@@ -6,6 +6,17 @@
 
 #![forbid(unsafe_code)]
 
+mod semantic;
+
+pub use semantic::{
+    OpaqueIdentity, OpaqueSemanticKind, ProtectedExpression, ProtectedExpressionKind,
+    ProtectedNode, ProtectedNodeKind, ProtectedStructure, SemanticAnalysis, SemanticExpression,
+    SemanticExpressionKind, SemanticFamily, SemanticMacro, SemanticNode, SemanticNodeKind,
+    SemanticOpaque, SemanticValidation, SemanticValidity, StructureComparison,
+    StructureCompatibility, StructureDifference, StructureDifferenceKind, TextRange, TextRangeKind,
+    analyze, compare_analyses, compare_macro_strings, compare_structures, validate,
+};
+
 /// Maximum parser call depth used while inspecting nested macros and
 /// expressions.
 pub const MAX_NESTING_DEPTH: usize = 128;
@@ -141,6 +152,19 @@ impl MacroString {
     #[must_use]
     pub const fn is_well_formed(&self) -> bool {
         !matches!(self.safety, Safety::Malformed)
+    }
+
+    /// Derives semantic classifications, text ranges, and protected
+    /// structure from this syntax document.
+    #[must_use]
+    pub fn semantic_analysis(&self) -> SemanticAnalysis {
+        semantic::analyze(self)
+    }
+
+    /// Validates this syntax document without executing its expressions.
+    #[must_use]
+    pub fn semantic_validation(&self) -> SemanticValidation {
+        semantic::validate(self)
     }
 }
 
