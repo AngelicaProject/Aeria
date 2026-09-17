@@ -1125,18 +1125,41 @@ mod tests {
                 candidate.name()
             );
             assert_eq!(diff.unrelated_records_reserialized, 0);
+        }
 
-            let merge = measure_merge(
-                candidate,
+        let selected = Candidate::ShardedJsonl;
+        let target_diff = measure_diff(selected, &dataset, DiffScenario::ChangeTarget);
+        assert_eq!(target_diff.files_changed, 1);
+        assert_eq!(target_diff.added_lines, 1);
+        assert_eq!(target_diff.deleted_lines, 1);
+        assert_eq!(target_diff.unrelated_records_reserialized, 0);
+
+        assert_eq!(
+            measure_merge(
+                selected,
                 &dataset,
                 MergeScenario::IndependentDifferentShards,
-            );
-            assert!(
-                matches!(merge.outcome, "succeeded" | "conflict"),
-                "candidate {} must produce a recorded merge result",
-                candidate.name()
-            );
-        }
+            )
+            .outcome,
+            "succeeded"
+        );
+        assert_eq!(
+            measure_merge(
+                selected,
+                &dataset,
+                MergeScenario::IndependentInsertsDifferentShards,
+            )
+            .outcome,
+            "succeeded"
+        );
+        assert_eq!(
+            measure_merge(selected, &dataset, MergeScenario::SameUnit).outcome,
+            "conflict"
+        );
+        assert_eq!(
+            measure_merge(selected, &dataset, MergeScenario::DeleteVersusEdit).outcome,
+            "conflict"
+        );
     }
 
     fn collect_files(root: &Path) -> io::Result<BTreeMap<PathBuf, Vec<u8>>> {

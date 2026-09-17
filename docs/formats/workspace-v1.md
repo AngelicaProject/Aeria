@@ -114,6 +114,55 @@ The v1 contract does not include comments, duplicate JSON keys, omitted
 nullable fields, literal record-breaking newlines inside JSONL, or alternate
 pretty-printing of unit records.
 
+## Reader and validation contract
+
+The canonical JSON and newline rules above define writer output. They are
+separate from semantic reader acceptance: a reader may accept harmless input
+variations listed here and must normalize them in memory. A reader must fail
+the whole workspace with a validation error; it must not silently skip invalid
+data or return a partially validated workspace.
+
+- The reader decodes UTF-8. It may accept exactly one UTF-8 BOM at the start
+  of `manifest.json` or a unit shard and strips it before JSON parsing. A BOM
+  anywhere else is invalid. The canonical writer never emits a BOM.
+- The workspace data root must contain `manifest.json` and the `units/`
+  directory. Apart from the repository's `.git/` control directory, any
+  unexpected root entry is invalid. `units/` may contain only files named
+  exactly `[0-9a-f]{2}.jsonl`; nested directories, other extensions, and
+  unexpected unit files are invalid. An empty shard file is invalid because
+  canonical writers omit empty shards.
+- The manifest must be one JSON object with all five required fields and no
+  unknown or duplicate fields. Unit records must have every required field
+  shown above, including both nested objects and nullable fields, with no
+  unknown or duplicate fields. Field order and insignificant JSON whitespace
+  are not semantic requirements for reading. Wrong JSON types, non-canonical
+  ID/hash spellings, arrays, fractional numbers, and negative coordinates are
+  invalid.
+- Every record's `id` must be placed in the shard derived from its raw ID
+  digest. A record in the wrong shard is invalid. IDs must be strictly
+  increasing within each shard; a duplicate ID is therefore invalid even
+  before considering whether the records' other fields match.
+- Duplicate current `SourceBinding` values are invalid across the entire
+  workspace, including duplicates in different shards. The reader must build
+  the secondary binding index only after this uniqueness check succeeds.
+- A JSONL reader may accept LF or CRLF record terminators, and may accept a
+  final record without a terminating line ending. A single terminal LF is a
+  terminator, not a blank record. Any blank or whitespace-only record line,
+  including an extra terminal LF, is invalid. A bare CR is not a record
+  terminator. The manifest may likewise omit its final LF; the canonical
+  writer always emits exactly one LF at EOF.
+- The reader validates the stored canonical `TranslationUnitId` and loads that
+  exact ID. It must never re-derive an existing ID from its current
+  `SourceBinding` or `SourceFingerprint` during load. Rebased units retain
+  their original ID even when those current source facts no longer produce
+  the original digest. ID derivation is a unit-creation operation, not a load
+  validation or repair operation.
+
+Reader acceptance of field order, insignificant whitespace, a leading BOM,
+CRLF, or a missing final LF does not make those byte sequences canonical. A
+writer must still emit only the byte form specified in the canonical rules
+above.
+
 ## Domain scope and compatibility
 
 The workspace is sparse and has exactly one canonical target language. The
