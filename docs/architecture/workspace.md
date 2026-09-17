@@ -62,4 +62,7 @@ Changing a target always resets its unit to `draft`. Marking a unit `reviewed` i
 
 The workspace has an explicit `formatVersion` from the first public version. New Aeria versions must either open an older public workspace directly or migrate it without data loss.
 
-The concrete workspace serialization and file layout remain draft. This domain slice does not select JSON, JSONL, TOML, YAML, SQLite, or a custom extension.
+The concrete v1 layout and serialization contract are frozen in
+[`../formats/workspace-v1.md`](../formats/workspace-v1.md). Production
+persistence is intentionally a subsequent implementation step; this domain
+slice still does not open or save workspace files.

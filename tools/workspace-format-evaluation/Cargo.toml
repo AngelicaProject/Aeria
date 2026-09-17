@@ -1,0 +1,14 @@
+[package]
+name = "aeria-workspace-format-evaluation"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Reproducible Git evaluation harness for Workspace Format v1 layouts."
+
+[dependencies]
+aeria-core = { path = "../../crates/aeria-core" }
+
+[lints]
+workspace = true
