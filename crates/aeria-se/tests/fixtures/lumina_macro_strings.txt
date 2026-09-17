@@ -1,0 +1,35 @@
+plain UTF-8: Привет, 世界
+literal \<angle> and \\slash
+Test<-><italic(1)>Test<--><italic(0)>Test
+ABC\<italic(1)>DEF<italic(0)>
+<br>
+<italic(1)>
+<if([1==2],yes,no)>
+<if([1!=2],yes,no)>
+<if([1>2],yes,no)>
+<if([1>=2],yes,no)>
+<if([1<2],yes,no)>
+<if([1<=2],yes,no)>
+<num(0_00'0012'345)>
+<num(0o000_5151)>
+<num(0b0000'1111'0000'1111)>
+<num(0x1234_5678)>
+<num(0d_5555)>
+<sec(t_min)>
+<string(lnum1)>
+<string(gnum2)>
+<string(lstr3)>
+<string(gstr4)>
+<string(<string(nested)>)>
+<if(t_hour,<italic(1)>yes,<italic(0)>no)>
+<color(510)>coloured<color(stackcolor)>
+<sheet(Item,1,2,lnum1)>
+<sheetsub(Item,1,2,3,Other,4)>
+<ennoun(Item,0,1,2,3,4)>
+<string()>
+<if(,)>
+<payload:CF(1,<expr: 01 02>)>
+<if(<expr: 0xAB is unsupported>,yes,no)>
+<if(<expr: invalid empty>,yes,no)>
+<payload: 00 FF>
+<payload: invalid empty>
