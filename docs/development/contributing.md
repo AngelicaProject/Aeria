@@ -1,5 +1,7 @@
 # Contribution workflow
 
+Use the [development index](./README.md) to locate the standards relevant to a change.
+
 ## Choose the scope
 
 Keep each change focused on one coherent problem. Avoid opportunistic refactors unless they are necessary to make the requested change correct or maintainable.
@@ -14,13 +16,20 @@ If a change affects a documented contract, update the canonical document with th
 
 ## Verify
 
-Run the smallest relevant test set while iterating, then run the broader checks appropriate to the affected area before review.
+Run the smallest relevant test set while iterating, then run the broader checks appropriate to the affected area before review. See [`testing.md`](./testing.md) and [`ci.md`](./ci.md).
 
 Changes to correctness-sensitive areas require regression coverage. These include structured string parsing, HXS compatibility, workspace persistence and migration, rebase, semantic merge, and export.
 
+## Prepare the change for review
+
+- Follow [`git.md`](./git.md) for branch and commit conventions.
+- Follow [`pull-requests.md`](./pull-requests.md) for pull request title, description, and readiness.
+- Keep the final branch diff limited to the intended problem.
+- Update documentation and section indexes when contracts or guidance change.
+
 ## Review
 
-A pull request should make it possible to answer:
+Review follows [`code-review.md`](./code-review.md). A reviewer should be able to answer:
 
 1. What problem does this solve?
 2. What behavior or contract changes?
@@ -28,4 +37,4 @@ A pull request should make it possible to answer:
 4. How was it verified?
 5. Does documentation need to change?
 
-Review should prioritize correctness, data safety, compatibility, understandable ownership, and regression resistance over stylistic cleverness.
+Prioritize correctness, data safety, compatibility, understandable ownership, and regression resistance over stylistic cleverness.
