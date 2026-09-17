@@ -75,3 +75,9 @@ The initial preview prioritizes meaning: nesting, colors, branches, runtime valu
 ## AI boundary
 
 AI should receive structured translatable content and typed/protected placeholders wherever practical. The default operation translates text nodes and reconstructs the syntax tree in Rust. Structural edits may later be exposed as explicit validated operations rather than unrestricted mutation of raw syntax.
+
+## Semantic analysis
+
+`aeria-se` derives a semantic projection from the lossless CST. The CST remains the source-preserving syntax layer: semantic nodes retain CST spans and do not replace the original representation or execute expressions. Known Lumina 7.7.0 macros receive only the broad classification supported by the upstream contract; unknown named macros and fallback payloads remain opaque protected constructs.
+
+Intrinsic validity is separate from source/target structure compatibility. A malformed CST is always invalid and blocks semantic editing/export. A well-formed document containing opaque constructs is valid with protected data. Strict structure comparison is a conservative safety mechanism for assisted or AI translation: it compares the ordered protected macro, expression, runtime, game-reference, and opaque structure while ignoring ordinary translatable prose. It does not make identical structure a general validity requirement. Manual structural editing may intentionally add, remove, or modify macros later through explicit validated operations.
