@@ -7,5 +7,9 @@ license.workspace = true
 repository.workspace = true
 description = "Core domain types and application contracts. Must remain independent of Tauri, persistence implementations, and UI."
 
+[dependencies]
+sha2 = "0.11.0"
+thiserror = "2.0.20"
+
 [lints]
 workspace = true

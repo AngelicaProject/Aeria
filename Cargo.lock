@@ -15,6 +15,10 @@ version = "0.1.0"
 [[package]]
 name = "aeria-core"
 version = "0.1.0"
+dependencies = [
+ "sha2 0.11.0",
+ "thiserror 2.0.20",
+]
 
 [[package]]
 name = "aeria-desktop"
@@ -58,6 +62,14 @@ version = "0.1.0"
 [[package]]
 name = "aeria-workspace"
 version = "0.1.0"
+dependencies = [
+ "aeria-core",
+ "aeria-hxs",
+ "aeria-se",
+ "rusqlite",
+ "sha2 0.11.0",
+ "thiserror 2.0.20",
+]
 
 [[package]]
 name = "aho-corasick"

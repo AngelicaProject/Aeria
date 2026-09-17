@@ -5,7 +5,17 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Versioned Git workspace model and deterministic persistence."
+description = "Sparse in-memory translation workspace domain operations."
+
+[dependencies]
+aeria-core = { path = "../aeria-core" }
+aeria-hxs = { path = "../aeria-hxs" }
+aeria-se = { path = "../aeria-se" }
+thiserror = "2.0.20"
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+rusqlite = { version = "0.40.2", features = ["bundled"] }
+sha2 = "0.11.0"
