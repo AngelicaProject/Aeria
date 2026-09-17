@@ -10,6 +10,10 @@ apps/desktop/dist/
 
 # Tauri
 apps/desktop/src-tauri/target/
+apps/desktop/src-tauri/gen/
+
+# TypeScript
+*.tsbuildinfo
 
 # IDE / OS
 .idea/
