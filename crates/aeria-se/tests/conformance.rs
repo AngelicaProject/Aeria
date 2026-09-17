@@ -228,6 +228,10 @@ fn preserves_unknown_named_macros_as_opaque_without_semantic_diagnostics() {
         };
         assert_eq!(name, expected_name);
         assert_eq!(arguments.len(), expected_arguments);
+        if expected_arguments == 2 {
+            assert_eq!(parsed.slice(arguments[0].span), Some("1"));
+            assert_eq!(parsed.slice(arguments[1].span), Some("text"));
+        }
     }
 
     let nested = parse(cases[2].0);
@@ -247,6 +251,9 @@ fn preserves_unknown_named_macros_as_opaque_without_semantic_diagnostics() {
     };
     assert_eq!(name, "inner");
     assert_eq!(inner_arguments.len(), 1);
+    assert_eq!(nested.slice(arguments[0].span), Some("<inner(1)>"));
+    assert_eq!(nested.slice(parts[0].span), Some("<inner(1)>"));
+    assert_eq!(nested.slice(inner_arguments[0].span), Some("1"));
 }
 
 #[test]
@@ -255,11 +262,9 @@ fn unknown_named_macro_with_malformed_arguments_remains_malformed() {
     let parsed = parse(source);
     assert_eq!(parsed.safety(), Safety::Malformed);
     assert!(!parsed.diagnostics().is_empty());
-    assert!(
-        parsed
-            .diagnostics()
-            .iter()
-            .all(|diagnostic| diagnostic.kind != DiagnosticKind::InvalidFallback)
+    assert_eq!(
+        parsed.diagnostics()[0].kind,
+        DiagnosticKind::InvalidDelimiter
     );
     assert_eq!(parsed.serialize(), source);
 }
