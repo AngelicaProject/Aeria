@@ -1,0 +1,7 @@
+# Accepted by Lumina's MacroStringParser but not emitted by ToMacroString().
+# Format: stable syntax name<TAB>parser-compatible input.
+decimal_digit_separators	<num(0_00'0012'345)>
+octal_prefix	<num(0o000_5151)>
+binary_prefix	<num(0b0000'1111'0000'1111)>
+hexadecimal_prefix	<num(0x1234_5678)>
+decimal_prefix	<num(0d_5555)>

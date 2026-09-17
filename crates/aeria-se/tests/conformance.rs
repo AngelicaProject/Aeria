@@ -1,48 +1,77 @@
 use aeria_se::{
     ComparisonOperator, DiagnosticKind, ExpressionKind, KnownMacro, MAX_NESTING_DEPTH, MacroNode,
-    OpaquePayload, PlaceholderExpression, Safety, SyntaxKind, UnaryExpression, parse,
+    OpaquePayload, PlaceholderExpression, Safety, Span, SyntaxKind, UnaryExpression, parse,
 };
 
-const LUMINA_CORPUS: &str = include_str!("fixtures/lumina_macro_strings.txt");
+const LUMINA_GOLDEN: &str = include_str!("fixtures/lumina_to_macro_string.golden.txt");
+const PARSER_COMPATIBILITY: &str = include_str!("fixtures/parser_compatibility.txt");
 
 #[test]
-fn lumina_corpus_round_trips_without_diagnostics() {
-    for (line_number, source) in LUMINA_CORPUS.lines().enumerate() {
+fn lumina_to_macro_string_golden_vectors_round_trip_structurally() {
+    for (label, source) in vectors(LUMINA_GOLDEN) {
         let parsed = parse(source);
-        let expected_safety = if source.contains("<payload:") || source.contains("<expr:") {
-            Safety::Opaque
-        } else {
-            Safety::Understood
-        };
         assert_eq!(
             parsed.safety(),
-            expected_safety,
-            "fixture line {line_number}: {source}"
+            if matches!(
+                label,
+                "unsupported_macro_payload" | "raw_payload_fallback" | "opaque_expression_fallback"
+            ) {
+                Safety::Opaque
+            } else {
+                Safety::Understood
+            },
+            "golden vector {label}: {source}"
         );
         assert!(
             parsed.diagnostics().is_empty(),
-            "fixture line {line_number}: {source}"
+            "golden vector {label}: {source}"
         );
+        assert!(
+            !parsed.nodes().is_empty(),
+            "golden vector {label}: {source}"
+        );
+        assert_node_spans(&parsed, source);
         assert_eq!(
             parsed.serialize(),
             source,
-            "fixture line {line_number}: {source}"
+            "golden vector {label}: {source}"
         );
+
         let reparsed = parse(&parsed.serialize());
         assert_eq!(
             reparsed.nodes(),
             parsed.nodes(),
-            "fixture line {line_number}: {source}"
+            "golden vector {label}: {source}"
         );
     }
 }
 
 #[test]
-fn exposes_nested_macro_and_expression_structure() {
+fn parser_compatibility_vectors_are_separate_from_emitter_golden_vectors() {
+    for (label, source) in vectors(PARSER_COMPATIBILITY) {
+        let parsed = parse(source);
+        assert_eq!(parsed.safety(), Safety::Understood, "compat vector {label}");
+        assert!(parsed.diagnostics().is_empty(), "compat vector {label}");
+        assert_node_spans(&parsed, source);
+
+        let SyntaxKind::Macro(macro_node) = &parsed.nodes()[0].kind else {
+            panic!("compat vector {label} should start with a known macro");
+        };
+        assert!(matches!(
+            macro_node.arguments[0].kind,
+            ExpressionKind::UnsignedInteger { .. }
+        ));
+    }
+}
+
+#[test]
+fn exposes_nested_macro_and_expression_structure_and_spans() {
     let source = r"<if([lnum1>=t_hour],<italic(1)>yes,<italic(0)>no)>";
     let parsed = parse(source);
     assert_eq!(parsed.safety(), Safety::Understood);
     assert_eq!(parsed.nodes().len(), 1);
+    assert_eq!(parsed.nodes()[0].span, Span::new(0, source.len()));
+    assert_eq!(parsed.slice(parsed.nodes()[0].span), Some(source));
 
     let SyntaxKind::Macro(if_macro) = &parsed.nodes()[0].kind else {
         panic!("expected a macro node");
@@ -59,6 +88,12 @@ fn exposes_nested_macro_and_expression_structure() {
         panic!("expected a comparison expression");
     };
     assert_eq!(*operator, ComparisonOperator::GreaterThanOrEqual);
+    assert_eq!(
+        parsed.slice(if_macro.arguments[0].span),
+        Some("[lnum1>=t_hour]")
+    );
+    assert_eq!(parsed.slice(left.span), Some("lnum1"));
+    assert_eq!(parsed.slice(right.span), Some("t_hour"));
     assert!(matches!(
         left.kind,
         ExpressionKind::Unary {
@@ -74,6 +109,10 @@ fn exposes_nested_macro_and_expression_structure() {
     let ExpressionKind::String { parts } = &if_macro.arguments[1].kind else {
         panic!("expected a nested string expression");
     };
+    assert_eq!(
+        parsed.slice(if_macro.arguments[1].span),
+        Some("<italic(1)>yes")
+    );
     assert!(matches!(
         parts[0].kind,
         SyntaxKind::Macro(MacroNode {
@@ -81,17 +120,25 @@ fn exposes_nested_macro_and_expression_structure() {
             ..
         })
     ));
+    assert_eq!(parsed.slice(parts[0].span), Some("<italic(1)>"));
 }
 
 #[test]
 fn classifies_lumina_numeric_and_native_expression_forms() {
-    let parsed = parse("<num(0x1234_5678)><string(lnum1)><sec(t_min)>");
+    let source = "<num(0x1234_5678)><string(lnum1)><sec(t_min)>";
+    let parsed = parse(source);
+    assert_node_spans(&parsed, source);
+
     let SyntaxKind::Macro(num_macro) = &parsed.nodes()[0].kind else {
         panic!("expected a num macro");
     };
     assert_eq!(
         &num_macro.arguments[0].kind,
         &ExpressionKind::UnsignedInteger { value: 0x1234_5678 }
+    );
+    assert_eq!(
+        parsed.slice(num_macro.arguments[0].span),
+        Some("0x1234_5678")
     );
 
     let SyntaxKind::Macro(string_macro) = &parsed.nodes()[1].kind else {
@@ -128,7 +175,9 @@ fn preserves_escape_nodes_and_their_source_spans() {
         parsed.nodes()[3].kind,
         SyntaxKind::Escape { character: '\\' }
     ));
+    assert_eq!(parsed.slice(parsed.nodes()[0].span), Some("literal "));
     assert_eq!(parsed.slice(parsed.nodes()[1].span), Some(r"\<"));
+    assert_eq!(parsed.slice(parsed.nodes()[3].span), Some(r"\\"));
     assert_eq!(parsed.serialize(), source);
 }
 
@@ -150,18 +199,79 @@ fn preserves_wider_string_expression_escapes() {
             .count(),
         8
     );
+    assert_eq!(
+        parsed.slice(macro_node.arguments[0].span),
+        Some(&source[8..source.len() - 2])
+    );
+    assert_eq!(parsed.serialize(), source);
+}
+
+#[test]
+fn preserves_unknown_named_macros_as_opaque_without_semantic_diagnostics() {
+    let cases = [
+        ("<futuremacro>", "futuremacro", 0),
+        ("<FutureMacro(1,text)>", "FutureMacro", 2),
+        ("<outer(<inner(1)>)>", "outer", 1),
+    ];
+
+    for (source, expected_name, expected_arguments) in cases {
+        let parsed = parse(source);
+        assert_eq!(parsed.safety(), Safety::Opaque, "source: {source}");
+        assert!(parsed.diagnostics().is_empty(), "source: {source}");
+        assert_eq!(parsed.serialize(), source);
+
+        let node = &parsed.nodes()[0];
+        assert_eq!(node.span, Span::new(0, source.len()));
+        assert_eq!(parsed.slice(node.span), Some(source));
+        let SyntaxKind::Opaque(OpaquePayload::NamedMacro { name, arguments }) = &node.kind else {
+            panic!("expected an opaque named macro: {source}");
+        };
+        assert_eq!(name, expected_name);
+        assert_eq!(arguments.len(), expected_arguments);
+    }
+
+    let nested = parse(cases[2].0);
+    let SyntaxKind::Opaque(OpaquePayload::NamedMacro { arguments, .. }) = &nested.nodes()[0].kind
+    else {
+        panic!("expected an opaque outer macro");
+    };
+    let ExpressionKind::String { parts } = &arguments[0].kind else {
+        panic!("expected the nested macro argument to be a string expression");
+    };
+    let SyntaxKind::Opaque(OpaquePayload::NamedMacro {
+        name,
+        arguments: inner_arguments,
+    }) = &parts[0].kind
+    else {
+        panic!("expected an opaque inner macro");
+    };
+    assert_eq!(name, "inner");
+    assert_eq!(inner_arguments.len(), 1);
+}
+
+#[test]
+fn unknown_named_macro_with_malformed_arguments_remains_malformed() {
+    let source = "<futuremacro(1,2>";
+    let parsed = parse(source);
+    assert_eq!(parsed.safety(), Safety::Malformed);
+    assert!(!parsed.diagnostics().is_empty());
+    assert!(
+        parsed
+            .diagnostics()
+            .iter()
+            .all(|diagnostic| diagnostic.kind != DiagnosticKind::InvalidFallback)
+    );
     assert_eq!(parsed.serialize(), source);
 }
 
 #[test]
 fn classifies_opaque_fallbacks_without_diagnostics() {
-    let parsed = parse("<payload:CF(1,<expr: 01 02>)><payload: 00 FF>");
+    let source = "<payload:CF(1,<expr: 01 02>)><payload: 00 FF>";
+    let parsed = parse(source);
     assert_eq!(parsed.safety(), Safety::Opaque);
     assert!(parsed.diagnostics().is_empty());
-    assert_eq!(
-        parsed.serialize(),
-        "<payload:CF(1,<expr: 01 02>)><payload: 00 FF>"
-    );
+    assert_eq!(parsed.serialize(), source);
+    assert_node_spans(&parsed, source);
 
     let SyntaxKind::Opaque(OpaquePayload::Macro { code, arguments }) = &parsed.nodes()[0].kind
     else {
@@ -178,7 +288,8 @@ fn classifies_opaque_fallbacks_without_diagnostics() {
 #[test]
 fn malformed_input_is_recoverable_and_lossless() {
     for source in [
-        "<bad_payload>",
+        "<>",
+        "<bad_payload(1,2>",
         "<if(1,2,3>",
         "<if(1,2,3",
         "<if([1=2],yes,no)>",
@@ -196,8 +307,8 @@ fn malformed_input_is_recoverable_and_lossless() {
         }));
     }
     assert_eq!(
-        parse("<bad_payload>").diagnostics()[0].kind,
-        DiagnosticKind::UnknownMacro
+        parse("<>").diagnostics()[0].kind,
+        DiagnosticKind::InvalidDelimiter
     );
 }
 
@@ -221,4 +332,28 @@ fn deep_nesting_hits_a_bounded_diagnostic() {
             .any(|diagnostic| { diagnostic.kind == DiagnosticKind::NestingLimit })
     );
     assert_eq!(parsed.serialize(), source);
+}
+
+fn vectors(corpus: &str) -> impl Iterator<Item = (&str, &str)> {
+    corpus.lines().filter_map(|line| {
+        let line = line.trim_end_matches('\r');
+        if line.is_empty() || line.starts_with('#') {
+            return None;
+        }
+        Some(
+            line.split_once('\t')
+                .expect("fixture line must contain a tab"),
+        )
+    })
+}
+
+fn assert_node_spans(parsed: &aeria_se::MacroString, source: &str) {
+    for node in parsed.nodes() {
+        assert!(node.span.start() <= node.span.end());
+        assert!(node.span.end() <= source.len());
+        assert_eq!(
+            parsed.slice(node.span),
+            Some(&source[node.span.start()..node.span.end()])
+        );
+    }
 }

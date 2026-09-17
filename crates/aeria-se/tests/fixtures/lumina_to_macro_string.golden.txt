@@ -1,0 +1,20 @@
+# Generated with Lumina 7.7.0 ReadOnlySeString.ToMacroString().
+# Format: stable vector name<TAB>canonical emitter output.
+plain_text	plain \< and \\slash
+escaped_text	angle \<, bracket [ and \\slash
+zero_argument_macro	<br>
+multi_argument_macro	<if(1,yes,no)>
+comparison_greater_than_or_equal	<if([1>=2],yes,no)>
+comparison_greater_than	<if([1>2],yes,no)>
+comparison_less_than_or_equal	<if([1<=2],yes,no)>
+comparison_less_than	<if([1<2],yes,no)>
+comparison_equal	<if([1==2],yes,no)>
+comparison_not_equal	<if([1!=2],yes,no)>
+integer_expression	<num(305419896)>
+nullary_expression	<sec(t_min)>
+unary_expression	<string(lnum7)>
+nested_string_expression	<string(outer \<\, \[x\] \\slash <italic(1)> tail)>
+formatting_macros	<bold(1)><italic(0)><color(287454020)>
+unsupported_macro_payload	<payload:35>
+raw_payload_fallback	<payload: 00>
+opaque_expression_fallback	<if(<expr: 0xD0 is unsupported>,yes,no)>

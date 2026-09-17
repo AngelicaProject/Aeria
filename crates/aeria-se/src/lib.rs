@@ -69,8 +69,6 @@ pub enum DiagnosticKind {
     InvalidDelimiter,
     /// A backslash did not introduce a character.
     InvalidEscape,
-    /// The macro name is not emitted by the inspected Lumina contract.
-    UnknownMacro,
     /// A Lumina fallback payload or expression could not be decoded.
     InvalidFallback,
     /// The configured parser nesting bound was reached.
@@ -130,6 +128,10 @@ impl MacroString {
     }
 
     /// Serializes the syntax document without changing its source spelling.
+    ///
+    /// Mutation-aware structural serialization is future work for this slice;
+    /// today this deliberately returns the owned source buffer so edits cannot
+    /// silently rewrite syntax that has not been modeled yet.
     #[must_use]
     pub fn serialize(&self) -> String {
         self.source.clone()
@@ -399,6 +401,14 @@ impl KnownMacro {
 /// An opaque payload fallback emitted by Lumina for unsupported/raw payloads.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum OpaquePayload {
+    /// A syntactically valid named macro whose semantics are not known to
+    /// this Lumina contract.
+    NamedMacro {
+        /// The exact macro name spelling between `<` and its argument list.
+        name: String,
+        /// Ordered arguments preserved for structural inspection.
+        arguments: Vec<Expression>,
+    },
     /// An unsupported macro code with optional expression arguments.
     Macro {
         /// The raw macro code byte.
@@ -626,10 +636,10 @@ impl<'a> Parser<'a> {
         if self.starts_with(name_start, "payload:") {
             return self.parse_opaque_payload(start, name_start + "payload:".len(), depth);
         }
-        self.parse_known_macro(start, name_start, depth)
+        self.parse_macro(start, name_start, depth)
     }
 
-    fn parse_known_macro(
+    fn parse_macro(
         &mut self,
         start: usize,
         name_start: usize,
@@ -637,15 +647,15 @@ impl<'a> Parser<'a> {
     ) -> (SyntaxNode, usize) {
         let name_end = self.scan_macro_name(name_start);
         let name = self.source.get(name_start..name_end).unwrap_or_default();
-        let Some(name) = KnownMacro::from_str(name) else {
+        if name.is_empty() {
             self.diagnose(
                 Span::new(name_start, name_end),
-                DiagnosticKind::UnknownMacro,
-                "macro name is not part of the Lumina 7.7.0 contract",
+                DiagnosticKind::InvalidDelimiter,
+                "macro name is missing",
             );
             let end = self.recover_macro(start);
             return (Self::malformed_node(start, end), end);
-        };
+        }
 
         let mut position = self.skip_whitespace(name_end);
         let arguments = if self.char_is(position, '>') {
@@ -687,10 +697,20 @@ impl<'a> Parser<'a> {
             return (Self::malformed_node(start, end), end);
         };
 
+        let kind = if let Some(name) = KnownMacro::from_str(name) {
+            SyntaxKind::Macro(MacroNode { name, arguments })
+        } else {
+            self.opaque_found = true;
+            SyntaxKind::Opaque(OpaquePayload::NamedMacro {
+                name: name.to_owned(),
+                arguments,
+            })
+        };
+
         (
             SyntaxNode {
                 span: Span::new(start, position),
-                kind: SyntaxKind::Macro(MacroNode { name, arguments }),
+                kind,
             },
             position,
         )
