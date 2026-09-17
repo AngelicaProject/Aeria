@@ -1,0 +1,11 @@
+[package]
+name = "aeria-search"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Local source search, indexes, translation memory, and query services."
+
+[lints]
+workspace = true

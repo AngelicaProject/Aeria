@@ -1,0 +1,25 @@
+# Rust
+/target/
+
+# Node
+node_modules/
+.pnpm-store/
+
+# Frontend
+apps/desktop/dist/
+
+# Tauri
+apps/desktop/src-tauri/target/
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Local Aeria state
+.aeria/
+*.local
+
+# Logs
+*.log

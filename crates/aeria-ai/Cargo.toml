@@ -1,0 +1,11 @@
+[package]
+name = "aeria-ai"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Provider-neutral AI translation orchestration and response validation."
+
+[lints]
+workspace = true

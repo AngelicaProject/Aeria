@@ -1,0 +1,11 @@
+[package]
+name = "aeria-git"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Git repository operations and semantic collaboration helpers."
+
+[lints]
+workspace = true

@@ -1,0 +1,11 @@
+[package]
+name = "aeria-rebase"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Deterministic and conservative cross-snapshot migration planning."
+
+[lints]
+workspace = true

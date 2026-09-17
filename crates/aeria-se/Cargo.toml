@@ -1,0 +1,11 @@
+[package]
+name = "aeria-se"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Lossless structured game-string parsing, validation, and rendering model."
+
+[lints]
+workspace = true

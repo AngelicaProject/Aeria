@@ -1,0 +1,11 @@
+[package]
+name = "aeria-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Core domain types and application contracts. Must remain independent of Tauri, persistence implementations, and UI."
+
+[lints]
+workspace = true
