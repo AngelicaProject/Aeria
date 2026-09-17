@@ -1,6 +1,7 @@
 # Pull request standards
 
 A pull request should let a reviewer understand the problem, the intended outcome, the important design choices, and the evidence that the change is ready.
+PR metadata describes the complete base-to-head change and should remain concise throughout the lifetime of the pull request.
 
 ## Title
 
