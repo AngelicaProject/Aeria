@@ -8,6 +8,50 @@ Aeria must never treat these constructs as disposable decoration.
 
 HXS provides an encodeable macro-string representation and raw source bytes. `aeria-se` parses the macro representation into a lossless syntax representation suitable for editing and validation.
 
+## Syntax-layer contract
+
+The first `aeria-se` slice is an owned concrete syntax tree (CST), not the
+future semantic editing or preview AST. Root and nested string-expression
+nodes retain byte spans into the original source. The tree exposes ordinary
+text, escapes, known Lumina macro names, ordered expressions, unsigned integer
+values, nested strings, native placeholders, unary expressions, comparison
+expressions, opaque named macros, and recovery nodes for malformed input.
+
+The parser follows the encodeable representation emitted by the Lumina 7.7.0
+`ToMacroString()` implementation used by Harmonia Atlas. It has no runtime
+dependency on Lumina or .NET. The native macro and expression name tables are
+owned by `aeria-se` and must be reviewed with the corresponding upstream
+source and conformance corpus when Atlas changes its Lumina version. The
+checked-in golden vectors in `crates/aeria-se/tests/fixtures/lumina_to_macro_string.golden.txt`
+are fixed output from synthetic Lumina 7.7.0 `ReadOnlySeString` values; the
+separate `parser_compatibility.txt` corpus covers accepted spellings that the
+emitter does not produce.
+
+Serialization is source-preserving:
+
+```text
+parse(source).serialize() == source
+```
+
+This invariant applies to understood syntax and to Lumina fallback forms that
+are opaque but losslessly preservable. Opaque payloads, expression fallbacks,
+and syntactically valid named macros that are unknown to the Lumina 7.7.0
+table are exposed as protected nodes and do not receive guessed semantic
+meaning. Unknown names alone do not produce diagnostics; invalid delimiters or
+arguments still do. The document retains the original source even for
+malformed input, but malformed documents are unsafe for editing/export and
+carry structured diagnostics with byte spans, kinds, and messages.
+
+`serialize()` currently returns the owned source buffer. Mutation-aware
+structural serialization is future work; this slice does not claim to rewrite
+syntax that it cannot model.
+
+The aggregate safety state distinguishes understood, opaque, and malformed
+documents. Recovery nodes keep malformed delimiters, escapes, and tails
+visible to inspection. Parsing is bounded by a nesting limit of 128 parser
+calls; exceeding it produces a diagnostic and preserves the remaining source
+as malformed rather than recursing without limit.
+
 ## Safety model
 
 A parsed construct is one of three broad safety classes:
