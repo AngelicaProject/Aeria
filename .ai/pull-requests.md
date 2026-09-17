@@ -9,6 +9,20 @@ Canonical pull request standards live in `docs/development/pull-requests.md`. Re
 - Run the required local checks and record the exact commands that actually ran.
 - Update documentation required by the change before requesting review.
 
+## Pull request metadata
+
+A pull request title and description describe the complete change from the PR base to its current head, not the latest commit.
+
+Keep the description short. It should normally contain only:
+
+* **Summary** — 1–2 sentences describing the overall outcome.
+* **Changes** — a few bullets covering the main parts of the complete PR.
+* **Verification** — the checks actually run.
+
+When pushing follow-up or review-fix commits, do not rewrite the PR to describe only those commits. Update the existing description only when the overall PR scope or outcome has changed.
+
+Do not copy commit messages into the PR title or description.
+
 ## Title
 
 Write a human-readable outcome-oriented title. Pull request titles are not commit messages: do not prepend Conventional Commit prefixes such as `feat:`, `fix:`, or `chore:`.
