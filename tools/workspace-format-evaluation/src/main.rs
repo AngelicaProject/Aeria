@@ -330,24 +330,22 @@ fn hex(bytes: &[u8]) -> String {
 fn write_layout(root: &Path, candidate: Candidate, dataset: &Dataset) -> io::Result<()> {
     clear_layout(root)?;
     fs::create_dir_all(root)?;
-    fs::write(root.join("manifest.json"), manifest_json(&dataset.metadata))?;
+    let data_root = root.join(".aeria");
+    fs::create_dir_all(&data_root)?;
+    fs::write(
+        data_root.join("manifest.json"),
+        manifest_json(&dataset.metadata),
+    )?;
     match candidate {
-        Candidate::OneFilePerUnit => write_one_file_layout(root, &dataset.units),
-        Candidate::SingleJsonl => write_single_jsonl(root, &dataset.units),
-        Candidate::ShardedJsonl => write_sharded_jsonl(root, &dataset.units),
-        Candidate::ShardedPrettyJson => write_sharded_pretty_json(root, &dataset.units),
+        Candidate::OneFilePerUnit => write_one_file_layout(&data_root, &dataset.units),
+        Candidate::SingleJsonl => write_single_jsonl(&data_root, &dataset.units),
+        Candidate::ShardedJsonl => write_sharded_jsonl(&data_root, &dataset.units),
+        Candidate::ShardedPrettyJson => write_sharded_pretty_json(&data_root, &dataset.units),
     }
 }
 
 fn clear_layout(root: &Path) -> io::Result<()> {
-    let units = root.join("units");
-    match fs::remove_dir_all(units) {
-        Ok(()) => {}
-        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-        Err(error) => return Err(error),
-    }
-    let path = root.join("units.jsonl");
-    match fs::remove_file(path) {
+    match fs::remove_dir_all(root.join(".aeria")) {
         Ok(()) => {}
         Err(error) if error.kind() == io::ErrorKind::NotFound => {}
         Err(error) => return Err(error),
@@ -364,21 +362,21 @@ fn manifest_json(metadata: &WorkspaceMetadata) -> String {
         2,
         "sourceLanguage",
         metadata.source_language(),
-        false,
+        true,
     );
     push_pretty_string_field(
         &mut output,
         2,
         "targetLanguage",
         metadata.target_language(),
-        false,
+        true,
     );
     push_pretty_string_field(
         &mut output,
         2,
         "contentId",
         metadata.source_content_id(),
-        false,
+        true,
     );
     push_pretty_string_field(
         &mut output,
@@ -1091,6 +1089,22 @@ impl Drop for TemporaryDirectory {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn manifest_json_is_canonical() {
+        let metadata = WorkspaceMetadata::new(
+            "en",
+            "fr",
+            "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+            "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        )
+        .expect("golden metadata is valid");
+
+        assert_eq!(
+            manifest_json(&metadata),
+            "{\n  \"formatVersion\": 1,\n  \"sourceLanguage\": \"en\",\n  \"targetLanguage\": \"fr\",\n  \"contentId\": \"sha256:0000000000000000000000000000000000000000000000000000000000000000\",\n  \"snapshotId\": \"sha256:1111111111111111111111111111111111111111111111111111111111111111\"\n}\n"
+        );
+    }
 
     #[test]
     fn smoke_evaluation_is_deterministic_and_mergeable() {

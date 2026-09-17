@@ -43,13 +43,14 @@ decision.
 All candidates used the same manifest and JSON object field order. The
 four layouts were:
 
-1. One JSON record per unit at `units/<shard>/tu1-<digest>.json`. The hyphen
+1. One JSON record per unit at `.aeria/units/<shard>/tu1-<digest>.json`. The hyphen
    in the filename is required for Windows portability; the canonical ID with
    `tu1:` remains in the record.
-2. One `units.jsonl` file containing all records sorted by ID.
-3. 256 sharded JSONL files named `units/00.jsonl` through `units/ff.jsonl`,
+2. One `.aeria/units.jsonl` file containing all records sorted by ID.
+3. 256 sharded JSONL files named `.aeria/units/00.jsonl` through
+   `.aeria/units/ff.jsonl`,
    with records sorted by full ID inside each shard.
-4. The same 256 shards as candidate 3, using a multi-line JSON array of
+4. The same `.aeria/units/` shards as candidate 3, using a multi-line JSON array of
    pretty-printed objects.
 
 The logical dataset for every candidate contained only the domain facts now
@@ -61,9 +62,9 @@ No source text or derived source-binding index was included.
 
 | Units | One file/unit | Single JSONL | Sharded JSONL | Sharded pretty JSON |
 | ---: | ---: | ---: | ---: | ---: |
-| 1,000 | 1,001 files / 505,910 B | 2 / 505,910 B | 252 / 505,910 B | 252 / 613,910 B |
-| 50,000 | 50,001 / 25,498,944 B | 2 / 25,498,944 B | 257 / 25,498,944 B | 257 / 30,898,944 B |
-| 250,000 | 250,001 / 128,002,641 B | 2 / 128,002,641 B | 257 / 128,002,641 B | 257 / 155,002,641 B |
+| 1,000 | 1,001 files / 505,913 B | 2 / 505,913 B | 252 / 505,913 B | 252 / 613,913 B |
+| 50,000 | 50,001 / 25,498,947 B | 2 / 25,498,947 B | 257 / 25,498,947 B | 257 / 30,898,947 B |
+| 250,000 | 250,001 / 128,002,644 B | 2 / 128,002,644 B | 257 / 128,002,644 B | 257 / 155,002,644 B |
 
 The 250,000-unit one-file run took several minutes on the Windows evaluation
 environment while the sharded writes completed materially faster. The
