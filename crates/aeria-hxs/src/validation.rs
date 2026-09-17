@@ -44,12 +44,9 @@ pub(crate) fn validate_and_read(connection: &Connection) -> Result<VerifiedSnaps
     let mut rows = statement.query([]).map_err(HxsError::storage)?;
     while let Some(row) = rows.next().map_err(HxsError::storage)? {
         let sheet_id = read_i64(row, 0, "sheets.id")?;
-        if sheet_id <= 0 {
-            return Err(HxsError::data("sheets.id must be positive"));
-        }
         let name = read_text(row, 1, "sheets.name")?;
-        if name.is_empty() {
-            return Err(HxsError::data("sheet names must not be empty"));
+        if name.trim().is_empty() {
+            return Err(HxsError::data("sheet names must not be blank"));
         }
         if !names.insert(name.clone()) {
             return Err(HxsError::data(format!("duplicate sheet name '{name}'")));
@@ -59,11 +56,6 @@ pub(crate) fn validate_and_read(connection: &Connection) -> Result<VerifiedSnaps
             HxsError::data(format!("unsupported HXS sheet variant {variant_code}"))
         })?;
         let effective_language = read_text(row, 3, "sheets.effective_language")?;
-        if effective_language.is_empty() {
-            return Err(HxsError::data(format!(
-                "effective language is empty for sheet '{name}'"
-            )));
-        }
         let column_count = read_non_negative_u64(row, 4, "sheets.column_count")?;
         let stored_row_count = read_non_negative_u64(row, 5, "sheets.row_count")?;
         let schema_hash = read_hash(row, 6, "sheets.schema_hash")?;
@@ -488,10 +480,10 @@ fn read_metadata(connection: &Connection) -> Result<SnapshotMetadata, HxsError> 
         let snapshot_id = read_text(row, 6, "hxs_meta.snapshot_id")?;
         let extractor_version = read_text(row, 7, "hxs_meta.extractor_version")?;
         let lumina_version = read_text(row, 8, "hxs_meta.lumina_version")?;
-        if game_version.is_empty()
-            || source_language.is_empty()
-            || extractor_version.is_empty()
-            || lumina_version.is_empty()
+        if game_version.trim().is_empty()
+            || source_language.trim().is_empty()
+            || extractor_version.trim().is_empty()
+            || lumina_version.trim().is_empty()
             || scope != "full"
         {
             return Err(HxsError::data(

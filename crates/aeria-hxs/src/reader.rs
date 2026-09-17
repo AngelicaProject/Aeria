@@ -3,6 +3,7 @@ use std::path::Path;
 
 use rusqlite::{Connection, OpenFlags};
 
+use crate::MAX_ROW_PAGE_SIZE;
 use crate::error::HxsError;
 use crate::types::{RowPage, RowRecord, SheetMetadata, SnapshotMetadata, StringCell};
 use crate::validation::{
@@ -65,9 +66,11 @@ impl HxsSnapshot {
 
     /// Reads one bounded page of rows in row/subrow order.
     ///
+    /// `limit` must be between one and [`MAX_ROW_PAGE_SIZE`] inclusive.
+    ///
     /// # Errors
     ///
-    /// Returns an error for an unknown sheet, a zero page size, an offset that SQLite cannot
+    /// Returns an error for an unknown sheet, an invalid page size, an offset that SQLite cannot
     /// represent, or a storage/read failure.
     pub fn page_rows(
         &self,
@@ -75,9 +78,9 @@ impl HxsSnapshot {
         offset: u64,
         limit: u32,
     ) -> Result<RowPage, HxsError> {
-        if limit == 0 {
+        if !(1..=MAX_ROW_PAGE_SIZE).contains(&limit) {
             return Err(HxsError::request(
-                "row page limit must be greater than zero",
+                "row page limit must be between 1 and MAX_ROW_PAGE_SIZE",
             ));
         }
         let sheet = self

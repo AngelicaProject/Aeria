@@ -15,3 +15,6 @@ pub use types::{
     SheetHashes, SheetMetadata, SheetVariant, SnapshotCounts, SnapshotMetadata, StringCell,
     StringCellHashes,
 };
+
+/// Maximum number of rows returned by one [`HxsSnapshot::page_rows`] call.
+pub const MAX_ROW_PAGE_SIZE: u32 = 4096;
