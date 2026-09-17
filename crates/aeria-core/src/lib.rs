@@ -189,28 +189,11 @@ impl TranslationUnitId {
     /// identity. Neither are target-language, target-text, review, snapshot,
     /// content, or game-version values.
     ///
-    /// # Panics
-    ///
-    /// Panics only when an input string exceeds the v1 framing limit. Use
-    /// [`Self::try_derive`] for untrusted input.
-    #[must_use]
-    pub fn derive(
-        source_language: &str,
-        source_binding: &SourceBinding,
-        source_fingerprint: &SourceFingerprint,
-    ) -> Self {
-        Self::try_derive(source_language, source_binding, source_fingerprint)
-            .expect("translation-unit identity inputs fit canonical framing")
-    }
-
-    /// Fallible form of [`Self::derive`] for adapters that handle oversized
-    /// untrusted metadata without panicking.
-    ///
     /// # Errors
     ///
     /// Returns an error when a framed input string exceeds the v1 fixed-width
     /// length limit.
-    pub fn try_derive(
+    pub fn derive(
         source_language: &str,
         source_binding: &SourceBinding,
         source_fingerprint: &SourceFingerprint,
@@ -525,9 +508,18 @@ mod tests {
         SourceFingerprint::new(macro_text_hash, Some(RAW_HASH), ROW_HASH)
     }
 
+    fn derived(
+        source_language: &str,
+        source_binding: &SourceBinding,
+        source_fingerprint: &SourceFingerprint,
+    ) -> TranslationUnitId {
+        TranslationUnitId::derive(source_language, source_binding, source_fingerprint)
+            .expect("test identity inputs fit canonical framing")
+    }
+
     #[test]
     fn translation_unit_id_v1_golden_vector_is_stable() {
-        let id = TranslationUnitId::derive(
+        let id = derived(
             "en",
             &binding("Synthetic", 42, 0, 0),
             &fingerprint(MACRO_HASH),
@@ -539,34 +531,49 @@ mod tests {
     }
 
     #[test]
+    fn translation_unit_id_v1_unicode_sheet_name_golden_vector_is_stable() {
+        let id = derived("en", &binding("翻訳表", 42, 0, 0), &fingerprint(MACRO_HASH));
+        assert_eq!(
+            id.to_string(),
+            "tu1:be2d7ee7f2757e6d175c803c163a2e65b0ff29b3d90f1c881bb9206403ef7111"
+        );
+    }
+
+    #[test]
+    fn translation_unit_id_v1_blank_sheet_zero_coordinate_golden_vector_is_stable() {
+        let id = derived("en", &binding("", 0, 0, 0), &fingerprint(MACRO_HASH));
+        assert_eq!(
+            id.to_string(),
+            "tu1:94262b29a0b4fdee486b587ff081ac6cddf6ef82c7f175f9ffa8668796834e4d"
+        );
+    }
+
+    #[test]
     fn translation_unit_id_changes_for_identity_inputs_only() {
         let base_binding = binding("Synthetic", 42, 0, 0);
         let base_fingerprint = fingerprint(MACRO_HASH);
-        let base = TranslationUnitId::derive("en", &base_binding, &base_fingerprint);
+        let base = derived("en", &base_binding, &base_fingerprint);
 
+        assert_ne!(base, derived("ja", &base_binding, &base_fingerprint));
         assert_ne!(
             base,
-            TranslationUnitId::derive("ja", &base_binding, &base_fingerprint)
+            derived("en", &binding("Other", 42, 0, 0), &base_fingerprint)
         );
         assert_ne!(
             base,
-            TranslationUnitId::derive("en", &binding("Other", 42, 0, 0), &base_fingerprint)
+            derived("en", &binding("Synthetic", 43, 0, 0), &base_fingerprint)
         );
         assert_ne!(
             base,
-            TranslationUnitId::derive("en", &binding("Synthetic", 43, 0, 0), &base_fingerprint)
+            derived("en", &binding("Synthetic", 42, 1, 0), &base_fingerprint)
         );
         assert_ne!(
             base,
-            TranslationUnitId::derive("en", &binding("Synthetic", 42, 1, 0), &base_fingerprint)
+            derived("en", &binding("Synthetic", 42, 0, 1), &base_fingerprint)
         );
         assert_ne!(
             base,
-            TranslationUnitId::derive("en", &binding("Synthetic", 42, 0, 1), &base_fingerprint)
-        );
-        assert_ne!(
-            base,
-            TranslationUnitId::derive(
+            derived(
                 "en",
                 &base_binding,
                 &fingerprint(Sha256Hash::from_bytes([0x33; 32]))
@@ -574,7 +581,7 @@ mod tests {
         );
         assert_eq!(
             base,
-            TranslationUnitId::derive(
+            derived(
                 "en",
                 &base_binding,
                 &SourceFingerprint::new(MACRO_HASH, None, Sha256Hash::from_bytes([0x99; 32]))
@@ -592,12 +599,12 @@ mod tests {
             WorkspaceMetadata::new("en", "de", "content-b", "snapshot-b").expect("metadata");
 
         assert_eq!(
-            TranslationUnitId::derive(
+            derived(
                 first_metadata.source_language(),
                 &source_binding,
                 &source_fingerprint,
             ),
-            TranslationUnitId::derive(
+            derived(
                 second_metadata.source_language(),
                 &source_binding,
                 &source_fingerprint,
@@ -607,7 +614,7 @@ mod tests {
 
     #[test]
     fn translation_unit_id_display_and_parse_round_trip() {
-        let id = TranslationUnitId::derive(
+        let id = derived(
             "en",
             &binding("Synthetic", 42, 0, 0),
             &fingerprint(MACRO_HASH),
@@ -620,7 +627,7 @@ mod tests {
 
     #[test]
     fn translation_unit_id_parser_rejects_malformed_values() {
-        let valid = TranslationUnitId::derive(
+        let valid = derived(
             "en",
             &binding("Synthetic", 42, 0, 0),
             &fingerprint(MACRO_HASH),
@@ -651,7 +658,7 @@ mod tests {
     fn unit_mutations_follow_review_rules() {
         let binding = binding("Synthetic", 42, 0, 0);
         let fingerprint = fingerprint(MACRO_HASH);
-        let id = TranslationUnitId::derive("en", &binding, &fingerprint);
+        let id = derived("en", &binding, &fingerprint);
         let mut unit = TranslationUnit::new(id, binding.clone(), fingerprint, "draft");
         unit.set_review_state(ReviewState::Reviewed);
         unit.set_target_macro("");

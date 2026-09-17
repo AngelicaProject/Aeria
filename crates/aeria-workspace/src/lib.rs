@@ -73,6 +73,7 @@ pub enum WorkspaceError {
 pub struct Workspace {
     metadata: WorkspaceMetadata,
     units: BTreeMap<TranslationUnitId, TranslationUnit>,
+    source_bindings: BTreeMap<SourceBinding, TranslationUnitId>,
 }
 
 impl Workspace {
@@ -82,6 +83,7 @@ impl Workspace {
         Self {
             metadata,
             units: BTreeMap::new(),
+            source_bindings: BTreeMap::new(),
         }
     }
 
@@ -124,9 +126,9 @@ impl Workspace {
     /// Finds a unit by its current source coordinate.
     #[must_use]
     pub fn unit_by_source_binding(&self, binding: &SourceBinding) -> Option<&TranslationUnit> {
-        self.units
-            .values()
-            .find(|unit| unit.source_binding() == binding)
+        self.source_bindings
+            .get(binding)
+            .and_then(|id| self.units.get(id))
     }
 
     /// Creates a draft unit from one String cell in an already verified HXS
@@ -201,35 +203,6 @@ impl Workspace {
         Ok(())
     }
 
-    /// Marks a known meaningful source change and retains the unit's durable
-    /// identity while replacing its current binding and fingerprint.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the unit does not exist or the new binding is
-    /// already owned by another unit.
-    pub fn mark_source_changed(
-        &mut self,
-        id: TranslationUnitId,
-        source_binding: SourceBinding,
-        source_fingerprint: SourceFingerprint,
-    ) -> Result<(), WorkspaceError> {
-        if !self.units.contains_key(&id) {
-            return Err(WorkspaceError::UnitNotFound { id });
-        }
-        if self
-            .unit_by_source_binding(&source_binding)
-            .is_some_and(|unit| unit.id() != id)
-        {
-            return Err(WorkspaceError::DuplicateSourceBinding {
-                binding: source_binding,
-            });
-        }
-        self.unit_mut(id)?
-            .update_source_after_known_change(source_binding, source_fingerprint);
-        Ok(())
-    }
-
     fn create_unit_from_verified_source(
         &mut self,
         snapshot: &HxsSnapshot,
@@ -240,17 +213,26 @@ impl Workspace {
         let fingerprint = verified_fingerprint(snapshot, &binding)?;
         validate_target(target_macro)?;
         let id =
-            TranslationUnitId::try_derive(self.metadata.source_language(), &binding, &fingerprint)?;
+            TranslationUnitId::derive(self.metadata.source_language(), &binding, &fingerprint)?;
+
+        let unit = TranslationUnit::new(id, binding, fingerprint, target_macro);
+        self.insert_unit(unit)?;
+        Ok(id)
+    }
+
+    fn insert_unit(&mut self, unit: TranslationUnit) -> Result<(), WorkspaceError> {
+        let id = unit.id();
+        let binding = unit.source_binding().clone();
         if self.units.contains_key(&id) {
             return Err(WorkspaceError::DuplicateUnitId { id });
         }
-        if self.unit_by_source_binding(&binding).is_some() {
+        if self.source_bindings.contains_key(&binding) {
             return Err(WorkspaceError::DuplicateSourceBinding { binding });
         }
 
-        let unit = TranslationUnit::new(id, binding, fingerprint, target_macro);
         self.units.insert(id, unit);
-        Ok(id)
+        self.source_bindings.insert(binding, id);
+        Ok(())
     }
 
     fn unit_mut(&mut self, id: TranslationUnitId) -> Result<&mut TranslationUnit, WorkspaceError> {
@@ -322,5 +304,88 @@ fn validate_target(target_macro: &str) -> Result<(), WorkspaceError> {
         Err(WorkspaceError::InvalidTarget {
             diagnostics: validation.diagnostics().to_vec(),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_unit(sheet_name: &str, row_id: u32, macro_byte: u8) -> TranslationUnit {
+        let binding = SourceBinding::new(sheet_name, row_id, 0, 0);
+        let fingerprint = SourceFingerprint::new(
+            Sha256Hash::from_bytes([macro_byte; 32]),
+            None,
+            Sha256Hash::from_bytes([0x22; 32]),
+        );
+        let id = TranslationUnitId::derive("en", &binding, &fingerprint)
+            .expect("test identity inputs fit canonical framing");
+        TranslationUnit::new(id, binding, fingerprint, "target")
+    }
+
+    fn test_metadata() -> WorkspaceMetadata {
+        WorkspaceMetadata::new("en", "fr", "content", "snapshot").expect("test metadata is valid")
+    }
+
+    fn assert_index_consistent(workspace: &Workspace) {
+        assert_eq!(workspace.units.len(), workspace.source_bindings.len());
+        for (binding, id) in &workspace.source_bindings {
+            assert_eq!(
+                workspace.units.get(id).map(TranslationUnit::source_binding),
+                Some(binding)
+            );
+        }
+        for (id, unit) in &workspace.units {
+            assert_eq!(
+                workspace.source_bindings.get(unit.source_binding()),
+                Some(id)
+            );
+        }
+    }
+
+    #[test]
+    fn source_binding_index_rejects_duplicates_and_stays_consistent() {
+        let mut workspace = Workspace::new(test_metadata());
+        let first = test_unit("Synthetic", 42, 0x11);
+        let first_id = first.id();
+        let binding = first.source_binding().clone();
+        workspace.insert_unit(first).expect("first unit inserts");
+
+        assert_eq!(
+            workspace
+                .unit_by_source_binding(&binding)
+                .map(TranslationUnit::id),
+            Some(first_id)
+        );
+        assert_index_consistent(&workspace);
+
+        let duplicate_binding = test_unit("Synthetic", 42, 0x33);
+        assert_ne!(duplicate_binding.id(), first_id);
+        assert!(matches!(
+            workspace.insert_unit(duplicate_binding),
+            Err(WorkspaceError::DuplicateSourceBinding { binding: found }) if found == binding
+        ));
+        assert_index_consistent(&workspace);
+
+        let second = test_unit("Synthetic", 7, 0x44);
+        let second_id = second.id();
+        let second_binding = second.source_binding().clone();
+        workspace.insert_unit(second).expect("second unit inserts");
+        workspace
+            .update_target(second_id, "updated target")
+            .expect("target update");
+        workspace
+            .update_note(second_id, Some("note".to_owned()))
+            .expect("note update");
+        workspace
+            .update_review_state(second_id, ReviewState::Reviewed)
+            .expect("review update");
+        assert_eq!(
+            workspace
+                .unit_by_source_binding(&second_binding)
+                .map(TranslationUnit::id),
+            Some(second_id)
+        );
+        assert_index_consistent(&workspace);
     }
 }

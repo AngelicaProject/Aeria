@@ -2,7 +2,7 @@ use std::fmt::Write as _;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use aeria_core::{ReviewState, Sha256Hash, SourceBinding, SourceFingerprint};
+use aeria_core::{ReviewState, Sha256Hash, SourceBinding};
 use aeria_hxs::HxsSnapshot;
 use aeria_workspace::{Workspace, WorkspaceError};
 use rusqlite::{Connection, params};
@@ -17,7 +17,6 @@ struct Fixture {
     one_row_technical_hash: [u8; 32],
     two_macro_hash: [u8; 32],
     two_raw_hash: [u8; 32],
-    two_row_technical_hash: [u8; 32],
 }
 
 impl Drop for Fixture {
@@ -80,6 +79,12 @@ fn workspace_is_sparse_and_explicit_empty_targets_are_present() {
 
     assert_eq!(workspace.units().count(), 1);
     assert_eq!(workspace.unit(id).expect("unit").target_macro(), "");
+    assert_eq!(
+        workspace
+            .unit_by_source_binding(&SourceBinding::new("Synthetic", 42, 0, 0))
+            .map(aeria_core::TranslationUnit::id),
+        Some(id)
+    );
     assert!(
         workspace
             .unit_by_source_binding(&SourceBinding::new("Synthetic", 7, 0, 0))
@@ -105,7 +110,7 @@ fn requested_missing_hxs_string_cells_are_rejected_without_inserting_units() {
 }
 
 #[test]
-fn duplicate_identity_and_binding_are_rejected() {
+fn duplicate_identity_is_rejected() {
     let fixture = write_fixture();
     let snapshot = HxsSnapshot::open(&fixture.path).expect("fixture should verify");
     let mut workspace = Workspace::from_verified_snapshot(&snapshot, "fr").expect("workspace");
@@ -116,20 +121,6 @@ fn duplicate_identity_and_binding_are_rejected() {
     assert!(matches!(
         workspace.create_unit_from_hxs(&snapshot, "Synthetic", 42, 0, 0, "second"),
         Err(WorkspaceError::DuplicateUnitId { id: duplicate }) if duplicate == id
-    ));
-
-    let moved_binding = SourceBinding::new("Synthetic", 7, 0, 0);
-    let moved_fingerprint = SourceFingerprint::new(
-        Sha256Hash::from_bytes(fixture.two_macro_hash),
-        Some(Sha256Hash::from_bytes(fixture.two_raw_hash)),
-        Sha256Hash::from_bytes(fixture.two_row_technical_hash),
-    );
-    workspace
-        .mark_source_changed(id, moved_binding.clone(), moved_fingerprint)
-        .expect("known source change");
-    assert!(matches!(
-        workspace.create_unit_from_hxs(&snapshot, "Synthetic", 7, 0, 0, "second"),
-        Err(WorkspaceError::DuplicateSourceBinding { binding }) if binding == moved_binding
     ));
 }
 
@@ -158,7 +149,7 @@ fn opaque_targets_are_valid_but_malformed_targets_are_rejected() {
 }
 
 #[test]
-fn editing_target_resets_review_and_known_source_change_needs_review() {
+fn editing_target_resets_review() {
     let fixture = write_fixture();
     let snapshot = HxsSnapshot::open(&fixture.path).expect("fixture should verify");
     let mut workspace = Workspace::from_verified_snapshot(&snapshot, "fr").expect("workspace");
@@ -176,26 +167,6 @@ fn editing_target_resets_review_and_known_source_change_needs_review() {
         workspace.unit(id).unwrap().review_state(),
         ReviewState::Draft
     );
-
-    workspace
-        .update_review_state(id, ReviewState::Reviewed)
-        .expect("explicit review");
-    let new_binding = SourceBinding::new("Synthetic", 7, 0, 0);
-    workspace
-        .mark_source_changed(
-            id,
-            new_binding.clone(),
-            SourceFingerprint::new(
-                Sha256Hash::from_bytes(fixture.two_macro_hash),
-                Some(Sha256Hash::from_bytes(fixture.two_raw_hash)),
-                Sha256Hash::from_bytes(fixture.two_row_technical_hash),
-            ),
-        )
-        .expect("known source change");
-    let unit = workspace.unit(id).expect("unit retains its ID");
-    assert_eq!(unit.id(), id);
-    assert_eq!(unit.source_binding(), &new_binding);
-    assert_eq!(unit.review_state(), ReviewState::NeedsReview);
 }
 
 #[test]
@@ -367,7 +338,6 @@ fn write_fixture() -> Fixture {
         one_row_technical_hash,
         two_macro_hash,
         two_raw_hash,
-        two_row_technical_hash,
     }
 }
 
