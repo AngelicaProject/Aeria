@@ -277,6 +277,24 @@ fn accepts_non_positive_sheet_surrogate_ids() {
 }
 
 #[test]
+fn accepts_blank_and_whitespace_only_sheet_names() {
+    for name in ["", "   "] {
+        let fixture = write_named_fixture(name);
+        let snapshot = HxsSnapshot::open(&fixture.path)
+            .expect("a self-consistent HXS must not reject the sheet name alone");
+        assert!(snapshot.sheet(name).is_some());
+        assert_eq!(
+            snapshot
+                .page_rows(name, 0, 1)
+                .expect("blank-name row page")
+                .rows
+                .len(),
+            1
+        );
+    }
+}
+
+#[test]
 fn rejects_unsupported_versions_and_required_schema_changes() {
     let (fixture, _) = write_fixture();
     let connection =
@@ -597,6 +615,56 @@ fn write_atlas_golden_fixture(sheet_id: i64) -> TempFixture {
             [],
         )
         .expect("insert golden metadata");
+    drop(connection);
+    TempFixture { path }
+}
+
+fn write_named_fixture(name: &str) -> TempFixture {
+    let path = std::env::temp_dir().join(format!(
+        "aeria-hxs-blank-name-{}-{}.hxs",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock after epoch")
+            .as_nanos()
+    ));
+    let connection = Connection::open(&path).expect("create blank-name fixture database");
+    connection
+        .execute_batch(SYNTHETIC_SCHEMA)
+        .expect("create blank-name fixture schema");
+    connection
+        .execute_batch(&format!(
+            "PRAGMA application_id = {APPLICATION_ID}; PRAGMA user_version = 1; PRAGMA foreign_keys = ON;"
+        ))
+        .expect("set HXS identity");
+
+    let sheet = build_sheet(
+        1,
+        name,
+        0,
+        "en",
+        vec![ColumnSpec {
+            index: 0,
+            offset: 0,
+            type_code: 1,
+        }],
+        vec![RowSpec {
+            row_id: 1,
+            subrow_id: 0,
+            technical: Vec::new(),
+            macro_text: "value".into(),
+            raw_value: None,
+        }],
+    );
+    insert_sheet(&connection, &sheet);
+    let content_id = content_id("en", &[&sheet]);
+    let snapshot_id = snapshot_id("blank-name", "en", &content_id);
+    connection
+        .execute(
+            "INSERT INTO hxs_meta (id, format_version, game_version, language, scope, content_id, snapshot_id, extractor_version, lumina_version, sheet_count, row_count, string_cell_count) VALUES (1, 1, 'blank-name', 'en', 'full', ?1, ?2, 'test', '7.7.0', 1, 1, 1)",
+            params![content_id, snapshot_id],
+        )
+        .expect("insert blank-name metadata");
     drop(connection);
     TempFixture { path }
 }

@@ -45,9 +45,6 @@ pub(crate) fn validate_and_read(connection: &Connection) -> Result<VerifiedSnaps
     while let Some(row) = rows.next().map_err(HxsError::storage)? {
         let sheet_id = read_i64(row, 0, "sheets.id")?;
         let name = read_text(row, 1, "sheets.name")?;
-        if name.trim().is_empty() {
-            return Err(HxsError::data("sheet names must not be blank"));
-        }
         if !names.insert(name.clone()) {
             return Err(HxsError::data(format!("duplicate sheet name '{name}'")));
         }
