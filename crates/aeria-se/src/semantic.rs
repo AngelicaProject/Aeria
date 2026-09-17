@@ -99,15 +99,12 @@ impl KnownMacro {
             Self::SetResetTime
             | Self::SetTime
             | Self::PcName
-            | Self::Key
             | Self::Num
             | Self::Hex
             | Self::Kilo
             | Self::Byte
             | Self::Sec
-            | Self::Time
             | Self::Float
-            | Self::Fixed
             | Self::Digit
             | Self::Ordinal => SemanticFamily::RuntimeContextValue,
             Self::If
@@ -120,11 +117,8 @@ impl KnownMacro {
             Self::Color
             | Self::EdgeColor
             | Self::ShadowColor
-            | Self::Scale
             | Self::Bold
             | Self::Italic
-            | Self::Edge
-            | Self::Shadow
             | Self::ColorType
             | Self::EdgeColorType => SemanticFamily::FormattingPresentation,
             Self::Sheet
@@ -141,7 +135,6 @@ impl KnownMacro {
             | Self::Icon
             | Self::SoftHyphen
             | Self::NonBreakingSpace
-            | Self::Icon2
             | Self::Hyphen
             | Self::Link
             | Self::Ruby
@@ -149,10 +142,20 @@ impl KnownMacro {
             Self::String
             | Self::Caps
             | Self::Head
-            | Self::Split
             | Self::HeadAll
             | Self::Lower
             | Self::LowerHead => SemanticFamily::TranslatableText,
+            // Lumina 7.7.0 exposes these names and/or argument shapes, but
+            // does not establish their runtime meaning. Preserve them as
+            // protected constructs until that contract is documented.
+            Self::Key
+            | Self::Scale
+            | Self::Edge
+            | Self::Shadow
+            | Self::Icon2
+            | Self::Time
+            | Self::Split
+            | Self::Fixed => SemanticFamily::OpaqueProtected,
         }
     }
 }
@@ -298,6 +301,9 @@ pub struct ProtectedNode {
 /// Protected node representation used by strict structure comparison.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ProtectedNodeKind {
+    /// A normalized slot for one or more adjacent user-facing text/escape
+    /// nodes. The prose itself is intentionally omitted.
+    TextSlot,
     /// A known macro and its non-prose argument structure.
     Macro {
         name: KnownMacro,
@@ -335,6 +341,8 @@ pub struct ProtectedExpression {
 pub enum ProtectedExpressionKind {
     /// An integer literal.
     Integer { value: u32 },
+    /// A numeric identifier belonging to a known game-data reference.
+    GameReference { value: u32 },
     /// A user-facing string expression with protected children only.
     String { nodes: Vec<ProtectedNode> },
     /// A protected string operand whose spelling is part of structure.
@@ -444,6 +452,9 @@ pub fn analyze(document: &MacroString) -> SemanticAnalysis {
         comparable: !matches!(document.safety(), Safety::Malformed),
     };
     let status = match document.safety() {
+        Safety::Understood if contains_opaque_protected_macro(&structure.nodes) => {
+            SemanticValidity::ValidWithOpaque
+        }
         Safety::Understood => SemanticValidity::ValidAndUnderstood,
         Safety::Opaque => SemanticValidity::ValidWithOpaque,
         Safety::Malformed => SemanticValidity::InvalidUnsafe,
@@ -696,36 +707,71 @@ fn project_expression(
 }
 
 fn project_protected_nodes(document: &MacroString, nodes: &[SyntaxNode]) -> Vec<ProtectedNode> {
-    nodes
-        .iter()
-        .filter_map(|node| {
-            let kind = match &node.kind {
-                SyntaxKind::Text | SyntaxKind::Escape { .. } => return None,
-                SyntaxKind::Macro(macro_node) => ProtectedNodeKind::Macro {
-                    name: macro_node.name,
-                    family: macro_node.name.semantic_family(),
-                    arguments: macro_node
-                        .arguments
-                        .iter()
-                        .enumerate()
-                        .map(|(index, argument)| {
-                            project_protected_expression(document, argument, macro_node.name, index)
-                        })
-                        .collect(),
-                },
-                SyntaxKind::Opaque(payload) => ProtectedNodeKind::Opaque {
-                    identity: opaque_identity(document, node.span, payload),
-                },
-                SyntaxKind::Malformed => ProtectedNodeKind::Malformed {
-                    spelling: source_spelling(document, node.span),
-                },
-            };
-            Some(ProtectedNode {
-                span: node.span,
-                kind,
-            })
-        })
-        .collect()
+    let mut projected = Vec::new();
+    let mut pending_text_slot: Option<Span> = None;
+
+    for node in nodes {
+        match &node.kind {
+            SyntaxKind::Text | SyntaxKind::Escape { .. } => {
+                pending_text_slot = Some(match pending_text_slot {
+                    Some(span) => Span::new(span.start(), node.span.end()),
+                    None => node.span,
+                });
+            }
+            SyntaxKind::Macro(macro_node) => {
+                push_text_slot(&mut projected, &mut pending_text_slot);
+                projected.push(ProtectedNode {
+                    span: node.span,
+                    kind: ProtectedNodeKind::Macro {
+                        name: macro_node.name,
+                        family: macro_node.name.semantic_family(),
+                        arguments: macro_node
+                            .arguments
+                            .iter()
+                            .enumerate()
+                            .map(|(index, argument)| {
+                                project_protected_expression(
+                                    document,
+                                    argument,
+                                    macro_node.name,
+                                    index,
+                                )
+                            })
+                            .collect(),
+                    },
+                });
+            }
+            SyntaxKind::Opaque(payload) => {
+                push_text_slot(&mut projected, &mut pending_text_slot);
+                projected.push(ProtectedNode {
+                    span: node.span,
+                    kind: ProtectedNodeKind::Opaque {
+                        identity: opaque_identity(document, node.span, payload),
+                    },
+                });
+            }
+            SyntaxKind::Malformed => {
+                push_text_slot(&mut projected, &mut pending_text_slot);
+                projected.push(ProtectedNode {
+                    span: node.span,
+                    kind: ProtectedNodeKind::Malformed {
+                        spelling: source_spelling(document, node.span),
+                    },
+                });
+            }
+        }
+    }
+    push_text_slot(&mut projected, &mut pending_text_slot);
+    projected
+}
+
+fn push_text_slot(nodes: &mut Vec<ProtectedNode>, pending_text_slot: &mut Option<Span>) {
+    if let Some(span) = pending_text_slot.take() {
+        nodes.push(ProtectedNode {
+            span,
+            kind: ProtectedNodeKind::TextSlot,
+        });
+    }
 }
 
 fn project_protected_expression(
@@ -736,12 +782,16 @@ fn project_protected_expression(
 ) -> ProtectedExpression {
     let kind = match &expression.kind {
         ExpressionKind::UnsignedInteger { value } => {
-            ProtectedExpressionKind::Integer { value: *value }
+            if is_game_reference_argument(macro_name, argument_index) {
+                ProtectedExpressionKind::GameReference { value: *value }
+            } else {
+                ProtectedExpressionKind::Integer { value: *value }
+            }
         }
         ExpressionKind::String { .. } if !is_user_facing_argument(macro_name, argument_index) => {
             ProtectedExpressionKind::ProtectedString {
                 spelling: source_spelling(document, expression.span),
-                game_reference: is_game_reference_macro(macro_name),
+                game_reference: is_game_reference_argument(macro_name, argument_index),
             }
         }
         ExpressionKind::String { parts } => ProtectedExpressionKind::String {
@@ -791,11 +841,25 @@ fn project_protected_expression(
     }
 }
 
-fn is_game_reference_macro(macro_name: KnownMacro) -> bool {
-    macro_name.semantic_family() == SemanticFamily::GameDataReference
+fn is_game_reference_argument(macro_name: KnownMacro, argument_index: usize) -> bool {
+    match macro_name {
+        KnownMacro::Sheet => matches!(argument_index, 0..=2),
+        KnownMacro::SheetSub => matches!(argument_index, 0..=5),
+        KnownMacro::JaNoun
+        | KnownMacro::EnNoun
+        | KnownMacro::DeNoun
+        | KnownMacro::FrNoun
+        | KnownMacro::ChNoun => matches!(argument_index, 0 | 2),
+        KnownMacro::SwitchPlatform | KnownMacro::LevelPos => argument_index == 0,
+        _ => false,
+    }
 }
 
 fn is_user_facing_argument(macro_name: KnownMacro, argument_index: usize) -> bool {
+    if macro_name.semantic_family() == SemanticFamily::OpaqueProtected {
+        return false;
+    }
+
     match macro_name {
         KnownMacro::If | KnownMacro::Switch => argument_index >= 1,
         KnownMacro::IfPcGender | KnownMacro::IfSelf => matches!(argument_index, 1 | 2),
@@ -881,6 +945,7 @@ fn compare_protected_nodes(
     differences: &mut Vec<StructureDifference>,
 ) {
     match (&source.kind, &target.kind) {
+        (ProtectedNodeKind::TextSlot, ProtectedNodeKind::TextSlot) => {}
         (
             ProtectedNodeKind::Macro {
                 name: source_name,
@@ -950,6 +1015,34 @@ fn compare_protected_expressions(
     target: &ProtectedExpression,
     differences: &mut Vec<StructureDifference>,
 ) {
+    let source_is_game_reference =
+        matches!(&source.kind, ProtectedExpressionKind::GameReference { .. });
+    let target_is_game_reference =
+        matches!(&target.kind, ProtectedExpressionKind::GameReference { .. });
+    if source_is_game_reference || target_is_game_reference {
+        match (
+            protected_numeric_value(&source.kind),
+            protected_numeric_value(&target.kind),
+        ) {
+            (Some(source_value), Some(target_value)) if source_value != target_value => {
+                push_expression_difference(
+                    source,
+                    target,
+                    differences,
+                    StructureDifferenceKind::ChangedGameReference,
+                );
+            }
+            (Some(_), Some(_)) => {}
+            _ => push_expression_difference(
+                source,
+                target,
+                differences,
+                StructureDifferenceKind::ChangedExpressionStructure,
+            ),
+        }
+        return;
+    }
+
     match (&source.kind, &target.kind) {
         (
             ProtectedExpressionKind::Integer {
@@ -1068,6 +1161,14 @@ fn compare_protected_expressions(
     }
 }
 
+fn protected_numeric_value(kind: &ProtectedExpressionKind) -> Option<u32> {
+    match kind {
+        ProtectedExpressionKind::Integer { value }
+        | ProtectedExpressionKind::GameReference { value } => Some(*value),
+        _ => None,
+    }
+}
+
 fn compare_protected_strings(
     source: &ProtectedExpression,
     target: &ProtectedExpression,
@@ -1178,6 +1279,7 @@ fn push_expression_difference(
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ProtectedNodeKey {
+    TextSlot,
     Macro(KnownMacro),
     Opaque,
     Malformed,
@@ -1185,9 +1287,44 @@ enum ProtectedNodeKey {
 
 fn protected_node_key(node: &ProtectedNode) -> ProtectedNodeKey {
     match node.kind {
+        ProtectedNodeKind::TextSlot => ProtectedNodeKey::TextSlot,
         ProtectedNodeKind::Macro { name, .. } => ProtectedNodeKey::Macro(name),
         ProtectedNodeKind::Opaque { .. } => ProtectedNodeKey::Opaque,
         ProtectedNodeKind::Malformed { .. } => ProtectedNodeKey::Malformed,
+    }
+}
+
+fn contains_opaque_protected_macro(nodes: &[ProtectedNode]) -> bool {
+    nodes.iter().any(|node| match &node.kind {
+        ProtectedNodeKind::Macro {
+            family: SemanticFamily::OpaqueProtected,
+            ..
+        } => true,
+        ProtectedNodeKind::Macro { arguments, .. } => {
+            arguments.iter().any(contains_opaque_protected_expression)
+        }
+        ProtectedNodeKind::TextSlot
+        | ProtectedNodeKind::Opaque { .. }
+        | ProtectedNodeKind::Malformed { .. } => false,
+    })
+}
+
+fn contains_opaque_protected_expression(expression: &ProtectedExpression) -> bool {
+    match &expression.kind {
+        ProtectedExpressionKind::String { nodes } => contains_opaque_protected_macro(nodes),
+        ProtectedExpressionKind::RuntimeParameter { operand, .. } => {
+            contains_opaque_protected_expression(operand)
+        }
+        ProtectedExpressionKind::Comparison { left, right, .. } => {
+            contains_opaque_protected_expression(left)
+                || contains_opaque_protected_expression(right)
+        }
+        ProtectedExpressionKind::Integer { .. }
+        | ProtectedExpressionKind::GameReference { .. }
+        | ProtectedExpressionKind::ProtectedString { .. }
+        | ProtectedExpressionKind::RuntimePlaceholder(_)
+        | ProtectedExpressionKind::Opaque { .. }
+        | ProtectedExpressionKind::Malformed { .. } => false,
     }
 }
 

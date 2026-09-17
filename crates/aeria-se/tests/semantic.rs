@@ -14,11 +14,32 @@ fn has_difference(source: &str, target: &str, kind: StructureDifferenceKind) -> 
 fn every_lumina_macro_has_an_exhaustive_semantic_classification() {
     assert_eq!(KnownMacro::ALL.len(), 57);
     for macro_name in KnownMacro::ALL {
-        assert_ne!(
+        assert!(matches!(
+            macro_name.semantic_family(),
+            SemanticFamily::TranslatableText
+                | SemanticFamily::FormattingPresentation
+                | SemanticFamily::ConditionalSelection
+                | SemanticFamily::RuntimeContextValue
+                | SemanticFamily::GameDataReference
+                | SemanticFamily::LayoutTextualControl
+                | SemanticFamily::OpaqueProtected
+        ));
+    }
+
+    for macro_name in [
+        KnownMacro::Key,
+        KnownMacro::Scale,
+        KnownMacro::Edge,
+        KnownMacro::Shadow,
+        KnownMacro::Icon2,
+        KnownMacro::Time,
+        KnownMacro::Split,
+        KnownMacro::Fixed,
+    ] {
+        assert_eq!(
             macro_name.semantic_family(),
             SemanticFamily::OpaqueProtected
         );
-        assert_ne!(macro_name.semantic_family(), SemanticFamily::Expression);
     }
 }
 
@@ -97,6 +118,10 @@ fn validation_distinguishes_understood_opaque_and_unsafe_documents() {
             .status(),
         SemanticValidity::ValidWithOpaque
     );
+    assert_eq!(
+        analyze(&parse("<fixed(1)>text")).validation().status(),
+        SemanticValidity::ValidWithOpaque
+    );
 
     let malformed = analyze(&parse("<if(1,2,3>"));
     assert_eq!(
@@ -153,6 +178,62 @@ fn text_only_translation_changes_remain_compatible() {
 }
 
 #[test]
+fn pure_text_replacement_remains_compatible() {
+    let comparison = compare_macro_strings("Hello", "Bonjour");
+    assert_eq!(comparison.compatibility, StructureCompatibility::Compatible);
+    assert!(comparison.differences.is_empty());
+}
+
+#[test]
+fn formatting_macros_cannot_cross_a_text_slot() {
+    for (source, target) in [
+        ("<bold(1)>Hello", "Hello<bold(1)>"),
+        ("<bold(1)>Hello<bold(0)>", "Hello<bold(1)><bold(0)>"),
+    ] {
+        let comparison = compare_macro_strings(source, target);
+        assert_eq!(
+            comparison.compatibility,
+            StructureCompatibility::Incompatible,
+            "unexpected comparison for {source:?} -> {target:?}: {:?}",
+            comparison.differences
+        );
+        assert!(
+            comparison.differences.iter().any(|difference| {
+                matches!(
+                    difference.kind,
+                    StructureDifferenceKind::ReorderedProtectedNodes
+                        | StructureDifferenceKind::DifferentProtectedKind
+                )
+            }),
+            "expected text-slot movement difference for {source:?} -> {target:?}"
+        );
+    }
+}
+
+#[test]
+fn text_slots_are_preserved_inside_branches_and_string_expressions() {
+    for (source, target) in [
+        (
+            "<if([1==2],<bold(1)>yes<bold(0)>,fallback)>",
+            "<if([1==2],yes<bold(1)><bold(0)>,fallback)>",
+        ),
+        (
+            "<string(<bold(1)>yes<bold(0)>)>",
+            "<string(yes<bold(1)><bold(0)>)>",
+        ),
+    ] {
+        let comparison = compare_macro_strings(source, target);
+        assert_eq!(
+            comparison.compatibility,
+            StructureCompatibility::Incompatible,
+            "unexpected comparison for {source:?} -> {target:?}: {:?}",
+            comparison.differences
+        );
+        assert!(!comparison.differences.is_empty());
+    }
+}
+
+#[test]
 fn comparison_reports_missing_and_reordered_protected_nodes() {
     let missing = compare_macro_strings("<bold(1)>hello", "hello");
     assert_eq!(missing.compatibility, StructureCompatibility::Incompatible);
@@ -182,6 +263,11 @@ fn comparison_reports_runtime_game_and_opaque_changes() {
     assert!(has_difference(
         "<sheet(Items,1,2,foo)>",
         "<sheet(Quests,1,2,foo)>",
+        StructureDifferenceKind::ChangedGameReference
+    ));
+    assert!(has_difference(
+        "<sheet(Item,1,2,foo)>",
+        "<sheet(Item,2,2,foo)>",
         StructureDifferenceKind::ChangedGameReference
     ));
     assert!(has_difference(
