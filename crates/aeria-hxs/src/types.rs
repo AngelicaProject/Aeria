@@ -2,7 +2,7 @@ use std::fmt;
 use std::fmt::Write as _;
 
 /// A verified SHA-256 digest stored in an HXS artifact.
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct HxsHash([u8; 32]);
 
 impl HxsHash {
@@ -238,6 +238,55 @@ pub struct RowRecord {
 pub struct StringCellHashes {
     pub macro_text: HxsHash,
     pub raw_value: Option<HxsHash>,
+}
+
+/// The coordinate of one String occurrence in a verified HXS snapshot.
+///
+/// This HXS-owned coordinate deliberately does not depend on `aeria-core`.
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct StringOccurrenceCoordinate {
+    pub sheet_name: String,
+    pub row_id: u32,
+    pub subrow_id: u16,
+    pub column_index: u32,
+}
+
+impl StringOccurrenceCoordinate {
+    /// Creates a coordinate for a String occurrence.
+    #[must_use]
+    pub fn new(
+        sheet_name: impl Into<String>,
+        row_id: u32,
+        subrow_id: u16,
+        column_index: u32,
+    ) -> Self {
+        Self {
+            sheet_name: sheet_name.into(),
+            row_id,
+            subrow_id,
+            column_index,
+        }
+    }
+}
+
+/// The source facts needed to build a deterministic rebase index.
+///
+/// The occurrence contains hashes only. It intentionally does not expose the
+/// macro text or raw source bytes, so a rebase scan does not load source values
+/// merely to establish exact identity evidence.
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct StringOccurrenceFingerprint {
+    pub coordinate: StringOccurrenceCoordinate,
+    pub macro_text_hash: HxsHash,
+    pub raw_value_hash: Option<HxsHash>,
+    pub row_technical_hash: HxsHash,
+}
+
+/// A bounded keyset page of String occurrence fingerprints.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct StringOccurrencePage {
+    pub occurrences: Vec<StringOccurrenceFingerprint>,
+    pub next_after: Option<StringOccurrenceCoordinate>,
 }
 
 /// One source String cell, including both source representations when available.

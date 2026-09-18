@@ -1,15 +1,18 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use rusqlite::{Connection, OpenFlags};
+use rusqlite::{Connection, OpenFlags, params};
 
-use crate::MAX_ROW_PAGE_SIZE;
 use crate::error::HxsError;
-use crate::types::{RowPage, RowRecord, SheetMetadata, SnapshotMetadata, StringCell};
+use crate::types::{
+    RowPage, RowRecord, SheetMetadata, SnapshotMetadata, StringCell, StringOccurrenceCoordinate,
+    StringOccurrenceFingerprint, StringOccurrencePage,
+};
 use crate::validation::{
     APPLICATION_ID, FORMAT_VERSION, VerifiedSnapshot, read_row_record, read_string_cell,
     validate_and_read,
 };
+use crate::{MAX_ROW_PAGE_SIZE, MAX_STRING_OCCURRENCE_PAGE_SIZE};
 
 /// A verified, read-only handle to one immutable HXS source artifact.
 pub struct HxsSnapshot {
@@ -183,6 +186,108 @@ impl HxsSnapshot {
             .transpose()
     }
 
+    /// Reads one bounded keyset page of String occurrence fingerprints within
+    /// one sheet in row/subrow/column order.
+    ///
+    /// Only source coordinates and verified hashes are returned. `after` is
+    /// exclusive; passing the returned cursor to the next call enumerates
+    /// every occurrence in the sheet exactly once without loading macro text
+    /// or raw bytes. Callers that need snapshot order should enumerate
+    /// [`Self::sheets`] by canonical name and page each sheet independently.
+    ///
+    /// `limit` must be between one and
+    /// [`MAX_STRING_OCCURRENCE_PAGE_SIZE`] inclusive.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an invalid page size, an invalid stored hash, or a
+    /// storage/read failure.
+    pub fn page_string_occurrences(
+        &self,
+        sheet_name: &str,
+        after: Option<&StringOccurrenceCoordinate>,
+        limit: u32,
+    ) -> Result<StringOccurrencePage, HxsError> {
+        if !(1..=MAX_STRING_OCCURRENCE_PAGE_SIZE).contains(&limit) {
+            return Err(HxsError::request(
+                "String occurrence page limit must be between 1 and MAX_STRING_OCCURRENCE_PAGE_SIZE",
+            ));
+        }
+        let page_limit = usize::try_from(limit)
+            .map_err(|_| HxsError::request("String occurrence page limit is too large"))?;
+        let sheet_id = self.sheet_id(sheet_name)?;
+        if after.is_some_and(|cursor| cursor.sheet_name != sheet_name) {
+            return Err(HxsError::request(
+                "String occurrence cursor belongs to a different sheet",
+            ));
+        }
+
+        let limit_sql = i64::from(limit) + 1;
+        let (sql, parameter_values) = if let Some(after) = after {
+            (
+                "SELECT c.row_id, c.subrow_id, c.column_index, \
+                        c.macro_hash, c.raw_hash, r.technical_hash \
+                 FROM string_cells AS c \
+                 JOIN rows AS r ON r.sheet_id = c.sheet_id \
+                                AND r.row_id = c.row_id \
+                                AND r.subrow_id = c.subrow_id \
+                 WHERE c.sheet_id = ?1 \
+                   AND (c.row_id, c.subrow_id, c.column_index) > (?2, ?3, ?4) \
+                 ORDER BY c.row_id, c.subrow_id, c.column_index \
+                 LIMIT ?5",
+                Some((
+                    sheet_id,
+                    i64::from(after.row_id),
+                    i64::from(after.subrow_id),
+                    i64::from(after.column_index),
+                    limit_sql,
+                )),
+            )
+        } else {
+            (
+                "SELECT c.row_id, c.subrow_id, c.column_index, \
+                        c.macro_hash, c.raw_hash, r.technical_hash \
+                 FROM string_cells AS c \
+                 JOIN rows AS r ON r.sheet_id = c.sheet_id \
+                                AND r.row_id = c.row_id \
+                                AND r.subrow_id = c.subrow_id \
+                 WHERE c.sheet_id = ?1 \
+                 ORDER BY c.row_id, c.subrow_id, c.column_index \
+                 LIMIT ?2",
+                None,
+            )
+        };
+
+        let mut statement = self.connection.prepare(sql).map_err(HxsError::storage)?;
+        let mut rows = match parameter_values {
+            Some((sheet_id, row_id, subrow_id, column_index, limit)) => statement
+                .query(params![sheet_id, row_id, subrow_id, column_index, limit])
+                .map_err(HxsError::storage)?,
+            None => statement
+                .query(params![sheet_id, limit_sql])
+                .map_err(HxsError::storage)?,
+        };
+
+        let mut occurrences = Vec::with_capacity(page_limit);
+        while let Some(row) = rows.next().map_err(HxsError::storage)? {
+            occurrences.push(read_string_occurrence(row, sheet_name)?);
+        }
+
+        let next_after = if occurrences.len() > page_limit {
+            occurrences.pop();
+            occurrences
+                .last()
+                .map(|occurrence| occurrence.coordinate.clone())
+        } else {
+            None
+        };
+
+        Ok(StringOccurrencePage {
+            occurrences,
+            next_after,
+        })
+    }
+
     fn sheet_id(&self, sheet_name: &str) -> Result<i64, HxsError> {
         self.sheet_ids
             .get(sheet_name)
@@ -191,6 +296,68 @@ impl HxsSnapshot {
                 name: sheet_name.to_owned(),
             })
     }
+}
+
+fn read_string_occurrence(
+    row: &rusqlite::Row<'_>,
+    sheet_name: &str,
+) -> Result<StringOccurrenceFingerprint, HxsError> {
+    let row_id = read_non_negative_u32(row, 0, "string_cells.row_id")?;
+    let subrow_id = read_non_negative_u16(row, 1, "string_cells.subrow_id")?;
+    let column_index = read_non_negative_u32(row, 2, "string_cells.column_index")?;
+    let macro_text_hash = read_hash(row, 3, "string_cells.macro_hash")?;
+    let raw_value_hash = read_optional_hash(row, 4, "string_cells.raw_hash")?;
+    let row_technical_hash = read_hash(row, 5, "rows.technical_hash")?;
+    Ok(StringOccurrenceFingerprint {
+        coordinate: StringOccurrenceCoordinate::new(sheet_name, row_id, subrow_id, column_index),
+        macro_text_hash,
+        raw_value_hash,
+        row_technical_hash,
+    })
+}
+
+fn read_non_negative_u32(
+    row: &rusqlite::Row<'_>,
+    index: usize,
+    column: &str,
+) -> Result<u32, HxsError> {
+    let value = row.get::<_, i64>(index).map_err(HxsError::storage)?;
+    u32::try_from(value).map_err(|_| HxsError::data(format!("{column} is out of range")))
+}
+
+fn read_non_negative_u16(
+    row: &rusqlite::Row<'_>,
+    index: usize,
+    column: &str,
+) -> Result<u16, HxsError> {
+    let value = row.get::<_, i64>(index).map_err(HxsError::storage)?;
+    u16::try_from(value).map_err(|_| HxsError::data(format!("{column} is out of range")))
+}
+
+fn read_hash(
+    row: &rusqlite::Row<'_>,
+    index: usize,
+    column: &str,
+) -> Result<crate::types::HxsHash, HxsError> {
+    let bytes = row.get::<_, Vec<u8>>(index).map_err(HxsError::storage)?;
+    crate::types::HxsHash::from_bytes(&bytes)
+        .ok_or_else(|| HxsError::data(format!("{column} must contain a 32-byte hash")))
+}
+
+fn read_optional_hash(
+    row: &rusqlite::Row<'_>,
+    index: usize,
+    column: &str,
+) -> Result<Option<crate::types::HxsHash>, HxsError> {
+    let bytes = row
+        .get::<_, Option<Vec<u8>>>(index)
+        .map_err(HxsError::storage)?;
+    bytes
+        .map(|bytes| {
+            crate::types::HxsHash::from_bytes(&bytes)
+                .ok_or_else(|| HxsError::data(format!("{column} must contain a 32-byte hash")))
+        })
+        .transpose()
 }
 
 fn validate_identity(connection: &Connection) -> Result<(), HxsError> {

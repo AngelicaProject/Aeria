@@ -2,7 +2,9 @@ use std::fmt::Write as _;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use aeria_hxs::{HxsError, HxsSnapshot, MAX_ROW_PAGE_SIZE, SheetVariant};
+use aeria_hxs::{
+    HxsError, HxsSnapshot, MAX_ROW_PAGE_SIZE, MAX_STRING_OCCURRENCE_PAGE_SIZE, SheetVariant,
+};
 use rusqlite::{Connection, params};
 use sha2::{Digest, Sha256};
 
@@ -181,6 +183,144 @@ fn opens_and_exposes_verified_metadata_sheets_rows_and_cells() {
         .expect("subrow cell lookup")
         .expect("subrow cell exists");
     assert_eq!(beta_subrow.raw_value, Some(vec![2]));
+}
+
+#[test]
+#[allow(clippy::too_many_lines)]
+fn string_occurrence_pages_are_canonical_bounded_and_hash_only() {
+    let (fixture, expected) = write_fixture();
+    let snapshot = HxsSnapshot::open(&fixture.path).expect("synthetic HXS should verify");
+
+    assert!(matches!(
+        snapshot.page_string_occurrences("Alpha", None, 0),
+        Err(HxsError::InvalidRequest { .. })
+    ));
+    assert!(matches!(
+        snapshot.page_string_occurrences("Alpha", None, MAX_STRING_OCCURRENCE_PAGE_SIZE + 1),
+        Err(HxsError::InvalidRequest { .. })
+    ));
+
+    let first = snapshot
+        .page_string_occurrences("Alpha", None, 1)
+        .expect("first occurrence page");
+    assert_eq!(first.occurrences.len(), 1);
+    assert_eq!(first.occurrences[0].coordinate.sheet_name, "Alpha");
+    assert_eq!(first.occurrences[0].coordinate.row_id, 2);
+    assert_eq!(
+        first.occurrences[0].macro_text_hash.as_bytes(),
+        &expected.alpha.rows[0].macro_hash
+    );
+    assert_eq!(
+        first.occurrences[0]
+            .raw_value_hash
+            .as_ref()
+            .map(aeria_hxs::HxsHash::as_bytes),
+        Some(&expected.alpha.rows[0].raw_hash.unwrap())
+    );
+    assert_eq!(
+        first.occurrences[0].row_technical_hash.as_bytes(),
+        &expected.alpha.rows[0].technical_hash
+    );
+    let after_first = first.next_after.expect("a second page exists");
+
+    let second = snapshot
+        .page_string_occurrences("Alpha", Some(&after_first), 1)
+        .expect("second occurrence page");
+    assert_eq!(
+        second
+            .occurrences
+            .iter()
+            .map(|occurrence| (
+                occurrence.coordinate.sheet_name.as_str(),
+                occurrence.coordinate.row_id,
+                occurrence.coordinate.subrow_id,
+            ))
+            .collect::<Vec<_>>(),
+        [("Alpha", 3, 0)]
+    );
+    assert!(second.next_after.is_none());
+
+    let beta_first = snapshot
+        .page_string_occurrences("Beta", None, 1)
+        .expect("first Beta occurrence page");
+    let beta_after_first = beta_first
+        .next_after
+        .clone()
+        .expect("a second Beta page exists");
+    let beta_second = snapshot
+        .page_string_occurrences("Beta", Some(&beta_after_first), 1)
+        .expect("second Beta occurrence page");
+    assert!(beta_second.next_after.is_none());
+
+    let coordinates: Vec<_> = first
+        .occurrences
+        .iter()
+        .chain(second.occurrences.iter())
+        .chain(beta_first.occurrences.iter())
+        .chain(beta_second.occurrences.iter())
+        .map(|occurrence| occurrence.coordinate.clone())
+        .collect();
+    assert_eq!(
+        coordinates
+            .iter()
+            .map(|coordinate| (
+                coordinate.sheet_name.as_str(),
+                coordinate.row_id,
+                coordinate.subrow_id,
+                coordinate.column_index,
+            ))
+            .collect::<Vec<_>>(),
+        [
+            ("Alpha", 2, 0, 0),
+            ("Alpha", 3, 0, 0),
+            ("Beta", 5, 0, 0),
+            ("Beta", 5, 1, 0),
+        ]
+    );
+
+    let after_second = beta_second
+        .occurrences
+        .last()
+        .expect("second page has a final occurrence")
+        .coordinate
+        .clone();
+    let empty = snapshot
+        .page_string_occurrences("Beta", Some(&after_second), MAX_STRING_OCCURRENCE_PAGE_SIZE)
+        .expect("page after final occurrence");
+    assert!(empty.occurrences.is_empty());
+
+    assert!(matches!(
+        snapshot.page_string_occurrences("Missing", None, 1),
+        Err(HxsError::SheetNotFound { .. })
+    ));
+    assert!(matches!(
+        snapshot.page_string_occurrences("Alpha", Some(&after_second), 1),
+        Err(HxsError::InvalidRequest { .. })
+    ));
+}
+
+#[test]
+fn string_occurrence_pages_handle_empty_sheets_subrows_and_high_coordinates() {
+    let fixture = write_reader_edge_fixture();
+    let snapshot = HxsSnapshot::open(&fixture.path).expect("edge HXS should verify");
+
+    assert!(
+        snapshot
+            .page_string_occurrences("Empty", None, 1)
+            .expect("empty-sheet occurrence page")
+            .occurrences
+            .is_empty()
+    );
+    let page = snapshot
+        .page_string_occurrences("High", None, 1)
+        .expect("edge occurrence page");
+    assert_eq!(page.occurrences.len(), 1);
+    let coordinate = &page.occurrences[0].coordinate;
+    assert_eq!(coordinate.sheet_name, "High");
+    assert_eq!(coordinate.row_id, u32::MAX);
+    assert_eq!(coordinate.subrow_id, u16::MAX);
+    assert_eq!(coordinate.column_index, 0);
+    assert!(page.next_after.is_none());
 }
 
 #[test]
@@ -669,6 +809,82 @@ fn write_named_fixture(name: &str) -> TempFixture {
     TempFixture { path }
 }
 
+fn write_reader_edge_fixture() -> TempFixture {
+    let path = std::env::temp_dir().join(format!(
+        "aeria-hxs-reader-edge-{}-{}.hxs",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock after epoch")
+            .as_nanos()
+    ));
+    let connection = Connection::open(&path).expect("create edge fixture database");
+    connection
+        .execute_batch(SYNTHETIC_SCHEMA)
+        .expect("create edge fixture schema");
+    connection
+        .execute_batch(&format!(
+            "PRAGMA application_id = {APPLICATION_ID}; PRAGMA user_version = 1; PRAGMA foreign_keys = ON;"
+        ))
+        .expect("set HXS identity");
+
+    let empty = build_sheet(
+        1,
+        "Empty",
+        0,
+        "en",
+        vec![ColumnSpec {
+            index: 0,
+            offset: 0,
+            type_code: 14,
+        }],
+        vec![RowSpec {
+            row_id: 1,
+            subrow_id: 0,
+            technical: vec![(0, 14, vec![1, 0, 0, 0])],
+            macro_text: String::new(),
+            raw_value: None,
+        }],
+    );
+    let high = build_sheet(
+        2,
+        "High",
+        1,
+        "en",
+        vec![
+            ColumnSpec {
+                index: 0,
+                offset: 0,
+                type_code: 1,
+            },
+            ColumnSpec {
+                index: 1,
+                offset: 4,
+                type_code: 14,
+            },
+        ],
+        vec![RowSpec {
+            row_id: u32::MAX,
+            subrow_id: u16::MAX,
+            technical: vec![(1, 14, vec![9, 0, 0, 0])],
+            macro_text: "高座標".into(),
+            raw_value: Some(vec![0xff]),
+        }],
+    );
+    insert_sheet(&connection, &empty);
+    insert_sheet(&connection, &high);
+    let content_id = content_id("en", &[&empty, &high]);
+    let snapshot_id = snapshot_id("reader-edge", "en", &content_id);
+    connection
+        .execute(
+            "INSERT INTO hxs_meta (id, format_version, game_version, language, scope, content_id, snapshot_id, extractor_version, lumina_version, sheet_count, row_count, string_cell_count) VALUES (1, 1, 'reader-edge', 'en', 'full', ?1, ?2, 'test', '7.7.0', 2, 2, 1)",
+            params![content_id, snapshot_id],
+        )
+        .expect("insert edge metadata");
+    drop(connection);
+    TempFixture { path }
+}
+
 fn fixed_bytes(value: &str) -> Vec<u8> {
     assert!(value.len().is_multiple_of(2));
     (0..value.len())
@@ -691,7 +907,11 @@ fn build_sheet(
             let technical_payload = technical_payload(&spec.technical);
             let macro_hash = macro_hash(&spec.macro_text);
             let raw_digest = spec.raw_value.as_deref().map(raw_hash);
-            let string_part = string_part(0, &macro_hash, raw_digest.as_ref());
+            let string_part = columns
+                .iter()
+                .filter(|column| column.type_code == 1)
+                .flat_map(|column| string_part(column.index, &macro_hash, raw_digest.as_ref()))
+                .collect::<Vec<_>>();
             let technical_hash = row_technical(name, &spec, &spec.technical);
             let string_hash = row_strings(name, &spec, &string_part);
             let combined_hash = row_hash(name, &spec, &technical_hash, &string_hash);
@@ -757,12 +977,14 @@ fn insert_sheet(connection: &Connection, sheet: &BuiltSheet) {
                 params![sheet.id, row.spec.row_id, row.spec.subrow_id, row.technical_payload, row.row_hash.as_slice(), row.technical_hash.as_slice(), row.string_hash.as_slice()],
             )
             .expect("insert row");
-        connection
-            .execute(
-                "INSERT INTO string_cells (sheet_id, row_id, subrow_id, column_index, macro_text, raw_value, macro_hash, raw_hash) VALUES (?1, ?2, ?3, 0, ?4, ?5, ?6, ?7)",
-                params![sheet.id, row.spec.row_id, row.spec.subrow_id, row.spec.macro_text, row.spec.raw_value, row.macro_hash.as_slice(), row.raw_hash.as_ref().map(<[u8; 32]>::as_slice)],
-            )
-            .expect("insert String cell");
+        if let Some(string_column) = sheet.columns.iter().find(|column| column.type_code == 1) {
+            connection
+                .execute(
+                    "INSERT INTO string_cells (sheet_id, row_id, subrow_id, column_index, macro_text, raw_value, macro_hash, raw_hash) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                    params![sheet.id, row.spec.row_id, row.spec.subrow_id, string_column.index, row.spec.macro_text, row.spec.raw_value, row.macro_hash.as_slice(), row.raw_hash.as_ref().map(<[u8; 32]>::as_slice)],
+                )
+                .expect("insert String cell");
+        }
     }
 }
 

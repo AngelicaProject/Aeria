@@ -7,5 +7,16 @@ license.workspace = true
 repository.workspace = true
 description = "Deterministic and conservative cross-snapshot migration planning."
 
+[dependencies]
+aeria-core = { path = "../aeria-core" }
+aeria-hxs = { path = "../aeria-hxs" }
+thiserror = "2.0.20"
+
 [lints]
 workspace = true
+
+[dev-dependencies]
+aeria-workspace = { path = "../aeria-workspace" }
+rusqlite = { version = "0.40.2", features = ["bundled"] }
+sha2 = "0.11.0"
+tempfile = "3.27.0"
