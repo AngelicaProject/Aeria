@@ -3,7 +3,7 @@ use std::path::Path;
 use std::str::FromStr;
 
 use aeria_core::{ReviewState, TranslationUnitId, WorkspaceMetadata};
-use aeria_workspace::{Workspace, WorkspaceStore};
+use aeria_workspace::{Workspace, WorkspaceError, WorkspaceStore, WorkspaceStoreError};
 use tempfile::{TempDir, tempdir};
 
 const FIXTURE_MANIFEST: &[u8] = include_bytes!("fixtures/workspace-v1/manifest.json");
@@ -141,18 +141,74 @@ fn persist_rewrites_only_the_selected_shard_and_preserves_complete_canonical_byt
 }
 
 #[test]
-fn empty_selected_shard_is_removed_with_empty_units_directory() {
+fn persist_unit_merges_a_partial_workspace_without_deleting_persisted_units() {
     let repository = fixture_repository();
     let store = WorkspaceStore::new(repository.path());
-    let workspace = Workspace::new(metadata());
     let first_id = TranslationUnitId::from_str(ID_00).expect("ID");
+    let second_id = TranslationUnitId::from_str(
+        "tu1:0000000000000000000000000000000000000000000000000000000000000001",
+    )
+    .expect("ID");
+    let before = store.load().expect("fixture loads");
+    let first_record = std::str::from_utf8(FIXTURE_00)
+        .expect("fixture UTF-8")
+        .lines()
+        .next()
+        .expect("first fixture record")
+        .to_owned()
+        + "\n";
+    let partial_repository = minimal_repository_with_shard("00.jsonl", &first_record);
+    let partial_workspace = WorkspaceStore::new(partial_repository.path())
+        .load()
+        .expect("partial workspace loads");
 
     store
-        .persist_unit(&workspace, first_id)
-        .expect("empty selected shard is removed");
+        .persist_unit(&partial_workspace, first_id)
+        .expect("selected unit persists");
 
-    assert!(!repository.path().join(".aeria/units/00.jsonl").exists());
-    assert!(repository.path().join(".aeria/units/ff.jsonl").exists());
+    assert_eq!(
+        fs::read(repository.path().join(".aeria/units/00.jsonl")).expect("00 shard"),
+        FIXTURE_00
+    );
+    let after = store.load().expect("persisted workspace loads");
+    assert_eq!(after.unit(first_id), partial_workspace.unit(first_id));
+    assert_eq!(after.unit(second_id), before.unit(second_id));
+}
+
+#[test]
+fn persist_unit_rejects_an_absent_id_without_modifying_the_shard() {
+    let repository = fixture_repository();
+    let store = WorkspaceStore::new(repository.path());
+    let first_id = TranslationUnitId::from_str(ID_00).expect("ID");
+    let absent_id = TranslationUnitId::from_str(
+        "tu1:0000000000000000000000000000000000000000000000000000000000000001",
+    )
+    .expect("ID");
+    let first_record = std::str::from_utf8(FIXTURE_00)
+        .expect("fixture UTF-8")
+        .lines()
+        .next()
+        .expect("first fixture record")
+        .to_owned()
+        + "\n";
+    let partial_repository = minimal_repository_with_shard("00.jsonl", &first_record);
+    let partial_workspace = WorkspaceStore::new(partial_repository.path())
+        .load()
+        .expect("partial workspace loads");
+    let before = fs::read(repository.path().join(".aeria/units/00.jsonl")).expect("00 shard");
+
+    let error = store
+        .persist_unit(&partial_workspace, absent_id)
+        .expect_err("absent unit must fail");
+    assert!(matches!(
+        error,
+        WorkspaceStoreError::Domain(WorkspaceError::UnitNotFound { id }) if id == absent_id
+    ));
+    assert_eq!(
+        fs::read(repository.path().join(".aeria/units/00.jsonl")).expect("00 shard"),
+        before
+    );
+    assert!(partial_workspace.unit(first_id).is_some());
 }
 
 #[test]

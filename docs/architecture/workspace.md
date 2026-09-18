@@ -64,7 +64,10 @@ Changing a target always resets its unit to `draft`. Marking a unit `reviewed` i
 adapter. `WorkspaceStore` binds to a repository root, loads the validated
 state from `.aeria/manifest.json` and `.aeria/units/*.jsonl`, initializes a
 new `.aeria/` directory from an in-memory workspace, and rewrites only the
-shard selected by an affected `TranslationUnitId`.
+shard selected by an affected `TranslationUnitId`. `persist_unit()` requires
+that unit to be present in memory, fully validates the currently persisted
+selected shard, replaces only that typed unit, and preserves every other
+persisted unit in the shard.
 
 Canonical shard replacements are written to a temporary file outside the
 managed `.aeria/` namespace and published with a cross-platform atomic file

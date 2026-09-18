@@ -9,6 +9,8 @@ use std::fs::{self, File, Metadata};
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
+#[cfg(test)]
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use aeria_core::{
     ReviewState, Sha256Hash, SourceBinding, SourceFingerprint, TranslationUnit, TranslationUnitId,
@@ -20,13 +22,16 @@ use serde_json::Value;
 use tempfile::{NamedTempFile, TempDir};
 use thiserror::Error;
 
-use super::Workspace;
+use super::{Workspace, WorkspaceError};
 
 const FORMAT_VERSION: u8 = 1;
 const AERIA_DIRECTORY: &str = ".aeria";
 const MANIFEST_FILE: &str = "manifest.json";
 const UNITS_DIRECTORY: &str = "units";
 const BOM: &[u8; 3] = b"\xef\xbb\xbf";
+
+#[cfg(test)]
+static FAIL_BEFORE_PUBLICATION: AtomicBool = AtomicBool::new(false);
 
 /// Errors raised while opening, validating, or persisting a Workspace Format
 /// v1 repository.
@@ -210,24 +215,30 @@ impl WorkspaceStore {
         Ok(())
     }
 
-    /// Rewrites the complete canonical shard selected by `id`.
+    /// Replaces exactly the selected unit in its complete canonical shard.
     ///
-    /// The workspace is authoritative for the shard contents. The temporary
-    /// file is created in the repository root, outside `.aeria/`, and
-    /// `tempfile` performs the cross-platform atomic replacement. Atomicity is
-    /// guaranteed per canonical file; this method does not claim a
-    /// multi-shard filesystem transaction.
+    /// The selected persisted shard is fully validated and all of its other
+    /// units are preserved. The temporary file is created in the repository
+    /// root, outside `.aeria/`, and `tempfile` performs the cross-platform
+    /// atomic replacement. Atomicity is guaranteed per canonical file; this
+    /// method does not claim a multi-shard filesystem transaction.
     ///
     /// # Errors
     ///
     /// Returns an error when the managed namespace is unsafe or its manifest
-    /// does not match the workspace, canonical serialization fails, or atomic
-    /// publication fails.
+    /// does not match the workspace, the requested unit is absent, canonical
+    /// serialization fails, or atomic publication fails.
     pub fn persist_unit(
         &self,
         workspace: &Workspace,
         id: TranslationUnitId,
     ) -> Result<(), WorkspaceStoreError> {
+        let replacement = workspace
+            .unit(id)
+            .cloned()
+            .ok_or(WorkspaceStoreError::Domain(WorkspaceError::UnitNotFound {
+                id,
+            }))?;
         let layout = self.inspect_existing_layout()?;
         let persisted_metadata = read_manifest(&layout.manifest_path)?;
         require_metadata_match(
@@ -242,12 +253,14 @@ impl WorkspaceStore {
             .join(AERIA_DIRECTORY)
             .join(UNITS_DIRECTORY)
             .join(shard_name(shard));
-        let bytes = canonical_shard_bytes(workspace, shard, &target_path)?;
-
-        if bytes.is_empty() {
-            remove_empty_shard(&layout, shard)?;
-            return Ok(());
+        let mut persisted_units = BTreeMap::new();
+        if let Some(shard_file) = layout.shards.iter().find(|file| file.shard == shard) {
+            for unit in read_shard(&shard_file.path, shard, &shard_file.name)? {
+                persisted_units.insert(unit.id(), unit);
+            }
         }
+        persisted_units.insert(id, replacement);
+        let bytes = canonical_units_bytes(persisted_units.values(), &target_path)?;
 
         let created_units_path = layout.units_path.is_none();
         let units_path = if let Some(path) = layout.units_path {
@@ -781,8 +794,15 @@ fn canonical_shard_bytes(
     shard: u8,
     path: &Path,
 ) -> Result<Vec<u8>, WorkspaceStoreError> {
+    canonical_units_bytes(workspace.units_in_shard(shard), path)
+}
+
+fn canonical_units_bytes<'a, I>(units: I, path: &Path) -> Result<Vec<u8>, WorkspaceStoreError>
+where
+    I: IntoIterator<Item = &'a TranslationUnit>,
+{
     let mut bytes = Vec::new();
-    for unit in workspace.units_in_shard(shard) {
+    for unit in units {
         let dto = canonical_unit_dto(unit, path)?;
         serde_json::to_writer(&mut bytes, &dto).map_err(|source| {
             WorkspaceStoreError::Serialization {
@@ -843,37 +863,6 @@ fn review_state_name(state: ReviewState) -> &'static str {
     }
 }
 
-fn remove_empty_shard(layout: &ExistingLayout, shard: u8) -> Result<(), WorkspaceStoreError> {
-    let Some(units_path) = &layout.units_path else {
-        return Ok(());
-    };
-    let target_path = units_path.join(shard_name(shard));
-    if let Some(metadata) = symlink_metadata(&target_path)? {
-        if metadata.file_type().is_symlink() || !metadata.is_file() {
-            return Err(managed_path_error(
-                &target_path,
-                "expected a regular shard file",
-            ));
-        }
-        fs::remove_file(&target_path)
-            .map_err(|source| io_error("remove empty workspace shard", &target_path, source))?;
-    }
-
-    let mut entries = fs::read_dir(units_path)
-        .map_err(|source| io_error("inspect workspace units directory", units_path, source))?;
-    if entries
-        .next()
-        .transpose()
-        .map_err(|source| io_error("inspect workspace units directory", units_path, source))?
-        .is_none()
-    {
-        fs::remove_dir(units_path).map_err(|source| {
-            io_error("remove empty workspace units directory", units_path, source)
-        })?;
-    }
-    Ok(())
-}
-
 fn atomic_publish(
     repository_root: &Path,
     target_path: &Path,
@@ -907,6 +896,13 @@ fn atomic_publish(
             source,
         )
     })?;
+    #[cfg(test)]
+    if FAIL_BEFORE_PUBLICATION.swap(false, Ordering::SeqCst) {
+        return Err(WorkspaceStoreError::AtomicPublication {
+            path: target_path.to_owned(),
+            source: io::Error::other("test failpoint before atomic publication"),
+        });
+    }
     temporary
         .persist(target_path)
         .map(|_| ())
@@ -1112,5 +1108,76 @@ fn io_error(operation: &'static str, path: &Path, source: io::Error) -> Workspac
         operation,
         path: path.to_owned(),
         source,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use std::str::FromStr;
+
+    #[test]
+    fn failed_publication_leaves_the_previous_shard_and_managed_namespace_unchanged() {
+        let repository = tempfile::tempdir().expect("temporary repository");
+        let aeria_path = repository.path().join(AERIA_DIRECTORY);
+        let units_path = aeria_path.join(UNITS_DIRECTORY);
+        fs::create_dir_all(&units_path).expect("workspace directories");
+        fs::write(
+            aeria_path.join(MANIFEST_FILE),
+            include_bytes!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/tests/fixtures/workspace-v1/manifest.json"
+            )),
+        )
+        .expect("manifest");
+        fs::write(
+            units_path.join("00.jsonl"),
+            include_bytes!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/tests/fixtures/workspace-v1/units/00.jsonl"
+            )),
+        )
+        .expect("shard");
+
+        let store = WorkspaceStore::new(repository.path());
+        let mut workspace = store.load().expect("fixture loads");
+        let id = TranslationUnitId::from_str(
+            "tu1:0000000000000000000000000000000000000000000000000000000000000000",
+        )
+        .expect("ID");
+        workspace
+            .update_target(id, "staged but unpublished")
+            .expect("target is valid");
+        let shard_path = units_path.join("00.jsonl");
+        let before = fs::read(&shard_path).expect("previous shard");
+
+        FAIL_BEFORE_PUBLICATION.store(true, Ordering::SeqCst);
+        let error = store
+            .persist_unit(&workspace, id)
+            .expect_err("publication failpoint must fail");
+        assert!(matches!(
+            error,
+            WorkspaceStoreError::AtomicPublication { .. }
+        ));
+
+        assert_eq!(fs::read(&shard_path).expect("previous shard"), before);
+        let unit_entries: Vec<_> = fs::read_dir(&units_path)
+            .expect("units directory")
+            .map(|entry| entry.expect("unit entry").file_name())
+            .collect();
+        assert_eq!(unit_entries, vec![std::ffi::OsString::from("00.jsonl")]);
+        let mut managed_entries: Vec<_> = fs::read_dir(&aeria_path)
+            .expect("managed directory")
+            .map(|entry| entry.expect("managed entry").file_name())
+            .collect();
+        managed_entries.sort();
+        assert_eq!(
+            managed_entries,
+            vec![
+                std::ffi::OsString::from(MANIFEST_FILE),
+                std::ffi::OsString::from(UNITS_DIRECTORY),
+            ]
+        );
     }
 }

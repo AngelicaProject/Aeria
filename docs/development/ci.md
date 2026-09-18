@@ -21,6 +21,13 @@ cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
 cargo test --workspace --locked
 ```
 
+Workspace persistence also runs its focused locked test suite on
+`windows-latest` because Windows is the first production desktop target:
+
+```text
+cargo test -p aeria-workspace --locked
+```
+
 When CI gains or removes a project-wide quality gate, update this document with the workflow change.
 
 ## Local validation
