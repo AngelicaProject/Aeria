@@ -303,39 +303,41 @@ where
     let new_index = NewSourceIndex::read(new_snapshot)?;
 
     resolve_same_binding(&mut states, &new_index);
-    record_candidate_stage(
-        &mut states,
-        &new_index.by_fingerprint,
-        CandidateEvidence::CompleteFingerprint,
-        |fingerprint| Some(*fingerprint),
-    );
-    record_candidate_stage(
-        &mut states,
-        &new_index.by_macro_and_raw,
-        CandidateEvidence::MacroAndRawValue,
-        |fingerprint| {
-            fingerprint
-                .raw_value_hash()
-                .map(|raw| (fingerprint.macro_text_hash(), raw))
-        },
-    );
-    record_candidate_stage(
-        &mut states,
-        &new_index.by_macro_and_row,
-        CandidateEvidence::MacroAndRowTechnical,
-        |fingerprint| {
-            Some((
-                fingerprint.macro_text_hash(),
-                fingerprint.row_technical_hash(),
-            ))
-        },
-    );
-    record_candidate_stage(
-        &mut states,
-        &new_index.by_macro,
-        CandidateEvidence::ExactMacroText,
-        |fingerprint| Some(fingerprint.macro_text_hash()),
-    );
+    if let Some(candidate_index) = new_index.candidate_index(&states) {
+        record_candidate_stage(
+            &mut states,
+            &candidate_index.fingerprint,
+            CandidateEvidence::CompleteFingerprint,
+            |fingerprint| Some(*fingerprint),
+        );
+        record_candidate_stage(
+            &mut states,
+            &candidate_index.macro_and_raw,
+            CandidateEvidence::MacroAndRawValue,
+            |fingerprint| {
+                fingerprint
+                    .raw_value_hash()
+                    .map(|raw| (fingerprint.macro_text_hash(), raw))
+            },
+        );
+        record_candidate_stage(
+            &mut states,
+            &candidate_index.macro_and_row,
+            CandidateEvidence::MacroAndRowTechnical,
+            |fingerprint| {
+                Some((
+                    fingerprint.macro_text_hash(),
+                    fingerprint.row_technical_hash(),
+                ))
+            },
+        );
+        record_candidate_stage(
+            &mut states,
+            &candidate_index.macro_text,
+            CandidateEvidence::ExactMacroText,
+            |fingerprint| Some(fingerprint.macro_text_hash()),
+        );
+    }
     let entries: Vec<_> = states.into_iter().map(UnitState::finish).collect();
     let summary = summarize(&entries);
     Ok(RebasePlan {
@@ -482,10 +484,13 @@ struct NewOccurrence {
 struct NewSourceIndex {
     occurrences: Vec<NewOccurrence>,
     by_binding: BTreeMap<SourceBinding, usize>,
-    by_fingerprint: BTreeMap<SourceFingerprint, Vec<usize>>,
-    by_macro_and_raw: BTreeMap<(Sha256Hash, Sha256Hash), Vec<usize>>,
-    by_macro_and_row: BTreeMap<(Sha256Hash, Sha256Hash), Vec<usize>>,
-    by_macro: BTreeMap<Sha256Hash, Vec<usize>>,
+}
+
+struct CandidateIndex {
+    fingerprint: BTreeMap<SourceFingerprint, Vec<usize>>,
+    macro_and_raw: BTreeMap<(Sha256Hash, Sha256Hash), Vec<usize>>,
+    macro_and_row: BTreeMap<(Sha256Hash, Sha256Hash), Vec<usize>>,
+    macro_text: BTreeMap<Sha256Hash, Vec<usize>>,
 }
 
 impl NewSourceIndex {
@@ -521,29 +526,46 @@ impl NewSourceIndex {
         let mut index = Self {
             occurrences,
             by_binding: BTreeMap::new(),
-            by_fingerprint: BTreeMap::new(),
-            by_macro_and_raw: BTreeMap::new(),
-            by_macro_and_row: BTreeMap::new(),
-            by_macro: BTreeMap::new(),
         };
         for (index_number, occurrence) in index.occurrences.iter().enumerate() {
             index
                 .by_binding
                 .insert(occurrence.binding.clone(), index_number);
+        }
+        Ok(index)
+    }
+
+    fn candidate_index(&self, states: &[UnitState]) -> Option<CandidateIndex> {
+        if states.iter().all(|state| state.outcome.is_some()) {
+            return None;
+        }
+        Some(CandidateIndex::build(&self.occurrences))
+    }
+}
+
+impl CandidateIndex {
+    fn build(occurrences: &[NewOccurrence]) -> Self {
+        let mut index = Self {
+            fingerprint: BTreeMap::new(),
+            macro_and_raw: BTreeMap::new(),
+            macro_and_row: BTreeMap::new(),
+            macro_text: BTreeMap::new(),
+        };
+        for (index_number, occurrence) in occurrences.iter().enumerate() {
             index
-                .by_fingerprint
+                .fingerprint
                 .entry(occurrence.fingerprint)
                 .or_default()
                 .push(index_number);
             if let Some(raw) = occurrence.fingerprint.raw_value_hash() {
                 index
-                    .by_macro_and_raw
+                    .macro_and_raw
                     .entry((occurrence.fingerprint.macro_text_hash(), raw))
                     .or_default()
                     .push(index_number);
             }
             index
-                .by_macro_and_row
+                .macro_and_row
                 .entry((
                     occurrence.fingerprint.macro_text_hash(),
                     occurrence.fingerprint.row_technical_hash(),
@@ -551,12 +573,12 @@ impl NewSourceIndex {
                 .or_default()
                 .push(index_number);
             index
-                .by_macro
+                .macro_text
                 .entry(occurrence.fingerprint.macro_text_hash())
                 .or_default()
                 .push(index_number);
         }
-        Ok(index)
+        index
     }
 }
 
@@ -772,11 +794,11 @@ mod tests {
             |previous| Some(*previous),
         );
 
-        let mut weaker_candidates = BTreeMap::new();
-        weaker_candidates.insert(macro_hash, vec![2]);
+        let mut macro_candidates = BTreeMap::new();
+        macro_candidates.insert(macro_hash, vec![2]);
         record_candidate_stage(
             &mut states,
-            &weaker_candidates,
+            &macro_candidates,
             CandidateEvidence::ExactMacroText,
             |previous| Some(previous.macro_text_hash()),
         );
@@ -796,5 +818,39 @@ mod tests {
                 },
             ]
         );
+    }
+
+    #[test]
+    fn candidate_index_is_lazy_after_surviving_binding_resolution() {
+        let binding = SourceBinding::new("Sheet", 1, 0, 0);
+        let fingerprint = SourceFingerprint::new(
+            Sha256Hash::from_bytes([1; 32]),
+            None,
+            Sha256Hash::from_bytes([2; 32]),
+        );
+        let unit = TranslationUnit::new(
+            TranslationUnitId::from_bytes([3; 32]),
+            binding.clone(),
+            fingerprint,
+            "target",
+        );
+        let occurrence = NewOccurrence {
+            binding: binding.clone(),
+            fingerprint,
+        };
+        let index = NewSourceIndex {
+            occurrences: vec![occurrence.clone()],
+            by_binding: BTreeMap::from([(binding, 0)]),
+        };
+
+        let mut resolved = vec![UnitState::new(&unit)];
+        resolved[0].resolve(&occurrence);
+        assert!(index.candidate_index(&resolved).is_none());
+
+        let unresolved = vec![UnitState::new(&unit)];
+        let candidate_index = index
+            .candidate_index(&unresolved)
+            .expect("missing binding requires candidate diagnostics");
+        assert_eq!(candidate_index.fingerprint[&fingerprint], vec![0]);
     }
 }

@@ -38,6 +38,8 @@ discovery is performed only for missing bindings, so surviving bindings do not
 pay the cost of broad candidate diagnostics. The owned plan retains at most a
 small evidence-and-count summary; it never stores candidate `SourceBinding`
 arrays. A future review suggester can resolve candidate bindings on demand.
+Candidate indexes are built lazily only when at least one previous binding is
+missing; surviving-binding-only rebases do not build them.
 
 The plan never recomputes `TranslationUnitId`. It currently does not apply a
 plan or automatically classify terminal `new`, `removed`, or `relocated`

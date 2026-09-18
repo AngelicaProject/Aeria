@@ -30,7 +30,9 @@ For a missing binding, the outcome is `Ambiguous`. Candidate diagnostics may
 show exact or partial matches, but they never establish a proposed binding.
 Candidate discovery is restricted to missing-binding units. Surviving units do
 not receive broad candidate diagnostics, even if the same source content is
-duplicated elsewhere.
+duplicated elsewhere. Candidate indexes are built lazily only when at least
+one previous binding is missing; surviving-binding-only rebases do not build
+them.
 
 The plan never recomputes `TranslationUnitId`. `automatic_evidence` is
 `AutomaticEvidence::SameBinding` only for surviving bindings. Proposed binding

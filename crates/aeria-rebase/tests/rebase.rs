@@ -93,6 +93,7 @@ fn identical_snapshot_is_unchanged_and_planning_is_pure_and_deterministic() {
         first.unit_entries[0].context_status,
         Some(SourceContextStatus::Unchanged)
     );
+    assert!(first.unit_entries[0].candidate_evidence.is_empty());
 }
 
 #[test]
@@ -368,7 +369,7 @@ fn exact_macro_and_raw_relocation_with_changed_context_is_ambiguous() {
 }
 
 #[test]
-fn ambiguous_macro_and_raw_candidates_block_weaker_macro_and_row_matching() {
+fn ambiguous_unit_reports_multiple_candidate_evidence_summaries() {
     let old_fixture = write_snapshot(&snapshot(
         "old",
         vec![row_at(1, 4, "same", Some(b"raw".to_vec()), &[1])],
@@ -413,7 +414,7 @@ fn ambiguous_macro_and_raw_candidates_block_weaker_macro_and_row_matching() {
 }
 
 #[test]
-fn zero_candidates_at_a_stronger_stage_allow_weaker_matching() {
+fn missing_unit_reports_all_matching_candidate_evidence_summaries() {
     let old_fixture = write_snapshot(&snapshot(
         "old",
         vec![row_at(1, 4, "same", Some(b"raw".to_vec()), &[1])],
