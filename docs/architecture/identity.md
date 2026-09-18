@@ -43,4 +43,9 @@ The raw-value hash, row technical hash, target language, target macro string, re
 
 ## Source occurrence rule
 
-Never infer durable identity from textual similarity alone. Cross-version identity changes are decided by the deterministic rebase engine and surfaced as ambiguous when uniqueness cannot be established safely.
+Never infer durable identity from textual similarity, partial hashes, or
+coordinate movement. The deterministic rebase engine establishes automatic
+continuity only for an unchanged complete fingerprint at the same
+`SourceBinding`; every other cross-version relationship is surfaced as
+ambiguous candidate evidence until explicit human reconciliation. See
+[`rebase-safety.md`](./rebase-safety.md) for the complete transition contract.
