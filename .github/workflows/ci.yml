@@ -45,3 +45,12 @@ jobs:
       - run: cargo build --workspace --locked
       - run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
       - run: cargo test --workspace --locked
+
+  workspace-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.98.1
+      - run: cargo test -p aeria-workspace --locked

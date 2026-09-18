@@ -1,28 +1,23 @@
 use std::fmt::Write as _;
 use std::path::PathBuf;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use aeria_core::{ReviewState, Sha256Hash, SourceBinding};
 use aeria_hxs::HxsSnapshot;
 use aeria_workspace::{Workspace, WorkspaceError};
 use rusqlite::{Connection, params};
 use sha2::{Digest, Sha256};
+use tempfile::TempDir;
 
 const SYNTHETIC_SCHEMA: &str = include_str!("../../aeria-hxs/tests/fixtures/synthetic_v1.sql");
 const APPLICATION_ID: i64 = 0x4841_544c;
 
 struct Fixture {
+    _directory: TempDir,
     path: PathBuf,
     one_macro_hash: [u8; 32],
     one_row_technical_hash: [u8; 32],
     two_macro_hash: [u8; 32],
     two_raw_hash: [u8; 32],
-}
-
-impl Drop for Fixture {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.path);
-    }
 }
 
 #[test]
@@ -197,14 +192,8 @@ fn unit_iteration_is_deterministic() {
 
 #[allow(clippy::too_many_lines)]
 fn write_fixture() -> Fixture {
-    let path = std::env::temp_dir().join(format!(
-        "aeria-workspace-{}-{}.hxs",
-        std::process::id(),
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("clock after epoch")
-            .as_nanos()
-    ));
+    let directory = tempfile::tempdir().expect("create fixture directory");
+    let path = directory.path().join("fixture.hxs");
     let connection = Connection::open(&path).expect("create fixture database");
     connection
         .execute_batch(SYNTHETIC_SCHEMA)
@@ -333,6 +322,7 @@ fn write_fixture() -> Fixture {
         .expect("insert metadata");
 
     Fixture {
+        _directory: directory,
         path,
         one_macro_hash,
         one_row_technical_hash,

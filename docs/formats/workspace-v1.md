@@ -1,6 +1,7 @@
 # Workspace Format v1
 
-Status: **frozen contract; production persistence is not implemented yet**.
+Status: **frozen contract; production persistence is implemented in
+`aeria-workspace`**.
 
 Workspace Format v1 is a sparse, Git-tracked translation overlay. It stores
 project metadata and explicitly managed translation units, never the complete

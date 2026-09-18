@@ -183,6 +183,16 @@ pub enum TranslationUnitIdError {
 pub struct TranslationUnitId([u8; 32]);
 
 impl TranslationUnitId {
+    /// Creates an identity from its canonical raw digest bytes.
+    ///
+    /// This is useful for ordered range bounds when a consumer needs to
+    /// address an existing ID without deriving a new identity from source
+    /// facts.
+    #[must_use]
+    pub const fn from_bytes(bytes: [u8; 32]) -> Self {
+        Self(bytes)
+    }
+
     /// Derives a v1 ID from source language, source coordinate, and macro hash.
     ///
     /// Raw-value and row-technical hashes are intentionally not part of the

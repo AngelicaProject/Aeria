@@ -1,0 +1,2 @@
+/crates/aeria-workspace/tests/fixtures/workspace-v1/manifest.json text eol=lf
+/crates/aeria-workspace/tests/fixtures/workspace-v1/units/*.jsonl text eol=lf

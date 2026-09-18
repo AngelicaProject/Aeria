@@ -5,12 +5,15 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Sparse in-memory translation workspace domain operations."
+description = "Sparse translation workspace domain operations and Workspace Format v1 persistence."
 
 [dependencies]
 aeria-core = { path = "../aeria-core" }
 aeria-hxs = { path = "../aeria-hxs" }
 aeria-se = { path = "../aeria-se" }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+tempfile = "3.27.0"
 thiserror = "2.0.20"
 
 [lints]
