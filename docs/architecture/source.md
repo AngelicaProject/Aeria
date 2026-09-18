@@ -21,6 +21,20 @@ sort.
 
 The reader verifies rows as a stream and does not require the complete snapshot to be resident in memory. This is a source inspection interface only: it does not persist workspace state, edit translations, or export runtime data.
 
+## Hash contract used by rebase
+
+HXS v1 hashes are canonical source facts, not relocation-invariant identity
+keys. In particular, `rows.technical_hash` includes `sheet_name`, `row_id`,
+and `subrow_id` as well as the non-String technical payload. The persisted
+rebase `SourceFingerprint` keeps the String-cell macro hash, optional raw-value
+hash, and this coordinate-sensitive row technical hash without changing the
+workspace format. Rebase identity is established by the surviving
+`SourceBinding`; `macroTextHash` and `rawValueHash` classify the String content
+as unchanged or changed, while `rowTechnicalHash` is reported as separate
+context status. A complete fingerprint must not be used to infer a moved
+occurrence at another binding. The complete rebase transition contract is documented in
+[`rebase-safety.md`](./rebase-safety.md).
+
 ## Source cache
 
 Snapshots live in a machine-local content-addressed source store, not in the translation repository.

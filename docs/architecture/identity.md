@@ -43,4 +43,18 @@ The raw-value hash, row technical hash, target language, target macro string, re
 
 ## Source occurrence rule
 
-Never infer durable identity from textual similarity alone. Cross-version identity changes are decided by the deterministic rebase engine and surfaced as ambiguous when uniqueness cannot be established safely.
+One managed String cell is one translation unit. During a verified source
+transition, the previous `SourceBinding` is the authoritative continuity key
+when that binding exists in the new snapshot. The planner then compares only
+the cell's `macroTextHash` and `rawValueHash`:
+
+- equal content is `Unchanged`;
+- changed content is `SourceChanged` at the same binding;
+- a changed `rowTechnicalHash` is context diagnostics, not identity evidence.
+
+If the old binding is missing, the unit is `Ambiguous`. Similarity, partial
+hashes, coordinate movement, and a unique candidate at another binding never
+establish cross-binding identity. The existing `TranslationUnitId` is kept;
+future apply semantics may update the source facts in place and require review
+for `SourceChanged`, but must not recompute the ID. See
+[`rebase-safety.md`](./rebase-safety.md) for the complete transition contract.
