@@ -1,8 +1,6 @@
 //! Sparse translation workspace operations over verified HXS source.
-//!
-//! This crate owns the source adapter and in-memory workspace operations. It
-//! deliberately does not choose or implement the eventual on-disk workspace
-//! serialization format.
+//! This crate owns the source adapter, in-memory workspace operations, and
+//! Workspace Format v1 persistence.
 
 #![forbid(unsafe_code)]
 
@@ -15,6 +13,10 @@ use aeria_core::{
 use aeria_hxs::{HxsError, HxsSnapshot};
 use aeria_se::{Diagnostic, SemanticValidity, parse};
 use thiserror::Error;
+
+mod persistence;
+
+pub use persistence::{WorkspaceStore, WorkspaceStoreError};
 
 /// Errors raised by the in-memory translation workspace.
 #[derive(Debug, Error)]
@@ -233,6 +235,42 @@ impl Workspace {
         self.units.insert(id, unit);
         self.source_bindings.insert(binding, id);
         Ok(())
+    }
+
+    fn from_loaded(
+        metadata: WorkspaceMetadata,
+        units: BTreeMap<TranslationUnitId, TranslationUnit>,
+    ) -> Result<Self, WorkspaceError> {
+        let mut source_bindings = BTreeMap::new();
+        for (id, unit) in &units {
+            let binding = unit.source_binding().clone();
+            if source_bindings.insert(binding.clone(), *id).is_some() {
+                return Err(WorkspaceError::DuplicateSourceBinding { binding });
+            }
+        }
+        Ok(Self {
+            metadata,
+            units,
+            source_bindings,
+        })
+    }
+
+    fn units_in_shard(&self, shard: u8) -> impl Iterator<Item = &TranslationUnit> {
+        use std::ops::Bound::{Excluded, Included, Unbounded};
+
+        let mut lower_bytes = [0_u8; 32];
+        lower_bytes[0] = shard;
+        let lower = TranslationUnitId::from_bytes(lower_bytes);
+        let upper = if shard == u8::MAX {
+            Unbounded
+        } else {
+            let mut upper_bytes = [0_u8; 32];
+            upper_bytes[0] = shard + 1;
+            Excluded(TranslationUnitId::from_bytes(upper_bytes))
+        };
+        self.units
+            .range((Included(lower), upper))
+            .map(|(_, unit)| unit)
     }
 
     fn unit_mut(&mut self, id: TranslationUnitId) -> Result<&mut TranslationUnit, WorkspaceError> {

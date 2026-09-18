@@ -58,11 +58,26 @@ Initial core states:
 
 Changing a target always resets its unit to `draft`. Marking a unit `reviewed` is an explicit workspace operation. The core `TranslationUnit` primitive can record a known meaningful source update as `needs-review` for a future atomic rebase; the current workspace interface does not accept arbitrary source binding or fingerprint replacements. Review is never inferred from Git commits, approvals, or other repository state.
 
+## Production persistence
+
+`aeria-workspace` now provides the production Workspace Format v1 persistence
+adapter. `WorkspaceStore` binds to a repository root, loads the validated
+state from `.aeria/manifest.json` and `.aeria/units/*.jsonl`, initializes a
+new `.aeria/` directory from an in-memory workspace, and rewrites only the
+shard selected by an affected `TranslationUnitId`.
+
+Canonical shard replacements are written to a temporary file outside the
+managed `.aeria/` namespace and published with a cross-platform atomic file
+replacement. Initialization stages the complete directory under the
+repository root and publishes it only after serialization succeeds. The
+atomicity guarantee is per canonical file; multi-shard bulk operations do not
+yet have one filesystem transaction or recovery protocol.
+
 ## Compatibility
 
 The workspace has an explicit `formatVersion` from the first public version. New Aeria versions must either open an older public workspace directly or migrate it without data loss.
 
 The concrete v1 layout and serialization contract are frozen in
-[`../formats/workspace-v1.md`](../formats/workspace-v1.md). Production
-persistence is intentionally a subsequent implementation step; this domain
-slice still does not open or save workspace files.
+[`../formats/workspace-v1.md`](../formats/workspace-v1.md). The persistence
+adapter accepts only v1 repositories and reports unsupported versions rather
+than applying an implicit migration.
