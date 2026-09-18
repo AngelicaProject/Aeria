@@ -186,12 +186,14 @@ impl HxsSnapshot {
             .transpose()
     }
 
-    /// Reads one bounded keyset page of String occurrence fingerprints in
-    /// canonical sheet/row/subrow/column order.
+    /// Reads one bounded keyset page of String occurrence fingerprints within
+    /// one sheet in row/subrow/column order.
     ///
     /// Only source coordinates and verified hashes are returned. `after` is
     /// exclusive; passing the returned cursor to the next call enumerates
-    /// every occurrence exactly once without loading macro text or raw bytes.
+    /// every occurrence in the sheet exactly once without loading macro text
+    /// or raw bytes. Callers that need snapshot order should enumerate
+    /// [`Self::sheets`] by canonical name and page each sheet independently.
     ///
     /// `limit` must be between one and
     /// [`MAX_STRING_OCCURRENCE_PAGE_SIZE`] inclusive.
@@ -202,6 +204,7 @@ impl HxsSnapshot {
     /// storage/read failure.
     pub fn page_string_occurrences(
         &self,
+        sheet_name: &str,
         after: Option<&StringOccurrenceCoordinate>,
         limit: u32,
     ) -> Result<StringOccurrencePage, HxsError> {
@@ -212,26 +215,28 @@ impl HxsSnapshot {
         }
         let page_limit = usize::try_from(limit)
             .map_err(|_| HxsError::request("String occurrence page limit is too large"))?;
+        let sheet_id = self.sheet_id(sheet_name)?;
+        if after.is_some_and(|cursor| cursor.sheet_name != sheet_name) {
+            return Err(HxsError::request(
+                "String occurrence cursor belongs to a different sheet",
+            ));
+        }
 
         let limit_sql = i64::from(limit) + 1;
         let (sql, parameter_values) = if let Some(after) = after {
             (
-                "SELECT s.name, c.row_id, c.subrow_id, c.column_index, \
+                "SELECT c.row_id, c.subrow_id, c.column_index, \
                         c.macro_hash, c.raw_hash, r.technical_hash \
                  FROM string_cells AS c \
-                 JOIN sheets AS s ON s.id = c.sheet_id \
                  JOIN rows AS r ON r.sheet_id = c.sheet_id \
                                 AND r.row_id = c.row_id \
                                 AND r.subrow_id = c.subrow_id \
-                 WHERE s.name > ?1 \
-                    OR (s.name = ?1 AND c.row_id > ?2) \
-                    OR (s.name = ?1 AND c.row_id = ?2 AND c.subrow_id > ?3) \
-                    OR (s.name = ?1 AND c.row_id = ?2 AND c.subrow_id = ?3 \
-                        AND c.column_index > ?4) \
-                 ORDER BY s.name COLLATE BINARY, c.row_id, c.subrow_id, c.column_index \
+                 WHERE c.sheet_id = ?1 \
+                   AND (c.row_id, c.subrow_id, c.column_index) > (?2, ?3, ?4) \
+                 ORDER BY c.row_id, c.subrow_id, c.column_index \
                  LIMIT ?5",
                 Some((
-                    after.sheet_name.as_str(),
+                    sheet_id,
                     i64::from(after.row_id),
                     i64::from(after.subrow_id),
                     i64::from(after.column_index),
@@ -240,32 +245,32 @@ impl HxsSnapshot {
             )
         } else {
             (
-                "SELECT s.name, c.row_id, c.subrow_id, c.column_index, \
+                "SELECT c.row_id, c.subrow_id, c.column_index, \
                         c.macro_hash, c.raw_hash, r.technical_hash \
                  FROM string_cells AS c \
-                 JOIN sheets AS s ON s.id = c.sheet_id \
                  JOIN rows AS r ON r.sheet_id = c.sheet_id \
                                 AND r.row_id = c.row_id \
                                 AND r.subrow_id = c.subrow_id \
-                 ORDER BY s.name COLLATE BINARY, c.row_id, c.subrow_id, c.column_index \
-                 LIMIT ?1",
+                 WHERE c.sheet_id = ?1 \
+                 ORDER BY c.row_id, c.subrow_id, c.column_index \
+                 LIMIT ?2",
                 None,
             )
         };
 
         let mut statement = self.connection.prepare(sql).map_err(HxsError::storage)?;
         let mut rows = match parameter_values {
-            Some((sheet_name, row_id, subrow_id, column_index, limit)) => statement
-                .query(params![sheet_name, row_id, subrow_id, column_index, limit])
+            Some((sheet_id, row_id, subrow_id, column_index, limit)) => statement
+                .query(params![sheet_id, row_id, subrow_id, column_index, limit])
                 .map_err(HxsError::storage)?,
             None => statement
-                .query(params![limit_sql])
+                .query(params![sheet_id, limit_sql])
                 .map_err(HxsError::storage)?,
         };
 
         let mut occurrences = Vec::with_capacity(page_limit);
         while let Some(row) = rows.next().map_err(HxsError::storage)? {
-            occurrences.push(read_string_occurrence(row)?);
+            occurrences.push(read_string_occurrence(row, sheet_name)?);
         }
 
         let next_after = if occurrences.len() > page_limit {
@@ -295,14 +300,14 @@ impl HxsSnapshot {
 
 fn read_string_occurrence(
     row: &rusqlite::Row<'_>,
+    sheet_name: &str,
 ) -> Result<StringOccurrenceFingerprint, HxsError> {
-    let sheet_name = row.get::<_, String>(0).map_err(HxsError::storage)?;
-    let row_id = read_non_negative_u32(row, 1, "string_cells.row_id")?;
-    let subrow_id = read_non_negative_u16(row, 2, "string_cells.subrow_id")?;
-    let column_index = read_non_negative_u32(row, 3, "string_cells.column_index")?;
-    let macro_text_hash = read_hash(row, 4, "string_cells.macro_hash")?;
-    let raw_value_hash = read_optional_hash(row, 5, "string_cells.raw_hash")?;
-    let row_technical_hash = read_hash(row, 6, "rows.technical_hash")?;
+    let row_id = read_non_negative_u32(row, 0, "string_cells.row_id")?;
+    let subrow_id = read_non_negative_u16(row, 1, "string_cells.subrow_id")?;
+    let column_index = read_non_negative_u32(row, 2, "string_cells.column_index")?;
+    let macro_text_hash = read_hash(row, 3, "string_cells.macro_hash")?;
+    let raw_value_hash = read_optional_hash(row, 4, "string_cells.raw_hash")?;
+    let row_technical_hash = read_hash(row, 5, "rows.technical_hash")?;
     Ok(StringOccurrenceFingerprint {
         coordinate: StringOccurrenceCoordinate::new(sheet_name, row_id, subrow_id, column_index),
         macro_text_hash,

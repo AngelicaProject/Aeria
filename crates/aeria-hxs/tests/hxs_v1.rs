@@ -186,26 +186,26 @@ fn opens_and_exposes_verified_metadata_sheets_rows_and_cells() {
 }
 
 #[test]
+#[allow(clippy::too_many_lines)]
 fn string_occurrence_pages_are_canonical_bounded_and_hash_only() {
     let (fixture, expected) = write_fixture();
     let snapshot = HxsSnapshot::open(&fixture.path).expect("synthetic HXS should verify");
 
     assert!(matches!(
-        snapshot.page_string_occurrences(None, 0),
+        snapshot.page_string_occurrences("Alpha", None, 0),
         Err(HxsError::InvalidRequest { .. })
     ));
     assert!(matches!(
-        snapshot.page_string_occurrences(None, MAX_STRING_OCCURRENCE_PAGE_SIZE + 1),
+        snapshot.page_string_occurrences("Alpha", None, MAX_STRING_OCCURRENCE_PAGE_SIZE + 1),
         Err(HxsError::InvalidRequest { .. })
     ));
 
     let first = snapshot
-        .page_string_occurrences(None, 2)
+        .page_string_occurrences("Alpha", None, 1)
         .expect("first occurrence page");
-    assert_eq!(first.occurrences.len(), 2);
+    assert_eq!(first.occurrences.len(), 1);
     assert_eq!(first.occurrences[0].coordinate.sheet_name, "Alpha");
     assert_eq!(first.occurrences[0].coordinate.row_id, 2);
-    assert_eq!(first.occurrences[1].coordinate.row_id, 3);
     assert_eq!(
         first.occurrences[0].macro_text_hash.as_bytes(),
         &expected.alpha.rows[0].macro_hash
@@ -224,7 +224,7 @@ fn string_occurrence_pages_are_canonical_bounded_and_hash_only() {
     let after_first = first.next_after.expect("a second page exists");
 
     let second = snapshot
-        .page_string_occurrences(Some(&after_first), 2)
+        .page_string_occurrences("Alpha", Some(&after_first), 1)
         .expect("second occurrence page");
     assert_eq!(
         second
@@ -236,20 +236,67 @@ fn string_occurrence_pages_are_canonical_bounded_and_hash_only() {
                 occurrence.coordinate.subrow_id,
             ))
             .collect::<Vec<_>>(),
-        [("Beta", 5, 0), ("Beta", 5, 1)]
+        [("Alpha", 3, 0)]
     );
     assert!(second.next_after.is_none());
 
-    let after_second = second
+    let beta_first = snapshot
+        .page_string_occurrences("Beta", None, 1)
+        .expect("first Beta occurrence page");
+    let beta_after_first = beta_first
+        .next_after
+        .clone()
+        .expect("a second Beta page exists");
+    let beta_second = snapshot
+        .page_string_occurrences("Beta", Some(&beta_after_first), 1)
+        .expect("second Beta occurrence page");
+    assert!(beta_second.next_after.is_none());
+
+    let coordinates: Vec<_> = first
+        .occurrences
+        .iter()
+        .chain(second.occurrences.iter())
+        .chain(beta_first.occurrences.iter())
+        .chain(beta_second.occurrences.iter())
+        .map(|occurrence| occurrence.coordinate.clone())
+        .collect();
+    assert_eq!(
+        coordinates
+            .iter()
+            .map(|coordinate| (
+                coordinate.sheet_name.as_str(),
+                coordinate.row_id,
+                coordinate.subrow_id,
+                coordinate.column_index,
+            ))
+            .collect::<Vec<_>>(),
+        [
+            ("Alpha", 2, 0, 0),
+            ("Alpha", 3, 0, 0),
+            ("Beta", 5, 0, 0),
+            ("Beta", 5, 1, 0),
+        ]
+    );
+
+    let after_second = beta_second
         .occurrences
         .last()
         .expect("second page has a final occurrence")
         .coordinate
         .clone();
     let empty = snapshot
-        .page_string_occurrences(Some(&after_second), MAX_STRING_OCCURRENCE_PAGE_SIZE)
+        .page_string_occurrences("Beta", Some(&after_second), MAX_STRING_OCCURRENCE_PAGE_SIZE)
         .expect("page after final occurrence");
     assert!(empty.occurrences.is_empty());
+
+    assert!(matches!(
+        snapshot.page_string_occurrences("Missing", None, 1),
+        Err(HxsError::SheetNotFound { .. })
+    ));
+    assert!(matches!(
+        snapshot.page_string_occurrences("Alpha", Some(&after_second), 1),
+        Err(HxsError::InvalidRequest { .. })
+    ));
 }
 
 #[test]
@@ -257,8 +304,15 @@ fn string_occurrence_pages_handle_empty_sheets_subrows_and_high_coordinates() {
     let fixture = write_reader_edge_fixture();
     let snapshot = HxsSnapshot::open(&fixture.path).expect("edge HXS should verify");
 
+    assert!(
+        snapshot
+            .page_string_occurrences("Empty", None, 1)
+            .expect("empty-sheet occurrence page")
+            .occurrences
+            .is_empty()
+    );
     let page = snapshot
-        .page_string_occurrences(None, 1)
+        .page_string_occurrences("High", None, 1)
         .expect("edge occurrence page");
     assert_eq!(page.occurrences.len(), 1);
     let coordinate = &page.occurrences[0].coordinate;

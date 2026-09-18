@@ -34,8 +34,11 @@ or persistence. The old snapshot must match the workspace source language,
 source language and HXS scope; a changed game version is valid.
 
 The planner verifies every managed unit against the old snapshot before it
-examines the new one. It then enumerates new String occurrence fingerprints in
-canonical coordinate order and applies these fixed mechanical stages:
+examines the new one. It enumerates verified sheet names in canonical order,
+then walks each sheet with bounded keyset pages over
+`(row_id, subrow_id, column_index)`. This preserves the global
+`sheet name/rowId/subrowId/columnIndex` order without repeatedly sorting the
+joined source corpus. It then applies these fixed mechanical stages:
 
 1. the same current source binding;
 2. an identical complete source fingerprint;

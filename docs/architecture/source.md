@@ -11,8 +11,13 @@ Before a snapshot is accepted, Aeria should verify its supported format, schema/
 The first production source slice is implemented by `aeria-hxs`. It opens HXS v1 as an immutable SQLite artifact in read-only mode, validates the HXS SQLite identity and required schema, runs SQLite integrity checks, and recomputes the canonical row, sheet, `contentId`, and `snapshotId` hashes before exposing any source data. Its public interface returns owned source DTOs for metadata, sheet schemas/hashes, bounded row pages, row technical payloads, and String-cell macro/raw representations; SQLite types remain private to the crate. A single row page is capped at the crate-level `MAX_ROW_PAGE_SIZE` of 4096 rows.
 
 For deterministic source rebase indexing, the reader also exposes bounded
-keyset pages of String occurrence coordinates and verified macro/raw/row-
-technical hashes without loading the corresponding source values.
+keyset pages for one verified sheet at a time. Each page is constrained by
+that sheet's ID and advances by the existing String-cell primary-key
+coordinate `(row_id, subrow_id, column_index)`, returning only verified
+macro/raw/row-technical hashes without loading the corresponding source
+values. Callers enumerate sheet names canonically to obtain snapshot order;
+the reader does not require a new cross-sheet index or a global temporary
+sort.
 
 The reader verifies rows as a stream and does not require the complete snapshot to be resident in memory. This is a source inspection interface only: it does not persist workspace state, edit translations, or export runtime data.
 

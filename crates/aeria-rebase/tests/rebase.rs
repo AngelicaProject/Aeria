@@ -1,7 +1,9 @@
 use std::fmt::Write as _;
 use std::path::PathBuf;
 
-use aeria_core::{ReviewState, Sha256Hash, SourceBinding, SourceFingerprint, TranslationUnit};
+use aeria_core::{
+    ReviewState, Sha256Hash, SourceBinding, SourceFingerprint, TranslationUnit, TranslationUnitId,
+};
 use aeria_hxs::HxsSnapshot;
 use aeria_rebase::{MatchEvidence, RebaseError, RebaseOutcome, RebasePlanner, plan_rebase};
 use aeria_workspace::Workspace;
@@ -346,6 +348,88 @@ fn same_binding_claims_before_relocation_and_competing_units_never_duplicate() {
         .collect();
     assert_eq!(bindings.len(), 1);
     assert_eq!(bindings[0], &SourceBinding::new("台詞", 1, 0, 0));
+}
+
+#[test]
+fn duplicate_bindings_are_rejected_across_the_complete_borrowed_input() {
+    let fixture = write_snapshot(&snapshot(
+        "old",
+        vec![row(1, "first", None, &[1]), row(2, "second", None, &[2])],
+    ));
+    let snapshot = HxsSnapshot::open(&fixture.path).expect("HXS");
+    let mut workspace = Workspace::from_verified_snapshot(&snapshot, "fr").expect("workspace");
+
+    let first_binding = SourceBinding::new("台詞", 1, 0, 0);
+    let second_binding = SourceBinding::new("台詞", 2, 0, 0);
+    let first_fingerprint = workspace
+        .create_unit_from_hxs(&snapshot, "台詞", 1, 0, 0, "first")
+        .and_then(|id| {
+            workspace
+                .unit(id)
+                .map(|unit| *unit.source_fingerprint())
+                .ok_or(aeria_workspace::WorkspaceError::UnitNotFound { id })
+        })
+        .expect("first fingerprint");
+    let second_fingerprint = workspace
+        .create_unit_from_hxs(&snapshot, "台詞", 2, 0, 0, "second")
+        .and_then(|id| {
+            workspace
+                .unit(id)
+                .map(|unit| *unit.source_fingerprint())
+                .ok_or(aeria_workspace::WorkspaceError::UnitNotFound { id })
+        })
+        .expect("second fingerprint");
+
+    let units = [
+        TranslationUnit::new(
+            TranslationUnitId::from_bytes([0; 32]),
+            first_binding.clone(),
+            first_fingerprint,
+            "",
+        ),
+        TranslationUnit::new(
+            TranslationUnitId::from_bytes([1; 32]),
+            second_binding,
+            second_fingerprint,
+            "",
+        ),
+        TranslationUnit::new(
+            TranslationUnitId::from_bytes([2; 32]),
+            first_binding,
+            first_fingerprint,
+            "",
+        ),
+    ];
+    let error = plan_rebase(workspace.metadata(), units.iter(), &snapshot, &snapshot)
+        .expect_err("duplicate binding must be rejected before matching");
+    assert!(
+        matches!(error, RebaseError::InvalidWorkspace { message } if message.contains("duplicate current source binding"))
+    );
+
+    let duplicate_id_units = [
+        TranslationUnit::new(
+            TranslationUnitId::from_bytes([0; 32]),
+            SourceBinding::new("台詞", 1, 0, 0),
+            first_fingerprint,
+            "",
+        ),
+        TranslationUnit::new(
+            TranslationUnitId::from_bytes([0; 32]),
+            SourceBinding::new("台詞", 2, 0, 0),
+            second_fingerprint,
+            "",
+        ),
+    ];
+    let error = plan_rebase(
+        workspace.metadata(),
+        duplicate_id_units.iter(),
+        &snapshot,
+        &snapshot,
+    )
+    .expect_err("duplicate ID must be rejected before matching");
+    assert!(
+        matches!(error, RebaseError::InvalidWorkspace { message } if message.contains("duplicate translation-unit ID"))
+    );
 }
 
 #[test]

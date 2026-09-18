@@ -361,17 +361,19 @@ fn validate_snapshot_preconditions(
 }
 
 fn validate_workspace_view(units: &[&TranslationUnit]) -> Result<(), RebaseError> {
-    for window in units.windows(2) {
-        if window[0].id() == window[1].id() {
+    let mut ids = BTreeSet::new();
+    let mut bindings = BTreeSet::new();
+    for unit in units {
+        if !ids.insert(unit.id()) {
             return Err(RebaseError::InvalidWorkspace {
-                message: format!("duplicate translation-unit ID {}", window[0].id()),
+                message: format!("duplicate translation-unit ID {}", unit.id()),
             });
         }
-        if window[0].source_binding() == window[1].source_binding() {
+        if !bindings.insert(unit.source_binding().clone()) {
             return Err(RebaseError::InvalidWorkspace {
                 message: format!(
                     "duplicate current source binding {:?}",
-                    window[0].source_binding()
+                    unit.source_binding()
                 ),
             });
         }
@@ -447,22 +449,33 @@ struct NewSourceIndex {
 impl NewSourceIndex {
     fn read(snapshot: &HxsSnapshot) -> Result<Self, RebaseError> {
         let mut occurrences = Vec::new();
-        let mut after: Option<StringOccurrenceCoordinate> = None;
-        loop {
-            let page = snapshot
-                .page_string_occurrences(after.as_ref(), MAX_STRING_OCCURRENCE_PAGE_SIZE)
-                .map_err(RebaseError::NewSourceRead)?;
-            let page_empty = page.occurrences.is_empty();
-            for occurrence in page.occurrences {
-                occurrences.push(convert_occurrence(&occurrence));
-            }
-            match page.next_after {
-                Some(next) if !page_empty => after = Some(next),
-                _ => break,
+        let mut sheet_names: Vec<_> = snapshot
+            .sheets()
+            .into_iter()
+            .map(|sheet| sheet.name)
+            .collect();
+        sheet_names.sort_unstable();
+
+        for sheet_name in sheet_names {
+            let mut after: Option<StringOccurrenceCoordinate> = None;
+            loop {
+                let page = snapshot
+                    .page_string_occurrences(
+                        &sheet_name,
+                        after.as_ref(),
+                        MAX_STRING_OCCURRENCE_PAGE_SIZE,
+                    )
+                    .map_err(RebaseError::NewSourceRead)?;
+                for occurrence in page.occurrences {
+                    occurrences.push(convert_occurrence(&occurrence));
+                }
+                match page.next_after {
+                    Some(next) => after = Some(next),
+                    None => break,
+                }
             }
         }
 
-        occurrences.sort_unstable_by(|left, right| left.binding.cmp(&right.binding));
         let mut index = Self {
             occurrences,
             by_binding: BTreeMap::new(),
@@ -610,10 +623,37 @@ fn resolve_same_binding(
     index: &NewSourceIndex,
     claimed: &mut BTreeSet<usize>,
 ) {
-    for state in states.iter_mut() {
-        if let Some(&new_index) = index.by_binding.get(&state.previous_binding) {
+    let mut groups: BTreeMap<SourceBinding, Vec<usize>> = BTreeMap::new();
+    for (state_index, state) in states.iter().enumerate() {
+        if state.outcome.is_none() {
+            groups
+                .entry(state.previous_binding.clone())
+                .or_default()
+                .push(state_index);
+        }
+    }
+
+    for (binding, old_units) in groups {
+        let available: Vec<_> = index
+            .by_binding
+            .get(&binding)
+            .into_iter()
+            .copied()
+            .filter(|candidate| !claimed.contains(candidate))
+            .collect();
+        if old_units.len() == 1 && available.len() == 1 {
+            let state_index = old_units[0];
+            let new_index = available[0];
             claimed.insert(new_index);
-            state.resolve(&index.occurrences[new_index], MatchEvidence::SameBinding);
+            states[state_index].resolve(&index.occurrences[new_index], MatchEvidence::SameBinding);
+        } else {
+            for state_index in old_units {
+                states[state_index].record_candidates(
+                    &available,
+                    index,
+                    MatchEvidence::SameBinding,
+                );
+            }
         }
     }
 }
@@ -706,5 +746,52 @@ mod tests {
             ),
             Err(RebaseError::IncompatibleScope { .. })
         ));
+    }
+
+    #[test]
+    fn same_binding_stage_does_not_claim_one_occurrence_twice() {
+        let binding = SourceBinding::new("Sheet", 1, 0, 0);
+        let fingerprint = SourceFingerprint::new(
+            Sha256Hash::from_bytes([1; 32]),
+            None,
+            Sha256Hash::from_bytes([2; 32]),
+        );
+        let units = [
+            TranslationUnit::new(
+                TranslationUnitId::from_bytes([1; 32]),
+                binding.clone(),
+                fingerprint,
+                "",
+            ),
+            TranslationUnit::new(
+                TranslationUnitId::from_bytes([2; 32]),
+                binding.clone(),
+                fingerprint,
+                "",
+            ),
+        ];
+        let mut states: Vec<_> = units.iter().map(UnitState::new).collect();
+        let index = NewSourceIndex {
+            occurrences: vec![NewOccurrence {
+                binding: binding.clone(),
+                fingerprint,
+            }],
+            by_binding: BTreeMap::from([(binding, 0)]),
+            by_fingerprint: BTreeMap::new(),
+            by_macro_and_raw: BTreeMap::new(),
+            by_macro_and_row: BTreeMap::new(),
+            by_macro: BTreeMap::new(),
+        };
+        let mut claimed = BTreeSet::new();
+
+        resolve_same_binding(&mut states, &index, &mut claimed);
+
+        assert!(claimed.is_empty());
+        assert!(states.iter().all(|state| state.outcome.is_none()));
+        assert!(states.iter().all(|state| {
+            state.evidence == MatchEvidence::SameBinding
+                && state.candidate_count == 1
+                && state.proposed.is_none()
+        }));
     }
 }
