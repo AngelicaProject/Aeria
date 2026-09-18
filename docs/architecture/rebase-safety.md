@@ -2,176 +2,136 @@
 
 Status: **required before any rebase apply or workspace mutation**.
 
-`aeria-rebase` produces a pure diagnostic plan. The planner may establish
-automatic continuity only when both facts are true:
-
-1. the previous `SourceBinding` exists in the new verified HXS snapshot; and
-2. the complete persisted `SourceFingerprint` is byte-for-byte identical.
-
-That one case is `Unchanged`. Every other managed unit is `Ambiguous`, even
-when candidate evidence is unique, exact, or strongly suggestive. Candidate
-evidence is review assistance, not an identity decision.
-
-False continuity is more dangerous than additional review. In particular,
-the planner never rebinds a `TranslationUnitId` because of similarity,
-partial hashes, coordinate movement, ordering, or a remaining candidate.
+`aeria-rebase` produces a pure diagnostic plan. A managed String cell is one
+translation unit. The planner reads verified old and new HXS snapshots and
+never mutates the workspace, source files, or persisted translation text.
 
 ## Authority boundary
 
-The plan DTO makes the distinction explicit:
+The previous `SourceBinding` is the authoritative continuity key when that
+binding exists in the new verified snapshot. This rule is intentionally
+independent of candidate uniqueness and complete-fingerprint equality:
 
-- `automatic_evidence` is present only for
-  `SameBindingAndCompleteFingerprint`.
-- `proposed_source_binding` and `proposed_source_fingerprint` are present
-  only for that authoritative `Unchanged` result.
-- `candidate_evidence` contains bounded diagnostic sets. It never claims a
-  source occurrence, and several units may suggest the same binding.
+```text
+old binding exists in new snapshot
+    -> same binding is authoritative
+old binding is missing
+    -> no automatic cross-binding identity
+```
 
-The current planner emits only `Unchanged` and `Ambiguous`. Relocation,
-source-change, new, and removed classifications remain reconciliation work.
-`TranslationUnitId` is never recomputed.
+For a surviving binding, the planner compares the String-cell content facts:
+
+- equal `macroTextHash` and `rawValueHash` produce `Unchanged`;
+- either content fact changing produces `SourceChanged`;
+- a changed `rowTechnicalHash` is reported separately as
+  `SourceContextStatus::Changed` and does not change identity.
+
+For a missing binding, the outcome is `Ambiguous`. Candidate diagnostics may
+show exact or partial matches, but they never establish a proposed binding.
+Candidate discovery is restricted to missing-binding units. Surviving units do
+not receive broad candidate diagnostics, even if the same source content is
+duplicated elsewhere.
+
+The plan never recomputes `TranslationUnitId`. `automatic_evidence` is
+`AutomaticEvidence::SameBinding` only for surviving bindings. Proposed binding
+and fingerprint are populated for both `Unchanged` and `SourceChanged`; they
+are absent for `Ambiguous`.
 
 ## HXS v1 hash contract
 
 The planner consumes verified HXS v1 data and does not redefine the persisted
-workspace format. The relevant hash inputs are:
+workspace format. The persisted `SourceFingerprint` remains the unchanged
+three-field tuple:
+
+```text
+(macroTextHash, rawValueHash, rowTechnicalHash)
+```
+
+The planner uses explicit concepts for the two comparisons:
+
+| Concept | Facts | Use |
+| --- | --- | --- |
+| `SourceContent` | `macroTextHash`, optional `rawValueHash` | Classifies a surviving binding as `Unchanged` or `SourceChanged`. |
+| `SourceContextStatus` | equality of `rowTechnicalHash` | Reports technical context change without changing identity. |
+| complete `SourceFingerprint` | all three persisted fields | Compatibility and candidate evidence; never a cross-binding identity key. |
+
+Relevant HXS inputs are:
 
 | HXS fact | Includes | Rebase consequence |
 | --- | --- | --- |
-| `string_cells.macro_hash` | The complete macro text, including its structured macro spelling | Exact macro evidence can suggest a candidate; it is not identity proof. |
-| `string_cells.raw_hash` | Presence and hash of the raw source value | `Some` and `None` are different source facts. Exact macro-plus-raw evidence is still only a suggestion away from the old binding. |
-| `rows.technical_hash` | The sheet name, `row_id`, `subrow_id`, and every non-String technical cell's canonical type/value payload | This hash is coordinate-sensitive. A row move or sheet move changes it even if the technical payload is otherwise logically unchanged. |
-| `rows.string_hash` | The sheet name, `row_id`, `subrow_id`, String column indexes, macro hashes, and raw-hash presence/values | This is a row-content aggregate and is not persisted in `SourceFingerprint`. |
-| `rows.row_hash` | The sheet name, `row_id`, `subrow_id`, technical hash, and String hash | It inherits coordinate sensitivity. |
-| sheet schema hash | Sheet name, variant, column indexes, offsets, and column types | Schema changes are source transitions, never identity evidence. |
-| content/snapshot IDs | Canonical sheet/schema/content and game/source metadata | They validate the snapshot relationship; they do not rebind units. |
+| `string_cells.macro_hash` | Complete macro text, including structured macro spelling | Cell content comparison and candidate evidence. |
+| `string_cells.raw_hash` | Presence and hash of raw source value | `Some`/`None` and value changes are `SourceChanged` at a surviving binding. |
+| `rows.technical_hash` | Sheet name, row ID, subrow ID, and canonical non-String technical payload | Context-only status; coordinate-sensitive changes do not break surviving identity. |
+| `rows.string_hash` | Row coordinates, String columns, macro hashes, and raw hashes | Verified aggregate; not a persisted identity key. |
+| `rows.row_hash` | Row coordinates, technical hash, and String hash | Verified aggregate; not a persisted identity key. |
+| sheet/schema/content/snapshot IDs | Canonical source and metadata identity | Snapshot validation; never a rebind decision. |
 
-Therefore the persisted `SourceFingerprint` tuple
-`(macroTextHash, rawValueHash, rowTechnicalHash)` is suitable for detecting
-whether the currently bound source facts are unchanged. It is not a
-relocation-invariant identity fingerprint. In particular, `rowTechnicalHash`
-must not be treated as binding-independent merely because a technical field's
-value did not change.
+Because row technical hashes include coordinates, a row shift can change the
+complete fingerprint even when the String cell's content is identical. That
+must be reported as context change, not mistaken for loss of identity.
 
 ## Planner truth matrix
 
-“Old binding occupied” means that the previous binding exists in the new
-snapshot. “Candidate” describes the diagnostic evidence available after the
-authoritative check. A candidate is never a claim.
+“Binding present” means the exact previous `SourceBinding` exists in the new
+snapshot. Candidate evidence is shown only for a missing binding.
 
-| Binding | Complete fingerprint | Candidate | Old binding occupied | Source value | Coordinate reused | Planner result |
-| --- | --- | --- | --- | --- | --- | --- |
-| same | same | unique | yes | same | no | `Unchanged`; authoritative proposed binding is the old binding |
-| same | same | duplicate | yes | same | yes/unknown | `Ambiguous`; duplicate complete evidence is a conflict |
-| same | different | none or any | yes | same or different | yes/no | `Ambiguous`; same-binding changed candidate may be reported |
-| same | different | unique | no | same | no | `Ambiguous`; exact macro/raw/row candidates may be reported |
-| different | same | unique | no | same | no | `Ambiguous`; complete-fingerprint candidate only |
-| different | same | duplicate | no | same | yes/no | `Ambiguous`; all matching bindings remain suggestions |
-| different | different | unique | no | same | yes/no | `Ambiguous`; weaker exact evidence remains non-authoritative |
-| different | different | duplicate | no | same/different | yes/no | `Ambiguous`; no ordering or uniqueness heuristic resolves it |
-| same/different | any | any | yes/no | different | yes/no | `Ambiguous`; source edits never become `SourceChanged` identity automatically |
+| Binding present | String content | Technical context | Candidate result | Planner result |
+| --- | --- | --- | --- | --- |
+| yes | same | same | none | `Unchanged`, same binding, `SameBinding` evidence, context unchanged |
+| yes | same | changed | none | `Unchanged`, same binding, context changed |
+| yes | changed | same | none | `SourceChanged`, same binding, context unchanged |
+| yes | changed | changed | none | `SourceChanged`, same binding, context changed |
+| no | same or changed | same or changed | zero, unique, or duplicate | `Ambiguous`, no proposed binding; candidates remain non-authoritative |
 
-The matrix is intentionally conservative. “Unique” does not mean “safe to
-apply”; it only means the diagnostic set contains one item at that evidence
-strength.
+The number of equal complete fingerprints elsewhere is irrelevant to every
+surviving binding. A duplicate elsewhere cannot turn a surviving binding into
+`Ambiguous`.
 
-## Complete source-transition state space
+## Required transition coverage
 
-The following cases define expected planner behavior. They are transition
-classes, not a promise that the pure planner can identify the historical
-logical origin in every case.
+The deterministic planner and tests cover these transition classes:
 
-### Snapshot-level transitions
+### Snapshot and sheet transitions
 
-| Transition | Expected behavior |
-| --- | --- |
-| Identical old/new snapshot | Each managed unit at the same binding with the same complete fingerprint is `Unchanged`. |
-| Game version changes only | Valid if source language, scope, content ID, and snapshot preconditions are compatible; matching still uses the safety rule. |
-| Source language mismatch | Reject the plan as a source compatibility error. |
-| Scope mismatch | Reject the plan; scope compatibility is not inferred. |
-| Wrong old `contentId` | Reject before matching. |
-| Wrong old `snapshotId` | Reject before matching. |
-| Malformed or unverified old HXS | Reject at HXS verification/opening; the planner accepts verified snapshots only. |
-| Malformed or unverified new HXS | Reject at HXS verification/opening; no partial plan is produced. |
-| Empty source corpus | A valid new snapshot with no String cells supplies no automatic mappings; managed old units are unresolved. |
-| Empty managed workspace | A valid compatible transition produces an empty plan and does not enumerate or create units. |
-| Source with zero String cells | No source occurrence can be claimed; any managed unit whose old baseline is valid becomes unresolved when its binding disappears. |
+- identical old/new snapshots;
+- game-version changes with compatible source language and scope;
+- source-language, scope, old-content, old-snapshot, malformed, and
+  unverified-input failures;
+- empty source corpora and empty managed workspaces;
+- added, removed, renamed, and variant-changed sheets;
+- unchanged and changed schemas, including String and technical column edits;
+- all cross-sheet relationships remain non-authoritative.
 
-### Sheet-level transitions
+### Binding and coordinate transitions
 
-| Transition | Expected behavior |
-| --- | --- |
-| Sheet unchanged | Apply the binding/fingerprint rule per String occurrence. |
-| Sheet added | New occurrences are not managed or claimed by this planner. |
-| Sheet removed | Units formerly on it become unresolved; removal is not a terminal automatic classification. |
-| Sheet renamed | Cross-sheet continuity is never automatic; exact candidates remain suggestions. |
-| Sheet variant changed | Candidate diagnostics may exist, but schema/variant change never implies identity. |
-| Effective language changed | Snapshot compatibility or review policy must handle it; the planner never infers continuity from language alone. |
-| Schema unchanged | It is contextual validation, not a replacement for same-binding complete-fingerprint equality. |
-| Schema changed | No identity follows. String-column additions/removals, technical-column additions/removals, column type changes, offset changes, and simultaneous schema changes all leave affected units unresolved unless their exact old binding and complete fingerprint remain valid. |
+- row/subrow/column shifts, insertions, deletions, and global offsets;
+- row and column movement together, block movement, permutations, swaps, and
+  cycles;
+- coordinate reuse where an unrelated value occupies the old coordinate;
+- the same binding surviving while its content changes;
+- duplicate values at the surviving binding and elsewhere;
+- no binding-presence check is replaced by ordering or nearest-coordinate logic.
 
-### Coordinate transitions
+### Content and context transitions
 
-Independently or in combination, the following are always non-authoritative
-when the binding differs:
+- macro-only, raw-only, and macro-plus-raw changes;
+- raw `Some -> None` and `None -> Some` changes;
+- technical-only changes;
+- a neighboring String cell changing without affecting another cell's unit;
+- technical changes in the same row reported as context changes;
+- empty, opaque, macro-bearing, and long valid macro text;
+- duplicate macro, macro-plus-raw, and complete-fingerprint candidates.
 
-| Change | Result |
-| --- | --- |
-| Sheet name | `Ambiguous`; cross-sheet exact evidence is a candidate. |
-| `row_id` +1, -1, or +N | `Ambiguous`; row offset is not identity evidence. |
-| `subrow_id` movement | `Ambiguous`; subrow continuity is not inferred. |
-| `column_index` +1, -1, or +N | `Ambiguous`; column offset is not identity evidence. |
-| Row + column movement | `Ambiguous`. |
-| Sheet + row movement | `Ambiguous`. |
-| Arbitrary permutation | `Ambiguous`; output cannot depend on permutation order. |
-| Contiguous block movement | `Ambiguous`; a future batch proposal must be human approved. |
-| Multiple moved blocks | `Ambiguous`; each proposed relationship remains review-only. |
+### Candidate transitions
 
-The only automatic coordinate result is the unchanged old binding itself.
+Only a missing old binding enters candidate discovery. Exact complete,
+macro-plus-raw, macro-plus-row, and exact-macro evidence is bounded,
+deterministic, and non-authoritative. Unique evidence is still a suggestion;
+duplicates remain ambiguous. Candidate discovery is not run for surviving
+bindings, which keeps ordinary rebase transitions proportional to the managed
+units that actually lost their binding.
 
-### Insertion and deletion transitions
-
-One row inserted at the beginning, middle, or end; multiple row insertions;
-one or multiple row deletions; alternating inserts/deletes; insertion followed
-by a global offset; column insertion/deletion; and subrow insertion/deletion
-are all handled as ordinary source transitions. A unit is `Unchanged` only if
-its own binding and complete fingerprint are still exactly equal. All other
-units are `Ambiguous`; no offset, nearest-coordinate, or block heuristic may
-claim them.
-
-### Source-value transitions
-
-The planner treats each persisted fingerprint field independently when
-forming candidate diagnostics, but never uses a changed value for automatic
-continuity:
-
-| Variation | Hash facts and result |
-| --- | --- |
-| All unchanged | At the same binding, all three persisted fields match and the result may be `Unchanged`. |
-| Macro changed only | `macroTextHash` changes; the unit is unresolved. |
-| Raw changed only | `rawValueHash` changes; `Some`/`None` transitions are changes. |
-| Technical changed only | `rowTechnicalHash` changes. |
-| Macro + raw, macro + technical, raw + technical, or all changed | The complete fingerprint changes; unresolved. |
-| Raw `Some -> None`, `None -> Some`, or `None -> None` | Presence/value semantics remain exact; only an unchanged complete tuple can be authoritative. |
-| Empty macro text | It is a normal exact macro value, not a wildcard. |
-| Extremely long macro text | HXS verification/framing limits apply; valid text is handled as data, never as fuzzy identity. |
-| Macro-bearing or opaque valid macro text | The complete macro hash is preserved as source data; macros do not become disposable similarity evidence. |
-
-### Neighbor context
-
-Because `rows.technical_hash` includes row coordinates and technical cells:
-
-| Neighbor change | Expected hash effect |
-| --- | --- |
-| Our String unchanged; adjacent technical field changes | Our cell macro/raw hashes stay the same; our `rowTechnicalHash` changes, so the complete fingerprint changes and our unit is unresolved. |
-| Our String unchanged; another String in the row changes | Our cell hashes stay the same; the row technical hash stays the same, but row/string aggregates may change. This does not create automatic continuity at a changed binding. |
-| Several neighboring fields change | The row technical hash changes when technical payload changes; any complete fingerprint change is unresolved. |
-| Our String changes; row technical data unchanged | Macro/raw facts change while `rowTechnicalHash` may stay equal; exact macro+row evidence is still only a candidate. |
-| Our String moves while technical data is logically identical | The row technical hash changes because its coordinate is part of the hash; it is not relocation-invariant evidence. |
-
-Never assume that `rowTechnicalHash` is independent of the binding.
-
-### Coordinate reuse
+## Coordinate reuse and row shifts
 
 For:
 
@@ -180,94 +140,62 @@ old: A at X
 new: A at Y, unrelated B at X
 ```
 
-the planner never uses the fact that X is occupied to move A to B. If B has
-a different source value, different macro/raw facts, or different technical
-facts, the old unit is unresolved and may have candidate diagnostics for B or
-for A at Y. If valid HXS facts are observationally identical at the same
-binding, the frozen contract has no production-visible fact with which to
-distinguish the logical labels A and B; the planner follows the exact
-same-binding/complete-fingerprint rule rather than inventing an origin
-identifier that HXS does not persist. Such observationally indistinguishable
-facts are not a license to use similarity at other bindings.
+the old unit at X follows X if X survives, even when X now contains B. It is
+`Unchanged` or `SourceChanged` according to B's content at X, with the
+surviving binding X proposed. A unit whose old binding is absent at Y is
+`Ambiguous`; A at Y may be a candidate but is never automatically proposed.
 
-The same rule covers Y present or absent, multiple reused coordinates, and
-reused coordinates with duplicate macro or macro-plus-raw values. No
-coordinate-presence check alone establishes identity.
+For a row shift:
 
-### Swaps, cycles, and permutations
+```text
+old: Alpha@100, Beta@101, Gamma@102
+new: Alpha@101, Beta@102, Gamma@103
+```
 
-For `A <-> B`, `A -> B; B -> C; C -> A`, rotations of three or more
-occurrences, reverse ordering, and whole-block permutations, every binding
-change is unresolved. Iteration order, `SourceBinding` order,
-`TranslationUnitId` order, and first-match behavior must not choose an origin.
-
-### Duplicate-source transitions
-
-Duplicate macro text, duplicate macro-plus-raw values, duplicate complete
-fingerprints, duplicates in old only, new only, or both, adjacent/far-apart
-duplicates, cross-sheet/cross-column duplicates, and identical empty strings
-are all diagnostic situations. One-to-many, many-to-one, and many-to-many
-candidate sets remain ambiguous. No tie is resolved by source binding order,
-unit ID order, or first match. Multiple old units may carry the same suggested
-new binding.
-
-### Removal and new-occurrence transitions
-
-Genuine removal, genuine addition, remove-plus-unrelated-add at the same
-coordinate, identical-text additions elsewhere or at the old coordinate,
-moves, moves plus edits, edits in place, and new text equal to old text never
-become automatic `removed`, `new`, or cross-binding continuity decisions.
-The current plan is intentionally limited to existing managed units and the
-two outcomes above.
-
-### Compound adversarial transitions
-
-Row insertion plus technical change; insertion plus duplicate text; insertion
-plus coordinate reuse; shift plus source edit; shift plus duplicate
-candidates; schema change plus row movement; column insertion plus source
-edit; swaps plus technical changes; remove plus add plus duplicate; several
-unrelated transformations in one sheet; and simultaneous transformations
-across sheets all preserve the same safety boundary. A compound transition
-may add candidate diagnostics, but it cannot create an authoritative mapping
-that was not already proven by the unchanged same-binding rule.
+old Alpha@100 is missing and ambiguous. Old Beta@101 and Gamma@102 retain
+their bindings and are `SourceChanged` because the surviving cells contain the
+shifted neighbor's content. Neither is rebound to its descendant row. The
+same rule handles insertions, deletions, coordinate reuse, duplicate values,
+and swaps.
 
 ## Model-based safety proof
 
-The integration suite contains a deterministic bounded reference model. The
-model assigns logical-origin IDs to three old occurrences, applies every
-injective placement into four coordinate slots (including removal), applies
-all eight combinations of unchanged/edited source facts, and tests both an
-inserted and non-inserted new corpus. It constructs verified synthetic HXS
-snapshots; logical-origin IDs are never passed to production.
+The integration suite runs a deterministic bounded reference model in CI; it
+is not ignored. The model enumerates 73 injective placements of three logical
+old occurrences into four slots, all eight source-mutation masks, and both
+inserted/non-inserted corpus states: `73 * 8 * 2 = 1,168` verified HXS
+transitions.
 
-For every production `Unchanged` entry, the oracle checks that the
-authoritative proposed binding contains the same logical origin. It also
-checks that unresolved entries have no proposed binding or fingerprint. The
-model is bounded and reproducible, not randomized. The exhaustive test is
-run separately because it intentionally exercises 1,168 transition states.
+For every generated state, the oracle checks:
 
-## Future structural reconciliation
+1. any authoritative proposed binding equals the previous binding;
+2. every surviving binding is never ambiguous and is `Unchanged` or
+   `SourceChanged` according to macro/raw content only;
+3. every missing binding is `Ambiguous` with no proposed binding or
+   fingerprint;
+4. content classification ignores row technical context;
+5. output is deterministic for equivalent physical insertion order; and
+6. the `TranslationUnitId` remains stable.
 
-A later UX may detect a review proposal such as “15,000 occurrences appear to
-shift by row +1.” The pattern can produce a human-reviewed batch proposal,
-but the pattern itself does not establish identity. One explicit human
-approval may establish a batch mapping in a future reconciliation format.
+The model never passes logical-origin labels to production. Its exhaustive
+state count, automatic continuity count, source-changed count, unresolved
+count, and wrong-mapping count are printed by the test for auditability.
 
-Fuzzy ranking, exact candidate suggestions, and structural observations all
-belong below the safety boundary:
+## Future apply semantics
 
-```text
-deterministic planner   -> exact unchanged same-binding authority only
-unresolved diagnostics  -> exact, structural, and fuzzy review suggestions
-human reconciliation    -> explicit new identity decisions
-```
+Apply is intentionally not implemented by this planner. Once the safety
+contract is merged and CI is green, a future apply operation may:
 
-## Apply blocker
+- carry `Unchanged` forward at the same binding;
+- carry `SourceChanged` forward at the same binding, replace the current
+  persisted source facts, and mark the unit for review;
+- reject `Ambiguous` until a human explicitly reconciles a candidate; and
+- preserve the existing `TranslationUnitId` in every case.
 
-**RebasePlan apply MUST NOT be implemented until this safety contract is
-merged and the exhaustive tests are green.**
+Apply must update workspace source facts and review state atomically. It must
+not silently discard translated text or infer cross-binding identity from a
+unique candidate.
 
-Any future apply operation must reject unresolved entries. It may apply only
-authoritative unchanged mappings or explicit human reconciliation decisions,
-and it must update workspace metadata and source facts atomically without
-recomputing existing `TranslationUnitId` values.
+Fuzzy matching, ranking, and structural shift detection are out of scope for
+identity authority. They may provide review UI later, but cannot create an
+automatic source mapping.

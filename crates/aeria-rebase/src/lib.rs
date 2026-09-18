@@ -114,8 +114,10 @@ impl SourceSnapshotIdentity {
 /// this planner; those require candidate review or explicit reconciliation.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum RebaseOutcome {
-    /// The previous binding and complete persisted fingerprint are identical.
+    /// The previous binding and String-cell source content are unchanged.
     Unchanged,
+    /// The previous binding exists, but the String-cell source content changed.
+    SourceChanged,
     /// No authoritative identity decision was established.
     Ambiguous,
 }
@@ -123,16 +125,45 @@ pub enum RebaseOutcome {
 /// The only evidence that can establish automatic source continuity.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum AutomaticEvidence {
-    /// The previous binding exists and its complete fingerprint is identical.
-    SameBindingAndCompleteFingerprint,
+    /// The previous binding exists in the new verified snapshot.
+    SameBinding,
+}
+
+/// The source-content facts of one managed String cell.
+///
+/// This intentionally excludes row technical context. The persisted
+/// [`SourceFingerprint`] still contains that context for compatibility, but it
+/// is not part of same-binding identity classification.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct SourceContent {
+    pub macro_text_hash: Sha256Hash,
+    pub raw_value_hash: Option<Sha256Hash>,
+}
+
+impl SourceContent {
+    /// Extracts String-cell content facts from a persisted source fingerprint.
+    #[must_use]
+    pub const fn from_fingerprint(fingerprint: &SourceFingerprint) -> Self {
+        Self {
+            macro_text_hash: fingerprint.macro_text_hash(),
+            raw_value_hash: fingerprint.raw_value_hash(),
+        }
+    }
+}
+
+/// Diagnostic status for row technical context at a surviving binding.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub enum SourceContextStatus {
+    /// The persisted row technical hash is unchanged.
+    Unchanged,
+    /// The persisted row technical hash changed; this does not change identity.
+    Changed,
 }
 
 /// Deterministic evidence for a non-authoritative candidate suggestion.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum CandidateEvidence {
-    /// The previous binding exists, but its complete fingerprint changed.
-    SameBindingChangedFingerprint,
-    /// The complete persisted fingerprint matches in the new snapshot.
+    /// The complete persisted fingerprint matches at another binding.
     CompleteFingerprint,
     /// Macro-text and the old optional raw-value hash matched.
     MacroAndRawValue,
@@ -165,8 +196,12 @@ pub struct UnitRebasePlan {
     pub outcome: RebaseOutcome,
     pub proposed_source_binding: Option<SourceBinding>,
     pub proposed_source_fingerprint: Option<SourceFingerprint>,
-    /// Present only for the exact unchanged same-binding decision.
+    /// Present for authoritative same-binding continuity, including
+    /// `SourceChanged`.
     pub automatic_evidence: Option<AutomaticEvidence>,
+    /// Technical-context comparison for a surviving old binding. It is absent
+    /// when the old binding is missing.
+    pub context_status: Option<SourceContextStatus>,
     /// Bounded, canonical, non-authoritative diagnostics. These suggestions
     /// never claim a new occurrence and never populate the proposed fields.
     pub candidate_evidence: Vec<CandidateEvidenceSet>,
@@ -179,6 +214,7 @@ pub type UnitPlanEntry = UnitRebasePlan;
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct RebaseSummary {
     pub unchanged: usize,
+    pub source_changed: usize,
     pub ambiguous: usize,
 }
 
@@ -264,9 +300,8 @@ where
     // The old baseline is fully verified before this scan begins. The new
     // snapshot is read once through its bounded keyset API.
     let new_index = NewSourceIndex::read(new_snapshot)?;
-    let mut claimed = BTreeSet::new();
 
-    resolve_exact_same_binding(&mut states, &new_index, &mut claimed);
+    resolve_same_binding(&mut states, &new_index);
     record_candidate_stage(
         &mut states,
         &new_index,
@@ -554,6 +589,7 @@ struct UnitState {
     outcome: Option<RebaseOutcome>,
     proposed: Option<(SourceBinding, SourceFingerprint)>,
     automatic_evidence: Option<AutomaticEvidence>,
+    context_status: Option<SourceContextStatus>,
     candidate_evidence: Vec<CandidateEvidenceSet>,
 }
 
@@ -566,16 +602,26 @@ impl UnitState {
             outcome: None,
             proposed: None,
             automatic_evidence: None,
+            context_status: None,
             candidate_evidence: Vec::new(),
         }
     }
 
     fn resolve(&mut self, occurrence: &NewOccurrence) {
         debug_assert_eq!(self.previous_binding, occurrence.binding);
-        debug_assert_eq!(self.previous_fingerprint, occurrence.fingerprint);
-        self.outcome = Some(RebaseOutcome::Unchanged);
+        let content_unchanged =
+            source_content_equal(&self.previous_fingerprint, &occurrence.fingerprint);
+        self.outcome = Some(if content_unchanged {
+            RebaseOutcome::Unchanged
+        } else {
+            RebaseOutcome::SourceChanged
+        });
         self.proposed = Some((occurrence.binding.clone(), occurrence.fingerprint));
-        self.automatic_evidence = Some(AutomaticEvidence::SameBindingAndCompleteFingerprint);
+        self.automatic_evidence = Some(AutomaticEvidence::SameBinding);
+        self.context_status = Some(source_context_status(
+            &self.previous_fingerprint,
+            &occurrence.fingerprint,
+        ));
     }
 
     fn record_candidates(
@@ -614,36 +660,31 @@ impl UnitState {
             proposed_source_binding,
             proposed_source_fingerprint,
             automatic_evidence: self.automatic_evidence,
+            context_status: self.context_status,
             candidate_evidence: self.candidate_evidence,
         }
     }
 }
 
-fn resolve_exact_same_binding(
-    states: &mut [UnitState],
-    index: &NewSourceIndex,
-    claimed: &mut BTreeSet<usize>,
-) {
+fn resolve_same_binding(states: &mut [UnitState], index: &NewSourceIndex) {
     for state in states.iter_mut() {
         let Some(&occurrence_index) = index.by_binding.get(&state.previous_binding) else {
             continue;
         };
         let occurrence = &index.occurrences[occurrence_index];
-        if state.previous_fingerprint == occurrence.fingerprint {
-            let exact_candidates = index
-                .by_fingerprint
-                .get(&state.previous_fingerprint)
-                .map_or(&[][..], Vec::as_slice);
-            if exact_candidates.len() == 1 && claimed.insert(occurrence_index) {
-                state.resolve(occurrence);
-            }
-        } else {
-            state.record_candidates(
-                &[occurrence_index],
-                index,
-                CandidateEvidence::SameBindingChangedFingerprint,
-            );
-        }
+        state.resolve(occurrence);
+    }
+}
+
+fn source_content_equal(old: &SourceFingerprint, new: &SourceFingerprint) -> bool {
+    SourceContent::from_fingerprint(old) == SourceContent::from_fingerprint(new)
+}
+
+fn source_context_status(old: &SourceFingerprint, new: &SourceFingerprint) -> SourceContextStatus {
+    if old.row_technical_hash() == new.row_technical_hash() {
+        SourceContextStatus::Unchanged
+    } else {
+        SourceContextStatus::Changed
     }
 }
 
@@ -684,6 +725,7 @@ fn summarize(entries: &[UnitRebasePlan]) -> RebaseSummary {
     for entry in entries {
         match entry.outcome {
             RebaseOutcome::Unchanged => summary.unchanged += 1,
+            RebaseOutcome::SourceChanged => summary.source_changed += 1,
             RebaseOutcome::Ambiguous => summary.ambiguous += 1,
         }
     }
@@ -727,62 +769,7 @@ mod tests {
     }
 
     #[test]
-    fn same_binding_stage_does_not_claim_one_occurrence_twice() {
-        let binding = SourceBinding::new("Sheet", 1, 0, 0);
-        let fingerprint = SourceFingerprint::new(
-            Sha256Hash::from_bytes([1; 32]),
-            None,
-            Sha256Hash::from_bytes([2; 32]),
-        );
-        let units = [
-            TranslationUnit::new(
-                TranslationUnitId::from_bytes([1; 32]),
-                binding.clone(),
-                fingerprint,
-                "",
-            ),
-            TranslationUnit::new(
-                TranslationUnitId::from_bytes([2; 32]),
-                binding.clone(),
-                fingerprint,
-                "",
-            ),
-        ];
-        let mut states: Vec<_> = units.iter().map(UnitState::new).collect();
-        let index = NewSourceIndex {
-            occurrences: vec![NewOccurrence {
-                binding: binding.clone(),
-                fingerprint,
-            }],
-            by_binding: BTreeMap::from([(binding, 0)]),
-            by_fingerprint: BTreeMap::from([(fingerprint, vec![0])]),
-            by_macro_and_raw: BTreeMap::new(),
-            by_macro_and_row: BTreeMap::new(),
-            by_macro: BTreeMap::new(),
-        };
-        let mut claimed = BTreeSet::new();
-
-        resolve_exact_same_binding(&mut states, &index, &mut claimed);
-
-        assert_eq!(claimed.len(), 1);
-        assert_eq!(
-            states
-                .iter()
-                .filter(|state| state.outcome.is_some())
-                .count(),
-            1
-        );
-        assert_eq!(
-            states
-                .iter()
-                .filter(|state| state.proposed.is_some())
-                .count(),
-            1
-        );
-    }
-
-    #[test]
-    fn ambiguous_complete_fingerprint_is_frozen_before_weaker_stages() {
+    fn candidate_evidence_is_non_authoritative_and_keeps_multiple_strengths() {
         let binding = SourceBinding::new("Sheet", 1, 0, 0);
         let macro_hash = Sha256Hash::from_bytes([1; 32]);
         let raw_hash = Sha256Hash::from_bytes([2; 32]);
@@ -855,59 +842,5 @@ mod tests {
             states[0].candidate_evidence[1].evidence,
             CandidateEvidence::ExactMacroText
         );
-    }
-
-    #[test]
-    fn duplicate_complete_fingerprints_block_same_binding_authority() {
-        let binding = SourceBinding::new("Sheet", 1, 0, 0);
-        let fingerprint = SourceFingerprint::new(
-            Sha256Hash::from_bytes([1; 32]),
-            None,
-            Sha256Hash::from_bytes([2; 32]),
-        );
-        let unit = TranslationUnit::new(
-            TranslationUnitId::from_bytes([5; 32]),
-            binding.clone(),
-            fingerprint,
-            "",
-        );
-        let mut states = vec![UnitState::new(&unit)];
-        let second_binding = SourceBinding::new("Sheet", 2, 0, 0);
-        let index = NewSourceIndex {
-            occurrences: vec![
-                NewOccurrence {
-                    binding: binding.clone(),
-                    fingerprint,
-                },
-                NewOccurrence {
-                    binding: second_binding,
-                    fingerprint,
-                },
-            ],
-            by_binding: BTreeMap::from([(binding, 0)]),
-            by_fingerprint: BTreeMap::from([(fingerprint, vec![0, 1])]),
-            by_macro_and_raw: BTreeMap::new(),
-            by_macro_and_row: BTreeMap::new(),
-            by_macro: BTreeMap::new(),
-        };
-        let mut claimed = BTreeSet::new();
-
-        resolve_exact_same_binding(&mut states, &index, &mut claimed);
-        record_candidate_stage(
-            &mut states,
-            &index,
-            &index.by_fingerprint,
-            CandidateEvidence::CompleteFingerprint,
-            |previous| Some(*previous),
-        );
-
-        assert!(claimed.is_empty());
-        assert_eq!(states[0].outcome, None);
-        assert_eq!(states[0].proposed, None);
-        assert_eq!(
-            states[0].candidate_evidence[0].evidence,
-            CandidateEvidence::CompleteFingerprint
-        );
-        assert_eq!(states[0].candidate_evidence[0].candidate_count, 2);
     }
 }

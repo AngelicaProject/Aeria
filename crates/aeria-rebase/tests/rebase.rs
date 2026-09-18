@@ -7,7 +7,8 @@ use aeria_core::{
 };
 use aeria_hxs::HxsSnapshot;
 use aeria_rebase::{
-    AutomaticEvidence, CandidateEvidence, RebaseError, RebaseOutcome, RebasePlanner, plan_rebase,
+    AutomaticEvidence, CandidateEvidence, RebaseError, RebaseOutcome, RebasePlanner,
+    SourceContextStatus, plan_rebase,
 };
 use aeria_workspace::Workspace;
 use rusqlite::{Connection, params};
@@ -86,12 +87,16 @@ fn identical_snapshot_is_unchanged_and_planning_is_pure_and_deterministic() {
     assert_eq!(first.unit_entries[0].outcome, RebaseOutcome::Unchanged);
     assert_eq!(
         first.unit_entries[0].automatic_evidence,
-        Some(AutomaticEvidence::SameBindingAndCompleteFingerprint)
+        Some(AutomaticEvidence::SameBinding)
+    );
+    assert_eq!(
+        first.unit_entries[0].context_status,
+        Some(SourceContextStatus::Unchanged)
     );
 }
 
 #[test]
-fn same_binding_fingerprint_changes_are_ambiguous() {
+fn same_binding_content_and_context_changes_are_classified_separately() {
     for changed in [
         ChangedField::Macro,
         ChangedField::Raw,
@@ -117,14 +122,130 @@ fn same_binding_fingerprint_changes_are_ambiguous() {
             .expect("plan succeeds");
         let entry = &plan.unit_entries[0];
         assert_eq!(entry.translation_unit_id, id);
-        assert_eq!(entry.outcome, RebaseOutcome::Ambiguous);
-        assert_eq!(entry.automatic_evidence, None);
-        assert_eq!(entry.proposed_source_binding, None);
-        assert_eq!(entry.proposed_source_fingerprint, None);
         assert_eq!(
-            entry.candidate_evidence[0].evidence,
-            CandidateEvidence::SameBindingChangedFingerprint
+            entry.automatic_evidence,
+            Some(AutomaticEvidence::SameBinding)
         );
+        assert_eq!(
+            entry.proposed_source_binding,
+            Some(SourceBinding::new("台詞", 1, 0, 0))
+        );
+        assert!(entry.proposed_source_fingerprint.is_some());
+        assert_eq!(
+            entry.context_status,
+            Some(match changed {
+                ChangedField::RowTechnical => SourceContextStatus::Changed,
+                ChangedField::Macro | ChangedField::Raw => SourceContextStatus::Unchanged,
+            })
+        );
+        assert_eq!(
+            entry.outcome,
+            match changed {
+                ChangedField::RowTechnical => RebaseOutcome::Unchanged,
+                ChangedField::Macro | ChangedField::Raw => RebaseOutcome::SourceChanged,
+            }
+        );
+    }
+}
+
+#[test]
+fn neighboring_string_changes_only_affect_their_own_translation_unit() {
+    let old_fixture = write_snapshot(&snapshot(
+        "old",
+        vec![row_with_cells(
+            1,
+            1,
+            vec![cell(0, "stable", None), cell(2, "old", None)],
+        )],
+    ));
+    let new_fixture = write_snapshot(&snapshot(
+        "new",
+        vec![row_with_cells(
+            1,
+            1,
+            vec![cell(0, "stable", None), cell(2, "new", None)],
+        )],
+    ));
+    let old = HxsSnapshot::open(&old_fixture.path).expect("old HXS");
+    let new = HxsSnapshot::open(&new_fixture.path).expect("new HXS");
+    let mut workspace = Workspace::from_verified_snapshot(&old, "fr").expect("workspace");
+    workspace
+        .create_unit_from_hxs(&old, "台詞", 1, 0, 0, "stable target")
+        .expect("stable unit");
+    workspace
+        .create_unit_from_hxs(&old, "台詞", 1, 0, 2, "changed target")
+        .expect("changed unit");
+
+    let plan =
+        plan_rebase(workspace.metadata(), workspace.units(), &old, &new).expect("plan succeeds");
+    let stable = plan
+        .unit_entries
+        .iter()
+        .find(|entry| entry.previous_source_binding.column_index() == 0)
+        .expect("stable entry");
+    assert_eq!(stable.outcome, RebaseOutcome::Unchanged);
+    assert_eq!(stable.candidate_evidence, Vec::new());
+    let changed = plan
+        .unit_entries
+        .iter()
+        .find(|entry| entry.previous_source_binding.column_index() == 2)
+        .expect("changed entry");
+    assert_eq!(changed.outcome, RebaseOutcome::SourceChanged);
+    assert_eq!(changed.candidate_evidence, Vec::new());
+    assert_eq!(plan.summary.unchanged, 1);
+    assert_eq!(plan.summary.source_changed, 1);
+    assert_eq!(plan.summary.ambiguous, 0);
+}
+
+#[test]
+fn duplicate_content_elsewhere_does_not_disqualify_a_surviving_binding() {
+    let old_fixture = write_snapshot(&snapshot("old", vec![row(1, "same", None, &[1])]));
+    let new_fixture = write_snapshot(&snapshot(
+        "new",
+        vec![row(1, "same", None, &[1]), row(2, "same", None, &[2])],
+    ));
+    let old = HxsSnapshot::open(&old_fixture.path).expect("old HXS");
+    let new = HxsSnapshot::open(&new_fixture.path).expect("new HXS");
+    let mut workspace = Workspace::from_verified_snapshot(&old, "fr").expect("workspace");
+    workspace
+        .create_unit_from_hxs(&old, "台詞", 1, 0, 0, "target")
+        .expect("unit");
+
+    let plan =
+        plan_rebase(workspace.metadata(), workspace.units(), &old, &new).expect("plan succeeds");
+    let entry = &plan.unit_entries[0];
+    assert_eq!(entry.outcome, RebaseOutcome::Unchanged);
+    assert_eq!(
+        entry.automatic_evidence,
+        Some(AutomaticEvidence::SameBinding)
+    );
+    assert!(entry.candidate_evidence.is_empty());
+    assert_eq!(plan.summary.unchanged, 1);
+    assert_eq!(plan.summary.source_changed, 0);
+    assert_eq!(plan.summary.ambiguous, 0);
+}
+
+#[test]
+fn raw_value_presence_changes_are_source_changed_at_the_same_binding() {
+    for (old_raw, new_raw) in [(Some(b"raw".to_vec()), None), (None, Some(b"raw".to_vec()))] {
+        let old_fixture = write_snapshot(&snapshot("old", vec![row(1, "same", old_raw, &[1])]));
+        let new_fixture = write_snapshot(&snapshot("new", vec![row(1, "same", new_raw, &[1])]));
+        let old = HxsSnapshot::open(&old_fixture.path).expect("old HXS");
+        let new = HxsSnapshot::open(&new_fixture.path).expect("new HXS");
+        let mut workspace = Workspace::from_verified_snapshot(&old, "fr").expect("workspace");
+        workspace
+            .create_unit_from_hxs(&old, "台詞", 1, 0, 0, "target")
+            .expect("unit");
+
+        let plan = plan_rebase(workspace.metadata(), workspace.units(), &old, &new)
+            .expect("plan succeeds");
+        let entry = &plan.unit_entries[0];
+        assert_eq!(entry.outcome, RebaseOutcome::SourceChanged);
+        assert_eq!(
+            entry.proposed_source_binding,
+            Some(SourceBinding::new("台詞", 1, 0, 0))
+        );
+        assert_eq!(entry.context_status, Some(SourceContextStatus::Unchanged));
     }
 }
 
@@ -417,7 +538,7 @@ fn equivalent_physical_insertion_order_produces_the_same_plan() {
 }
 
 #[test]
-fn same_binding_claims_before_relocation_and_competing_units_never_duplicate() {
+fn surviving_binding_continuity_wins_over_relocation_candidates() {
     let old_fixture = write_snapshot(&snapshot(
         "old",
         vec![row(1, "first", None, &[1]), row(2, "second", None, &[2])],
@@ -436,15 +557,33 @@ fn same_binding_claims_before_relocation_and_competing_units_never_duplicate() {
     let plan =
         plan_rebase(workspace.metadata(), workspace.units(), &old, &new).expect("plan succeeds");
     assert_eq!(plan.summary.unchanged, 0);
-    assert_eq!(plan.summary.ambiguous, 2);
-    assert!(
-        plan.unit_entries
-            .iter()
-            .all(|entry| entry.proposed_source_binding.is_none())
+    assert_eq!(plan.summary.source_changed, 1);
+    assert_eq!(plan.summary.ambiguous, 1);
+    let changed = plan
+        .unit_entries
+        .iter()
+        .find(|entry| entry.previous_source_binding.row_id() == 1)
+        .expect("surviving binding");
+    assert_eq!(changed.outcome, RebaseOutcome::SourceChanged);
+    assert_eq!(
+        changed.proposed_source_binding,
+        Some(SourceBinding::new("台詞", 1, 0, 0))
     );
+    assert_eq!(
+        changed.automatic_evidence,
+        Some(AutomaticEvidence::SameBinding)
+    );
+    let missing = plan
+        .unit_entries
+        .iter()
+        .find(|entry| entry.previous_source_binding.row_id() == 2)
+        .expect("missing binding");
+    assert_eq!(missing.outcome, RebaseOutcome::Ambiguous);
+    assert_eq!(missing.proposed_source_binding, None);
 }
 
 #[test]
+#[allow(clippy::too_many_lines)]
 fn coordinate_shifts_and_reused_coordinates_never_rebind_units() {
     let old_rows = vec![
         row(100, "Alpha", None, &[1]),
@@ -459,7 +598,7 @@ fn coordinate_shifts_and_reused_coordinates_never_rebind_units() {
                 row(102, "Beta", None, &[2]),
                 row(103, "Gamma", None, &[3]),
             ],
-            0,
+            (0, 2, 1),
         ),
         (
             "minus-one shift",
@@ -468,7 +607,7 @@ fn coordinate_shifts_and_reused_coordinates_never_rebind_units() {
                 row(100, "Beta", None, &[2]),
                 row(101, "Gamma", None, &[3]),
             ],
-            0,
+            (0, 2, 1),
         ),
         (
             "large shift",
@@ -477,7 +616,7 @@ fn coordinate_shifts_and_reused_coordinates_never_rebind_units() {
                 row(201, "Beta", None, &[2]),
                 row(202, "Gamma", None, &[3]),
             ],
-            0,
+            (0, 0, 3),
         ),
         (
             "middle insertion",
@@ -487,16 +626,17 @@ fn coordinate_shifts_and_reused_coordinates_never_rebind_units() {
                 row(102, "Beta", None, &[2]),
                 row(103, "Gamma", None, &[3]),
             ],
-            1,
+            (1, 2, 0),
         ),
         (
             "middle deletion",
             vec![row(100, "Alpha", None, &[1]), row(102, "Gamma", None, &[3])],
-            2,
+            (2, 0, 1),
         ),
     ];
 
-    for (name, new_rows, expected_unchanged) in cases {
+    for (name, new_rows, (expected_unchanged, expected_source_changed, expected_ambiguous)) in cases
+    {
         let old_fixture = write_snapshot(&snapshot("old", old_rows.clone()));
         let new_fixture = write_snapshot(&snapshot("new", new_rows));
         let old = HxsSnapshot::open(&old_fixture.path).expect("old HXS");
@@ -511,10 +651,20 @@ fn coordinate_shifts_and_reused_coordinates_never_rebind_units() {
         let plan = plan_rebase(workspace.metadata(), workspace.units(), &old, &new)
             .unwrap_or_else(|error| panic!("{name}: {error}"));
         assert_eq!(plan.summary.unchanged, expected_unchanged, "{name}");
-        assert_eq!(plan.summary.unchanged + plan.summary.ambiguous, 3, "{name}");
+        assert_eq!(
+            plan.summary.source_changed, expected_source_changed,
+            "{name}"
+        );
+        assert_eq!(plan.summary.ambiguous, expected_ambiguous, "{name}");
         assert!(
             plan.unit_entries.iter().all(|entry| {
-                entry.outcome == RebaseOutcome::Unchanged
+                (matches!(
+                    entry.outcome,
+                    RebaseOutcome::Unchanged | RebaseOutcome::SourceChanged
+                ) && entry.proposed_source_binding.as_ref()
+                    == Some(&entry.previous_source_binding)
+                    && entry.proposed_source_fingerprint.is_some()
+                    && entry.automatic_evidence == Some(AutomaticEvidence::SameBinding))
                     || (entry.outcome == RebaseOutcome::Ambiguous
                         && entry.proposed_source_binding.is_none()
                         && entry.proposed_source_fingerprint.is_none()
@@ -529,15 +679,16 @@ fn coordinate_shifts_and_reused_coordinates_never_rebind_units() {
                     .iter()
                     .find(|entry| entry.previous_source_binding.row_id() == old_row)
                     .expect("shift entry");
-                assert_eq!(entry.outcome, RebaseOutcome::Ambiguous);
-                assert!(entry.proposed_source_binding.is_none());
-                assert!(entry.candidate_evidence.iter().any(|set| {
-                    set.evidence == CandidateEvidence::ExactMacroText
-                        && set
-                            .candidate_bindings
-                            .iter()
-                            .any(|binding| binding.row_id() == descendant_row)
-                }));
+                assert_eq!(entry.outcome, RebaseOutcome::SourceChanged);
+                assert_eq!(
+                    entry.proposed_source_binding,
+                    Some(SourceBinding::new("台詞", old_row, 0, 0))
+                );
+                assert!(entry.candidate_evidence.is_empty());
+                assert_ne!(
+                    entry.proposed_source_binding,
+                    Some(SourceBinding::new("台詞", descendant_row, 0, 0))
+                );
             }
         }
     }
@@ -565,15 +716,27 @@ fn reused_coordinate_does_not_bind_the_old_occurrence_to_an_unrelated_value() {
 
     let plan =
         plan_rebase(workspace.metadata(), workspace.units(), &old, &new).expect("plan succeeds");
-    assert!(plan.unit_entries.iter().all(|entry| {
-        entry.outcome == RebaseOutcome::Ambiguous
-            && entry.proposed_source_binding.is_none()
-            && entry.proposed_source_fingerprint.is_none()
-    }));
+    let reused = plan
+        .unit_entries
+        .iter()
+        .find(|entry| entry.previous_source_binding.row_id() == 10)
+        .expect("reused binding");
+    assert_eq!(reused.outcome, RebaseOutcome::SourceChanged);
+    assert_eq!(
+        reused.proposed_source_binding,
+        Some(SourceBinding::new("台詞", 10, 0, 0))
+    );
+    let missing = plan
+        .unit_entries
+        .iter()
+        .find(|entry| entry.previous_source_binding.row_id() == 11)
+        .expect("missing binding");
+    assert_eq!(missing.outcome, RebaseOutcome::Ambiguous);
+    assert_eq!(missing.proposed_source_binding, None);
 }
 
 #[test]
-fn duplicate_values_under_a_row_shift_remain_ambiguous() {
+fn duplicate_values_under_a_row_shift_preserve_surviving_bindings() {
     let old_fixture = write_snapshot(&snapshot(
         "old",
         vec![
@@ -601,19 +764,24 @@ fn duplicate_values_under_a_row_shift_remain_ambiguous() {
 
     let plan =
         plan_rebase(workspace.metadata(), workspace.units(), &old, &new).expect("plan succeeds");
-    assert_eq!(plan.summary.unchanged, 0);
-    assert_eq!(plan.summary.ambiguous, 3);
-    assert!(plan.unit_entries.iter().all(|entry| {
-        entry.proposed_source_binding.is_none()
-            && entry.proposed_source_fingerprint.is_none()
-            && entry.automatic_evidence.is_none()
+    assert_eq!(plan.summary.unchanged, 1);
+    assert_eq!(plan.summary.source_changed, 1);
+    assert_eq!(plan.summary.ambiguous, 1);
+    let ambiguous = plan
+        .unit_entries
+        .iter()
+        .find(|entry| entry.outcome == RebaseOutcome::Ambiguous)
+        .expect("removed shifted binding");
+    assert!(ambiguous.proposed_source_binding.is_none());
+    assert!(plan.unit_entries.iter().any(|entry| {
+        entry.outcome == RebaseOutcome::Unchanged
+            && entry.automatic_evidence == Some(AutomaticEvidence::SameBinding)
     }));
 }
 
 #[test]
-#[ignore = "run separately as the bounded exhaustive transition suite"]
 #[allow(clippy::too_many_lines)]
-fn bounded_exhaustive_transition_model_has_no_wrong_automatic_mappings() {
+fn bounded_exhaustive_transition_model_obeys_binding_continuity_oracle() {
     let old_fixture = write_snapshot(&snapshot(
         "old",
         vec![
@@ -638,9 +806,15 @@ fn bounded_exhaustive_transition_model_has_no_wrong_automatic_mappings() {
             )
         })
         .collect();
+    let old_content = [
+        (macro_hash("Alpha"), None, 1_u8),
+        (macro_hash("Beta"), Some(raw_hash(b"beta")), 2_u8),
+        (macro_hash("Gamma"), Some(raw_hash(b"gamma")), 3_u8),
+    ];
     let placements = model_placements();
     let mut states = 0_usize;
     let mut automatically_resolved = 0_usize;
+    let mut source_changed = 0_usize;
     let mut unresolved = 0_usize;
     let mut wrong_automatic_mappings = 0_usize;
 
@@ -648,7 +822,7 @@ fn bounded_exhaustive_transition_model_has_no_wrong_automatic_mappings() {
         for mutation_mask in 0_u8..8 {
             for include_inserted in [false, true] {
                 let mut new_rows = Vec::new();
-                let mut new_origins = BTreeMap::new();
+                let mut new_content = BTreeMap::new();
                 for (origin, slot) in placement.iter().enumerate() {
                     let Some(slot) = slot else {
                         continue;
@@ -673,10 +847,18 @@ fn bounded_exhaustive_transition_model_has_no_wrong_automatic_mappings() {
                         row_id,
                         column_index,
                         &macro_text,
-                        raw_value,
+                        raw_value.clone(),
                         &[technical],
                     ));
-                    new_origins.insert(SourceBinding::new("台詞", row_id, 0, column_index), origin);
+                    let binding = SourceBinding::new("台詞", row_id, 0, column_index);
+                    new_content.insert(
+                        binding,
+                        (
+                            macro_hash(&macro_text),
+                            raw_value.as_deref().map(raw_hash),
+                            technical,
+                        ),
+                    );
                 }
                 if include_inserted {
                     let occupied: BTreeSet<_> = placement.iter().flatten().copied().collect();
@@ -689,6 +871,9 @@ fn bounded_exhaustive_transition_model_has_no_wrong_automatic_mappings() {
                             Some(b"beta".to_vec()),
                             &[7],
                         ));
+                        let binding = SourceBinding::new("台詞", row_id, 0, column_index);
+                        new_content
+                            .insert(binding, (macro_hash("Beta"), Some(raw_hash(b"beta")), 7));
                     }
                 }
 
@@ -697,15 +882,49 @@ fn bounded_exhaustive_transition_model_has_no_wrong_automatic_mappings() {
                 let plan = plan_rebase(workspace.metadata(), workspace.units(), &old, &new)
                     .expect("model plan succeeds");
                 states += 1;
+                let actual_ids: BTreeSet<_> = plan
+                    .unit_entries
+                    .iter()
+                    .map(|entry| entry.translation_unit_id)
+                    .collect();
+                let expected_ids: BTreeSet<_> = unit_origins.keys().copied().collect();
+                assert_eq!(actual_ids, expected_ids);
                 for entry in &plan.unit_entries {
                     let origin = unit_origins[&entry.translation_unit_id];
-                    if entry.outcome == RebaseOutcome::Unchanged {
+                    if let Some((new_macro, new_raw, new_technical)) =
+                        new_content.get(&entry.previous_source_binding)
+                    {
                         automatically_resolved += 1;
+                        assert_eq!(
+                            entry.proposed_source_binding.as_ref(),
+                            Some(&entry.previous_source_binding)
+                        );
+                        assert_eq!(
+                            entry.automatic_evidence,
+                            Some(AutomaticEvidence::SameBinding)
+                        );
+                        assert!(entry.proposed_source_fingerprint.is_some());
+                        let (old_macro, old_raw, old_technical) = old_content[origin];
+                        let expected_outcome = if old_macro == *new_macro && old_raw == *new_raw {
+                            RebaseOutcome::Unchanged
+                        } else {
+                            source_changed += 1;
+                            RebaseOutcome::SourceChanged
+                        };
+                        assert_eq!(entry.outcome, expected_outcome);
+                        assert_eq!(
+                            entry.context_status,
+                            Some(if old_technical == *new_technical {
+                                SourceContextStatus::Unchanged
+                            } else {
+                                SourceContextStatus::Changed
+                            })
+                        );
                         let binding = entry
                             .proposed_source_binding
                             .as_ref()
-                            .expect("unchanged entry has authoritative binding");
-                        if new_origins.get(binding) != Some(&origin) {
+                            .expect("surviving entry has authoritative binding");
+                        if binding != &entry.previous_source_binding {
                             wrong_automatic_mappings += 1;
                         }
                     } else {
@@ -714,6 +933,7 @@ fn bounded_exhaustive_transition_model_has_no_wrong_automatic_mappings() {
                         assert!(entry.proposed_source_binding.is_none());
                         assert!(entry.proposed_source_fingerprint.is_none());
                         assert!(entry.automatic_evidence.is_none());
+                        assert!(entry.context_status.is_none());
                     }
                 }
             }
@@ -721,11 +941,12 @@ fn bounded_exhaustive_transition_model_has_no_wrong_automatic_mappings() {
     }
 
     println!(
-        "model states: {states}; automatically resolved entries: {automatically_resolved}; unresolved entries: {unresolved}; wrong automatic mappings: {wrong_automatic_mappings}"
+        "model states: {states}; automatically resolved entries: {automatically_resolved}; source-changed entries: {source_changed}; unresolved entries: {unresolved}; wrong automatic mappings: {wrong_automatic_mappings}"
     );
     assert_eq!(wrong_automatic_mappings, 0);
     assert_eq!(states, 73 * 8 * 2);
     assert!(automatically_resolved > 0);
+    assert!(source_changed > 0);
     assert!(unresolved > 0);
 }
 
@@ -942,6 +1163,23 @@ fn row(row_id: u32, macro_text: &str, raw_value: Option<Vec<u8>>, technical: &[u
     row_at(row_id, 0, macro_text, raw_value, technical)
 }
 
+fn cell(column_index: u32, macro_text: &str, raw_value: Option<Vec<u8>>) -> CellSpec {
+    CellSpec {
+        column_index,
+        macro_text: macro_text.into(),
+        raw_value,
+    }
+}
+
+fn row_with_cells(row_id: u32, technical: u8, cells: Vec<CellSpec>) -> RowSpec {
+    RowSpec {
+        row_id,
+        subrow_id: 0,
+        technical,
+        cells,
+    }
+}
+
 fn row_at(
     row_id: u32,
     column_index: u32,
@@ -953,11 +1191,7 @@ fn row_at(
         row_id,
         subrow_id: 0,
         technical: technical.first().copied().unwrap_or_default(),
-        cells: vec![CellSpec {
-            column_index,
-            macro_text: macro_text.into(),
-            raw_value,
-        }],
+        cells: vec![cell(column_index, macro_text, raw_value)],
     }
 }
 
