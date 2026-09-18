@@ -50,6 +50,15 @@ dependencies = [
 [[package]]
 name = "aeria-rebase"
 version = "0.1.0"
+dependencies = [
+ "aeria-core",
+ "aeria-hxs",
+ "aeria-workspace",
+ "rusqlite",
+ "sha2 0.11.0",
+ "tempfile",
+ "thiserror 2.0.20",
+]
 
 [[package]]
 name = "aeria-se"
