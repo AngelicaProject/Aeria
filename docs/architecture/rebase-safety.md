@@ -35,7 +35,10 @@ duplicated elsewhere.
 The plan never recomputes `TranslationUnitId`. `automatic_evidence` is
 `AutomaticEvidence::SameBinding` only for surviving bindings. Proposed binding
 and fingerprint are populated for both `Unchanged` and `SourceChanged`; they
-are absent for `Ambiguous`.
+are absent for `Ambiguous`. An ambiguous entry may retain only compact
+`CandidateEvidenceSummary` values containing evidence type and candidate count;
+candidate `SourceBinding` values are never materialized in the authoritative
+plan. A future review suggester may resolve candidate bindings on demand.
 
 ## HXS v1 hash contract
 
@@ -186,11 +189,17 @@ count, and wrong-mapping count are printed by the test for auditability.
 Apply is intentionally not implemented by this planner. Once the safety
 contract is merged and CI is green, a future apply operation may:
 
-- carry `Unchanged` forward at the same binding;
-- carry `SourceChanged` forward at the same binding, replace the current
-  persisted source facts, and mark the unit for review;
-- reject `Ambiguous` until a human explicitly reconciles a candidate; and
-- preserve the existing `TranslationUnitId` in every case.
+- For `Unchanged`, preserve the `TranslationUnitId`, `SourceBinding`, target
+  text, and review state, then replace the current `SourceFingerprint` with
+  the proposed fingerprint. This includes a context-only
+  `rowTechnicalHash` change; retaining the old fingerprint would leave the
+  workspace stale against the new baseline.
+- For `SourceChanged`, preserve the `TranslationUnitId`, `SourceBinding`, and
+  target text, replace the current fingerprint, and mark the target
+  `NeedsReview`.
+- For `Ambiguous`, apply no source transition until explicit human
+  reconciliation.
+- Preserve the existing `TranslationUnitId` in every case.
 
 Apply must update workspace source facts and review state atomically. It must
 not silently discard translated text or infer cross-binding identity from a

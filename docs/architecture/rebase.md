@@ -35,13 +35,25 @@ matches, exact macro matches, row evidence, coordinate observations, and
 future fuzzy rankings are candidate diagnostics only. They never populate an
 authoritative proposed binding and never claim a new occurrence. Candidate
 discovery is performed only for missing bindings, so surviving bindings do not
-pay the cost of broad candidate diagnostics.
+pay the cost of broad candidate diagnostics. The owned plan retains at most a
+small evidence-and-count summary; it never stores candidate `SourceBinding`
+arrays. A future review suggester can resolve candidate bindings on demand.
 
 The plan never recomputes `TranslationUnitId`. It currently does not apply a
 plan or automatically classify terminal `new`, `removed`, or `relocated`
 states; those require later explicit reconciliation. A future apply operation
-may carry a `SourceChanged` unit forward at its surviving binding, update its
-current source facts, and mark it for review without changing its durable ID.
+must apply the proposed new fingerprint for every surviving binding, including
+an `Unchanged` unit whose row technical context changed. Its conceptual rules
+are:
+
+- `Unchanged`: preserve the translation-unit ID, binding, target text, and
+  review state; update the current `SourceFingerprint` to the proposed new
+  fingerprint, including a context-only `rowTechnicalHash` change.
+- `SourceChanged`: preserve the translation-unit ID, binding, and target text;
+  update the current fingerprint and mark the target `NeedsReview`.
+- `Ambiguous`: apply no source transition until explicit human reconciliation.
+
+Apply is not implemented by this planner.
 
 The complete source-transition matrix, HXS v1 hash contract, adversarial cases,
 model-based safety proof, and apply blocker live in

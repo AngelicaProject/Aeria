@@ -7,8 +7,8 @@ use aeria_core::{
 };
 use aeria_hxs::HxsSnapshot;
 use aeria_rebase::{
-    AutomaticEvidence, CandidateEvidence, RebaseError, RebaseOutcome, RebasePlanner,
-    SourceContextStatus, plan_rebase,
+    AutomaticEvidence, CandidateEvidence, CandidateEvidenceSummary, RebaseError, RebaseOutcome,
+    RebasePlanner, SourceContextStatus, UnitRebasePlan, plan_rebase,
 };
 use aeria_workspace::Workspace;
 use rusqlite::{Connection, params};
@@ -273,12 +273,25 @@ fn exact_fingerprint_at_another_binding_is_only_a_candidate() {
     assert_eq!(entry.outcome, RebaseOutcome::Ambiguous);
     assert_eq!(entry.automatic_evidence, None);
     assert_eq!(
-        entry.candidate_evidence[0].evidence,
-        CandidateEvidence::CompleteFingerprint
-    );
-    assert_eq!(
-        entry.candidate_evidence[0].candidate_bindings,
-        vec![SourceBinding::new("台詞", 1, 0, 2)]
+        entry.candidate_evidence,
+        vec![
+            CandidateEvidenceSummary {
+                evidence: CandidateEvidence::CompleteFingerprint,
+                candidate_count: 1,
+            },
+            CandidateEvidenceSummary {
+                evidence: CandidateEvidence::MacroAndRawValue,
+                candidate_count: 1,
+            },
+            CandidateEvidenceSummary {
+                evidence: CandidateEvidence::MacroAndRowTechnical,
+                candidate_count: 1,
+            },
+            CandidateEvidenceSummary {
+                evidence: CandidateEvidence::ExactMacroText,
+                candidate_count: 1,
+            },
+        ]
     );
     assert_eq!(entry.proposed_source_binding, None);
 }
@@ -307,12 +320,11 @@ fn exact_content_relocation_with_changed_context_is_ambiguous() {
     assert_eq!(entry.outcome, RebaseOutcome::Ambiguous);
     assert_eq!(entry.automatic_evidence, None);
     assert_eq!(
-        entry.candidate_evidence[0].evidence,
-        CandidateEvidence::ExactMacroText
-    );
-    assert_eq!(
-        entry.candidate_evidence[0].candidate_bindings,
-        vec![SourceBinding::new("台詞", 9, 0, 0)]
+        entry.candidate_evidence,
+        vec![CandidateEvidenceSummary {
+            evidence: CandidateEvidence::ExactMacroText,
+            candidate_count: 1,
+        }]
     );
     assert_eq!(entry.proposed_source_binding, None);
 }
@@ -340,12 +352,17 @@ fn exact_macro_and_raw_relocation_with_changed_context_is_ambiguous() {
     assert_eq!(entry.outcome, RebaseOutcome::Ambiguous);
     assert_eq!(entry.automatic_evidence, None);
     assert_eq!(
-        entry.candidate_evidence[0].evidence,
-        CandidateEvidence::MacroAndRawValue
-    );
-    assert_eq!(
-        entry.candidate_evidence[0].candidate_bindings,
-        vec![SourceBinding::new("台詞", 9, 0, 2)]
+        entry.candidate_evidence,
+        vec![
+            CandidateEvidenceSummary {
+                evidence: CandidateEvidence::MacroAndRawValue,
+                candidate_count: 1,
+            },
+            CandidateEvidenceSummary {
+                evidence: CandidateEvidence::ExactMacroText,
+                candidate_count: 1,
+            },
+        ]
     );
     assert_eq!(entry.proposed_source_binding, None);
 }
@@ -376,15 +393,20 @@ fn ambiguous_macro_and_raw_candidates_block_weaker_macro_and_row_matching() {
     let entry = &plan.unit_entries[0];
     assert_eq!(entry.outcome, RebaseOutcome::Ambiguous);
     assert_eq!(
-        entry.candidate_evidence[0].evidence,
-        CandidateEvidence::MacroAndRawValue
-    );
-    assert_eq!(entry.candidate_evidence[0].candidate_count, 2);
-    assert_eq!(
-        entry.candidate_evidence[0].candidate_bindings,
+        entry.candidate_evidence,
         vec![
-            SourceBinding::new("台詞", 2, 0, 0),
-            SourceBinding::new("台詞", 3, 0, 0),
+            CandidateEvidenceSummary {
+                evidence: CandidateEvidence::MacroAndRawValue,
+                candidate_count: 2,
+            },
+            CandidateEvidenceSummary {
+                evidence: CandidateEvidence::MacroAndRowTechnical,
+                candidate_count: 1,
+            },
+            CandidateEvidenceSummary {
+                evidence: CandidateEvidence::ExactMacroText,
+                candidate_count: 3,
+            },
         ]
     );
     assert_eq!(entry.proposed_source_binding, None);
@@ -412,12 +434,17 @@ fn zero_candidates_at_a_stronger_stage_allow_weaker_matching() {
     let entry = &plan.unit_entries[0];
     assert_eq!(entry.outcome, RebaseOutcome::Ambiguous);
     assert_eq!(
-        entry.candidate_evidence[0].evidence,
-        CandidateEvidence::MacroAndRowTechnical
-    );
-    assert_eq!(
-        entry.candidate_evidence[0].candidate_bindings,
-        vec![SourceBinding::new("台詞", 1, 0, 2)]
+        entry.candidate_evidence,
+        vec![
+            CandidateEvidenceSummary {
+                evidence: CandidateEvidence::MacroAndRowTechnical,
+                candidate_count: 1,
+            },
+            CandidateEvidenceSummary {
+                evidence: CandidateEvidence::ExactMacroText,
+                candidate_count: 1,
+            },
+        ]
     );
     assert_eq!(entry.proposed_source_binding, None);
 }
@@ -451,25 +478,29 @@ fn duplicate_candidates_and_competing_units_remain_ambiguous() {
             .all(|entry| entry.outcome == RebaseOutcome::Ambiguous)
     );
     assert!(plan.unit_entries.iter().all(|entry| {
-        entry.candidate_evidence[0].candidate_count == 2
-            && entry.candidate_evidence[0].evidence == CandidateEvidence::ExactMacroText
+        entry.candidate_evidence
+            == vec![CandidateEvidenceSummary {
+                evidence: CandidateEvidence::ExactMacroText,
+                candidate_count: 2,
+            }]
     }));
-    assert_eq!(
-        plan.unit_entries[0].candidate_evidence[0].candidate_bindings,
-        vec![
-            SourceBinding::new("台詞", 9, 0, 0),
-            SourceBinding::new("台詞", 10, 0, 0)
-        ]
-    );
-    assert_eq!(
-        plan.unit_entries[1].candidate_evidence[0].candidate_bindings,
-        plan.unit_entries[0].candidate_evidence[0].candidate_bindings
-    );
 }
 
 #[test]
-fn duplicate_heavy_macro_index_is_bounded_and_conservative() {
-    let old_fixture = write_snapshot(&snapshot("old", vec![row(1, "repeated", None, &[1])]));
+fn duplicate_heavy_ambiguous_plan_keeps_candidate_payload_small() {
+    let old_fixture = write_snapshot(&snapshot(
+        "old",
+        (1..=8)
+            .map(|row_id| {
+                row(
+                    row_id,
+                    "repeated",
+                    None,
+                    &[u8::try_from(row_id).expect("old duplicate row fits in a byte")],
+                )
+            })
+            .collect(),
+    ));
     let new_rows = (10..110)
         .map(|row_id| {
             row(
@@ -484,17 +515,28 @@ fn duplicate_heavy_macro_index_is_bounded_and_conservative() {
     let old = HxsSnapshot::open(&old_fixture.path).expect("old HXS");
     let new = HxsSnapshot::open(&new_fixture.path).expect("new HXS");
     let mut workspace = Workspace::from_verified_snapshot(&old, "fr").expect("workspace");
-    workspace
-        .create_unit_from_hxs(&old, "台詞", 1, 0, 0, "target")
-        .expect("unit");
+    for row_id in 1..=8 {
+        workspace
+            .create_unit_from_hxs(&old, "台詞", row_id, 0, 0, "target")
+            .expect("unit");
+    }
 
     let plan =
         plan_rebase(workspace.metadata(), workspace.units(), &old, &new).expect("plan succeeds");
-    let entry = &plan.unit_entries[0];
-    assert_eq!(entry.outcome, RebaseOutcome::Ambiguous);
-    assert_eq!(entry.candidate_evidence[0].candidate_count, 100);
-    assert_eq!(entry.candidate_evidence[0].candidate_bindings.len(), 64);
-    assert!(entry.candidate_evidence[0].candidates_truncated);
+    assert_eq!(plan.unit_entries.len(), 8);
+    assert_eq!(plan.summary.ambiguous, 8);
+    assert!(plan.unit_entries.iter().all(|entry| {
+        entry.outcome == RebaseOutcome::Ambiguous
+            && entry.candidate_evidence
+                == vec![CandidateEvidenceSummary {
+                    evidence: CandidateEvidence::ExactMacroText,
+                    candidate_count: 100,
+                }]
+    }));
+    assert!(
+        std::mem::size_of::<UnitRebasePlan>() < 64 * std::mem::size_of::<SourceBinding>(),
+        "authoritative entry must not contain 64 candidate bindings"
+    );
 }
 
 #[test]

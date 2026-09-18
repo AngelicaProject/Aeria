@@ -14,8 +14,6 @@ use aeria_hxs::{
 };
 use thiserror::Error;
 
-const MAX_REPORTED_CANDIDATES: usize = 64;
-
 /// Errors raised when a deterministic rebase plan cannot be built safely.
 #[derive(Debug, Error)]
 pub enum RebaseError {
@@ -109,16 +107,18 @@ impl SourceSnapshotIdentity {
 
 /// The deterministic result for one already managed translation unit.
 ///
-/// The hardening contract intentionally has only two planner outcomes. A
-/// source change, relocation, removal, or addition is not established by
-/// this planner; those require candidate review or explicit reconciliation.
+/// `Unchanged` and `SourceChanged` are authoritative classifications when the
+/// previous binding survives. `Ambiguous` means that binding is missing and
+/// no automatic cross-binding identity was established. Relocation, removal,
+/// and addition are not automatically established by this planner.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum RebaseOutcome {
-    /// The previous binding and String-cell source content are unchanged.
+    /// A surviving previous binding has unchanged String-cell content.
     Unchanged,
-    /// The previous binding exists, but the String-cell source content changed.
+    /// A surviving previous binding has changed String-cell content.
     SourceChanged,
-    /// No authoritative identity decision was established.
+    /// The previous binding is missing; no automatic cross-binding identity
+    /// was established.
     Ambiguous,
 }
 
@@ -173,18 +173,18 @@ pub enum CandidateEvidence {
     ExactMacroText,
 }
 
-/// One bounded, deterministic, non-authoritative candidate diagnostic.
+/// One compact, deterministic, non-authoritative candidate diagnostic.
+///
+/// Only the count is retained in the authoritative plan. Candidate bindings
+/// belong to a future on-demand review suggester and are never materialized
+/// here.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct CandidateEvidenceSet {
+pub struct CandidateEvidenceSummary {
     /// The evidence that produced this candidate set. This is never an
     /// identity decision and never authorizes a source claim.
     pub evidence: CandidateEvidence,
-    /// Candidate bindings in canonical source order.
-    pub candidate_bindings: Vec<SourceBinding>,
-    /// Number of available candidates before diagnostic truncation.
+    /// Number of available candidates for this evidence strength.
     pub candidate_count: usize,
-    /// Whether `candidate_bindings` was truncated to the diagnostic limit.
-    pub candidates_truncated: bool,
 }
 
 /// One deterministic plan entry for an existing managed unit.
@@ -202,9 +202,10 @@ pub struct UnitRebasePlan {
     /// Technical-context comparison for a surviving old binding. It is absent
     /// when the old binding is missing.
     pub context_status: Option<SourceContextStatus>,
-    /// Bounded, canonical, non-authoritative diagnostics. These suggestions
-    /// never claim a new occurrence and never populate the proposed fields.
-    pub candidate_evidence: Vec<CandidateEvidenceSet>,
+    /// Compact, non-authoritative diagnostics for a missing previous binding.
+    /// Candidate bindings are not stored here; a future review suggester may
+    /// resolve them on demand. These summaries never populate proposed fields.
+    pub candidate_evidence: Vec<CandidateEvidenceSummary>,
 }
 
 /// Backward-friendly name for consumers that call an entry a unit plan entry.
@@ -304,14 +305,12 @@ where
     resolve_same_binding(&mut states, &new_index);
     record_candidate_stage(
         &mut states,
-        &new_index,
         &new_index.by_fingerprint,
         CandidateEvidence::CompleteFingerprint,
         |fingerprint| Some(*fingerprint),
     );
     record_candidate_stage(
         &mut states,
-        &new_index,
         &new_index.by_macro_and_raw,
         CandidateEvidence::MacroAndRawValue,
         |fingerprint| {
@@ -322,7 +321,6 @@ where
     );
     record_candidate_stage(
         &mut states,
-        &new_index,
         &new_index.by_macro_and_row,
         CandidateEvidence::MacroAndRowTechnical,
         |fingerprint| {
@@ -334,7 +332,6 @@ where
     );
     record_candidate_stage(
         &mut states,
-        &new_index,
         &new_index.by_macro,
         CandidateEvidence::ExactMacroText,
         |fingerprint| Some(fingerprint.macro_text_hash()),
@@ -590,7 +587,7 @@ struct UnitState {
     proposed: Option<(SourceBinding, SourceFingerprint)>,
     automatic_evidence: Option<AutomaticEvidence>,
     context_status: Option<SourceContextStatus>,
-    candidate_evidence: Vec<CandidateEvidenceSet>,
+    candidate_evidence: Vec<CandidateEvidenceSummary>,
 }
 
 impl UnitState {
@@ -624,24 +621,13 @@ impl UnitState {
         ));
     }
 
-    fn record_candidates(
-        &mut self,
-        candidates: &[usize],
-        index: &NewSourceIndex,
-        evidence: CandidateEvidence,
-    ) {
-        if candidates.is_empty() {
+    fn record_candidate_summary(&mut self, candidate_count: usize, evidence: CandidateEvidence) {
+        if candidate_count == 0 {
             return;
         }
-        let retained = candidates.iter().take(MAX_REPORTED_CANDIDATES);
-        let candidate_bindings = retained
-            .map(|candidate| index.occurrences[*candidate].binding.clone())
-            .collect();
-        self.candidate_evidence.push(CandidateEvidenceSet {
+        self.candidate_evidence.push(CandidateEvidenceSummary {
             evidence,
-            candidate_bindings,
-            candidate_count: candidates.len(),
-            candidates_truncated: candidates.len() > MAX_REPORTED_CANDIDATES,
+            candidate_count,
         });
     }
 
@@ -690,7 +676,6 @@ fn source_context_status(old: &SourceFingerprint, new: &SourceFingerprint) -> So
 
 fn record_candidate_stage<K, F>(
     states: &mut [UnitState],
-    new_index: &NewSourceIndex,
     candidates_by_key: &BTreeMap<K, Vec<usize>>,
     evidence: CandidateEvidence,
     key_for_unit: F,
@@ -708,14 +693,9 @@ fn record_candidate_stage<K, F>(
     }
 
     for (key, old_units) in groups {
-        let available: Vec<_> = candidates_by_key
-            .get(&key)
-            .into_iter()
-            .flatten()
-            .copied()
-            .collect();
+        let candidate_count = candidates_by_key.get(&key).map_or(0, Vec::len);
         for state_index in old_units {
-            states[state_index].record_candidates(&available, new_index, evidence);
+            states[state_index].record_candidate_summary(candidate_count, evidence);
         }
     }
 }
@@ -782,37 +762,11 @@ mod tests {
             "",
         );
         let mut states = vec![UnitState::new(&unit)];
-        let index = NewSourceIndex {
-            occurrences: vec![
-                NewOccurrence {
-                    binding: SourceBinding::new("Sheet", 1, 0, 1),
-                    fingerprint,
-                },
-                NewOccurrence {
-                    binding: SourceBinding::new("Sheet", 1, 0, 2),
-                    fingerprint,
-                },
-                NewOccurrence {
-                    binding: SourceBinding::new("Sheet", 1, 0, 3),
-                    fingerprint: SourceFingerprint::new(
-                        macro_hash,
-                        Some(Sha256Hash::from_bytes([9; 32])),
-                        fingerprint.row_technical_hash(),
-                    ),
-                },
-            ],
-            by_binding: BTreeMap::new(),
-            by_fingerprint: BTreeMap::new(),
-            by_macro_and_raw: BTreeMap::new(),
-            by_macro_and_row: BTreeMap::new(),
-            by_macro: BTreeMap::new(),
-        };
         let mut complete_candidates = BTreeMap::new();
         complete_candidates.insert(fingerprint, vec![0, 1]);
 
         record_candidate_stage(
             &mut states,
-            &index,
             &complete_candidates,
             CandidateEvidence::CompleteFingerprint,
             |previous| Some(*previous),
@@ -822,7 +776,6 @@ mod tests {
         weaker_candidates.insert(macro_hash, vec![2]);
         record_candidate_stage(
             &mut states,
-            &index,
             &weaker_candidates,
             CandidateEvidence::ExactMacroText,
             |previous| Some(previous.macro_text_hash()),
@@ -830,17 +783,18 @@ mod tests {
 
         assert_eq!(states[0].outcome, None);
         assert_eq!(states[0].automatic_evidence, None);
-        assert_eq!(states[0].candidate_evidence.len(), 2);
         assert_eq!(
-            states[0].candidate_evidence[0].candidate_bindings,
+            states[0].candidate_evidence,
             vec![
-                SourceBinding::new("Sheet", 1, 0, 1),
-                SourceBinding::new("Sheet", 1, 0, 2),
+                CandidateEvidenceSummary {
+                    evidence: CandidateEvidence::CompleteFingerprint,
+                    candidate_count: 2,
+                },
+                CandidateEvidenceSummary {
+                    evidence: CandidateEvidence::ExactMacroText,
+                    candidate_count: 1,
+                },
             ]
-        );
-        assert_eq!(
-            states[0].candidate_evidence[1].evidence,
-            CandidateEvidence::ExactMacroText
         );
     }
 }
