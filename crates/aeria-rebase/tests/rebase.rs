@@ -205,6 +205,71 @@ fn exact_macro_and_raw_relocation_with_changed_context_is_source_changed() {
 }
 
 #[test]
+fn ambiguous_macro_and_raw_candidates_block_weaker_macro_and_row_matching() {
+    let old_fixture = write_snapshot(&snapshot(
+        "old",
+        vec![row_at(1, 4, "same", Some(b"raw".to_vec()), &[1])],
+    ));
+    let new_fixture = write_snapshot(&snapshot(
+        "new",
+        vec![
+            row(2, "same", Some(b"raw".to_vec()), &[2]),
+            row(3, "same", Some(b"raw".to_vec()), &[3]),
+            row_at(1, 2, "same", Some(b"other".to_vec()), &[1]),
+        ],
+    ));
+    let old = HxsSnapshot::open(&old_fixture.path).expect("old HXS");
+    let new = HxsSnapshot::open(&new_fixture.path).expect("new HXS");
+    let mut workspace = Workspace::from_verified_snapshot(&old, "fr").expect("workspace");
+    workspace
+        .create_unit_from_hxs(&old, "台詞", 1, 0, 4, "target")
+        .expect("unit");
+
+    let plan =
+        plan_rebase(workspace.metadata(), workspace.units(), &old, &new).expect("plan succeeds");
+    let entry = &plan.unit_entries[0];
+    assert_eq!(entry.outcome, RebaseOutcome::Ambiguous);
+    assert_eq!(entry.matching_evidence, MatchEvidence::MacroAndRawValue);
+    assert_eq!(entry.candidate_count, 2);
+    assert_eq!(
+        entry.candidate_bindings,
+        vec![
+            SourceBinding::new("台詞", 2, 0, 0),
+            SourceBinding::new("台詞", 3, 0, 0),
+        ]
+    );
+    assert_eq!(entry.proposed_source_binding, None);
+}
+
+#[test]
+fn zero_candidates_at_a_stronger_stage_allow_weaker_matching() {
+    let old_fixture = write_snapshot(&snapshot(
+        "old",
+        vec![row_at(1, 4, "same", Some(b"raw".to_vec()), &[1])],
+    ));
+    let new_fixture = write_snapshot(&snapshot(
+        "new",
+        vec![row_at(1, 2, "same", Some(b"other".to_vec()), &[1])],
+    ));
+    let old = HxsSnapshot::open(&old_fixture.path).expect("old HXS");
+    let new = HxsSnapshot::open(&new_fixture.path).expect("new HXS");
+    let mut workspace = Workspace::from_verified_snapshot(&old, "fr").expect("workspace");
+    workspace
+        .create_unit_from_hxs(&old, "台詞", 1, 0, 4, "target")
+        .expect("unit");
+
+    let plan =
+        plan_rebase(workspace.metadata(), workspace.units(), &old, &new).expect("plan succeeds");
+    let entry = &plan.unit_entries[0];
+    assert_eq!(entry.outcome, RebaseOutcome::SourceChanged);
+    assert_eq!(entry.matching_evidence, MatchEvidence::MacroAndRowTechnical);
+    assert_eq!(
+        entry.proposed_source_binding,
+        Some(SourceBinding::new("台詞", 1, 0, 2))
+    );
+}
+
+#[test]
 fn duplicate_candidates_and_competing_units_remain_ambiguous() {
     let old_fixture = write_snapshot(&snapshot(
         "old",

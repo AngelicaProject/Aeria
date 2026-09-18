@@ -672,6 +672,7 @@ fn resolve_stage<K, F>(
     let mut groups: BTreeMap<K, Vec<usize>> = BTreeMap::new();
     for (state_index, state) in states.iter().enumerate() {
         if state.outcome.is_none()
+            && state.evidence == MatchEvidence::None
             && let Some(key) = key_for_unit(&state.previous_fingerprint)
         {
             groups.entry(key).or_default().push(state_index);
@@ -793,5 +794,81 @@ mod tests {
                 && state.candidate_count == 1
                 && state.proposed.is_none()
         }));
+    }
+
+    #[test]
+    fn ambiguous_complete_fingerprint_is_frozen_before_weaker_stages() {
+        let binding = SourceBinding::new("Sheet", 1, 0, 0);
+        let macro_hash = Sha256Hash::from_bytes([1; 32]);
+        let raw_hash = Sha256Hash::from_bytes([2; 32]);
+        let fingerprint =
+            SourceFingerprint::new(macro_hash, Some(raw_hash), Sha256Hash::from_bytes([3; 32]));
+        let unit = TranslationUnit::new(
+            TranslationUnitId::from_bytes([4; 32]),
+            binding.clone(),
+            fingerprint,
+            "",
+        );
+        let mut states = vec![UnitState::new(&unit)];
+        let index = NewSourceIndex {
+            occurrences: vec![
+                NewOccurrence {
+                    binding: SourceBinding::new("Sheet", 1, 0, 1),
+                    fingerprint,
+                },
+                NewOccurrence {
+                    binding: SourceBinding::new("Sheet", 1, 0, 2),
+                    fingerprint,
+                },
+                NewOccurrence {
+                    binding: SourceBinding::new("Sheet", 1, 0, 3),
+                    fingerprint: SourceFingerprint::new(
+                        macro_hash,
+                        Some(Sha256Hash::from_bytes([9; 32])),
+                        fingerprint.row_technical_hash(),
+                    ),
+                },
+            ],
+            by_binding: BTreeMap::new(),
+            by_fingerprint: BTreeMap::new(),
+            by_macro_and_raw: BTreeMap::new(),
+            by_macro_and_row: BTreeMap::new(),
+            by_macro: BTreeMap::new(),
+        };
+        let mut claimed = BTreeSet::new();
+        let mut complete_candidates = BTreeMap::new();
+        complete_candidates.insert(fingerprint, vec![0, 1]);
+
+        resolve_stage(
+            &mut states,
+            &mut claimed,
+            &index,
+            &complete_candidates,
+            MatchEvidence::CompleteFingerprint,
+            |previous| Some(*previous),
+        );
+
+        let mut weaker_candidates = BTreeMap::new();
+        weaker_candidates.insert(macro_hash, vec![2]);
+        resolve_stage(
+            &mut states,
+            &mut claimed,
+            &index,
+            &weaker_candidates,
+            MatchEvidence::UniqueMacroText,
+            |previous| Some(previous.macro_text_hash()),
+        );
+
+        assert!(claimed.is_empty());
+        assert_eq!(states[0].outcome, None);
+        assert_eq!(states[0].evidence, MatchEvidence::CompleteFingerprint);
+        assert_eq!(states[0].candidate_count, 2);
+        assert_eq!(
+            states[0].candidate_bindings,
+            vec![
+                SourceBinding::new("Sheet", 1, 0, 1),
+                SourceBinding::new("Sheet", 1, 0, 2),
+            ]
+        );
     }
 }

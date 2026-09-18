@@ -49,9 +49,11 @@ joined source corpus. It then applies these fixed mechanical stages:
 Each stage resolves candidates as a batch. A new occurrence can be assigned to
 at most one existing unit, and a candidate is automatically selected only
 when one old unit and one currently unclaimed new occurrence remain under that
-stage. Deterministic sorting never acts as identity evidence. Unresolved or
-competing candidates remain `ambiguous`; they are not classified as terminal
-`new` or `removed` outcomes.
+stage. Once a stage records one or more candidates without establishing that
+safe one-to-one mapping, the unit is frozen as unresolved for all weaker
+stages, preserving the strongest candidate diagnostics. Deterministic sorting
+never acts as identity evidence. Unresolved or competing candidates remain
+`ambiguous`; they are not classified as terminal `new` or `removed` outcomes.
 
 An exact complete fingerprint proves that tracked source/context state did not
 change. Partial exact-content evidence may establish a binding while still
