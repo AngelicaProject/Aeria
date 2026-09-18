@@ -67,7 +67,12 @@ new `.aeria/` directory from an in-memory workspace, and rewrites only the
 shard selected by an affected `TranslationUnitId`. `persist_unit()` requires
 that unit to be present in memory, fully validates the currently persisted
 selected shard, replaces only that typed unit, and preserves every other
-persisted unit in the shard.
+persisted unit in the shard. For an existing ID, its persisted
+`SourceBinding` and `SourceFingerprint` are immutable on this ordinary
+target/note/review path. A new ID must use a `SourceBinding` not owned anywhere
+else in the persisted workspace; that insertion-only check may scan all
+shards. Source transitions remain the responsibility of a future atomic rebase
+operation.
 
 Canonical shard replacements are written to a temporary file outside the
 managed `.aeria/` namespace and published with a cross-platform atomic file

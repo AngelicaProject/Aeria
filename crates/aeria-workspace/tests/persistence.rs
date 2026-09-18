@@ -11,6 +11,12 @@ const FIXTURE_00: &[u8] = include_bytes!("fixtures/workspace-v1/units/00.jsonl")
 const FIXTURE_FF: &[u8] = include_bytes!("fixtures/workspace-v1/units/ff.jsonl");
 const ID_00: &str = "tu1:0000000000000000000000000000000000000000000000000000000000000000";
 const ID_FF: &str = "tu1:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
+const FIRST_BINDING: &str =
+    r#""sourceBinding":{"sheetName":"翻訳表","rowId":0,"subrowId":2,"columnIndex":4294967295}"#;
+const SECOND_BINDING: &str =
+    r#""sourceBinding":{"sheetName":"Synthetic","rowId":42,"subrowId":0,"columnIndex":1}"#;
+const OTHER_BINDING: &str =
+    r#""sourceBinding":{"sheetName":"Other","rowId":4294967295,"subrowId":65535,"columnIndex":0}"#;
 
 #[test]
 fn initializes_empty_workspace_without_units_directory() {
@@ -150,17 +156,7 @@ fn persist_unit_merges_a_partial_workspace_without_deleting_persisted_units() {
     )
     .expect("ID");
     let before = store.load().expect("fixture loads");
-    let first_record = std::str::from_utf8(FIXTURE_00)
-        .expect("fixture UTF-8")
-        .lines()
-        .next()
-        .expect("first fixture record")
-        .to_owned()
-        + "\n";
-    let partial_repository = minimal_repository_with_shard("00.jsonl", &first_record);
-    let partial_workspace = WorkspaceStore::new(partial_repository.path())
-        .load()
-        .expect("partial workspace loads");
+    let partial_workspace = load_partial_workspace("00.jsonl", &first_fixture_record());
 
     store
         .persist_unit(&partial_workspace, first_id)
@@ -184,17 +180,7 @@ fn persist_unit_rejects_an_absent_id_without_modifying_the_shard() {
         "tu1:0000000000000000000000000000000000000000000000000000000000000001",
     )
     .expect("ID");
-    let first_record = std::str::from_utf8(FIXTURE_00)
-        .expect("fixture UTF-8")
-        .lines()
-        .next()
-        .expect("first fixture record")
-        .to_owned()
-        + "\n";
-    let partial_repository = minimal_repository_with_shard("00.jsonl", &first_record);
-    let partial_workspace = WorkspaceStore::new(partial_repository.path())
-        .load()
-        .expect("partial workspace loads");
+    let partial_workspace = load_partial_workspace("00.jsonl", &first_fixture_record());
     let before = fs::read(repository.path().join(".aeria/units/00.jsonl")).expect("00 shard");
 
     let error = store
@@ -209,6 +195,76 @@ fn persist_unit_rejects_an_absent_id_without_modifying_the_shard() {
         before
     );
     assert!(partial_workspace.unit(first_id).is_some());
+}
+
+#[test]
+fn persist_unit_rejects_source_binding_transition_without_modifying_the_shard() {
+    let repository = fixture_repository();
+    let store = WorkspaceStore::new(repository.path());
+    let id = TranslationUnitId::from_str(ID_00).expect("ID");
+    let before = fs::read(repository.path().join(".aeria/units/00.jsonl")).expect("00 shard");
+    let replacement = first_fixture_record().replace(FIRST_BINDING, SECOND_BINDING);
+    let partial_workspace = load_partial_workspace("00.jsonl", &replacement);
+
+    let error = store
+        .persist_unit(&partial_workspace, id)
+        .expect_err("source binding transition must fail");
+    assert!(error.to_string().contains("SourceBinding"));
+    assert_eq!(
+        fs::read(repository.path().join(".aeria/units/00.jsonl")).expect("00 shard"),
+        before
+    );
+}
+
+#[test]
+fn persist_unit_rejects_source_fingerprint_transition_without_modifying_the_shard() {
+    let repository = fixture_repository();
+    let store = WorkspaceStore::new(repository.path());
+    let id = TranslationUnitId::from_str(ID_00).expect("ID");
+    let before = fs::read(repository.path().join(".aeria/units/00.jsonl")).expect("00 shard");
+    let replacement = first_fixture_record().replace(
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+    );
+    let partial_workspace = load_partial_workspace("00.jsonl", &replacement);
+
+    let error = store
+        .persist_unit(&partial_workspace, id)
+        .expect_err("source fingerprint transition must fail");
+    assert!(error.to_string().contains("SourceFingerprint"));
+    assert_eq!(
+        fs::read(repository.path().join(".aeria/units/00.jsonl")).expect("00 shard"),
+        before
+    );
+}
+
+#[test]
+fn persist_unit_rejects_new_id_with_binding_owned_in_another_shard() {
+    let repository = fixture_repository();
+    let store = WorkspaceStore::new(repository.path());
+    let before_00 = fs::read(repository.path().join(".aeria/units/00.jsonl")).expect("00 shard");
+    let before_ff = fs::read(repository.path().join(".aeria/units/ff.jsonl")).expect("ff shard");
+    let new_id_text = format!("tu1:fe{}", "00".repeat(31));
+    let replacement = std::str::from_utf8(FIXTURE_FF)
+        .expect("fixture UTF-8")
+        .replace(ID_FF, &new_id_text)
+        .replace(OTHER_BINDING, FIRST_BINDING);
+    let partial_workspace = load_partial_workspace("fe.jsonl", &replacement);
+    let new_id = TranslationUnitId::from_str(&new_id_text).expect("ID");
+
+    let error = store
+        .persist_unit(&partial_workspace, new_id)
+        .expect_err("duplicate persisted binding must fail");
+    assert!(error.to_string().contains("already owned"));
+    assert_eq!(
+        fs::read(repository.path().join(".aeria/units/00.jsonl")).expect("00 shard"),
+        before_00
+    );
+    assert_eq!(
+        fs::read(repository.path().join(".aeria/units/ff.jsonl")).expect("ff shard"),
+        before_ff
+    );
+    assert!(!repository.path().join(".aeria/units/fe.jsonl").exists());
 }
 
 #[test]
@@ -535,6 +591,23 @@ fn minimal_repository_with_shard(filename: &str, contents: &str) -> TempDir {
     )
     .expect("shard");
     repository
+}
+
+fn first_fixture_record() -> String {
+    std::str::from_utf8(FIXTURE_00)
+        .expect("fixture UTF-8")
+        .lines()
+        .next()
+        .expect("first fixture record")
+        .to_owned()
+        + "\n"
+}
+
+fn load_partial_workspace(filename: &str, contents: &str) -> Workspace {
+    let repository = minimal_repository_with_shard(filename, contents);
+    WorkspaceStore::new(repository.path())
+        .load()
+        .expect("partial workspace loads")
 }
 
 #[cfg(unix)]

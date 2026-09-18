@@ -10,7 +10,9 @@ use std::io::{self, BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 #[cfg(test)]
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Mutex;
+#[cfg(test)]
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use aeria_core::{
     ReviewState, Sha256Hash, SourceBinding, SourceFingerprint, TranslationUnit, TranslationUnitId,
@@ -32,6 +34,10 @@ const BOM: &[u8; 3] = b"\xef\xbb\xbf";
 
 #[cfg(test)]
 static FAIL_BEFORE_PUBLICATION: AtomicBool = AtomicBool::new(false);
+#[cfg(test)]
+static READ_SHARD_COUNT: AtomicUsize = AtomicUsize::new(0);
+#[cfg(test)]
+static PERSISTENCE_TEST_LOCK: Mutex<()> = Mutex::new(());
 
 /// Errors raised while opening, validating, or persisting a Workspace Format
 /// v1 repository.
@@ -258,6 +264,18 @@ impl WorkspaceStore {
             for unit in read_shard(&shard_file.path, shard, &shard_file.name)? {
                 persisted_units.insert(unit.id(), unit);
             }
+        }
+        validate_unique_shard_bindings(&persisted_units, &target_path)?;
+        if let Some(persisted) = persisted_units.get(&id) {
+            require_persisted_identity(persisted, &replacement, &target_path)?;
+        } else {
+            require_new_binding_is_unowned(
+                &layout,
+                shard,
+                &persisted_units,
+                &replacement,
+                &target_path,
+            )?;
         }
         persisted_units.insert(id, replacement);
         let bytes = canonical_units_bytes(persisted_units.values(), &target_path)?;
@@ -552,6 +570,8 @@ fn read_shard(
     shard: u8,
     shard_name: &str,
 ) -> Result<Vec<TranslationUnit>, WorkspaceStoreError> {
+    #[cfg(test)]
+    READ_SHARD_COUNT.fetch_add(1, Ordering::SeqCst);
     let file = File::open(path).map_err(|source| io_error("open unit shard", path, source))?;
     let mut reader = BufReader::new(file);
     let mut records = Vec::new();
@@ -763,6 +783,97 @@ fn require_metadata_match(
             path,
             None,
             "in-memory workspace metadata does not match manifest.json",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_unique_shard_bindings(
+    units: &BTreeMap<TranslationUnitId, TranslationUnit>,
+    path: &Path,
+) -> Result<(), WorkspaceStoreError> {
+    let mut bindings = BTreeSet::new();
+    for unit in units.values() {
+        if !bindings.insert(unit.source_binding().clone()) {
+            return Err(invalid(
+                path,
+                None,
+                format!(
+                    "duplicate current SourceBinding {:?}",
+                    unit.source_binding()
+                ),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn require_persisted_identity(
+    persisted: &TranslationUnit,
+    replacement: &TranslationUnit,
+    path: &Path,
+) -> Result<(), WorkspaceStoreError> {
+    if persisted.source_binding() != replacement.source_binding() {
+        return Err(invalid(
+            path,
+            None,
+            format!(
+                "persist_unit cannot change SourceBinding for existing TranslationUnitId {}",
+                replacement.id()
+            ),
+        ));
+    }
+    if persisted.source_fingerprint() != replacement.source_fingerprint() {
+        return Err(invalid(
+            path,
+            None,
+            format!(
+                "persist_unit cannot change SourceFingerprint for existing TranslationUnitId {}",
+                replacement.id()
+            ),
+        ));
+    }
+    Ok(())
+}
+
+fn require_new_binding_is_unowned(
+    layout: &ExistingLayout,
+    target_shard: u8,
+    target_units: &BTreeMap<TranslationUnitId, TranslationUnit>,
+    replacement: &TranslationUnit,
+    path: &Path,
+) -> Result<(), WorkspaceStoreError> {
+    let mut bindings = BTreeSet::new();
+    for unit in target_units.values() {
+        bindings.insert(unit.source_binding().clone());
+    }
+
+    for shard in &layout.shards {
+        if shard.shard == target_shard {
+            continue;
+        }
+        for unit in read_shard(&shard.path, shard.shard, &shard.name)? {
+            if !bindings.insert(unit.source_binding().clone()) {
+                return Err(invalid(
+                    &shard.path,
+                    None,
+                    format!(
+                        "duplicate current SourceBinding {:?}",
+                        unit.source_binding()
+                    ),
+                ));
+            }
+        }
+    }
+
+    if !bindings.insert(replacement.source_binding().clone()) {
+        return Err(invalid(
+            path,
+            None,
+            format!(
+                "SourceBinding {:?} is already owned by a persisted unit",
+                replacement.source_binding()
+            ),
         ));
     }
     Ok(())
@@ -1114,11 +1225,13 @@ fn io_error(operation: &'static str, path: &Path, source: io::Error) -> Workspac
 #[cfg(test)]
 mod tests {
     use super::*;
+    use aeria_core::ReviewState;
     use std::fs;
     use std::str::FromStr;
 
     #[test]
     fn failed_publication_leaves_the_previous_shard_and_managed_namespace_unchanged() {
+        let _test_lock = PERSISTENCE_TEST_LOCK.lock().expect("test lock");
         let repository = tempfile::tempdir().expect("temporary repository");
         let aeria_path = repository.path().join(AERIA_DIRECTORY);
         let units_path = aeria_path.join(UNITS_DIRECTORY);
@@ -1179,5 +1292,73 @@ mod tests {
                 std::ffi::OsString::from(UNITS_DIRECTORY),
             ]
         );
+    }
+
+    #[test]
+    fn ordinary_persistence_reads_only_the_selected_shard() {
+        let _test_lock = PERSISTENCE_TEST_LOCK.lock().expect("test lock");
+        let repository = tempfile::tempdir().expect("temporary repository");
+        let aeria_path = repository.path().join(AERIA_DIRECTORY);
+        let units_path = aeria_path.join(UNITS_DIRECTORY);
+        fs::create_dir_all(&units_path).expect("workspace directories");
+        fs::write(
+            aeria_path.join(MANIFEST_FILE),
+            include_bytes!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/tests/fixtures/workspace-v1/manifest.json"
+            )),
+        )
+        .expect("manifest");
+        fs::write(
+            units_path.join("00.jsonl"),
+            include_bytes!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/tests/fixtures/workspace-v1/units/00.jsonl"
+            )),
+        )
+        .expect("00 shard");
+        fs::write(
+            units_path.join("ff.jsonl"),
+            include_bytes!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/tests/fixtures/workspace-v1/units/ff.jsonl"
+            )),
+        )
+        .expect("ff shard");
+
+        let store = WorkspaceStore::new(repository.path());
+        let mut workspace = store.load().expect("fixture loads");
+        let id = TranslationUnitId::from_str(
+            "tu1:0000000000000000000000000000000000000000000000000000000000000000",
+        )
+        .expect("ID");
+        workspace
+            .update_target(id, "ordinary update")
+            .expect("target is valid");
+        READ_SHARD_COUNT.store(0, Ordering::SeqCst);
+
+        store
+            .persist_unit(&workspace, id)
+            .expect("ordinary update persists");
+
+        assert_eq!(READ_SHARD_COUNT.load(Ordering::SeqCst), 1);
+
+        workspace
+            .update_note(id, Some("ordinary note".to_owned()))
+            .expect("note is valid");
+        READ_SHARD_COUNT.store(0, Ordering::SeqCst);
+        store
+            .persist_unit(&workspace, id)
+            .expect("ordinary note persists");
+        assert_eq!(READ_SHARD_COUNT.load(Ordering::SeqCst), 1);
+
+        workspace
+            .update_review_state(id, ReviewState::Reviewed)
+            .expect("review state is valid");
+        READ_SHARD_COUNT.store(0, Ordering::SeqCst);
+        store
+            .persist_unit(&workspace, id)
+            .expect("ordinary review state persists");
+        assert_eq!(READ_SHARD_COUNT.load(Ordering::SeqCst), 1);
     }
 }
