@@ -1,30 +1,54 @@
-import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useState } from "react";
+import { currentProject, normalizeCommandError } from "./ipc";
+import { EditorShell } from "./components/EditorShell";
+import { ProjectLauncher } from "./components/ProjectLauncher";
+import type { CommandError, ProjectSummaryDto } from "./types";
 
-type AppInfo = {
-  name: string;
-  version: string;
-};
+type StartupState = "starting" | "launcher";
 
 export function App() {
-  const [info, setInfo] = useState<AppInfo | null>(null);
+  const [project, setProject] = useState<ProjectSummaryDto | null>(null);
+  const [startupState, setStartupState] = useState<StartupState>("starting");
+  const [startupError, setStartupError] = useState<CommandError | null>(null);
 
   useEffect(() => {
-    void invoke<AppInfo>("app_info").then(setInfo);
+    let active = true;
+
+    void currentProject()
+      .then((current) => {
+        if (!active) {
+          return;
+        }
+        setProject(current);
+        setStartupState("launcher");
+      })
+      .catch((error: unknown) => {
+        if (!active) {
+          return;
+        }
+        setStartupError(normalizeCommandError(error));
+        setStartupState("launcher");
+      });
+
+    return () => {
+      active = false;
+    };
   }, []);
 
-  return (
-    <main className="shell">
-      <section className="hero">
-        <p className="eyebrow">AngelicaProject</p>
-        <h1>Aeria</h1>
-        <p className="lede">
-          Create, maintain, and review FINAL FANTASY XIV translations.
-        </p>
-        <div className="status">
-          {info ? `${info.name} ${info.version}` : "Connecting to native core…"}
+  if (startupState === "starting") {
+    return (
+      <main className="status-shell">
+        <div className="status-card">
+          <span className="spinner" aria-hidden="true" />
+          <p>Checking the active project…</p>
         </div>
-      </section>
-    </main>
-  );
+      </main>
+    );
+  }
+
+  if (!project) {
+    return <ProjectLauncher initialError={startupError} onProjectReady={setProject} />;
+  }
+
+  return <EditorShell project={project} onClosed={() => setProject(null)} />;
 }

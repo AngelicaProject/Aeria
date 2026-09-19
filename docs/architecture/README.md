@@ -6,6 +6,7 @@ Start with [`overview.md`](./overview.md). It defines the major runtime boundari
 | --- | --- | --- |
 | Overall boundaries | [`overview.md`](./overview.md) | workspace-wide |
 | Desktop application boundary | [`desktop-application-boundary.md`](./desktop-application-boundary.md) | `apps/desktop/src-tauri` |
+| Desktop translation editor UI | [`desktop-editor-ui.md`](./desktop-editor-ui.md) | `apps/desktop/src` |
 | Open project session ownership | [`project-session.md`](./project-session.md) | `aeria-workspace` |
 | Bounded translation reads | [`translation-read.md`](./translation-read.md) | `aeria-workspace`, `aeria-hxs` |
 | Transactional translation mutations | [`translation-mutations.md`](./translation-mutations.md) | `aeria-workspace` |
