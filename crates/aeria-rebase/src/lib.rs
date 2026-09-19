@@ -96,7 +96,7 @@ pub struct SourceSnapshotIdentity {
 }
 
 impl SourceSnapshotIdentity {
-    fn from_metadata(metadata: &SnapshotMetadata) -> Self {
+    pub(crate) fn from_metadata(metadata: &SnapshotMetadata) -> Self {
         Self {
             game_version: metadata.game_version.clone(),
             source_language: metadata.source_language.clone(),

@@ -42,6 +42,8 @@ struct SnapshotSpec {
     game_version: String,
     source_language: String,
     scope: String,
+    extractor_version: String,
+    lumina_version: String,
     sheet_name: String,
     rows: Vec<RowSpec>,
     reverse_insertion: bool,
@@ -195,6 +197,65 @@ fn candidate_payload_snapshot_must_match_the_index_snapshot() {
         error,
         CandidateSuggestionError::NewSnapshotMismatch { .. }
     ));
+}
+
+#[test]
+fn producer_metadata_does_not_change_candidate_payload_compatibility() {
+    let old_fixture = write_snapshot(&snapshot("old", vec![row(1, "Cancel", None, &[1])]));
+    let index_fixture = write_snapshot(&snapshot_with_producer(
+        "new",
+        "en",
+        "extractor-a",
+        "lumina-a",
+        vec![row(2, "Cancel", None, &[1])],
+    ));
+    let payload_fixture = write_snapshot(&snapshot_with_producer(
+        "new",
+        "en",
+        "extractor-b",
+        "lumina-b",
+        vec![row(2, "Cancel", None, &[1])],
+    ));
+    let old = HxsSnapshot::open(&old_fixture.path).expect("old HXS");
+    let index_snapshot = HxsSnapshot::open(&index_fixture.path).expect("index HXS");
+    let payload_snapshot = HxsSnapshot::open(&payload_fixture.path).expect("payload HXS");
+    assert_eq!(
+        index_snapshot.metadata().game_version,
+        payload_snapshot.metadata().game_version
+    );
+    assert_eq!(
+        index_snapshot.metadata().source_language,
+        payload_snapshot.metadata().source_language
+    );
+    assert_eq!(
+        index_snapshot.metadata().scope,
+        payload_snapshot.metadata().scope
+    );
+    assert_eq!(
+        index_snapshot.metadata().content_id,
+        payload_snapshot.metadata().content_id
+    );
+    assert_eq!(
+        index_snapshot.metadata().snapshot_id,
+        payload_snapshot.metadata().snapshot_id
+    );
+    assert_ne!(
+        index_snapshot.metadata().producer,
+        payload_snapshot.metadata().producer
+    );
+    let mut workspace = Workspace::from_verified_snapshot(&old, "fr").expect("workspace");
+    let id = workspace
+        .create_unit_from_hxs(&old, "台詞", 1, 0, 0, "target")
+        .expect("unit");
+    let unit = workspace.units().next().expect("unit view");
+    let suggester = CandidateSuggester::from_snapshot(&index_snapshot).expect("candidate index");
+    let with_producer_difference = suggester
+        .suggest(CandidateQuery::new(id), unit, &old, &payload_snapshot)
+        .expect("producer-only metadata difference must be accepted");
+    let with_same_snapshot = suggester
+        .suggest(CandidateQuery::new(id), unit, &old, &index_snapshot)
+        .expect("index snapshot payload must be accepted");
+    assert_eq!(with_producer_difference, with_same_snapshot);
 }
 
 #[test]
@@ -1377,10 +1438,22 @@ fn snapshot_with_language(
     source_language: &str,
     rows: Vec<RowSpec>,
 ) -> SnapshotSpec {
+    snapshot_with_producer(game_version, source_language, "test", "7.7.0", rows)
+}
+
+fn snapshot_with_producer(
+    game_version: &str,
+    source_language: &str,
+    extractor_version: &str,
+    lumina_version: &str,
+    rows: Vec<RowSpec>,
+) -> SnapshotSpec {
     SnapshotSpec {
         game_version: game_version.into(),
         source_language: source_language.into(),
         scope: "full".into(),
+        extractor_version: extractor_version.into(),
+        lumina_version: lumina_version.into(),
         sheet_name: "台詞".into(),
         rows,
         reverse_insertion: false,
@@ -1562,13 +1635,15 @@ fn write_snapshot(spec: &SnapshotSpec) -> Fixture {
     }
     connection
         .execute(
-            "INSERT INTO hxs_meta (id, format_version, game_version, language, scope, content_id, snapshot_id, extractor_version, lumina_version, sheet_count, row_count, string_cell_count) VALUES (1, 1, ?1, ?2, ?3, ?4, ?5, 'test', '7.7.0', 1, ?6, ?7)",
+            "INSERT INTO hxs_meta (id, format_version, game_version, language, scope, content_id, snapshot_id, extractor_version, lumina_version, sheet_count, row_count, string_cell_count) VALUES (1, 1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, 1, ?8, ?9)",
             params![
                 spec.game_version,
                 spec.source_language,
                 spec.scope,
                 content_id,
                 snapshot_id,
+                spec.extractor_version,
+                spec.lumina_version,
                 i64::try_from(built_rows.len()).expect("row count"),
                 i64::try_from(built_rows.iter().map(|row| row.cells.len()).sum::<usize>())
                     .expect("String-cell count")

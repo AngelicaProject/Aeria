@@ -14,13 +14,12 @@ use aeria_core::{
     Sha256Hash, SourceBinding, SourceFingerprint, TranslationUnit, TranslationUnitId,
 };
 use aeria_hxs::{
-    HxsError, HxsSnapshot, MAX_STRING_OCCURRENCE_PAGE_SIZE, SnapshotMetadata,
-    StringOccurrenceCoordinate,
+    HxsError, HxsSnapshot, MAX_STRING_OCCURRENCE_PAGE_SIZE, StringOccurrenceCoordinate,
 };
 use aeria_se::{SemanticAnalysis, StructureCompatibility, TextRangeKind};
 use thiserror::Error;
 
-use crate::CandidateEvidence;
+use crate::{CandidateEvidence, SourceSnapshotIdentity};
 
 /// The default number of suggestions returned by one query.
 pub const DEFAULT_RESULT_LIMIT: usize = 10;
@@ -110,11 +109,11 @@ pub enum CandidateSuggestionError {
     /// The payload snapshot does not match the snapshot used to build the
     /// lightweight candidate index.
     #[error(
-        "candidate payload snapshot does not match index snapshot: expected {expected_snapshot_id:?}, found {found_snapshot_id:?}"
+        "candidate payload snapshot identity does not match index snapshot: expected {expected:?}, found {found:?}"
     )]
     NewSnapshotMismatch {
-        expected_snapshot_id: String,
-        found_snapshot_id: String,
+        expected: Box<SourceSnapshotIdentity>,
+        found: Box<SourceSnapshotIdentity>,
     },
 
     /// The old snapshot does not satisfy the planner's persisted baseline
@@ -239,7 +238,7 @@ pub struct SourceCandidate {
 #[derive(Clone, Debug)]
 pub struct CandidateSuggester {
     index: CandidateIndex,
-    new_snapshot_metadata: SnapshotMetadata,
+    new_snapshot_identity: SourceSnapshotIdentity,
 }
 
 impl CandidateSuggester {
@@ -254,7 +253,7 @@ impl CandidateSuggester {
     pub fn from_snapshot(snapshot: &HxsSnapshot) -> Result<Self, CandidateSuggestionError> {
         Ok(Self {
             index: CandidateIndex::read(snapshot).map_err(CandidateSuggestionError::IndexRead)?,
-            new_snapshot_metadata: snapshot.metadata(),
+            new_snapshot_identity: SourceSnapshotIdentity::from_metadata(&snapshot.metadata()),
         })
     }
 
@@ -288,11 +287,12 @@ impl CandidateSuggester {
             });
         }
 
-        let found_snapshot_metadata = new_snapshot.metadata();
-        if found_snapshot_metadata != self.new_snapshot_metadata {
+        let found_snapshot_identity =
+            SourceSnapshotIdentity::from_metadata(&new_snapshot.metadata());
+        if found_snapshot_identity != self.new_snapshot_identity {
             return Err(CandidateSuggestionError::NewSnapshotMismatch {
-                expected_snapshot_id: self.new_snapshot_metadata.snapshot_id.clone(),
-                found_snapshot_id: found_snapshot_metadata.snapshot_id,
+                expected: Box::new(self.new_snapshot_identity.clone()),
+                found: Box::new(found_snapshot_identity),
             });
         }
 

@@ -29,12 +29,13 @@ adds a bounded same-sheet/same-column coordinate neighborhood. Duplicate
 indexes are merged in canonical source order and capped at
 `MAX_GENERATED_CANDIDATES` (currently 128).
 
-The suggester retains the verified `SnapshotMetadata` from construction and
-rejects any different snapshot passed for payload reads. Before reading the
-old macro payload, it reuses the planner's old-baseline verification, including
-the persisted macro/raw/row-technical fingerprint checks. Ranking therefore
-cannot combine an index, new payload, or old payload from an unverified source
-state.
+The suggester retains and compares verified source snapshot identity from
+construction: game version, source language, scope, content ID, and snapshot
+ID. Producer provenance is not part of this compatibility check. Before
+reading the old macro payload, it reuses the planner's old-baseline
+verification, including the persisted macro/raw/row-technical fingerprint
+checks. Ranking therefore cannot combine an index, new payload, or old payload
+from an unverified source state.
 
 Full macro payloads are read only for that bounded pool. A unit whose binding
 survives in the prepared new snapshot receives no suggestions and does not
