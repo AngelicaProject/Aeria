@@ -16,6 +16,7 @@ Documentation is maintained with the code it describes and is the source of trut
 | Understand product scope or user behavior | [`product/README.md`](./product/README.md) |
 | Change a subsystem boundary or data flow | [`architecture/README.md`](./architecture/README.md) |
 | Work with HXS source snapshots | [`architecture/source.md`](./architecture/source.md) |
+| Open or initialize an Aeria project session | [`architecture/project-session.md`](./architecture/project-session.md) |
 | Work with SeString / macro structure | [`architecture/strings.md`](./architecture/strings.md) |
 | Change translation identity or rebase | [`architecture/identity.md`](./architecture/identity.md), [`architecture/rebase.md`](./architecture/rebase.md) |
 | Change workspace persistence | [`architecture/workspace.md`](./architecture/workspace.md), [`formats/workspace-v1.md`](./formats/workspace-v1.md) |

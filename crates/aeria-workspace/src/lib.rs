@@ -15,8 +15,10 @@ use aeria_se::{Diagnostic, SemanticValidity, parse};
 use thiserror::Error;
 
 mod persistence;
+mod session;
 
 pub use persistence::{WorkspaceStore, WorkspaceStoreError};
+pub use session::{ProjectSession, ProjectSessionError};
 
 /// Errors raised by the in-memory translation workspace.
 #[derive(Debug, Error)]
@@ -279,7 +281,10 @@ impl Workspace {
             .ok_or(WorkspaceError::UnitNotFound { id })
     }
 
-    fn require_compatible_snapshot(&self, snapshot: &HxsSnapshot) -> Result<(), WorkspaceError> {
+    pub(crate) fn require_compatible_snapshot(
+        &self,
+        snapshot: &HxsSnapshot,
+    ) -> Result<(), WorkspaceError> {
         let source = snapshot.metadata();
         if source.source_language != self.metadata.source_language() {
             return Err(WorkspaceError::SourceLanguageMismatch {
