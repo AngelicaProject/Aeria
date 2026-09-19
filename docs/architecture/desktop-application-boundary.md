@@ -24,9 +24,10 @@ idempotent and drops the active session without changing Workspace Format v1.
 
 The HXS path remains local runtime state held by `ProjectSession`; it is not
 added to Workspace Format. Translation browsing delegates to the bounded
-`ProjectSession::page_translation_entries` API, so page size remains governed
-by the backend contract. Tauri performs DTO and error mapping, not business
-logic, and does not access HXS or SQLite directly.
+`ProjectSession::page_translation_rows` API, so page size remains governed by
+the backend contract. The DTO is row-centric, while each contained cell keeps
+its existing `SourceBinding` and overlay. Tauri performs DTO and error mapping,
+not business logic, and does not access HXS or SQLite directly.
 
 Commands that require an active project report `noProjectOpen` before
 validating project-scoped payload such as translation-unit IDs.

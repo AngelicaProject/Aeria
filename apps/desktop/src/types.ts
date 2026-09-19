@@ -37,15 +37,34 @@ export type TranslationOverlayDto = {
   translatorNote: string | null;
 };
 
-export type TranslationEntryDto = {
+export type TranslationRowCursorDto = {
+  sheetName: string;
+  rowId: number;
+  subrowId: number;
+};
+
+export type TranslationContextCellDto = {
+  columnIndex: number;
+  sourceMacro: string;
+};
+
+export type TranslationCellDto = {
   sourceBinding: SourceBinding;
   sourceMacro: string;
   translation: TranslationOverlayDto | null;
 };
 
-export type TranslationEntryPageDto = {
-  entries: TranslationEntryDto[];
-  nextAfter: SourceBinding | null;
+export type TranslationRowDto = {
+  sheetName: string;
+  rowId: number;
+  subrowId: number;
+  context: TranslationContextCellDto[];
+  cells: TranslationCellDto[];
+};
+
+export type TranslationRowPageDto = {
+  rows: TranslationRowDto[];
+  nextAfter: TranslationRowCursorDto | null;
 };
 
 export type TranslationUnitIdDto = {

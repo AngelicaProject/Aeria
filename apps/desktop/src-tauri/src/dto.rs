@@ -1,6 +1,7 @@
 use aeria_core::{ReviewState, SourceBinding, TranslationUnitId};
 use aeria_workspace::{
-    ProjectSession, TranslationEntryPage, TranslationEntryView, TranslationOverlayView,
+    ProjectSession, TranslationCellView, TranslationContextCellView, TranslationOverlayView,
+    TranslationRowCursor, TranslationRowPage, TranslationRowView,
 };
 use serde::{Deserialize, Serialize};
 
@@ -118,38 +119,103 @@ impl ProjectSummaryDto {
     }
 }
 
-/// One bounded page of source occurrences and optional workspace overlays.
+/// A row/subrow cursor for the bounded desktop translation read.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct TranslationEntryPageDto {
-    pub entries: Vec<TranslationEntryDto>,
-    pub next_after: Option<SourceBindingDto>,
+pub struct TranslationRowCursorDto {
+    pub sheet_name: String,
+    pub row_id: u32,
+    pub subrow_id: u16,
 }
 
-impl From<TranslationEntryPage> for TranslationEntryPageDto {
-    fn from(page: TranslationEntryPage) -> Self {
+impl From<&TranslationRowCursor> for TranslationRowCursorDto {
+    fn from(cursor: &TranslationRowCursor) -> Self {
         Self {
-            entries: page.entries.into_iter().map(Into::into).collect(),
-            next_after: page.next_after.as_ref().map(Into::into),
+            sheet_name: cursor.sheet_name().to_owned(),
+            row_id: cursor.row_id(),
+            subrow_id: cursor.subrow_id(),
         }
     }
 }
 
-/// One source occurrence and its optional translation overlay.
+impl From<TranslationRowCursorDto> for TranslationRowCursor {
+    fn from(cursor: TranslationRowCursorDto) -> Self {
+        Self::new(cursor.sheet_name, cursor.row_id, cursor.subrow_id)
+    }
+}
+
+/// One read-only technical context cell in a logical source row.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct TranslationEntryDto {
+pub struct TranslationContextCellDto {
+    pub column_index: u32,
+    pub source_macro: String,
+}
+
+impl From<TranslationContextCellView> for TranslationContextCellDto {
+    fn from(cell: TranslationContextCellView) -> Self {
+        Self {
+            column_index: cell.column_index,
+            source_macro: cell.source_macro,
+        }
+    }
+}
+
+/// One translatable String cell and its optional translation overlay.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TranslationCellDto {
     pub source_binding: SourceBindingDto,
     pub source_macro: String,
     pub translation: Option<TranslationOverlayDto>,
 }
 
-impl From<TranslationEntryView> for TranslationEntryDto {
-    fn from(entry: TranslationEntryView) -> Self {
+impl From<TranslationCellView> for TranslationCellDto {
+    fn from(cell: TranslationCellView) -> Self {
         Self {
-            source_binding: (&entry.source_binding).into(),
-            source_macro: entry.source_macro,
-            translation: entry.translation.map(Into::into),
+            source_binding: (&cell.source_binding).into(),
+            source_macro: cell.source_macro,
+            translation: cell.translation.map(Into::into),
+        }
+    }
+}
+
+/// One logical source row for the desktop editor.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TranslationRowDto {
+    pub sheet_name: String,
+    pub row_id: u32,
+    pub subrow_id: u16,
+    pub context: Vec<TranslationContextCellDto>,
+    pub cells: Vec<TranslationCellDto>,
+}
+
+impl From<TranslationRowView> for TranslationRowDto {
+    fn from(row: TranslationRowView) -> Self {
+        Self {
+            sheet_name: row.sheet_name,
+            row_id: row.row_id,
+            subrow_id: row.subrow_id,
+            context: row.context.into_iter().map(Into::into).collect(),
+            cells: row.cells.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+/// One bounded page of logical source rows and optional workspace overlays.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TranslationRowPageDto {
+    pub rows: Vec<TranslationRowDto>,
+    pub next_after: Option<TranslationRowCursorDto>,
+}
+
+impl From<TranslationRowPage> for TranslationRowPageDto {
+    fn from(page: TranslationRowPage) -> Self {
+        Self {
+            rows: page.rows.into_iter().map(Into::into).collect(),
+            next_after: page.next_after.as_ref().map(Into::into),
         }
     }
 }
@@ -203,34 +269,44 @@ mod tests {
     }
 
     #[test]
-    fn translation_page_mapping_preserves_missing_and_explicit_empty_overlays() {
+    fn translation_row_mapping_preserves_context_cells_and_explicit_empty_overlays() {
         let translated_id = TranslationUnitId::from_bytes([0xab; 32]);
         let translated_binding = SourceBinding::new("Synthetic", 42, 0, 0);
         let empty_binding = SourceBinding::new("Synthetic", 7, 0, 0);
-        let page = TranslationEntryPage {
-            entries: vec![
-                TranslationEntryView {
-                    source_binding: translated_binding,
-                    source_macro: "source".to_owned(),
-                    translation: Some(TranslationOverlayView {
-                        translation_unit_id: translated_id,
-                        target_macro: String::new(),
-                        review_state: ReviewState::NeedsReview,
-                        translator_note: Some("check later".to_owned()),
-                    }),
-                },
-                TranslationEntryView {
-                    source_binding: empty_binding.clone(),
-                    source_macro: "untranslated".to_owned(),
-                    translation: None,
-                },
-            ],
-            next_after: Some(empty_binding),
+        let page = TranslationRowPage {
+            rows: vec![TranslationRowView {
+                sheet_name: "Synthetic".to_owned(),
+                row_id: 42,
+                subrow_id: 0,
+                context: vec![TranslationContextCellView {
+                    column_index: 3,
+                    source_macro: "TEXT_CONTEXT".to_owned(),
+                }],
+                cells: vec![
+                    TranslationCellView {
+                        source_binding: translated_binding,
+                        source_macro: "source".to_owned(),
+                        translation: Some(TranslationOverlayView {
+                            translation_unit_id: translated_id,
+                            target_macro: String::new(),
+                            review_state: ReviewState::NeedsReview,
+                            translator_note: Some("check later".to_owned()),
+                        }),
+                    },
+                    TranslationCellView {
+                        source_binding: empty_binding,
+                        source_macro: "untranslated".to_owned(),
+                        translation: None,
+                    },
+                ],
+            }],
+            next_after: Some(TranslationRowCursor::new("Synthetic", 7, 0)),
         };
 
-        let dto = TranslationEntryPageDto::from(page);
-        assert_eq!(dto.entries[0].source_binding.row_id, 42);
-        let overlay = dto.entries[0]
+        let dto = TranslationRowPageDto::from(page);
+        assert_eq!(dto.rows[0].row_id, 42);
+        assert_eq!(dto.rows[0].context[0].source_macro, "TEXT_CONTEXT");
+        let overlay = dto.rows[0].cells[0]
             .translation
             .as_ref()
             .expect("explicit empty target remains an overlay");
@@ -241,7 +317,7 @@ mod tests {
         assert_eq!(overlay.target_macro, "");
         assert_eq!(overlay.review_state, ReviewStateDto::NeedsReview);
         assert_eq!(overlay.translator_note.as_deref(), Some("check later"));
-        assert!(dto.entries[1].translation.is_none());
+        assert!(dto.rows[0].cells[1].translation.is_none());
         assert_eq!(dto.next_after.expect("cursor").row_id, 7);
     }
 
