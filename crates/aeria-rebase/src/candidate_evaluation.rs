@@ -98,11 +98,7 @@ fn evaluate(corpus: &[EvaluationPair]) -> Metrics {
             .iter()
             .map(|candidate| candidate.occurrence.clone())
             .collect();
-        let mut index = CandidateIndex {
-            occurrences,
-            ..CandidateIndex::default()
-        };
-        index.rebuild_for_test();
+        let index = CandidateIndex::from_canonical_occurrences(occurrences);
         let pool = index.generate_pool(&case.old_binding, &old_fingerprint);
         let Some(valid_origin) = case.valid_origin else {
             metrics.no_valid_candidate_cases += 1;
@@ -141,35 +137,6 @@ fn evaluate(corpus: &[EvaluationPair]) -> Metrics {
         metrics.recall_at_10 += usize::from(rank < 10);
     }
     metrics
-}
-
-impl CandidateIndex {
-    fn rebuild_for_test(&mut self) {
-        for (index, occurrence) in self.occurrences.iter().enumerate() {
-            self.by_binding.insert(occurrence.binding.clone(), index);
-            self.by_fingerprint
-                .entry(occurrence.fingerprint)
-                .or_default()
-                .push(index);
-            if let Some(raw) = occurrence.fingerprint.raw_value_hash() {
-                self.by_macro_and_raw
-                    .entry((occurrence.fingerprint.macro_text_hash(), raw))
-                    .or_default()
-                    .push(index);
-            }
-            self.by_macro_text
-                .entry(occurrence.fingerprint.macro_text_hash())
-                .or_default()
-                .push(index);
-            self.by_sheet_column
-                .entry((
-                    occurrence.binding.sheet_name().to_owned(),
-                    occurrence.binding.column_index(),
-                ))
-                .or_default()
-                .push(index);
-        }
-    }
 }
 
 #[allow(clippy::too_many_lines)]

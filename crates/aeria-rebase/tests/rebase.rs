@@ -827,6 +827,45 @@ fn equivalent_physical_insertion_order_produces_the_same_plan() {
 }
 
 #[test]
+fn equivalent_physical_insertion_order_produces_identical_candidate_suggestions() {
+    let old_fixture = write_snapshot(&snapshot("old", vec![row(1, "one", None, &[1])]));
+    let mut indexed_spec = snapshot(
+        "new",
+        vec![
+            row(9, "one", None, &[9]),
+            row(10, "one", None, &[10]),
+            row(11, "near", None, &[11]),
+        ],
+    );
+    indexed_spec.reverse_insertion = true;
+    let indexed_fixture = write_snapshot(&indexed_spec);
+    let payload_fixture = write_snapshot(&snapshot(
+        "new",
+        vec![
+            row(11, "near", None, &[11]),
+            row(9, "one", None, &[9]),
+            row(10, "one", None, &[10]),
+        ],
+    ));
+    let old = HxsSnapshot::open(&old_fixture.path).expect("old HXS");
+    let indexed = HxsSnapshot::open(&indexed_fixture.path).expect("indexed new HXS");
+    let payload = HxsSnapshot::open(&payload_fixture.path).expect("payload new HXS");
+    let mut workspace = Workspace::from_verified_snapshot(&old, "fr").expect("workspace");
+    let id = workspace
+        .create_unit_from_hxs(&old, "台詞", 1, 0, 0, "target")
+        .expect("unit");
+    let unit = workspace.units().next().expect("unit view");
+    let suggester = CandidateSuggester::from_snapshot(&indexed).expect("candidate index");
+    let from_indexed_storage = suggester
+        .suggest(CandidateQuery::new(id), unit, &old, &indexed)
+        .expect("indexed payload");
+    let from_reordered_storage = suggester
+        .suggest(CandidateQuery::new(id), unit, &old, &payload)
+        .expect("reordered payload");
+    assert_eq!(from_indexed_storage, from_reordered_storage);
+}
+
+#[test]
 fn surviving_binding_continuity_wins_over_relocation_candidates() {
     let old_fixture = write_snapshot(&snapshot(
         "old",

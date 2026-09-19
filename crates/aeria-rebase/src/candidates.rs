@@ -8,7 +8,7 @@
 #![forbid(unsafe_code)]
 
 use std::cmp::Ordering;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
 use aeria_core::{
     Sha256Hash, SourceBinding, SourceFingerprint, TranslationUnit, TranslationUnitId,
@@ -364,12 +364,15 @@ struct IndexedOccurrence {
 
 #[derive(Clone, Debug, Default)]
 struct CandidateIndex {
+    /// HXS occurrence pages are enumerated by canonical sheet and coordinate
+    /// order, so this table is also sorted by full [`SourceBinding`].
     occurrences: Vec<IndexedOccurrence>,
-    by_binding: BTreeMap<SourceBinding, usize>,
-    by_fingerprint: BTreeMap<SourceFingerprint, Vec<usize>>,
-    by_macro_and_raw: BTreeMap<(Sha256Hash, Sha256Hash), Vec<usize>>,
-    by_macro_text: BTreeMap<Sha256Hash, Vec<usize>>,
-    by_sheet_column: BTreeMap<(String, u32), Vec<usize>>,
+    /// Occurrence references sorted by macro hash, raw hash, then binding.
+    macro_and_raw_order: Vec<usize>,
+    /// Occurrence references sorted by macro hash, then binding.
+    macro_text_order: Vec<usize>,
+    /// Occurrence references sorted by sheet, column, row, and subrow.
+    sheet_column_order: Vec<usize>,
 }
 
 impl CandidateIndex {
@@ -414,45 +417,48 @@ impl CandidateIndex {
             }
         }
 
+        Ok(Self::from_canonical_occurrences(occurrences))
+    }
+
+    fn from_canonical_occurrences(occurrences: Vec<IndexedOccurrence>) -> Self {
+        debug_assert!(
+            occurrences
+                .windows(2)
+                .all(|pair| pair[0].binding <= pair[1].binding)
+        );
         let mut index = Self {
             occurrences,
             ..Self::default()
         };
-        for (occurrence_index, occurrence) in index.occurrences.iter().enumerate() {
-            index
-                .by_binding
-                .insert(occurrence.binding.clone(), occurrence_index);
-            index
-                .by_fingerprint
-                .entry(occurrence.fingerprint)
-                .or_default()
-                .push(occurrence_index);
-            if let Some(raw_hash) = occurrence.fingerprint.raw_value_hash() {
-                index
-                    .by_macro_and_raw
-                    .entry((occurrence.fingerprint.macro_text_hash(), raw_hash))
-                    .or_default()
-                    .push(occurrence_index);
-            }
-            index
-                .by_macro_text
-                .entry(occurrence.fingerprint.macro_text_hash())
-                .or_default()
-                .push(occurrence_index);
-            index
-                .by_sheet_column
-                .entry((
-                    occurrence.binding.sheet_name().to_owned(),
-                    occurrence.binding.column_index(),
-                ))
-                .or_default()
-                .push(occurrence_index);
-        }
-        Ok(index)
+        index.rebuild_orders();
+        index
+    }
+
+    fn rebuild_orders(&mut self) {
+        self.macro_and_raw_order = self
+            .occurrences
+            .iter()
+            .enumerate()
+            .filter_map(|(index, occurrence)| {
+                occurrence.fingerprint.raw_value_hash().map(|_| index)
+            })
+            .collect();
+        self.macro_text_order = (0..self.occurrences.len()).collect();
+        self.sheet_column_order = (0..self.occurrences.len()).collect();
+
+        let occurrences = &self.occurrences;
+        self.macro_and_raw_order
+            .sort_unstable_by(|left, right| compare_macro_and_raw(occurrences, *left, *right));
+        self.macro_text_order
+            .sort_unstable_by(|left, right| compare_macro_text(occurrences, *left, *right));
+        self.sheet_column_order
+            .sort_unstable_by(|left, right| compare_sheet_column(occurrences, *left, *right));
     }
 
     fn contains_binding(&self, binding: &SourceBinding) -> bool {
-        self.by_binding.contains_key(binding)
+        self.occurrences
+            .binary_search_by(|occurrence| occurrence.binding.cmp(binding))
+            .is_ok()
     }
 
     fn generate_pool(
@@ -473,37 +479,128 @@ impl CandidateIndex {
             }
         };
 
-        if let Some(indices) = self.by_fingerprint.get(fingerprint) {
-            add(indices);
+        if let Some(raw_hash) = fingerprint.raw_value_hash() {
+            let range = self.macro_and_raw_range(fingerprint.macro_text_hash(), raw_hash);
+            add(&self.macro_and_raw_order[range]);
         }
-        if let Some(raw_hash) = fingerprint.raw_value_hash()
-            && let Some(indices) = self
-                .by_macro_and_raw
-                .get(&(fingerprint.macro_text_hash(), raw_hash))
-        {
-            add(indices);
-        }
-        if let Some(indices) = self.by_macro_text.get(&fingerprint.macro_text_hash()) {
-            add(indices);
-        }
+        let range = self.macro_text_range(fingerprint.macro_text_hash());
+        add(&self.macro_text_order[range]);
 
-        if let Some(indices) = self
-            .by_sheet_column
-            .get(&(binding.sheet_name().to_owned(), binding.column_index()))
-        {
-            let pivot = indices.partition_point(|&index| {
-                let candidate = &self.occurrences[index].binding;
-                (candidate.row_id(), candidate.subrow_id())
-                    < (binding.row_id(), binding.subrow_id())
-            });
-            let start = pivot.saturating_sub(COORDINATE_NEIGHBOR_RADIUS);
-            let end = pivot
-                .saturating_add(COORDINATE_NEIGHBOR_RADIUS)
-                .min(indices.len());
-            add(&indices[start..end]);
-        }
+        let range = self.sheet_column_range(binding.sheet_name(), binding.column_index());
+        let indices = &self.sheet_column_order[range];
+        let pivot = indices.partition_point(|&index| {
+            let candidate = &self.occurrences[index].binding;
+            (candidate.row_id(), candidate.subrow_id()) < (binding.row_id(), binding.subrow_id())
+        });
+        let start = pivot.saturating_sub(COORDINATE_NEIGHBOR_RADIUS);
+        let end = pivot
+            .saturating_add(COORDINATE_NEIGHBOR_RADIUS)
+            .min(indices.len());
+        add(&indices[start..end]);
         pool
     }
+
+    fn macro_and_raw_range(
+        &self,
+        macro_hash: Sha256Hash,
+        raw_hash: Sha256Hash,
+    ) -> std::ops::Range<usize> {
+        let key = (macro_hash, raw_hash);
+        let start = self
+            .macro_and_raw_order
+            .partition_point(|&index| macro_and_raw_group_key(&self.occurrences, index) < key);
+        let end = self
+            .macro_and_raw_order
+            .partition_point(|&index| macro_and_raw_group_key(&self.occurrences, index) <= key);
+        start..end
+    }
+
+    fn macro_text_range(&self, macro_hash: Sha256Hash) -> std::ops::Range<usize> {
+        let start = self
+            .macro_text_order
+            .partition_point(|&index| macro_text_group_key(&self.occurrences, index) < macro_hash);
+        let end = self
+            .macro_text_order
+            .partition_point(|&index| macro_text_group_key(&self.occurrences, index) <= macro_hash);
+        start..end
+    }
+
+    fn sheet_column_range(&self, sheet_name: &str, column_index: u32) -> std::ops::Range<usize> {
+        let key = (sheet_name, column_index);
+        let start = self
+            .sheet_column_order
+            .partition_point(|&index| sheet_column_group_key(&self.occurrences, index) < key);
+        let end = self
+            .sheet_column_order
+            .partition_point(|&index| sheet_column_group_key(&self.occurrences, index) <= key);
+        start..end
+    }
+}
+
+fn macro_and_raw_key(
+    occurrences: &[IndexedOccurrence],
+    index: usize,
+) -> (Sha256Hash, Sha256Hash, &SourceBinding) {
+    let occurrence = &occurrences[index];
+    (
+        macro_and_raw_group_key(occurrences, index).0,
+        macro_and_raw_group_key(occurrences, index).1,
+        &occurrence.binding,
+    )
+}
+
+fn macro_and_raw_group_key(
+    occurrences: &[IndexedOccurrence],
+    index: usize,
+) -> (Sha256Hash, Sha256Hash) {
+    let occurrence = &occurrences[index];
+    (
+        occurrence.fingerprint.macro_text_hash(),
+        occurrence
+            .fingerprint
+            .raw_value_hash()
+            .expect("macro-and-raw index contains only occurrences with raw hashes"),
+    )
+}
+
+fn macro_text_key(occurrences: &[IndexedOccurrence], index: usize) -> (Sha256Hash, &SourceBinding) {
+    let occurrence = &occurrences[index];
+    (
+        macro_text_group_key(occurrences, index),
+        &occurrence.binding,
+    )
+}
+
+fn macro_text_group_key(occurrences: &[IndexedOccurrence], index: usize) -> Sha256Hash {
+    occurrences[index].fingerprint.macro_text_hash()
+}
+
+fn sheet_column_key(occurrences: &[IndexedOccurrence], index: usize) -> (&str, u32, u32, u16) {
+    let binding = &occurrences[index].binding;
+    let (sheet_name, column_index) = sheet_column_group_key(occurrences, index);
+    (
+        sheet_name,
+        column_index,
+        binding.row_id(),
+        binding.subrow_id(),
+    )
+}
+
+fn sheet_column_group_key(occurrences: &[IndexedOccurrence], index: usize) -> (&str, u32) {
+    let binding = &occurrences[index].binding;
+    (binding.sheet_name(), binding.column_index())
+}
+
+fn compare_macro_and_raw(occurrences: &[IndexedOccurrence], left: usize, right: usize) -> Ordering {
+    macro_and_raw_key(occurrences, left).cmp(&macro_and_raw_key(occurrences, right))
+}
+
+fn compare_macro_text(occurrences: &[IndexedOccurrence], left: usize, right: usize) -> Ordering {
+    macro_text_key(occurrences, left).cmp(&macro_text_key(occurrences, right))
+}
+
+fn compare_sheet_column(occurrences: &[IndexedOccurrence], left: usize, right: usize) -> Ordering {
+    sheet_column_key(occurrences, left).cmp(&sheet_column_key(occurrences, right))
 }
 
 struct PreparedSource {
@@ -791,28 +888,107 @@ mod tests {
                 fingerprint,
             })
             .collect();
-        let mut index = CandidateIndex {
-            occurrences,
-            ..CandidateIndex::default()
-        };
-        for (index_number, occurrence) in index.occurrences.iter().enumerate() {
-            index
-                .by_binding
-                .insert(occurrence.binding.clone(), index_number);
-            index
-                .by_macro_text
-                .entry(fingerprint.macro_text_hash())
-                .or_default()
-                .push(index_number);
-            index
-                .by_sheet_column
-                .entry(("Sheet".to_owned(), 0))
-                .or_default()
-                .push(index_number);
-        }
+        let index = CandidateIndex::from_canonical_occurrences(occurrences);
         let pool = index.generate_pool(&SourceBinding::new("Missing", 0, 0, 0), &fingerprint);
         assert_eq!(pool.len(), MAX_GENERATED_CANDIDATES);
         assert_eq!(pool, (0..MAX_GENERATED_CANDIDATES).collect::<Vec<_>>());
+        assert_eq!(
+            pool,
+            index.generate_pool(&SourceBinding::new("Missing", 0, 0, 0), &fingerprint)
+        );
+        assert!(pool.len() <= MAX_GENERATED_CANDIDATES);
+    }
+
+    #[test]
+    fn contains_binding_uses_canonical_occurrence_order() {
+        let index = CandidateIndex::from_canonical_occurrences(vec![
+            test_occurrence("Alpha", 1, 0, 0, 1, None),
+            test_occurrence("Alpha", 3, 0, 0, 2, None),
+            test_occurrence("Beta", 1, 0, 0, 3, None),
+        ]);
+        assert!(index.contains_binding(&SourceBinding::new("Alpha", 1, 0, 0)));
+        assert!(index.contains_binding(&SourceBinding::new("Alpha", 3, 0, 0)));
+        assert!(index.contains_binding(&SourceBinding::new("Beta", 1, 0, 0)));
+        assert!(!index.contains_binding(&SourceBinding::new("Alpha", 2, 0, 0)));
+        assert!(!index.contains_binding(&SourceBinding::new("Beta", 1, 0, 1)));
+    }
+
+    #[test]
+    fn macro_and_raw_ranges_cover_zero_one_and_duplicate_groups() {
+        let index = CandidateIndex::from_canonical_occurrences(vec![
+            test_occurrence("Sheet", 1, 0, 0, 1, Some(1)),
+            test_occurrence("Sheet", 2, 0, 0, 1, Some(1)),
+            test_occurrence("Sheet", 3, 0, 0, 1, Some(2)),
+            test_occurrence("Sheet", 4, 0, 0, 2, Some(1)),
+            test_occurrence("Sheet", 5, 0, 0, 1, None),
+        ]);
+        let hash = |value| Sha256Hash::from_bytes([value; 32]);
+        assert_eq!(index.macro_and_raw_range(hash(1), hash(1)), 0..2);
+        assert_eq!(index.macro_and_raw_range(hash(1), hash(2)), 2..3);
+        assert_eq!(index.macro_and_raw_range(hash(2), hash(2)), 4..4);
+    }
+
+    #[test]
+    fn macro_text_ranges_cover_zero_one_and_duplicate_groups() {
+        let index = CandidateIndex::from_canonical_occurrences(vec![
+            test_occurrence("Sheet", 1, 0, 0, 1, None),
+            test_occurrence("Sheet", 2, 0, 0, 1, Some(1)),
+            test_occurrence("Sheet", 3, 0, 0, 2, None),
+        ]);
+        let hash = |value| Sha256Hash::from_bytes([value; 32]);
+        assert_eq!(index.macro_text_range(hash(1)), 0..2);
+        assert_eq!(index.macro_text_range(hash(2)), 2..3);
+        assert_eq!(index.macro_text_range(hash(3)), 3..3);
+    }
+
+    #[test]
+    fn sheet_column_ranges_are_grouped_by_canonical_coordinate_order() {
+        let index = CandidateIndex::from_canonical_occurrences(vec![
+            test_occurrence("Alpha", 1, 0, 0, 1, None),
+            test_occurrence("Alpha", 2, 0, 1, 4, None),
+            test_occurrence("Alpha", 3, 2, 0, 2, None),
+            test_occurrence("Alpha", 9, 0, 0, 3, None),
+            test_occurrence("Beta", 5, 1, 0, 5, None),
+        ]);
+        assert_eq!(index.sheet_column_range("Alpha", 0), 0..3);
+        assert_eq!(index.sheet_column_range("Alpha", 1), 3..4);
+        assert_eq!(index.sheet_column_range("Beta", 0), 4..5);
+        assert_eq!(index.sheet_column_range("Gamma", 0), 5..5);
+        assert_eq!(
+            &index.sheet_column_order[0..3],
+            &[0, 2, 3],
+            "sparse rows and subrows retain canonical order"
+        );
+    }
+
+    #[test]
+    fn candidate_index_uses_flat_occurrence_orders() {
+        let index = CandidateIndex::from_canonical_occurrences(vec![
+            test_occurrence("Sheet", 1, 0, 0, 2, Some(2)),
+            test_occurrence("Sheet", 2, 0, 0, 1, Some(1)),
+        ]);
+        assert_eq!(index.occurrences.len(), 2);
+        assert_eq!(index.macro_and_raw_order.len(), 2);
+        assert_eq!(index.macro_text_order.len(), 2);
+        assert_eq!(index.sheet_column_order.len(), 2);
+    }
+
+    fn test_occurrence(
+        sheet_name: &str,
+        row_id: u32,
+        subrow_id: u16,
+        column_index: u32,
+        macro_hash: u8,
+        raw_hash: Option<u8>,
+    ) -> IndexedOccurrence {
+        IndexedOccurrence {
+            binding: SourceBinding::new(sheet_name, row_id, subrow_id, column_index),
+            fingerprint: SourceFingerprint::new(
+                Sha256Hash::from_bytes([macro_hash; 32]),
+                raw_hash.map(|hash| Sha256Hash::from_bytes([hash; 32])),
+                Sha256Hash::from_bytes([0; 32]),
+            ),
+        }
     }
 
     #[test]

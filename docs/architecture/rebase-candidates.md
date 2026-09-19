@@ -23,11 +23,12 @@ acceptance, rebinding, apply operation, or proposed authoritative binding.
 
 `CandidateSuggester::from_snapshot` enumerates the verified new HXS once using
 the bounded, canonical String-occurrence pages. It retains lightweight
-coordinates and hashes in an owned index. A query first blocks on exact
-complete fingerprint, macro-plus-raw hash, and macro-text hash groups. It then
-adds a bounded same-sheet/same-column coordinate neighborhood. Duplicate
-indexes are merged in canonical source order and capped at
-`MAX_GENERATED_CANDIDATES` (currently 128).
+coordinates and hashes in one canonical occurrence table, plus compact sorted
+occurrence-index vectors for exact macro-plus-raw, exact macro-text, and
+same-sheet/same-column coordinate blocking. Queries use binary-range lookup,
+merge ranges in canonical source order, and add a bounded coordinate
+neighborhood. Duplicate indexes are capped at `MAX_GENERATED_CANDIDATES`
+(currently 128).
 
 The suggester retains and compares verified source snapshot identity from
 construction: game version, source language, scope, content ID, and snapshot
