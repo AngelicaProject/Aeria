@@ -289,6 +289,21 @@ pub struct StringOccurrencePage {
     pub next_after: Option<StringOccurrenceCoordinate>,
 }
 
+/// One verified String occurrence, including the macro text needed by an
+/// application source-browsing page.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct StringOccurrenceRecord {
+    pub fingerprint: StringOccurrenceFingerprint,
+    pub macro_text: String,
+}
+
+/// A bounded keyset page of verified String occurrence records.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct StringOccurrenceRecordPage {
+    pub occurrences: Vec<StringOccurrenceRecord>,
+    pub next_after: Option<StringOccurrenceCoordinate>,
+}
+
 /// One source String cell, including both source representations when available.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct StringCell {

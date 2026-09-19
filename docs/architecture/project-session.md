@@ -54,3 +54,8 @@ Search, indexes, and caches are disposable future layers. Source
 update/rebase is a separate explicit workflow. Session-level mutation and
 persistence orchestration is intentionally outside this layer; callers do not
 receive unrestricted mutable access to the workspace or store.
+
+The session also exposes the read-only bounded translation browsing layer
+described in [`translation-read.md`](./translation-read.md). It composes one
+verified per-sheet HXS source page with sparse Workspace state without
+materializing the source corpus or giving callers mutable persistence access.

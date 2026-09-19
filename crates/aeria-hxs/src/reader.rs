@@ -6,7 +6,8 @@ use rusqlite::{Connection, OpenFlags, params};
 use crate::error::HxsError;
 use crate::types::{
     RowPage, RowRecord, SheetMetadata, SnapshotMetadata, StringCell, StringOccurrenceCoordinate,
-    StringOccurrenceFingerprint, StringOccurrencePage,
+    StringOccurrenceFingerprint, StringOccurrencePage, StringOccurrenceRecord,
+    StringOccurrenceRecordPage,
 };
 use crate::validation::{
     APPLICATION_ID, FORMAT_VERSION, VerifiedSnapshot, read_row_record, read_string_cell,
@@ -288,6 +289,107 @@ impl HxsSnapshot {
         })
     }
 
+    /// Reads one bounded keyset page of String occurrence records within one
+    /// sheet in row/subrow/column order.
+    ///
+    /// The query returns macro text and the verified hashes for each source
+    /// occurrence without selecting raw-value payload bytes. `after` is
+    /// exclusive; passing the returned cursor to the next call enumerates
+    /// every occurrence in the sheet exactly once.
+    ///
+    /// `limit` must be between one and
+    /// [`MAX_STRING_OCCURRENCE_PAGE_SIZE`] inclusive.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an invalid page size, an invalid stored value or
+    /// hash, or a storage/read failure.
+    pub fn page_string_occurrence_records(
+        &self,
+        sheet_name: &str,
+        after: Option<&StringOccurrenceCoordinate>,
+        limit: u32,
+    ) -> Result<StringOccurrenceRecordPage, HxsError> {
+        if !(1..=MAX_STRING_OCCURRENCE_PAGE_SIZE).contains(&limit) {
+            return Err(HxsError::request(
+                "String occurrence record page limit must be between 1 and MAX_STRING_OCCURRENCE_PAGE_SIZE",
+            ));
+        }
+        let page_limit = usize::try_from(limit)
+            .map_err(|_| HxsError::request("String occurrence record page limit is too large"))?;
+        let sheet_id = self.sheet_id(sheet_name)?;
+        if after.is_some_and(|cursor| cursor.sheet_name != sheet_name) {
+            return Err(HxsError::request(
+                "String occurrence record cursor belongs to a different sheet",
+            ));
+        }
+
+        let limit_sql = i64::from(limit) + 1;
+        let (sql, parameter_values) = if let Some(after) = after {
+            (
+                "SELECT c.row_id, c.subrow_id, c.column_index, c.macro_text, \
+                        c.macro_hash, c.raw_hash, r.technical_hash \
+                 FROM string_cells AS c \
+                 JOIN rows AS r ON r.sheet_id = c.sheet_id \
+                                AND r.row_id = c.row_id \
+                                AND r.subrow_id = c.subrow_id \
+                 WHERE c.sheet_id = ?1 \
+                   AND (c.row_id, c.subrow_id, c.column_index) > (?2, ?3, ?4) \
+                 ORDER BY c.row_id, c.subrow_id, c.column_index \
+                 LIMIT ?5",
+                Some((
+                    sheet_id,
+                    i64::from(after.row_id),
+                    i64::from(after.subrow_id),
+                    i64::from(after.column_index),
+                    limit_sql,
+                )),
+            )
+        } else {
+            (
+                "SELECT c.row_id, c.subrow_id, c.column_index, c.macro_text, \
+                        c.macro_hash, c.raw_hash, r.technical_hash \
+                 FROM string_cells AS c \
+                 JOIN rows AS r ON r.sheet_id = c.sheet_id \
+                                AND r.row_id = c.row_id \
+                                AND r.subrow_id = c.subrow_id \
+                 WHERE c.sheet_id = ?1 \
+                 ORDER BY c.row_id, c.subrow_id, c.column_index \
+                 LIMIT ?2",
+                None,
+            )
+        };
+
+        let mut statement = self.connection.prepare(sql).map_err(HxsError::storage)?;
+        let mut rows = match parameter_values {
+            Some((sheet_id, row_id, subrow_id, column_index, limit)) => statement
+                .query(params![sheet_id, row_id, subrow_id, column_index, limit])
+                .map_err(HxsError::storage)?,
+            None => statement
+                .query(params![sheet_id, limit_sql])
+                .map_err(HxsError::storage)?,
+        };
+
+        let mut occurrences = Vec::with_capacity(page_limit);
+        while let Some(row) = rows.next().map_err(HxsError::storage)? {
+            occurrences.push(read_string_occurrence_record(row, sheet_name)?);
+        }
+
+        let next_after = if occurrences.len() > page_limit {
+            occurrences.pop();
+            occurrences
+                .last()
+                .map(|occurrence| occurrence.fingerprint.coordinate.clone())
+        } else {
+            None
+        };
+
+        Ok(StringOccurrenceRecordPage {
+            occurrences,
+            next_after,
+        })
+    }
+
     fn sheet_id(&self, sheet_name: &str) -> Result<i64, HxsError> {
         self.sheet_ids
             .get(sheet_name)
@@ -313,6 +415,33 @@ fn read_string_occurrence(
         macro_text_hash,
         raw_value_hash,
         row_technical_hash,
+    })
+}
+
+fn read_string_occurrence_record(
+    row: &rusqlite::Row<'_>,
+    sheet_name: &str,
+) -> Result<StringOccurrenceRecord, HxsError> {
+    let row_id = read_non_negative_u32(row, 0, "string_cells.row_id")?;
+    let subrow_id = read_non_negative_u16(row, 1, "string_cells.subrow_id")?;
+    let column_index = read_non_negative_u32(row, 2, "string_cells.column_index")?;
+    let macro_text = row.get::<_, String>(3).map_err(HxsError::storage)?;
+    let macro_text_hash = read_hash(row, 4, "string_cells.macro_hash")?;
+    let raw_value_hash = read_optional_hash(row, 5, "string_cells.raw_hash")?;
+    let row_technical_hash = read_hash(row, 6, "rows.technical_hash")?;
+    Ok(StringOccurrenceRecord {
+        fingerprint: StringOccurrenceFingerprint {
+            coordinate: StringOccurrenceCoordinate::new(
+                sheet_name,
+                row_id,
+                subrow_id,
+                column_index,
+            ),
+            macro_text_hash,
+            raw_value_hash,
+            row_technical_hash,
+        },
+        macro_text,
     })
 }
 

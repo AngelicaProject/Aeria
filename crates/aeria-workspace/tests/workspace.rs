@@ -6,7 +6,8 @@ use std::path::{Path, PathBuf};
 use aeria_core::{ReviewState, Sha256Hash, SourceBinding};
 use aeria_hxs::HxsSnapshot;
 use aeria_workspace::{
-    ProjectSession, ProjectSessionError, Workspace, WorkspaceError, WorkspaceStore,
+    MAX_TRANSLATION_PAGE_SIZE, ProjectSession, ProjectSessionError, TranslationReadError,
+    Workspace, WorkspaceError, WorkspaceStore,
 };
 use rusqlite::{Connection, params};
 use sha2::{Digest, Sha256};
@@ -270,6 +271,191 @@ fn opens_existing_project_and_preserves_managed_files() {
     assert_eq!(session.workspace().metadata(), workspace.metadata());
     drop(session);
     assert_managed_files_omit_path(repository.path(), &fixture.path);
+    assert_eq!(before, managed_files(repository.path()));
+}
+
+#[test]
+fn translation_read_composes_verified_source_with_sparse_workspace_overlay() {
+    let fixture = write_fixture();
+    let source = HxsSnapshot::open(&fixture.path).expect("source");
+    let mut workspace = Workspace::from_verified_snapshot(&source, "fr").expect("workspace");
+    let translated_id = workspace
+        .create_unit_from_hxs(&source, "Synthetic", 42, 0, 0, "Bonjour")
+        .expect("translated unit");
+    workspace
+        .update_review_state(translated_id, ReviewState::Reviewed)
+        .expect("review state");
+    workspace
+        .update_note(translated_id, Some("Checked by editor".to_owned()))
+        .expect("translator note");
+
+    let repository = tempfile::tempdir().expect("temporary repository");
+    WorkspaceStore::new(repository.path())
+        .initialize(&workspace)
+        .expect("workspace should initialize");
+    let session = ProjectSession::open(repository.path(), &fixture.path).expect("session");
+
+    let first = session
+        .page_translation_entries("Synthetic", None, 1)
+        .expect("first translation page");
+    assert_eq!(first.entries.len(), 1);
+    assert_eq!(first.entries[0].source_binding.row_id(), 7);
+    assert_eq!(first.entries[0].source_macro, "two");
+    assert!(first.entries[0].translation.is_none());
+    let after = first.next_after.expect("second page cursor");
+
+    let second = session
+        .page_translation_entries("Synthetic", Some(&after), 1)
+        .expect("second translation page");
+    assert_eq!(second.entries.len(), 1);
+    assert_eq!(second.entries[0].source_binding.row_id(), 42);
+    assert_eq!(second.entries[0].source_macro, "one");
+    let overlay = second.entries[0]
+        .translation
+        .as_ref()
+        .expect("translated occurrence has an overlay");
+    assert_eq!(overlay.translation_unit_id, translated_id);
+    assert_eq!(overlay.target_macro, "Bonjour");
+    assert_eq!(overlay.review_state, ReviewState::Reviewed);
+    assert_eq!(
+        overlay.translator_note.as_deref(),
+        Some("Checked by editor")
+    );
+    assert!(second.next_after.is_none());
+}
+
+#[test]
+fn translation_read_distinguishes_an_empty_target_from_missing_workspace_state() {
+    let fixture = write_fixture();
+    let source = HxsSnapshot::open(&fixture.path).expect("source");
+    let mut workspace = Workspace::from_verified_snapshot(&source, "fr").expect("workspace");
+    let empty_id = workspace
+        .create_unit_from_hxs(&source, "Synthetic", 7, 0, 0, "")
+        .expect("empty target unit");
+
+    let repository = tempfile::tempdir().expect("temporary repository");
+    WorkspaceStore::new(repository.path())
+        .initialize(&workspace)
+        .expect("workspace should initialize");
+    let session = ProjectSession::open(repository.path(), &fixture.path).expect("session");
+    let page = session
+        .page_translation_entries("Synthetic", None, 2)
+        .expect("translation page");
+
+    let empty = &page.entries[0];
+    let overlay = empty
+        .translation
+        .as_ref()
+        .expect("an explicit empty target still has a unit");
+    assert_eq!(overlay.translation_unit_id, empty_id);
+    assert_eq!(overlay.target_macro, "");
+    assert!(page.entries[1].translation.is_none());
+}
+
+#[test]
+fn translation_read_rejects_invalid_limits_and_cross_sheet_cursors() {
+    let fixture = write_fixture();
+    let repository = tempfile::tempdir().expect("temporary repository");
+    ProjectSession::initialize(repository.path(), &fixture.path, "fr")
+        .expect("project should initialize");
+    let session = ProjectSession::open(repository.path(), &fixture.path).expect("session");
+
+    assert!(matches!(
+        session.page_translation_entries("Synthetic", None, 0),
+        Err(TranslationReadError::InvalidPageLimit { limit: 0, max })
+            if max == MAX_TRANSLATION_PAGE_SIZE
+    ));
+    assert!(matches!(
+        session.page_translation_entries("Synthetic", None, MAX_TRANSLATION_PAGE_SIZE + 1),
+        Err(TranslationReadError::InvalidPageLimit { limit, max })
+            if limit == MAX_TRANSLATION_PAGE_SIZE + 1 && max == MAX_TRANSLATION_PAGE_SIZE
+    ));
+    assert!(matches!(
+        session.page_translation_entries(
+            "Synthetic",
+            Some(&SourceBinding::new("Other", 7, 0, 0)),
+            1,
+        ),
+        Err(TranslationReadError::CursorSheetMismatch {
+            requested_sheet,
+            cursor_sheet,
+        }) if requested_sheet == "Synthetic" && cursor_sheet == "Other"
+    ));
+}
+
+#[test]
+fn translation_read_rejects_a_stale_sparse_unit_fingerprint_without_repairing_files() {
+    let fixture = write_fixture();
+    let source = HxsSnapshot::open(&fixture.path).expect("source");
+    let mut workspace = Workspace::from_verified_snapshot(&source, "fr").expect("workspace");
+    let unit_id = workspace
+        .create_unit_from_hxs(&source, "Synthetic", 42, 0, 0, "Bonjour")
+        .expect("unit");
+    let repository = tempfile::tempdir().expect("temporary repository");
+    WorkspaceStore::new(repository.path())
+        .initialize(&workspace)
+        .expect("workspace should initialize");
+
+    let shard = fs::read_dir(repository.path().join(".aeria/units"))
+        .expect("unit shards")
+        .map(|entry| entry.expect("unit shard entry").path())
+        .next()
+        .expect("one unit shard");
+    let before = managed_files(repository.path());
+    let text = fs::read_to_string(&shard).expect("unit shard text");
+    let persisted_hash = hex(&fixture.one_macro_hash);
+    let stale_hash = "00".repeat(32);
+    let updated = text.replace(
+        &format!("\"macroTextHash\":\"{persisted_hash}\""),
+        &format!("\"macroTextHash\":\"{stale_hash}\""),
+    );
+    assert_ne!(updated, text, "test fixture must change the persisted hash");
+    fs::write(&shard, updated).expect("stale unit fixture");
+    let before_read = managed_files(repository.path());
+
+    let session = ProjectSession::open(repository.path(), &fixture.path).expect("session");
+    let error = session
+        .page_translation_entries(
+            "Synthetic",
+            Some(&SourceBinding::new("Synthetic", 7, 0, 0)),
+            2,
+        )
+        .expect_err("stale unit must fail the read");
+    assert!(matches!(
+        error,
+        TranslationReadError::WorkspaceSourceMismatch {
+            translation_unit_id,
+            source_binding,
+            ..
+        } if translation_unit_id == unit_id
+            && source_binding == SourceBinding::new("Synthetic", 42, 0, 0)
+    ));
+    assert_eq!(before_read, managed_files(repository.path()));
+    assert_ne!(
+        before, before_read,
+        "the test fixture should be observably stale"
+    );
+}
+
+#[test]
+fn translation_reads_do_not_modify_managed_workspace_files() {
+    let fixture = write_fixture();
+    let repository = tempfile::tempdir().expect("temporary repository");
+    let session = ProjectSession::initialize(repository.path(), &fixture.path, "fr")
+        .expect("project should initialize");
+    let before = managed_files(repository.path());
+
+    let mut after = None;
+    loop {
+        let page = session
+            .page_translation_entries("Synthetic", after.as_ref(), 1)
+            .expect("translation page");
+        assert!(page.entries.len() <= 1);
+        after = page.next_after;
+        if after.is_none() {
+            break;
+        }
+    }
     assert_eq!(before, managed_files(repository.path()));
 }
 
