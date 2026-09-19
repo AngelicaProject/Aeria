@@ -61,6 +61,10 @@ The complete source-transition matrix, HXS v1 hash contract, adversarial cases,
 model-based safety proof, and apply blocker live in
 [`rebase-safety.md`](./rebase-safety.md).
 
+Bounded review suggestions for missing bindings are documented separately in
+[`rebase-candidates.md`](./rebase-candidates.md). They do not change this
+planner contract or add candidate arrays to `UnitRebasePlan`.
+
 ## Product rules
 
 - AI does not make identity or migration decisions.

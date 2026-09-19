@@ -6,6 +6,10 @@ use aeria_core::{
     ReviewState, Sha256Hash, SourceBinding, SourceFingerprint, TranslationUnit, TranslationUnitId,
 };
 use aeria_hxs::HxsSnapshot;
+use aeria_rebase::candidates::{
+    CandidateQuery, CandidateSuggester, CandidateSuggestionError, MAX_GENERATED_CANDIDATES,
+    MAX_RESULT_LIMIT,
+};
 use aeria_rebase::{
     AutomaticEvidence, CandidateEvidence, CandidateEvidenceSummary, RebaseError, RebaseOutcome,
     RebasePlanner, SourceContextStatus, UnitRebasePlan, plan_rebase,
@@ -38,6 +42,8 @@ struct SnapshotSpec {
     game_version: String,
     source_language: String,
     scope: String,
+    extractor_version: String,
+    lumina_version: String,
     sheet_name: String,
     rows: Vec<RowSpec>,
     reverse_insertion: bool,
@@ -94,6 +100,246 @@ fn identical_snapshot_is_unchanged_and_planning_is_pure_and_deterministic() {
         Some(SourceContextStatus::Unchanged)
     );
     assert!(first.unit_entries[0].candidate_evidence.is_empty());
+}
+
+#[test]
+fn candidate_suggestions_are_bounded_and_non_authoritative() {
+    let old_fixture = write_snapshot(&snapshot(
+        "old",
+        vec![row(1, "Hello", Some(b"raw".to_vec()), &[1])],
+    ));
+    let new_fixture = write_snapshot(&snapshot(
+        "new",
+        vec![
+            row(2, "Hello", Some(b"raw".to_vec()), &[1]),
+            row(3, "Hella", None, &[1]),
+            row(4, "Hello", Some(b"raw".to_vec()), &[1]),
+        ],
+    ));
+    let old = HxsSnapshot::open(&old_fixture.path).expect("old HXS");
+    let new = HxsSnapshot::open(&new_fixture.path).expect("new HXS");
+    let mut workspace = Workspace::from_verified_snapshot(&old, "fr").expect("workspace");
+    let id = workspace
+        .create_unit_from_hxs(&old, "台詞", 1, 0, 0, "target")
+        .expect("unit");
+    let before = workspace.clone();
+    let unit = workspace.units().next().expect("unit view");
+    assert_eq!(id, unit.id());
+    let suggester = CandidateSuggester::from_snapshot(&new).expect("candidate index");
+    let suggestions = suggester
+        .suggest(CandidateQuery::new(id), unit, &old, &new)
+        .expect("suggestions");
+
+    assert_eq!(suggestions.len(), 3);
+    assert_eq!(suggestions[0].binding.row_id(), 2);
+    assert_eq!(suggestions[0].evidence, CandidateEvidence::MacroAndRawValue);
+    assert_eq!(suggestions[1].binding.row_id(), 4);
+    assert_eq!(suggestions[2].binding.row_id(), 3);
+    assert!(
+        suggestions
+            .iter()
+            .all(|candidate| candidate.binding.row_id() != 1)
+    );
+    assert_eq!(workspace, before);
+    let after = workspace.units().next().expect("unit view after");
+    assert_eq!(after.id(), id);
+    assert_eq!(after.source_binding().row_id(), 1);
+}
+
+#[test]
+fn unique_exact_candidate_remains_only_a_review_suggestion() {
+    let old_fixture = write_snapshot(&snapshot("old", vec![row(1, "Cancel", None, &[1])]));
+    let new_fixture = write_snapshot(&snapshot("new", vec![row(2, "Cancel", None, &[1])]));
+    let old = HxsSnapshot::open(&old_fixture.path).expect("old HXS");
+    let new = HxsSnapshot::open(&new_fixture.path).expect("new HXS");
+    let mut workspace = Workspace::from_verified_snapshot(&old, "fr").expect("workspace");
+    let id = workspace
+        .create_unit_from_hxs(&old, "台詞", 1, 0, 0, "target")
+        .expect("unit");
+    let before = workspace.clone();
+    let unit = workspace.units().next().expect("unit view");
+    let suggestions = CandidateSuggester::from_snapshot(&new)
+        .expect("candidate index")
+        .suggest(CandidateQuery::new(id), unit, &old, &new)
+        .expect("suggestions");
+    assert_eq!(suggestions.len(), 1);
+    assert_eq!(suggestions[0].binding.row_id(), 2);
+    assert_eq!(workspace, before);
+    assert_eq!(
+        workspace
+            .units()
+            .next()
+            .expect("unit view")
+            .source_binding()
+            .row_id(),
+        1
+    );
+}
+
+#[test]
+fn candidate_payload_snapshot_must_match_the_index_snapshot() {
+    let old_fixture = write_snapshot(&snapshot("old", vec![row(1, "Cancel", None, &[1])]));
+    let index_fixture = write_snapshot(&snapshot("new-a", vec![row(2, "Cancel", None, &[1])]));
+    let payload_fixture = write_snapshot(&snapshot("new-b", vec![row(3, "Cancel", None, &[1])]));
+    let old = HxsSnapshot::open(&old_fixture.path).expect("old HXS");
+    let index_snapshot = HxsSnapshot::open(&index_fixture.path).expect("new A HXS");
+    let payload_snapshot = HxsSnapshot::open(&payload_fixture.path).expect("new B HXS");
+    let mut workspace = Workspace::from_verified_snapshot(&old, "fr").expect("workspace");
+    let id = workspace
+        .create_unit_from_hxs(&old, "台詞", 1, 0, 0, "target")
+        .expect("unit");
+    let unit = workspace.units().next().expect("unit view");
+    let error = CandidateSuggester::from_snapshot(&index_snapshot)
+        .expect("candidate index")
+        .suggest(CandidateQuery::new(id), unit, &old, &payload_snapshot)
+        .expect_err("different payload snapshot must be rejected");
+    assert!(matches!(
+        error,
+        CandidateSuggestionError::NewSnapshotMismatch { .. }
+    ));
+}
+
+#[test]
+fn producer_metadata_does_not_change_candidate_payload_compatibility() {
+    let old_fixture = write_snapshot(&snapshot("old", vec![row(1, "Cancel", None, &[1])]));
+    let index_fixture = write_snapshot(&snapshot_with_producer(
+        "new",
+        "en",
+        "extractor-a",
+        "lumina-a",
+        vec![row(2, "Cancel", None, &[1])],
+    ));
+    let payload_fixture = write_snapshot(&snapshot_with_producer(
+        "new",
+        "en",
+        "extractor-b",
+        "lumina-b",
+        vec![row(2, "Cancel", None, &[1])],
+    ));
+    let old = HxsSnapshot::open(&old_fixture.path).expect("old HXS");
+    let index_snapshot = HxsSnapshot::open(&index_fixture.path).expect("index HXS");
+    let payload_snapshot = HxsSnapshot::open(&payload_fixture.path).expect("payload HXS");
+    assert_eq!(
+        index_snapshot.metadata().game_version,
+        payload_snapshot.metadata().game_version
+    );
+    assert_eq!(
+        index_snapshot.metadata().source_language,
+        payload_snapshot.metadata().source_language
+    );
+    assert_eq!(
+        index_snapshot.metadata().scope,
+        payload_snapshot.metadata().scope
+    );
+    assert_eq!(
+        index_snapshot.metadata().content_id,
+        payload_snapshot.metadata().content_id
+    );
+    assert_eq!(
+        index_snapshot.metadata().snapshot_id,
+        payload_snapshot.metadata().snapshot_id
+    );
+    assert_ne!(
+        index_snapshot.metadata().producer,
+        payload_snapshot.metadata().producer
+    );
+    let mut workspace = Workspace::from_verified_snapshot(&old, "fr").expect("workspace");
+    let id = workspace
+        .create_unit_from_hxs(&old, "台詞", 1, 0, 0, "target")
+        .expect("unit");
+    let unit = workspace.units().next().expect("unit view");
+    let suggester = CandidateSuggester::from_snapshot(&index_snapshot).expect("candidate index");
+    let with_producer_difference = suggester
+        .suggest(CandidateQuery::new(id), unit, &old, &payload_snapshot)
+        .expect("producer-only metadata difference must be accepted");
+    let with_same_snapshot = suggester
+        .suggest(CandidateQuery::new(id), unit, &old, &index_snapshot)
+        .expect("index snapshot payload must be accepted");
+    assert_eq!(with_producer_difference, with_same_snapshot);
+}
+
+#[test]
+fn old_payload_must_match_the_managed_unit_baseline() {
+    let managed_fixture = write_snapshot(&snapshot("old-a", vec![row(1, "Cancel", None, &[1])]));
+    let supplied_fixture = write_snapshot(&snapshot("old-b", vec![row(1, "Changed", None, &[1])]));
+    let new_fixture = write_snapshot(&snapshot("new", vec![row(2, "Cancel", None, &[1])]));
+    let managed_snapshot = HxsSnapshot::open(&managed_fixture.path).expect("old A HXS");
+    let supplied_snapshot = HxsSnapshot::open(&supplied_fixture.path).expect("old B HXS");
+    let new = HxsSnapshot::open(&new_fixture.path).expect("new HXS");
+    let mut workspace =
+        Workspace::from_verified_snapshot(&managed_snapshot, "fr").expect("workspace");
+    let id = workspace
+        .create_unit_from_hxs(&managed_snapshot, "台詞", 1, 0, 0, "target")
+        .expect("unit");
+    let unit = workspace.units().next().expect("unit view");
+    let error = CandidateSuggester::from_snapshot(&new)
+        .expect("candidate index")
+        .suggest(CandidateQuery::new(id), unit, &supplied_snapshot, &new)
+        .expect_err("stale old payload must be rejected");
+    assert!(matches!(
+        error,
+        CandidateSuggestionError::OldBaselineVerification(
+            RebaseError::OldFingerprintMismatch { .. }
+        )
+    ));
+}
+
+#[test]
+fn surviving_bindings_never_compete_for_candidate_suggestions() {
+    let old_fixture = write_snapshot(&snapshot("old", vec![row(1, "Hello", None, &[1])]));
+    let new_fixture = write_snapshot(&snapshot(
+        "new",
+        vec![row(1, "Hello", None, &[1]), row(2, "Hello", None, &[1])],
+    ));
+    let old = HxsSnapshot::open(&old_fixture.path).expect("old HXS");
+    let new = HxsSnapshot::open(&new_fixture.path).expect("new HXS");
+    let mut workspace = Workspace::from_verified_snapshot(&old, "fr").expect("workspace");
+    let id = workspace
+        .create_unit_from_hxs(&old, "台詞", 1, 0, 0, "target")
+        .expect("unit");
+    let unit = workspace.units().next().expect("unit view");
+    let suggestions = CandidateSuggester::from_snapshot(&new)
+        .expect("candidate index")
+        .suggest(CandidateQuery::new(id), unit, &old, &new)
+        .expect("suggestions");
+    assert!(suggestions.is_empty());
+}
+
+#[test]
+fn duplicate_candidate_groups_are_capped_and_requested_top_k_is_clamped() {
+    let old_fixture = write_snapshot(&snapshot("old", vec![row(1, "Yes", None, &[1])]));
+    let generated_limit =
+        u32::try_from(MAX_GENERATED_CANDIDATES).expect("test limit fits HXS coordinate");
+    let new_rows = (100..(100 + generated_limit + 10))
+        .map(|row_id| row(row_id, "Yes", None, &[1]))
+        .collect();
+    let new_fixture = write_snapshot(&snapshot("new", new_rows));
+    let old = HxsSnapshot::open(&old_fixture.path).expect("old HXS");
+    let new = HxsSnapshot::open(&new_fixture.path).expect("new HXS");
+    let mut workspace = Workspace::from_verified_snapshot(&old, "fr").expect("workspace");
+    let id = workspace
+        .create_unit_from_hxs(&old, "台詞", 1, 0, 0, "target")
+        .expect("unit");
+    let unit = workspace.units().next().expect("unit view");
+    let suggestions = CandidateSuggester::from_snapshot(&new)
+        .expect("candidate index")
+        .suggest(
+            CandidateQuery {
+                translation_unit_id: id,
+                limit: usize::MAX,
+            },
+            unit,
+            &old,
+            &new,
+        )
+        .expect("suggestions");
+    assert_eq!(suggestions.len(), MAX_RESULT_LIMIT);
+    assert_eq!(suggestions.first().expect("first").binding.row_id(), 100);
+    let result_limit = u32::try_from(MAX_RESULT_LIMIT).expect("test limit fits HXS coordinate");
+    assert_eq!(
+        suggestions.last().expect("last").binding.row_id(),
+        100 + result_limit - 1
+    );
 }
 
 #[test]
@@ -578,6 +824,45 @@ fn equivalent_physical_insertion_order_produces_the_same_plan() {
     )
     .expect("equivalent plan succeeds");
     assert_eq!(first, second);
+}
+
+#[test]
+fn equivalent_physical_insertion_order_produces_identical_candidate_suggestions() {
+    let old_fixture = write_snapshot(&snapshot("old", vec![row(1, "one", None, &[1])]));
+    let mut indexed_spec = snapshot(
+        "new",
+        vec![
+            row(9, "one", None, &[9]),
+            row(10, "one", None, &[10]),
+            row(11, "near", None, &[11]),
+        ],
+    );
+    indexed_spec.reverse_insertion = true;
+    let indexed_fixture = write_snapshot(&indexed_spec);
+    let payload_fixture = write_snapshot(&snapshot(
+        "new",
+        vec![
+            row(11, "near", None, &[11]),
+            row(9, "one", None, &[9]),
+            row(10, "one", None, &[10]),
+        ],
+    ));
+    let old = HxsSnapshot::open(&old_fixture.path).expect("old HXS");
+    let indexed = HxsSnapshot::open(&indexed_fixture.path).expect("indexed new HXS");
+    let payload = HxsSnapshot::open(&payload_fixture.path).expect("payload new HXS");
+    let mut workspace = Workspace::from_verified_snapshot(&old, "fr").expect("workspace");
+    let id = workspace
+        .create_unit_from_hxs(&old, "台詞", 1, 0, 0, "target")
+        .expect("unit");
+    let unit = workspace.units().next().expect("unit view");
+    let suggester = CandidateSuggester::from_snapshot(&indexed).expect("candidate index");
+    let from_indexed_storage = suggester
+        .suggest(CandidateQuery::new(id), unit, &old, &indexed)
+        .expect("indexed payload");
+    let from_reordered_storage = suggester
+        .suggest(CandidateQuery::new(id), unit, &old, &payload)
+        .expect("reordered payload");
+    assert_eq!(from_indexed_storage, from_reordered_storage);
 }
 
 #[test]
@@ -1192,10 +1477,22 @@ fn snapshot_with_language(
     source_language: &str,
     rows: Vec<RowSpec>,
 ) -> SnapshotSpec {
+    snapshot_with_producer(game_version, source_language, "test", "7.7.0", rows)
+}
+
+fn snapshot_with_producer(
+    game_version: &str,
+    source_language: &str,
+    extractor_version: &str,
+    lumina_version: &str,
+    rows: Vec<RowSpec>,
+) -> SnapshotSpec {
     SnapshotSpec {
         game_version: game_version.into(),
         source_language: source_language.into(),
         scope: "full".into(),
+        extractor_version: extractor_version.into(),
+        lumina_version: lumina_version.into(),
         sheet_name: "台詞".into(),
         rows,
         reverse_insertion: false,
@@ -1377,13 +1674,15 @@ fn write_snapshot(spec: &SnapshotSpec) -> Fixture {
     }
     connection
         .execute(
-            "INSERT INTO hxs_meta (id, format_version, game_version, language, scope, content_id, snapshot_id, extractor_version, lumina_version, sheet_count, row_count, string_cell_count) VALUES (1, 1, ?1, ?2, ?3, ?4, ?5, 'test', '7.7.0', 1, ?6, ?7)",
+            "INSERT INTO hxs_meta (id, format_version, game_version, language, scope, content_id, snapshot_id, extractor_version, lumina_version, sheet_count, row_count, string_cell_count) VALUES (1, 1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, 1, ?8, ?9)",
             params![
                 spec.game_version,
                 spec.source_language,
                 spec.scope,
                 content_id,
                 snapshot_id,
+                spec.extractor_version,
+                spec.lumina_version,
                 i64::try_from(built_rows.len()).expect("row count"),
                 i64::try_from(built_rows.iter().map(|row| row.cells.len()).sum::<usize>())
                     .expect("String-cell count")

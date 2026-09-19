@@ -53,6 +53,7 @@ version = "0.1.0"
 dependencies = [
  "aeria-core",
  "aeria-hxs",
+ "aeria-se",
  "aeria-workspace",
  "rusqlite",
  "sha2 0.11.0",
