@@ -6,6 +6,9 @@ use aeria_core::{
     ReviewState, Sha256Hash, SourceBinding, SourceFingerprint, TranslationUnit, TranslationUnitId,
 };
 use aeria_hxs::HxsSnapshot;
+use aeria_rebase::candidates::{
+    CandidateQuery, CandidateSuggester, MAX_GENERATED_CANDIDATES, MAX_RESULT_LIMIT,
+};
 use aeria_rebase::{
     AutomaticEvidence, CandidateEvidence, CandidateEvidenceSummary, RebaseError, RebaseOutcome,
     RebasePlanner, SourceContextStatus, UnitRebasePlan, plan_rebase,
@@ -94,6 +97,138 @@ fn identical_snapshot_is_unchanged_and_planning_is_pure_and_deterministic() {
         Some(SourceContextStatus::Unchanged)
     );
     assert!(first.unit_entries[0].candidate_evidence.is_empty());
+}
+
+#[test]
+fn candidate_suggestions_are_bounded_and_non_authoritative() {
+    let old_fixture = write_snapshot(&snapshot(
+        "old",
+        vec![row(1, "Hello", Some(b"raw".to_vec()), &[1])],
+    ));
+    let new_fixture = write_snapshot(&snapshot(
+        "new",
+        vec![
+            row(2, "Hello", Some(b"raw".to_vec()), &[1]),
+            row(3, "Hella", None, &[1]),
+            row(4, "Hello", Some(b"raw".to_vec()), &[1]),
+        ],
+    ));
+    let old = HxsSnapshot::open(&old_fixture.path).expect("old HXS");
+    let new = HxsSnapshot::open(&new_fixture.path).expect("new HXS");
+    let mut workspace = Workspace::from_verified_snapshot(&old, "fr").expect("workspace");
+    let id = workspace
+        .create_unit_from_hxs(&old, "台詞", 1, 0, 0, "target")
+        .expect("unit");
+    let before = workspace.clone();
+    let unit = workspace.units().next().expect("unit view");
+    assert_eq!(id, unit.id());
+    let suggester = CandidateSuggester::from_snapshot(&new).expect("candidate index");
+    let suggestions = suggester
+        .suggest(CandidateQuery::new(id), unit, &old, &new)
+        .expect("suggestions");
+
+    assert_eq!(suggestions.len(), 3);
+    assert_eq!(suggestions[0].binding.row_id(), 2);
+    assert_eq!(suggestions[0].evidence, CandidateEvidence::MacroAndRawValue);
+    assert_eq!(suggestions[1].binding.row_id(), 4);
+    assert_eq!(suggestions[2].binding.row_id(), 3);
+    assert!(
+        suggestions
+            .iter()
+            .all(|candidate| candidate.binding.row_id() != 1)
+    );
+    assert_eq!(workspace, before);
+    let after = workspace.units().next().expect("unit view after");
+    assert_eq!(after.id(), id);
+    assert_eq!(after.source_binding().row_id(), 1);
+}
+
+#[test]
+fn unique_exact_candidate_remains_only_a_review_suggestion() {
+    let old_fixture = write_snapshot(&snapshot("old", vec![row(1, "Cancel", None, &[1])]));
+    let new_fixture = write_snapshot(&snapshot("new", vec![row(2, "Cancel", None, &[1])]));
+    let old = HxsSnapshot::open(&old_fixture.path).expect("old HXS");
+    let new = HxsSnapshot::open(&new_fixture.path).expect("new HXS");
+    let mut workspace = Workspace::from_verified_snapshot(&old, "fr").expect("workspace");
+    let id = workspace
+        .create_unit_from_hxs(&old, "台詞", 1, 0, 0, "target")
+        .expect("unit");
+    let before = workspace.clone();
+    let unit = workspace.units().next().expect("unit view");
+    let suggestions = CandidateSuggester::from_snapshot(&new)
+        .expect("candidate index")
+        .suggest(CandidateQuery::new(id), unit, &old, &new)
+        .expect("suggestions");
+    assert_eq!(suggestions.len(), 1);
+    assert_eq!(suggestions[0].binding.row_id(), 2);
+    assert_eq!(workspace, before);
+    assert_eq!(
+        workspace
+            .units()
+            .next()
+            .expect("unit view")
+            .source_binding()
+            .row_id(),
+        1
+    );
+}
+
+#[test]
+fn surviving_bindings_never_compete_for_candidate_suggestions() {
+    let old_fixture = write_snapshot(&snapshot("old", vec![row(1, "Hello", None, &[1])]));
+    let new_fixture = write_snapshot(&snapshot(
+        "new",
+        vec![row(1, "Hello", None, &[1]), row(2, "Hello", None, &[1])],
+    ));
+    let old = HxsSnapshot::open(&old_fixture.path).expect("old HXS");
+    let new = HxsSnapshot::open(&new_fixture.path).expect("new HXS");
+    let mut workspace = Workspace::from_verified_snapshot(&old, "fr").expect("workspace");
+    let id = workspace
+        .create_unit_from_hxs(&old, "台詞", 1, 0, 0, "target")
+        .expect("unit");
+    let unit = workspace.units().next().expect("unit view");
+    let suggestions = CandidateSuggester::from_snapshot(&new)
+        .expect("candidate index")
+        .suggest(CandidateQuery::new(id), unit, &old, &new)
+        .expect("suggestions");
+    assert!(suggestions.is_empty());
+}
+
+#[test]
+fn duplicate_candidate_groups_are_capped_and_requested_top_k_is_clamped() {
+    let old_fixture = write_snapshot(&snapshot("old", vec![row(1, "Yes", None, &[1])]));
+    let generated_limit =
+        u32::try_from(MAX_GENERATED_CANDIDATES).expect("test limit fits HXS coordinate");
+    let new_rows = (100..(100 + generated_limit + 10))
+        .map(|row_id| row(row_id, "Yes", None, &[1]))
+        .collect();
+    let new_fixture = write_snapshot(&snapshot("new", new_rows));
+    let old = HxsSnapshot::open(&old_fixture.path).expect("old HXS");
+    let new = HxsSnapshot::open(&new_fixture.path).expect("new HXS");
+    let mut workspace = Workspace::from_verified_snapshot(&old, "fr").expect("workspace");
+    let id = workspace
+        .create_unit_from_hxs(&old, "台詞", 1, 0, 0, "target")
+        .expect("unit");
+    let unit = workspace.units().next().expect("unit view");
+    let suggestions = CandidateSuggester::from_snapshot(&new)
+        .expect("candidate index")
+        .suggest(
+            CandidateQuery {
+                translation_unit_id: id,
+                limit: usize::MAX,
+            },
+            unit,
+            &old,
+            &new,
+        )
+        .expect("suggestions");
+    assert_eq!(suggestions.len(), MAX_RESULT_LIMIT);
+    assert_eq!(suggestions.first().expect("first").binding.row_id(), 100);
+    let result_limit = u32::try_from(MAX_RESULT_LIMIT).expect("test limit fits HXS coordinate");
+    assert_eq!(
+        suggestions.last().expect("last").binding.row_id(),
+        100 + result_limit - 1
+    );
 }
 
 #[test]

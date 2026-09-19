@@ -34,6 +34,12 @@ duplicated elsewhere. Candidate indexes are built lazily only when at least
 one previous binding is missing; surviving-binding-only rebases do not build
 them.
 
+The separate on-demand `CandidateSuggester` may return bounded deterministic
+review candidates for an ambiguous unit. Its exact evidence, protected
+structure comparison, visible-text similarity, and coordinate hints remain
+non-authoritative ranking assistance; they never populate these proposed
+fields.
+
 The plan never recomputes `TranslationUnitId`. `automatic_evidence` is
 `AutomaticEvidence::SameBinding` only for surviving bindings. Proposed binding
 and fingerprint are populated for both `Unchanged` and `SourceChanged`; they
@@ -208,5 +214,5 @@ not silently discard translated text or infer cross-binding identity from a
 unique candidate.
 
 Fuzzy matching, ranking, and structural shift detection are out of scope for
-identity authority. They may provide review UI later, but cannot create an
-automatic source mapping.
+identity authority. They may provide bounded review assistance, but cannot
+create an automatic source mapping.

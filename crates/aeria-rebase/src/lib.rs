@@ -2,6 +2,8 @@
 
 #![forbid(unsafe_code)]
 
+pub mod candidates;
+
 use std::collections::{BTreeMap, BTreeSet};
 
 use aeria_core::{
@@ -161,6 +163,10 @@ pub enum SourceContextStatus {
 }
 
 /// Deterministic evidence for a non-authoritative candidate suggestion.
+///
+/// The first four variants are also used by compact planner diagnostics. The
+/// last two are available to the on-demand candidate suggester only. No
+/// variant establishes cross-binding identity.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum CandidateEvidence {
     /// The complete persisted fingerprint matches at another binding.
@@ -171,6 +177,10 @@ pub enum CandidateEvidence {
     MacroAndRowTechnical,
     /// The macro-text hash matched.
     ExactMacroText,
+    /// Protected macro structure was equivalent while macro text differed.
+    ProtectedStructureCompatible,
+    /// Visible/translatable text similarity supplied the ranking evidence.
+    VisibleTextSimilarity,
 }
 
 /// One compact, deterministic, non-authoritative candidate diagnostic.

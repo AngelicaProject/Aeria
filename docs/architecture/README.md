@@ -9,7 +9,7 @@ Start with [`overview.md`](./overview.md). It defines the major runtime boundari
 | Structured strings and macros | [`strings.md`](./strings.md) | `aeria-se` |
 | Translation unit identity | [`identity.md`](./identity.md) | `aeria-core`, `aeria-workspace`, `aeria-rebase` |
 | Workspace state and persistence | [`workspace.md`](./workspace.md) | `aeria-workspace` |
-| Source update and deterministic rebase | [`rebase.md`](./rebase.md), [`rebase-safety.md`](./rebase-safety.md) | `aeria-rebase` |
+| Source update and deterministic rebase | [`rebase.md`](./rebase.md), [`rebase-safety.md`](./rebase-safety.md), [`rebase-candidates.md`](./rebase-candidates.md) | `aeria-rebase` |
 | Git-backed collaboration | [`git.md`](./git.md) | `aeria-git` |
 | Translation assistance | [`ai.md`](./ai.md) | `aeria-ai` |
 | Runtime translation pack export | [`export.md`](./export.md) | `aeria-export` |
