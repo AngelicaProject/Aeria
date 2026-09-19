@@ -5,6 +5,7 @@ Start with [`overview.md`](./overview.md). It defines the major runtime boundari
 | Area | Canonical document | Primary implementation area |
 | --- | --- | --- |
 | Overall boundaries | [`overview.md`](./overview.md) | workspace-wide |
+| Open project session ownership | [`project-session.md`](./project-session.md) | `aeria-workspace` |
 | HXS source snapshots and Atlas integration | [`source.md`](./source.md) | `aeria-hxs`, desktop source management |
 | Structured strings and macros | [`strings.md`](./strings.md) | `aeria-se` |
 | Translation unit identity | [`identity.md`](./identity.md) | `aeria-core`, `aeria-workspace`, `aeria-rebase` |

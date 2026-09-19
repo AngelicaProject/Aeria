@@ -1,9 +1,13 @@
+use std::collections::BTreeMap;
 use std::fmt::Write as _;
-use std::path::PathBuf;
+use std::fs;
+use std::path::{Path, PathBuf};
 
 use aeria_core::{ReviewState, Sha256Hash, SourceBinding};
 use aeria_hxs::HxsSnapshot;
-use aeria_workspace::{Workspace, WorkspaceError};
+use aeria_workspace::{
+    ProjectSession, ProjectSessionError, Workspace, WorkspaceError, WorkspaceStore,
+};
 use rusqlite::{Connection, params};
 use sha2::{Digest, Sha256};
 use tempfile::TempDir;
@@ -190,8 +194,208 @@ fn unit_iteration_is_deterministic() {
     );
 }
 
+#[test]
+fn initializes_and_reopens_a_new_project_without_persisting_the_source_path() {
+    let fixture = write_fixture();
+    let repository = tempfile::tempdir().expect("temporary repository");
+    let unrelated_path = repository.path().join("README.md");
+    fs::write(&unrelated_path, b"project-owned file\n").expect("unrelated file");
+    let source_path = fixture.path.clone();
+
+    let session = ProjectSession::initialize(repository.path(), &source_path, "fr")
+        .expect("new project should initialize");
+    let source_metadata = session.source().metadata();
+    assert_eq!(session.repository_root(), repository.path());
+    assert_eq!(session.source_path(), source_path.as_path());
+    assert_eq!(session.workspace().units().count(), 0);
+    assert_eq!(
+        session.workspace().metadata().source_language(),
+        source_metadata.source_language
+    );
+    assert_eq!(session.workspace().metadata().target_language(), "fr");
+    assert_eq!(
+        session.workspace().metadata().source_content_id(),
+        source_metadata.content_id
+    );
+    assert_eq!(
+        session.workspace().metadata().source_snapshot_id(),
+        source_metadata.snapshot_id
+    );
+    assert!(repository.path().join(".aeria/manifest.json").is_file());
+    assert!(!repository.path().join(".aeria/units").exists());
+    let manifest =
+        fs::read_to_string(repository.path().join(".aeria/manifest.json")).expect("manifest");
+    assert!(!manifest.contains(source_path.to_string_lossy().as_ref()));
+    assert_managed_files_omit_path(repository.path(), &source_path);
+    assert_eq!(
+        fs::read(&unrelated_path).expect("unrelated file"),
+        b"project-owned file\n"
+    );
+
+    let expected_metadata = session.workspace().metadata().clone();
+    drop(session);
+    let reopened = ProjectSession::open(repository.path(), &source_path)
+        .expect("initialized project should reopen");
+    assert_eq!(reopened.workspace().metadata(), &expected_metadata);
+    assert_eq!(reopened.workspace().units().count(), 0);
+    assert_eq!(reopened.source_path(), source_path.as_path());
+}
+
+#[test]
+fn opens_existing_project_and_preserves_managed_files() {
+    let fixture = write_fixture();
+    let repository = tempfile::tempdir().expect("temporary repository");
+    let source = HxsSnapshot::open(&fixture.path).expect("fixture should verify");
+    let mut workspace = Workspace::from_verified_snapshot(&source, "fr").expect("workspace");
+    workspace
+        .create_unit_from_hxs(&source, "Synthetic", 42, 0, 0, "Bonjour")
+        .expect("unit");
+    WorkspaceStore::new(repository.path())
+        .initialize(&workspace)
+        .expect("workspace should initialize");
+    let before = managed_files(repository.path());
+
+    let session = ProjectSession::open(repository.path(), &fixture.path)
+        .expect("existing project should open");
+    assert_eq!(session.workspace().units().count(), 1);
+    assert_eq!(
+        session
+            .source()
+            .string_cell("Synthetic", 42, 0, 0)
+            .expect("source read")
+            .expect("source cell")
+            .macro_text,
+        "one"
+    );
+    assert_eq!(session.workspace().metadata(), workspace.metadata());
+    drop(session);
+    assert_managed_files_omit_path(repository.path(), &fixture.path);
+    assert_eq!(before, managed_files(repository.path()));
+}
+
+#[test]
+fn rejects_a_different_verified_snapshot_without_modifying_the_workspace() {
+    let original_fixture = write_fixture();
+    let different_snapshot = write_fixture_with("en", "different-game");
+    let repository = tempfile::tempdir().expect("temporary repository");
+    ProjectSession::initialize(repository.path(), &original_fixture.path, "fr")
+        .expect("new project should initialize");
+    let before = managed_files(repository.path());
+
+    let error = ProjectSession::open(repository.path(), &different_snapshot.path)
+        .err()
+        .expect("different snapshot must be rejected");
+    assert!(matches!(
+        error,
+        ProjectSessionError::Compatibility {
+            source: WorkspaceError::SourceSnapshotMismatch { .. },
+            ..
+        }
+    ));
+    assert_eq!(before, managed_files(repository.path()));
+}
+
+#[test]
+fn rejects_a_different_verified_source_language_without_modifying_the_workspace() {
+    let original_fixture = write_fixture();
+    let different_language = write_fixture_with("ja", "test-game");
+    let repository = tempfile::tempdir().expect("temporary repository");
+    ProjectSession::initialize(repository.path(), &original_fixture.path, "fr")
+        .expect("new project should initialize");
+    let before = managed_files(repository.path());
+
+    let error = ProjectSession::open(repository.path(), &different_language.path)
+        .err()
+        .expect("different source language must be rejected");
+    assert!(matches!(
+        error,
+        ProjectSessionError::Compatibility {
+            source: WorkspaceError::SourceLanguageMismatch { .. },
+            ..
+        }
+    ));
+    assert_eq!(before, managed_files(repository.path()));
+}
+
+#[test]
+fn invalid_hxs_and_target_language_fail_before_publishing_workspace_state() {
+    let fixture = write_fixture();
+    let invalid_source_directory = tempfile::tempdir().expect("invalid source directory");
+    let invalid_source = invalid_source_directory.path().join("invalid.hxs");
+    fs::write(&invalid_source, b"not an HXS database").expect("invalid source");
+    let invalid_source_repository = tempfile::tempdir().expect("temporary repository");
+
+    let error = ProjectSession::initialize(invalid_source_repository.path(), &invalid_source, "fr")
+        .err()
+        .expect("invalid HXS must be rejected");
+    assert!(matches!(error, ProjectSessionError::Source { .. }));
+    assert!(!invalid_source_repository.path().join(".aeria").exists());
+    let error = ProjectSession::open(invalid_source_repository.path(), &invalid_source)
+        .err()
+        .expect("invalid HXS must be rejected while opening");
+    assert!(matches!(error, ProjectSessionError::Source { .. }));
+
+    let invalid_target_repository = tempfile::tempdir().expect("temporary repository");
+    let error = ProjectSession::initialize(invalid_target_repository.path(), &fixture.path, " ")
+        .err()
+        .expect("invalid target language must be rejected");
+    assert!(matches!(error, ProjectSessionError::Workspace { .. }));
+    assert!(!invalid_target_repository.path().join(".aeria").exists());
+}
+
+#[test]
+fn initialization_protects_existing_project_state() {
+    let fixture = write_fixture();
+    let repository = tempfile::tempdir().expect("temporary repository");
+    ProjectSession::initialize(repository.path(), &fixture.path, "fr")
+        .expect("new project should initialize");
+    let before = managed_files(repository.path());
+
+    let error = ProjectSession::initialize(repository.path(), &fixture.path, "fr")
+        .err()
+        .expect("existing project must not be replaced");
+    assert!(matches!(
+        error,
+        ProjectSessionError::Store {
+            source: aeria_workspace::WorkspaceStoreError::AlreadyInitialized { .. },
+            ..
+        }
+    ));
+    assert_eq!(before, managed_files(repository.path()));
+}
+
+fn managed_files(repository_root: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
+    let aeria_root = repository_root.join(".aeria");
+    let mut files = BTreeMap::new();
+    let manifest = aeria_root.join("manifest.json");
+    files.insert(manifest.clone(), fs::read(manifest).expect("manifest"));
+    let units = aeria_root.join("units");
+    if units.is_dir() {
+        for entry in fs::read_dir(units).expect("units directory") {
+            let entry = entry.expect("unit entry");
+            let path = entry.path();
+            if path.is_file() {
+                files.insert(path.clone(), fs::read(path).expect("unit shard"));
+            }
+        }
+    }
+    files
+}
+
+fn assert_managed_files_omit_path(repository_root: &Path, source_path: &Path) {
+    let source_path = source_path.to_string_lossy();
+    for bytes in managed_files(repository_root).values() {
+        assert!(!String::from_utf8_lossy(bytes).contains(source_path.as_ref()));
+    }
+}
+
 #[allow(clippy::too_many_lines)]
 fn write_fixture() -> Fixture {
+    write_fixture_with("en", "test-game")
+}
+
+#[allow(clippy::too_many_lines)]
+fn write_fixture_with(source_language: &str, game_version: &str) -> Fixture {
     let directory = tempfile::tempdir().expect("create fixture directory");
     let path = directory.path().join("fixture.hxs");
     let connection = Connection::open(&path).expect("create fixture database");
@@ -252,9 +456,9 @@ fn write_fixture() -> Fixture {
         "sha256:{}",
         hex(&digest(|hasher| {
             hasher.update(b"HARMONIA-HXS-CONTENT-v1");
-            framed_text(hasher, "en");
+            framed_text(hasher, source_language);
             framed_text(hasher, "Synthetic");
-            framed_text(hasher, "en");
+            framed_text(hasher, source_language);
             hasher.update(schema_hash);
             hasher.update(content_hash);
         }))
@@ -263,16 +467,16 @@ fn write_fixture() -> Fixture {
         "sha256:{}",
         hex(&digest(|hasher| {
             hasher.update(b"HARMONIA-HXS-SNAPSHOT-v1");
-            framed_text(hasher, "test-game");
-            framed_text(hasher, "en");
+            framed_text(hasher, game_version);
+            framed_text(hasher, source_language);
             framed_text(hasher, &content_id);
         }))
     );
 
     connection
         .execute(
-            "INSERT INTO sheets (id, name, variant, effective_language, column_count, row_count, schema_hash, technical_hash, string_hash, content_hash) VALUES (1, 'Synthetic', 0, 'en', 1, 2, ?1, ?2, ?3, ?4)",
-            params![schema_hash.as_slice(), sheet_technical_hash.as_slice(), sheet_string_hash.as_slice(), content_hash.as_slice()],
+            "INSERT INTO sheets (id, name, variant, effective_language, column_count, row_count, schema_hash, technical_hash, string_hash, content_hash) VALUES (1, 'Synthetic', 0, ?1, 1, 2, ?2, ?3, ?4, ?5)",
+            params![source_language, schema_hash.as_slice(), sheet_technical_hash.as_slice(), sheet_string_hash.as_slice(), content_hash.as_slice()],
         )
         .expect("insert sheet");
     connection
@@ -316,8 +520,8 @@ fn write_fixture() -> Fixture {
         .expect("insert second String cell");
     connection
         .execute(
-            "INSERT INTO hxs_meta (id, format_version, game_version, language, scope, content_id, snapshot_id, extractor_version, lumina_version, sheet_count, row_count, string_cell_count) VALUES (1, 1, 'test-game', 'en', 'full', ?1, ?2, 'test', '7.7.0', 1, 2, 2)",
-            params![content_id, snapshot_id],
+            "INSERT INTO hxs_meta (id, format_version, game_version, language, scope, content_id, snapshot_id, extractor_version, lumina_version, sheet_count, row_count, string_cell_count) VALUES (1, 1, ?1, ?2, 'full', ?3, ?4, 'test', '7.7.0', 1, 2, 2)",
+            params![game_version, source_language, content_id, snapshot_id],
         )
         .expect("insert metadata");
 
