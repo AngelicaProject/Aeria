@@ -51,11 +51,15 @@ ProjectSession
 
 The session does not enumerate or materialize the full HXS source corpus.
 Search, indexes, and caches are disposable future layers. Source
-update/rebase is a separate explicit workflow. Session-level mutation and
-persistence orchestration is intentionally outside this layer; callers do not
-receive unrestricted mutable access to the workspace or store.
+update/rebase is a separate explicit workflow. Ordinary one-unit mutation and
+persistence orchestration belongs to the focused session mutation layer; callers
+still do not receive unrestricted mutable access to the workspace or store.
 
 The session also exposes the read-only bounded translation browsing layer
-described in [`translation-read.md`](./translation-read.md). It composes one
-verified per-sheet HXS source page with sparse Workspace state without
-materializing the source corpus or giving callers mutable persistence access.
+described in [`translation-read.md`](./translation-read.md), and the
+transactional ordinary-editor mutation layer described in
+[`translation-mutations.md`](./translation-mutations.md). Reads compose one
+verified per-sheet HXS source page with sparse Workspace state. Mutations
+verify the exact current source, apply existing Workspace domain semantics,
+and persist one canonical shard without giving callers mutable persistence
+access.

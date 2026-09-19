@@ -16,9 +16,9 @@ use crate::{Workspace, WorkspaceError, WorkspaceStore, WorkspaceStoreError};
 pub struct ProjectSession {
     repository_root: PathBuf,
     source_path: PathBuf,
-    _store: WorkspaceStore,
-    workspace: Workspace,
-    source: HxsSnapshot,
+    pub(crate) store: WorkspaceStore,
+    pub(crate) workspace: Workspace,
+    pub(crate) source: HxsSnapshot,
 }
 
 /// Errors raised while opening or initializing a project session.
@@ -101,7 +101,7 @@ impl ProjectSession {
         Ok(Self {
             repository_root,
             source_path,
-            _store: store,
+            store,
             workspace,
             source,
         })
@@ -146,7 +146,7 @@ impl ProjectSession {
         Ok(Self {
             repository_root,
             source_path,
-            _store: store,
+            store,
             workspace,
             source,
         })

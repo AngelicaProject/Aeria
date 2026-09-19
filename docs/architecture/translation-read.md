@@ -28,7 +28,9 @@ the verified HXS occurrence at the same binding, the read returns an
 integrity error. It does not repair, rebase, or reinterpret the unit.
 
 The API is read-only. It does not write Workspace Format files, HXS data,
-review state, targets, notes, or TranslationUnit IDs. Search, filtering,
-indexes, caches, mutations, source update/rebase, export, and UI remain
-separate future layers. No UI owns authoritative source/workspace
+review state, targets, notes, or TranslationUnit IDs. Ordinary one-unit
+mutations are provided by the separate
+[`translation-mutations.md`](./translation-mutations.md) application layer.
+Search, filtering, indexes, caches, source update/rebase, export, and UI
+remain separate layers. No UI owns authoritative source/workspace
 composition.

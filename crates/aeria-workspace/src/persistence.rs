@@ -39,6 +39,16 @@ static READ_SHARD_COUNT: AtomicUsize = AtomicUsize::new(0);
 #[cfg(test)]
 static PERSISTENCE_TEST_LOCK: Mutex<()> = Mutex::new(());
 
+#[cfg(test)]
+pub(crate) fn fail_next_publication_for_test() {
+    FAIL_BEFORE_PUBLICATION.store(true, Ordering::SeqCst);
+}
+
+#[cfg(test)]
+pub(crate) fn persistence_test_lock() -> std::sync::MutexGuard<'static, ()> {
+    PERSISTENCE_TEST_LOCK.lock().expect("persistence test lock")
+}
+
 /// Errors raised while opening, validating, or persisting a Workspace Format
 /// v1 repository.
 #[derive(Debug, Error)]
