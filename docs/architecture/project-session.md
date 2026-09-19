@@ -63,3 +63,8 @@ verified per-sheet HXS source page with sparse Workspace state. Mutations
 verify the exact current source, apply existing Workspace domain semantics,
 and persist one canonical shard without giving callers mutable persistence
 access.
+
+The desktop application boundary described in
+[`desktop-application-boundary.md`](./desktop-application-boundary.md) owns
+the process-level active-session slot and delegates open/initialize, bounded
+reads, and ordinary mutations to this API.

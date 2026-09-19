@@ -1,4 +1,20 @@
+mod commands;
+mod dto;
+mod error;
+mod state;
+
 use serde::Serialize;
+
+pub use commands::{
+    close_project, current_project, initialize_project, open_project, page_translation_entries,
+    set_translation_note, set_translation_review_state, set_translation_target,
+};
+pub use dto::{
+    ProjectSheetDto, ProjectSummaryDto, ReviewStateDto, SourceBindingDto, TranslationEntryDto,
+    TranslationEntryPageDto, TranslationOverlayDto, TranslationUnitIdDto,
+};
+pub use error::CommandError;
+pub use state::DesktopState;
 
 #[derive(Serialize)]
 struct AppInfo {
@@ -23,7 +39,18 @@ fn app_info() -> AppInfo {
 /// generated configuration.
 pub fn run() {
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![app_info])
+        .manage(DesktopState::new())
+        .invoke_handler(tauri::generate_handler![
+            app_info,
+            open_project,
+            initialize_project,
+            current_project,
+            close_project,
+            page_translation_entries,
+            set_translation_target,
+            set_translation_note,
+            set_translation_review_state
+        ])
         .run(tauri::generate_context!())
         .expect("failed to run Aeria desktop application");
 }
