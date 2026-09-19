@@ -28,6 +28,9 @@ added to Workspace Format. Translation browsing delegates to the bounded
 by the backend contract. Tauri performs DTO and error mapping, not business
 logic, and does not access HXS or SQLite directly.
 
+Commands that require an active project report `noProjectOpen` before
+validating project-scoped payload such as translation-unit IDs.
+
 The IPC boundary contains no source update or rebase logic, no background
 server, and no async worker architecture. React has no direct filesystem or
 SQLite access. Translation-unit IDs cross IPC only in their canonical textual

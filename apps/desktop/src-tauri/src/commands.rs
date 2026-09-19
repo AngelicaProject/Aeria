@@ -195,9 +195,9 @@ pub(crate) fn set_translation_note_with_state(
     translation_unit_id: &str,
     note: Option<String>,
 ) -> CommandResult<()> {
-    let translation_unit_id = parse_translation_unit_id(translation_unit_id)?;
     let mut project = state.lock_project()?;
     let project = project.as_mut().ok_or_else(CommandError::no_project)?;
+    let translation_unit_id = parse_translation_unit_id(translation_unit_id)?;
     project
         .set_note(translation_unit_id, note)
         .map_err(CommandError::from)
@@ -224,10 +224,10 @@ pub(crate) fn set_translation_review_state_with_state(
     translation_unit_id: &str,
     review_state: ReviewStateDto,
 ) -> CommandResult<()> {
-    let translation_unit_id = parse_translation_unit_id(translation_unit_id)?;
-    let review_state: ReviewState = review_state.into();
     let mut project = state.lock_project()?;
     let project = project.as_mut().ok_or_else(CommandError::no_project)?;
+    let translation_unit_id = parse_translation_unit_id(translation_unit_id)?;
+    let review_state: ReviewState = review_state.into();
     project
         .set_review_state(translation_unit_id, review_state)
         .map_err(CommandError::from)
@@ -239,8 +239,45 @@ fn parse_translation_unit_id(value: &str) -> CommandResult<TranslationUnitId> {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+    use std::path::{Path, PathBuf};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
     use super::*;
-    use crate::dto::{ReviewStateDto, SourceBindingDto};
+    use crate::dto::{ProjectSheetDto, ReviewStateDto, SourceBindingDto};
+
+    struct TestRepository {
+        path: PathBuf,
+    }
+
+    impl TestRepository {
+        fn new(label: &str) -> Self {
+            let timestamp = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("system clock is after the Unix epoch")
+                .as_nanos();
+            let path = std::env::temp_dir().join(format!(
+                "aeria-desktop-boundary-{label}-{}-{timestamp}",
+                std::process::id()
+            ));
+            fs::create_dir_all(&path).expect("test repository");
+            Self { path }
+        }
+
+        fn path(&self) -> &Path {
+            &self.path
+        }
+    }
+
+    impl Drop for TestRepository {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.path);
+        }
+    }
+
+    fn fixture_path() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("test-fixtures/synthetic.hxs")
+    }
 
     fn binding() -> SourceBindingDto {
         SourceBindingDto {
@@ -291,18 +328,124 @@ mod tests {
 
         let error =
             set_translation_note_with_state(&state, "not-a-tu", None).expect_err("invalid ID");
-        assert_eq!(error.code, "invalidTranslationUnitId");
+        assert_eq!(error.code, "noProjectOpen");
 
-        let error = set_translation_review_state_with_state(
-            &state,
-            "tu1:0000000000000000000000000000000000000000000000000000000000000000",
-            ReviewStateDto::Reviewed,
-        )
-        .expect_err("no project");
+        let error =
+            set_translation_review_state_with_state(&state, "not-a-tu", ReviewStateDto::Reviewed)
+                .expect_err("no project");
         assert_eq!(error.code, "noProjectOpen");
 
         let error =
             set_translation_target_with_state(&state, binding(), "target").expect_err("no project");
         assert_eq!(error.code, "noProjectOpen");
+    }
+
+    #[test]
+    fn desktop_boundary_lifecycle_and_read_write_flow_are_persisted() {
+        let repository = TestRepository::new("flow");
+        let source = fixture_path();
+        let state = DesktopState::new();
+
+        let summary = initialize_project_with_state(
+            &state,
+            repository.path().to_string_lossy().into_owned(),
+            source.to_string_lossy().into_owned(),
+            "fr".to_owned(),
+        )
+        .expect("initialize project");
+        assert_eq!(
+            summary.repository_root,
+            repository.path().to_string_lossy().into_owned()
+        );
+        assert_eq!(summary.source_path, source.to_string_lossy().into_owned());
+        assert_eq!(summary.source_language, "en");
+        assert_eq!(summary.target_language, "fr");
+        assert!(summary.source_content_id.starts_with("sha256:"));
+        assert!(summary.source_snapshot_id.starts_with("sha256:"));
+        assert_eq!(summary.game_version, "test-game");
+        assert_eq!(summary.scope, "full");
+        assert_eq!(
+            summary.sheets,
+            vec![ProjectSheetDto {
+                name: "Synthetic".to_owned(),
+                effective_language: "en".to_owned(),
+                row_count: 1,
+            }]
+        );
+        assert_eq!(
+            current_project_with_state(&state).expect("current"),
+            Some(summary.clone())
+        );
+
+        let page = page_translation_entries_with_state(&state, "Synthetic", None, 1)
+            .expect("initial page");
+        assert_eq!(page.entries[0].source_macro, "one");
+        assert!(page.entries[0].translation.is_none());
+
+        let active_invalid_note =
+            set_translation_note_with_state(&state, "not-a-tu", None).expect_err("invalid ID");
+        assert_eq!(active_invalid_note.code, "invalidTranslationUnitId");
+        let active_invalid_review =
+            set_translation_review_state_with_state(&state, "not-a-tu", ReviewStateDto::Reviewed)
+                .expect_err("invalid ID");
+        assert_eq!(active_invalid_review.code, "invalidTranslationUnitId");
+
+        let binding = binding();
+        let first_id = set_translation_target_with_state(&state, binding.clone(), "Bonjour")
+            .expect("set target")
+            .translation_unit_id;
+        let page = page_translation_entries_with_state(&state, "Synthetic", None, 1)
+            .expect("translated page");
+        let overlay = page.entries[0]
+            .translation
+            .as_ref()
+            .expect("translation overlay");
+        assert_eq!(overlay.translation_unit_id, first_id);
+        assert_eq!(overlay.target_macro, "Bonjour");
+
+        let second_id = set_translation_target_with_state(&state, binding, "Salut")
+            .expect("update target")
+            .translation_unit_id;
+        assert_eq!(second_id, first_id);
+        set_translation_note_with_state(&state, &first_id, Some("checked".to_owned()))
+            .expect("set note");
+        set_translation_review_state_with_state(&state, &first_id, ReviewStateDto::Reviewed)
+            .expect("set review state");
+
+        close_project_with_state(&state).expect("close project");
+        assert_eq!(current_project_with_state(&state).expect("closed"), None);
+        open_project_with_state(
+            &state,
+            repository.path().to_string_lossy().into_owned(),
+            source.to_string_lossy().into_owned(),
+        )
+        .expect("reopen project");
+        let reopened_page = page_translation_entries_with_state(&state, "Synthetic", None, 1)
+            .expect("reopened page");
+        let reopened_overlay = reopened_page.entries[0]
+            .translation
+            .as_ref()
+            .expect("persisted overlay");
+        assert_eq!(reopened_overlay.translation_unit_id, first_id);
+        assert_eq!(reopened_overlay.target_macro, "Salut");
+        assert_eq!(reopened_overlay.review_state, ReviewStateDto::Reviewed);
+        assert_eq!(reopened_overlay.translator_note.as_deref(), Some("checked"));
+
+        let before_failed_replacement = current_project_with_state(&state)
+            .expect("current before failed replacement")
+            .expect("active project");
+        let invalid_source = repository.path().join("invalid.hxs");
+        fs::write(&invalid_source, b"not an HXS database").expect("invalid source");
+        let error = open_project_with_state(
+            &state,
+            repository.path().to_string_lossy().into_owned(),
+            invalid_source.to_string_lossy().into_owned(),
+        )
+        .expect_err("invalid replacement");
+        assert_eq!(error.code, "projectSource");
+        assert_eq!(
+            current_project_with_state(&state).expect("current after failure"),
+            Some(before_failed_replacement)
+        );
     }
 }
