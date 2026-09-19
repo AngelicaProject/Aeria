@@ -4,6 +4,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use aeria_hxs::{
     HxsError, HxsSnapshot, MAX_ROW_PAGE_SIZE, MAX_STRING_OCCURRENCE_PAGE_SIZE, SheetVariant,
+    StringOccurrenceCoordinate,
 };
 use rusqlite::{Connection, params};
 use sha2::{Digest, Sha256};
@@ -321,6 +322,61 @@ fn string_occurrence_pages_handle_empty_sheets_subrows_and_high_coordinates() {
     assert_eq!(coordinate.subrow_id, u16::MAX);
     assert_eq!(coordinate.column_index, 0);
     assert!(page.next_after.is_none());
+}
+
+#[test]
+fn string_occurrence_record_pages_return_macro_text_with_the_verified_fingerprint() {
+    let (fixture, expected) = write_fixture();
+    let snapshot = HxsSnapshot::open(&fixture.path).expect("synthetic HXS should verify");
+
+    let first = snapshot
+        .page_string_occurrence_records("Alpha", None, 1)
+        .expect("first occurrence record page");
+    assert_eq!(first.occurrences.len(), 1);
+    assert_eq!(first.occurrences[0].macro_text, "Hello");
+    assert_eq!(
+        first.occurrences[0].fingerprint.macro_text_hash.as_bytes(),
+        &expected.alpha.rows[0].macro_hash
+    );
+    assert_eq!(
+        first.occurrences[0]
+            .fingerprint
+            .raw_value_hash
+            .as_ref()
+            .map(aeria_hxs::HxsHash::as_bytes),
+        Some(&expected.alpha.rows[0].raw_hash.unwrap())
+    );
+    assert_eq!(
+        first.occurrences[0]
+            .fingerprint
+            .row_technical_hash
+            .as_bytes(),
+        &expected.alpha.rows[0].technical_hash
+    );
+
+    let second = snapshot
+        .page_string_occurrence_records("Alpha", first.next_after.as_ref(), 1)
+        .expect("second occurrence record page");
+    assert_eq!(second.occurrences.len(), 1);
+    assert_eq!(second.occurrences[0].macro_text, "World");
+    assert!(second.next_after.is_none());
+
+    assert!(matches!(
+        snapshot.page_string_occurrence_records("Alpha", None, 0),
+        Err(HxsError::InvalidRequest { .. })
+    ));
+    assert!(matches!(
+        snapshot.page_string_occurrence_records("Alpha", None, MAX_STRING_OCCURRENCE_PAGE_SIZE + 1),
+        Err(HxsError::InvalidRequest { .. })
+    ));
+    assert!(matches!(
+        snapshot.page_string_occurrence_records(
+            "Alpha",
+            Some(&StringOccurrenceCoordinate::new("Beta", 5, 0, 0)),
+            1,
+        ),
+        Err(HxsError::InvalidRequest { .. })
+    ));
 }
 
 #[test]

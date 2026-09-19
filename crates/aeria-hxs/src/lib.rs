@@ -14,7 +14,7 @@ pub use types::{
     ColumnMetadata, ColumnType, HxsHash, ProducerMetadata, RowHashes, RowPage, RowRecord,
     SheetHashes, SheetMetadata, SheetVariant, SnapshotCounts, SnapshotMetadata, StringCell,
     StringCellHashes, StringOccurrenceCoordinate, StringOccurrenceFingerprint,
-    StringOccurrencePage,
+    StringOccurrencePage, StringOccurrenceRecord, StringOccurrenceRecordPage,
 };
 
 /// Maximum number of rows returned by one [`HxsSnapshot::page_rows`] call.

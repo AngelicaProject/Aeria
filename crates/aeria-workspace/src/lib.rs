@@ -10,14 +10,19 @@ use aeria_core::{
     DomainValueError, ReviewState, Sha256Hash, SourceBinding, SourceFingerprint, TranslationUnit,
     TranslationUnitId, TranslationUnitIdError, WorkspaceMetadata,
 };
-use aeria_hxs::{HxsError, HxsSnapshot};
+use aeria_hxs::{HxsError, HxsHash, HxsSnapshot};
 use aeria_se::{Diagnostic, SemanticValidity, parse};
 use thiserror::Error;
 
 mod persistence;
+mod read;
 mod session;
 
 pub use persistence::{WorkspaceStore, WorkspaceStoreError};
+pub use read::{
+    MAX_TRANSLATION_PAGE_SIZE, TranslationEntryPage, TranslationEntryView, TranslationOverlayView,
+    TranslationReadError,
+};
 pub use session::{ProjectSession, ProjectSessionError};
 
 /// Errors raised by the in-memory translation workspace.
@@ -327,13 +332,23 @@ fn verified_fingerprint(
         .ok_or_else(|| WorkspaceError::SourceCellNotFound {
             binding: binding.clone(),
         })?;
-    Ok(SourceFingerprint::new(
-        Sha256Hash::from_bytes(*cell.hashes.macro_text.as_bytes()),
-        cell.hashes
-            .raw_value
-            .map(|hash| Sha256Hash::from_bytes(*hash.as_bytes())),
-        Sha256Hash::from_bytes(*row.hashes.technical.as_bytes()),
+    Ok(source_fingerprint_from_hashes(
+        &cell.hashes.macro_text,
+        cell.hashes.raw_value.as_ref(),
+        &row.hashes.technical,
     ))
+}
+
+pub(crate) fn source_fingerprint_from_hashes(
+    macro_text_hash: &HxsHash,
+    raw_value_hash: Option<&HxsHash>,
+    row_technical_hash: &HxsHash,
+) -> SourceFingerprint {
+    SourceFingerprint::new(
+        Sha256Hash::from_bytes(*macro_text_hash.as_bytes()),
+        raw_value_hash.map(|hash| Sha256Hash::from_bytes(*hash.as_bytes())),
+        Sha256Hash::from_bytes(*row_technical_hash.as_bytes()),
+    )
 }
 
 fn validate_target(target_macro: &str) -> Result<(), WorkspaceError> {
