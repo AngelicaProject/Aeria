@@ -6,8 +6,8 @@ use std::path::{Path, PathBuf};
 use aeria_core::{ReviewState, Sha256Hash, SourceBinding};
 use aeria_hxs::HxsSnapshot;
 use aeria_workspace::{
-    MAX_TRANSLATION_PAGE_SIZE, ProjectSession, ProjectSessionError, TranslationReadError,
-    Workspace, WorkspaceError, WorkspaceStore,
+    MAX_TRANSLATION_PAGE_SIZE, ProjectSession, ProjectSessionError, TranslationMutationError,
+    TranslationReadError, Workspace, WorkspaceError, WorkspaceStore,
 };
 use rusqlite::{Connection, params};
 use sha2::{Digest, Sha256};
@@ -457,6 +457,322 @@ fn translation_reads_do_not_modify_managed_workspace_files() {
         }
     }
     assert_eq!(before, managed_files(repository.path()));
+}
+
+#[test]
+fn session_mutations_create_update_and_read_back_the_committed_state() {
+    let fixture = write_fixture();
+    let repository = tempfile::tempdir().expect("temporary repository");
+    let source_binding = SourceBinding::new("Synthetic", 42, 0, 0);
+    let unrelated_path = repository.path().join("README.md");
+    fs::write(&unrelated_path, b"project-owned\n").expect("unrelated file");
+    let mut session = ProjectSession::initialize(repository.path(), &fixture.path, "fr")
+        .expect("project should initialize");
+
+    let id = session
+        .set_target(&source_binding, "Bonjour")
+        .expect("first target should create a unit");
+    let unit = session.workspace().unit(id).expect("created unit");
+    assert_eq!(unit.source_binding(), &source_binding);
+    assert_eq!(unit.target_macro(), "Bonjour");
+    assert_eq!(unit.review_state(), ReviewState::Draft);
+    assert_eq!(session.workspace().units().count(), 1);
+
+    let page = session
+        .page_translation_entries("Synthetic", None, 2)
+        .expect("read after write");
+    let overlay = page.entries[1]
+        .translation
+        .as_ref()
+        .expect("new target is visible immediately");
+    assert_eq!(overlay.translation_unit_id, id);
+    assert_eq!(overlay.target_macro, "Bonjour");
+
+    session
+        .set_review_state(id, ReviewState::Reviewed)
+        .expect("review state");
+    let before_update = session.workspace().unit(id).expect("unit").clone();
+    session
+        .set_target(&source_binding, "Salut")
+        .expect("existing target should update");
+    let updated = session.workspace().unit(id).expect("updated unit");
+    assert_eq!(updated.id(), before_update.id());
+    assert_eq!(updated.source_binding(), before_update.source_binding());
+    assert_eq!(
+        updated.source_fingerprint(),
+        before_update.source_fingerprint()
+    );
+    assert_eq!(updated.target_macro(), "Salut");
+    assert_eq!(updated.review_state(), ReviewState::Draft);
+    assert_eq!(
+        fs::read(&unrelated_path).expect("unrelated file"),
+        b"project-owned\n"
+    );
+
+    drop(session);
+    let reopened = ProjectSession::open(repository.path(), &fixture.path).expect("reopen");
+    let reopened_unit = reopened.workspace().unit(id).expect("persisted unit");
+    assert_eq!(reopened_unit.target_macro(), "Salut");
+    assert_eq!(reopened_unit.source_binding(), &source_binding);
+}
+
+#[test]
+fn empty_target_creates_explicit_sparse_state() {
+    let fixture = write_fixture();
+    let repository = tempfile::tempdir().expect("temporary repository");
+    let binding = SourceBinding::new("Synthetic", 7, 0, 0);
+    let mut session = ProjectSession::initialize(repository.path(), &fixture.path, "fr")
+        .expect("project should initialize");
+
+    let id = session
+        .set_target(&binding, "")
+        .expect("empty target should create a unit");
+    let page = session
+        .page_translation_entries("Synthetic", None, 2)
+        .expect("read explicit empty target");
+    let overlay = page.entries[0]
+        .translation
+        .as_ref()
+        .expect("empty target remains present");
+    assert_eq!(overlay.translation_unit_id, id);
+    assert_eq!(overlay.target_macro, "");
+
+    drop(session);
+    let reopened = ProjectSession::open(repository.path(), &fixture.path).expect("reopen");
+    assert_eq!(
+        reopened
+            .workspace()
+            .unit(id)
+            .expect("empty unit")
+            .target_macro(),
+        ""
+    );
+}
+
+#[test]
+fn identical_mutations_do_not_rewrite_canonical_files() {
+    let fixture = write_fixture();
+    let repository = tempfile::tempdir().expect("temporary repository");
+    let binding = SourceBinding::new("Synthetic", 42, 0, 0);
+    let mut session = ProjectSession::initialize(repository.path(), &fixture.path, "fr")
+        .expect("project should initialize");
+    let id = session
+        .set_target(&binding, "Bonjour")
+        .expect("target should create a unit");
+    session.set_note(id, Some("note".to_owned())).expect("note");
+    session
+        .set_review_state(id, ReviewState::Reviewed)
+        .expect("review state");
+
+    let before = managed_files(repository.path());
+    session
+        .set_target(&binding, "Bonjour")
+        .expect("same target is a no-op");
+    session
+        .set_note(id, Some("note".to_owned()))
+        .expect("same note is a no-op");
+    session
+        .set_review_state(id, ReviewState::Reviewed)
+        .expect("same review state is a no-op");
+    assert_eq!(before, managed_files(repository.path()));
+    assert_eq!(
+        session.workspace().unit(id).unwrap().review_state(),
+        ReviewState::Reviewed
+    );
+}
+
+#[test]
+fn note_and_review_mutations_preserve_their_existing_semantics() {
+    let fixture = write_fixture();
+    let repository = tempfile::tempdir().expect("temporary repository");
+    let binding = SourceBinding::new("Synthetic", 42, 0, 0);
+    let mut session = ProjectSession::initialize(repository.path(), &fixture.path, "fr")
+        .expect("project should initialize");
+    let id = session
+        .set_target(&binding, "Bonjour")
+        .expect("target should create a unit");
+    session
+        .set_review_state(id, ReviewState::Reviewed)
+        .expect("review state");
+
+    session
+        .set_note(id, Some("note".to_owned()))
+        .expect("set note");
+    assert_eq!(
+        session.workspace().unit(id).unwrap().translator_note(),
+        Some("note")
+    );
+    assert_eq!(
+        session.workspace().unit(id).unwrap().review_state(),
+        ReviewState::Reviewed
+    );
+    session.set_note(id, None).expect("clear note");
+    assert_eq!(
+        session.workspace().unit(id).unwrap().translator_note(),
+        None
+    );
+    assert_eq!(
+        session.workspace().unit(id).unwrap().review_state(),
+        ReviewState::Reviewed
+    );
+
+    session
+        .set_review_state(id, ReviewState::NeedsReview)
+        .expect("needs review");
+    assert_eq!(
+        session.workspace().unit(id).unwrap().review_state(),
+        ReviewState::NeedsReview
+    );
+    drop(session);
+    let reopened = ProjectSession::open(repository.path(), &fixture.path).expect("reopen");
+    let unit = reopened.workspace().unit(id).expect("persisted unit");
+    assert_eq!(unit.translator_note(), None);
+    assert_eq!(unit.review_state(), ReviewState::NeedsReview);
+}
+
+#[test]
+fn invalid_or_missing_targets_do_not_change_session_or_files() {
+    let fixture = write_fixture();
+    let repository = tempfile::tempdir().expect("temporary repository");
+    let binding = SourceBinding::new("Synthetic", 42, 0, 0);
+    let mut session = ProjectSession::initialize(repository.path(), &fixture.path, "fr")
+        .expect("project should initialize");
+    let before = managed_files(repository.path());
+    assert!(matches!(
+        session.set_target(&binding, "<if(1,2,3>"),
+        Err(TranslationMutationError::Workspace(
+            WorkspaceError::InvalidTarget { .. }
+        ))
+    ));
+    assert!(
+        session
+            .workspace()
+            .unit_by_source_binding(&binding)
+            .is_none()
+    );
+    assert_eq!(before, managed_files(repository.path()));
+
+    assert!(matches!(
+        session.set_target(&SourceBinding::new("Synthetic", 42, 0, 1), "target"),
+        Err(TranslationMutationError::Workspace(
+            WorkspaceError::SourceCellNotFound { .. }
+        ))
+    ));
+    assert_eq!(before, managed_files(repository.path()));
+
+    let id = session
+        .set_target(&binding, "Bonjour")
+        .expect("valid target should create a unit");
+    let before_existing = managed_files(repository.path());
+    assert!(matches!(
+        session.set_target(&binding, "<if(1,2,3>"),
+        Err(TranslationMutationError::Workspace(
+            WorkspaceError::InvalidTarget { .. }
+        ))
+    ));
+    assert_eq!(
+        session.workspace().unit(id).unwrap().target_macro(),
+        "Bonjour"
+    );
+    assert_eq!(before_existing, managed_files(repository.path()));
+
+    let unknown = aeria_core::TranslationUnitId::from_bytes([0xff; 32]);
+    assert!(matches!(
+        session.set_note(unknown, Some("note".to_owned())),
+        Err(TranslationMutationError::Workspace(WorkspaceError::UnitNotFound { id })) if id == unknown
+    ));
+    assert!(matches!(
+        session.set_review_state(unknown, ReviewState::Reviewed),
+        Err(TranslationMutationError::Workspace(WorkspaceError::UnitNotFound { id })) if id == unknown
+    ));
+    assert_eq!(before_existing, managed_files(repository.path()));
+}
+
+#[test]
+fn stale_source_fingerprint_blocks_all_ordinary_mutations() {
+    let fixture = write_fixture();
+    let repository = tempfile::tempdir().expect("temporary repository");
+    let binding = SourceBinding::new("Synthetic", 42, 0, 0);
+    let mut initial = ProjectSession::initialize(repository.path(), &fixture.path, "fr")
+        .expect("project should initialize");
+    let id = initial
+        .set_target(&binding, "Bonjour")
+        .expect("target should create a unit");
+    drop(initial);
+
+    let shard = fs::read_dir(repository.path().join(".aeria/units"))
+        .expect("unit shards")
+        .map(|entry| entry.expect("unit shard entry").path())
+        .next()
+        .expect("one unit shard");
+    let text = fs::read_to_string(&shard).expect("unit shard text");
+    let stale = text.replace(
+        &format!("\"macroTextHash\":\"{}\"", hex(&fixture.one_macro_hash)),
+        &format!("\"macroTextHash\":\"{}\"", "00".repeat(32)),
+    );
+    fs::write(&shard, stale).expect("stale unit fixture");
+    let before = managed_files(repository.path());
+
+    let mut session = ProjectSession::open(repository.path(), &fixture.path).expect("reopen");
+    for result in [
+        session.set_target(&binding, "Salut").map(|_| ()),
+        session.set_note(id, Some("note".to_owned())),
+        session.set_review_state(id, ReviewState::Reviewed),
+    ] {
+        assert!(
+            matches!(result, Err(TranslationMutationError::SourceIntegrity { translation_unit_id, source_binding, .. })
+            if translation_unit_id == id && *source_binding == binding)
+        );
+    }
+    assert_eq!(before, managed_files(repository.path()));
+    assert_eq!(
+        session.workspace().unit(id).unwrap().target_macro(),
+        "Bonjour"
+    );
+    assert_eq!(
+        session.workspace().unit(id).unwrap().translator_note(),
+        None
+    );
+    assert_eq!(
+        session.workspace().unit(id).unwrap().review_state(),
+        ReviewState::Draft
+    );
+}
+
+#[test]
+fn only_the_affected_shard_changes() {
+    let fixture = write_fixture();
+    let repository = tempfile::tempdir().expect("temporary repository");
+    let mut session = ProjectSession::initialize(repository.path(), &fixture.path, "fr")
+        .expect("project should initialize");
+    let first_binding = SourceBinding::new("Synthetic", 42, 0, 0);
+    let second_binding = SourceBinding::new("Synthetic", 7, 0, 0);
+    let first = session
+        .set_target(&first_binding, "one")
+        .expect("first target");
+    let second = session
+        .set_target(&second_binding, "two")
+        .expect("second target");
+    assert_ne!(first.as_bytes()[0], second.as_bytes()[0]);
+    let before = managed_files(repository.path());
+    session
+        .set_target(&first_binding, "updated")
+        .expect("update first target");
+    let after = managed_files(repository.path());
+    assert_eq!(
+        before[&repository.path().join(".aeria/manifest.json")],
+        after[&repository.path().join(".aeria/manifest.json")]
+    );
+    let first_path = repository
+        .path()
+        .join(".aeria/units")
+        .join(format!("{:02x}.jsonl", first.as_bytes()[0]));
+    let second_path = repository
+        .path()
+        .join(".aeria/units")
+        .join(format!("{:02x}.jsonl", second.as_bytes()[0]));
+    assert_ne!(before[&first_path], after[&first_path]);
+    assert_eq!(before[&second_path], after[&second_path]);
 }
 
 #[test]

@@ -14,10 +14,12 @@ use aeria_hxs::{HxsError, HxsHash, HxsSnapshot};
 use aeria_se::{Diagnostic, SemanticValidity, parse};
 use thiserror::Error;
 
+mod mutation;
 mod persistence;
 mod read;
 mod session;
 
+pub use mutation::TranslationMutationError;
 pub use persistence::{WorkspaceStore, WorkspaceStoreError};
 pub use read::{
     MAX_TRANSLATION_PAGE_SIZE, TranslationEntryPage, TranslationEntryView, TranslationOverlayView,
@@ -242,6 +244,24 @@ impl Workspace {
         self.units.insert(id, unit);
         self.source_bindings.insert(binding, id);
         Ok(())
+    }
+
+    pub(crate) fn remove_unit(&mut self, id: TranslationUnitId) -> Option<TranslationUnit> {
+        let unit = self.units.remove(&id)?;
+        self.source_bindings.remove(unit.source_binding());
+        Some(unit)
+    }
+
+    pub(crate) fn restore_unit(&mut self, unit: TranslationUnit) {
+        let id = unit.id();
+        let binding = unit.source_binding().clone();
+        let existing = self
+            .units
+            .get_mut(&id)
+            .expect("transaction rollback target must still exist");
+        debug_assert_eq!(existing.source_binding(), &binding);
+        *existing = unit;
+        debug_assert_eq!(self.source_bindings.get(&binding), Some(&id));
     }
 
     fn from_loaded(
