@@ -2,11 +2,12 @@ use std::str::FromStr;
 
 use aeria_core::{ReviewState, SourceBinding, TranslationUnitId};
 use aeria_workspace::ProjectSession;
+use aeria_workspace::TranslationRowCursor;
 use tauri::State;
 
 use crate::dto::{
-    ProjectSummaryDto, ReviewStateDto, SourceBindingDto, TranslationEntryPageDto,
-    TranslationUnitIdDto,
+    ProjectSummaryDto, ReviewStateDto, SourceBindingDto, TranslationRowCursorDto,
+    TranslationRowPageDto, TranslationUnitIdDto,
 };
 use crate::error::CommandError;
 use crate::state::DesktopState;
@@ -114,32 +115,32 @@ pub(crate) fn close_project_with_state(state: &DesktopState) -> CommandResult<()
 
 #[tauri::command(rename_all = "camelCase")]
 #[allow(clippy::needless_pass_by_value)]
-/// Reads one bounded page of source occurrences and workspace overlays.
+/// Reads one bounded page of logical source rows and workspace overlays.
 ///
 /// # Errors
 ///
 /// Returns a typed command error when no project is open, the page request is
 /// invalid, the source cannot be read, or source integrity fails.
-pub fn page_translation_entries(
+pub fn page_translation_rows(
     state: State<'_, DesktopState>,
     sheet_name: String,
-    after: Option<SourceBindingDto>,
+    after: Option<TranslationRowCursorDto>,
     limit: u32,
-) -> CommandResult<TranslationEntryPageDto> {
-    page_translation_entries_with_state(&state, &sheet_name, after, limit)
+) -> CommandResult<TranslationRowPageDto> {
+    page_translation_rows_with_state(&state, &sheet_name, after, limit)
 }
 
-pub(crate) fn page_translation_entries_with_state(
+pub(crate) fn page_translation_rows_with_state(
     state: &DesktopState,
     sheet_name: &str,
-    after: Option<SourceBindingDto>,
+    after: Option<TranslationRowCursorDto>,
     limit: u32,
-) -> CommandResult<TranslationEntryPageDto> {
-    let after = after.map(SourceBinding::from);
+) -> CommandResult<TranslationRowPageDto> {
+    let after = after.map(TranslationRowCursor::from);
     let project = state.lock_project()?;
     let project = project.as_ref().ok_or_else(CommandError::no_project)?;
     project
-        .page_translation_entries(sheet_name, after.as_ref(), limit)
+        .page_translation_rows(sheet_name, after.as_ref(), limit)
         .map(Into::into)
         .map_err(CommandError::from)
 }
@@ -297,8 +298,7 @@ mod tests {
             None
         );
         assert_eq!(
-            page_translation_entries_with_state(&state, "Synthetic", None, 1)
-                .expect_err("no project"),
+            page_translation_rows_with_state(&state, "Synthetic", None, 1).expect_err("no project"),
             CommandError::no_project()
         );
     }
@@ -377,10 +377,10 @@ mod tests {
             Some(summary.clone())
         );
 
-        let page = page_translation_entries_with_state(&state, "Synthetic", None, 1)
-            .expect("initial page");
-        assert_eq!(page.entries[0].source_macro, "one");
-        assert!(page.entries[0].translation.is_none());
+        let page =
+            page_translation_rows_with_state(&state, "Synthetic", None, 1).expect("initial page");
+        assert_eq!(page.rows[0].cells[0].source_macro, "one");
+        assert!(page.rows[0].cells[0].translation.is_none());
 
         let active_invalid_note =
             set_translation_note_with_state(&state, "not-a-tu", None).expect_err("invalid ID");
@@ -394,9 +394,9 @@ mod tests {
         let first_id = set_translation_target_with_state(&state, binding.clone(), "Bonjour")
             .expect("set target")
             .translation_unit_id;
-        let page = page_translation_entries_with_state(&state, "Synthetic", None, 1)
+        let page = page_translation_rows_with_state(&state, "Synthetic", None, 1)
             .expect("translated page");
-        let overlay = page.entries[0]
+        let overlay = page.rows[0].cells[0]
             .translation
             .as_ref()
             .expect("translation overlay");
@@ -420,9 +420,9 @@ mod tests {
             source.to_string_lossy().into_owned(),
         )
         .expect("reopen project");
-        let reopened_page = page_translation_entries_with_state(&state, "Synthetic", None, 1)
-            .expect("reopened page");
-        let reopened_overlay = reopened_page.entries[0]
+        let reopened_page =
+            page_translation_rows_with_state(&state, "Synthetic", None, 1).expect("reopened page");
+        let reopened_overlay = reopened_page.rows[0].cells[0]
             .translation
             .as_ref()
             .expect("persisted overlay");

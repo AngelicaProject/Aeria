@@ -19,6 +19,13 @@ values. Callers enumerate sheet names canonically to obtain snapshot order;
 the reader does not require a new cross-sheet index or a global temporary
 sort.
 
+For desktop source browsing, `aeria-hxs` also exposes a bounded
+`page_string_rows` path. It selects row/subrow groups with a keyset cursor and
+joins all String cells in those groups in one bounded query, returning macro
+text plus verified hashes but never `raw_value` bytes. This row-oriented
+presentation path is separate from the occurrence-level rebase/scanning APIs;
+it does not change String-cell identity or any HXS hash contract.
+
 The reader verifies rows as a stream and does not require the complete snapshot to be resident in memory. This is a source inspection interface only: it does not persist workspace state, edit translations, or export runtime data.
 
 ## Hash contract used by rebase

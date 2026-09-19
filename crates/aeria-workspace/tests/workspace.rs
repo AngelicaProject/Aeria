@@ -7,7 +7,7 @@ use aeria_core::{ReviewState, Sha256Hash, SourceBinding};
 use aeria_hxs::HxsSnapshot;
 use aeria_workspace::{
     MAX_TRANSLATION_PAGE_SIZE, ProjectSession, ProjectSessionError, TranslationMutationError,
-    TranslationReadError, Workspace, WorkspaceError, WorkspaceStore,
+    TranslationReadError, TranslationRowCursor, Workspace, WorkspaceError, WorkspaceStore,
 };
 use rusqlite::{Connection, params};
 use sha2::{Digest, Sha256};
@@ -24,6 +24,27 @@ struct Fixture {
     two_macro_hash: [u8; 32],
     two_raw_hash: [u8; 32],
 }
+
+struct ProjectionFixture {
+    _directory: TempDir,
+    path: PathBuf,
+}
+
+struct ProjectionString {
+    column_index: u32,
+    macro_text: String,
+    macro_hash: [u8; 32],
+}
+
+struct ProjectionRow {
+    row_id: u32,
+    row_hash: [u8; 32],
+    technical_hash: [u8; 32],
+    string_hash: [u8; 32],
+    strings: Vec<ProjectionString>,
+}
+
+type StringHashSpec = (u32, [u8; 32], Option<[u8; 32]>);
 
 #[test]
 fn creates_a_unit_from_a_verified_hxs_string_cell_without_copying_source_text() {
@@ -296,21 +317,21 @@ fn translation_read_composes_verified_source_with_sparse_workspace_overlay() {
     let session = ProjectSession::open(repository.path(), &fixture.path).expect("session");
 
     let first = session
-        .page_translation_entries("Synthetic", None, 1)
+        .page_translation_rows("Synthetic", None, 1)
         .expect("first translation page");
-    assert_eq!(first.entries.len(), 1);
-    assert_eq!(first.entries[0].source_binding.row_id(), 7);
-    assert_eq!(first.entries[0].source_macro, "two");
-    assert!(first.entries[0].translation.is_none());
+    assert_eq!(first.rows.len(), 1);
+    assert_eq!(first.rows[0].row_id, 7);
+    assert_eq!(first.rows[0].cells[0].source_macro, "two");
+    assert!(first.rows[0].cells[0].translation.is_none());
     let after = first.next_after.expect("second page cursor");
 
     let second = session
-        .page_translation_entries("Synthetic", Some(&after), 1)
+        .page_translation_rows("Synthetic", Some(&after), 1)
         .expect("second translation page");
-    assert_eq!(second.entries.len(), 1);
-    assert_eq!(second.entries[0].source_binding.row_id(), 42);
-    assert_eq!(second.entries[0].source_macro, "one");
-    let overlay = second.entries[0]
+    assert_eq!(second.rows.len(), 1);
+    assert_eq!(second.rows[0].row_id, 42);
+    assert_eq!(second.rows[0].cells[0].source_macro, "one");
+    let overlay = second.rows[0].cells[0]
         .translation
         .as_ref()
         .expect("translated occurrence has an overlay");
@@ -322,6 +343,140 @@ fn translation_read_composes_verified_source_with_sparse_workspace_overlay() {
         Some("Checked by editor")
     );
     assert!(second.next_after.is_none());
+}
+
+#[test]
+fn translation_rows_classify_context_empty_and_regular_multi_string_rows() {
+    let fixture = write_projection_fixture();
+    let repository = tempfile::tempdir().expect("temporary repository");
+    let session = ProjectSession::initialize(repository.path(), &fixture.path, "fr")
+        .expect("project should initialize");
+
+    let page = session
+        .page_translation_rows("Projection", None, 5)
+        .expect("row page");
+    assert_eq!(page.rows.len(), 2);
+
+    let path_row = &page.rows[0];
+    assert_eq!((path_row.row_id, path_row.subrow_id), (1, 0));
+    assert_eq!(
+        path_row
+            .context
+            .iter()
+            .map(|cell| (cell.column_index, cell.source_macro.as_str()))
+            .collect::<Vec<_>>(),
+        [(0, "TEXT_CONTEXT")]
+    );
+    assert_eq!(path_row.cells.len(), 1);
+    assert_eq!(path_row.cells[0].source_binding.column_index(), 1);
+    assert_eq!(path_row.cells[0].source_macro, "Greetings and welcome");
+
+    let item_row = &page.rows[1];
+    assert_eq!((item_row.row_id, item_row.subrow_id), (4, 0));
+    assert!(item_row.context.is_empty());
+    assert_eq!(item_row.cells.len(), 4);
+    assert_eq!(
+        item_row
+            .cells
+            .iter()
+            .map(|cell| cell.source_binding.column_index())
+            .collect::<Vec<_>>(),
+        [0, 1, 2, 3]
+    );
+    assert_eq!(item_row.cells[0].source_macro, "fire shard");
+    assert_eq!(item_row.cells[3].source_macro, "Fire Shard");
+}
+
+#[test]
+fn context_only_and_empty_rows_advance_the_translation_row_cursor() {
+    let fixture = write_projection_fixture();
+    let repository = tempfile::tempdir().expect("temporary repository");
+    let session = ProjectSession::initialize(repository.path(), &fixture.path, "fr")
+        .expect("project should initialize");
+
+    let first = session
+        .page_translation_rows("Projection", None, 1)
+        .expect("first row page");
+    assert_eq!(
+        first.rows.iter().map(|row| row.row_id).collect::<Vec<_>>(),
+        [1]
+    );
+    let mut after = first.next_after;
+    let mut visible = vec![1];
+    let mut empty_pages = 0;
+    while let Some(cursor) = after {
+        let page = session
+            .page_translation_rows("Projection", Some(&cursor), 1)
+            .expect("following row page");
+        if page.rows.is_empty() {
+            empty_pages += 1;
+        } else {
+            visible.extend(page.rows.iter().map(|row| row.row_id));
+        }
+        after = page.next_after;
+    }
+
+    assert_eq!(visible, [1, 4]);
+    assert_eq!(
+        empty_pages, 3,
+        "context/empty source rows still advanced paging"
+    );
+}
+
+#[test]
+fn translation_rows_overlay_cells_by_binding_and_preserve_explicit_empty_targets() {
+    let fixture = write_projection_fixture();
+    let source = HxsSnapshot::open(&fixture.path).expect("source");
+    let mut workspace = Workspace::from_verified_snapshot(&source, "fr").expect("workspace");
+    let translated_id = workspace
+        .create_unit_from_hxs(&source, "Projection", 4, 0, 2, "")
+        .expect("explicit empty target unit");
+    let unrelated_id = workspace
+        .create_unit_from_hxs(&source, "Projection", 1, 0, 1, "Bonjour")
+        .expect("path unit");
+    let repository = tempfile::tempdir().expect("temporary repository");
+    WorkspaceStore::new(repository.path())
+        .initialize(&workspace)
+        .expect("workspace should initialize");
+    let session = ProjectSession::open(repository.path(), &fixture.path).expect("session");
+
+    let page = session
+        .page_translation_rows(
+            "Projection",
+            Some(&TranslationRowCursor::new("Projection", 3, 0)),
+            2,
+        )
+        .expect("item row page");
+    let row = &page.rows[0];
+    assert_eq!(row.row_id, 4);
+    assert_eq!(
+        row.cells[2]
+            .translation
+            .as_ref()
+            .expect("explicit empty target overlay")
+            .translation_unit_id,
+        translated_id
+    );
+    assert_eq!(row.cells[2].translation.as_ref().unwrap().target_macro, "");
+    assert!(row.cells[0].translation.is_none());
+    assert_eq!(
+        page.rows[0].cells.len(),
+        4,
+        "the unrelated cell-level overlay does not collapse the row"
+    );
+    let path_row = session
+        .page_translation_rows("Projection", None, 1)
+        .expect("path row page")
+        .rows
+        .remove(0);
+    assert_eq!(
+        path_row.cells[0]
+            .translation
+            .as_ref()
+            .expect("path overlay")
+            .translation_unit_id,
+        unrelated_id
+    );
 }
 
 #[test]
@@ -339,17 +494,17 @@ fn translation_read_distinguishes_an_empty_target_from_missing_workspace_state()
         .expect("workspace should initialize");
     let session = ProjectSession::open(repository.path(), &fixture.path).expect("session");
     let page = session
-        .page_translation_entries("Synthetic", None, 2)
+        .page_translation_rows("Synthetic", None, 2)
         .expect("translation page");
 
-    let empty = &page.entries[0];
+    let empty = &page.rows[0].cells[0];
     let overlay = empty
         .translation
         .as_ref()
         .expect("an explicit empty target still has a unit");
     assert_eq!(overlay.translation_unit_id, empty_id);
     assert_eq!(overlay.target_macro, "");
-    assert!(page.entries[1].translation.is_none());
+    assert!(page.rows[1].cells[0].translation.is_none());
 }
 
 #[test]
@@ -361,19 +516,19 @@ fn translation_read_rejects_invalid_limits_and_cross_sheet_cursors() {
     let session = ProjectSession::open(repository.path(), &fixture.path).expect("session");
 
     assert!(matches!(
-        session.page_translation_entries("Synthetic", None, 0),
+        session.page_translation_rows("Synthetic", None, 0),
         Err(TranslationReadError::InvalidPageLimit { limit: 0, max })
             if max == MAX_TRANSLATION_PAGE_SIZE
     ));
     assert!(matches!(
-        session.page_translation_entries("Synthetic", None, MAX_TRANSLATION_PAGE_SIZE + 1),
+        session.page_translation_rows("Synthetic", None, MAX_TRANSLATION_PAGE_SIZE + 1),
         Err(TranslationReadError::InvalidPageLimit { limit, max })
             if limit == MAX_TRANSLATION_PAGE_SIZE + 1 && max == MAX_TRANSLATION_PAGE_SIZE
     ));
     assert!(matches!(
-        session.page_translation_entries(
+        session.page_translation_rows(
             "Synthetic",
-            Some(&SourceBinding::new("Other", 7, 0, 0)),
+            Some(&TranslationRowCursor::new("Other", 7, 0)),
             1,
         ),
         Err(TranslationReadError::CursorSheetMismatch {
@@ -415,9 +570,9 @@ fn translation_read_rejects_a_stale_sparse_unit_fingerprint_without_repairing_fi
 
     let session = ProjectSession::open(repository.path(), &fixture.path).expect("session");
     let error = session
-        .page_translation_entries(
+        .page_translation_rows(
             "Synthetic",
-            Some(&SourceBinding::new("Synthetic", 7, 0, 0)),
+            Some(&TranslationRowCursor::new("Synthetic", 7, 0)),
             2,
         )
         .expect_err("stale unit must fail the read");
@@ -448,9 +603,9 @@ fn translation_reads_do_not_modify_managed_workspace_files() {
     let mut after = None;
     loop {
         let page = session
-            .page_translation_entries("Synthetic", after.as_ref(), 1)
+            .page_translation_rows("Synthetic", after.as_ref(), 1)
             .expect("translation page");
-        assert!(page.entries.len() <= 1);
+        assert!(page.rows.len() <= 1);
         after = page.next_after;
         if after.is_none() {
             break;
@@ -479,9 +634,9 @@ fn session_mutations_create_update_and_read_back_the_committed_state() {
     assert_eq!(session.workspace().units().count(), 1);
 
     let page = session
-        .page_translation_entries("Synthetic", None, 2)
+        .page_translation_rows("Synthetic", None, 2)
         .expect("read after write");
-    let overlay = page.entries[1]
+    let overlay = page.rows[1].cells[0]
         .translation
         .as_ref()
         .expect("new target is visible immediately");
@@ -528,9 +683,9 @@ fn empty_target_creates_explicit_sparse_state() {
         .set_target(&binding, "")
         .expect("empty target should create a unit");
     let page = session
-        .page_translation_entries("Synthetic", None, 2)
+        .page_translation_rows("Synthetic", None, 2)
         .expect("read explicit empty target");
-    let overlay = page.entries[0]
+    let overlay = page.rows[0].cells[0]
         .translation
         .as_ref()
         .expect("empty target remains present");
@@ -1037,6 +1192,187 @@ fn write_fixture_with(source_language: &str, game_version: &str) -> Fixture {
     }
 }
 
+#[allow(clippy::too_many_lines)]
+fn write_projection_fixture() -> ProjectionFixture {
+    let directory = tempfile::tempdir().expect("create projection fixture directory");
+    let path = directory.path().join("projection.hxs");
+    let connection = Connection::open(&path).expect("create projection fixture database");
+    connection
+        .execute_batch(SYNTHETIC_SCHEMA)
+        .expect("create projection fixture schema");
+    connection
+        .execute_batch(&format!(
+            "PRAGMA application_id = {APPLICATION_ID}; PRAGMA user_version = 1; PRAGMA foreign_keys = ON;"
+        ))
+        .expect("set HXS identity");
+
+    let definitions = vec![
+        (
+            1,
+            ["TEXT_CONTEXT", "Greetings and welcome", "", ""]
+                .into_iter()
+                .map(str::to_owned)
+                .collect::<Vec<_>>(),
+        ),
+        (
+            2,
+            ["TEXT_EMPTY", "", "", ""]
+                .into_iter()
+                .map(str::to_owned)
+                .collect::<Vec<_>>(),
+        ),
+        (
+            3,
+            ["", "", "", ""]
+                .into_iter()
+                .map(str::to_owned)
+                .collect::<Vec<_>>(),
+        ),
+        (
+            4,
+            [
+                "fire shard",
+                "fire shards",
+                "A tiny crystalline manifestation",
+                "Fire Shard",
+            ]
+            .into_iter()
+            .map(str::to_owned)
+            .collect::<Vec<_>>(),
+        ),
+        (
+            5,
+            ["TEXT_ONLY", "", "", ""]
+                .into_iter()
+                .map(str::to_owned)
+                .collect::<Vec<_>>(),
+        ),
+    ];
+    let rows = definitions
+        .into_iter()
+        .map(|(row_id, texts)| {
+            let string_hashes = texts
+                .iter()
+                .map(|text| macro_hash(text))
+                .collect::<Vec<_>>();
+            let string_hash = row_strings_hash(
+                "Projection",
+                row_id,
+                0,
+                &(0..4)
+                    .map(|column| (column, string_hashes[column as usize], None))
+                    .collect::<Vec<_>>(),
+            );
+            let technical_hash = row_technical_hash("Projection", row_id, 0);
+            let row_hash = row_hash("Projection", row_id, 0, &technical_hash, &string_hash);
+            ProjectionRow {
+                row_id,
+                row_hash,
+                technical_hash,
+                string_hash,
+                strings: texts
+                    .into_iter()
+                    .enumerate()
+                    .map(|(column_index, macro_text)| ProjectionString {
+                        column_index: u32::try_from(column_index).expect("column fits"),
+                        macro_hash: macro_hash(&macro_text),
+                        macro_text,
+                    })
+                    .collect(),
+            }
+        })
+        .collect::<Vec<_>>();
+
+    let schema_hash =
+        schema_hash_for_columns("Projection", &[(0, 0, 1), (1, 4, 1), (2, 8, 1), (3, 12, 1)]);
+    let sheet_technical_hash = sheet_rows_hash(
+        "HARMONIA-HXS-V1-SHEET-TECHNICAL",
+        "Projection",
+        &rows
+            .iter()
+            .map(|row| (row.row_id, 0, row.technical_hash))
+            .collect::<Vec<_>>(),
+    );
+    let sheet_string_hash = sheet_rows_hash(
+        "HARMONIA-HXS-V1-SHEET-STRINGS",
+        "Projection",
+        &rows
+            .iter()
+            .map(|row| (row.row_id, 0, row.string_hash))
+            .collect::<Vec<_>>(),
+    );
+    let content_hash = digest(|hasher| {
+        hasher.update(b"HARMONIA-HXS-V1-SHEET");
+        framed_text(hasher, "Projection");
+        hasher.update(0_u32.to_le_bytes());
+        hasher.update(schema_hash);
+        hasher.update(sheet_technical_hash);
+        hasher.update(sheet_string_hash);
+    });
+    let content_id = format!(
+        "sha256:{}",
+        hex(&digest(|hasher| {
+            hasher.update(b"HARMONIA-HXS-CONTENT-v1");
+            framed_text(hasher, "en");
+            framed_text(hasher, "Projection");
+            framed_text(hasher, "en");
+            hasher.update(schema_hash);
+            hasher.update(content_hash);
+        }))
+    );
+    let snapshot_id = format!(
+        "sha256:{}",
+        hex(&digest(|hasher| {
+            hasher.update(b"HARMONIA-HXS-SNAPSHOT-v1");
+            framed_text(hasher, "projection");
+            framed_text(hasher, "en");
+            framed_text(hasher, &content_id);
+        }))
+    );
+
+    connection
+        .execute(
+            "INSERT INTO sheets (id, name, variant, effective_language, column_count, row_count, schema_hash, technical_hash, string_hash, content_hash) VALUES (1, 'Projection', 0, 'en', 4, 5, ?1, ?2, ?3, ?4)",
+            params![schema_hash.as_slice(), sheet_technical_hash.as_slice(), sheet_string_hash.as_slice(), content_hash.as_slice()],
+        )
+        .expect("insert projection sheet");
+    for (column_index, offset) in [(0_u32, 0_u32), (1, 4), (2, 8), (3, 12)] {
+        connection
+            .execute(
+                "INSERT INTO columns (sheet_id, column_index, offset, type) VALUES (1, ?1, ?2, 1)",
+                params![column_index, offset],
+            )
+            .expect("insert projection column");
+    }
+    for row in &rows {
+        connection
+            .execute(
+                "INSERT INTO rows (sheet_id, row_id, subrow_id, technical_payload, row_hash, technical_hash, string_hash) VALUES (1, ?1, 0, ?2, ?3, ?4, ?5)",
+                params![row.row_id, Vec::<u8>::new(), row.row_hash.as_slice(), row.technical_hash.as_slice(), row.string_hash.as_slice()],
+            )
+            .expect("insert projection row");
+        for string in &row.strings {
+            connection
+                .execute(
+                    "INSERT INTO string_cells (sheet_id, row_id, subrow_id, column_index, macro_text, raw_value, macro_hash, raw_hash) VALUES (1, ?1, 0, ?2, ?3, NULL, ?4, NULL)",
+                    params![row.row_id, string.column_index, string.macro_text, string.macro_hash.as_slice()],
+                )
+                .expect("insert projection String cell");
+        }
+    }
+    connection
+        .execute(
+            "INSERT INTO hxs_meta (id, format_version, game_version, language, scope, content_id, snapshot_id, extractor_version, lumina_version, sheet_count, row_count, string_cell_count) VALUES (1, 1, 'projection', 'en', 'full', ?1, ?2, 'test', '7.7.0', 1, 5, 20)",
+            params![content_id, snapshot_id],
+        )
+        .expect("insert projection metadata");
+
+    ProjectionFixture {
+        _directory: directory,
+        path,
+    }
+}
+
 fn macro_hash(value: &str) -> [u8; 32] {
     digest(|hasher| {
         hasher.update(b"HARMONIA-HXS-V1-MACRO");
@@ -1059,6 +1395,19 @@ fn schema_hash(sheet_name: &str) -> [u8; 32] {
         hasher.update(0_u32.to_le_bytes());
         hasher.update(0_u32.to_le_bytes());
         hasher.update(1_u32.to_le_bytes());
+    })
+}
+
+fn schema_hash_for_columns(sheet_name: &str, columns: &[(u32, u32, u32)]) -> [u8; 32] {
+    digest(|hasher| {
+        hasher.update(b"HARMONIA-HXS-V1-SCHEMA");
+        framed_text(hasher, sheet_name);
+        hasher.update(0_u32.to_le_bytes());
+        for (index, offset, type_code) in columns {
+            hasher.update(index.to_le_bytes());
+            hasher.update(offset.to_le_bytes());
+            hasher.update(type_code.to_le_bytes());
+        }
     })
 }
 
@@ -1085,6 +1434,26 @@ fn row_string_hash(
         hasher.update([u8::from(raw_hash.is_some())]);
         if let Some(raw_hash) = raw_hash {
             hasher.update(raw_hash);
+        }
+    })
+}
+
+fn row_strings_hash(
+    sheet_name: &str,
+    row_id: u32,
+    subrow_id: u16,
+    cells: &[StringHashSpec],
+) -> [u8; 32] {
+    digest(|hasher| {
+        hasher.update(b"HARMONIA-HXS-V1-ROW-STRINGS");
+        row_identity(hasher, sheet_name, row_id, subrow_id);
+        for (column_index, macro_hash, raw_hash) in cells {
+            hasher.update(column_index.to_le_bytes());
+            hasher.update(macro_hash);
+            hasher.update([u8::from(raw_hash.is_some())]);
+            if let Some(raw_hash) = raw_hash {
+                hasher.update(raw_hash);
+            }
         }
     })
 }

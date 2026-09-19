@@ -304,6 +304,43 @@ pub struct StringOccurrenceRecordPage {
     pub next_after: Option<StringOccurrenceCoordinate>,
 }
 
+/// The coordinate of one logical source row containing String cells.
+///
+/// This HXS-owned cursor deliberately stops at the physical row/subrow
+/// boundary. It does not depend on `aeria-core` and never includes a column.
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct StringRowCoordinate {
+    pub sheet_name: String,
+    pub row_id: u32,
+    pub subrow_id: u16,
+}
+
+impl StringRowCoordinate {
+    /// Creates a coordinate for a String-bearing source row.
+    #[must_use]
+    pub fn new(sheet_name: impl Into<String>, row_id: u32, subrow_id: u16) -> Self {
+        Self {
+            sheet_name: sheet_name.into(),
+            row_id,
+            subrow_id,
+        }
+    }
+}
+
+/// One physical source row and all of its verified String cells.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct StringRowRecord {
+    pub coordinate: StringRowCoordinate,
+    pub occurrences: Vec<StringOccurrenceRecord>,
+}
+
+/// A bounded keyset page of physical rows containing String cells.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct StringRowRecordPage {
+    pub rows: Vec<StringRowRecord>,
+    pub next_after: Option<StringRowCoordinate>,
+}
+
 /// One source String cell, including both source representations when available.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct StringCell {

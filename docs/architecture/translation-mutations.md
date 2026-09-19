@@ -73,7 +73,7 @@ persistence operation. The store may perform its existing global binding
 check when inserting a new durable unit.
 
 Successful mutations update the live workspace before returning, so
-`page_translation_entries` immediately reads the committed state from the
+`page_translation_rows` immediately reads the committed state from the
 same session. The persisted format, canonical JSON/JSONL encoding, identity
 derivation, source-binding contract, and target validation rules are
 unchanged.

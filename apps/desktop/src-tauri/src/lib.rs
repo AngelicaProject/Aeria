@@ -6,12 +6,13 @@ mod state;
 use serde::Serialize;
 
 pub use commands::{
-    close_project, current_project, initialize_project, open_project, page_translation_entries,
+    close_project, current_project, initialize_project, open_project, page_translation_rows,
     set_translation_note, set_translation_review_state, set_translation_target,
 };
 pub use dto::{
-    ProjectSheetDto, ProjectSummaryDto, ReviewStateDto, SourceBindingDto, TranslationEntryDto,
-    TranslationEntryPageDto, TranslationOverlayDto, TranslationUnitIdDto,
+    ProjectSheetDto, ProjectSummaryDto, ReviewStateDto, SourceBindingDto, TranslationCellDto,
+    TranslationContextCellDto, TranslationOverlayDto, TranslationRowCursorDto, TranslationRowDto,
+    TranslationRowPageDto, TranslationUnitIdDto,
 };
 pub use error::CommandError;
 pub use state::DesktopState;
@@ -46,7 +47,7 @@ pub fn run() {
             initialize_project,
             current_project,
             close_project,
-            page_translation_entries,
+            page_translation_rows,
             set_translation_target,
             set_translation_note,
             set_translation_review_state

@@ -22,8 +22,9 @@ mod session;
 pub use mutation::TranslationMutationError;
 pub use persistence::{WorkspaceStore, WorkspaceStoreError};
 pub use read::{
-    MAX_TRANSLATION_PAGE_SIZE, TranslationEntryPage, TranslationEntryView, TranslationOverlayView,
-    TranslationReadError,
+    MAX_TRANSLATION_PAGE_SIZE, TranslationCellView, TranslationContextCellView,
+    TranslationOverlayView, TranslationReadError, TranslationRowCursor, TranslationRowPage,
+    TranslationRowView,
 };
 pub use session::{ProjectSession, ProjectSessionError};
 

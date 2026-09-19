@@ -4,7 +4,8 @@ import type {
   ProjectSummaryDto,
   ReviewState,
   SourceBinding,
-  TranslationEntryPageDto,
+  TranslationRowCursorDto,
+  TranslationRowPageDto,
   TranslationUnitIdDto,
 } from "./types";
 
@@ -59,12 +60,12 @@ export function closeProject(): Promise<void> {
   return call<void>("close_project");
 }
 
-export function pageTranslationEntries(
+export function pageTranslationRows(
   sheetName: string,
-  after: SourceBinding | null,
+  after: TranslationRowCursorDto | null,
   limit: number,
-): Promise<TranslationEntryPageDto> {
-  return call<TranslationEntryPageDto>("page_translation_entries", {
+): Promise<TranslationRowPageDto> {
+  return call<TranslationRowPageDto>("page_translation_rows", {
     sheetName,
     after,
     limit,
