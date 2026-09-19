@@ -81,3 +81,6 @@ unchanged.
 Deletion/reset-to-untranslated, bulk or multi-shard transactions, source
 update/rebase, export, Git, AI, Tauri commands, and UI state are outside this
 layer's scope.
+
+The desktop application boundary delegates ordinary target, note, and review
+commands to this API and maps its typed failures to the IPC error contract.

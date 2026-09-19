@@ -34,3 +34,7 @@ mutations are provided by the separate
 Search, filtering, indexes, caches, source update/rebase, export, and UI
 remain separate layers. No UI owns authoritative source/workspace
 composition.
+
+The desktop application boundary maps this page to owned IPC DTOs and keeps
+the backend page-size bound and integrity failures intact; it does not query
+HXS or Workspace independently.
