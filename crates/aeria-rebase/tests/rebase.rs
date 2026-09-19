@@ -7,7 +7,8 @@ use aeria_core::{
 };
 use aeria_hxs::HxsSnapshot;
 use aeria_rebase::candidates::{
-    CandidateQuery, CandidateSuggester, MAX_GENERATED_CANDIDATES, MAX_RESULT_LIMIT,
+    CandidateQuery, CandidateSuggester, CandidateSuggestionError, MAX_GENERATED_CANDIDATES,
+    MAX_RESULT_LIMIT,
 };
 use aeria_rebase::{
     AutomaticEvidence, CandidateEvidence, CandidateEvidenceSummary, RebaseError, RebaseOutcome,
@@ -171,6 +172,55 @@ fn unique_exact_candidate_remains_only_a_review_suggestion() {
             .row_id(),
         1
     );
+}
+
+#[test]
+fn candidate_payload_snapshot_must_match_the_index_snapshot() {
+    let old_fixture = write_snapshot(&snapshot("old", vec![row(1, "Cancel", None, &[1])]));
+    let index_fixture = write_snapshot(&snapshot("new-a", vec![row(2, "Cancel", None, &[1])]));
+    let payload_fixture = write_snapshot(&snapshot("new-b", vec![row(3, "Cancel", None, &[1])]));
+    let old = HxsSnapshot::open(&old_fixture.path).expect("old HXS");
+    let index_snapshot = HxsSnapshot::open(&index_fixture.path).expect("new A HXS");
+    let payload_snapshot = HxsSnapshot::open(&payload_fixture.path).expect("new B HXS");
+    let mut workspace = Workspace::from_verified_snapshot(&old, "fr").expect("workspace");
+    let id = workspace
+        .create_unit_from_hxs(&old, "台詞", 1, 0, 0, "target")
+        .expect("unit");
+    let unit = workspace.units().next().expect("unit view");
+    let error = CandidateSuggester::from_snapshot(&index_snapshot)
+        .expect("candidate index")
+        .suggest(CandidateQuery::new(id), unit, &old, &payload_snapshot)
+        .expect_err("different payload snapshot must be rejected");
+    assert!(matches!(
+        error,
+        CandidateSuggestionError::NewSnapshotMismatch { .. }
+    ));
+}
+
+#[test]
+fn old_payload_must_match_the_managed_unit_baseline() {
+    let managed_fixture = write_snapshot(&snapshot("old-a", vec![row(1, "Cancel", None, &[1])]));
+    let supplied_fixture = write_snapshot(&snapshot("old-b", vec![row(1, "Changed", None, &[1])]));
+    let new_fixture = write_snapshot(&snapshot("new", vec![row(2, "Cancel", None, &[1])]));
+    let managed_snapshot = HxsSnapshot::open(&managed_fixture.path).expect("old A HXS");
+    let supplied_snapshot = HxsSnapshot::open(&supplied_fixture.path).expect("old B HXS");
+    let new = HxsSnapshot::open(&new_fixture.path).expect("new HXS");
+    let mut workspace =
+        Workspace::from_verified_snapshot(&managed_snapshot, "fr").expect("workspace");
+    let id = workspace
+        .create_unit_from_hxs(&managed_snapshot, "台詞", 1, 0, 0, "target")
+        .expect("unit");
+    let unit = workspace.units().next().expect("unit view");
+    let error = CandidateSuggester::from_snapshot(&new)
+        .expect("candidate index")
+        .suggest(CandidateQuery::new(id), unit, &supplied_snapshot, &new)
+        .expect_err("stale old payload must be rejected");
+    assert!(matches!(
+        error,
+        CandidateSuggestionError::OldBaselineVerification(
+            RebaseError::OldFingerprintMismatch { .. }
+        )
+    ));
 }
 
 #[test]

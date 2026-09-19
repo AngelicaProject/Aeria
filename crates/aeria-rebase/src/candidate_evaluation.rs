@@ -74,11 +74,18 @@ fn synthetic_corpus_reports_blocking_and_ranking_metrics_deterministically() {
     let second = evaluate(&corpus);
     assert_eq!(first, second);
     println!("candidate evaluation: {}", first.report());
+    assert_eq!(first.valid_cases, 27);
     assert_eq!(first.no_valid_candidate_cases, 1);
-    assert!(first.pool_hits <= first.valid_cases);
-    assert!(first.recall_at_1 <= first.recall_at_3);
-    assert!(first.recall_at_3 <= first.recall_at_5);
-    assert!(first.recall_at_5 <= first.recall_at_10);
+    assert_eq!(first.pool_hits, 26);
+    assert_eq!(first.recall_at_1, 25);
+    assert_eq!(first.recall_at_3, 26);
+    assert_eq!(first.recall_at_5, 26);
+    assert_eq!(first.recall_at_10, 26);
+    let mrr = first.reciprocal_rank_sum / as_f64(first.valid_cases);
+    assert!(
+        (mrr - 0.944).abs() < 0.0005,
+        "unexpected MRR baseline: {mrr:.6}"
+    );
 }
 
 fn evaluate(corpus: &[EvaluationPair]) -> Metrics {

@@ -29,6 +29,13 @@ adds a bounded same-sheet/same-column coordinate neighborhood. Duplicate
 indexes are merged in canonical source order and capped at
 `MAX_GENERATED_CANDIDATES` (currently 128).
 
+The suggester retains the verified `SnapshotMetadata` from construction and
+rejects any different snapshot passed for payload reads. Before reading the
+old macro payload, it reuses the planner's old-baseline verification, including
+the persisted macro/raw/row-technical fingerprint checks. Ranking therefore
+cannot combine an index, new payload, or old payload from an unverified source
+state.
+
 Full macro payloads are read only for that bounded pool. A unit whose binding
 survives in the prepared new snapshot receives no suggestions and does not
 compete with other coordinates. The query result is capped by
@@ -58,6 +65,13 @@ structure and coordinate facts are ranking evidence only. Opaque but valid
 macros remain supported by the `aeria-se` projection; malformed input is not
 silently treated as safe structure.
 
+The expensive edit scorer has an explicit per-candidate budget of at most
+65,536 edit-matrix cells. It reuses two dynamic-programming buffers for work
+within that budget. Larger normalized inputs use a deterministic positional
+overlap fallback, so the 128-candidate pool cannot create an unbounded
+quadratic scoring cost. This is a computational bound, not a confidence
+threshold.
+
 Every equal score uses canonical source order as the final tie-break:
 `sheet_name`, `row_id`, `subrow_id`, then `column_index`. The score is a
 ranking value, not a probability or calibrated confidence, and the top result
@@ -69,8 +83,12 @@ The offline evaluation harness keeps logical-origin labels in the evaluation
 oracle only. Production blocking and ranking receive source facts, not those
 labels. It reports candidate-pool recall separately from final recall@1,
 recall@3, recall@5, recall@10, and MRR; cases with no valid candidate are
-reported separately. Its source-pair abstraction can later be backed by real
-historical HXS pairs without changing the production interface.
+reported separately. The current 28-case corpus freezes integer regression
+baselines of 27 valid cases, 1 no-valid case, pool hits 26, recall@1 hits 25,
+and recall@3/5/10 hits 26. These are deterministic regression gates, not
+confidence claims or representative production accuracy for historical FFXIV
+updates. Its source-pair abstraction can later be backed by real historical
+HXS pairs without changing the production interface.
 
 Suggestion lists, scores, normalized text, pool contents, and ranker versions
 are disposable snapshot-dependent state. Workspace Format v1 is unchanged;

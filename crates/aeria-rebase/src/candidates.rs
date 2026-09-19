@@ -14,7 +14,8 @@ use aeria_core::{
     Sha256Hash, SourceBinding, SourceFingerprint, TranslationUnit, TranslationUnitId,
 };
 use aeria_hxs::{
-    HxsError, HxsSnapshot, MAX_STRING_OCCURRENCE_PAGE_SIZE, StringOccurrenceCoordinate,
+    HxsError, HxsSnapshot, MAX_STRING_OCCURRENCE_PAGE_SIZE, SnapshotMetadata,
+    StringOccurrenceCoordinate,
 };
 use aeria_se::{SemanticAnalysis, StructureCompatibility, TextRangeKind};
 use thiserror::Error;
@@ -29,6 +30,10 @@ pub const MAX_RESULT_LIMIT: usize = 50;
 
 /// The largest bounded pool ranked for one query.
 pub const MAX_GENERATED_CANDIDATES: usize = 128;
+
+/// The maximum number of edit-distance matrix cells evaluated for one
+/// candidate. Larger inputs use the deterministic bounded fallback scorer.
+pub const MAX_EDIT_MATRIX_CELLS: usize = 65_536;
 
 const COORDINATE_NEIGHBOR_RADIUS: usize = 32;
 const MAX_NORMALIZED_TEXT_SCALARS: usize = 4096;
@@ -101,6 +106,21 @@ pub enum CandidateSuggestionError {
         #[source]
         source: HxsError,
     },
+
+    /// The payload snapshot does not match the snapshot used to build the
+    /// lightweight candidate index.
+    #[error(
+        "candidate payload snapshot does not match index snapshot: expected {expected_snapshot_id:?}, found {found_snapshot_id:?}"
+    )]
+    NewSnapshotMismatch {
+        expected_snapshot_id: String,
+        found_snapshot_id: String,
+    },
+
+    /// The old snapshot does not satisfy the planner's persisted baseline
+    /// fingerprint contract for the managed unit.
+    #[error("old source baseline verification failed: {0}")]
+    OldBaselineVerification(#[source] crate::RebaseError),
 
     /// Building the bounded source index failed.
     #[error("could not enumerate new HXS String occurrences: {0}")]
@@ -219,6 +239,7 @@ pub struct SourceCandidate {
 #[derive(Clone, Debug)]
 pub struct CandidateSuggester {
     index: CandidateIndex,
+    new_snapshot_metadata: SnapshotMetadata,
 }
 
 impl CandidateSuggester {
@@ -233,6 +254,7 @@ impl CandidateSuggester {
     pub fn from_snapshot(snapshot: &HxsSnapshot) -> Result<Self, CandidateSuggestionError> {
         Ok(Self {
             index: CandidateIndex::read(snapshot).map_err(CandidateSuggestionError::IndexRead)?,
+            new_snapshot_metadata: snapshot.metadata(),
         })
     }
 
@@ -266,10 +288,21 @@ impl CandidateSuggester {
             });
         }
 
+        let found_snapshot_metadata = new_snapshot.metadata();
+        if found_snapshot_metadata != self.new_snapshot_metadata {
+            return Err(CandidateSuggestionError::NewSnapshotMismatch {
+                expected_snapshot_id: self.new_snapshot_metadata.snapshot_id.clone(),
+                found_snapshot_id: found_snapshot_metadata.snapshot_id,
+            });
+        }
+
         let limit = query.effective_limit();
         if limit == 0 || self.index.contains_binding(unit.source_binding()) {
             return Ok(Vec::new());
         }
+
+        crate::verify_old_baseline(unit, old_snapshot)
+            .map_err(CandidateSuggestionError::OldBaselineVerification)?;
 
         let old_cell = old_snapshot
             .string_cell(
@@ -475,7 +508,7 @@ impl CandidateIndex {
 
 struct PreparedSource {
     analysis: SemanticAnalysis,
-    visible_text: String,
+    visible_scalars: Vec<char>,
 }
 
 fn rank_candidates(
@@ -511,8 +544,8 @@ fn rank_candidates(
                 exactness,
                 protected_structure: structure,
                 visible_text_similarity: normalized_edit_similarity(
-                    &old_source.visible_text,
-                    &prepared.visible_text,
+                    &old_source.visible_scalars,
+                    &prepared.visible_scalars,
                 ),
                 same_sheet,
                 same_column,
@@ -560,9 +593,11 @@ impl PreparedSource {
                 }
             }
         }
+        let visible_text = normalize_visible_text(&visible);
+        let visible_scalars = visible_text.chars().collect();
         Self {
             analysis,
-            visible_text: normalize_visible_text(&visible),
+            visible_scalars,
         }
     }
 }
@@ -597,29 +632,66 @@ fn structure_match(old: &SemanticAnalysis, new: &SemanticAnalysis) -> ProtectedS
     }
 }
 
-fn normalized_edit_similarity(old: &str, new: &str) -> u16 {
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum EditSimilarityPath {
+    FullMatrix,
+    BoundedFallback,
+}
+
+fn normalized_edit_similarity(old: &[char], new: &[char]) -> u16 {
+    edit_similarity(old, new).0
+}
+
+fn edit_similarity(old: &[char], new: &[char]) -> (u16, EditSimilarityPath) {
     if old == new {
-        return 1000;
+        return (1000, EditSimilarityPath::FullMatrix);
     }
-    let old: Vec<_> = old.chars().collect();
-    let new: Vec<_> = new.chars().collect();
     if old.is_empty() || new.is_empty() {
-        return 0;
+        return (0, EditSimilarityPath::FullMatrix);
     }
-    let mut previous: Vec<usize> = (0..=new.len()).collect();
-    for (old_index, old_character) in old.iter().enumerate() {
-        let mut current = vec![old_index + 1; new.len() + 1];
-        for (new_index, new_character) in new.iter().enumerate() {
-            let substitution = previous[new_index] + usize::from(old_character != new_character);
-            current[new_index + 1] = (current[new_index] + 1)
-                .min(previous[new_index + 1] + 1)
+
+    let matrix_cells = old.len().saturating_mul(new.len());
+    if matrix_cells > MAX_EDIT_MATRIX_CELLS {
+        return (
+            bounded_overlap_similarity(old, new),
+            EditSimilarityPath::BoundedFallback,
+        );
+    }
+
+    let (short, long) = if old.len() <= new.len() {
+        (old, new)
+    } else {
+        (new, old)
+    };
+    let mut previous: Vec<usize> = (0..=short.len()).collect();
+    let mut current = vec![0; short.len() + 1];
+    for (long_index, long_character) in long.iter().enumerate() {
+        current[0] = long_index + 1;
+        for (short_index, short_character) in short.iter().enumerate() {
+            let substitution =
+                previous[short_index] + usize::from(long_character != short_character);
+            current[short_index + 1] = (current[short_index] + 1)
+                .min(previous[short_index + 1] + 1)
                 .min(substitution);
         }
-        previous = current;
+        std::mem::swap(&mut previous, &mut current);
     }
-    let distance = previous[new.len()];
+    let distance = previous[short.len()];
     let longest = old.len().max(new.len());
-    u16::try_from(((longest - distance) * 1000) / longest).unwrap_or(0)
+    (
+        u16::try_from(((longest - distance) * 1000) / longest).unwrap_or(0),
+        EditSimilarityPath::FullMatrix,
+    )
+}
+
+fn bounded_overlap_similarity(old: &[char], new: &[char]) -> u16 {
+    let matching_scalars = old
+        .iter()
+        .zip(new)
+        .filter(|(old_character, new_character)| old_character == new_character)
+        .count();
+    let longest = old.len().max(new.len());
+    u16::try_from((matching_scalars * 1000) / longest).unwrap_or(0)
 }
 
 fn coordinate_distance(old: &SourceBinding, new: &SourceBinding) -> u64 {
@@ -650,16 +722,33 @@ mod tests {
 
     #[test]
     fn edit_similarity_is_deterministic_and_bounded() {
-        assert_eq!(normalized_edit_similarity("same", "same"), 1000);
-        assert!(normalized_edit_similarity("same", "sane") > 700);
-        assert!(normalized_edit_similarity("same", "different") < 500);
-        assert_eq!(normalized_edit_similarity("", "value"), 0);
+        let score = |old: &str, new: &str| {
+            let old: Vec<_> = old.chars().collect();
+            let new: Vec<_> = new.chars().collect();
+            normalized_edit_similarity(&old, &new)
+        };
+        assert_eq!(score("same", "same"), 1000);
+        assert!(score("same", "sane") > 700);
+        assert!(score("same", "different") < 500);
+        assert_eq!(score("", "value"), 0);
+    }
+
+    #[test]
+    fn long_edit_similarity_uses_the_bounded_fallback() {
+        let old = vec!['a'; 4096];
+        let new = vec!['b'; 4096];
+        let first = edit_similarity(&old, &new);
+        let second = edit_similarity(&old, &new);
+        assert_eq!(first.1, EditSimilarityPath::BoundedFallback);
+        assert_eq!(first, second);
+        assert_eq!(first.0, 0);
     }
 
     #[test]
     fn opaque_valid_macros_have_visible_text_and_are_not_rejected() {
         let prepared = PreparedSource::new("before<UnknownFuture(1)>after");
-        assert_eq!(prepared.visible_text, "beforeafter");
+        let visible: String = prepared.visible_scalars.iter().collect();
+        assert_eq!(visible, "beforeafter");
         assert!(!matches!(
             prepared.analysis.validation().status(),
             aeria_se::SemanticValidity::InvalidUnsafe
