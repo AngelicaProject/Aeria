@@ -8,17 +8,22 @@ The Rust core consumes a validated HSP and does not depend on how the package
 was produced. Atlas process integration is a desktop workflow outside the
 package-consumption boundary.
 
-When creating a project from an installed game, Aeria launches a pinned,
-bundled Harmonia Atlas sidecar with its `package --events jsonl` command. The
+When creating a project from an installed game, Aeria launches the pinned
+Harmonia Atlas v0.2.0 sidecar with its `package --events jsonl` command. The
 JSONL stream is the process boundary: stdout is typed protocol data and stderr
-is bounded diagnostics. Cancellation terminates and awaits the child. After a
-completed event, Aeria publishes the immutable HSP under app data at
-`source-packages/<package-id-hex>.hsp`, validates it through `aeria-hsp`, and
-transfers the validated package into `ProjectSession` without reopening it.
-Atlas is acquired only at build time from a pinned release with a verified
-checksum; runtime downloads are not used. Materialized HXS files remain
-disposable app-cache artifacts, and Workspace Format v1 remains independent of
-game paths, Atlas paths, package IDs, and cache paths.
+is bounded diagnostics. Cancellation terminates and awaits the child, then
+remains authoritative through package validation, workspace initialization, and
+active-project publication. Atlas writes the generated HSP to the deterministic
+app-data staging path `source-packages/staging/source.hsp`; Aeria validates that
+staging artifact and checks its package ID against Atlas before atomically moving
+it to the immutable `source-packages/<package-id-hex>.hsp` path. A validated
+package is transferred into `ProjectSession` without reopening it. Existing
+valid immutable collisions are reused, while invalid collisions are replaced
+only after the new staging package is validated. Atlas is acquired only at
+build time from this pinned release with a verified checksum; runtime downloads
+are not used. Materialized HXS files remain disposable app-cache artifacts, and
+Workspace Format v1 remains independent of game paths, Atlas paths, package IDs,
+and cache paths.
 
 ## Import verification
 

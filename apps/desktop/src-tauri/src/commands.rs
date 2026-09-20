@@ -132,11 +132,12 @@ pub async fn initialize_project_from_game(
     let job_id = started.id.clone();
     let token = started.token;
     let worker_job_id = job_id.clone();
+    let worker_token = token.clone();
     let worker = tauri::async_runtime::spawn_blocking(move || {
         initialize_project_from_game_inner(
             &app,
             &worker_job_id,
-            &token,
+            &worker_token,
             repository_root,
             game_path,
             source_language,
@@ -149,8 +150,27 @@ pub async fn initialize_project_from_game(
             "Atlas creation worker failed: {error}"
         ))),
     };
-    state.finish_atlas_job(&job_id)?;
-    result.and_then(|replacement| replace_project(&state, replacement))
+    match result {
+        Ok(prepared) => {
+            let result = state.with_atlas_publication(&job_id, &token, |_| {
+                require_not_cancelled(&token)?;
+                let replacement = ProjectSession::initialize_from_source_package(
+                    prepared.repository_root,
+                    prepared.source_package,
+                    prepared.target_language,
+                )
+                .map_err(CommandError::from)?;
+                require_not_cancelled(&token)?;
+                replace_project(&state, replacement)
+            });
+            state.finish_atlas_job(&job_id)?;
+            result
+        }
+        Err(error) => {
+            state.finish_atlas_job(&job_id)?;
+            Err(error)
+        }
+    }
 }
 
 /// Cancels the active source-package generation job with the supplied ID.
@@ -174,7 +194,7 @@ fn initialize_project_from_game_inner(
     game_path: String,
     source_language: String,
     target_language: String,
-) -> Result<ProjectSession, CommandError> {
+) -> Result<PreparedAtlasProject, CommandError> {
     let executable_path = resolve_atlas_executable(app)?;
     let app_data = app
         .path()
@@ -212,27 +232,26 @@ fn initialize_project_from_game_inner(
         )
         .map_err(CommandError::from)?;
 
-    let source_package =
-        publish_and_open_package(&result, &staging_path, &packages_root, &cache_root)?;
-    if source_package.package_id() != result.package_id {
-        let _ = fs::remove_file(source_package.package_path());
-        return Err(CommandError::new(
-            "atlasPackage",
-            format!(
-                "completed packageId {} does not match validated HSP packageId {}",
-                result.package_id,
-                source_package.package_id()
-            ),
-        ));
-    }
-
-    let replacement = ProjectSession::initialize_from_source_package(
+    require_not_cancelled_with_staging(cancellation, &staging_path)?;
+    let source_package = validate_and_publish_package(
+        &result,
+        &staging_path,
+        &packages_root,
+        &cache_root,
+        cancellation,
+    )?;
+    require_not_cancelled(cancellation)?;
+    Ok(PreparedAtlasProject {
         repository_root,
         source_package,
         target_language,
-    )
-    .map_err(CommandError::from)?;
-    Ok(replacement)
+    })
+}
+
+struct PreparedAtlasProject {
+    repository_root: String,
+    source_package: SourcePackage,
+    target_language: String,
 }
 
 fn resolve_atlas_executable(app: &tauri::AppHandle) -> CommandResult<PathBuf> {
@@ -287,71 +306,144 @@ fn resolve_atlas_executable(app: &tauri::AppHandle) -> CommandResult<PathBuf> {
         })
 }
 
-fn publish_and_open_package(
+fn validate_and_publish_package(
     result: &AtlasPackageResult,
     staging_path: &Path,
     packages_root: &Path,
     cache_root: &Path,
+    cancellation: &CancellationToken,
 ) -> CommandResult<SourcePackage> {
+    validate_and_publish_package_with_hook(
+        result,
+        staging_path,
+        packages_root,
+        cache_root,
+        cancellation,
+        || {},
+    )
+}
+
+fn validate_and_publish_package_with_hook<F>(
+    result: &AtlasPackageResult,
+    staging_path: &Path,
+    packages_root: &Path,
+    cache_root: &Path,
+    cancellation: &CancellationToken,
+    on_validated: F,
+) -> CommandResult<SourcePackage>
+where
+    F: FnOnce(),
+{
     let package_hex = result
         .package_id
         .strip_prefix("sha256:")
         .ok_or_else(|| CommandError::new("atlasPackage", "Atlas packageId is not canonical"))?;
     let final_path = packages_root.join(format!("{package_hex}.hsp"));
 
-    if final_path.exists() {
-        if let Ok(existing) = SourcePackage::open(&final_path, cache_root)
-            && existing.package_id() == result.package_id
-        {
-            fs::remove_file(staging_path)
-                .map_err(|error| storage_error("remove reused staging package", &error))?;
-            return Ok(existing);
+    if final_path.exists()
+        && let Ok(existing) = SourcePackage::open(&final_path, cache_root)
+        && existing.package_id() == result.package_id
+    {
+        require_not_cancelled_with_staging(cancellation, staging_path)?;
+        remove_staging_package(staging_path, "remove reused staging package")?;
+        return Ok(existing);
+    }
+
+    require_not_cancelled_with_staging(cancellation, staging_path)?;
+    let validated = match SourcePackage::open(staging_path, cache_root) {
+        Ok(source_package) => source_package,
+        Err(error) => {
+            remove_staging_package(staging_path, "remove invalid staging package")?;
+            return Err(CommandError::new("atlasPackage", error.to_string()));
         }
-        replace_invalid_final(staging_path, &final_path)?;
+    };
+    if validated.package_id() != result.package_id {
+        let package_id = validated.package_id().to_owned();
+        remove_staging_package(staging_path, "remove mismatched staging package")?;
+        return Err(CommandError::new(
+            "atlasPackage",
+            format!(
+                "validated HSP packageId {package_id} does not match Atlas packageId {}",
+                result.package_id
+            ),
+        ));
+    }
+    on_validated();
+    require_not_cancelled_with_staging(cancellation, staging_path)?;
+
+    if final_path.exists() {
+        let backup_path = final_path.with_extension("hsp.invalid");
+        if backup_path.exists() {
+            fs::remove_file(&backup_path)
+                .map_err(|error| storage_error("remove stale invalid package backup", &error))?;
+        }
+        fs::rename(&final_path, &backup_path)
+            .map_err(|error| storage_error("stage invalid package replacement", &error))?;
+        if cancellation.is_cancelled() {
+            let restore = fs::rename(&backup_path, &final_path);
+            let _ = remove_staging_package(staging_path, "remove cancelled staging package");
+            if let Err(error) = restore {
+                return Err(storage_error(
+                    "restore invalid package after cancellation",
+                    &error,
+                ));
+            }
+            return Err(cancelled_error());
+        }
+        match fs::rename(staging_path, &final_path) {
+            Ok(()) => {
+                fs::remove_file(&backup_path)
+                    .map_err(|error| storage_error("remove invalid package backup", &error))?;
+                Ok(validated.relocate_package_path(final_path))
+            }
+            Err(error) => {
+                let _ = fs::rename(&backup_path, &final_path);
+                Err(storage_error("publish replacement source package", &error))
+            }
+        }
     } else {
         fs::rename(staging_path, &final_path)
             .map_err(|error| storage_error("atomically publish source package", &error))?;
-    }
-
-    match SourcePackage::open(&final_path, cache_root) {
-        Ok(source_package) if source_package.package_id() == result.package_id => {
-            Ok(source_package)
-        }
-        Ok(source_package) => {
-            let package_id = source_package.package_id().to_owned();
-            let _ = fs::remove_file(&final_path);
-            Err(CommandError::new(
-                "atlasPackage",
-                format!(
-                    "validated HSP packageId {package_id} does not match Atlas packageId {}",
-                    result.package_id
-                ),
-            ))
-        }
-        Err(error) => {
-            let _ = fs::remove_file(&final_path);
-            Err(CommandError::new("atlasPackage", error.to_string()))
-        }
+        Ok(validated.relocate_package_path(final_path))
     }
 }
 
-fn replace_invalid_final(staging_path: &Path, final_path: &Path) -> CommandResult<()> {
-    let backup_path = final_path.with_extension("hsp.invalid");
-    if backup_path.exists() {
-        fs::remove_file(&backup_path)
-            .map_err(|error| storage_error("remove stale invalid package backup", &error))?;
+fn remove_staging_package(path: &Path, operation: &str) -> CommandResult<()> {
+    match fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(storage_error(operation, &error)),
     }
-    fs::rename(final_path, &backup_path)
-        .map_err(|error| storage_error("stage invalid package replacement", &error))?;
-    match fs::rename(staging_path, final_path) {
-        Ok(()) => {
-            let _ = fs::remove_file(backup_path);
-            Ok(())
-        }
-        Err(error) => {
-            let _ = fs::rename(&backup_path, final_path);
-            Err(storage_error("publish replacement source package", &error))
-        }
+}
+
+fn cancelled_error() -> CommandError {
+    CommandError::new("atlasCancelled", "Atlas project creation was cancelled")
+}
+
+fn require_not_cancelled(cancellation: &CancellationToken) -> CommandResult<()> {
+    if cancellation.is_cancelled() {
+        Err(cancelled_error())
+    } else {
+        Ok(())
+    }
+}
+
+fn require_not_cancelled_with_staging(
+    cancellation: &CancellationToken,
+    staging_path: &Path,
+) -> CommandResult<()> {
+    if cancellation.is_cancelled() {
+        remove_staging_package(staging_path, "remove cancelled staging package").map_err(
+            |error| {
+                CommandError::new(
+                    "atlasCancelled",
+                    format!("Atlas project creation was cancelled: {}", error.message),
+                )
+            },
+        )?;
+        Err(cancelled_error())
+    } else {
+        Ok(())
     }
 }
 
@@ -770,7 +862,14 @@ mod tests {
             output_path: staging.clone(),
             completed_metadata: std::collections::BTreeMap::new(),
         };
-        let reused = publish_and_open_package(&result, &staging, &existing, &cache).expect("reuse");
+        let reused = validate_and_publish_package(
+            &result,
+            &staging,
+            &existing,
+            &cache,
+            &CancellationToken::default(),
+        )
+        .expect("reuse");
         assert_eq!(reused.package_id(), result.package_id);
         assert!(!staging.exists());
         assert!(final_path.exists());
@@ -797,11 +896,171 @@ mod tests {
             output_path: staging.clone(),
             completed_metadata: std::collections::BTreeMap::new(),
         };
-        let replacement =
-            publish_and_open_package(&result, &staging, &existing, &cache).expect("replace");
+        let replacement = validate_and_publish_package(
+            &result,
+            &staging,
+            &existing,
+            &cache,
+            &CancellationToken::default(),
+        )
+        .expect("replace");
         assert_eq!(replacement.package_id(), result.package_id);
         assert!(!staging.exists());
         assert!(final_path.exists());
         assert!(!final_path.with_extension("hsp.invalid").exists());
+    }
+
+    #[test]
+    fn new_package_is_validated_before_final_publication() {
+        let temp = TestRepository::new("package-new");
+        let fixture = fixture_path();
+        let cache = temp.path().join("cache");
+        let packages = temp.path().join("source-packages");
+        let staging = packages.join("staging/source.hsp");
+        fs::create_dir_all(staging.parent().expect("staging parent")).expect("staging");
+        fs::copy(&fixture, &staging).expect("staging package");
+        let package = SourcePackage::open(&fixture, &cache).expect("fixture package");
+        let final_path = packages.join(format!(
+            "{}.hsp",
+            package.package_id().strip_prefix("sha256:").expect("hash")
+        ));
+        let result = AtlasPackageResult {
+            package_id: package.package_id().to_owned(),
+            output_path: staging.clone(),
+            completed_metadata: std::collections::BTreeMap::new(),
+        };
+        let published = validate_and_publish_package_with_hook(
+            &result,
+            &staging,
+            &packages,
+            &cache,
+            &CancellationToken::default(),
+            || assert!(!final_path.exists()),
+        )
+        .expect("publish new package");
+
+        assert_eq!(published.package_path(), final_path);
+        assert!(!staging.exists());
+        assert!(final_path.is_file());
+    }
+
+    #[test]
+    fn staging_package_id_mismatch_is_removed_without_creating_final() {
+        let temp = TestRepository::new("package-mismatch");
+        let fixture = fixture_path();
+        let cache = temp.path().join("cache");
+        let packages = temp.path().join("source-packages");
+        let staging = packages.join("staging/source.hsp");
+        fs::create_dir_all(staging.parent().expect("staging parent")).expect("staging");
+        fs::copy(&fixture, &staging).expect("staging package");
+        let result = AtlasPackageResult {
+            package_id: "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+                .to_owned(),
+            output_path: staging.clone(),
+            completed_metadata: std::collections::BTreeMap::new(),
+        };
+
+        let Err(error) = validate_and_publish_package(
+            &result,
+            &staging,
+            &packages,
+            &cache,
+            &CancellationToken::default(),
+        ) else {
+            panic!("package ID mismatch must fail")
+        };
+        assert_eq!(error.code, "atlasPackage");
+        assert!(!staging.exists());
+        assert!(
+            !packages
+                .join("ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff.hsp")
+                .exists()
+        );
+    }
+
+    #[test]
+    fn invalid_staging_leaves_invalid_final_untouched() {
+        let temp = TestRepository::new("package-invalid-staging");
+        let cache = temp.path().join("cache");
+        let packages = temp.path().join("source-packages");
+        let staging = packages.join("staging/source.hsp");
+        fs::create_dir_all(staging.parent().expect("staging parent")).expect("staging");
+        fs::write(&staging, b"invalid new package").expect("invalid staging");
+        let package_id = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        let final_path = packages.join(format!(
+            "{}.hsp",
+            package_id.strip_prefix("sha256:").expect("hash")
+        ));
+        let before = b"invalid old package";
+        fs::write(&final_path, before).expect("invalid final");
+        let result = AtlasPackageResult {
+            package_id: package_id.to_owned(),
+            output_path: staging.clone(),
+            completed_metadata: std::collections::BTreeMap::new(),
+        };
+
+        let Err(error) = validate_and_publish_package(
+            &result,
+            &staging,
+            &packages,
+            &cache,
+            &CancellationToken::default(),
+        ) else {
+            panic!("invalid staging must fail")
+        };
+        assert_eq!(error.code, "atlasPackage");
+        assert_eq!(fs::read(&final_path).expect("final bytes"), before);
+        assert!(!staging.exists());
+        assert!(!final_path.with_extension("hsp.invalid").exists());
+    }
+
+    #[test]
+    fn cancel_after_completed_prevents_workspace_and_active_project_publication() {
+        let temp = TestRepository::new("cancel-after-completed");
+        let fixture = fixture_path();
+        let cache = temp.path().join("cache");
+        let packages = temp.path().join("source-packages");
+        let staging = packages.join("staging/source.hsp");
+        fs::create_dir_all(staging.parent().expect("staging parent")).expect("staging");
+        fs::copy(&fixture, &staging).expect("staging package");
+        let package = SourcePackage::open(&fixture, &cache).expect("fixture package");
+        let result = AtlasPackageResult {
+            package_id: package.package_id().to_owned(),
+            output_path: staging.clone(),
+            completed_metadata: std::collections::BTreeMap::new(),
+        };
+        let (token, handle) = CancellationToken::new();
+        let state = DesktopState::new();
+        let started = state.start_atlas_job().expect("Atlas job");
+        assert_eq!(started.id, "atlas-0000000000000001");
+
+        let error = state
+            .with_atlas_publication(&started.id, &token, |_| {
+                let source_package = validate_and_publish_package_with_hook(
+                    &result,
+                    &staging,
+                    &packages,
+                    &cache,
+                    &token,
+                    || handle.cancel(),
+                )?;
+                require_not_cancelled(&token)?;
+                let replacement = ProjectSession::initialize_from_source_package(
+                    temp.path().to_owned(),
+                    source_package,
+                    "fr",
+                )
+                .map_err(CommandError::from)?;
+                require_not_cancelled(&token)?;
+                replace_project(&state, replacement)
+            })
+            .expect_err("cancelled completed flow");
+        assert_eq!(error.code, "atlasCancelled");
+        assert_eq!(
+            current_project_with_state(&state).expect("current project"),
+            None
+        );
+        assert!(!temp.path().join(".aeria").exists());
+        state.finish_atlas_job(&started.id).expect("finish job");
     }
 }

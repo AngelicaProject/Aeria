@@ -246,6 +246,17 @@ impl SourcePackage {
         &self.package_path
     }
 
+    /// Moves the runtime package path after the package has already been
+    /// fully validated.
+    ///
+    /// This only updates the path carried by the validated runtime object. It
+    /// does not reopen the archive or repeat any HSP, HXS, or HSG validation.
+    #[must_use]
+    pub fn relocate_package_path(mut self, package_path: impl Into<PathBuf>) -> Self {
+        self.package_path = package_path.into();
+        self
+    }
+
     /// The logical package identity from the validated manifest.
     #[must_use]
     pub fn package_id(&self) -> &str {

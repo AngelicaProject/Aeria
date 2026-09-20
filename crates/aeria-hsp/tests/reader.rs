@@ -87,6 +87,19 @@ fn valid_cache_is_reused_only_after_component_verification() {
 }
 
 #[test]
+fn validated_package_can_relocate_its_runtime_path_without_reopening() {
+    let cache = tempdir().expect("cache directory");
+    let package = SourcePackage::open(fixture_path(), cache.path()).expect("valid package");
+    let package_id = package.package_id().to_owned();
+    let source_snapshot_id = package.source_snapshot_id().to_owned();
+    let relocated = package.relocate_package_path("published.hsp");
+
+    assert_eq!(relocated.package_path(), Path::new("published.hsp"));
+    assert_eq!(relocated.package_id(), package_id);
+    assert_eq!(relocated.source_snapshot_id(), source_snapshot_id);
+}
+
+#[test]
 fn invalid_zip_duplicate_and_unlisted_entries_are_rejected() {
     let directory = tempdir().expect("test directory");
     let entries = fixture_entries();

@@ -83,6 +83,41 @@ impl DesktopState {
         }
         Ok(())
     }
+
+    /// Runs the final Atlas project-publication boundary while holding the
+    /// Atlas job slot. Cancellation requests cannot be accepted between the
+    /// final cancellation check and the operation's project publication.
+    pub(crate) fn with_atlas_publication<T, F>(
+        &self,
+        id: &str,
+        token: &CancellationToken,
+        operation: F,
+    ) -> Result<T, CommandError>
+    where
+        F: FnOnce(&Self) -> Result<T, CommandError>,
+    {
+        let mut active = self.atlas_job.lock().map_err(|_| {
+            CommandError::internal_state("desktop Atlas job state lock is poisoned")
+        })?;
+        if active.as_ref().is_none_or(|job| job.id != id) {
+            return Err(CommandError::new(
+                "atlasCancelled",
+                "the requested Atlas job is not active",
+            ));
+        }
+        if token.is_cancelled() {
+            return Err(CommandError::new(
+                "atlasCancelled",
+                "Atlas project creation was cancelled",
+            ));
+        }
+
+        let result = operation(self);
+        if result.is_ok() {
+            *active = None;
+        }
+        result
+    }
 }
 
 impl Default for DesktopState {
