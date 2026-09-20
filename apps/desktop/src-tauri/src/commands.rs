@@ -255,43 +255,14 @@ struct PreparedAtlasProject {
 }
 
 fn resolve_atlas_executable(app: &tauri::AppHandle) -> CommandResult<PathBuf> {
-    if let Ok(value) = env::var("AERIA_ATLAS_PATH") {
-        let path = PathBuf::from(value);
-        if path.is_file() {
-            return Ok(path);
-        }
-        return Err(CommandError::new(
-            "atlasNotFound",
-            format!(
-                "AERIA_ATLAS_PATH does not point to a file: {}",
-                path.display()
-            ),
-        ));
+    if let Some(path) = atlas_override_path(env::var_os("AERIA_ATLAS_PATH"))? {
+        return Ok(path);
     }
 
-    let resource_dir = app
-        .path()
-        .resource_dir()
+    let executable_path = env::current_exe()
         .map_err(|error| CommandError::new("atlasNotFound", error.to_string()))?;
-    let target = if cfg!(target_os = "windows") {
-        "x86_64-pc-windows-msvc"
-    } else {
-        "x86_64-unknown-linux-gnu"
-    };
-    let extension = if cfg!(target_os = "windows") {
-        ".exe"
-    } else {
-        ""
-    };
-    let candidates = [
-        resource_dir
-            .join("binaries")
-            .join(format!("harmonia-atlas-{target}{extension}")),
-        resource_dir
-            .join("binaries")
-            .join(format!("harmonia-atlas{extension}")),
-        resource_dir.join(format!("harmonia-atlas-{target}{extension}")),
-    ];
+    let resource_dir = app.path().resource_dir().ok();
+    let candidates = bundled_atlas_candidates(&executable_path, resource_dir.as_deref());
     candidates
         .into_iter()
         .find(|path| path.is_file())
@@ -299,11 +270,53 @@ fn resolve_atlas_executable(app: &tauri::AppHandle) -> CommandResult<PathBuf> {
             CommandError::new(
                 "atlasNotFound",
                 format!(
-                    "the bundled Harmonia Atlas executable was not found under {}",
-                    resource_dir.display()
+                    "the bundled Harmonia Atlas executable was not found beside {} or in the resource directory",
+                    executable_path.display()
                 ),
             )
         })
+}
+
+fn atlas_override_path(value: Option<std::ffi::OsString>) -> CommandResult<Option<PathBuf>> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    let path = PathBuf::from(value);
+    if path.is_file() {
+        Ok(Some(path))
+    } else {
+        Err(CommandError::new(
+            "atlasNotFound",
+            format!(
+                "AERIA_ATLAS_PATH does not point to a file: {}",
+                path.display()
+            ),
+        ))
+    }
+}
+
+fn bundled_atlas_candidates(executable_path: &Path, resource_dir: Option<&Path>) -> Vec<PathBuf> {
+    // Tauri stages harmonia-atlas-<target-triple>[.exe] at build time, but
+    // packages the runtime sidecar as harmonia-atlas[.exe] beside Aeria.
+    let mut candidates = Vec::new();
+    if let Some(executable_dir) = executable_path.parent() {
+        candidates.push(executable_dir.join(atlas_runtime_filename()));
+    }
+
+    if let Some(resource_dir) = resource_dir {
+        candidates.push(resource_dir.join("binaries").join(atlas_runtime_filename()));
+        candidates.push(resource_dir.join(atlas_runtime_filename()));
+    }
+
+    candidates
+}
+
+fn atlas_runtime_filename() -> &'static str {
+    if cfg!(target_os = "windows") {
+        "harmonia-atlas.exe"
+    } else {
+        "harmonia-atlas"
+    }
 }
 
 fn validate_and_publish_package(
@@ -722,6 +735,108 @@ mod tests {
         let error =
             set_translation_target_with_state(&state, binding(), "target").expect_err("no project");
         assert_eq!(error.code, "noProjectOpen");
+    }
+
+    #[test]
+    fn atlas_override_path_is_authoritative_when_it_points_to_a_file() {
+        let repository = TestRepository::new("atlas-override");
+        let override_path = repository.path().join("harmonia-atlas");
+        fs::write(&override_path, b"fixture").expect("override executable");
+
+        assert_eq!(
+            atlas_override_path(Some(override_path.clone().into_os_string()))
+                .expect("override path"),
+            Some(override_path)
+        );
+        assert_eq!(atlas_override_path(None).expect("unset override"), None);
+    }
+
+    #[test]
+    fn runtime_filename_does_not_expose_a_target_triple() {
+        assert!(!atlas_runtime_filename().contains("x86_64"));
+        assert_eq!(
+            atlas_runtime_filename(),
+            if cfg!(target_os = "windows") {
+                "harmonia-atlas.exe"
+            } else {
+                "harmonia-atlas"
+            }
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_packaged_atlas_candidate_is_next_to_aeria_executable() {
+        let executable = Path::new(r"C:\Program Files\Aeria\aeria.exe");
+        let candidates = bundled_atlas_candidates(
+            executable,
+            Some(Path::new(r"C:\Program Files\Aeria\resources")),
+        );
+
+        assert_eq!(
+            candidates.first(),
+            Some(&PathBuf::from(r"C:\Program Files\Aeria\harmonia-atlas.exe"))
+        );
+        assert!(
+            !candidates
+                .first()
+                .expect("primary candidate")
+                .to_string_lossy()
+                .contains("x86_64-pc-windows-msvc")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn linux_packaged_atlas_candidate_is_next_to_aeria_executable() {
+        let executable = Path::new("/usr/bin/aeria");
+        let candidates = bundled_atlas_candidates(executable, Some(Path::new("/usr/lib/aeria")));
+
+        assert_eq!(
+            candidates.first(),
+            Some(&PathBuf::from("/usr/bin/harmonia-atlas"))
+        );
+        assert!(
+            !candidates
+                .first()
+                .expect("primary candidate")
+                .to_string_lossy()
+                .contains("x86_64-unknown-linux-gnu")
+        );
+    }
+
+    #[test]
+    fn bundled_sidecar_prefers_executable_sibling_over_resource_fallbacks() {
+        let executable = if cfg!(target_os = "windows") {
+            PathBuf::from(r"C:\Program Files\Aeria\aeria.exe")
+        } else {
+            PathBuf::from("/usr/bin/aeria")
+        };
+        let resource_dir = if cfg!(target_os = "windows") {
+            PathBuf::from(r"C:\Program Files\Aeria\resources")
+        } else {
+            PathBuf::from("/usr/lib/aeria")
+        };
+        let candidates = bundled_atlas_candidates(&executable, Some(&resource_dir));
+
+        assert_eq!(
+            candidates[0],
+            executable
+                .parent()
+                .expect("executable directory")
+                .join(atlas_runtime_filename())
+        );
+        assert!(
+            candidates
+                .iter()
+                .skip(1)
+                .all(|candidate| candidate.starts_with(&resource_dir))
+        );
+        assert!(
+            candidates
+                .iter()
+                .all(|candidate| !candidate.to_string_lossy().contains("x86_64-"))
+        );
     }
 
     #[test]

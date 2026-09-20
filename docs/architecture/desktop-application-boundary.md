@@ -41,11 +41,15 @@ SQLite access. Translation-unit IDs cross IPC only in their canonical textual
 form, and review states use an explicit camelCase protocol enum.
 
 Source-package creation is the one desktop process workflow that owns an Atlas
-child job. Rust resolves the bundled v0.2.0 executable (or the explicit
-`AERIA_ATLAS_PATH` development/test override), supplies the stable app-data
-staging path, forwards typed `source-package-event` payloads containing an
-opaque job ID, validates the staging HSP before immutable publication, and
-publishes a project only after the completed package has been validated.
+child job. The build stages the v0.2.0 sidecar with Tauri's target-triple
+filename convention, while packaged runtime lookup resolves
+`harmonia-atlas[.exe]` beside the Aeria executable. Rust first honors the
+explicit `AERIA_ATLAS_PATH` development/test override, then the packaged
+executable sibling, and finally resource-directory compatibility fallbacks.
+It supplies the stable app-data staging path, forwards typed
+`source-package-event` payloads containing an opaque job ID, validates the
+staging HSP before immutable publication, and publishes a project only after
+the completed package has been validated.
 Desktop state permits one active package job. Cancellation signals that job,
 terminates and awaits Atlas, and remains authoritative through validation and
 workspace initialization: the final publication boundary serializes
