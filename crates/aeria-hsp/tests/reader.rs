@@ -5,7 +5,7 @@ use std::path::Path;
 
 use aeria_hsp::{
     GuidanceOccurrence, GuidanceSheetStatus, HspManifest, SourceGuidance, SourcePackage,
-    compute_guidance_bundle_id, compute_package_id,
+    compute_guidance_bundle_id, compute_package_id, compute_source_evidence_id,
 };
 use sha2::{Digest, Sha256};
 use tempfile::tempdir;
@@ -51,6 +51,25 @@ fn atlas_fixture_opens_and_materializes_verified_source() {
             .expect("cached HXS")
             .len()
             > 0
+    );
+}
+
+#[test]
+fn atlas_fixture_evidence_id_remains_byte_compatible() {
+    let cache = tempdir().expect("cache directory");
+    let package = SourcePackage::open(fixture_path(), cache.path()).expect("valid Atlas package");
+    let expected = package
+        .guidance()
+        .evidence_inputs
+        .iter()
+        .find(|input| input.language == package.source_language())
+        .expect("source evidence input")
+        .evidence_id
+        .clone();
+
+    assert_eq!(
+        compute_source_evidence_id(package.source()).expect("source evidence"),
+        expected
     );
 }
 
@@ -177,6 +196,127 @@ fn unknown_optional_component_is_checked_and_unknown_required_is_rejected() {
         SourcePackage::open(&required, directory.path()),
         Err(aeria_hsp::HspError::Manifest { .. })
     ));
+}
+
+#[test]
+fn oversized_manifest_is_rejected_before_json_allocation() {
+    let directory = tempdir().expect("test directory");
+    let (mut entries, mut manifest) = load_fixture();
+    let large_id = "x".repeat(1_100_000);
+    let optional_bytes = Vec::new();
+    entries.push(("optional/large.bin".to_owned(), optional_bytes.clone()));
+    manifest.components.push(aeria_hsp::HspComponentDescriptor {
+        id: large_id,
+        kind: "future".to_owned(),
+        format_version: 1,
+        required: false,
+        path: "optional/large.bin".to_owned(),
+        size: 0,
+        sha256: hash_bytes(&optional_bytes),
+    });
+    manifest.package_id = compute_package_id(&manifest).expect("package hash");
+    let package = directory.path().join("oversized-manifest.hsp");
+    write_manifest_archive(&package, entries, &manifest);
+
+    assert!(matches!(
+        SourcePackage::open(&package, directory.path()),
+        Err(aeria_hsp::HspError::Manifest { .. })
+    ));
+}
+
+#[test]
+fn component_declared_size_mismatches_are_rejected_before_decompression() {
+    let directory = tempdir().expect("test directory");
+
+    let (entries, mut guidance_manifest) = load_fixture();
+    let guidance = guidance_manifest
+        .components
+        .iter_mut()
+        .find(|component| component.kind == "sourceGuidance")
+        .expect("guidance component");
+    guidance.size += 1;
+    guidance_manifest.package_id = compute_package_id(&guidance_manifest).expect("package hash");
+    let guidance_package = directory.path().join("guidance-size.hsp");
+    write_manifest_archive(&guidance_package, entries.clone(), &guidance_manifest);
+    assert!(matches!(
+        SourcePackage::open(&guidance_package, directory.path()),
+        Err(aeria_hsp::HspError::Component { .. })
+    ));
+
+    let (mut optional_entries, mut optional_manifest) = load_fixture();
+    let optional_bytes = vec![0x5a; 2 * 1024 * 1024];
+    optional_entries.push(("optional/large.bin".to_owned(), optional_bytes.clone()));
+    optional_manifest
+        .components
+        .push(aeria_hsp::HspComponentDescriptor {
+            id: "future-large".to_owned(),
+            kind: "future".to_owned(),
+            format_version: 1,
+            required: false,
+            path: "optional/large.bin".to_owned(),
+            size: i64::try_from(optional_bytes.len()).expect("size"),
+            sha256: hash_bytes(&optional_bytes),
+        });
+    optional_manifest.package_id = compute_package_id(&optional_manifest).expect("package hash");
+    let optional_package = directory.path().join("large-optional.hsp");
+    write_manifest_archive(&optional_package, optional_entries, &optional_manifest);
+    assert!(SourcePackage::open(&optional_package, directory.path()).is_ok());
+
+    let (mut mismatched_entries, mut mismatched_manifest) = load_fixture();
+    let optional_bytes = b"optional".to_vec();
+    mismatched_entries.push(("optional/mismatch.bin".to_owned(), optional_bytes.clone()));
+    mismatched_manifest
+        .components
+        .push(aeria_hsp::HspComponentDescriptor {
+            id: "future-mismatch".to_owned(),
+            kind: "future".to_owned(),
+            format_version: 1,
+            required: false,
+            path: "optional/mismatch.bin".to_owned(),
+            size: i64::try_from(optional_bytes.len()).expect("size") + 1,
+            sha256: hash_bytes(&optional_bytes),
+        });
+    mismatched_manifest.package_id =
+        compute_package_id(&mismatched_manifest).expect("package hash");
+    let mismatch_package = directory.path().join("optional-size.hsp");
+    write_manifest_archive(&mismatch_package, mismatched_entries, &mismatched_manifest);
+    assert!(matches!(
+        SourcePackage::open(&mismatch_package, directory.path()),
+        Err(aeria_hsp::HspError::Component { .. })
+    ));
+}
+
+#[test]
+fn oversized_source_entry_does_not_leave_a_partial_cache_file() {
+    let directory = tempdir().expect("test directory");
+    let (entries, mut manifest) = load_fixture();
+    let source = manifest
+        .components
+        .iter_mut()
+        .find(|component| component.kind == "sourceHxs")
+        .expect("source component");
+    source.size -= 1;
+    manifest.package_id = compute_package_id(&manifest).expect("package hash");
+    let cache_path = directory
+        .path()
+        .join("cache")
+        .join("hxs")
+        .join(
+            manifest
+                .source
+                .snapshot_id
+                .strip_prefix("sha256:")
+                .expect("snapshot hash"),
+        )
+        .join("source.hxs");
+    let package = directory.path().join("source-size.hsp");
+    write_manifest_archive(&package, entries, &manifest);
+
+    assert!(matches!(
+        SourcePackage::open(&package, directory.path().join("cache")),
+        Err(aeria_hsp::HspError::Component { .. })
+    ));
+    assert!(!cache_path.exists());
 }
 
 #[test]

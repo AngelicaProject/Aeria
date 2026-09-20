@@ -21,6 +21,8 @@ pub fn compute_package_id(manifest: &HspManifest) -> Result<String, String> {
     hasher.write_utf8(&manifest.source.content_id)?;
     hasher.write_utf8(&manifest.source.snapshot_id)?;
 
+    // Atlas uses StringComparer.Ordinal for producer-owned identifiers. Rust's
+    // lexical ordering is equivalent for the current canonical HSP contract.
     let mut components = manifest.components.iter().collect::<Vec<_>>();
     components.sort_by(|left, right| left.id.cmp(&right.id));
     hasher.write_u32(u32::try_from(components.len()).map_err(|_| "too many components")?);

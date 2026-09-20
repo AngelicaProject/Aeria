@@ -18,6 +18,12 @@ pub use model::{
 };
 pub use reader::open;
 
+/// Maximum decompressed size accepted for the HSP manifest JSON.
+pub const MAX_HSP_MANIFEST_BYTES: u64 = 1 << 20;
+
+/// Maximum decompressed size accepted for the HSG JSON component.
+pub const MAX_HSP_GUIDANCE_BYTES: u64 = 64 << 20;
+
 use thiserror::Error;
 
 /// Errors returned while opening or validating an HSP v1 package.

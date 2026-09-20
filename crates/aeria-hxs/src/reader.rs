@@ -5,7 +5,8 @@ use rusqlite::{Connection, OpenFlags, params};
 
 use crate::error::HxsError;
 use crate::types::{
-    RowPage, RowRecord, SheetMetadata, SnapshotMetadata, StringCell, StringOccurrenceCoordinate,
+    EvidenceStringOccurrence, EvidenceStringRow, EvidenceStringRowPage, RowPage, RowRecord,
+    SheetMetadata, SnapshotMetadata, StringCell, StringOccurrenceCoordinate,
     StringOccurrenceFingerprint, StringOccurrencePage, StringOccurrenceRecord,
     StringOccurrenceRecordPage, StringRowCoordinate, StringRowRecord, StringRowRecordPage,
 };
@@ -13,7 +14,10 @@ use crate::validation::{
     APPLICATION_ID, FORMAT_VERSION, VerifiedSnapshot, read_row_record, read_string_cell,
     validate_and_read,
 };
-use crate::{MAX_ROW_PAGE_SIZE, MAX_STRING_OCCURRENCE_PAGE_SIZE, MAX_STRING_ROW_PAGE_SIZE};
+use crate::{
+    MAX_EVIDENCE_STRING_ROW_PAGE_SIZE, MAX_ROW_PAGE_SIZE, MAX_STRING_OCCURRENCE_PAGE_SIZE,
+    MAX_STRING_ROW_PAGE_SIZE,
+};
 
 /// A verified, read-only handle to one immutable HXS source artifact.
 pub struct HxsSnapshot {
@@ -523,6 +527,171 @@ impl HxsSnapshot {
         })
     }
 
+    /// Reads one bounded keyset page of every physical row in a sheet while
+    /// selecting only String column indexes and macro text. The page limit
+    /// counts physical row/subrow groups, not String cells, and rows with no
+    /// String cells are preserved with an empty occurrence list.
+    ///
+    /// This API is intentionally separate from [`Self::page_string_rows`]: it
+    /// does not select hashes, raw values, or technical payloads and is owned
+    /// by source-evidence hashing rather than editor presentation.
+    ///
+    /// `after` is exclusive and ordered by row ID then subrow ID. The SQL
+    /// query selects the next row groups first, then left-joins their String
+    /// cells, so a physical row is never split across pages.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an invalid page size, an unknown sheet, a cursor
+    /// from another sheet, an invalid stored value, or a storage/read failure.
+    #[allow(clippy::too_many_lines)]
+    pub fn page_evidence_string_rows(
+        &self,
+        sheet_name: &str,
+        after: Option<&StringRowCoordinate>,
+        limit: u32,
+    ) -> Result<EvidenceStringRowPage, HxsError> {
+        if !(1..=MAX_EVIDENCE_STRING_ROW_PAGE_SIZE).contains(&limit) {
+            return Err(HxsError::request(
+                "evidence String row page limit must be between 1 and MAX_EVIDENCE_STRING_ROW_PAGE_SIZE",
+            ));
+        }
+        let page_limit = usize::try_from(limit)
+            .map_err(|_| HxsError::request("evidence String row page limit is too large"))?;
+        let sheet_id = self.sheet_id(sheet_name)?;
+        if after.is_some_and(|cursor| cursor.sheet_name != sheet_name) {
+            return Err(HxsError::request(
+                "evidence String row cursor belongs to a different sheet",
+            ));
+        }
+
+        let limit_sql = i64::from(limit) + 1;
+        let (sql, parameters) = if let Some(after) = after {
+            (
+                r"WITH page_rows AS (
+                    SELECT row_id, subrow_id
+                    FROM rows
+                    WHERE sheet_id = ?1
+                      AND (row_id, subrow_id) > (?2, ?3)
+                    ORDER BY row_id, subrow_id
+                    LIMIT ?4
+                )
+                SELECT page_rows.row_id, page_rows.subrow_id,
+                       string_cells.column_index, string_cells.macro_text
+                FROM page_rows
+                LEFT JOIN string_cells
+                  ON string_cells.sheet_id = ?1
+                 AND string_cells.row_id = page_rows.row_id
+                 AND string_cells.subrow_id = page_rows.subrow_id
+                ORDER BY page_rows.row_id, page_rows.subrow_id,
+                         string_cells.column_index",
+                Some((
+                    sheet_id,
+                    i64::from(after.row_id),
+                    i64::from(after.subrow_id),
+                    limit_sql,
+                )),
+            )
+        } else {
+            (
+                r"WITH page_rows AS (
+                    SELECT row_id, subrow_id
+                    FROM rows
+                    WHERE sheet_id = ?1
+                    ORDER BY row_id, subrow_id
+                    LIMIT ?2
+                )
+                SELECT page_rows.row_id, page_rows.subrow_id,
+                       string_cells.column_index, string_cells.macro_text
+                FROM page_rows
+                LEFT JOIN string_cells
+                  ON string_cells.sheet_id = ?1
+                 AND string_cells.row_id = page_rows.row_id
+                 AND string_cells.subrow_id = page_rows.subrow_id
+                ORDER BY page_rows.row_id, page_rows.subrow_id,
+                         string_cells.column_index",
+                None,
+            )
+        };
+
+        let mut statement = self.connection.prepare(sql).map_err(HxsError::storage)?;
+        let mut rows = match parameters {
+            Some((sheet_id, row_id, subrow_id, limit)) => statement
+                .query(params![sheet_id, row_id, subrow_id, limit])
+                .map_err(HxsError::storage)?,
+            None => statement
+                .query(params![sheet_id, limit_sql])
+                .map_err(HxsError::storage)?,
+        };
+
+        let mut grouped = Vec::<EvidenceStringRow>::new();
+        while let Some(row) = rows.next().map_err(HxsError::storage)? {
+            let row_id = read_non_negative_u32(row, 0, "rows.row_id")?;
+            let subrow_id = read_non_negative_u16(row, 1, "rows.subrow_id")?;
+            let column_index = row.get::<_, Option<i64>>(2).map_err(HxsError::storage)?;
+            let macro_text = row.get::<_, Option<String>>(3).map_err(HxsError::storage)?;
+            let current = (row_id, subrow_id);
+            if let Some(last) = grouped.last_mut()
+                && (last.row_id, last.subrow_id) == current
+            {
+                match (column_index, macro_text) {
+                    (Some(column_index), Some(macro_text)) => {
+                        last.occurrences.push(EvidenceStringOccurrence {
+                            column_index: read_non_negative_u32_value(
+                                column_index,
+                                "string_cells.column_index",
+                            )?,
+                            macro_text,
+                        });
+                    }
+                    (None, None) => {}
+                    _ => {
+                        return Err(HxsError::data(
+                            "String evidence row has an incomplete occurrence",
+                        ));
+                    }
+                }
+            } else {
+                let occurrences = match (column_index, macro_text) {
+                    (Some(column_index), Some(macro_text)) => {
+                        vec![EvidenceStringOccurrence {
+                            column_index: read_non_negative_u32_value(
+                                column_index,
+                                "string_cells.column_index",
+                            )?,
+                            macro_text,
+                        }]
+                    }
+                    (None, None) => Vec::new(),
+                    _ => {
+                        return Err(HxsError::data(
+                            "String evidence row has an incomplete occurrence",
+                        ));
+                    }
+                };
+                grouped.push(EvidenceStringRow {
+                    row_id,
+                    subrow_id,
+                    occurrences,
+                });
+            }
+        }
+
+        let next_after = if grouped.len() > page_limit {
+            grouped.truncate(page_limit);
+            grouped
+                .last()
+                .map(|row| StringRowCoordinate::new(sheet_name, row.row_id, row.subrow_id))
+        } else {
+            None
+        };
+
+        Ok(EvidenceStringRowPage {
+            rows: grouped,
+            next_after,
+        })
+    }
+
     fn sheet_id(&self, sheet_name: &str) -> Result<i64, HxsError> {
         self.sheet_ids
             .get(sheet_name)
@@ -584,6 +753,10 @@ fn read_non_negative_u32(
     column: &str,
 ) -> Result<u32, HxsError> {
     let value = row.get::<_, i64>(index).map_err(HxsError::storage)?;
+    u32::try_from(value).map_err(|_| HxsError::data(format!("{column} is out of range")))
+}
+
+fn read_non_negative_u32_value(value: i64, column: &str) -> Result<u32, HxsError> {
     u32::try_from(value).map_err(|_| HxsError::data(format!("{column} is out of range")))
 }
 

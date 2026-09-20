@@ -17,16 +17,24 @@ An existing cache file is reused only after it is verified against the
 manifest component size and SHA-256.
 
 The package reader streams `source/source.hxs` directly from the archive while
-hashing it. It materializes only the manifest-approved source component into a
-caller-provided disposable cache, then opens that path through
-`HxsSnapshot::open`.
+hashing it. Every manifest-listed ZIP entry is checked against its declared
+uncompressed size before decompression, and its actual decompressed byte count
+and SHA-256 are bounded and verified while streaming. Manifest JSON is capped
+at 1 MiB; HSG JSON is capped at 64 MiB; unknown optional components are
+integrity-checked and discarded without a payload allocation. The source is
+materialized only into a caller-provided disposable cache, then opened through
+`HxsSnapshot::open`; rejected replacements remove their partial cache file.
 
 The production HXS reader remains owned by `aeria-hxs`. It opens HXS v1 as an
 immutable SQLite artifact in read-only mode, validates the HXS SQLite identity
 and required schema, runs SQLite integrity checks, and recomputes the
 canonical row, sheet, `contentId`, and `snapshotId` hashes before exposing
-source data. `aeria-hsp` owns package/HSG validation and consumes the row-centric
-and String APIs without duplicating source text in guidance.
+source data. `aeria-hsp` owns package/HSG validation and consumes a dedicated
+row-complete, String-only evidence stream. Its bounded keyset pages return
+physical row/subrow groups, preserve rows with zero String cells, and select
+only `row_id`, `subrow_id`, `column_index`, and exact macro text. Evidence
+matching therefore requires no raw source bytes, technical payload, row hashes,
+or per-cell `string_cell` lookups.
 
 For deterministic source rebase indexing, the reader also exposes bounded
 keyset pages for one verified sheet at a time. Each page is constrained by

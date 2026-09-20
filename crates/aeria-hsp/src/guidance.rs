@@ -1,6 +1,8 @@
 use std::cmp::Ordering;
 
-use aeria_hxs::{ColumnType, HxsError, HxsSnapshot, SheetVariant};
+use aeria_hxs::{
+    HxsError, HxsSnapshot, MAX_EVIDENCE_STRING_ROW_PAGE_SIZE, SheetVariant, StringRowCoordinate,
+};
 use sha2::{Digest, Sha256};
 
 use crate::hash::{compute_guidance_bundle_id, is_sha256, to_hash_string};
@@ -312,43 +314,35 @@ pub fn compute_source_evidence_id(snapshot: &HxsSnapshot) -> Result<String, HxsE
     )
     .map_err(|message| HxsError::InvalidData { message })?;
 
+    // Atlas uses StringComparer.Ordinal for these producer-owned names. Rust's
+    // lexical ordering is equivalent for the current canonical HSP contract.
     let mut sheets = snapshot.sheets();
     sheets.sort_by(|left, right| left.name.cmp(&right.name));
     for sheet in sheets {
         hasher
             .add_sheet(&sheet.name, sheet.variant, sheet.hashes.schema.as_bytes())
             .map_err(|message| HxsError::InvalidData { message })?;
-        let string_columns = sheet
-            .columns
-            .iter()
-            .filter(|column| column.column_type == ColumnType::String)
-            .map(|column| column.index)
-            .collect::<Vec<_>>();
-        let mut offset = 0_u64;
+        let mut after: Option<StringRowCoordinate> = None;
         loop {
-            let page = snapshot.page_rows(&sheet.name, offset, aeria_hxs::MAX_ROW_PAGE_SIZE)?;
+            let page = snapshot.page_evidence_string_rows(
+                &sheet.name,
+                after.as_ref(),
+                MAX_EVIDENCE_STRING_ROW_PAGE_SIZE,
+            )?;
             for row in &page.rows {
                 hasher
                     .add_row(row.row_id, row.subrow_id)
                     .map_err(|message| HxsError::InvalidData { message })?;
-                for column_index in &string_columns {
-                    let cell = snapshot
-                        .string_cell(&sheet.name, row.row_id, row.subrow_id, *column_index)?
-                        .ok_or_else(|| HxsError::InvalidData {
-                            message: format!(
-                                "HXS String column {column_index} is missing from {}/{}-{}",
-                                sheet.name, row.row_id, row.subrow_id
-                            ),
-                        })?;
+                for occurrence in &row.occurrences {
                     hasher
-                        .add_occurrence(*column_index, &cell.macro_text)
+                        .add_occurrence(occurrence.column_index, &occurrence.macro_text)
                         .map_err(|message| HxsError::InvalidData { message })?;
                 }
             }
-            let Some(next) = page.next_offset else {
+            let Some(next) = page.next_after else {
                 break;
             };
-            offset = next;
+            after = Some(next);
         }
     }
     Ok(hasher.finish())

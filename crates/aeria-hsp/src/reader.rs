@@ -12,6 +12,7 @@ use crate::HspError;
 use crate::guidance::{parse_and_validate, validate_relationships};
 use crate::hash::{compute_package_id, is_sha256, sha256_reader, to_hash_string};
 use crate::model::{HspComponentDescriptor, HspManifest, SourcePackage};
+use crate::{MAX_HSP_GUIDANCE_BYTES, MAX_HSP_MANIFEST_BYTES};
 
 const MANIFEST_PATH: &str = "manifest.json";
 const SOURCE_PATH: &str = "source/source.hxs";
@@ -37,7 +38,7 @@ pub fn open(
         message: source.to_string(),
     })?;
     validate_archive_names(&mut archive)?;
-    let manifest_bytes = read_entry(&mut archive, MANIFEST_PATH)?;
+    let manifest_bytes = read_bounded_entry(&mut archive, MANIFEST_PATH, MAX_HSP_MANIFEST_BYTES)?;
     let manifest: HspManifest =
         serde_json::from_slice(&manifest_bytes).map_err(|source| HspError::Manifest {
             message: format!("manifest JSON is invalid: {source}"),
@@ -71,7 +72,7 @@ pub fn open(
     let source_cache_path = cache_path(&cache_root, &manifest.source.snapshot_id)?;
     let (materialized_source, materialized) =
         materialize_source(&mut archive, source_component, &source_cache_path)?;
-    let guidance_bytes = match read_and_validate_component(&mut archive, guidance_component) {
+    let guidance_bytes = match read_guidance_component(&mut archive, guidance_component) {
         Ok(bytes) => bytes,
         Err(error) => {
             cleanup_materialized_source(materialized, &materialized_source);
@@ -79,8 +80,12 @@ pub fn open(
         }
     };
     for component in &manifest.components {
-        if component.id != source_component.id && component.id != guidance_component.id {
-            read_and_validate_component(&mut archive, component)?;
+        if component.id != source_component.id
+            && component.id != guidance_component.id
+            && let Err(error) = validate_component_entry(&mut archive, component, None, None)
+        {
+            cleanup_materialized_source(materialized, &materialized_source);
+            return Err(error);
         }
     }
     let source_snapshot = match HxsSnapshot::open(&materialized_source) {
@@ -261,40 +266,116 @@ fn required_component<'a>(
         })
 }
 
-fn read_entry<R: Read + io::Seek>(
+fn read_bounded_entry<R: Read + io::Seek>(
     archive: &mut ZipArchive<R>,
     path: &str,
+    maximum_size: u64,
 ) -> Result<Vec<u8>, HspError> {
     let mut entry = archive.by_name(path).map_err(|source| HspError::Archive {
         message: source.to_string(),
     })?;
-    let mut bytes = Vec::new();
-    entry
-        .read_to_end(&mut bytes)
-        .map_err(|source| HspError::Io {
-            path: PathBuf::from(path),
-            message: source.to_string(),
-        })?;
+    let declared_size = entry.size();
+    if declared_size > maximum_size {
+        return Err(HspError::Manifest {
+            message: format!("{path} exceeds its {maximum_size}-byte hard limit"),
+        });
+    }
+    let capacity = usize::try_from(declared_size).map_err(|_| HspError::Manifest {
+        message: format!("{path} declared size cannot fit in memory"),
+    })?;
+    let mut bytes = Vec::with_capacity(capacity);
+    stream_bounded(&mut entry, declared_size, maximum_size, Some(&mut bytes)).map_err(|error| {
+        HspError::Manifest {
+            message: format!(
+                "failed to read bounded {path}: {}",
+                stream_error_message(&error)
+            ),
+        }
+    })?;
     Ok(bytes)
 }
 
-fn read_and_validate_component<R: Read + io::Seek>(
+fn read_guidance_component<R: Read + io::Seek>(
     archive: &mut ZipArchive<R>,
     component: &HspComponentDescriptor,
 ) -> Result<Vec<u8>, HspError> {
-    let bytes = read_entry(archive, &component.path)?;
-    let actual_size = i64::try_from(bytes.len()).map_err(|_| HspError::Component {
-        id: component.id.clone(),
-        message: "component is too large".to_owned(),
-    })?;
-    let actual_hash = to_hash_string(Sha256::digest(&bytes).into());
-    if actual_size != component.size || actual_hash != component.sha256 {
+    let mut entry = archive
+        .by_name(&component.path)
+        .map_err(|source| HspError::Archive {
+            message: source.to_string(),
+        })?;
+    let expected_size = validate_declared_component_size(entry.size(), component)?;
+    if expected_size > MAX_HSP_GUIDANCE_BYTES {
         return Err(HspError::Component {
             id: component.id.clone(),
-            message: "component size or SHA-256 does not match its manifest".to_owned(),
+            message: format!(
+                "source guidance exceeds its {MAX_HSP_GUIDANCE_BYTES}-byte hard limit"
+            ),
         });
     }
+    let capacity = usize::try_from(expected_size).map_err(|_| HspError::Component {
+        id: component.id.clone(),
+        message: "source guidance declared size cannot fit in memory".to_owned(),
+    })?;
+    let mut bytes = Vec::with_capacity(capacity);
+    let digest = stream_bounded(
+        &mut entry,
+        expected_size,
+        MAX_HSP_GUIDANCE_BYTES,
+        Some(&mut bytes),
+    )
+    .map_err(|error| component_stream_error(component, error, None))?;
+    verify_component_digest(component, digest.hash)?;
     Ok(bytes)
+}
+
+fn validate_component_entry<R: Read + io::Seek>(
+    archive: &mut ZipArchive<R>,
+    component: &HspComponentDescriptor,
+    output: Option<&mut dyn Write>,
+    output_path: Option<&Path>,
+) -> Result<(), HspError> {
+    let mut entry = archive
+        .by_name(&component.path)
+        .map_err(|source| HspError::Archive {
+            message: source.to_string(),
+        })?;
+    let expected_size = validate_declared_component_size(entry.size(), component)?;
+    let digest =
+        validate_component_stream(&mut entry, component, expected_size, output, output_path)?;
+    verify_component_digest(component, digest.hash)
+}
+
+fn validate_declared_component_size(
+    declared_size: u64,
+    component: &HspComponentDescriptor,
+) -> Result<u64, HspError> {
+    let expected_size = u64::try_from(component.size).map_err(|_| HspError::Component {
+        id: component.id.clone(),
+        message: "component size is out of range".to_owned(),
+    })?;
+    if declared_size != expected_size {
+        return Err(HspError::Component {
+            id: component.id.clone(),
+            message: format!(
+                "ZIP entry declares {declared_size} bytes but manifest requires {expected_size}"
+            ),
+        });
+    }
+    Ok(expected_size)
+}
+
+fn verify_component_digest(
+    component: &HspComponentDescriptor,
+    actual_hash: [u8; 32],
+) -> Result<(), HspError> {
+    if to_hash_string(actual_hash) != component.sha256 {
+        return Err(HspError::Component {
+            id: component.id.clone(),
+            message: "component SHA-256 does not match its manifest".to_owned(),
+        });
+    }
+    Ok(())
 }
 
 fn materialize_source<R: Read + io::Seek>(
@@ -317,8 +398,10 @@ fn materialize_source<R: Read + io::Seek>(
         .map_err(|source| HspError::Archive {
             message: source.to_string(),
         })?;
+    let expected_size = validate_declared_component_size(entry.size(), component)?;
     if reusable {
-        validate_stream(&mut entry, component, None)?;
+        let digest = validate_component_stream(&mut entry, component, expected_size, None, None)?;
+        verify_component_digest(component, digest.hash)?;
         return Ok((destination.to_path_buf(), false));
     }
 
@@ -331,65 +414,144 @@ fn materialize_source<R: Read + io::Seek>(
             path: temporary.clone(),
             message: source.to_string(),
         })?;
-    let validation = validate_stream(&mut entry, component, Some(&mut output));
+    let validation = validate_component_stream(
+        &mut entry,
+        component,
+        expected_size,
+        Some(&mut output),
+        Some(&temporary),
+    )
+    .and_then(|digest| verify_component_digest(component, digest.hash).map(|()| digest));
     let close_result = output.flush();
     drop(output);
     if let Err(error) = validation {
         let _ = fs::remove_file(&temporary);
         return Err(error);
     }
-    close_result.map_err(|source| HspError::Cache {
-        path: temporary.clone(),
-        message: source.to_string(),
-    })?;
-    publish_atomically(&temporary, destination)?;
+    if let Err(source) = close_result {
+        let _ = fs::remove_file(&temporary);
+        return Err(HspError::Cache {
+            path: temporary.clone(),
+            message: source.to_string(),
+        });
+    }
+    if let Err(error) = publish_atomically(&temporary, destination) {
+        let _ = fs::remove_file(&temporary);
+        return Err(error);
+    }
     Ok((destination.to_path_buf(), true))
 }
 
-fn validate_stream(
+fn validate_component_stream(
     input: &mut impl Read,
     component: &HspComponentDescriptor,
-    mut output: Option<&mut File>,
-) -> Result<(), HspError> {
+    expected_size: u64,
+    output: Option<&mut dyn Write>,
+    output_path: Option<&Path>,
+) -> Result<StreamDigest, HspError> {
+    stream_bounded(input, expected_size, expected_size, output)
+        .map_err(|error| component_stream_error(component, error, output_path))
+}
+
+#[derive(Debug)]
+struct StreamDigest {
+    hash: [u8; 32],
+}
+
+#[derive(Debug)]
+enum StreamError {
+    Read(io::Error),
+    Write(io::Error),
+    Overflow { expected: u64, actual: u64 },
+    Short { expected: u64, actual: u64 },
+}
+
+fn stream_bounded(
+    input: &mut impl Read,
+    expected_size: u64,
+    maximum_size: u64,
+    mut output: Option<&mut dyn Write>,
+) -> Result<StreamDigest, StreamError> {
+    if expected_size > maximum_size {
+        return Err(StreamError::Overflow {
+            expected: maximum_size,
+            actual: expected_size,
+        });
+    }
+
     let mut hasher = Sha256::new();
     let mut size = 0_u64;
     let mut buffer = vec![0_u8; 64 * 1024].into_boxed_slice();
     loop {
+        let remaining = expected_size.saturating_sub(size);
+        let read_size = usize::try_from(remaining.saturating_add(1))
+            .unwrap_or(buffer.len())
+            .clamp(1, buffer.len());
         let read = input
-            .read(&mut buffer)
-            .map_err(|source| HspError::Component {
-                id: component.id.clone(),
-                message: source.to_string(),
-            })?;
+            .read(&mut buffer[..read_size])
+            .map_err(StreamError::Read)?;
         if read == 0 {
             break;
         }
-        size = size
+        let next_size = size
             .checked_add(u64::try_from(read).expect("buffer length fits u64"))
-            .ok_or_else(|| HspError::Component {
-                id: component.id.clone(),
-                message: "component size overflow".to_owned(),
+            .ok_or(StreamError::Overflow {
+                expected: expected_size,
+                actual: u64::MAX,
             })?;
+        if next_size > expected_size {
+            return Err(StreamError::Overflow {
+                expected: expected_size,
+                actual: next_size,
+            });
+        }
         hasher.update(&buffer[..read]);
         if let Some(output) = output.as_deref_mut() {
             output
                 .write_all(&buffer[..read])
-                .map_err(|source| HspError::Cache {
-                    path: PathBuf::from(SOURCE_PATH),
-                    message: source.to_string(),
-                })?;
+                .map_err(StreamError::Write)?;
         }
+        size = next_size;
     }
-    let actual_hash: [u8; 32] = hasher.finalize().into();
-    if i64::try_from(size).ok() != Some(component.size)
-        || to_hash_string(actual_hash) != component.sha256
-    {
-        return Err(HspError::Component {
-            id: component.id.clone(),
-            message: "component size or SHA-256 does not match its manifest".to_owned(),
+
+    if size != expected_size {
+        return Err(StreamError::Short {
+            expected: expected_size,
+            actual: size,
         });
     }
-    Ok(())
+    Ok(StreamDigest {
+        hash: hasher.finalize().into(),
+    })
+}
+
+fn stream_error_message(error: &StreamError) -> String {
+    match error {
+        StreamError::Read(source) | StreamError::Write(source) => source.to_string(),
+        StreamError::Overflow { expected, actual } => {
+            format!("stream produced {actual} bytes, exceeding {expected}")
+        }
+        StreamError::Short { expected, actual } => {
+            format!("stream ended at {actual} bytes, expected {expected}")
+        }
+    }
+}
+
+fn component_stream_error(
+    component: &HspComponentDescriptor,
+    error: StreamError,
+    output_path: Option<&Path>,
+) -> HspError {
+    match error {
+        StreamError::Write(source) => HspError::Cache {
+            path: output_path.map_or_else(|| PathBuf::from(&component.path), Path::to_path_buf),
+            message: source.to_string(),
+        },
+        error => HspError::Component {
+            id: component.id.clone(),
+            message: stream_error_message(&error),
+        },
+    }
 }
 
 fn file_matches(path: &Path, component: &HspComponentDescriptor) -> Result<bool, HspError> {
@@ -475,4 +637,29 @@ fn is_canonical_language(language: &str) -> bool {
         language,
         "en" | "ja" | "de" | "fr" | "zh-cn" | "zh-tw" | "ko"
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::Cursor;
+
+    use super::*;
+
+    #[test]
+    fn bounded_component_stream_aborts_on_the_first_byte_over_expected_size() {
+        let component = HspComponentDescriptor {
+            id: "test".to_owned(),
+            kind: "future".to_owned(),
+            format_version: 1,
+            required: false,
+            path: "optional/test.bin".to_owned(),
+            size: 3,
+            sha256: "sha256:".to_owned() + &"0".repeat(64),
+        };
+        let mut input = Cursor::new([1_u8, 2, 3, 4]);
+        let error = validate_component_stream(&mut input, &component, 3, None, None)
+            .expect_err("oversized stream");
+
+        assert!(error.to_string().contains("exceeding 3"));
+    }
 }

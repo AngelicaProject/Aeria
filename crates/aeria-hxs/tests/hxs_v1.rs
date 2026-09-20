@@ -3,8 +3,9 @@ use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use aeria_hxs::{
-    HxsError, HxsSnapshot, MAX_ROW_PAGE_SIZE, MAX_STRING_OCCURRENCE_PAGE_SIZE,
-    MAX_STRING_ROW_PAGE_SIZE, SheetVariant, StringOccurrenceCoordinate, StringRowCoordinate,
+    HxsError, HxsSnapshot, MAX_EVIDENCE_STRING_ROW_PAGE_SIZE, MAX_ROW_PAGE_SIZE,
+    MAX_STRING_OCCURRENCE_PAGE_SIZE, MAX_STRING_ROW_PAGE_SIZE, SheetVariant,
+    StringOccurrenceCoordinate, StringRowCoordinate,
 };
 use rusqlite::{Connection, params};
 use sha2::{Digest, Sha256};
@@ -481,6 +482,76 @@ fn string_row_pages_group_cells_and_page_by_exclusive_row_cursor() {
         }
     }
     assert_eq!(coordinates, [(1, 0), (2, 0), (2, 1)]);
+}
+
+#[test]
+fn evidence_string_pages_are_row_complete_and_preserve_empty_rows() {
+    let fixture = write_grouped_fixture();
+    let snapshot = HxsSnapshot::open(&fixture.path).expect("grouped HXS should verify");
+
+    assert!(matches!(
+        snapshot.page_evidence_string_rows("Grouped", None, 0),
+        Err(HxsError::InvalidRequest { .. })
+    ));
+    assert!(matches!(
+        snapshot.page_evidence_string_rows("Grouped", None, MAX_EVIDENCE_STRING_ROW_PAGE_SIZE + 1),
+        Err(HxsError::InvalidRequest { .. })
+    ));
+    assert!(matches!(
+        snapshot.page_evidence_string_rows("Missing", None, 1),
+        Err(HxsError::SheetNotFound { .. })
+    ));
+    assert!(matches!(
+        snapshot.page_evidence_string_rows(
+            "Grouped",
+            Some(&StringRowCoordinate::new("Other", 1, 0)),
+            1,
+        ),
+        Err(HxsError::InvalidRequest { .. })
+    ));
+
+    let first = snapshot
+        .page_evidence_string_rows("Grouped", None, 1)
+        .expect("first evidence page");
+    assert_eq!((first.rows[0].row_id, first.rows[0].subrow_id), (1, 0));
+    assert_eq!(
+        first.rows[0]
+            .occurrences
+            .iter()
+            .map(|occurrence| occurrence.column_index)
+            .collect::<Vec<_>>(),
+        [0, 2]
+    );
+    assert_eq!(first.rows[0].occurrences[0].macro_text, "first");
+    let after_first = first.next_after.expect("second page");
+
+    let second = snapshot
+        .page_evidence_string_rows("Grouped", Some(&after_first), 1)
+        .expect("second evidence page");
+    assert_eq!((second.rows[0].row_id, second.rows[0].subrow_id), (2, 0));
+    assert_eq!(second.rows[0].occurrences.len(), 2);
+    assert_eq!(
+        second
+            .next_after
+            .as_ref()
+            .map(|cursor| (cursor.row_id, cursor.subrow_id)),
+        Some((2, 0))
+    );
+
+    let third = snapshot
+        .page_evidence_string_rows("Grouped", second.next_after.as_ref(), 1)
+        .expect("third evidence page");
+    assert_eq!((third.rows[0].row_id, third.rows[0].subrow_id), (2, 1));
+    assert!(third.next_after.is_none());
+
+    let technical = write_technical_only_fixture();
+    let technical_snapshot = HxsSnapshot::open(&technical.path).expect("technical HXS");
+    let empty = technical_snapshot
+        .page_evidence_string_rows("TechnicalOnly", None, 1)
+        .expect("empty evidence row");
+    assert_eq!(empty.rows.len(), 1);
+    assert_eq!((empty.rows[0].row_id, empty.rows[0].subrow_id), (9, 0));
+    assert!(empty.rows[0].occurrences.is_empty());
 }
 
 #[test]
@@ -965,6 +1036,55 @@ fn write_grouped_fixture() -> TempFixture {
             params![content_id, snapshot_id],
         )
         .expect("insert grouped metadata");
+    drop(connection);
+    TempFixture { path }
+}
+
+fn write_technical_only_fixture() -> TempFixture {
+    let path = std::env::temp_dir().join(format!(
+        "aeria-hxs-technical-only-{}-{}.hxs",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock after epoch")
+            .as_nanos()
+    ));
+    let connection = Connection::open(&path).expect("create technical-only fixture database");
+    connection
+        .execute_batch(SYNTHETIC_SCHEMA)
+        .expect("create technical-only fixture schema");
+    connection
+        .execute_batch(&format!(
+            "PRAGMA application_id = {APPLICATION_ID}; PRAGMA user_version = 1; PRAGMA foreign_keys = ON;"
+        ))
+        .expect("set HXS identity");
+
+    let sheet = build_sheet(
+        1,
+        "TechnicalOnly",
+        0,
+        "en",
+        vec![ColumnSpec {
+            index: 0,
+            offset: 0,
+            type_code: 14,
+        }],
+        vec![RowSpec {
+            row_id: 9,
+            subrow_id: 0,
+            technical: vec![(0, 14, vec![9, 0, 0, 0])],
+            strings: Vec::new(),
+        }],
+    );
+    insert_sheet(&connection, &sheet);
+    let content_id = content_id("en", &[&sheet]);
+    let snapshot_id = snapshot_id("technical-only", "en", &content_id);
+    connection
+        .execute(
+            "INSERT INTO hxs_meta (id, format_version, game_version, language, scope, content_id, snapshot_id, extractor_version, lumina_version, sheet_count, row_count, string_cell_count) VALUES (1, 1, 'technical-only', 'en', 'full', ?1, ?2, 'test', '7.7.0', 1, 1, 0)",
+            params![content_id, snapshot_id],
+        )
+        .expect("insert technical-only metadata");
     drop(connection);
     TempFixture { path }
 }
