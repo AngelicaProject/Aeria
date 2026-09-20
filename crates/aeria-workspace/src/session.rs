@@ -96,6 +96,25 @@ impl ProjectSession {
                     source,
                 }
             })?;
+        Self::open_from_source_package(repository_root, source_package)
+    }
+
+    /// Opens an existing project from an HSP that has already been fully
+    /// validated by [`SourcePackage::open`]. The package is consumed and
+    /// becomes the package owned by the session, so callers can validate an
+    /// association before workspace compatibility is checked without
+    /// reopening the archive.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed error when workspace loading, source compatibility, or
+    /// source-guidance validation fails.
+    pub fn open_from_source_package(
+        repository_root: impl Into<PathBuf>,
+        source_package: SourcePackage,
+    ) -> Result<Self, ProjectSessionError> {
+        let repository_root = repository_root.into();
+        let source_package_path = source_package.package_path().to_owned();
         let store = WorkspaceStore::new(repository_root.clone());
         let workspace = store.load().map_err(|source| ProjectSessionError::Store {
             repository_root: repository_root.clone(),

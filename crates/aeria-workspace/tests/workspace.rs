@@ -285,6 +285,44 @@ fn initializes_and_reopens_a_new_project_without_persisting_the_source_path() {
 }
 
 #[test]
+fn open_and_open_from_source_package_produce_equivalent_sessions() {
+    let fixture = write_fixture();
+    let repository = tempfile::tempdir().expect("temporary repository");
+    let cache_root = repository.path().join("cache");
+    ProjectSession::initialize(repository.path(), &fixture.package_path, &cache_root, "fr")
+        .expect("project should initialize");
+
+    let opened = ProjectSession::open(repository.path(), &fixture.package_path, &cache_root)
+        .expect("normal constructor should open");
+    let source_package = aeria_hsp::SourcePackage::open(&fixture.package_path, &cache_root)
+        .expect("source package should validate");
+    let opened_from_package =
+        ProjectSession::open_from_source_package(repository.path(), source_package)
+            .expect("validated-package constructor should open");
+
+    assert_eq!(
+        opened.repository_root(),
+        opened_from_package.repository_root()
+    );
+    assert_eq!(
+        opened.source_package_path(),
+        opened_from_package.source_package_path()
+    );
+    assert_eq!(
+        opened.source_package().package_id(),
+        opened_from_package.source_package().package_id()
+    );
+    assert_eq!(
+        opened.workspace().metadata(),
+        opened_from_package.workspace().metadata()
+    );
+    assert_eq!(
+        opened.source().metadata().snapshot_id,
+        opened_from_package.source().metadata().snapshot_id
+    );
+}
+
+#[test]
 fn opens_existing_project_and_preserves_managed_files() {
     let fixture = write_fixture();
     let repository = tempfile::tempdir().expect("temporary repository");

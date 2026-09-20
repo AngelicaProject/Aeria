@@ -49,8 +49,19 @@ only when the final file is missing.
 
 The launcher can list recents using filesystem presence only, without opening
 HSP/HXS data or creating a `ProjectSession`. Ready entries can be opened by
-opaque ID; the actual opened HSP package ID must exactly match the remembered
-association before the active project is replaced. `Remove from recents`
+opaque ID through this sequence:
+
+```text
+filesystem existence checks
+→ SourcePackage::open on the remembered HSP path
+→ exact sourcePackageId comparison
+→ ProjectSession::open_from_source_package with that validated package
+→ active-project replacement
+→ best-effort registry refresh
+```
+
+The exact remembered HSP association is therefore checked before workspace
+compatibility can reject a replacement package. `Remove from recents`
 removes only registry state. Manual Open project and Create project remain
 fully usable when the registry is corrupt, stale, or unavailable, and closing
 an active project does not remove its entry.

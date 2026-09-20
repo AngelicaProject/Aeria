@@ -10,8 +10,8 @@ use aeria_atlas::{
 use aeria_core::{ReviewState, SourceBinding, TranslationUnitId};
 use aeria_hsp::SourcePackage;
 use aeria_projects::{ProjectMetadata, ProjectRegistry, REGISTRY_FILE_NAME, RegistryEntry};
-use aeria_workspace::ProjectSession;
 use aeria_workspace::TranslationRowCursor;
+use aeria_workspace::{ProjectSession, ProjectSessionError};
 use serde::Serialize;
 
 use tauri::{Emitter, Manager, State};
@@ -264,19 +264,26 @@ fn open_recent_project_with_entry(
         ));
     }
 
-    let replacement = ProjectSession::open(repository_root, source_package_path, cache_root)
-        .map_err(CommandError::from)?;
-    let actual_package_id = replacement.source_package().package_id().to_owned();
-    if actual_package_id != entry.source_package_id {
+    let source_package =
+        SourcePackage::open(&source_package_path, cache_root).map_err(|source| {
+            CommandError::from(ProjectSessionError::Source {
+                path: source_package_path.clone(),
+                source,
+            })
+        })?;
+    if source_package.package_id() != entry.source_package_id {
         return Err(CommandError::recent_project(
             "recentProjectSourceMismatch",
             format!(
-                "remembered source packageId {} does not match the package at the remembered path ({actual_package_id})",
-                entry.source_package_id
+                "remembered source packageId {} does not match the package at the remembered path ({})",
+                entry.source_package_id,
+                source_package.package_id()
             ),
         ));
     }
 
+    let replacement = ProjectSession::open_from_source_package(repository_root, source_package)
+        .map_err(CommandError::from)?;
     let project = replace_project(state, replacement)?;
     Ok(remember_project(state, project, Ok(registry_path)))
 }
@@ -837,12 +844,20 @@ fn parse_translation_unit_id(value: &str) -> CommandResult<TranslationUnitId> {
 
 #[cfg(test)]
 mod tests {
+    use std::fmt::Write as _;
     use std::fs;
+    use std::io::{Read, Write as _};
     use std::path::{Path, PathBuf};
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use super::*;
     use crate::dto::{ProjectSheetDto, ReviewStateDto, SourceBindingDto};
+    use aeria_hsp::{
+        SourceGuidance, compute_guidance_bundle_id, compute_package_id, compute_source_evidence_id,
+    };
+    use rusqlite::{Connection, params};
+    use sha2::{Digest, Sha256};
+    use zip::{ZipArchive, ZipWriter, write::SimpleFileOptions};
 
     struct TestRepository {
         path: PathBuf,
@@ -884,7 +899,8 @@ mod tests {
 
     fn seed_recent_project(label: &str) -> (TestRepository, DesktopState, PathBuf, RegistryEntry) {
         let repository = TestRepository::new(label);
-        let source = fixture_path();
+        let source = repository.path().join("source.hsp");
+        fs::copy(fixture_path(), &source).expect("source package");
         let cache_root = repository.path().join("cache");
         let state = DesktopState::new();
         let summary = initialize_project_with_state(
@@ -906,6 +922,154 @@ mod tests {
             .next()
             .expect("seeded entry");
         (repository, state, path, entry)
+    }
+
+    fn write_valid_incompatible_package(path: &Path, work_directory: &Path) {
+        let mut entries = read_archive_entries(path);
+        let manifest_entry = entries
+            .iter()
+            .find(|(entry_path, _)| entry_path == "manifest.json")
+            .expect("manifest entry")
+            .1
+            .clone();
+        let mut manifest: aeria_hsp::HspManifest =
+            serde_json::from_slice(&manifest_entry).expect("manifest JSON");
+
+        let source_entry = entries
+            .iter()
+            .find(|(entry_path, _)| entry_path == "source/source.hxs")
+            .expect("source entry")
+            .1
+            .clone();
+        let hxs_path = work_directory.join("replacement.hxs");
+        fs::write(&hxs_path, source_entry).expect("replacement HXS");
+        let connection = Connection::open(&hxs_path).expect("replacement HXS database");
+        let (content_id, source_language): (String, String) = connection
+            .query_row(
+                "SELECT content_id, language FROM hxs_meta WHERE id = 1",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("HXS metadata");
+        let game_version = "replacement-game";
+        let snapshot_id = hxs_snapshot_id(game_version, &source_language, &content_id);
+        connection
+            .execute(
+                "UPDATE hxs_meta SET game_version = ?1, snapshot_id = ?2 WHERE id = 1",
+                params![game_version, &snapshot_id],
+            )
+            .expect("update HXS metadata");
+        drop(connection);
+
+        let source_bytes = fs::read(&hxs_path).expect("replacement HXS bytes");
+        replace_archive_entry(&mut entries, "source/source.hxs", source_bytes.clone());
+        manifest.game_version = game_version.to_owned();
+        manifest.source.snapshot_id = snapshot_id.clone();
+        update_component(&mut manifest, "sourceHxs", &source_bytes);
+
+        let guidance_entry = entries
+            .iter()
+            .find(|(entry_path, _)| entry_path == "guidance/source-guidance.json")
+            .expect("guidance entry")
+            .1
+            .clone();
+        let mut guidance: SourceGuidance =
+            serde_json::from_slice(&guidance_entry).expect("guidance JSON");
+        guidance.game_version = game_version.to_owned();
+        guidance.source.snapshot_id = snapshot_id.clone();
+        let replacement_snapshot =
+            aeria_hxs::HxsSnapshot::open(&hxs_path).expect("replacement HXS should validate");
+        let source_evidence = guidance
+            .evidence_inputs
+            .iter_mut()
+            .find(|input| input.language == source_language)
+            .expect("source evidence input");
+        source_evidence.evidence_id =
+            compute_source_evidence_id(&replacement_snapshot).expect("source evidence hash");
+        guidance.bundle_id = compute_guidance_bundle_id(&guidance).expect("guidance hash");
+        let mut guidance_bytes = serde_json::to_vec(&guidance).expect("guidance JSON");
+        guidance_bytes.push(b'\n');
+        replace_archive_entry(
+            &mut entries,
+            "guidance/source-guidance.json",
+            guidance_bytes.clone(),
+        );
+        update_component(&mut manifest, "sourceGuidance", &guidance_bytes);
+        manifest.package_id = compute_package_id(&manifest).expect("package hash");
+        let mut manifest_bytes = serde_json::to_vec(&manifest).expect("manifest JSON");
+        manifest_bytes.push(b'\n');
+        replace_archive_entry(&mut entries, "manifest.json", manifest_bytes);
+
+        let file = fs::File::create(path).expect("replacement package");
+        let mut archive = ZipWriter::new(file);
+        for (entry_path, bytes) in entries {
+            archive
+                .start_file(entry_path, SimpleFileOptions::default())
+                .expect("replacement archive entry");
+            archive
+                .write_all(&bytes)
+                .expect("replacement archive bytes");
+        }
+        archive.finish().expect("replacement archive");
+    }
+
+    fn read_archive_entries(path: &Path) -> Vec<(String, Vec<u8>)> {
+        let file = fs::File::open(path).expect("source package archive");
+        let mut archive = ZipArchive::new(file).expect("source package zip");
+        (0..archive.len())
+            .map(|index| {
+                let mut entry = archive.by_index(index).expect("archive entry");
+                let mut bytes = Vec::new();
+                entry.read_to_end(&mut bytes).expect("archive bytes");
+                (entry.name().to_owned(), bytes)
+            })
+            .collect()
+    }
+
+    fn replace_archive_entry(entries: &mut [(String, Vec<u8>)], path: &str, bytes: Vec<u8>) {
+        let entry = entries
+            .iter_mut()
+            .find(|(entry_path, _)| entry_path == path)
+            .expect("archive entry to replace");
+        entry.1 = bytes;
+    }
+
+    fn update_component(manifest: &mut aeria_hsp::HspManifest, kind: &str, bytes: &[u8]) {
+        let component = manifest
+            .components
+            .iter_mut()
+            .find(|component| component.kind == kind)
+            .expect("manifest component");
+        component.size = i64::try_from(bytes.len()).expect("component size");
+        component.sha256 = hash_bytes(bytes);
+    }
+
+    fn hxs_snapshot_id(game_version: &str, source_language: &str, content_id: &str) -> String {
+        let mut hasher = Sha256::new();
+        hasher.update(b"HARMONIA-HXS-SNAPSHOT-v1");
+        for value in [game_version, source_language, content_id] {
+            hasher.update(
+                u32::try_from(value.len())
+                    .expect("test value fits HXS framing")
+                    .to_le_bytes(),
+            );
+            hasher.update(value.as_bytes());
+        }
+        let digest: [u8; 32] = hasher.finalize().into();
+        hash_string(digest)
+    }
+
+    fn hash_bytes(bytes: &[u8]) -> String {
+        let digest: [u8; 32] = Sha256::digest(bytes).into();
+        hash_string(digest)
+    }
+
+    fn hash_string(digest: [u8; 32]) -> String {
+        let mut hex = String::with_capacity(64);
+        for byte in digest {
+            write!(&mut hex, "{byte:02x}").expect("hex string");
+        }
+        format!("sha256:{hex}")
     }
 
     fn binding() -> SourceBindingDto {
@@ -1032,6 +1196,58 @@ mod tests {
                 .expect("current project")
                 .is_none()
         );
+    }
+
+    #[test]
+    fn recent_project_replacement_mismatch_precedes_workspace_compatibility() {
+        let (repository, state, registry_path, entry) =
+            seed_recent_project("recent-replacement-mismatch");
+        let remembered_entry = entry.clone();
+        let source_path = PathBuf::from(&entry.source_package_path);
+        let cache_root = repository.path().join("cache");
+        let before = open_project_with_state(
+            &state,
+            repository.path().to_string_lossy().into_owned(),
+            source_path.to_string_lossy().into_owned(),
+            cache_root.clone(),
+        )
+        .expect("active project should open");
+        let before_active = current_project_with_state(&state).expect("active project snapshot");
+
+        write_valid_incompatible_package(&source_path, repository.path());
+        let replacement =
+            SourcePackage::open(&source_path, repository.path().join("replacement-cache"))
+                .expect("replacement package should be valid");
+        assert_ne!(replacement.package_id(), entry.source_package_id);
+
+        let compatibility_error = match ProjectSession::open(
+            repository.path(),
+            &source_path,
+            repository.path().join("direct-cache"),
+        ) {
+            Ok(_) => panic!("replacement package should be workspace-incompatible"),
+            Err(error) => CommandError::from(error),
+        };
+        assert_eq!(compatibility_error.code, "projectCompatibility");
+
+        let error =
+            open_recent_project_with_entry(&state, &entry, cache_root, registry_path.clone())
+                .expect_err("recent association mismatch should win");
+        assert_eq!(error.code, "recentProjectSourceMismatch");
+        assert_eq!(
+            current_project_with_state(&state).expect("active project after mismatch"),
+            before_active
+        );
+        assert_eq!(
+            aeria_projects::ProjectRegistry::new(registry_path)
+                .load()
+                .expect("registry after mismatch")
+                .into_iter()
+                .next()
+                .expect("remembered entry"),
+            remembered_entry
+        );
+        assert_eq!(before.source_package_id, entry.source_package_id);
     }
 
     #[test]

@@ -24,6 +24,13 @@ validate HSP archive, HSG, embedded HXS, and their relationships
 → create session
 ```
 
+`ProjectSession::open` validates the HSP once and delegates the already
+validated package to `ProjectSession::open_from_source_package(repository_root,
+source_package)`. The latter owns workspace loading, workspace/source
+compatibility, blocked-unit guidance validation, and session construction. It
+uses `source_package.package_path()` for the runtime HSP path and never adds
+that path to Workspace Format v1.
+
 The compatibility check reuses the workspace source-binding contract for
 source language, HXS content ID, and HXS snapshot ID. An incompatible source
 is an open failure. Opening does not update workspace metadata, invoke source

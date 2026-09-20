@@ -18,6 +18,11 @@ import type {
   SourcePackageEventPayload,
 } from "../types";
 import { ErrorBanner } from "./ErrorBanner";
+import {
+  initialRecentProjectsState,
+  reduceRecentProjectsState,
+  type RecentProjectsState,
+} from "../recentProjectsState";
 
 type LauncherMode = "open" | "create";
 
@@ -79,8 +84,8 @@ export function ProjectLauncher({ initialError, onProjectReady }: ProjectLaunche
   const [cancelRequested, setCancelRequested] = useState(false);
   const [progress, setProgress] = useState<AtlasEvent | null>(null);
   const [error, setError] = useState<CommandError | null>(initialError);
-  const [recentProjects, setRecentProjects] = useState<RecentProjectDto[] | null>(null);
-  const [recentError, setRecentError] = useState<CommandError | null>(null);
+  const [recentState, setRecentState] = useState<RecentProjectsState>(initialRecentProjectsState);
+  const [recentActionError, setRecentActionError] = useState<CommandError | null>(null);
   const [recentBusyId, setRecentBusyId] = useState<string | null>(null);
   const busyRef = useRef<LauncherMode | null>(null);
   const jobIdRef = useRef<string | null>(null);
@@ -92,12 +97,13 @@ export function ProjectLauncher({ initialError, onProjectReady }: ProjectLaunche
     void listRecentProjects()
       .then((projects) => {
         if (!disposed) {
-          setRecentProjects(projects);
-          setRecentError(null);
+          setRecentState({ status: "loaded", projects });
         }
       })
       .catch((caughtError: unknown) => {
-        if (!disposed) setRecentError(normalizeCommandError(caughtError));
+        if (!disposed) {
+          setRecentState({ status: "failed", error: normalizeCommandError(caughtError) });
+        }
       });
     return () => {
       disposed = true;
@@ -163,12 +169,15 @@ export function ProjectLauncher({ initialError, onProjectReady }: ProjectLaunche
   async function handleRecentRemove(project: RecentProjectDto) {
     if (busy !== null || recentBusyId !== null) return;
     setRecentBusyId(project.id);
-    setRecentError(null);
+    setRecentActionError(null);
     try {
       await forgetRecentProject(project.id);
-      setRecentProjects((current) => current?.filter((candidate) => candidate.id !== project.id) ?? []);
+      setRecentState((current) => reduceRecentProjectsState(current, {
+        type: "removed",
+        projectId: project.id,
+      }));
     } catch (caughtError) {
-      setRecentError(normalizeCommandError(caughtError));
+      setRecentActionError(normalizeCommandError(caughtError));
     } finally {
       setRecentBusyId(null);
     }
@@ -210,22 +219,32 @@ export function ProjectLauncher({ initialError, onProjectReady }: ProjectLaunche
               <p className="eyebrow">Local workspace history</p>
               <h2 id="recent-projects-title">Recent projects</h2>
             </div>
-            {recentProjects ? <span className="pane-count">{recentProjects.length}</span> : null}
+            {recentState.status === "loaded" ? <span className="pane-count">{recentState.projects.length}</span> : null}
           </div>
-          {recentError ? (
+          {recentState.status === "failed" && recentState.error ? (
             <ErrorBanner
               title="Recent projects unavailable"
-              error={recentError}
-              onDismiss={() => setRecentError(null)}
+              error={recentState.error}
+              onDismiss={() => setRecentState((current) => reduceRecentProjectsState(current, { type: "dismissError" }))}
             />
           ) : null}
-          {recentProjects === null && !recentError ? <p className="list-state">Loading recent projects…</p> : null}
-          {recentProjects?.length === 0 ? (
+          {recentActionError ? (
+            <ErrorBanner
+              title="Could not remove recent project"
+              error={recentActionError}
+              onDismiss={() => setRecentActionError(null)}
+            />
+          ) : null}
+          {recentState.status === "loading" ? <p className="list-state">Loading recent projects…</p> : null}
+          {recentState.status === "failed" ? (
+            <p className="recent-empty">Recent projects unavailable.</p>
+          ) : null}
+          {recentState.status === "loaded" && recentState.projects.length === 0 ? (
             <p className="recent-empty">Projects you successfully open or create will appear here.</p>
           ) : null}
-          {recentProjects && recentProjects.length > 0 ? (
+          {recentState.status === "loaded" && recentState.projects.length > 0 ? (
             <div className="recent-project-list">
-              {recentProjects.map((project) => (
+              {recentState.projects.map((project) => (
                 <article className="recent-project-card" key={project.id}>
                   <div className="recent-project-topline">
                     <strong>{repositoryName(project.repositoryRoot)}</strong>

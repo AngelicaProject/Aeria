@@ -37,11 +37,16 @@ dependencies = [
  "aeria-atlas",
  "aeria-core",
  "aeria-hsp",
+ "aeria-hxs",
  "aeria-projects",
  "aeria-workspace",
+ "rusqlite",
  "serde",
+ "serde_json",
+ "sha2 0.11.0",
  "tauri",
  "tauri-build",
+ "zip",
 ]
 
 [[package]]

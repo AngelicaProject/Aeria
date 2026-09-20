@@ -51,7 +51,8 @@ rows while its row cursor still has more source work.
 This first editor intentionally has no file picker, search or filtering, virtualization, structured macro controls, source update/rebase UI, export, Git controls, or AI controls. Macro text is shown literally with whitespace preserved.
 
 Registry load failures show a dismissible, non-blocking launcher warning while
-manual Open project and Create project remain available. A successful project
-launch with a local registry write warning enters the editor normally and
-shows the warning at the application level. The launcher never automatically
-reopens the last project.
+manual Open project and Create project remain available. After dismissal, the
+Recent projects section remains in a stable unavailable state rather than
+returning to its loading state. A successful project launch with a local
+registry write warning enters the editor normally and shows the warning at the
+application level. The launcher never automatically reopens the last project.
