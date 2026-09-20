@@ -1,9 +1,15 @@
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use aeria_core::{ReviewState, Sha256Hash, SourceBinding};
+use aeria_hsp::{
+    GuidanceEvidenceInput, GuidanceOccurrence, GuidanceSheet, GuidanceSheetStatus,
+    HspComponentDescriptor, HspManifest, HspSourceIdentity, SourceGuidance,
+    compute_guidance_bundle_id, compute_package_id, compute_source_evidence_id,
+};
 use aeria_hxs::HxsSnapshot;
 use aeria_workspace::{
     MAX_TRANSLATION_PAGE_SIZE, ProjectSession, ProjectSessionError, TranslationMutationError,
@@ -12,6 +18,7 @@ use aeria_workspace::{
 use rusqlite::{Connection, params};
 use sha2::{Digest, Sha256};
 use tempfile::TempDir;
+use zip::ZipWriter;
 
 const SYNTHETIC_SCHEMA: &str = include_str!("../../aeria-hxs/tests/fixtures/synthetic_v1.sql");
 const APPLICATION_ID: i64 = 0x4841_544c;
@@ -19,6 +26,7 @@ const APPLICATION_ID: i64 = 0x4841_544c;
 struct Fixture {
     _directory: TempDir,
     path: PathBuf,
+    package_path: PathBuf,
     one_macro_hash: [u8; 32],
     one_row_technical_hash: [u8; 32],
     two_macro_hash: [u8; 32],
@@ -28,6 +36,7 @@ struct Fixture {
 struct ProjectionFixture {
     _directory: TempDir,
     path: PathBuf,
+    package_path: PathBuf,
 }
 
 struct ProjectionString {
@@ -222,13 +231,18 @@ fn initializes_and_reopens_a_new_project_without_persisting_the_source_path() {
     let repository = tempfile::tempdir().expect("temporary repository");
     let unrelated_path = repository.path().join("README.md");
     fs::write(&unrelated_path, b"project-owned file\n").expect("unrelated file");
-    let source_path = fixture.path.clone();
+    let source_package_path = fixture.package_path.clone();
 
-    let session = ProjectSession::initialize(repository.path(), &source_path, "fr")
-        .expect("new project should initialize");
+    let session = ProjectSession::initialize(
+        repository.path(),
+        &source_package_path,
+        repository.path().join("cache"),
+        "fr",
+    )
+    .expect("new project should initialize");
     let source_metadata = session.source().metadata();
     assert_eq!(session.repository_root(), repository.path());
-    assert_eq!(session.source_path(), source_path.as_path());
+    assert_eq!(session.source_package_path(), source_package_path.as_path());
     assert_eq!(session.workspace().units().count(), 0);
     assert_eq!(
         session.workspace().metadata().source_language(),
@@ -247,8 +261,8 @@ fn initializes_and_reopens_a_new_project_without_persisting_the_source_path() {
     assert!(!repository.path().join(".aeria/units").exists());
     let manifest =
         fs::read_to_string(repository.path().join(".aeria/manifest.json")).expect("manifest");
-    assert!(!manifest.contains(source_path.to_string_lossy().as_ref()));
-    assert_managed_files_omit_path(repository.path(), &source_path);
+    assert!(!manifest.contains(source_package_path.to_string_lossy().as_ref()));
+    assert_managed_files_omit_path(repository.path(), &source_package_path);
     assert_eq!(
         fs::read(&unrelated_path).expect("unrelated file"),
         b"project-owned file\n"
@@ -256,11 +270,18 @@ fn initializes_and_reopens_a_new_project_without_persisting_the_source_path() {
 
     let expected_metadata = session.workspace().metadata().clone();
     drop(session);
-    let reopened = ProjectSession::open(repository.path(), &source_path)
-        .expect("initialized project should reopen");
+    let reopened = ProjectSession::open(
+        repository.path(),
+        &source_package_path,
+        repository.path().join("cache"),
+    )
+    .expect("initialized project should reopen");
     assert_eq!(reopened.workspace().metadata(), &expected_metadata);
     assert_eq!(reopened.workspace().units().count(), 0);
-    assert_eq!(reopened.source_path(), source_path.as_path());
+    assert_eq!(
+        reopened.source_package_path(),
+        source_package_path.as_path()
+    );
 }
 
 #[test]
@@ -277,8 +298,12 @@ fn opens_existing_project_and_preserves_managed_files() {
         .expect("workspace should initialize");
     let before = managed_files(repository.path());
 
-    let session = ProjectSession::open(repository.path(), &fixture.path)
-        .expect("existing project should open");
+    let session = ProjectSession::open(
+        repository.path(),
+        &fixture.package_path,
+        repository.path().join("cache"),
+    )
+    .expect("existing project should open");
     assert_eq!(session.workspace().units().count(), 1);
     assert_eq!(
         session
@@ -291,7 +316,65 @@ fn opens_existing_project_and_preserves_managed_files() {
     );
     assert_eq!(session.workspace().metadata(), workspace.metadata());
     drop(session);
-    assert_managed_files_omit_path(repository.path(), &fixture.path);
+    assert_managed_files_omit_path(repository.path(), &fixture.package_path);
+    assert_eq!(before, managed_files(repository.path()));
+}
+
+#[test]
+fn opening_existing_workspace_rejects_a_binding_blocked_by_guidance() {
+    let fixture = write_fixture();
+    let blocked_package = write_hsp_package(&fixture.path, |_, row_id, _, column_index, _| {
+        !(row_id == 42 && column_index == 0)
+    });
+    let source = HxsSnapshot::open(&fixture.path).expect("fixture should verify");
+    let mut workspace = Workspace::from_verified_snapshot(&source, "fr").expect("workspace");
+    let id = workspace
+        .create_unit_from_hxs(&source, "Synthetic", 42, 0, 0, "Bonjour")
+        .expect("unit");
+    let repository = tempfile::tempdir().expect("repository");
+    WorkspaceStore::new(repository.path())
+        .initialize(&workspace)
+        .expect("workspace should initialize");
+    let before = managed_files(repository.path());
+
+    let Err(error) = ProjectSession::open(
+        repository.path(),
+        blocked_package,
+        repository.path().join("cache"),
+    ) else {
+        panic!("blocked existing unit must fail opening")
+    };
+    assert!(matches!(
+        error,
+        ProjectSessionError::BlockedWorkspaceUnit {
+            translation_unit_id,
+            source_binding,
+            ..
+        } if translation_unit_id == id
+            && source_binding == SourceBinding::new("Synthetic", 42, 0, 0)
+    ));
+    assert_eq!(before, managed_files(repository.path()));
+}
+
+#[test]
+fn blocked_target_mutation_does_not_create_a_unit_or_write_workspace_files() {
+    let fixture = write_fixture();
+    let blocked_package = write_hsp_package(&fixture.path, |_, row_id, _, column_index, _| {
+        !(row_id == 42 && column_index == 0)
+    });
+    let repository = tempfile::tempdir().expect("repository");
+    let mut session = initialize_project(&repository, &blocked_package, "fr");
+    let before = managed_files(repository.path());
+
+    let error = session
+        .set_target(&SourceBinding::new("Synthetic", 42, 0, 0), "Bonjour")
+        .expect_err("blocked source must be rejected");
+    assert!(matches!(
+        error,
+        TranslationMutationError::SourceNotTranslatable { source_binding }
+            if source_binding == SourceBinding::new("Synthetic", 42, 0, 0)
+    ));
+    assert_eq!(session.workspace().units().count(), 0);
     assert_eq!(before, managed_files(repository.path()));
 }
 
@@ -314,7 +397,12 @@ fn translation_read_composes_verified_source_with_sparse_workspace_overlay() {
     WorkspaceStore::new(repository.path())
         .initialize(&workspace)
         .expect("workspace should initialize");
-    let session = ProjectSession::open(repository.path(), &fixture.path).expect("session");
+    let session = ProjectSession::open(
+        repository.path(),
+        &fixture.package_path,
+        repository.path().join("cache"),
+    )
+    .expect("session");
 
     let first = session
         .page_translation_rows("Synthetic", None, 1)
@@ -346,16 +434,15 @@ fn translation_read_composes_verified_source_with_sparse_workspace_overlay() {
 }
 
 #[test]
-fn translation_rows_classify_context_empty_and_regular_multi_string_rows() {
+fn translation_rows_follow_guidance_for_context_empty_and_regular_multi_string_rows() {
     let fixture = write_projection_fixture();
     let repository = tempfile::tempdir().expect("temporary repository");
-    let session = ProjectSession::initialize(repository.path(), &fixture.path, "fr")
-        .expect("project should initialize");
+    let session = initialize_project(&repository, &fixture.package_path, "fr");
 
     let page = session
         .page_translation_rows("Projection", None, 5)
         .expect("row page");
-    assert_eq!(page.rows.len(), 2);
+    assert_eq!(page.rows.len(), 3);
 
     let path_row = &page.rows[0];
     assert_eq!((path_row.row_id, path_row.subrow_id), (1, 0));
@@ -365,13 +452,27 @@ fn translation_rows_classify_context_empty_and_regular_multi_string_rows() {
             .iter()
             .map(|cell| (cell.column_index, cell.source_macro.as_str()))
             .collect::<Vec<_>>(),
-        [(0, "TEXT_CONTEXT")]
+        [(0, "Context field")]
     );
     assert_eq!(path_row.cells.len(), 1);
     assert_eq!(path_row.cells[0].source_binding.column_index(), 1);
     assert_eq!(path_row.cells[0].source_macro, "Greetings and welcome");
 
-    let item_row = &page.rows[1];
+    let empty_row = &page.rows[1];
+    assert_eq!((empty_row.row_id, empty_row.subrow_id), (2, 0));
+    assert_eq!(
+        empty_row
+            .context
+            .iter()
+            .map(|cell| (cell.column_index, cell.source_macro.as_str()))
+            .collect::<Vec<_>>(),
+        [(0, "Empty context")]
+    );
+    assert_eq!(empty_row.cells.len(), 1);
+    assert_eq!(empty_row.cells[0].source_binding.column_index(), 1);
+    assert_eq!(empty_row.cells[0].source_macro, "");
+
+    let item_row = &page.rows[2];
     assert_eq!((item_row.row_id, item_row.subrow_id), (4, 0));
     assert!(item_row.context.is_empty());
     assert_eq!(item_row.cells.len(), 4);
@@ -391,8 +492,7 @@ fn translation_rows_classify_context_empty_and_regular_multi_string_rows() {
 fn context_only_and_empty_rows_advance_the_translation_row_cursor() {
     let fixture = write_projection_fixture();
     let repository = tempfile::tempdir().expect("temporary repository");
-    let session = ProjectSession::initialize(repository.path(), &fixture.path, "fr")
-        .expect("project should initialize");
+    let session = initialize_project(&repository, &fixture.package_path, "fr");
 
     let first = session
         .page_translation_rows("Projection", None, 1)
@@ -416,9 +516,9 @@ fn context_only_and_empty_rows_advance_the_translation_row_cursor() {
         after = page.next_after;
     }
 
-    assert_eq!(visible, [1, 4]);
+    assert_eq!(visible, [1, 2, 4]);
     assert_eq!(
-        empty_pages, 3,
+        empty_pages, 2,
         "context/empty source rows still advanced paging"
     );
 }
@@ -438,7 +538,7 @@ fn translation_rows_overlay_cells_by_binding_and_preserve_explicit_empty_targets
     WorkspaceStore::new(repository.path())
         .initialize(&workspace)
         .expect("workspace should initialize");
-    let session = ProjectSession::open(repository.path(), &fixture.path).expect("session");
+    let session = open_project(&repository, &fixture.package_path);
 
     let page = session
         .page_translation_rows(
@@ -492,7 +592,7 @@ fn translation_read_distinguishes_an_empty_target_from_missing_workspace_state()
     WorkspaceStore::new(repository.path())
         .initialize(&workspace)
         .expect("workspace should initialize");
-    let session = ProjectSession::open(repository.path(), &fixture.path).expect("session");
+    let session = open_project(&repository, &fixture.package_path);
     let page = session
         .page_translation_rows("Synthetic", None, 2)
         .expect("translation page");
@@ -511,9 +611,8 @@ fn translation_read_distinguishes_an_empty_target_from_missing_workspace_state()
 fn translation_read_rejects_invalid_limits_and_cross_sheet_cursors() {
     let fixture = write_fixture();
     let repository = tempfile::tempdir().expect("temporary repository");
-    ProjectSession::initialize(repository.path(), &fixture.path, "fr")
-        .expect("project should initialize");
-    let session = ProjectSession::open(repository.path(), &fixture.path).expect("session");
+    initialize_project(&repository, &fixture.package_path, "fr");
+    let session = open_project(&repository, &fixture.package_path);
 
     assert!(matches!(
         session.page_translation_rows("Synthetic", None, 0),
@@ -568,7 +667,7 @@ fn translation_read_rejects_a_stale_sparse_unit_fingerprint_without_repairing_fi
     fs::write(&shard, updated).expect("stale unit fixture");
     let before_read = managed_files(repository.path());
 
-    let session = ProjectSession::open(repository.path(), &fixture.path).expect("session");
+    let session = open_project(&repository, &fixture.package_path);
     let error = session
         .page_translation_rows(
             "Synthetic",
@@ -596,8 +695,7 @@ fn translation_read_rejects_a_stale_sparse_unit_fingerprint_without_repairing_fi
 fn translation_reads_do_not_modify_managed_workspace_files() {
     let fixture = write_fixture();
     let repository = tempfile::tempdir().expect("temporary repository");
-    let session = ProjectSession::initialize(repository.path(), &fixture.path, "fr")
-        .expect("project should initialize");
+    let session = initialize_project(&repository, &fixture.package_path, "fr");
     let before = managed_files(repository.path());
 
     let mut after = None;
@@ -621,8 +719,7 @@ fn session_mutations_create_update_and_read_back_the_committed_state() {
     let source_binding = SourceBinding::new("Synthetic", 42, 0, 0);
     let unrelated_path = repository.path().join("README.md");
     fs::write(&unrelated_path, b"project-owned\n").expect("unrelated file");
-    let mut session = ProjectSession::initialize(repository.path(), &fixture.path, "fr")
-        .expect("project should initialize");
+    let mut session = initialize_project(&repository, &fixture.package_path, "fr");
 
     let id = session
         .set_target(&source_binding, "Bonjour")
@@ -665,7 +762,7 @@ fn session_mutations_create_update_and_read_back_the_committed_state() {
     );
 
     drop(session);
-    let reopened = ProjectSession::open(repository.path(), &fixture.path).expect("reopen");
+    let reopened = open_project(&repository, &fixture.package_path);
     let reopened_unit = reopened.workspace().unit(id).expect("persisted unit");
     assert_eq!(reopened_unit.target_macro(), "Salut");
     assert_eq!(reopened_unit.source_binding(), &source_binding);
@@ -676,8 +773,7 @@ fn empty_target_creates_explicit_sparse_state() {
     let fixture = write_fixture();
     let repository = tempfile::tempdir().expect("temporary repository");
     let binding = SourceBinding::new("Synthetic", 7, 0, 0);
-    let mut session = ProjectSession::initialize(repository.path(), &fixture.path, "fr")
-        .expect("project should initialize");
+    let mut session = initialize_project(&repository, &fixture.package_path, "fr");
 
     let id = session
         .set_target(&binding, "")
@@ -693,7 +789,7 @@ fn empty_target_creates_explicit_sparse_state() {
     assert_eq!(overlay.target_macro, "");
 
     drop(session);
-    let reopened = ProjectSession::open(repository.path(), &fixture.path).expect("reopen");
+    let reopened = open_project(&repository, &fixture.package_path);
     assert_eq!(
         reopened
             .workspace()
@@ -709,8 +805,7 @@ fn identical_mutations_do_not_rewrite_canonical_files() {
     let fixture = write_fixture();
     let repository = tempfile::tempdir().expect("temporary repository");
     let binding = SourceBinding::new("Synthetic", 42, 0, 0);
-    let mut session = ProjectSession::initialize(repository.path(), &fixture.path, "fr")
-        .expect("project should initialize");
+    let mut session = initialize_project(&repository, &fixture.package_path, "fr");
     let id = session
         .set_target(&binding, "Bonjour")
         .expect("target should create a unit");
@@ -741,8 +836,7 @@ fn note_and_review_mutations_preserve_their_existing_semantics() {
     let fixture = write_fixture();
     let repository = tempfile::tempdir().expect("temporary repository");
     let binding = SourceBinding::new("Synthetic", 42, 0, 0);
-    let mut session = ProjectSession::initialize(repository.path(), &fixture.path, "fr")
-        .expect("project should initialize");
+    let mut session = initialize_project(&repository, &fixture.package_path, "fr");
     let id = session
         .set_target(&binding, "Bonjour")
         .expect("target should create a unit");
@@ -779,7 +873,7 @@ fn note_and_review_mutations_preserve_their_existing_semantics() {
         ReviewState::NeedsReview
     );
     drop(session);
-    let reopened = ProjectSession::open(repository.path(), &fixture.path).expect("reopen");
+    let reopened = open_project(&repository, &fixture.package_path);
     let unit = reopened.workspace().unit(id).expect("persisted unit");
     assert_eq!(unit.translator_note(), None);
     assert_eq!(unit.review_state(), ReviewState::NeedsReview);
@@ -790,8 +884,7 @@ fn invalid_or_missing_targets_do_not_change_session_or_files() {
     let fixture = write_fixture();
     let repository = tempfile::tempdir().expect("temporary repository");
     let binding = SourceBinding::new("Synthetic", 42, 0, 0);
-    let mut session = ProjectSession::initialize(repository.path(), &fixture.path, "fr")
-        .expect("project should initialize");
+    let mut session = initialize_project(&repository, &fixture.package_path, "fr");
     let before = managed_files(repository.path());
     assert!(matches!(
         session.set_target(&binding, "<if(1,2,3>"),
@@ -809,9 +902,7 @@ fn invalid_or_missing_targets_do_not_change_session_or_files() {
 
     assert!(matches!(
         session.set_target(&SourceBinding::new("Synthetic", 42, 0, 1), "target"),
-        Err(TranslationMutationError::Workspace(
-            WorkspaceError::SourceCellNotFound { .. }
-        ))
+        Err(TranslationMutationError::SourceNotTranslatable { .. })
     ));
     assert_eq!(before, managed_files(repository.path()));
 
@@ -848,8 +939,7 @@ fn stale_source_fingerprint_blocks_all_ordinary_mutations() {
     let fixture = write_fixture();
     let repository = tempfile::tempdir().expect("temporary repository");
     let binding = SourceBinding::new("Synthetic", 42, 0, 0);
-    let mut initial = ProjectSession::initialize(repository.path(), &fixture.path, "fr")
-        .expect("project should initialize");
+    let mut initial = initialize_project(&repository, &fixture.package_path, "fr");
     let id = initial
         .set_target(&binding, "Bonjour")
         .expect("target should create a unit");
@@ -868,7 +958,7 @@ fn stale_source_fingerprint_blocks_all_ordinary_mutations() {
     fs::write(&shard, stale).expect("stale unit fixture");
     let before = managed_files(repository.path());
 
-    let mut session = ProjectSession::open(repository.path(), &fixture.path).expect("reopen");
+    let mut session = open_project(&repository, &fixture.package_path);
     for result in [
         session.set_target(&binding, "Salut").map(|_| ()),
         session.set_note(id, Some("note".to_owned())),
@@ -898,8 +988,7 @@ fn stale_source_fingerprint_blocks_all_ordinary_mutations() {
 fn only_the_affected_shard_changes() {
     let fixture = write_fixture();
     let repository = tempfile::tempdir().expect("temporary repository");
-    let mut session = ProjectSession::initialize(repository.path(), &fixture.path, "fr")
-        .expect("project should initialize");
+    let mut session = initialize_project(&repository, &fixture.package_path, "fr");
     let first_binding = SourceBinding::new("Synthetic", 42, 0, 0);
     let second_binding = SourceBinding::new("Synthetic", 7, 0, 0);
     let first = session
@@ -935,13 +1024,16 @@ fn rejects_a_different_verified_snapshot_without_modifying_the_workspace() {
     let original_fixture = write_fixture();
     let different_snapshot = write_fixture_with("en", "different-game");
     let repository = tempfile::tempdir().expect("temporary repository");
-    ProjectSession::initialize(repository.path(), &original_fixture.path, "fr")
-        .expect("new project should initialize");
+    initialize_project(&repository, &original_fixture.package_path, "fr");
     let before = managed_files(repository.path());
 
-    let error = ProjectSession::open(repository.path(), &different_snapshot.path)
-        .err()
-        .expect("different snapshot must be rejected");
+    let Err(error) = ProjectSession::open(
+        repository.path(),
+        &different_snapshot.package_path,
+        repository.path().join("cache"),
+    ) else {
+        panic!("different snapshot must be rejected")
+    };
     assert!(matches!(
         error,
         ProjectSessionError::Compatibility {
@@ -957,13 +1049,16 @@ fn rejects_a_different_verified_source_language_without_modifying_the_workspace(
     let original_fixture = write_fixture();
     let different_language = write_fixture_with("ja", "test-game");
     let repository = tempfile::tempdir().expect("temporary repository");
-    ProjectSession::initialize(repository.path(), &original_fixture.path, "fr")
-        .expect("new project should initialize");
+    initialize_project(&repository, &original_fixture.package_path, "fr");
     let before = managed_files(repository.path());
 
-    let error = ProjectSession::open(repository.path(), &different_language.path)
-        .err()
-        .expect("different source language must be rejected");
+    let Err(error) = ProjectSession::open(
+        repository.path(),
+        &different_language.package_path,
+        repository.path().join("cache"),
+    ) else {
+        panic!("different source language must be rejected")
+    };
     assert!(matches!(
         error,
         ProjectSessionError::Compatibility {
@@ -982,20 +1077,34 @@ fn invalid_hxs_and_target_language_fail_before_publishing_workspace_state() {
     fs::write(&invalid_source, b"not an HXS database").expect("invalid source");
     let invalid_source_repository = tempfile::tempdir().expect("temporary repository");
 
-    let error = ProjectSession::initialize(invalid_source_repository.path(), &invalid_source, "fr")
-        .err()
-        .expect("invalid HXS must be rejected");
+    let error = ProjectSession::initialize(
+        invalid_source_repository.path(),
+        &invalid_source,
+        invalid_source_repository.path().join("cache"),
+        "fr",
+    )
+    .err()
+    .expect("invalid HXS must be rejected");
     assert!(matches!(error, ProjectSessionError::Source { .. }));
     assert!(!invalid_source_repository.path().join(".aeria").exists());
-    let error = ProjectSession::open(invalid_source_repository.path(), &invalid_source)
-        .err()
-        .expect("invalid HXS must be rejected while opening");
+    let error = ProjectSession::open(
+        invalid_source_repository.path(),
+        &invalid_source,
+        invalid_source_repository.path().join("cache"),
+    )
+    .err()
+    .expect("invalid HXS must be rejected while opening");
     assert!(matches!(error, ProjectSessionError::Source { .. }));
 
     let invalid_target_repository = tempfile::tempdir().expect("temporary repository");
-    let error = ProjectSession::initialize(invalid_target_repository.path(), &fixture.path, " ")
-        .err()
-        .expect("invalid target language must be rejected");
+    let error = ProjectSession::initialize(
+        invalid_target_repository.path(),
+        &fixture.package_path,
+        invalid_target_repository.path().join("cache"),
+        " ",
+    )
+    .err()
+    .expect("invalid target language must be rejected");
     assert!(matches!(error, ProjectSessionError::Workspace { .. }));
     assert!(!invalid_target_repository.path().join(".aeria").exists());
 }
@@ -1004,13 +1113,17 @@ fn invalid_hxs_and_target_language_fail_before_publishing_workspace_state() {
 fn initialization_protects_existing_project_state() {
     let fixture = write_fixture();
     let repository = tempfile::tempdir().expect("temporary repository");
-    ProjectSession::initialize(repository.path(), &fixture.path, "fr")
-        .expect("new project should initialize");
+    initialize_project(&repository, &fixture.package_path, "fr");
     let before = managed_files(repository.path());
 
-    let error = ProjectSession::initialize(repository.path(), &fixture.path, "fr")
-        .err()
-        .expect("existing project must not be replaced");
+    let Err(error) = ProjectSession::initialize(
+        repository.path(),
+        &fixture.package_path,
+        repository.path().join("cache"),
+        "fr",
+    ) else {
+        panic!("existing project must not be replaced")
+    };
     assert!(matches!(
         error,
         ProjectSessionError::Store {
@@ -1019,6 +1132,29 @@ fn initialization_protects_existing_project_state() {
         }
     ));
     assert_eq!(before, managed_files(repository.path()));
+}
+
+fn initialize_project(
+    repository: &TempDir,
+    package_path: &Path,
+    target_language: &str,
+) -> ProjectSession {
+    ProjectSession::initialize(
+        repository.path(),
+        package_path,
+        repository.path().join("cache"),
+        target_language,
+    )
+    .expect("project should initialize")
+}
+
+fn open_project(repository: &TempDir, package_path: &Path) -> ProjectSession {
+    ProjectSession::open(
+        repository.path(),
+        package_path,
+        repository.path().join("cache"),
+    )
+    .expect("project should open")
 }
 
 fn managed_files(repository_root: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
@@ -1182,9 +1318,11 @@ fn write_fixture_with(source_language: &str, game_version: &str) -> Fixture {
         )
         .expect("insert metadata");
 
+    let package_path = write_hsp_package(&path, |_, _, _, _, _| true);
     Fixture {
         _directory: directory,
         path,
+        package_path,
         one_macro_hash,
         one_row_technical_hash,
         two_macro_hash,
@@ -1209,14 +1347,14 @@ fn write_projection_fixture() -> ProjectionFixture {
     let definitions = vec![
         (
             1,
-            ["TEXT_CONTEXT", "Greetings and welcome", "", ""]
+            ["Context field", "Greetings and welcome", "", ""]
                 .into_iter()
                 .map(str::to_owned)
                 .collect::<Vec<_>>(),
         ),
         (
             2,
-            ["TEXT_EMPTY", "", "", ""]
+            ["Empty context", "", "", ""]
                 .into_iter()
                 .map(str::to_owned)
                 .collect::<Vec<_>>(),
@@ -1242,7 +1380,7 @@ fn write_projection_fixture() -> ProjectionFixture {
         ),
         (
             5,
-            ["TEXT_ONLY", "", "", ""]
+            ["Blocked only", "", "", ""]
                 .into_iter()
                 .map(str::to_owned)
                 .collect::<Vec<_>>(),
@@ -1367,10 +1505,175 @@ fn write_projection_fixture() -> ProjectionFixture {
         )
         .expect("insert projection metadata");
 
+    let package_path = write_hsp_package(&path, |sheet, row_id, _, column_index, _| {
+        sheet == "Projection" && matches!((row_id, column_index), (1 | 2, 1) | (4, 0..=3))
+    });
     ProjectionFixture {
         _directory: directory,
         path,
+        package_path,
     }
+}
+
+fn write_hsp_package(
+    source_path: &Path,
+    allow: impl Fn(&str, u32, u16, u32, &str) -> bool,
+) -> PathBuf {
+    let snapshot = HxsSnapshot::open(source_path).expect("source fixture verifies");
+    let metadata = snapshot.metadata();
+    let guidance = build_guidance(&snapshot, &allow);
+    let mut guidance_bytes = serde_json::to_vec(&guidance).expect("guidance JSON");
+    guidance_bytes.push(b'\n');
+    let source_bytes = fs::read(source_path).expect("source bytes");
+    let source_component = HspComponentDescriptor {
+        id: "source".to_owned(),
+        kind: "sourceHxs".to_owned(),
+        format_version: 1,
+        required: true,
+        path: "source/source.hxs".to_owned(),
+        size: i64::try_from(source_bytes.len()).expect("source size"),
+        sha256: hash_bytes(&source_bytes),
+    };
+    let guidance_component = HspComponentDescriptor {
+        id: "guidance".to_owned(),
+        kind: "sourceGuidance".to_owned(),
+        format_version: 1,
+        required: true,
+        path: "guidance/source-guidance.json".to_owned(),
+        size: i64::try_from(guidance_bytes.len()).expect("guidance size"),
+        sha256: hash_bytes(&guidance_bytes),
+    };
+    let manifest_without_id = HspManifest {
+        format_version: 1,
+        package_id: String::new(),
+        game_version: metadata.game_version,
+        scope: metadata.scope,
+        source: HspSourceIdentity {
+            language: metadata.source_language,
+            content_id: metadata.content_id,
+            snapshot_id: metadata.snapshot_id,
+        },
+        components: vec![guidance_component, source_component],
+    };
+    let manifest = HspManifest {
+        package_id: compute_package_id(&manifest_without_id).expect("package hash"),
+        ..manifest_without_id
+    };
+    let package_path = source_path.with_extension("hsp");
+    let file = fs::File::create(&package_path).expect("package file");
+    let mut archive = ZipWriter::new(file);
+    let options = zip::write::SimpleFileOptions::default();
+    archive
+        .start_file("manifest.json", options)
+        .expect("manifest entry");
+    let mut manifest_bytes = serde_json::to_vec(&manifest).expect("manifest JSON");
+    manifest_bytes.push(b'\n');
+    archive.write_all(&manifest_bytes).expect("manifest bytes");
+    archive
+        .start_file("guidance/source-guidance.json", options)
+        .expect("guidance entry");
+    archive.write_all(&guidance_bytes).expect("guidance bytes");
+    archive
+        .start_file("source/source.hxs", options)
+        .expect("source entry");
+    archive.write_all(&source_bytes).expect("source bytes");
+    archive.finish().expect("package archive");
+    package_path
+}
+
+fn build_guidance(
+    snapshot: &HxsSnapshot,
+    allow: &impl Fn(&str, u32, u16, u32, &str) -> bool,
+) -> SourceGuidance {
+    let metadata = snapshot.metadata();
+    let source_evidence_id = compute_source_evidence_id(snapshot).expect("source evidence");
+    let comparison_language = if metadata.source_language == "en" {
+        "ja"
+    } else {
+        "en"
+    };
+    let mut evidence_inputs = vec![
+        GuidanceEvidenceInput {
+            language: metadata.source_language.clone(),
+            evidence_id: source_evidence_id,
+        },
+        GuidanceEvidenceInput {
+            language: comparison_language.to_owned(),
+            evidence_id: format!("sha256:{}", "1".repeat(64)),
+        },
+    ];
+    evidence_inputs.sort_by(|left, right| left.language.cmp(&right.language));
+
+    let mut sheets = snapshot.sheets();
+    sheets.sort_by(|left, right| left.name.cmp(&right.name));
+    let guidance_sheets = sheets
+        .iter()
+        .map(|sheet| {
+            let mut occurrences = Vec::new();
+            let mut after = None;
+            loop {
+                let page = snapshot
+                    .page_string_rows(
+                        &sheet.name,
+                        after.as_ref(),
+                        aeria_hxs::MAX_STRING_ROW_PAGE_SIZE,
+                    )
+                    .expect("String rows");
+                for row in &page.rows {
+                    for occurrence in &row.occurrences {
+                        let coordinate = &occurrence.fingerprint.coordinate;
+                        if allow(
+                            &coordinate.sheet_name,
+                            coordinate.row_id,
+                            coordinate.subrow_id,
+                            coordinate.column_index,
+                            &occurrence.macro_text,
+                        ) {
+                            occurrences.push(GuidanceOccurrence {
+                                row_id: coordinate.row_id,
+                                subrow_id: coordinate.subrow_id,
+                                column_index: coordinate.column_index,
+                            });
+                        }
+                    }
+                }
+                let Some(next) = page.next_after else {
+                    break;
+                };
+                after = Some(next);
+            }
+            GuidanceSheet {
+                name: sheet.name.clone(),
+                schema_hash: format!("sha256:{}", sheet.hashes.schema.to_hex()),
+                status: GuidanceSheetStatus::Compatible,
+                translatable: occurrences,
+                incompatibility_reasons: Vec::new(),
+            }
+        })
+        .collect::<Vec<_>>();
+
+    let guidance_without_id = SourceGuidance {
+        format_version: 1,
+        game_version: metadata.game_version.clone(),
+        scope: metadata.scope.clone(),
+        bundle_id: String::new(),
+        source: aeria_hsp::GuidanceSourceIdentity {
+            language: metadata.source_language.clone(),
+            content_id: metadata.content_id.clone(),
+            snapshot_id: metadata.snapshot_id.clone(),
+        },
+        evidence_inputs,
+        sheets: guidance_sheets,
+    };
+    SourceGuidance {
+        bundle_id: compute_guidance_bundle_id(&guidance_without_id).expect("guidance hash"),
+        ..guidance_without_id
+    }
+}
+
+fn hash_bytes(bytes: &[u8]) -> String {
+    let digest: [u8; 32] = Sha256::digest(bytes).into();
+    format!("sha256:{}", hex(&digest))
 }
 
 fn macro_hash(value: &str) -> [u8; 32] {

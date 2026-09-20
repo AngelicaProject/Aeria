@@ -10,6 +10,12 @@ use crate::{ProjectSession, WorkspaceError, WorkspaceStoreError};
 /// Errors raised while applying one transactional translation mutation.
 #[derive(Debug, Error)]
 pub enum TranslationMutationError {
+    /// The exact source occurrence is not granted by the verified HSG.
+    #[error(
+        "source occurrence is not translatable according to source guidance: {source_binding:?}"
+    )]
+    SourceNotTranslatable { source_binding: SourceBinding },
+
     /// The requested domain mutation was invalid.
     #[error("translation workspace mutation failed: {0}")]
     Workspace(#[from] WorkspaceError),
@@ -47,6 +53,16 @@ impl ProjectSession {
         source_binding: &SourceBinding,
         target_macro: &str,
     ) -> Result<TranslationUnitId, TranslationMutationError> {
+        if !self.source_package.guidance_index().is_translatable(
+            source_binding.sheet_name(),
+            source_binding.row_id(),
+            source_binding.subrow_id(),
+            source_binding.column_index(),
+        ) {
+            return Err(TranslationMutationError::SourceNotTranslatable {
+                source_binding: source_binding.clone(),
+            });
+        }
         let existing_id = self
             .workspace
             .unit_by_source_binding(source_binding)
@@ -54,7 +70,7 @@ impl ProjectSession {
 
         let Some(id) = existing_id else {
             let id = self.workspace.create_unit_from_hxs(
-                &self.source,
+                self.source_package.source(),
                 source_binding.sheet_name(),
                 source_binding.row_id(),
                 source_binding.subrow_id(),
@@ -169,7 +185,7 @@ impl ProjectSession {
                     id: translation_unit_id,
                 })?;
         let source_binding = unit.source_binding().clone();
-        let verified = crate::verified_fingerprint(&self.source, &source_binding)?;
+        let verified = crate::verified_fingerprint(self.source_package.source(), &source_binding)?;
         if unit.source_fingerprint() != &verified {
             return Err(TranslationMutationError::SourceIntegrity {
                 translation_unit_id,
@@ -184,6 +200,7 @@ impl ProjectSession {
 
 #[cfg(test)]
 mod tests {
+    #![allow(dead_code, unused_imports)]
     use std::collections::BTreeMap;
     use std::fmt::Write as _;
     use std::fs;
@@ -215,8 +232,13 @@ mod tests {
         let fixture = write_fixture();
         let repository = tempfile::tempdir().expect("temporary repository");
         let binding = SourceBinding::new("Synthetic", 42, 0, 0);
-        let mut session =
-            ProjectSession::initialize(repository.path(), &fixture.path, "fr").expect("init");
+        let mut session = ProjectSession::initialize(
+            repository.path(),
+            &fixture.path,
+            repository.path().join("cache"),
+            "fr",
+        )
+        .expect("init");
         let id = session
             .set_target(&binding, "Bonjour")
             .expect("initial target");
@@ -253,8 +275,13 @@ mod tests {
         let fixture = write_fixture();
         let repository = tempfile::tempdir().expect("temporary repository");
         let binding = SourceBinding::new("Synthetic", 42, 0, 0);
-        let mut session =
-            ProjectSession::initialize(repository.path(), &fixture.path, "fr").expect("init");
+        let mut session = ProjectSession::initialize(
+            repository.path(),
+            &fixture.path,
+            repository.path().join("cache"),
+            "fr",
+        )
+        .expect("init");
         let before_files = managed_files(repository.path());
 
         fail_next_publication_for_test();
@@ -299,6 +326,15 @@ mod tests {
 
     #[allow(clippy::too_many_lines)]
     fn write_fixture() -> Fixture {
+        Fixture {
+            _directory: tempfile::tempdir().expect("fixture directory"),
+            path: PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("../aeria-hsp/tests/fixtures/synthetic.hsp"),
+        }
+    }
+
+    #[allow(dead_code)]
+    fn write_legacy_fixture() -> Fixture {
         let directory = tempfile::tempdir().expect("fixture directory");
         let path = directory.path().join("fixture.hxs");
         let connection = Connection::open(&path).expect("fixture database");

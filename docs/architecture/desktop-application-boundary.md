@@ -22,8 +22,11 @@ replacement constructs and verifies the new `ProjectSession` before acquiring
 the state lock, so failure preserves the previous active session. Closing is
 idempotent and drops the active session without changing Workspace Format v1.
 
-The HXS path remains local runtime state held by `ProjectSession`; it is not
-added to Workspace Format. Translation browsing delegates to the bounded
+The HSP path remains local runtime state held by `ProjectSession`; its
+materialized HXS cache path is also local runtime state. Neither is added to
+Workspace Format. Public commands derive the application cache directory
+through Tauri's path API; React cannot choose an arbitrary cache root.
+Translation browsing delegates to the bounded
 `ProjectSession::page_translation_rows` API, so page size remains governed by
 the backend contract. The DTO is row-centric, while each contained cell keeps
 its existing `SourceBinding` and overlay. Tauri performs DTO and error mapping,

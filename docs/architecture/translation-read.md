@@ -10,7 +10,7 @@ ProjectSession
     ↓
 bounded HXS String-row page
     ↓
-classify String cells
+apply the verified HSG GuidanceIndex
     ↓
 sparse Workspace lookup by SourceBinding
     ↓
@@ -29,18 +29,17 @@ Grouping does not change identity. For example, four String cells in one
 `TranslationCellView` values. Mutations still address one `SourceBinding` at a
 time.
 
-The current classification is deliberately narrow because EXDSchema is not
-yet integrated:
-
-- empty macro text is ignored;
-- non-empty macro text beginning with the exact uppercase `TEXT_` prefix is
-  read-only context;
-- every other non-empty String cell is translatable.
+HSG is the only editability authority. The `GuidanceIndex` stores compatible
+sheet allowlists as sorted `(row_id, subrow_id, column_index)` vectors and
+uses binary search for exact occurrence lookup. It contains no source text or
+text classifier.
 
 Context cells are returned separately from editable cells. Rows with no
-translatable cells are omitted from the visible result. Existing Workspace
-units bound to a newly classified context cell are not deleted or repaired by
-this read path.
+guidance-allowed cells are omitted from the visible result. A guidance-allowed
+empty source macro is still an editable cell. A blocked non-empty String is
+returned as read-only context, while a blocked empty String may be omitted.
+Existing blocked Workspace units are rejected during ProjectSession opening;
+the read path never repairs or hides them.
 
 This is not the future semantic-schema system. EXDSchema integration is
 deferred; labels remain `Column N`. Later schema metadata may refine roles and

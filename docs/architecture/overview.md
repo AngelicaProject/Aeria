@@ -10,8 +10,8 @@ React / TypeScript
 Tauri application boundary
        |
 Rust application/domain crates
-   |      |       |      |
-  HXS   Workspace Git   AI
+  |       |       |      |
+ HSP/HXS Workspace Git  AI
    |              |
 SQLite indexes/cache  filesystem
 ```
@@ -48,6 +48,7 @@ The renderer may cache Rust data for display, but cached data is never the canon
 Three stores have distinct roles:
 
 - **HXS**: immutable source snapshots.
+- **HSP/HSG**: validated source handoff and exact translation permission.
 - **Git workspace**: canonical user-authored translation/project state.
 - **Local SQLite/cache**: rebuildable indexes, search data, AI jobs, and other machine-local acceleration/state.
 
@@ -57,6 +58,7 @@ Deleting local cache must never delete a user's translation work.
 
 - `aeria-core`: domain types and application contracts that should not know Tauri, Git implementation details, or SQLite.
 - `aeria-hxs`: HXS reader and verifier.
+- `aeria-hsp`: HSP/HSG reader, relationship validator, source cache materializer, and guidance index.
 - `aeria-se`: structured FFXIV string parsing, syntax tree, validation, and rendering model.
 - `aeria-workspace`: versioned translation workspace model and deterministic serialization.
 - `aeria-rebase`: deterministic cross-snapshot migration planning.

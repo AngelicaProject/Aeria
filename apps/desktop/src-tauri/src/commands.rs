@@ -3,7 +3,9 @@ use std::str::FromStr;
 use aeria_core::{ReviewState, SourceBinding, TranslationUnitId};
 use aeria_workspace::ProjectSession;
 use aeria_workspace::TranslationRowCursor;
-use tauri::State;
+use std::path::PathBuf;
+
+use tauri::{Manager, State};
 
 use crate::dto::{
     ProjectSummaryDto, ReviewStateDto, SourceBindingDto, TranslationRowCursorDto,
@@ -23,20 +25,26 @@ type CommandResult<T> = Result<T, CommandError>;
 /// Returns a typed command error when source verification, workspace loading,
 /// compatibility validation, or state locking fails.
 pub fn open_project(
+    app: tauri::AppHandle,
     state: State<'_, DesktopState>,
     repository_root: String,
-    source_path: String,
+    source_package_path: String,
 ) -> CommandResult<ProjectSummaryDto> {
-    open_project_with_state(&state, repository_root, source_path)
+    let cache_root = app
+        .path()
+        .app_cache_dir()
+        .map_err(|error| CommandError::new("cachePath", error.to_string()))?;
+    open_project_with_state(&state, repository_root, source_package_path, cache_root)
 }
 
 pub(crate) fn open_project_with_state(
     state: &DesktopState,
     repository_root: String,
-    source_path: String,
+    source_package_path: String,
+    cache_root: PathBuf,
 ) -> CommandResult<ProjectSummaryDto> {
-    let replacement =
-        ProjectSession::open(repository_root, source_path).map_err(CommandError::from)?;
+    let replacement = ProjectSession::open(repository_root, source_package_path, cache_root)
+        .map_err(CommandError::from)?;
     replace_project(state, replacement)
 }
 
@@ -49,22 +57,39 @@ pub(crate) fn open_project_with_state(
 /// Returns a typed command error when source verification, workspace
 /// initialization, or state locking fails.
 pub fn initialize_project(
+    app: tauri::AppHandle,
     state: State<'_, DesktopState>,
     repository_root: String,
-    source_path: String,
+    source_package_path: String,
     target_language: String,
 ) -> CommandResult<ProjectSummaryDto> {
-    initialize_project_with_state(&state, repository_root, source_path, target_language)
+    let cache_root = app
+        .path()
+        .app_cache_dir()
+        .map_err(|error| CommandError::new("cachePath", error.to_string()))?;
+    initialize_project_with_state(
+        &state,
+        repository_root,
+        source_package_path,
+        cache_root,
+        target_language,
+    )
 }
 
 pub(crate) fn initialize_project_with_state(
     state: &DesktopState,
     repository_root: String,
-    source_path: String,
+    source_package_path: String,
+    cache_root: PathBuf,
     target_language: String,
 ) -> CommandResult<ProjectSummaryDto> {
-    let replacement = ProjectSession::initialize(repository_root, source_path, target_language)
-        .map_err(CommandError::from)?;
+    let replacement = ProjectSession::initialize(
+        repository_root,
+        source_package_path,
+        cache_root,
+        target_language,
+    )
+    .map_err(CommandError::from)?;
     replace_project(state, replacement)
 }
 
@@ -277,7 +302,8 @@ mod tests {
     }
 
     fn fixture_path() -> PathBuf {
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("test-fixtures/synthetic.hxs")
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../crates/aeria-hsp/tests/fixtures/synthetic.hsp")
     }
 
     fn binding() -> SourceBindingDto {
@@ -341,15 +367,18 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)]
     fn desktop_boundary_lifecycle_and_read_write_flow_are_persisted() {
         let repository = TestRepository::new("flow");
         let source = fixture_path();
+        let cache_root = repository.path().join("cache");
         let state = DesktopState::new();
 
         let summary = initialize_project_with_state(
             &state,
             repository.path().to_string_lossy().into_owned(),
             source.to_string_lossy().into_owned(),
+            cache_root.clone(),
             "fr".to_owned(),
         )
         .expect("initialize project");
@@ -357,7 +386,10 @@ mod tests {
             summary.repository_root,
             repository.path().to_string_lossy().into_owned()
         );
-        assert_eq!(summary.source_path, source.to_string_lossy().into_owned());
+        assert_eq!(
+            summary.source_package_path,
+            source.to_string_lossy().into_owned()
+        );
         assert_eq!(summary.source_language, "en");
         assert_eq!(summary.target_language, "fr");
         assert!(summary.source_content_id.starts_with("sha256:"));
@@ -418,6 +450,7 @@ mod tests {
             &state,
             repository.path().to_string_lossy().into_owned(),
             source.to_string_lossy().into_owned(),
+            cache_root,
         )
         .expect("reopen project");
         let reopened_page =
@@ -440,6 +473,7 @@ mod tests {
             &state,
             repository.path().to_string_lossy().into_owned(),
             invalid_source.to_string_lossy().into_owned(),
+            repository.path().join("cache"),
         )
         .expect_err("invalid replacement");
         assert_eq!(error.code, "projectSource");

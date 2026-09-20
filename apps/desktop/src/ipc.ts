@@ -40,18 +40,18 @@ export function currentProject(): Promise<ProjectSummaryDto | null> {
   return call<ProjectSummaryDto | null>("current_project");
 }
 
-export function openProject(repositoryRoot: string, sourcePath: string): Promise<ProjectSummaryDto> {
-  return call<ProjectSummaryDto>("open_project", { repositoryRoot, sourcePath });
+export function openProject(repositoryRoot: string, sourcePackagePath: string): Promise<ProjectSummaryDto> {
+  return call<ProjectSummaryDto>("open_project", { repositoryRoot, sourcePackagePath });
 }
 
 export function initializeProject(
   repositoryRoot: string,
-  sourcePath: string,
+  sourcePackagePath: string,
   targetLanguage: string,
 ): Promise<ProjectSummaryDto> {
   return call<ProjectSummaryDto>("initialize_project", {
     repositoryRoot,
-    sourcePath,
+    sourcePackagePath,
     targetLanguage,
   });
 }
