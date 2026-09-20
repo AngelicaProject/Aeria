@@ -14,7 +14,14 @@ project launcher
 → immediate review-state persistence
 ```
 
-The launcher can open an existing project or initialize a project with a repository root, HSP source-package path, and free-text target language. Once a project is active, the renderer uses the sheets in `ProjectSummaryDto`, pages one sheet at a time with a limit of 100 entries, and offers an explicit **Load more** action.
+The launcher can open an existing project with a repository root and HSP
+source-package path, or create a project from a repository root, game
+installation, one of Atlas's supported source languages (`en`, `ja`, `de`, or
+`fr`), and a target language. During creation it displays typed Atlas phase and
+progress events and offers cancellation. Raw stdout is never exposed to the
+renderer. Once a project is active, the renderer uses the sheets in
+`ProjectSummaryDto`, pages one sheet at a time with a limit of 100 entries, and
+offers an explicit **Load more** action.
 
 The renderer owns only ephemeral drafts, navigation, paging, and loading/error presentation. Rust remains authoritative for source bindings, workspace state, validation, classification, and mutation semantics. The middle pane selects a logical row by `sheetName`, `rowId`, and `subrowId`; the editor renders context cells read-only and every translatable cell in physical column order. Until EXDSchema exists, fields are labelled `Column N`.
 

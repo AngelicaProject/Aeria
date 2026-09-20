@@ -56,6 +56,24 @@ export function initializeProject(
   });
 }
 
+export function initializeProjectFromGame(
+  repositoryRoot: string,
+  gamePath: string,
+  sourceLanguage: string,
+  targetLanguage: string,
+): Promise<ProjectSummaryDto> {
+  return call<ProjectSummaryDto>("initialize_project_from_game", {
+    repositoryRoot,
+    gamePath,
+    sourceLanguage,
+    targetLanguage,
+  });
+}
+
+export function cancelSourcePackage(jobId: string): Promise<void> {
+  return call<void>("cancel_source_package", { jobId });
+}
+
 export function closeProject(): Promise<void> {
   return call<void>("close_project");
 }

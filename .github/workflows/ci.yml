@@ -24,6 +24,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
       - name: Install Tauri Linux dependencies
         run: |
           sudo apt-get update
@@ -42,6 +45,10 @@ jobs:
           toolchain: 1.98.1
           components: rustfmt, clippy
       - run: cargo fmt --check
+      - name: Stage pinned Harmonia Atlas sidecar
+        run: sh tools/atlas/stage-sidecar.sh linux-x64
+      - name: Smoke-test pinned Harmonia Atlas sidecar
+        run: sh tools/atlas/smoke-test-sidecar.sh linux-x64
       - run: cargo build --workspace --locked
       - run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
       - run: cargo test --workspace --locked
@@ -54,3 +61,17 @@ jobs:
         with:
           toolchain: 1.98.1
       - run: cargo test -p aeria-workspace --locked
+
+  atlas-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.98.1
+      - name: Stage pinned Harmonia Atlas sidecar
+        run: pwsh -NoProfile -File tools/atlas/stage-sidecar.ps1 -Target win-x64
+      - name: Smoke-test pinned Harmonia Atlas sidecar
+        run: pwsh -NoProfile -File tools/atlas/smoke-test-sidecar.ps1 -Target win-x64
+      - run: cargo test -p aeria-atlas --all-targets --locked
+      - run: cargo test -p aeria-desktop --lib --locked

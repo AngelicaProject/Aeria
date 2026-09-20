@@ -56,6 +56,10 @@ Deleting local cache must never delete a user's translation work.
 
 ## Crates
 
+The desktop-only aeria-atlas crate owns bounded Harmonia Atlas process
+invocation and JSONL protocol v1 parsing. It does not depend on Tauri,
+React, aeria-workspace, or aeria-hsp.
+
 - `aeria-core`: domain types and application contracts that should not know Tauri, Git implementation details, or SQLite.
 - `aeria-hxs`: HXS reader and verifier.
 - `aeria-hsp`: HSP/HSG reader, relationship validator, source cache materializer, and guidance index.

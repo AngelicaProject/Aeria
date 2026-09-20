@@ -6,8 +6,9 @@ mod state;
 use serde::Serialize;
 
 pub use commands::{
-    close_project, current_project, initialize_project, open_project, page_translation_rows,
-    set_translation_note, set_translation_review_state, set_translation_target,
+    cancel_source_package, close_project, current_project, initialize_project,
+    initialize_project_from_game, open_project, page_translation_rows, set_translation_note,
+    set_translation_review_state, set_translation_target,
 };
 pub use dto::{
     ProjectSheetDto, ProjectSummaryDto, ReviewStateDto, SourceBindingDto, TranslationCellDto,
@@ -45,6 +46,8 @@ pub fn run() {
             app_info,
             open_project,
             initialize_project,
+            initialize_project_from_game,
+            cancel_source_package,
             current_project,
             close_project,
             page_translation_rows,

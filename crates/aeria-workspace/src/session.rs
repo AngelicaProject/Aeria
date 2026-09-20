@@ -159,6 +159,25 @@ impl ProjectSession {
                     source,
                 }
             })?;
+        Self::initialize_from_source_package(repository_root, source_package, target_language)
+    }
+
+    /// Initializes a project from a package that has already been fully
+    /// validated by [`SourcePackage::open`]. This constructor is used by the
+    /// Atlas creation flow so the package is not reopened and source evidence
+    /// is not scanned twice.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when workspace construction or atomic Workspace
+    /// Format v1 initialization fails.
+    pub fn initialize_from_source_package(
+        repository_root: impl Into<PathBuf>,
+        source_package: SourcePackage,
+        target_language: impl Into<String>,
+    ) -> Result<Self, ProjectSessionError> {
+        let repository_root = repository_root.into();
+        let source_package_path = source_package.package_path().to_owned();
         let workspace =
             Workspace::from_verified_snapshot(source_package.source(), target_language.into())
                 .map_err(|source| ProjectSessionError::Workspace {

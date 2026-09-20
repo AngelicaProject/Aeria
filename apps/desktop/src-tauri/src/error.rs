@@ -1,3 +1,4 @@
+use aeria_atlas::AtlasError;
 use aeria_core::TranslationUnitIdParseError;
 use aeria_workspace::{
     ProjectSessionError, TranslationMutationError, TranslationReadError, WorkspaceError,
@@ -27,6 +28,19 @@ impl CommandError {
 
     pub(crate) fn internal_state(message: impl Into<String>) -> Self {
         Self::new("internalState", message)
+    }
+}
+
+impl From<AtlasError> for CommandError {
+    fn from(error: AtlasError) -> Self {
+        let code = match &error {
+            AtlasError::Spawn { .. } => "atlasSpawn",
+            AtlasError::Protocol { .. } => "atlasProtocol",
+            AtlasError::Failed { .. } | AtlasError::Exit { .. } => "atlasFailed",
+            AtlasError::Package { .. } => "atlasPackage",
+            AtlasError::Cancelled { .. } => "atlasCancelled",
+        };
+        Self::new(code, error.to_string())
     }
 }
 
@@ -133,5 +147,20 @@ mod tests {
             source_binding: aeria_core::SourceBinding::new("Synthetic", 42, 0, 0),
         });
         assert_eq!(blocked_error.code, "sourceNotTranslatable");
+    }
+
+    #[test]
+    fn atlas_failures_keep_stable_desktop_codes() {
+        let protocol = CommandError::from(AtlasError::Protocol {
+            message: "bad event".to_owned(),
+            line: None,
+            stderr_tail: String::new(),
+        });
+        assert_eq!(protocol.code, "atlasProtocol");
+
+        let cancelled = CommandError::from(AtlasError::Cancelled {
+            stderr_tail: String::new(),
+        });
+        assert_eq!(cancelled.code, "atlasCancelled");
     }
 }
