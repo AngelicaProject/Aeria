@@ -2,18 +2,28 @@ import { useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import {
   cancelSourcePackage,
+  forgetRecentProject,
   initializeProjectFromGame,
+  listRecentProjects,
   normalizeCommandError,
   openProject,
+  openRecentProject,
 } from "../ipc";
-import type { AtlasEvent, CommandError, ProjectSummaryDto, SourcePackageEventPayload } from "../types";
+import type {
+  AtlasEvent,
+  CommandError,
+  ProjectOpenResultDto,
+  RecentProjectAvailability,
+  RecentProjectDto,
+  SourcePackageEventPayload,
+} from "../types";
 import { ErrorBanner } from "./ErrorBanner";
 
 type LauncherMode = "open" | "create";
 
 type ProjectLauncherProps = {
   initialError: CommandError | null;
-  onProjectReady: (project: ProjectSummaryDto) => void;
+  onProjectReady: (result: ProjectOpenResultDto) => void;
 };
 
 const sourceLanguages = ["en", "ja", "de", "fr"] as const;
@@ -40,6 +50,23 @@ function progressDetails(event: AtlasEvent | null): { sheet: string | null; lang
   return { sheet: event.sheet, language: event.language, rows: event.rowsProcessed };
 }
 
+function repositoryName(path: string): string {
+  return path.split(/[\\/]/).filter(Boolean).at(-1) ?? path;
+}
+
+function availabilityLabel(availability: RecentProjectAvailability): string {
+  switch (availability) {
+    case "ready": return "Ready";
+    case "repositoryMissing": return "Repository missing";
+    case "sourcePackageMissing": return "Source package missing";
+    case "repositoryAndSourceMissing": return "Repository and source package missing";
+  }
+}
+
+function lastOpenedLabel(timestamp: number): string {
+  return new Date(timestamp).toLocaleString();
+}
+
 export function ProjectLauncher({ initialError, onProjectReady }: ProjectLauncherProps) {
   const [mode, setMode] = useState<LauncherMode>("open");
   const [repositoryRoot, setRepositoryRoot] = useState("");
@@ -52,10 +79,30 @@ export function ProjectLauncher({ initialError, onProjectReady }: ProjectLaunche
   const [cancelRequested, setCancelRequested] = useState(false);
   const [progress, setProgress] = useState<AtlasEvent | null>(null);
   const [error, setError] = useState<CommandError | null>(initialError);
+  const [recentProjects, setRecentProjects] = useState<RecentProjectDto[] | null>(null);
+  const [recentError, setRecentError] = useState<CommandError | null>(null);
+  const [recentBusyId, setRecentBusyId] = useState<string | null>(null);
   const busyRef = useRef<LauncherMode | null>(null);
   const jobIdRef = useRef<string | null>(null);
 
   useEffect(() => setError(initialError), [initialError]);
+
+  useEffect(() => {
+    let disposed = false;
+    void listRecentProjects()
+      .then((projects) => {
+        if (!disposed) {
+          setRecentProjects(projects);
+          setRecentError(null);
+        }
+      })
+      .catch((caughtError: unknown) => {
+        if (!disposed) setRecentError(normalizeCommandError(caughtError));
+      });
+    return () => {
+      disposed = true;
+    };
+  }, []);
 
   useEffect(() => {
     let disposed = false;
@@ -85,10 +132,10 @@ export function ProjectLauncher({ initialError, onProjectReady }: ProjectLaunche
     setJobId(null);
     setCancelRequested(false);
     try {
-      const project = mode === "open"
+      const result = mode === "open"
         ? await openProject(repositoryRoot, sourcePackagePath)
         : await initializeProjectFromGame(repositoryRoot, gamePath, sourceLanguage, targetLanguage);
-      onProjectReady(project);
+      onProjectReady(result);
     } catch (caughtError) {
       setError(normalizeCommandError(caughtError));
     } finally {
@@ -96,6 +143,34 @@ export function ProjectLauncher({ initialError, onProjectReady }: ProjectLaunche
       jobIdRef.current = null;
       setBusy(null);
       setCancelRequested(false);
+    }
+  }
+
+  async function handleRecentOpen(project: RecentProjectDto) {
+    if (project.availability !== "ready" || busy !== null || recentBusyId !== null) return;
+    setRecentBusyId(project.id);
+    setError(null);
+    try {
+      const result = await openRecentProject(project.id);
+      onProjectReady(result);
+    } catch (caughtError) {
+      setError(normalizeCommandError(caughtError));
+    } finally {
+      setRecentBusyId(null);
+    }
+  }
+
+  async function handleRecentRemove(project: RecentProjectDto) {
+    if (busy !== null || recentBusyId !== null) return;
+    setRecentBusyId(project.id);
+    setRecentError(null);
+    try {
+      await forgetRecentProject(project.id);
+      setRecentProjects((current) => current?.filter((candidate) => candidate.id !== project.id) ?? []);
+    } catch (caughtError) {
+      setRecentError(normalizeCommandError(caughtError));
+    } finally {
+      setRecentBusyId(null);
     }
   }
 
@@ -111,6 +186,7 @@ export function ProjectLauncher({ initialError, onProjectReady }: ProjectLaunche
   }
 
   const details = progressDetails(progress);
+  const launcherDisabled = busy !== null || recentBusyId !== null;
 
   return (
     <main className="launcher-shell">
@@ -128,13 +204,73 @@ export function ProjectLauncher({ initialError, onProjectReady }: ProjectLaunche
           />
         ) : null}
 
+        <section className="recent-projects" aria-labelledby="recent-projects-title">
+          <div className="recent-projects-heading">
+            <div>
+              <p className="eyebrow">Local workspace history</p>
+              <h2 id="recent-projects-title">Recent projects</h2>
+            </div>
+            {recentProjects ? <span className="pane-count">{recentProjects.length}</span> : null}
+          </div>
+          {recentError ? (
+            <ErrorBanner
+              title="Recent projects unavailable"
+              error={recentError}
+              onDismiss={() => setRecentError(null)}
+            />
+          ) : null}
+          {recentProjects === null && !recentError ? <p className="list-state">Loading recent projects…</p> : null}
+          {recentProjects?.length === 0 ? (
+            <p className="recent-empty">Projects you successfully open or create will appear here.</p>
+          ) : null}
+          {recentProjects && recentProjects.length > 0 ? (
+            <div className="recent-project-list">
+              {recentProjects.map((project) => (
+                <article className="recent-project-card" key={project.id}>
+                  <div className="recent-project-topline">
+                    <strong>{repositoryName(project.repositoryRoot)}</strong>
+                    <span className={project.availability === "ready" ? "status-pill translated" : "status-pill"}>
+                      {availabilityLabel(project.availability)}
+                    </span>
+                  </div>
+                  <code className="recent-project-path" title={project.repositoryRoot}>{project.repositoryRoot}</code>
+                  <p className="recent-project-meta">
+                    {project.sourceLanguage} → {project.targetLanguage} · {project.gameVersion || "Unknown game version"}
+                  </p>
+                  <p className="recent-project-meta">Last opened {lastOpenedLabel(project.lastOpenedAtUnixMs)}</p>
+                  <div className="recent-project-actions">
+                    {project.availability === "ready" ? (
+                      <button
+                        className="primary-button"
+                        type="button"
+                        onClick={() => void handleRecentOpen(project)}
+                        disabled={launcherDisabled}
+                      >
+                        {recentBusyId === project.id ? "Opening…" : "Open"}
+                      </button>
+                    ) : null}
+                    <button
+                      className="secondary-button"
+                      type="button"
+                      onClick={() => void handleRecentRemove(project)}
+                      disabled={launcherDisabled}
+                    >
+                      Remove from recents
+                    </button>
+                  </div>
+                </article>
+              ))}
+            </div>
+          ) : null}
+        </section>
+
         <div className="mode-tabs" role="tablist" aria-label="Project action">
           <button className={mode === "open" ? "tab-button active" : "tab-button"} type="button" role="tab"
-            aria-selected={mode === "open"} disabled={busy !== null} onClick={() => setMode("open")}>
+            aria-selected={mode === "open"} disabled={launcherDisabled} onClick={() => setMode("open")}>
             Open project
           </button>
           <button className={mode === "create" ? "tab-button active" : "tab-button"} type="button" role="tab"
-            aria-selected={mode === "create"} disabled={busy !== null} onClick={() => setMode("create")}>
+            aria-selected={mode === "create"} disabled={launcherDisabled} onClick={() => setMode("create")}>
             Create project
           </button>
         </div>
@@ -143,35 +279,35 @@ export function ProjectLauncher({ initialError, onProjectReady }: ProjectLaunche
           <label htmlFor="repository-root">Repository root</label>
           <input id="repository-root" value={repositoryRoot}
             onChange={(event) => setRepositoryRoot(event.target.value)}
-            placeholder="C:\\Projects\\my-translation" autoComplete="off" disabled={busy !== null} required />
+            placeholder="C:\\Projects\\my-translation" autoComplete="off" disabled={launcherDisabled} required />
 
           {mode === "open" ? (
             <>
               <label htmlFor="source-package-path">HSP source package path</label>
               <input id="source-package-path" value={sourcePackagePath}
                 onChange={(event) => setSourcePackagePath(event.target.value)}
-                placeholder="C:\\Sources\\source-en.hsp" autoComplete="off" disabled={busy !== null} required />
+                placeholder="C:\\Sources\\source-en.hsp" autoComplete="off" disabled={launcherDisabled} required />
             </>
           ) : (
             <>
               <label htmlFor="game-path">Game installation path</label>
               <input id="game-path" value={gamePath}
                 onChange={(event) => setGamePath(event.target.value)}
-                placeholder="C:\\Games\\FINAL FANTASY XIV" autoComplete="off" disabled={busy !== null} required />
+                placeholder="C:\\Games\\FINAL FANTASY XIV" autoComplete="off" disabled={launcherDisabled} required />
               <label htmlFor="source-language">Source language</label>
               <select id="source-language" value={sourceLanguage}
                 onChange={(event) => setSourceLanguage(event.target.value as (typeof sourceLanguages)[number])}
-                disabled={busy !== null}>
+                disabled={launcherDisabled}>
                 {sourceLanguages.map((language) => <option key={language} value={language}>{language}</option>)}
               </select>
               <label htmlFor="target-language">Target language</label>
               <input id="target-language" value={targetLanguage}
                 onChange={(event) => setTargetLanguage(event.target.value)}
-                placeholder="fr, ru, es" autoComplete="off" disabled={busy !== null} required />
+                placeholder="fr, ru, es" autoComplete="off" disabled={launcherDisabled} required />
             </>
           )}
 
-          <button className="primary-button launcher-submit" type="submit" disabled={busy !== null}>
+          <button className="primary-button launcher-submit" type="submit" disabled={launcherDisabled}>
             {busy === "open" ? "Opening…" : busy === "create" ? "Creating…" : mode === "open" ? "Open project" : "Create project"}
           </button>
         </form>

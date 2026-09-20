@@ -2,12 +2,14 @@ use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use aeria_atlas::{
     AtlasEvent, AtlasPackageRequest, AtlasPackageResult, AtlasPackageRunner, CancellationToken,
 };
 use aeria_core::{ReviewState, SourceBinding, TranslationUnitId};
 use aeria_hsp::SourcePackage;
+use aeria_projects::{ProjectMetadata, ProjectRegistry, REGISTRY_FILE_NAME, RegistryEntry};
 use aeria_workspace::ProjectSession;
 use aeria_workspace::TranslationRowCursor;
 use serde::Serialize;
@@ -15,8 +17,8 @@ use serde::Serialize;
 use tauri::{Emitter, Manager, State};
 
 use crate::dto::{
-    ProjectSummaryDto, ReviewStateDto, SourceBindingDto, TranslationRowCursorDto,
-    TranslationRowPageDto, TranslationUnitIdDto,
+    ProjectOpenResultDto, ProjectSummaryDto, RecentProjectDto, ReviewStateDto, SourceBindingDto,
+    TranslationRowCursorDto, TranslationRowPageDto, TranslationUnitIdDto,
 };
 use crate::error::CommandError;
 use crate::state::DesktopState;
@@ -26,6 +28,51 @@ type CommandResult<T> = Result<T, CommandError>;
 const SOURCE_PACKAGES_DIRECTORY: &str = "source-packages";
 const STAGING_DIRECTORY: &str = "staging";
 const STAGING_FILE: &str = "source.hsp";
+
+fn app_registry_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    app.path()
+        .app_data_dir()
+        .map(|path| path.join(REGISTRY_FILE_NAME))
+        .map_err(|error| format!("could not resolve the Aeria app-data directory: {error}"))
+}
+
+fn remember_project(
+    state: &DesktopState,
+    project: ProjectSummaryDto,
+    registry_path: Result<PathBuf, String>,
+) -> ProjectOpenResultDto {
+    let warning = match registry_path {
+        Ok(path) => {
+            let timestamp = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .ok()
+                .and_then(|duration| u64::try_from(duration.as_millis()).ok());
+            match (timestamp, state.lock_registry()) {
+                (Some(timestamp), Ok(_lock)) => {
+                    let metadata = ProjectMetadata {
+                        repository_root: PathBuf::from(&project.repository_root),
+                        source_package_path: PathBuf::from(&project.source_package_path),
+                        source_package_id: project.source_package_id.clone(),
+                        source_language: project.source_language.clone(),
+                        target_language: project.target_language.clone(),
+                        game_version: project.game_version.clone(),
+                    };
+                    ProjectRegistry::new(path)
+                        .upsert(&metadata, timestamp)
+                        .err()
+                        .map(|error| CommandError::registry_write(&error))
+                }
+                (None, _) => Some(CommandError::new(
+                    "projectRegistryWrite",
+                    "could not determine the current time for Recent projects",
+                )),
+                (_, Err(error)) => Some(CommandError::new("projectRegistryWrite", error.message)),
+            }
+        }
+        Err(message) => Some(CommandError::new("projectRegistryWrite", message)),
+    };
+    ProjectOpenResultDto { project, warning }
+}
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -47,12 +94,15 @@ pub fn open_project(
     state: State<'_, DesktopState>,
     repository_root: String,
     source_package_path: String,
-) -> CommandResult<ProjectSummaryDto> {
+) -> CommandResult<ProjectOpenResultDto> {
     let cache_root = app
         .path()
         .app_cache_dir()
         .map_err(|error| CommandError::new("cachePath", error.to_string()))?;
-    open_project_with_state(&state, repository_root, source_package_path, cache_root)
+    let registry_path = app_registry_path(&app);
+    let project =
+        open_project_with_state(&state, repository_root, source_package_path, cache_root)?;
+    Ok(remember_project(&state, project, registry_path))
 }
 
 pub(crate) fn open_project_with_state(
@@ -80,18 +130,20 @@ pub fn initialize_project(
     repository_root: String,
     source_package_path: String,
     target_language: String,
-) -> CommandResult<ProjectSummaryDto> {
+) -> CommandResult<ProjectOpenResultDto> {
     let cache_root = app
         .path()
         .app_cache_dir()
         .map_err(|error| CommandError::new("cachePath", error.to_string()))?;
-    initialize_project_with_state(
+    let registry_path = app_registry_path(&app);
+    let project = initialize_project_with_state(
         &state,
         repository_root,
         source_package_path,
         cache_root,
         target_language,
-    )
+    )?;
+    Ok(remember_project(&state, project, registry_path))
 }
 
 pub(crate) fn initialize_project_with_state(
@@ -111,6 +163,153 @@ pub(crate) fn initialize_project_with_state(
     replace_project(state, replacement)
 }
 
+#[tauri::command(rename_all = "camelCase")]
+#[allow(clippy::needless_pass_by_value)]
+/// Lists local recent projects using only registry data and filesystem presence.
+///
+/// # Errors
+///
+/// Returns a typed registry error when app-data cannot be resolved or the
+/// registry cannot be loaded.
+pub fn list_recent_projects(
+    app: tauri::AppHandle,
+    state: State<'_, DesktopState>,
+) -> CommandResult<Vec<RecentProjectDto>> {
+    let path = app_registry_path(&app)
+        .map_err(|message| CommandError::new("projectRegistryRead", message))?;
+    let _lock = state.lock_registry()?;
+    ProjectRegistry::new(path)
+        .load()
+        .map(|projects| {
+            projects
+                .into_iter()
+                .map(RecentProjectDto::from_registry_entry)
+                .collect()
+        })
+        .map_err(|error| CommandError::registry_read(&error))
+}
+
+#[tauri::command(rename_all = "camelCase")]
+#[allow(clippy::needless_pass_by_value)]
+/// Opens one exact local recent-project entry and refreshes its cached metadata.
+///
+/// # Errors
+///
+/// Returns a typed error when the registry entry is missing, either remembered
+/// path is unavailable, project validation fails, or the source package ID no
+/// longer matches the remembered association.
+pub fn open_recent_project(
+    app: tauri::AppHandle,
+    state: State<'_, DesktopState>,
+    project_id: String,
+) -> CommandResult<ProjectOpenResultDto> {
+    let cache_root = app
+        .path()
+        .app_cache_dir()
+        .map_err(|error| CommandError::new("cachePath", error.to_string()))?;
+    let registry_path = app_registry_path(&app)
+        .map_err(|message| CommandError::new("projectRegistryRead", message))?;
+    open_recent_project_from_registry(&state, &project_id, cache_root, registry_path)
+}
+
+fn open_recent_project_from_registry(
+    state: &DesktopState,
+    project_id: &str,
+    cache_root: PathBuf,
+    registry_path: PathBuf,
+) -> CommandResult<ProjectOpenResultDto> {
+    let entry = {
+        let _lock = state.lock_registry()?;
+        let projects = ProjectRegistry::new(&registry_path)
+            .load()
+            .map_err(|error| CommandError::registry_read(&error))?;
+        projects
+            .into_iter()
+            .find(|project| project.id == project_id)
+            .ok_or_else(|| {
+                CommandError::recent_project(
+                    "recentProjectNotFound",
+                    format!("recent project {project_id:?} was not found"),
+                )
+            })?
+    };
+
+    open_recent_project_with_entry(state, &entry, cache_root, registry_path)
+}
+
+fn open_recent_project_with_entry(
+    state: &DesktopState,
+    entry: &RegistryEntry,
+    cache_root: PathBuf,
+    registry_path: PathBuf,
+) -> CommandResult<ProjectOpenResultDto> {
+    let repository_root = PathBuf::from(&entry.repository_root);
+    if !repository_root.is_dir() {
+        return Err(CommandError::recent_project(
+            "recentProjectRepositoryMissing",
+            format!(
+                "recent project repository is missing: {}",
+                entry.repository_root
+            ),
+        ));
+    }
+    let source_package_path = PathBuf::from(&entry.source_package_path);
+    if !source_package_path.is_file() {
+        return Err(CommandError::recent_project(
+            "recentProjectSourceMissing",
+            format!(
+                "recent project source package is missing: {}",
+                entry.source_package_path
+            ),
+        ));
+    }
+
+    let replacement = ProjectSession::open(repository_root, source_package_path, cache_root)
+        .map_err(CommandError::from)?;
+    let actual_package_id = replacement.source_package().package_id().to_owned();
+    if actual_package_id != entry.source_package_id {
+        return Err(CommandError::recent_project(
+            "recentProjectSourceMismatch",
+            format!(
+                "remembered source packageId {} does not match the package at the remembered path ({actual_package_id})",
+                entry.source_package_id
+            ),
+        ));
+    }
+
+    let project = replace_project(state, replacement)?;
+    Ok(remember_project(state, project, Ok(registry_path)))
+}
+
+#[tauri::command(rename_all = "camelCase")]
+#[allow(clippy::needless_pass_by_value)]
+/// Removes one entry from Recent projects without touching project files.
+///
+/// # Errors
+///
+/// Returns a typed registry error when app-data cannot be resolved, the entry
+/// is absent, or the updated registry cannot be published.
+pub fn forget_recent_project(
+    app: tauri::AppHandle,
+    state: State<'_, DesktopState>,
+    project_id: String,
+) -> CommandResult<()> {
+    let path = app_registry_path(&app)
+        .map_err(|message| CommandError::new("projectRegistryWrite", message))?;
+    forget_recent_project_from_registry(&state, &path, &project_id)
+}
+
+fn forget_recent_project_from_registry(
+    state: &DesktopState,
+    path: &Path,
+    project_id: &str,
+) -> CommandResult<()> {
+    let _lock = state.lock_registry()?;
+    ProjectRegistry::new(path)
+        .remove(project_id)
+        .map_err(|error| CommandError::registry_write(&error))
+}
+
 /// Generates a source package from a local game installation and initializes
 /// the project from the already validated package.
 ///
@@ -127,15 +326,16 @@ pub async fn initialize_project_from_game(
     game_path: String,
     source_language: String,
     target_language: String,
-) -> CommandResult<ProjectSummaryDto> {
+) -> CommandResult<ProjectOpenResultDto> {
     let started = state.start_atlas_job()?;
     let job_id = started.id.clone();
     let token = started.token;
     let worker_job_id = job_id.clone();
     let worker_token = token.clone();
+    let worker_app = app.clone();
     let worker = tauri::async_runtime::spawn_blocking(move || {
         initialize_project_from_game_inner(
-            &app,
+            &worker_app,
             &worker_job_id,
             &worker_token,
             repository_root,
@@ -164,7 +364,8 @@ pub async fn initialize_project_from_game(
                 replace_project(&state, replacement)
             });
             state.finish_atlas_job(&job_id)?;
-            result
+            let registry_path = app_registry_path(&app);
+            result.map(|project| remember_project(&state, project, registry_path))
         }
         Err(error) => {
             state.finish_atlas_job(&job_id)?;
@@ -677,6 +878,36 @@ mod tests {
             .join("../../../crates/aeria-hsp/tests/fixtures/synthetic.hsp")
     }
 
+    fn registry_path(repository: &TestRepository) -> PathBuf {
+        repository.path().join("app-data").join(REGISTRY_FILE_NAME)
+    }
+
+    fn seed_recent_project(label: &str) -> (TestRepository, DesktopState, PathBuf, RegistryEntry) {
+        let repository = TestRepository::new(label);
+        let source = fixture_path();
+        let cache_root = repository.path().join("cache");
+        let state = DesktopState::new();
+        let summary = initialize_project_with_state(
+            &state,
+            repository.path().to_string_lossy().into_owned(),
+            source.to_string_lossy().into_owned(),
+            cache_root,
+            "fr".to_owned(),
+        )
+        .expect("initialize project");
+        let path = registry_path(&repository);
+        let result = remember_project(&state, summary, Ok(path.clone()));
+        assert!(result.warning.is_none());
+        close_project_with_state(&state).expect("close active project");
+        let entry = aeria_projects::ProjectRegistry::new(&path)
+            .load()
+            .expect("load recent project")
+            .into_iter()
+            .next()
+            .expect("seeded entry");
+        (repository, state, path, entry)
+    }
+
     fn binding() -> SourceBindingDto {
         SourceBindingDto {
             sheet_name: "Synthetic".to_owned(),
@@ -709,6 +940,170 @@ mod tests {
         assert_eq!(
             current_project_with_state(&state).expect("state read"),
             None
+        );
+    }
+
+    #[test]
+    fn recent_project_open_succeeds_and_refreshes_active_state() {
+        let (repository, state, path, entry) = seed_recent_project("recent-open");
+        let result = open_recent_project_from_registry(
+            &state,
+            &entry.id,
+            repository.path().join("cache"),
+            path,
+        )
+        .expect("open recent project");
+        assert_eq!(
+            PathBuf::from(result.project.repository_root),
+            fs::canonicalize(repository.path()).expect("canonical repository")
+        );
+        assert!(result.warning.is_none());
+        assert!(
+            current_project_with_state(&state)
+                .expect("current project")
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn recent_project_unknown_id_is_typed() {
+        let (repository, state, path, _entry) = seed_recent_project("recent-unknown");
+        let error = open_recent_project_from_registry(
+            &state,
+            "missing-local-id",
+            repository.path().join("cache"),
+            path,
+        )
+        .expect_err("unknown recent project");
+        assert_eq!(error.code, "recentProjectNotFound");
+    }
+
+    #[test]
+    fn recent_project_missing_paths_are_not_auto_removed() {
+        let (repository, state, path, mut entry) = seed_recent_project("recent-missing");
+        entry.repository_root = repository
+            .path()
+            .join("moved")
+            .to_string_lossy()
+            .into_owned();
+        let error = open_recent_project_with_entry(
+            &state,
+            &entry,
+            repository.path().join("cache"),
+            path.clone(),
+        )
+        .expect_err("missing repository");
+        assert_eq!(error.code, "recentProjectRepositoryMissing");
+
+        entry.repository_root = repository.path().to_string_lossy().into_owned();
+        entry.source_package_path = repository
+            .path()
+            .join("missing.hsp")
+            .to_string_lossy()
+            .into_owned();
+        let error = open_recent_project_with_entry(
+            &state,
+            &entry,
+            repository.path().join("cache"),
+            path.clone(),
+        )
+        .expect_err("missing source");
+        assert_eq!(error.code, "recentProjectSourceMissing");
+        assert_eq!(
+            aeria_projects::ProjectRegistry::new(path)
+                .load()
+                .expect("load retained registry")
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn recent_project_source_package_mismatch_is_explicit() {
+        let (repository, state, path, mut entry) = seed_recent_project("recent-mismatch");
+        entry.source_package_id =
+            "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff".to_owned();
+        let error =
+            open_recent_project_with_entry(&state, &entry, repository.path().join("cache"), path)
+                .expect_err("mismatched source package");
+        assert_eq!(error.code, "recentProjectSourceMismatch");
+        assert!(
+            current_project_with_state(&state)
+                .expect("current project")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn registry_write_failure_keeps_project_active_and_returns_warning() {
+        let repository = TestRepository::new("recent-write-failure");
+        let source = fixture_path();
+        let cache_root = repository.path().join("cache");
+        let state = DesktopState::new();
+        let summary = initialize_project_with_state(
+            &state,
+            repository.path().to_string_lossy().into_owned(),
+            source.to_string_lossy().into_owned(),
+            cache_root,
+            "fr".to_owned(),
+        )
+        .expect("initialize project");
+        let blocked_parent = repository.path().join("not-a-directory");
+        fs::write(&blocked_parent, b"owned test failure").expect("blocked parent");
+        let result = remember_project(
+            &state,
+            summary.clone(),
+            Ok(blocked_parent.join(REGISTRY_FILE_NAME)),
+        );
+        assert_eq!(result.project, summary);
+        assert_eq!(
+            result.warning.expect("warning").code,
+            "projectRegistryWrite"
+        );
+        assert!(
+            current_project_with_state(&state)
+                .expect("active project")
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn forgetting_recent_project_does_not_close_or_delete_the_active_project() {
+        let repository = TestRepository::new("recent-forget-active");
+        let source = fixture_path();
+        let state = DesktopState::new();
+        let summary = initialize_project_with_state(
+            &state,
+            repository.path().to_string_lossy().into_owned(),
+            source.to_string_lossy().into_owned(),
+            repository.path().join("cache"),
+            "fr".to_owned(),
+        )
+        .expect("initialize project");
+        let path = registry_path(&repository);
+        let result = remember_project(&state, summary, Ok(path.clone()));
+        let id = aeria_projects::ProjectRegistry::new(&path)
+            .load()
+            .expect("load registry")
+            .into_iter()
+            .next()
+            .expect("recent entry")
+            .id;
+
+        forget_recent_project_from_registry(&state, &path, &id).expect("forget recent project");
+        assert!(result.warning.is_none());
+        assert!(
+            current_project_with_state(&state)
+                .expect("active project")
+                .is_some()
+        );
+        assert!(repository.path().join(".aeria").is_dir());
+        assert!(Path::new(&result.project.source_package_path).is_file());
+        assert!(
+            aeria_projects::ProjectRegistry::new(path)
+                .load()
+                .expect("load empty registry")
+                .is_empty()
         );
     }
 

@@ -1,5 +1,6 @@
 use aeria_atlas::AtlasError;
 use aeria_core::TranslationUnitIdParseError;
+use aeria_projects::RegistryError;
 use aeria_workspace::{
     ProjectSessionError, TranslationMutationError, TranslationReadError, WorkspaceError,
     WorkspaceStoreError,
@@ -28,6 +29,42 @@ impl CommandError {
 
     pub(crate) fn internal_state(message: impl Into<String>) -> Self {
         Self::new("internalState", message)
+    }
+
+    pub(crate) fn registry_read(error: &RegistryError) -> Self {
+        let code = match &error {
+            RegistryError::UnsupportedVersion { .. } => "projectRegistryVersion",
+            RegistryError::EntryNotFound { .. } => "recentProjectNotFound",
+            RegistryError::Io { .. }
+            | RegistryError::InvalidJson { .. }
+            | RegistryError::InvalidData { .. }
+            | RegistryError::Serialization { .. }
+            | RegistryError::AtomicPublication { .. } => "projectRegistryRead",
+        };
+        Self::new(code, error.to_string())
+    }
+
+    pub(crate) fn registry_write(error: &RegistryError) -> Self {
+        let code = match &error {
+            RegistryError::UnsupportedVersion { .. } => "projectRegistryVersion",
+            RegistryError::EntryNotFound { .. } => "recentProjectNotFound",
+            RegistryError::Io { .. }
+            | RegistryError::InvalidJson { .. }
+            | RegistryError::InvalidData { .. }
+            | RegistryError::Serialization { .. }
+            | RegistryError::AtomicPublication { .. } => "projectRegistryWrite",
+        };
+        Self::new(code, error.to_string())
+    }
+
+    pub(crate) fn recent_project(code: &'static str, message: impl Into<String>) -> Self {
+        Self::new(code, message)
+    }
+}
+
+impl From<RegistryError> for CommandError {
+    fn from(error: RegistryError) -> Self {
+        Self::registry_read(&error)
     }
 }
 

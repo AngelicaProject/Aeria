@@ -64,6 +64,29 @@ export type ProjectSummaryDto = {
   sheets: ProjectSheetDto[];
 };
 
+export type ProjectOpenResultDto = {
+  project: ProjectSummaryDto;
+  warning: CommandError | null;
+};
+
+export type RecentProjectAvailability =
+  | "ready"
+  | "repositoryMissing"
+  | "sourcePackageMissing"
+  | "repositoryAndSourceMissing";
+
+export type RecentProjectDto = {
+  id: string;
+  repositoryRoot: string;
+  sourcePackagePath: string;
+  sourcePackageId: string;
+  sourceLanguage: string;
+  targetLanguage: string;
+  gameVersion: string;
+  lastOpenedAtUnixMs: number;
+  availability: RecentProjectAvailability;
+};
+
 export type TranslationOverlayDto = {
   translationUnitId: string;
   targetMacro: string;

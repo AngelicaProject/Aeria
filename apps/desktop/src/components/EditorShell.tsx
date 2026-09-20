@@ -31,6 +31,8 @@ type EditorError = {
 
 type EditorShellProps = {
   project: ProjectSummaryDto;
+  applicationWarning: CommandError | null;
+  onDismissApplicationWarning: () => void;
   onClosed: () => void;
 };
 
@@ -65,7 +67,12 @@ function cellIsDirty(cell: TranslationCellDto, draft: CellDraft): boolean {
     (cell.translation !== null && draft.note !== (cell.translation.translatorNote ?? ""));
 }
 
-export function EditorShell({ project, onClosed }: EditorShellProps) {
+export function EditorShell({
+  project,
+  applicationWarning,
+  onDismissApplicationWarning,
+  onClosed,
+}: EditorShellProps) {
   const firstSheetName = project.sheets[0]?.name ?? null;
   const [selectedSheetName, setSelectedSheetName] = useState<string | null>(firstSheetName);
   const [rows, setRows] = useState<TranslationRowDto[]>([]);
@@ -356,6 +363,13 @@ export function EditorShell({ project, onClosed }: EditorShellProps) {
         disabled={closing || sheetLoading || refreshing || mutation !== null}
         onClose={() => void handleClose()}
       />
+      {applicationWarning ? (
+        <ErrorBanner
+          title="Project opened with a Recent projects warning"
+          error={applicationWarning}
+          onDismiss={onDismissApplicationWarning}
+        />
+      ) : null}
       {editorError ? <ErrorBanner title={editorError.title} error={editorError.error} onDismiss={() => setEditorError(null)} /> : null}
       <div className="editor-layout">
         <SheetSidebar

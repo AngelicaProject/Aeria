@@ -9,6 +9,7 @@ use crate::error::CommandError;
 /// The one authoritative project session owned by the desktop process.
 pub struct DesktopState {
     project: Mutex<Option<ProjectSession>>,
+    registry: Mutex<()>,
     atlas_job: Mutex<Option<AtlasJob>>,
     next_atlas_job_id: AtomicU64,
 }
@@ -30,6 +31,7 @@ impl DesktopState {
     pub const fn new() -> Self {
         Self {
             project: Mutex::new(None),
+            registry: Mutex::new(()),
             atlas_job: Mutex::new(None),
             next_atlas_job_id: AtomicU64::new(1),
         }
@@ -41,6 +43,12 @@ impl DesktopState {
         self.project
             .lock()
             .map_err(|_| CommandError::internal_state("desktop project state lock is poisoned"))
+    }
+
+    pub(crate) fn lock_registry(&self) -> Result<MutexGuard<'_, ()>, CommandError> {
+        self.registry
+            .lock()
+            .map_err(|_| CommandError::internal_state("desktop project registry lock is poisoned"))
     }
 
     pub(crate) fn start_atlas_job(&self) -> Result<StartedAtlasJob, CommandError> {

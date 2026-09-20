@@ -1,7 +1,9 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
   CommandError,
+  ProjectOpenResultDto,
   ProjectSummaryDto,
+  RecentProjectDto,
   ReviewState,
   SourceBinding,
   TranslationRowCursorDto,
@@ -40,16 +42,16 @@ export function currentProject(): Promise<ProjectSummaryDto | null> {
   return call<ProjectSummaryDto | null>("current_project");
 }
 
-export function openProject(repositoryRoot: string, sourcePackagePath: string): Promise<ProjectSummaryDto> {
-  return call<ProjectSummaryDto>("open_project", { repositoryRoot, sourcePackagePath });
+export function openProject(repositoryRoot: string, sourcePackagePath: string): Promise<ProjectOpenResultDto> {
+  return call<ProjectOpenResultDto>("open_project", { repositoryRoot, sourcePackagePath });
 }
 
 export function initializeProject(
   repositoryRoot: string,
   sourcePackagePath: string,
   targetLanguage: string,
-): Promise<ProjectSummaryDto> {
-  return call<ProjectSummaryDto>("initialize_project", {
+): Promise<ProjectOpenResultDto> {
+  return call<ProjectOpenResultDto>("initialize_project", {
     repositoryRoot,
     sourcePackagePath,
     targetLanguage,
@@ -61,13 +63,25 @@ export function initializeProjectFromGame(
   gamePath: string,
   sourceLanguage: string,
   targetLanguage: string,
-): Promise<ProjectSummaryDto> {
-  return call<ProjectSummaryDto>("initialize_project_from_game", {
+): Promise<ProjectOpenResultDto> {
+  return call<ProjectOpenResultDto>("initialize_project_from_game", {
     repositoryRoot,
     gamePath,
     sourceLanguage,
     targetLanguage,
   });
+}
+
+export function listRecentProjects(): Promise<RecentProjectDto[]> {
+  return call<RecentProjectDto[]>("list_recent_projects");
+}
+
+export function openRecentProject(projectId: string): Promise<ProjectOpenResultDto> {
+  return call<ProjectOpenResultDto>("open_recent_project", { projectId });
+}
+
+export function forgetRecentProject(projectId: string): Promise<void> {
+  return call<void>("forget_recent_project", { projectId });
 }
 
 export function cancelSourcePackage(jobId: string): Promise<void> {
