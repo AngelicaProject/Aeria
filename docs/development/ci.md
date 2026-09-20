@@ -21,6 +21,12 @@ cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
 cargo test --workspace --locked
 ```
 
+The Rust job stages the pinned Harmonia Atlas Linux sidecar after verifying
+the checksum recorded in tools/atlas/version.json, because Tauri validates
+configured external binaries during its build. A separate Windows job runs the
+portable aeria-atlas child-process fixture suite; it does not require a game
+installation or a real Atlas binary.
+
 Workspace persistence also runs its focused locked test suite on
 `windows-latest` because Windows is the first production desktop target:
 

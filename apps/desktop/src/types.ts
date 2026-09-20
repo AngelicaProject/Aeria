@@ -3,6 +3,39 @@ export type CommandError = {
   message: string;
 };
 
+export type AtlasEvent =
+  | { type: "started"; protocolVersion: number; language: string | null }
+  | { type: "phase"; protocolVersion: number; phase: string }
+  | {
+      type: "progress";
+      protocolVersion: number;
+      phase: string;
+      sheet: string | null;
+      language: string | null;
+      sheetIndex: number | null;
+      sheetCount: number | null;
+      rowsProcessed: number | null;
+      sheetCompleted: boolean | null;
+    }
+  | {
+      type: "completed";
+      protocolVersion: number;
+      packageId: string;
+      outputPath: string | null;
+      metadata: Record<string, unknown>;
+    }
+  | {
+      type: "failed";
+      protocolVersion: number;
+      code: string | null;
+      message: string | null;
+    };
+
+export type SourcePackageEventPayload = {
+  jobId: string;
+  event: AtlasEvent;
+};
+
 export type ReviewState = "draft" | "reviewed" | "needsReview";
 
 export type SourceBinding = {

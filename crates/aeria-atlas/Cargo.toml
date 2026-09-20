@@ -1,0 +1,19 @@
+[package]
+name = "aeria-atlas"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Bounded Harmonia Atlas process integration and JSONL protocol v1."
+
+[dependencies]
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+thiserror = "2.0.20"
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+tempfile = "3.27.0"

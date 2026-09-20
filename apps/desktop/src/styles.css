@@ -164,6 +164,8 @@ textarea {
 
 input { min-height: 40px; padding: 9px 11px; }
 
+select { min-height: 40px; padding: 9px 11px; border: 1px solid var(--border); border-radius: 5px; background: #0f131a; color: var(--text); }
+
 textarea {
   min-height: 104px;
   padding: 11px;
@@ -194,6 +196,16 @@ textarea::placeholder { color: #687486; }
 .launcher-submit { margin-top: 12px; }
 
 .launcher-footnote { margin: 18px 0 0; color: var(--muted); font-size: 12px; }
+
+.atlas-progress { margin-top: 22px; padding: 14px; border: 1px solid var(--border); border-radius: 6px; background: var(--panel-raised); }
+
+.atlas-progress-heading { display: flex; align-items: center; gap: 9px; font-size: 13px; }
+
+.atlas-progress p { margin: 9px 0 0; color: var(--muted); font-size: 12px; }
+
+.atlas-progress p span { color: var(--text); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+
+.cancel-button { margin-top: 14px; width: 100%; }
 
 .error-banner {
   display: flex;

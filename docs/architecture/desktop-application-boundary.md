@@ -39,3 +39,12 @@ The IPC boundary contains no source update or rebase logic, no background
 server, and no async worker architecture. React has no direct filesystem or
 SQLite access. Translation-unit IDs cross IPC only in their canonical textual
 form, and review states use an explicit camelCase protocol enum.
+
+Source-package creation is the one desktop process workflow that owns an Atlas
+child job. Rust resolves the bundled executable (or the explicit
+`AERIA_ATLAS_PATH` development/test override), supplies the stable app-data
+staging path, forwards typed `source-package-event` payloads containing an
+opaque job ID, and publishes a project only after the completed package has
+been validated. Desktop state permits one active package job; cancellation
+signals that job, terminates and awaits Atlas, and leaves Workspace Format v1
+uninitialized when creation does not succeed.

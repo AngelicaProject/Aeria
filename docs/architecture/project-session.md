@@ -44,6 +44,14 @@ validate HSP and verify its embedded HXS/HSG
 Existing `.aeria/` state is never replaced. Invalid HXS input and invalid
 project inputs fail before new managed state is published.
 
+Atlas-created projects use
+`ProjectSession::initialize_from_source_package(repository_root, source_package,
+target_language)`. The desktop creation workflow opens the published HSP once,
+checks its package identity against Atlas's completed event, and transfers that
+validated `SourcePackage` into the session. The constructor does not reopen the
+archive, so source evidence validation is not repeated before Workspace Format
+v1 initialization.
+
 ## Ownership and scope
 
 ```text

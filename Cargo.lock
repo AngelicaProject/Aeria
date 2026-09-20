@@ -13,6 +13,16 @@ name = "aeria-ai"
 version = "0.1.0"
 
 [[package]]
+name = "aeria-atlas"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.20",
+]
+
+[[package]]
 name = "aeria-core"
 version = "0.1.0"
 dependencies = [
@@ -24,7 +34,9 @@ dependencies = [
 name = "aeria-desktop"
 version = "0.1.0"
 dependencies = [
+ "aeria-atlas",
  "aeria-core",
+ "aeria-hsp",
  "aeria-workspace",
  "serde",
  "tauri",
