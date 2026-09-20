@@ -1,14 +1,40 @@
-# Source and HXS
+# Source packages and HXS
 
-HXS is Aeria's immutable source contract.
+HSP is Aeria's source handoff artifact. HXS is the immutable source contract
+embedded inside it, and HSG is the deterministic translation-permission
+allowlist derived from multilingual evidence.
 
-The Rust core consumes HXS and does not depend on how a snapshot was produced. The desktop source manager may invoke Harmonia Atlas to provide a one-click `Generate Source from FFXIV installation` experience.
+The Rust core consumes a validated HSP and does not depend on how the package
+was produced. Atlas process integration is a desktop workflow outside the
+package-consumption boundary.
 
 ## Import verification
 
-Before a snapshot is accepted, Aeria should verify its supported format, schema/invariants, logical metadata, and hashes/identifiers. A previously verified file may be trusted through a local cache keyed by file identity/hash when safe to do so.
+Before a package is accepted, Aeria verifies its ZIP structure, manifest,
+component paths, sizes, hashes, logical package identity, embedded HXS,
+embedded HSG, source evidence identity, and all HSP/HXS/HSG relationships.
+An existing cache file is reused only after it is verified against the
+manifest component size and SHA-256.
 
-The first production source slice is implemented by `aeria-hxs`. It opens HXS v1 as an immutable SQLite artifact in read-only mode, validates the HXS SQLite identity and required schema, runs SQLite integrity checks, and recomputes the canonical row, sheet, `contentId`, and `snapshotId` hashes before exposing any source data. Its public interface returns owned source DTOs for metadata, sheet schemas/hashes, bounded row pages, row technical payloads, and String-cell macro/raw representations; SQLite types remain private to the crate. A single row page is capped at the crate-level `MAX_ROW_PAGE_SIZE` of 4096 rows.
+The package reader streams `source/source.hxs` directly from the archive while
+hashing it. Every manifest-listed ZIP entry is checked against its declared
+uncompressed size before decompression, and its actual decompressed byte count
+and SHA-256 are bounded and verified while streaming. Manifest JSON is capped
+at 1 MiB; HSG JSON is capped at 64 MiB; unknown optional components are
+integrity-checked and discarded without a payload allocation. The source is
+materialized only into a caller-provided disposable cache, then opened through
+`HxsSnapshot::open`; rejected replacements remove their partial cache file.
+
+The production HXS reader remains owned by `aeria-hxs`. It opens HXS v1 as an
+immutable SQLite artifact in read-only mode, validates the HXS SQLite identity
+and required schema, runs SQLite integrity checks, and recomputes the
+canonical row, sheet, `contentId`, and `snapshotId` hashes before exposing
+source data. `aeria-hsp` owns package/HSG validation and consumes a dedicated
+row-complete, String-only evidence stream. Its bounded keyset pages return
+physical row/subrow groups, preserve rows with zero String cells, and select
+only `row_id`, `subrow_id`, `column_index`, and exact macro text. Evidence
+matching therefore requires no raw source bytes, technical payload, row hashes,
+or per-cell `string_cell` lookups.
 
 For deterministic source rebase indexing, the reader also exposes bounded
 keyset pages for one verified sheet at a time. Each page is constrained by
@@ -44,7 +70,16 @@ occurrence at another binding. The complete rebase transition contract is docume
 
 ## Source cache
 
-Snapshots live in a machine-local content-addressed source store, not in the translation repository.
+Embedded HXS snapshots live outside the translation repository in a
+machine-local disposable cache. The package reader uses:
+
+```text
+<cache-root>/hxs/<snapshot-id-without-sha256-prefix>/source.hxs
+```
+
+The canonical `sha256:` prefix is not used in the Windows filename. A failed
+replacement is staged beside the destination and published only after the
+component stream has been flushed and verified.
 
 The current and immediately previous snapshots are protected because rebase requires them. Older snapshots are eligible for LRU cleanup under a user-configurable cache budget.
 

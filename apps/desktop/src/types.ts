@@ -20,7 +20,8 @@ export type ProjectSheetDto = {
 
 export type ProjectSummaryDto = {
   repositoryRoot: string;
-  sourcePath: string;
+  sourcePackagePath: string;
+  sourcePackageId: string;
   sourceLanguage: string;
   targetLanguage: string;
   sourceContentId: string;

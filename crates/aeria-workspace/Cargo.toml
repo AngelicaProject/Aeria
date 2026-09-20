@@ -9,6 +9,7 @@ description = "Sparse translation workspace domain operations and Workspace Form
 
 [dependencies]
 aeria-core = { path = "../aeria-core" }
+aeria-hsp = { path = "../aeria-hsp" }
 aeria-hxs = { path = "../aeria-hxs" }
 aeria-se = { path = "../aeria-se" }
 serde = { version = "1.0.229", features = ["derive"] }
@@ -22,3 +23,4 @@ workspace = true
 [dev-dependencies]
 rusqlite = { version = "0.40.2", features = ["bundled"] }
 sha2 = "0.11.0"
+zip = { version = "6.0.0", default-features = false, features = ["deflate"] }

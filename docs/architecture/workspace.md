@@ -40,7 +40,7 @@ Project-shared data may include:
 Machine/user-local data includes:
 
 - secondary source-language preferences
-- source snapshot paths/cache
+- source-package paths and disposable HXS cache
 - AI credentials/model preferences
 - local UI layout
 - local search/index databases

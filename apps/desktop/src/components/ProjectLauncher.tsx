@@ -13,7 +13,7 @@ type ProjectLauncherProps = {
 export function ProjectLauncher({ initialError, onProjectReady }: ProjectLauncherProps) {
   const [mode, setMode] = useState<LauncherMode>("open");
   const [repositoryRoot, setRepositoryRoot] = useState("");
-  const [sourcePath, setSourcePath] = useState("");
+  const [sourcePackagePath, setSourcePackagePath] = useState("");
   const [targetLanguage, setTargetLanguage] = useState("");
   const [busy, setBusy] = useState<LauncherMode | null>(null);
   const [error, setError] = useState<CommandError | null>(initialError);
@@ -30,8 +30,8 @@ export function ProjectLauncher({ initialError, onProjectReady }: ProjectLaunche
     try {
       const project =
         mode === "open"
-          ? await openProject(repositoryRoot, sourcePath)
-          : await initializeProject(repositoryRoot, sourcePath, targetLanguage);
+          ? await openProject(repositoryRoot, sourcePackagePath)
+          : await initializeProject(repositoryRoot, sourcePackagePath, targetLanguage);
       onProjectReady(project);
     } catch (caughtError) {
       setError(normalizeCommandError(caughtError));
@@ -46,7 +46,7 @@ export function ProjectLauncher({ initialError, onProjectReady }: ProjectLaunche
         <div className="launcher-heading">
           <p className="eyebrow">Desktop translation editor</p>
           <h1 id="launcher-title">Aeria</h1>
-          <p>Open an existing translation workspace or initialize one from a verified HXS source.</p>
+          <p>Open an existing translation workspace or initialize one from a verified HSP source package.</p>
         </div>
 
         {error ? <ErrorBanner title="Could not open project" error={error} onDismiss={() => setError(null)} /> : null}
@@ -85,12 +85,12 @@ export function ProjectLauncher({ initialError, onProjectReady }: ProjectLaunche
             disabled={busy !== null}
           />
 
-          <label htmlFor="source-path">HXS source path</label>
+          <label htmlFor="source-package-path">HSP source package path</label>
           <input
-            id="source-path"
-            value={sourcePath}
-            onChange={(event) => setSourcePath(event.target.value)}
-            placeholder="C:\\Sources\\game.hxs"
+            id="source-package-path"
+            value={sourcePackagePath}
+            onChange={(event) => setSourcePackagePath(event.target.value)}
+            placeholder="C:\\Sources\\source-en.hsp"
             autoComplete="off"
             disabled={busy !== null}
           />

@@ -217,3 +217,8 @@ Future incompatible changes require a new format version or an explicit,
 lossless migration. The next implementation change may add a reader/writer
 for this frozen representation, but must not make new layout or syntax
 decisions.
+
+HSP paths, materialized HXS cache paths, and HSP package IDs are runtime source
+configuration, not Workspace Format v1 state. The workspace continues to
+persist only the verified HXS language/content/snapshot identity defined by
+this contract.

@@ -14,7 +14,7 @@ export function ProjectHeader({ project, closing, disabled, onClose }: ProjectHe
         <span className="brand-name">Aeria</span>
         <span className="brand-context">translation workspace</span>
       </div>
-      <div className="project-summary" title={`${project.repositoryRoot}\n${project.sourcePath}`}>
+      <div className="project-summary" title={`${project.repositoryRoot}\n${project.sourcePackagePath}`}>
         <span className="language-pair">
           {project.sourceLanguage} <span aria-hidden="true">→</span> {project.targetLanguage}
         </span>

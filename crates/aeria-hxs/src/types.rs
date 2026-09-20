@@ -341,6 +341,30 @@ pub struct StringRowRecordPage {
     pub next_after: Option<StringRowCoordinate>,
 }
 
+/// One physical source row and only the String values required by evidence
+/// hashing. Unlike [`StringRowRecord`], this type does not include hashes or
+/// raw source bytes.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct EvidenceStringRow {
+    pub row_id: u32,
+    pub subrow_id: u16,
+    pub occurrences: Vec<EvidenceStringOccurrence>,
+}
+
+/// One String value returned by the narrow evidence scan.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct EvidenceStringOccurrence {
+    pub column_index: u32,
+    pub macro_text: String,
+}
+
+/// A bounded keyset page of physical rows for evidence hashing.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct EvidenceStringRowPage {
+    pub rows: Vec<EvidenceStringRow>,
+    pub next_after: Option<StringRowCoordinate>,
+}
+
 /// One source String cell, including both source representations when available.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct StringCell {

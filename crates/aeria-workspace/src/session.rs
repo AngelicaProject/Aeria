@@ -2,35 +2,33 @@
 
 use std::path::{Path, PathBuf};
 
-use aeria_hxs::{HxsError, HxsSnapshot};
+use aeria_core::{SourceBinding, TranslationUnitId};
+use aeria_hsp::{HspError, SourcePackage};
+use aeria_hxs::HxsSnapshot;
 use thiserror::Error;
 
 use crate::{Workspace, WorkspaceError, WorkspaceStore, WorkspaceStoreError};
 
 /// The owned runtime representation of one opened Aeria project.
 ///
-/// A session keeps the local source path alongside the verified immutable HXS
-/// handle, loaded sparse workspace, persistence adapter, and repository root.
-/// The source path is runtime configuration and is not part of Workspace
-/// Format v1 state.
+/// A session keeps the local source-package path alongside the validated
+/// package, verified immutable HXS handle, loaded sparse workspace,
+/// persistence adapter, and repository root. Package and cache paths are
+/// runtime configuration and are not part of Workspace Format v1 state.
 pub struct ProjectSession {
     repository_root: PathBuf,
-    source_path: PathBuf,
+    source_package_path: PathBuf,
     pub(crate) store: WorkspaceStore,
     pub(crate) workspace: Workspace,
-    pub(crate) source: HxsSnapshot,
+    pub(crate) source_package: SourcePackage,
 }
 
 /// Errors raised while opening or initializing a project session.
 #[derive(Debug, Error)]
 pub enum ProjectSessionError {
-    /// The local HXS file could not be opened or fully verified.
-    #[error("failed to open and verify HXS source {path}: {source}")]
-    Source {
-        path: PathBuf,
-        #[source]
-        source: HxsError,
-    },
+    /// The local HSP file could not be opened or fully verified.
+    #[error("failed to open and verify HSP source package {path}: {source}")]
+    Source { path: PathBuf, source: HspError },
 
     /// Workspace Format v1 could not be loaded or initialized.
     #[error("failed to load or initialize workspace at {repository_root}: {source}")]
@@ -42,24 +40,34 @@ pub enum ProjectSessionError {
 
     /// The loaded workspace is bound to a different source snapshot.
     #[error(
-        "workspace at {repository_root} is incompatible with HXS source {source_path}: {source}"
+        "workspace at {repository_root} is incompatible with HSP source package {source_package_path}: {source}"
     )]
     Compatibility {
         repository_root: PathBuf,
-        source_path: PathBuf,
+        source_package_path: PathBuf,
         #[source]
         source: WorkspaceError,
     },
 
     /// The requested target language could not be used to construct workspace metadata.
     #[error(
-        "could not create workspace metadata for {repository_root} from HXS source {source_path}: {source}"
+        "could not create workspace metadata for {repository_root} from HSP source package {source_package_path}: {source}"
     )]
     Workspace {
         repository_root: PathBuf,
-        source_path: PathBuf,
+        source_package_path: PathBuf,
         #[source]
         source: WorkspaceError,
+    },
+
+    /// The existing sparse workspace contains a binding blocked by HSG.
+    #[error(
+        "workspace at {repository_root} contains translation unit {translation_unit_id} at {source_binding:?}, which is not permitted by source guidance"
+    )]
+    BlockedWorkspaceUnit {
+        repository_root: PathBuf,
+        translation_unit_id: TranslationUnitId,
+        source_binding: SourceBinding,
     },
 }
 
@@ -76,14 +84,17 @@ impl ProjectSession {
     /// source compatibility fails.
     pub fn open(
         repository_root: impl Into<PathBuf>,
-        source_path: impl Into<PathBuf>,
+        source_package_path: impl Into<PathBuf>,
+        cache_root: impl Into<PathBuf>,
     ) -> Result<Self, ProjectSessionError> {
         let repository_root = repository_root.into();
-        let source_path = source_path.into();
-        let source =
-            HxsSnapshot::open(&source_path).map_err(|source| ProjectSessionError::Source {
-                path: source_path.clone(),
-                source,
+        let source_package_path = source_package_path.into();
+        let source_package =
+            SourcePackage::open(&source_package_path, cache_root.into()).map_err(|source| {
+                ProjectSessionError::Source {
+                    path: source_package_path.clone(),
+                    source,
+                }
             })?;
         let store = WorkspaceStore::new(repository_root.clone());
         let workspace = store.load().map_err(|source| ProjectSessionError::Store {
@@ -91,19 +102,35 @@ impl ProjectSession {
             source,
         })?;
         workspace
-            .require_compatible_snapshot(&source)
+            .require_compatible_snapshot(source_package.source())
             .map_err(|source| ProjectSessionError::Compatibility {
                 repository_root: repository_root.clone(),
-                source_path: source_path.clone(),
+                source_package_path: source_package_path.clone(),
                 source,
             })?;
 
+        if let Some(unit) = workspace.units().find(|unit| {
+            let binding = unit.source_binding();
+            !source_package.guidance_index().is_translatable(
+                binding.sheet_name(),
+                binding.row_id(),
+                binding.subrow_id(),
+                binding.column_index(),
+            )
+        }) {
+            return Err(ProjectSessionError::BlockedWorkspaceUnit {
+                repository_root,
+                translation_unit_id: unit.id(),
+                source_binding: unit.source_binding().clone(),
+            });
+        }
+
         Ok(Self {
             repository_root,
-            source_path,
+            source_package_path,
             store,
             workspace,
-            source,
+            source_package,
         })
     }
 
@@ -119,22 +146,26 @@ impl ProjectSession {
     /// or atomic Workspace Format v1 initialization fails.
     pub fn initialize(
         repository_root: impl Into<PathBuf>,
-        source_path: impl Into<PathBuf>,
+        source_package_path: impl Into<PathBuf>,
+        cache_root: impl Into<PathBuf>,
         target_language: impl Into<String>,
     ) -> Result<Self, ProjectSessionError> {
         let repository_root = repository_root.into();
-        let source_path = source_path.into();
-        let source =
-            HxsSnapshot::open(&source_path).map_err(|source| ProjectSessionError::Source {
-                path: source_path.clone(),
-                source,
+        let source_package_path = source_package_path.into();
+        let source_package =
+            SourcePackage::open(&source_package_path, cache_root.into()).map_err(|source| {
+                ProjectSessionError::Source {
+                    path: source_package_path.clone(),
+                    source,
+                }
             })?;
-        let workspace = Workspace::from_verified_snapshot(&source, target_language.into())
-            .map_err(|source| ProjectSessionError::Workspace {
-                repository_root: repository_root.clone(),
-                source_path: source_path.clone(),
-                source,
-            })?;
+        let workspace =
+            Workspace::from_verified_snapshot(source_package.source(), target_language.into())
+                .map_err(|source| ProjectSessionError::Workspace {
+                    repository_root: repository_root.clone(),
+                    source_package_path: source_package_path.clone(),
+                    source,
+                })?;
         let store = WorkspaceStore::new(repository_root.clone());
         store
             .initialize(&workspace)
@@ -145,10 +176,10 @@ impl ProjectSession {
 
         Ok(Self {
             repository_root,
-            source_path,
+            source_package_path,
             store,
             workspace,
-            source,
+            source_package,
         })
     }
 
@@ -158,10 +189,10 @@ impl ProjectSession {
         &self.repository_root
     }
 
-    /// Returns the local HXS path used by this session.
+    /// Returns the local HSP path used by this session.
     #[must_use]
-    pub fn source_path(&self) -> &Path {
-        &self.source_path
+    pub fn source_package_path(&self) -> &Path {
+        &self.source_package_path
     }
 
     /// Returns the loaded sparse workspace.
@@ -173,6 +204,12 @@ impl ProjectSession {
     /// Returns the verified immutable HXS source handle.
     #[must_use]
     pub fn source(&self) -> &HxsSnapshot {
-        &self.source
+        self.source_package.source()
+    }
+
+    /// Returns the validated source package owned by this session.
+    #[must_use]
+    pub fn source_package(&self) -> &SourcePackage {
+        &self.source_package
     }
 }

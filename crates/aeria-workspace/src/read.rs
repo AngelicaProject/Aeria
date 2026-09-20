@@ -133,10 +133,10 @@ impl ProjectSession {
     /// groups may make the visible result shorter without preventing the
     /// source cursor from advancing.
     ///
-    /// Empty macro text is ignored. A non-empty macro beginning with the exact
-    /// uppercase prefix `TEXT_` is read-only context. Every other non-empty
-    /// String cell is translatable. This deliberately narrow classification is
-    /// not semantic schema metadata.
+    /// HSG is the sole permission source. An allowed occurrence is editable,
+    /// including when its source macro is empty. A blocked non-empty
+    /// occurrence is returned as read-only context; blocked empty occurrences
+    /// are omitted from the presentation.
     ///
     /// # Errors
     ///
@@ -179,23 +179,28 @@ impl ProjectSession {
                 let coordinate = &occurrence.fingerprint.coordinate;
                 let column_index = coordinate.column_index;
                 let source_macro = occurrence.macro_text;
-                if source_macro.is_empty() {
-                    continue;
-                }
-                if source_macro.starts_with("TEXT_") {
-                    context.push(TranslationContextCellView {
-                        column_index,
-                        source_macro,
-                    });
-                    continue;
-                }
-
                 let source_binding = SourceBinding::new(
                     coordinate.sheet_name.clone(),
                     coordinate.row_id,
                     coordinate.subrow_id,
                     column_index,
                 );
+                let allowed = self.source_package.guidance_index().is_translatable(
+                    source_binding.sheet_name(),
+                    source_binding.row_id(),
+                    source_binding.subrow_id(),
+                    source_binding.column_index(),
+                );
+                if !allowed {
+                    if source_macro.is_empty() {
+                        continue;
+                    }
+                    context.push(TranslationContextCellView {
+                        column_index,
+                        source_macro,
+                    });
+                    continue;
+                }
                 let verified_fingerprint = source_fingerprint_from_hashes(
                     &occurrence.fingerprint.macro_text_hash,
                     occurrence.fingerprint.raw_value_hash.as_ref(),

@@ -41,7 +41,8 @@ impl From<ProjectSessionError> for CommandError {
         let code = match &error {
             ProjectSessionError::Source { .. } => "projectSource",
             ProjectSessionError::Store { .. } => "projectStore",
-            ProjectSessionError::Compatibility { .. } => "projectCompatibility",
+            ProjectSessionError::Compatibility { .. }
+            | ProjectSessionError::BlockedWorkspaceUnit { .. } => "projectCompatibility",
             ProjectSessionError::Workspace { .. } => "projectWorkspace",
         };
         Self::new(code, error.to_string())
@@ -63,6 +64,7 @@ impl From<TranslationReadError> for CommandError {
 impl From<TranslationMutationError> for CommandError {
     fn from(error: TranslationMutationError) -> Self {
         let code = match &error {
+            TranslationMutationError::SourceNotTranslatable { .. } => "sourceNotTranslatable",
             TranslationMutationError::Workspace(error) => workspace_error_code(error),
             TranslationMutationError::Persistence(_) => "translationPersistence",
             TranslationMutationError::SourceIntegrity { .. } => "translationSourceIntegrity",
@@ -105,7 +107,8 @@ mod tests {
     fn project_source_failures_use_a_stable_code() {
         let error = ProjectSession::open(
             PathBuf::from("missing-repository"),
-            PathBuf::from("missing-source.hxs"),
+            PathBuf::from("missing-source.hsp"),
+            PathBuf::from("missing-cache"),
         )
         .err()
         .expect("missing source");
@@ -125,5 +128,10 @@ mod tests {
             },
         ));
         assert_eq!(mutation_error.code, "translationWorkspace");
+
+        let blocked_error = CommandError::from(TranslationMutationError::SourceNotTranslatable {
+            source_binding: aeria_core::SourceBinding::new("Synthetic", 42, 0, 0),
+        });
+        assert_eq!(blocked_error.code, "sourceNotTranslatable");
     }
 }

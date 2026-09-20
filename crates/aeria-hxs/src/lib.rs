@@ -11,11 +11,12 @@ mod validation;
 pub use error::HxsError;
 pub use reader::HxsSnapshot;
 pub use types::{
-    ColumnMetadata, ColumnType, HxsHash, ProducerMetadata, RowHashes, RowPage, RowRecord,
-    SheetHashes, SheetMetadata, SheetVariant, SnapshotCounts, SnapshotMetadata, StringCell,
-    StringCellHashes, StringOccurrenceCoordinate, StringOccurrenceFingerprint,
-    StringOccurrencePage, StringOccurrenceRecord, StringOccurrenceRecordPage, StringRowCoordinate,
-    StringRowRecord, StringRowRecordPage,
+    ColumnMetadata, ColumnType, EvidenceStringOccurrence, EvidenceStringRow, EvidenceStringRowPage,
+    HxsHash, ProducerMetadata, RowHashes, RowPage, RowRecord, SheetHashes, SheetMetadata,
+    SheetVariant, SnapshotCounts, SnapshotMetadata, StringCell, StringCellHashes,
+    StringOccurrenceCoordinate, StringOccurrenceFingerprint, StringOccurrencePage,
+    StringOccurrenceRecord, StringOccurrenceRecordPage, StringRowCoordinate, StringRowRecord,
+    StringRowRecordPage,
 };
 
 /// Maximum number of rows returned by one [`HxsSnapshot::page_rows`] call.
@@ -26,3 +27,6 @@ pub const MAX_STRING_OCCURRENCE_PAGE_SIZE: u32 = 4096;
 
 /// Maximum number of physical row/subrow groups returned by one String-row page.
 pub const MAX_STRING_ROW_PAGE_SIZE: u32 = 4096;
+
+/// Maximum number of physical row/subrow groups returned by one evidence scan page.
+pub const MAX_EVIDENCE_STRING_ROW_PAGE_SIZE: u32 = 4096;

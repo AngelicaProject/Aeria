@@ -80,7 +80,8 @@ pub struct ProjectSheetDto {
 #[serde(rename_all = "camelCase")]
 pub struct ProjectSummaryDto {
     pub repository_root: String,
-    pub source_path: String,
+    pub source_package_path: String,
+    pub source_package_id: String,
     pub source_language: String,
     pub target_language: String,
     pub source_content_id: String,
@@ -107,7 +108,8 @@ impl ProjectSummaryDto {
 
         Self {
             repository_root: session.repository_root().to_string_lossy().into_owned(),
-            source_path: session.source_path().to_string_lossy().into_owned(),
+            source_package_path: session.source_package_path().to_string_lossy().into_owned(),
+            source_package_id: session.source_package().package_id().to_owned(),
             source_language: workspace_metadata.source_language().to_owned(),
             target_language: workspace_metadata.target_language().to_owned(),
             source_content_id: workspace_metadata.source_content_id().to_owned(),
@@ -280,7 +282,7 @@ mod tests {
                 subrow_id: 0,
                 context: vec![TranslationContextCellView {
                     column_index: 3,
-                    source_macro: "TEXT_CONTEXT".to_owned(),
+                    source_macro: "Context field".to_owned(),
                 }],
                 cells: vec![
                     TranslationCellView {
@@ -305,7 +307,7 @@ mod tests {
 
         let dto = TranslationRowPageDto::from(page);
         assert_eq!(dto.rows[0].row_id, 42);
-        assert_eq!(dto.rows[0].context[0].source_macro, "TEXT_CONTEXT");
+        assert_eq!(dto.rows[0].context[0].source_macro, "Context field");
         let overlay = dto.rows[0].cells[0]
             .translation
             .as_ref()

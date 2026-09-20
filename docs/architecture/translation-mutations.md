@@ -8,6 +8,8 @@ memory and to Workspace Format v1.
 ```text
 ProjectSession mutation
         ↓
+exact HSG allowlist check
+        ↓
 verify exact current HXS source
         ↓
 Workspace domain mutation
@@ -20,6 +22,11 @@ committed live session state
 ## Target mutations
 
 `ProjectSession::set_target` is the create-or-update application operation.
+Before any Workspace operation, it requires the exact `SourceBinding` to be
+present in the compatible HSG allowlist. A blocked binding returns the typed
+`SourceNotTranslatable` mutation error and cannot create or modify a
+translation unit or write a shard.
+
 When no unit owns the supplied binding, the session verifies that the current
 HXS coordinate is a String occurrence, derives its source fingerprint and
 stable `TranslationUnitId` through the existing workspace/domain rules, and
@@ -76,7 +83,7 @@ Successful mutations update the live workspace before returning, so
 `page_translation_rows` immediately reads the committed state from the
 same session. The persisted format, canonical JSON/JSONL encoding, identity
 derivation, source-binding contract, and target validation rules are
-unchanged.
+unchanged. HSG adds only the permission gate for target mutations.
 
 Deletion/reset-to-untranslated, bulk or multi-shard transactions, source
 update/rebase, export, Git, AI, Tauri commands, and UI state are outside this

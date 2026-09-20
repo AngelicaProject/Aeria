@@ -3,6 +3,7 @@ resolver = "2"
 members = [
   "crates/aeria-core",
   "crates/aeria-hxs",
+  "crates/aeria-hsp",
   "crates/aeria-se",
   "crates/aeria-workspace",
   "crates/aeria-rebase",

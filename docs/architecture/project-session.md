@@ -1,21 +1,26 @@
 # Project session
 
 `ProjectSession` is the Rust application-layer representation of one opened
-Aeria project. It owns the local repository root, local HXS path, verified
-immutable `HxsSnapshot`, loaded sparse `Workspace`, and `WorkspaceStore`.
+Aeria project. It owns the local repository root, source-package path,
+validated `aeria-hsp::SourcePackage`, verified immutable `HxsSnapshot`, loaded
+sparse `Workspace`, and `WorkspaceStore`.
 
-The HXS artifact is external, immutable, and local to the machine. Its
-filesystem path is runtime configuration only; it is not persisted in
+An HSP is Aeria's source handoff artifact. Its embedded HXS remains immutable
+source data; its embedded HSG is the sole translation-permission authority.
+The HXS is materialized into a disposable caller-provided local cache. HSP
+and cache paths are runtime configuration only and are not persisted in
 Workspace Format v1. React does not own authoritative project state.
 
 ## Opening an existing project
 
-`ProjectSession::open` performs these steps in order:
+`ProjectSession::open(repository_root, source_package_path, cache_root)` performs these steps in order:
 
 ```text
-verify HXS
+validate HSP archive, HSG, embedded HXS, and their relationships
+→ materialize and verify HXS in the managed cache
 → load Workspace Format v1
 → verify workspace/source compatibility
+→ reject existing units blocked by HSG
 → create session
 ```
 
@@ -26,10 +31,11 @@ update/rebase, or migrate project state.
 
 ## Initializing a project
 
-`ProjectSession::initialize` performs these steps:
+`ProjectSession::initialize(repository_root, source_package_path, cache_root,
+target_language)` performs these steps:
 
 ```text
-verify HXS
+validate HSP and verify its embedded HXS/HSG
 → create workspace metadata from the verified HXS
 → atomically initialize Workspace Format v1
 → create session
@@ -43,7 +49,8 @@ project inputs fail before new managed state is published.
 ```text
 ProjectSession
 ├── local repository root
-├── local HXS path
+├── local HSP path
+├── validated SourcePackage and GuidanceIndex
 ├── verified immutable HxsSnapshot
 ├── loaded sparse Workspace
 └── WorkspaceStore
