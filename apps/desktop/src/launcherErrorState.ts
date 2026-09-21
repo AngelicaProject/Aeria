@@ -17,3 +17,11 @@ export function launcherErrorTitle(operation: LauncherErrorOperation): string {
       return "Could not reopen recent project";
   }
 }
+
+export function sourcePackageListenerError(): CommandError {
+  return {
+    code: "sourcePackageListener",
+    message:
+      "Source-package progress updates could not be connected. Project creation is disabled until this connection is available.",
+  };
+}
