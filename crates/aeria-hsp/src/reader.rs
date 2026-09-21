@@ -1,3 +1,4 @@
+use std::cell::Cell;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::fs::{self, File, OpenOptions};
@@ -7,6 +8,7 @@ use std::sync::{Mutex, OnceLock};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use aeria_hxs::HxsSnapshot;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use zip::ZipArchive;
 
@@ -19,6 +21,9 @@ use crate::{MAX_HSP_GUIDANCE_BYTES, MAX_HSP_MANIFEST_BYTES};
 const MANIFEST_PATH: &str = "manifest.json";
 const SOURCE_PATH: &str = "source/source.hxs";
 const GUIDANCE_PATH: &str = "guidance/source-guidance.json";
+const VERIFICATION_CACHE_DIRECTORY: &str = "hsp-verification";
+const VERIFICATION_CACHE_VERSION: u32 = 1;
+const MAX_VERIFICATION_RECORD_BYTES: u64 = 64 * 1024;
 
 #[derive(Clone)]
 struct VerifiedPackageCache {
@@ -29,6 +34,24 @@ struct VerifiedPackageCache {
     source_cache_hash: String,
     manifest: HspManifest,
     guidance: SourceGuidance,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct PersistentVerificationRecord {
+    version: u32,
+    package_path: String,
+    package_size: u64,
+    package_hash: String,
+    package_id: String,
+    source_cache_path: String,
+    source_cache_size: u64,
+    source_cache_hash: String,
+    source_language: String,
+    content_id: String,
+    snapshot_id: String,
+    game_version: String,
+    scope: String,
 }
 
 static VERIFIED_PACKAGE_CACHE: OnceLock<Mutex<HashMap<PathBuf, VerifiedPackageCache>>> =
@@ -50,6 +73,10 @@ pub fn open(
     let cache_root = cache_root.as_ref().to_path_buf();
     if let Some(source_package) = try_open_verified_cache(&package_path, &cache_root) {
         trace.mark("hsp.verified-cache-fast-path");
+        return Ok(source_package);
+    }
+    if let Some(source_package) = try_open_persistent_verified_cache(&package_path, &cache_root) {
+        trace.mark("hsp.persistent-verified-cache-fast-path");
         return Ok(source_package);
     }
     let file = File::open(&package_path).map_err(|source| HspError::Io {
@@ -149,19 +176,20 @@ pub fn open(
     trace.mark("hsp.guidance-relationships");
 
     let (package_size, package_hash) = digest_file(&package_path)?;
+    trace.mark("hsp.package-identity-and-hash");
     let (source_cache_size, source_cache_hash) = digest_file(&materialized_source)?;
-    remember_verified_cache(
-        &package_path,
-        VerifiedPackageCache {
-            package_size,
-            package_hash,
-            source_cache_path: materialized_source.clone(),
-            source_cache_size,
-            source_cache_hash,
-            manifest: manifest.clone(),
-            guidance: guidance.clone(),
-        },
-    );
+    trace.mark("hsp.hxs-identity-and-hash");
+    let verified_cache = VerifiedPackageCache {
+        package_size,
+        package_hash,
+        source_cache_path: materialized_source.clone(),
+        source_cache_size,
+        source_cache_hash,
+        manifest: manifest.clone(),
+        guidance: guidance.clone(),
+    };
+    remember_verified_cache(&package_path, verified_cache.clone());
+    persist_verification_record(&cache_root, &package_path, &verified_cache);
     trace.mark("hsp.verified-cache-recorded");
 
     Ok(SourcePackage::new(
@@ -237,6 +265,212 @@ fn try_open_verified_cache(package_path: &Path, cache_root: &Path) -> Option<Sou
     ))
 }
 
+fn try_open_persistent_verified_cache(
+    package_path: &Path,
+    cache_root: &Path,
+) -> Option<SourcePackage> {
+    let record_path = persistent_record_path(cache_root, package_path);
+    let metadata = fs::symlink_metadata(&record_path).ok()?;
+    if metadata.file_type().is_symlink()
+        || !metadata.is_file()
+        || metadata.len() > MAX_VERIFICATION_RECORD_BYTES
+    {
+        let _ = fs::remove_file(&record_path);
+        return None;
+    }
+    let bytes = fs::read(&record_path).ok()?;
+    let record = serde_json::from_slice::<PersistentVerificationRecord>(&bytes).ok();
+    let Some(record) = record else {
+        let _ = fs::remove_file(&record_path);
+        return None;
+    };
+    let result = try_open_persistent_record(package_path, cache_root, &record);
+    if result.is_none() {
+        let _ = fs::remove_file(&record_path);
+    }
+    result
+}
+
+fn try_open_persistent_record(
+    package_path: &Path,
+    cache_root: &Path,
+    record: &PersistentVerificationRecord,
+) -> Option<SourcePackage> {
+    if record.version != VERIFICATION_CACHE_VERSION
+        || record.package_path != canonical_path_string(package_path)?
+        || !is_sha256(&record.package_hash)
+        || !is_sha256(&record.source_cache_hash)
+    {
+        return None;
+    }
+    let package_digest = digest_file(package_path).ok()?;
+    if package_digest != (record.package_size, record.package_hash.clone()) {
+        return None;
+    }
+
+    let source_cache_path = cache_path(cache_root, &record.snapshot_id).ok()?;
+    if canonical_path_string(&source_cache_path)? != record.source_cache_path {
+        return None;
+    }
+    let source_digest = digest_file(&source_cache_path).ok()?;
+    if source_digest != (record.source_cache_size, record.source_cache_hash.clone()) {
+        return None;
+    }
+
+    let file = File::open(package_path).ok()?;
+    let mut archive = ZipArchive::new(file).ok()?;
+    validate_archive_names(&mut archive).ok()?;
+    let manifest_bytes =
+        read_bounded_entry(&mut archive, MANIFEST_PATH, MAX_HSP_MANIFEST_BYTES).ok()?;
+    let manifest: HspManifest = serde_json::from_slice(&manifest_bytes).ok()?;
+    validate_manifest(&manifest).ok()?;
+    if manifest.package_id != record.package_id
+        || manifest.source.language != record.source_language
+        || manifest.source.content_id != record.content_id
+        || manifest.source.snapshot_id != record.snapshot_id
+        || manifest.game_version != record.game_version
+        || manifest.scope != record.scope
+    {
+        return None;
+    }
+
+    let expected_entries = manifest
+        .components
+        .iter()
+        .map(|component| component.path.clone())
+        .chain(std::iter::once(MANIFEST_PATH.to_owned()))
+        .collect::<HashSet<_>>();
+    let archive_entries = (0..archive.len())
+        .map(|index| {
+            archive
+                .by_index(index)
+                .ok()
+                .map(|entry| entry.name().to_owned())
+        })
+        .collect::<Option<HashSet<_>>>()?;
+    if archive_entries != expected_entries {
+        return None;
+    }
+
+    let _source_component = required_component(&manifest, "sourceHxs", SOURCE_PATH).ok()?;
+    let guidance_component = required_component(&manifest, "sourceGuidance", GUIDANCE_PATH).ok()?;
+    let guidance_bytes = read_guidance_component(&mut archive, guidance_component).ok()?;
+    let guidance = parse_and_validate(&guidance_bytes).ok()?;
+    let source_snapshot = HxsSnapshot::open_cached_verified(&source_cache_path).ok()?;
+    let metadata = source_snapshot.metadata();
+    if manifest.game_version != metadata.game_version
+        || manifest.scope != metadata.scope
+        || manifest.source.language != metadata.source_language
+        || manifest.source.content_id != metadata.content_id
+        || manifest.source.snapshot_id != metadata.snapshot_id
+        || metadata.source_language != record.source_language
+        || metadata.content_id != record.content_id
+        || metadata.snapshot_id != record.snapshot_id
+    {
+        return None;
+    }
+    validate_relationships(&guidance, &source_snapshot).ok()?;
+
+    let verified_cache = VerifiedPackageCache {
+        package_size: record.package_size,
+        package_hash: record.package_hash.clone(),
+        source_cache_path: source_cache_path.clone(),
+        source_cache_size: record.source_cache_size,
+        source_cache_hash: record.source_cache_hash.clone(),
+        manifest: manifest.clone(),
+        guidance: guidance.clone(),
+    };
+    remember_verified_cache(package_path, verified_cache);
+    Some(SourcePackage::new(
+        package_path.to_owned(),
+        manifest,
+        source_cache_path,
+        source_snapshot,
+        guidance,
+    ))
+}
+
+fn persist_verification_record(
+    cache_root: &Path,
+    package_path: &Path,
+    cache: &VerifiedPackageCache,
+) {
+    let Some(package_path) = canonical_path_string(package_path) else {
+        return;
+    };
+    let Some(source_cache_path) = canonical_path_string(&cache.source_cache_path) else {
+        return;
+    };
+    let record = PersistentVerificationRecord {
+        version: VERIFICATION_CACHE_VERSION,
+        package_path,
+        package_size: cache.package_size,
+        package_hash: cache.package_hash.clone(),
+        package_id: cache.manifest.package_id.clone(),
+        source_cache_path,
+        source_cache_size: cache.source_cache_size,
+        source_cache_hash: cache.source_cache_hash.clone(),
+        source_language: cache.manifest.source.language.clone(),
+        content_id: cache.manifest.source.content_id.clone(),
+        snapshot_id: cache.manifest.source.snapshot_id.clone(),
+        game_version: cache.manifest.game_version.clone(),
+        scope: cache.manifest.scope.clone(),
+    };
+    let Ok(bytes) = serde_json::to_vec(&record) else {
+        return;
+    };
+    let directory = cache_root.join(VERIFICATION_CACHE_DIRECTORY);
+    if fs::create_dir_all(&directory).is_err() {
+        return;
+    }
+    let record_path = persistent_record_path(cache_root, Path::new(&record.package_path));
+    let temporary_path = directory.join(format!(
+        ".{}.{}.tmp",
+        record_path
+            .file_stem()
+            .and_then(|name| name.to_str())
+            .unwrap_or("verification"),
+        std::process::id()
+    ));
+    let Ok(mut temporary) = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&temporary_path)
+    else {
+        return;
+    };
+    if temporary.write_all(&bytes).is_err()
+        || temporary.flush().is_err()
+        || temporary.sync_all().is_err()
+    {
+        let _ = fs::remove_file(&temporary_path);
+        return;
+    }
+    drop(temporary);
+    let _ = fs::remove_file(&record_path);
+    if fs::rename(&temporary_path, &record_path).is_err() {
+        let _ = fs::remove_file(&temporary_path);
+    }
+}
+
+fn persistent_record_path(cache_root: &Path, package_path: &Path) -> PathBuf {
+    let key = package_cache_key(package_path);
+    let digest = Sha256::digest(key.to_string_lossy().as_bytes());
+    let digest = to_hash_string(digest.into());
+    let file_name = digest
+        .strip_prefix("sha256:")
+        .expect("sha256 helper always prefixes its output");
+    cache_root
+        .join(VERIFICATION_CACHE_DIRECTORY)
+        .join(format!("{file_name}.json"))
+}
+
+fn canonical_path_string(path: &Path) -> Option<String> {
+    fs::canonicalize(path)
+        .ok()
+        .map(|path| path.to_string_lossy().into_owned())
+}
+
 fn remember_verified_cache(package_path: &Path, cache: VerifiedPackageCache) {
     if let Ok(mut entries) = VERIFIED_PACKAGE_CACHE
         .get_or_init(|| Mutex::new(HashMap::new()))
@@ -283,6 +517,7 @@ fn digest_file(path: &Path) -> Result<(u64, String), HspError> {
 struct PerfTrace {
     enabled: bool,
     started: Instant,
+    last: Cell<Instant>,
 }
 
 impl PerfTrace {
@@ -290,13 +525,17 @@ impl PerfTrace {
         Self {
             enabled: std::env::var("AERIA_PERF_TRACE").as_deref() == Ok("1"),
             started: Instant::now(),
+            last: Cell::new(Instant::now()),
         }
     }
 
     fn mark(&self, phase: &str) {
         if self.enabled {
+            let now = Instant::now();
+            let duration = now.duration_since(self.last.get()).as_secs_f64() * 1_000.0;
+            self.last.set(now);
             eprintln!(
-                "[aeria-perf] {phase}: {} ms",
+                "[aeria-perf] {phase}: duration_ms={duration:.3} total_ms={:.3}",
                 self.started.elapsed().as_secs_f64() * 1_000.0
             );
         }

@@ -71,8 +71,13 @@ mutations. `persist_unit()` uses that cache to avoid repeating directory
 enumeration and JSONL parsing, while preserving the same invariant checks;
 callers that have not loaded through the store take the original full
 validation path. The cache is updated only after atomic publication and is
-invalidated on publication failure. For an existing ID, its persisted
-`SourceBinding` and `SourceFingerprint` are immutable on this ordinary
+invalidated on publication failure. Before a cached publish, the store checks
+the managed `.aeria` paths against the cache snapshot using path metadata
+and content hashes for the manifest and target shard. If an external change
+is detected, the cached path is invalidated and the mutation fails closed; the
+caller must reload or retry through the fallback path, so an external unit is
+never silently discarded. For an existing ID, its persisted `SourceBinding`
+and `SourceFingerprint` are immutable on this ordinary
 target/note/review path. A new ID must use a `SourceBinding` not owned anywhere
 else in the persisted workspace; the validated session index checks all
 shards without rereading them. Source transitions remain the responsibility

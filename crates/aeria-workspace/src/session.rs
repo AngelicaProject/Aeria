@@ -259,6 +259,7 @@ impl ProjectSession {
 struct PerfTrace {
     enabled: bool,
     started: Instant,
+    last: std::cell::Cell<Instant>,
 }
 
 impl PerfTrace {
@@ -266,13 +267,17 @@ impl PerfTrace {
         Self {
             enabled: std::env::var("AERIA_PERF_TRACE").as_deref() == Ok("1"),
             started: Instant::now(),
+            last: std::cell::Cell::new(Instant::now()),
         }
     }
 
     fn mark(&self, phase: &str) {
         if self.enabled {
+            let now = Instant::now();
+            let duration = now.duration_since(self.last.get()).as_secs_f64() * 1_000.0;
+            self.last.set(now);
             eprintln!(
-                "[aeria-perf] {phase}: {} ms",
+                "[aeria-perf] {phase}: duration_ms={duration:.3} total_ms={:.3}",
                 self.started.elapsed().as_secs_f64() * 1_000.0
             );
         }

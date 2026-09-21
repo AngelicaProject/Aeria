@@ -12,7 +12,7 @@ use std::str::FromStr;
 #[cfg(test)]
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use std::time::{Instant, SystemTime};
 
 use aeria_core::{
     ReviewState, Sha256Hash, SourceBinding, SourceFingerprint, TranslationUnit, TranslationUnitId,
@@ -21,6 +21,7 @@ use aeria_core::{
 use aeria_se::{SemanticValidity, parse};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use tempfile::{NamedTempFile, TempDir};
 use thiserror::Error;
 
@@ -92,6 +93,11 @@ pub enum WorkspaceStoreError {
     #[error("failed to atomically publish canonical workspace file {path}: {source}")]
     AtomicPublication { path: PathBuf, source: io::Error },
 
+    /// The managed workspace changed after this store loaded its session
+    /// cache. The caller must reload before retrying the mutation.
+    #[error("managed workspace state changed since it was loaded: {path}")]
+    ExternalChange { path: PathBuf },
+
     /// A normal filesystem operation failed with its path and operation.
     #[error("filesystem operation '{operation}' failed for {path}: {source}")]
     Io {
@@ -129,6 +135,17 @@ struct PersistenceCache {
     layout: ExistingLayout,
     metadata: WorkspaceMetadata,
     units: BTreeMap<TranslationUnitId, TranslationUnit>,
+    managed_paths: Vec<ManagedPathState>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ManagedPathState {
+    path: PathBuf,
+    exists: bool,
+    is_dir: bool,
+    size: u64,
+    modified: Option<SystemTime>,
+    content_hash: Option<[u8; 32]>,
 }
 
 impl WorkspaceStore {
@@ -188,11 +205,14 @@ impl WorkspaceStore {
         let workspace = Workspace::from_loaded(metadata.clone(), units.clone())
             .map_err(WorkspaceStoreError::from)?;
         trace.mark("workspace.store-load");
-        self.replace_session_cache(PersistenceCache {
-            layout,
-            metadata,
-            units,
-        });
+        if let Ok(managed_paths) = capture_managed_paths(&layout) {
+            self.replace_session_cache(PersistenceCache {
+                layout,
+                metadata,
+                units,
+                managed_paths,
+            });
+        }
         Ok(workspace)
     }
 
@@ -260,22 +280,26 @@ impl WorkspaceStore {
         } else {
             Some(aeria_path.join(UNITS_DIRECTORY))
         };
-        self.replace_session_cache(PersistenceCache {
-            layout: ExistingLayout {
-                manifest_path: aeria_path.join(MANIFEST_FILE),
-                units_path,
-                shards: shard_numbers
-                    .iter()
-                    .map(|shard| ShardFile {
-                        shard: *shard,
-                        name: shard_name(*shard),
-                        path: aeria_path.join(UNITS_DIRECTORY).join(shard_name(*shard)),
-                    })
-                    .collect(),
-            },
-            metadata: workspace.metadata().clone(),
-            units: workspace.units.clone().into_iter().collect(),
-        });
+        let layout = ExistingLayout {
+            manifest_path: aeria_path.join(MANIFEST_FILE),
+            units_path,
+            shards: shard_numbers
+                .iter()
+                .map(|shard| ShardFile {
+                    shard: *shard,
+                    name: shard_name(*shard),
+                    path: aeria_path.join(UNITS_DIRECTORY).join(shard_name(*shard)),
+                })
+                .collect(),
+        };
+        if let Ok(managed_paths) = capture_managed_paths(&layout) {
+            self.replace_session_cache(PersistenceCache {
+                layout,
+                metadata: workspace.metadata().clone(),
+                units: workspace.units.clone().into_iter().collect(),
+                managed_paths,
+            });
+        }
         Ok(())
     }
 
@@ -299,33 +323,47 @@ impl WorkspaceStore {
         workspace: &Workspace,
         id: TranslationUnitId,
     ) -> Result<(), WorkspaceStoreError> {
+        let trace = PerfTrace::new();
         let replacement = workspace
             .unit(id)
             .cloned()
             .ok_or(WorkspaceStoreError::Domain(WorkspaceError::UnitNotFound {
                 id,
             }))?;
-        let cached = self.take_session_cache();
-        let (layout, persisted_metadata, mut all_persisted_units, using_cache) =
-            if let Some(cache) = cached {
-                (cache.layout, cache.metadata, cache.units, true)
-            } else {
-                let layout = self.inspect_existing_layout()?;
-                let persisted_metadata = read_manifest(&layout.manifest_path)?;
-                (layout, persisted_metadata, BTreeMap::new(), false)
-            };
-        require_metadata_match(
-            workspace.metadata(),
-            &persisted_metadata,
-            &layout.manifest_path,
-        )?;
-
         let shard = id.as_bytes()[0];
         let target_path = self
             .repository_root
             .join(AERIA_DIRECTORY)
             .join(UNITS_DIRECTORY)
             .join(shard_name(shard));
+        let cached = self.take_session_cache();
+        let (layout, persisted_metadata, mut all_persisted_units, using_cache) =
+            if let Some(cache) = cached {
+                if let Err(error) = verify_cached_managed_paths(
+                    &cache.managed_paths,
+                    &cache.layout.manifest_path,
+                    &target_path,
+                ) {
+                    self.invalidate_session_cache();
+                    return Err(error);
+                }
+                (cache.layout, cache.metadata, cache.units, true)
+            } else {
+                let layout = self.inspect_existing_layout()?;
+                let persisted_metadata = read_manifest(&layout.manifest_path)?;
+                (layout, persisted_metadata, BTreeMap::new(), false)
+            };
+        trace.mark(if using_cache {
+            "workspace.persist-unit.cache-check"
+        } else {
+            "workspace.persist-unit.fallback-load"
+        });
+        require_metadata_match(
+            workspace.metadata(),
+            &persisted_metadata,
+            &layout.manifest_path,
+        )?;
+
         let mut persisted_units = BTreeMap::new();
         if using_cache {
             for (unit_id, unit) in &all_persisted_units {
@@ -361,6 +399,7 @@ impl WorkspaceStore {
         }
         persisted_units.insert(id, replacement.clone());
         let bytes = canonical_units_bytes(persisted_units.values(), &target_path)?;
+        trace.mark("workspace.persist-unit.serialize");
 
         let created_units_path = layout.units_path.is_none();
         let units_path = if let Some(path) = &layout.units_path {
@@ -406,12 +445,16 @@ impl WorkspaceStore {
         }
         if using_cache {
             all_persisted_units.insert(id, replacement);
-            self.replace_session_cache(PersistenceCache {
-                layout: published_layout,
-                metadata: persisted_metadata,
-                units: all_persisted_units,
-            });
+            if let Ok(managed_paths) = capture_managed_paths(&published_layout) {
+                self.replace_session_cache(PersistenceCache {
+                    layout: published_layout,
+                    metadata: persisted_metadata,
+                    units: all_persisted_units,
+                    managed_paths,
+                });
+            }
         }
+        trace.mark("workspace.persist-unit.publish");
         Ok(())
     }
 
@@ -547,9 +590,121 @@ impl WorkspaceStore {
     }
 }
 
+fn capture_managed_paths(
+    layout: &ExistingLayout,
+) -> Result<Vec<ManagedPathState>, WorkspaceStoreError> {
+    let aeria_path = layout
+        .manifest_path
+        .parent()
+        .expect("manifest path must have a parent")
+        .to_owned();
+    let units_path = layout
+        .units_path
+        .clone()
+        .unwrap_or_else(|| aeria_path.join(UNITS_DIRECTORY));
+    let mut paths = vec![aeria_path, layout.manifest_path.clone(), units_path];
+    paths.extend(layout.shards.iter().map(|shard| shard.path.clone()));
+    paths.sort();
+    paths.dedup();
+    paths
+        .iter()
+        .map(|path| managed_path_state(path, true))
+        .collect()
+}
+
+fn managed_path_state(
+    path: &Path,
+    include_hash: bool,
+) -> Result<ManagedPathState, WorkspaceStoreError> {
+    let Some(metadata) = symlink_metadata(path)? else {
+        return Ok(ManagedPathState {
+            path: path.to_owned(),
+            exists: false,
+            is_dir: false,
+            size: 0,
+            modified: None,
+            content_hash: None,
+        });
+    };
+    if metadata.file_type().is_symlink() {
+        return Err(managed_path_error(path, "symlinks are not allowed"));
+    }
+    let content_hash = if include_hash && metadata.is_file() {
+        Some(hash_managed_file(path)?)
+    } else {
+        None
+    };
+    Ok(ManagedPathState {
+        path: path.to_owned(),
+        exists: true,
+        is_dir: metadata.is_dir(),
+        size: metadata.len(),
+        modified: metadata.modified().ok(),
+        content_hash,
+    })
+}
+
+fn hash_managed_file(path: &Path) -> Result<[u8; 32], WorkspaceStoreError> {
+    let mut file =
+        File::open(path).map_err(|source| io_error("hash managed workspace file", path, source))?;
+    let mut hasher = Sha256::new();
+    let mut buffer = vec![0_u8; 64 * 1024].into_boxed_slice();
+    loop {
+        let read = file
+            .read(&mut buffer)
+            .map_err(|source| io_error("hash managed workspace file", path, source))?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+    }
+    Ok(hasher.finalize().into())
+}
+
+fn verify_cached_managed_paths(
+    cached_paths: &[ManagedPathState],
+    manifest_path: &Path,
+    target_path: &Path,
+) -> Result<(), WorkspaceStoreError> {
+    if cached_paths.is_empty() {
+        return Err(WorkspaceStoreError::ExternalChange {
+            path: manifest_path.to_owned(),
+        });
+    }
+    for cached in cached_paths {
+        let current = managed_path_state(&cached.path, false)?;
+        if cached.exists != current.exists
+            || cached.is_dir != current.is_dir
+            || cached.size != current.size
+            || cached.modified != current.modified
+        {
+            return Err(WorkspaceStoreError::ExternalChange {
+                path: cached.path.clone(),
+            });
+        }
+        if cached.exists
+            && !cached.is_dir
+            && (cached.path == manifest_path || cached.path == target_path)
+        {
+            let Some(expected_hash) = cached.content_hash else {
+                return Err(WorkspaceStoreError::ExternalChange {
+                    path: cached.path.clone(),
+                });
+            };
+            if hash_managed_file(&cached.path)? != expected_hash {
+                return Err(WorkspaceStoreError::ExternalChange {
+                    path: cached.path.clone(),
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
 struct PerfTrace {
     enabled: bool,
     started: Instant,
+    last: std::cell::Cell<Instant>,
 }
 
 impl PerfTrace {
@@ -557,13 +712,17 @@ impl PerfTrace {
         Self {
             enabled: std::env::var("AERIA_PERF_TRACE").as_deref() == Ok("1"),
             started: Instant::now(),
+            last: std::cell::Cell::new(Instant::now()),
         }
     }
 
     fn mark(&self, phase: &str) {
         if self.enabled {
+            let now = Instant::now();
+            let duration = now.duration_since(self.last.get()).as_secs_f64() * 1_000.0;
+            self.last.set(now);
             eprintln!(
-                "[aeria-perf] {phase}: {} ms",
+                "[aeria-perf] {phase}: duration_ms={duration:.3} total_ms={:.3}",
                 self.started.elapsed().as_secs_f64() * 1_000.0
             );
         }
@@ -1535,5 +1694,73 @@ mod tests {
             .persist_unit(&workspace, id)
             .expect("ordinary review state persists");
         assert_eq!(READ_SHARD_COUNT.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn external_change_in_cached_shard_is_rejected_without_losing_external_unit() {
+        let _test_lock = PERSISTENCE_TEST_LOCK.lock().expect("test lock");
+        let repository = tempfile::tempdir().expect("temporary repository");
+        let aeria_path = repository.path().join(AERIA_DIRECTORY);
+        let units_path = aeria_path.join(UNITS_DIRECTORY);
+        fs::create_dir_all(&units_path).expect("workspace directories");
+        fs::write(
+            aeria_path.join(MANIFEST_FILE),
+            include_bytes!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/tests/fixtures/workspace-v1/manifest.json"
+            )),
+        )
+        .expect("manifest");
+        let shard_path = units_path.join("00.jsonl");
+        fs::write(
+            &shard_path,
+            include_bytes!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/tests/fixtures/workspace-v1/units/00.jsonl"
+            )),
+        )
+        .expect("00 shard");
+
+        let store = WorkspaceStore::new(repository.path());
+        let mut workspace = store.load().expect("fixture loads");
+        let original_id = TranslationUnitId::from_str(
+            "tu1:0000000000000000000000000000000000000000000000000000000000000000",
+        )
+        .expect("original ID");
+        let external_id = TranslationUnitId::from_str(
+            "tu1:0000000000000000000000000000000000000000000000000000000000000002",
+        )
+        .expect("external ID");
+
+        let mut externally_changed = fs::read(&shard_path).expect("cached shard");
+        externally_changed.extend_from_slice(
+            br#"{"id":"tu1:0000000000000000000000000000000000000000000000000000000000000002","sourceBinding":{"sheetName":"External","rowId":7,"subrowId":0,"columnIndex":1},"sourceFingerprint":{"macroTextHash":"1212121212121212121212121212121212121212121212121212121212121212","rawValueHash":null,"rowTechnicalHash":"3434343434343434343434343434343434343434343434343434343434343434"},"targetMacro":"external","reviewState":"draft","translatorNote":null}"#,
+        );
+        externally_changed.push(b'\n');
+        fs::write(&shard_path, externally_changed).expect("external unit update");
+
+        workspace
+            .update_target(original_id, "local update")
+            .expect("target is valid");
+        let error = store
+            .persist_unit(&workspace, original_id)
+            .expect_err("stale session cache must not publish");
+        assert!(matches!(error, WorkspaceStoreError::ExternalChange { .. }));
+
+        let reloaded = store.load().expect("external shard remains loadable");
+        assert_eq!(
+            reloaded
+                .unit(external_id)
+                .expect("external unit")
+                .target_macro(),
+            "external"
+        );
+        assert_eq!(
+            reloaded
+                .unit(original_id)
+                .expect("original unit")
+                .target_macro(),
+            "Quote \" slash \\ line\n tab\t control\u{0}"
+        );
     }
 }

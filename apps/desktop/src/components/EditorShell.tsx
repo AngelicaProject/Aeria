@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { flushSync } from "react-dom";
 import {
   closeProject,
   normalizeCommandError,
@@ -88,15 +89,22 @@ export function EditorShell({
     }));
   }, []);
 
-  const beginSheetLoad = useCallback(async (sheetName: string) => {
+  const beginSheetLoad = useCallback(async (sheetName: string, immediate = true) => {
     const generation = ++requestGeneration.current;
-    setSelectedSheetName(sheetName);
-    setRows([]);
-    setNextAfter(null);
-    setSelectedRowCursor(null);
-    hasDirtyDraft.current = false;
-    setSheetLoading(true);
-    setEditorError(null);
+    const resetForSheet = () => {
+      setSelectedSheetName(sheetName);
+      setRows([]);
+      setNextAfter(null);
+      setSelectedRowCursor(null);
+      hasDirtyDraft.current = false;
+      setSheetLoading(true);
+      setEditorError(null);
+    };
+    if (immediate) {
+      flushSync(resetForSheet);
+    } else {
+      resetForSheet();
+    }
 
     try {
       const page = await pageTranslationRows(sheetName, null, PAGE_SIZE);
@@ -118,25 +126,25 @@ export function EditorShell({
 
   useEffect(() => {
     if (firstSheetName) {
-      void beginSheetLoad(firstSheetName);
+      void beginSheetLoad(firstSheetName, false);
     }
   }, [beginSheetLoad, firstSheetName]);
 
-  function confirmDiscardChanges(action: string): boolean {
+  const confirmDiscardChanges = useCallback((action: string): boolean => {
     if (!hasDirtyDraft.current) {
       return true;
     }
     return window.confirm(`You have unsaved changes. ${action} will discard them. Continue?`);
-  }
+  }, []);
 
-  function handleSheetSelect(sheetName: string) {
+  const handleSheetSelect = useCallback((sheetName: string) => {
     if (sheetName === selectedSheetName || !confirmDiscardChanges("Changing sheets")) {
       return;
     }
     void beginSheetLoad(sheetName);
-  }
+  }, [beginSheetLoad, confirmDiscardChanges, selectedSheetName]);
 
-  function handleRowSelect(row: TranslationRowDto) {
+  const handleRowSelect = useCallback((row: TranslationRowDto) => {
     const cursor = cursorForRow(row);
     if (selectedRowCursor && rowKey(selectedRowCursor) === rowKey(cursor)) {
       return;
@@ -144,18 +152,26 @@ export function EditorShell({
     if (!confirmDiscardChanges("Changing rows")) {
       return;
     }
-    setSelectedRowCursor(cursor);
-    hasDirtyDraft.current = false;
-    setEditorError(null);
-  }
+    flushSync(() => {
+      setSelectedRowCursor(cursor);
+      hasDirtyDraft.current = false;
+      setEditorError(null);
+    });
+  }, [confirmDiscardChanges, selectedRowCursor]);
 
-  async function handleSaveTarget(cell: TranslationCellDto, draft: CellDraft, otherDirty: boolean) {
+  const confirmMutationDiscard = useCallback((shouldConfirm: boolean, message: string): boolean => {
+    return !shouldConfirm || window.confirm(message);
+  }, []);
+
+  const handleSaveTarget = useCallback(async (cell: TranslationCellDto, draft: CellDraft, otherDirty: boolean) => {
     const key = bindingKey(cell.sourceBinding);
     if (!selectedRow || !confirmMutationDiscard(otherDirty, "Saving the target will discard other unsaved changes. Continue?")) {
       return;
     }
-    setMutation({ kind: "target", bindingKey: key });
-    setEditorError(null);
+    flushSync(() => {
+      setMutation({ kind: "target", bindingKey: key });
+      setEditorError(null);
+    });
     try {
       const overlay = await setTranslationTarget(cell.sourceBinding, draft.target);
       applyOverlay(cell.sourceBinding, overlay);
@@ -164,16 +180,18 @@ export function EditorShell({
     } finally {
       setMutation(null);
     }
-  }
+  }, [applyOverlay, confirmMutationDiscard, selectedRow, showError]);
 
-  async function handleSaveNote(cell: TranslationCellDto, draft: CellDraft, otherDirty: boolean) {
+  const handleSaveNote = useCallback(async (cell: TranslationCellDto, draft: CellDraft, otherDirty: boolean) => {
     const translation = cell.translation;
     const key = bindingKey(cell.sourceBinding);
     if (!translation || !selectedRow || !confirmMutationDiscard(otherDirty, "Saving the note will discard other unsaved changes. Continue?")) {
       return;
     }
-    setMutation({ kind: "note", bindingKey: key });
-    setEditorError(null);
+    flushSync(() => {
+      setMutation({ kind: "note", bindingKey: key });
+      setEditorError(null);
+    });
     try {
       const overlay = await setTranslationNote(translation.translationUnitId, draft.note.length === 0 ? null : draft.note);
       applyOverlay(cell.sourceBinding, overlay);
@@ -182,16 +200,18 @@ export function EditorShell({
     } finally {
       setMutation(null);
     }
-  }
+  }, [applyOverlay, confirmMutationDiscard, selectedRow, showError]);
 
-  async function handleReviewChange(cell: TranslationCellDto, reviewState: ReviewState) {
+  const handleReviewChange = useCallback(async (cell: TranslationCellDto, reviewState: ReviewState) => {
     const translation = cell.translation;
     if (!translation || translation.reviewState === reviewState || !confirmMutationDiscard(hasDirtyDraft.current, "Changing review state will discard unsaved draft changes. Continue?")) {
       return;
     }
     const key = bindingKey(cell.sourceBinding);
-    setMutation({ kind: "review", bindingKey: key });
-    setEditorError(null);
+    flushSync(() => {
+      setMutation({ kind: "review", bindingKey: key });
+      setEditorError(null);
+    });
     try {
       const overlay = await setTranslationReviewState(translation.translationUnitId, reviewState);
       applyOverlay(cell.sourceBinding, overlay);
@@ -200,16 +220,16 @@ export function EditorShell({
     } finally {
       setMutation(null);
     }
-  }
+  }, [applyOverlay, confirmMutationDiscard, showError]);
 
-  async function handleLoadMore() {
+  const handleLoadMore = useCallback(async () => {
     if (!selectedSheetName || !nextAfter || loadingMore) {
       return;
     }
 
     const generation = requestGeneration.current;
     const after = nextAfter;
-    setLoadingMore(true);
+    flushSync(() => setLoadingMore(true));
 
     try {
       const page = await pageTranslationRows(selectedSheetName, after, PAGE_SIZE);
@@ -233,18 +253,16 @@ export function EditorShell({
     } finally {
       setLoadingMore(false);
     }
-  }
+  }, [loadingMore, nextAfter, selectedSheetName, showError]);
 
-  function confirmMutationDiscard(shouldConfirm: boolean, message: string): boolean {
-    return !shouldConfirm || window.confirm(message);
-  }
-
-  async function handleClose() {
+  const handleClose = useCallback(async () => {
     if (!confirmDiscardChanges("Closing the project")) {
       return;
     }
-    setClosing(true);
-    setEditorError(null);
+    flushSync(() => {
+      setClosing(true);
+      setEditorError(null);
+    });
     try {
       await closeProject();
       setClosing(false);
@@ -253,7 +271,23 @@ export function EditorShell({
       setClosing(false);
       showError("Could not close project", error);
     }
-  }
+  }, [confirmDiscardChanges, onClosed, showError]);
+
+  const handleCloseClick = useCallback(() => {
+    void handleClose();
+  }, [handleClose]);
+  const handleLoadMoreClick = useCallback(() => {
+    void handleLoadMore();
+  }, [handleLoadMore]);
+  const handleSaveTargetClick = useCallback((cell: TranslationCellDto, draft: CellDraft, otherDirty: boolean) => {
+    void handleSaveTarget(cell, draft, otherDirty);
+  }, [handleSaveTarget]);
+  const handleSaveNoteClick = useCallback((cell: TranslationCellDto, draft: CellDraft, otherDirty: boolean) => {
+    void handleSaveNote(cell, draft, otherDirty);
+  }, [handleSaveNote]);
+  const handleReviewChangeClick = useCallback((cell: TranslationCellDto, reviewState: ReviewState) => {
+    void handleReviewChange(cell, reviewState);
+  }, [handleReviewChange]);
 
   return (
     <main className="app-shell editor-shell">
@@ -261,7 +295,7 @@ export function EditorShell({
         project={project}
         closing={closing}
         disabled={closing || sheetLoading || mutation !== null}
-        onClose={() => void handleClose()}
+        onClose={handleCloseClick}
       />
       {applicationWarning ? (
         <ErrorBanner
@@ -275,28 +309,28 @@ export function EditorShell({
         <SheetSidebar
           sheets={project.sheets}
           selectedSheetName={selectedSheetName}
-          disabled={sheetLoading || mutation !== null || closing}
+          disabled={closing}
           onSelect={handleSheetSelect}
         />
         <TranslationList
           rows={rows}
           selectedRow={selectedRowCursor}
-          disabled={sheetLoading || mutation !== null || closing}
+          disabled={closing}
           loading={sheetLoading}
           refreshing={false}
           loadingMore={loadingMore}
           hasMore={nextAfter !== null}
           onSelect={handleRowSelect}
-          onLoadMore={() => void handleLoadMore()}
+          onLoadMore={handleLoadMoreClick}
         />
         <TranslationEditor
           key={selectedRow ? rowKey(selectedRow) : "empty-editor"}
           row={selectedRow}
           mutation={mutation}
           onDirtyChange={handleDirtyChange}
-          onSaveTarget={(cell, draft, otherDirty) => void handleSaveTarget(cell, draft, otherDirty)}
-          onSaveNote={(cell, draft, otherDirty) => void handleSaveNote(cell, draft, otherDirty)}
-          onReviewChange={(cell, reviewState) => void handleReviewChange(cell, reviewState)}
+          onSaveTarget={handleSaveTargetClick}
+          onSaveNote={handleSaveNoteClick}
+          onReviewChange={handleReviewChangeClick}
         />
       </div>
     </main>

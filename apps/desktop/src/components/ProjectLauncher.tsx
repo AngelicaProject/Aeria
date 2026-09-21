@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { flushSync } from "react-dom";
 import { listen } from "@tauri-apps/api/event";
 import {
   cancelSourcePackage,
@@ -157,11 +158,13 @@ export function ProjectLauncher({ initialError, onProjectReady }: ProjectLaunche
     }
     busyRef.current = mode;
     jobIdRef.current = null;
-    setBusy(mode);
-    setError(null);
-    setProgress(null);
-    setJobId(null);
-    setCancelRequested(false);
+    flushSync(() => {
+      setBusy(mode);
+      setError(null);
+      setProgress(null);
+      setJobId(null);
+      setCancelRequested(false);
+    });
     try {
       const result = mode === "open"
         ? await openProject(repositoryRoot, sourcePackagePath)
@@ -193,8 +196,10 @@ export function ProjectLauncher({ initialError, onProjectReady }: ProjectLaunche
 
   async function handleRecentOpen(project: RecentProjectDto) {
     if (project.availability !== "ready" || busy !== null || recentBusyId !== null) return;
-    setRecentBusyId(project.id);
-    setError(null);
+    flushSync(() => {
+      setRecentBusyId(project.id);
+      setError(null);
+    });
     try {
       const result = await openRecentProject(project.id);
       onProjectReady(result);
@@ -210,8 +215,10 @@ export function ProjectLauncher({ initialError, onProjectReady }: ProjectLaunche
 
   async function handleRecentRemove(project: RecentProjectDto) {
     if (busy !== null || recentBusyId !== null) return;
-    setRecentBusyId(project.id);
-    setRecentActionError(null);
+    flushSync(() => {
+      setRecentBusyId(project.id);
+      setRecentActionError(null);
+    });
     try {
       await forgetRecentProject(project.id);
       setRecentState((current) => reduceRecentProjectsState(current, {
@@ -227,7 +234,7 @@ export function ProjectLauncher({ initialError, onProjectReady }: ProjectLaunche
 
   async function handleCancel() {
     if (!jobId || cancelRequested) return;
-    setCancelRequested(true);
+    flushSync(() => setCancelRequested(true));
     try {
       await cancelSourcePackage(jobId);
     } catch (caughtError) {

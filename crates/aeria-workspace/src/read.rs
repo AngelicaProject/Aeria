@@ -2,6 +2,8 @@
 
 use aeria_core::{ReviewState, SourceBinding, SourceFingerprint, TranslationUnitId};
 use aeria_hxs::{HxsError, StringRowCoordinate};
+use std::cell::Cell;
+use std::time::Instant;
 use thiserror::Error;
 
 use crate::{ProjectSession, source_fingerprint_from_hashes};
@@ -149,6 +151,7 @@ impl ProjectSession {
         after: Option<&TranslationRowCursor>,
         limit: u32,
     ) -> Result<TranslationRowPage, TranslationReadError> {
+        let trace = PerfTrace::new();
         if !(1..=MAX_TRANSLATION_PAGE_SIZE).contains(&limit) {
             return Err(TranslationReadError::InvalidPageLimit {
                 limit,
@@ -170,6 +173,7 @@ impl ProjectSession {
         let source_page =
             self.source()
                 .page_string_rows(sheet_name, after_coordinate.as_ref(), limit)?;
+        trace.mark("workspace.page-rows.source");
 
         let mut rows = Vec::with_capacity(source_page.rows.len());
         for source_row in source_page.rows {
@@ -227,6 +231,7 @@ impl ProjectSession {
             });
         }
 
+        trace.mark("workspace.page-rows.compose");
         Ok(TranslationRowPage {
             rows,
             next_after: source_page.next_after.map(|coordinate| {
@@ -263,5 +268,33 @@ impl ProjectSession {
                 })
             })
             .transpose()
+    }
+}
+
+struct PerfTrace {
+    enabled: bool,
+    started: Instant,
+    last: Cell<Instant>,
+}
+
+impl PerfTrace {
+    fn new() -> Self {
+        Self {
+            enabled: std::env::var("AERIA_PERF_TRACE").as_deref() == Ok("1"),
+            started: Instant::now(),
+            last: Cell::new(Instant::now()),
+        }
+    }
+
+    fn mark(&self, phase: &str) {
+        if self.enabled {
+            let now = Instant::now();
+            let duration = now.duration_since(self.last.get()).as_secs_f64() * 1_000.0;
+            self.last.set(now);
+            eprintln!(
+                "[aeria-perf] {phase}: duration_ms={duration:.3} total_ms={:.3}",
+                self.started.elapsed().as_secs_f64() * 1_000.0
+            );
+        }
     }
 }
