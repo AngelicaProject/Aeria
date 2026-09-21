@@ -87,16 +87,29 @@ the backend contract. The DTO is row-centric, while each contained cell keeps
 its existing `SourceBinding` and overlay. Tauri performs DTO and error mapping,
 not business logic, and does not access HXS or SQLite directly.
 
+Filesystem, HSP/HXS, SQLite, workspace loading, row paging, and ordinary
+translation mutations run inside Tauri blocking workers. The async command
+handlers do not hold `DesktopState` or the project mutex across an await;
+worker-side access still goes through the single `ProjectSession` mutex, so
+mutations remain serialized. Target, note, and review commands return the
+compact committed `TranslationOverlayDto` for the changed cell; the renderer
+patches that cell instead of reloading the current sheet.
+
 Commands that require an active project report `noProjectOpen` before
 validating project-scoped payload such as translation-unit IDs.
 
-The IPC boundary contains no source update or rebase logic, no background
-server, and no async worker architecture. React has no direct filesystem or
-SQLite access. Translation-unit IDs cross IPC only in their canonical textual
-form, and review states use an explicit camelCase protocol enum.
+The IPC boundary contains no source update or rebase logic and no background
+server. React has no direct filesystem or SQLite access. Translation-unit IDs
+cross IPC only in their canonical textual form, and review states use an
+explicit camelCase protocol enum.
 
 Source-package creation is the one desktop process workflow that owns an Atlas
-child job. The build stages the v0.2.0 sidecar with Tauri's target-triple
+child job. The renderer first starts the desktop job and receives its opaque
+job ID before the Atlas worker starts; the long-running initialization command
+uses that ID to claim the active cancellation token. Progress events report
+Atlas state only and are not the source of job identity, so cancellation is
+available even before the first external-process event arrives. The build
+stages the v0.2.0 sidecar with Tauri's target-triple
 filename convention, while packaged runtime lookup resolves
 `harmonia-atlas[.exe]` beside the Aeria executable. Rust first honors the
 explicit `AERIA_ATLAS_PATH` development/test override, then the packaged

@@ -36,6 +36,10 @@ export type SourcePackageEventPayload = {
   event: AtlasEvent;
 };
 
+export type SourcePackageJobDto = {
+  jobId: string;
+};
+
 export type ReviewState = "draft" | "reviewed" | "needsReview";
 
 export type SourceBinding = {

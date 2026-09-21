@@ -1,6 +1,7 @@
 //! Owned application-layer state for one opened Aeria project.
 
 use std::path::{Path, PathBuf};
+use std::time::Instant;
 
 use aeria_core::{SourceBinding, TranslationUnitId};
 use aeria_hsp::{HspError, SourcePackage};
@@ -113,6 +114,7 @@ impl ProjectSession {
         repository_root: impl Into<PathBuf>,
         source_package: SourcePackage,
     ) -> Result<Self, ProjectSessionError> {
+        let trace = PerfTrace::new();
         let repository_root = repository_root.into();
         let source_package_path = source_package.package_path().to_owned();
         let store = WorkspaceStore::new(repository_root.clone());
@@ -127,6 +129,7 @@ impl ProjectSession {
                 source_package_path: source_package_path.clone(),
                 source,
             })?;
+        trace.mark("workspace.compatibility");
 
         if let Some(unit) = workspace.units().find(|unit| {
             let binding = unit.source_binding();
@@ -143,6 +146,7 @@ impl ProjectSession {
                 source_binding: unit.source_binding().clone(),
             });
         }
+        trace.mark("workspace.guidance");
 
         Ok(Self {
             repository_root,
@@ -249,5 +253,33 @@ impl ProjectSession {
     #[must_use]
     pub fn source_package(&self) -> &SourcePackage {
         &self.source_package
+    }
+}
+
+struct PerfTrace {
+    enabled: bool,
+    started: Instant,
+    last: std::cell::Cell<Instant>,
+}
+
+impl PerfTrace {
+    fn new() -> Self {
+        Self {
+            enabled: std::env::var("AERIA_PERF_TRACE").as_deref() == Ok("1"),
+            started: Instant::now(),
+            last: std::cell::Cell::new(Instant::now()),
+        }
+    }
+
+    fn mark(&self, phase: &str) {
+        if self.enabled {
+            let now = Instant::now();
+            let duration = now.duration_since(self.last.get()).as_secs_f64() * 1_000.0;
+            self.last.set(now);
+            eprintln!(
+                "[aeria-perf] {phase}: duration_ms={duration:.3} total_ms={:.3}",
+                self.started.elapsed().as_secs_f64() * 1_000.0
+            );
+        }
     }
 }

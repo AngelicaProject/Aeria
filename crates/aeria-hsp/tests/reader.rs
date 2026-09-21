@@ -87,12 +87,81 @@ fn valid_cache_is_reused_only_after_component_verification() {
 }
 
 #[test]
+fn verified_cache_can_be_rebuilt_from_persistent_record_after_process_cache_miss() {
+    let directory = tempdir().expect("test directory");
+    let package_path = directory.path().join("source.hsp");
+    fs::copy(fixture_path(), &package_path).expect("package copy");
+    let first_cache = directory.path().join("first-cache");
+    let first = SourcePackage::open(&package_path, &first_cache).expect("first open");
+
+    let second_cache = directory.path().join("second-cache");
+    let second_hxs = second_cache
+        .join("hxs")
+        .join(
+            first
+                .source_snapshot_id()
+                .strip_prefix("sha256:")
+                .expect("snapshot hash"),
+        )
+        .join("source.hxs");
+    fs::create_dir_all(second_hxs.parent().expect("HXS parent")).expect("second HXS directory");
+    fs::copy(first.materialized_hxs_path(), &second_hxs).expect("copy HXS cache");
+
+    let first_record = fs::read_dir(first_cache.join("hsp-verification"))
+        .expect("persistent verification cache")
+        .next()
+        .expect("verification record entry")
+        .expect("verification record")
+        .path();
+    let second_record_directory = second_cache.join("hsp-verification");
+    fs::create_dir_all(&second_record_directory).expect("second record directory");
+    let second_record =
+        second_record_directory.join(first_record.file_name().expect("record filename"));
+    let mut record: serde_json::Value =
+        serde_json::from_slice(&fs::read(first_record).expect("record bytes"))
+            .expect("record JSON");
+    record["sourceCachePath"] = serde_json::Value::String(
+        fs::canonicalize(&second_hxs)
+            .expect("canonical second HXS")
+            .to_string_lossy()
+            .into_owned(),
+    );
+    fs::write(
+        &second_record,
+        serde_json::to_vec(&record).expect("record bytes"),
+    )
+    .expect("second record");
+    drop(first);
+
+    let reopened = SourcePackage::open(&package_path, &second_cache)
+        .expect("persistent record should reopen verified package");
+    assert_eq!(
+        reopened.package_id(),
+        record["packageId"].as_str().expect("package ID")
+    );
+    assert_eq!(reopened.materialized_hxs_path(), second_hxs);
+}
+
+#[test]
+fn verified_reopen_does_not_trust_a_tampered_package() {
+    let directory = tempdir().expect("test directory");
+    let package_path = directory.path().join("source.hsp");
+    fs::copy(fixture_path(), &package_path).expect("package copy");
+    let cache = directory.path().join("cache");
+
+    SourcePackage::open(&package_path, &cache).expect("first open");
+    fs::write(&package_path, b"tampered package").expect("tamper package");
+
+    assert!(SourcePackage::open(&package_path, &cache).is_err());
+}
+
+#[test]
 fn validated_package_can_relocate_its_runtime_path_without_reopening() {
     let cache = tempdir().expect("cache directory");
     let package = SourcePackage::open(fixture_path(), cache.path()).expect("valid package");
     let package_id = package.package_id().to_owned();
     let source_snapshot_id = package.source_snapshot_id().to_owned();
-    let relocated = package.relocate_package_path("published.hsp");
+    let relocated = package.relocate_package_path("published.hsp", cache.path());
 
     assert_eq!(relocated.package_path(), Path::new("published.hsp"));
     assert_eq!(relocated.package_id(), package_id);

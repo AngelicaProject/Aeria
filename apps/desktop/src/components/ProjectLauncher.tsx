@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { flushSync } from "react-dom";
 import { listen } from "@tauri-apps/api/event";
 import {
   cancelSourcePackage,
@@ -8,6 +9,7 @@ import {
   normalizeCommandError,
   openProject,
   openRecentProject,
+  startSourcePackage,
 } from "../ipc";
 import type {
   AtlasEvent,
@@ -25,6 +27,7 @@ import {
 } from "../recentProjectsState";
 import {
   launcherErrorTitle,
+  sourcePackageListenerError,
   type LauncherError,
 } from "../launcherErrorState";
 
@@ -86,6 +89,7 @@ export function ProjectLauncher({ initialError, onProjectReady }: ProjectLaunche
   const [busy, setBusy] = useState<LauncherMode | null>(null);
   const [jobId, setJobId] = useState<string | null>(null);
   const [cancelRequested, setCancelRequested] = useState(false);
+  const [sourcePackageEventsReady, setSourcePackageEventsReady] = useState(false);
   const [progress, setProgress] = useState<AtlasEvent | null>(null);
   const [error, setError] = useState<LauncherError | null>(
     initialError ? { operation: "open", error: initialError } : null,
@@ -128,7 +132,17 @@ export function ProjectLauncher({ initialError, onProjectReady }: ProjectLaunche
       setProgress(payload.event);
     }).then((cleanup) => {
       if (disposed) cleanup();
-      else unlisten = cleanup;
+      else {
+        unlisten = cleanup;
+        setSourcePackageEventsReady(true);
+      }
+    }).catch((caughtError: unknown) => {
+      if (disposed) return;
+      if (import.meta.env.DEV) {
+        console.error("failed to register source-package-event listener", caughtError);
+      }
+      setSourcePackageEventsReady(false);
+      setError({ operation: "create", error: sourcePackageListenerError() });
     });
     return () => {
       disposed = true;
@@ -138,17 +152,34 @@ export function ProjectLauncher({ initialError, onProjectReady }: ProjectLaunche
 
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (mode === "create" && !sourcePackageEventsReady) {
+      setError({ operation: "create", error: sourcePackageListenerError() });
+      return;
+    }
     busyRef.current = mode;
     jobIdRef.current = null;
-    setBusy(mode);
-    setError(null);
-    setProgress(null);
-    setJobId(null);
-    setCancelRequested(false);
+    flushSync(() => {
+      setBusy(mode);
+      setError(null);
+      setProgress(null);
+      setJobId(null);
+      setCancelRequested(false);
+    });
     try {
       const result = mode === "open"
         ? await openProject(repositoryRoot, sourcePackagePath)
-        : await initializeProjectFromGame(repositoryRoot, gamePath, sourceLanguage, targetLanguage);
+        : await (async () => {
+          const started = await startSourcePackage();
+          jobIdRef.current = started.jobId;
+          setJobId(started.jobId);
+          return initializeProjectFromGame(
+            started.jobId,
+            repositoryRoot,
+            gamePath,
+            sourceLanguage,
+            targetLanguage,
+          );
+        })();
       onProjectReady(result);
     } catch (caughtError) {
       setError({
@@ -165,8 +196,10 @@ export function ProjectLauncher({ initialError, onProjectReady }: ProjectLaunche
 
   async function handleRecentOpen(project: RecentProjectDto) {
     if (project.availability !== "ready" || busy !== null || recentBusyId !== null) return;
-    setRecentBusyId(project.id);
-    setError(null);
+    flushSync(() => {
+      setRecentBusyId(project.id);
+      setError(null);
+    });
     try {
       const result = await openRecentProject(project.id);
       onProjectReady(result);
@@ -182,8 +215,10 @@ export function ProjectLauncher({ initialError, onProjectReady }: ProjectLaunche
 
   async function handleRecentRemove(project: RecentProjectDto) {
     if (busy !== null || recentBusyId !== null) return;
-    setRecentBusyId(project.id);
-    setRecentActionError(null);
+    flushSync(() => {
+      setRecentBusyId(project.id);
+      setRecentActionError(null);
+    });
     try {
       await forgetRecentProject(project.id);
       setRecentState((current) => reduceRecentProjectsState(current, {
@@ -199,7 +234,7 @@ export function ProjectLauncher({ initialError, onProjectReady }: ProjectLaunche
 
   async function handleCancel() {
     if (!jobId || cancelRequested) return;
-    setCancelRequested(true);
+    flushSync(() => setCancelRequested(true));
     try {
       await cancelSourcePackage(jobId);
     } catch (caughtError) {
@@ -343,7 +378,11 @@ export function ProjectLauncher({ initialError, onProjectReady }: ProjectLaunche
             </>
           )}
 
-          <button className="primary-button launcher-submit" type="submit" disabled={launcherDisabled}>
+          <button
+            className="primary-button launcher-submit"
+            type="submit"
+            disabled={launcherDisabled || (mode === "create" && !sourcePackageEventsReady)}
+          >
             {busy === "open" ? "Opening…" : busy === "create" ? "Creating…" : mode === "open" ? "Open project" : "Create project"}
           </button>
         </form>

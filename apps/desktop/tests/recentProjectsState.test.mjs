@@ -5,7 +5,10 @@ import {
   initialRecentProjectsState,
   reduceRecentProjectsState,
 } from "../src/recentProjectsState.ts";
-import { launcherErrorTitle } from "../src/launcherErrorState.ts";
+import {
+  launcherErrorTitle,
+  sourcePackageListenerError,
+} from "../src/launcherErrorState.ts";
 
 const project = {
   id: "local-project",
@@ -45,4 +48,11 @@ test("successful recent-project removal updates the loaded list locally", () => 
 test("recent-project open errors use a recent-project-specific title", () => {
   assert.equal(launcherErrorTitle("recentOpen"), "Could not reopen recent project");
   assert.equal(launcherErrorTitle("create"), "Could not create project");
+});
+
+test("source-package listener failures use a typed user-facing error", () => {
+  const error = sourcePackageListenerError();
+
+  assert.equal(error.code, "sourcePackageListener");
+  assert.match(error.message, /progress updates/i);
 });

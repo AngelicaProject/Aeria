@@ -81,7 +81,9 @@ check when inserting a new durable unit.
 
 Successful mutations update the live workspace before returning, so
 `page_translation_rows` immediately reads the committed state from the
-same session. The persisted format, canonical JSON/JSONL encoding, identity
+same session. The desktop command returns the resulting overlay for the
+changed unit, allowing the renderer to patch one loaded cell without
+reloading pages. The persisted format, canonical JSON/JSONL encoding, identity
 derivation, source-binding contract, and target validation rules are
 unchanged. HSG adds only the permission gate for target mutations.
 

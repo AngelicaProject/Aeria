@@ -1,5 +1,7 @@
+use std::cell::Cell;
 use std::collections::HashMap;
 use std::path::Path;
+use std::time::Instant;
 
 use rusqlite::{Connection, OpenFlags, params};
 
@@ -11,8 +13,8 @@ use crate::types::{
     StringOccurrenceRecordPage, StringRowCoordinate, StringRowRecord, StringRowRecordPage,
 };
 use crate::validation::{
-    APPLICATION_ID, FORMAT_VERSION, VerifiedSnapshot, read_row_record, read_string_cell,
-    validate_and_read,
+    APPLICATION_ID, FORMAT_VERSION, VerifiedSnapshot, read_cached_snapshot, read_row_record,
+    read_string_cell, validate_and_read,
 };
 use crate::{
     MAX_EVIDENCE_STRING_ROW_PAGE_SIZE, MAX_ROW_PAGE_SIZE, MAX_STRING_OCCURRENCE_PAGE_SIZE,
@@ -35,13 +37,48 @@ impl HxsSnapshot {
     /// Returns an error when the file cannot be opened read-only, does not have the HXS v1
     /// identity, has an invalid schema, or fails any logical verification check.
     pub fn open(path: impl AsRef<Path>) -> Result<Self, HxsError> {
+        let trace = PerfTrace::new();
+        let connection = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .map_err(HxsError::storage)?;
+        trace.mark("hxs.sqlite-open");
+        connection
+            .execute_batch("PRAGMA query_only = ON; PRAGMA foreign_keys = ON;")
+            .map_err(HxsError::storage)?;
+        validate_identity(&connection)?;
+        trace.mark("hxs.identity");
+        let VerifiedSnapshot { metadata, sheets } = validate_and_read(&connection)?;
+        trace.mark("hxs.schema-integrity-and-row-hash-validation");
+        let sheet_ids = sheets
+            .iter()
+            .map(|(id, sheet)| (sheet.name.clone(), *id))
+            .collect();
+        Ok(Self {
+            connection,
+            metadata,
+            sheets: sheets.into_iter().map(|(_, sheet)| sheet).collect(),
+            sheet_ids,
+        })
+    }
+
+    /// Opens an HXS file after the caller has proved that its complete bytes
+    /// match an artifact already accepted by [`Self::open`]. This deliberately
+    /// skips row/hash verification and is only used behind the in-memory HSP
+    /// verification cache; any proof failure must fall back to [`Self::open`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the read-only SQLite connection, HXS identity, or
+    /// cached metadata/sheet catalog cannot be opened. The caller must supply
+    /// an independent proof that the complete file bytes were already
+    /// validated; this method only reads the cached catalog.
+    pub fn open_cached_verified(path: impl AsRef<Path>) -> Result<Self, HxsError> {
         let connection = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
             .map_err(HxsError::storage)?;
         connection
             .execute_batch("PRAGMA query_only = ON; PRAGMA foreign_keys = ON;")
             .map_err(HxsError::storage)?;
         validate_identity(&connection)?;
-        let VerifiedSnapshot { metadata, sheets } = validate_and_read(&connection)?;
+        let VerifiedSnapshot { metadata, sheets } = read_cached_snapshot(&connection)?;
         let sheet_ids = sheets
             .iter()
             .map(|(id, sheet)| (sheet.name.clone(), *id))
@@ -699,6 +736,34 @@ impl HxsSnapshot {
             .ok_or_else(|| HxsError::SheetNotFound {
                 name: sheet_name.to_owned(),
             })
+    }
+}
+
+struct PerfTrace {
+    enabled: bool,
+    started: Instant,
+    last: Cell<Instant>,
+}
+
+impl PerfTrace {
+    fn new() -> Self {
+        Self {
+            enabled: std::env::var("AERIA_PERF_TRACE").as_deref() == Ok("1"),
+            started: Instant::now(),
+            last: Cell::new(Instant::now()),
+        }
+    }
+
+    fn mark(&self, phase: &str) {
+        if self.enabled {
+            let now = Instant::now();
+            let duration = now.duration_since(self.last.get()).as_secs_f64() * 1_000.0;
+            self.last.set(now);
+            eprintln!(
+                "[aeria-perf] {phase}: duration_ms={duration:.3} total_ms={:.3}",
+                self.started.elapsed().as_secs_f64() * 1_000.0
+            );
+        }
     }
 }
 

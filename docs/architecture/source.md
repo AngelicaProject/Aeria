@@ -71,6 +71,38 @@ it does not change String-cell identity or any HXS hash contract.
 
 The reader verifies rows as a stream and does not require the complete snapshot to be resident in memory. This is a source inspection interface only: it does not persist workspace state, edit translations, or export runtime data.
 
+Within one desktop process, a successfully fully verified HSP and its
+materialized HXS may be reopened through an in-memory immutable-byte cache.
+The fast path rehashes both files, re-parses the manifest/guidance, and opens
+only the HXS metadata/sheet catalog. The accepted verification is also
+recorded as a rebuildable JSON record under
+`<cache-root>/hsp-verification/`; the record contains its version,
+canonical package path, HSP/HXS sizes and SHA-256 hashes, package/source
+identities, cache path, and validated package metadata. On a later process
+start, Aeria rehashes both artifacts, checks the canonical paths and
+identities, validates the manifest-owned component descriptors, rechecks
+archive membership and guidance relationships, and opens only the cached HXS
+catalog. In particular, the required `sourceHxs` descriptor's size and
+SHA-256 are authoritative for the cached HXS bytes; the persistent record's
+copies must also match but cannot replace that manifest contract. Missing,
+malformed, unsupported, tampered, or mismatched records are deleted and the
+complete ZIP/component, SQLite integrity/schema, row/hash, and relationship
+validation runs instead. This cache is disposable and does not change HSP/HXS
+or Workspace Format contracts.
+When a validated staging HSP is atomically published to its immutable
+package-ID path, the relocation operation updates both the process-local cache
+and the persistent record key and canonical `packagePath`, then removes the
+staging record. A failure to write disposable cache state does not roll back
+the published HSP; it removes the stale staging record so the next open uses
+full validation.
+
+Set `AERIA_PERF_TRACE=1` to emit both per-phase duration and cumulative
+elapsed time for HSP identity/hash work, HSP archive/component verification,
+HXS identity and full validation, guidance relationships,
+persistent/in-memory cache paths, workspace loading and compatibility, row
+paging, and unit persistence. This is an optional diagnostic trace, not a
+runtime behavior switch for validation.
+
 ## Hash contract used by rebase
 
 HXS v1 hashes are canonical source facts, not relocation-invariant identity

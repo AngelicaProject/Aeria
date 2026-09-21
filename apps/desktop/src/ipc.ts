@@ -6,9 +6,10 @@ import type {
   RecentProjectDto,
   ReviewState,
   SourceBinding,
+  SourcePackageJobDto,
   TranslationRowCursorDto,
   TranslationRowPageDto,
-  TranslationUnitIdDto,
+  TranslationOverlayDto,
 } from "./types";
 
 export function normalizeCommandError(error: unknown): CommandError {
@@ -59,17 +60,23 @@ export function initializeProject(
 }
 
 export function initializeProjectFromGame(
+  jobId: string,
   repositoryRoot: string,
   gamePath: string,
   sourceLanguage: string,
   targetLanguage: string,
 ): Promise<ProjectOpenResultDto> {
   return call<ProjectOpenResultDto>("initialize_project_from_game", {
+    jobId,
     repositoryRoot,
     gamePath,
     sourceLanguage,
     targetLanguage,
   });
+}
+
+export function startSourcePackage(): Promise<SourcePackageJobDto> {
+  return call<SourcePackageJobDto>("start_source_package");
 }
 
 export function listRecentProjects(): Promise<RecentProjectDto[]> {
@@ -107,8 +114,8 @@ export function pageTranslationRows(
 export function setTranslationTarget(
   sourceBinding: SourceBinding,
   targetMacro: string,
-): Promise<TranslationUnitIdDto> {
-  return call<TranslationUnitIdDto>("set_translation_target", {
+): Promise<TranslationOverlayDto> {
+  return call<TranslationOverlayDto>("set_translation_target", {
     sourceBinding,
     targetMacro,
   });
@@ -117,13 +124,13 @@ export function setTranslationTarget(
 export function setTranslationNote(
   translationUnitId: string,
   note: string | null,
-): Promise<void> {
-  return call<void>("set_translation_note", { translationUnitId, note });
+): Promise<TranslationOverlayDto> {
+  return call<TranslationOverlayDto>("set_translation_note", { translationUnitId, note });
 }
 
 export function setTranslationReviewState(
   translationUnitId: string,
   reviewState: ReviewState,
-): Promise<void> {
-  return call<void>("set_translation_review_state", { translationUnitId, reviewState });
+): Promise<TranslationOverlayDto> {
+  return call<TranslationOverlayDto>("set_translation_review_state", { translationUnitId, reviewState });
 }

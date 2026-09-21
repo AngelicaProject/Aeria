@@ -1,22 +1,65 @@
+use std::cell::Cell;
+use std::collections::HashMap;
 use std::collections::HashSet;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
+#[cfg(test)]
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Mutex, OnceLock};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use aeria_hxs::HxsSnapshot;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use zip::ZipArchive;
 
 use crate::HspError;
 use crate::guidance::{parse_and_validate, validate_relationships};
 use crate::hash::{compute_package_id, is_sha256, sha256_reader, to_hash_string};
-use crate::model::{HspComponentDescriptor, HspManifest, SourcePackage};
+use crate::model::{HspComponentDescriptor, HspManifest, SourceGuidance, SourcePackage};
 use crate::{MAX_HSP_GUIDANCE_BYTES, MAX_HSP_MANIFEST_BYTES};
 
 const MANIFEST_PATH: &str = "manifest.json";
 const SOURCE_PATH: &str = "source/source.hxs";
 const GUIDANCE_PATH: &str = "guidance/source-guidance.json";
+const VERIFICATION_CACHE_DIRECTORY: &str = "hsp-verification";
+const VERIFICATION_CACHE_VERSION: u32 = 1;
+const MAX_VERIFICATION_RECORD_BYTES: u64 = 64 * 1024;
+
+#[derive(Clone)]
+struct VerifiedPackageCache {
+    package_size: u64,
+    package_hash: String,
+    source_cache_path: PathBuf,
+    source_cache_size: u64,
+    source_cache_hash: String,
+    manifest: HspManifest,
+    guidance: SourceGuidance,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct PersistentVerificationRecord {
+    version: u32,
+    package_path: String,
+    package_size: u64,
+    package_hash: String,
+    package_id: String,
+    source_cache_path: String,
+    source_cache_size: u64,
+    source_cache_hash: String,
+    source_language: String,
+    content_id: String,
+    snapshot_id: String,
+    game_version: String,
+    scope: String,
+}
+
+static VERIFIED_PACKAGE_CACHE: OnceLock<Mutex<HashMap<PathBuf, VerifiedPackageCache>>> =
+    OnceLock::new();
+#[cfg(test)]
+static PERSISTENT_CACHE_HITS: AtomicUsize = AtomicUsize::new(0);
 
 /// Opens, validates, and materializes an HSP v1 source package.
 ///
@@ -24,12 +67,22 @@ const GUIDANCE_PATH: &str = "guidance/source-guidance.json";
 ///
 /// Returns [`HspError`] when archive, manifest, component, source, guidance,
 /// relationship, or cache validation fails.
+#[allow(clippy::too_many_lines)]
 pub fn open(
     package_path: impl AsRef<Path>,
     cache_root: impl AsRef<Path>,
 ) -> Result<SourcePackage, HspError> {
+    let trace = PerfTrace::new();
     let package_path = package_path.as_ref().to_path_buf();
     let cache_root = cache_root.as_ref().to_path_buf();
+    if let Some(source_package) = try_open_verified_cache(&package_path, &cache_root) {
+        trace.mark("hsp.verified-cache-fast-path");
+        return Ok(source_package);
+    }
+    if let Some(source_package) = try_open_persistent_verified_cache(&package_path, &cache_root) {
+        trace.mark("hsp.persistent-verified-cache-fast-path");
+        return Ok(source_package);
+    }
     let file = File::open(&package_path).map_err(|source| HspError::Io {
         path: package_path.clone(),
         message: source.to_string(),
@@ -37,6 +90,7 @@ pub fn open(
     let mut archive = ZipArchive::new(file).map_err(|source| HspError::Archive {
         message: source.to_string(),
     })?;
+    trace.mark("hsp.archive-open");
     validate_archive_names(&mut archive)?;
     let manifest_bytes = read_bounded_entry(&mut archive, MANIFEST_PATH, MAX_HSP_MANIFEST_BYTES)?;
     let manifest: HspManifest =
@@ -66,6 +120,7 @@ pub fn open(
             message: "archive membership does not exactly match the manifest".to_owned(),
         });
     }
+    trace.mark("hsp.manifest-and-membership");
 
     let source_component = required_component(&manifest, "sourceHxs", SOURCE_PATH)?;
     let guidance_component = required_component(&manifest, "sourceGuidance", GUIDANCE_PATH)?;
@@ -88,6 +143,7 @@ pub fn open(
             return Err(error);
         }
     }
+    trace.mark("hsp.component-verification");
     let source_snapshot = match HxsSnapshot::open(&materialized_source) {
         Ok(source) => source,
         Err(source) => {
@@ -95,6 +151,7 @@ pub fn open(
             return Err(HspError::Hxs { source });
         }
     };
+    trace.mark("hsp.hxs-snapshot-open");
     let guidance = match parse_and_validate(&guidance_bytes) {
         Ok(guidance) => guidance,
         Err(message) => {
@@ -120,6 +177,24 @@ pub fn open(
             message: source.to_string(),
         });
     }
+    trace.mark("hsp.guidance-relationships");
+
+    let (package_size, package_hash) = digest_file(&package_path)?;
+    trace.mark("hsp.package-identity-and-hash");
+    let (source_cache_size, source_cache_hash) = digest_file(&materialized_source)?;
+    trace.mark("hsp.hxs-identity-and-hash");
+    let verified_cache = VerifiedPackageCache {
+        package_size,
+        package_hash,
+        source_cache_path: materialized_source.clone(),
+        source_cache_size,
+        source_cache_hash,
+        manifest: manifest.clone(),
+        guidance: guidance.clone(),
+    };
+    remember_verified_cache(&package_path, verified_cache.clone());
+    persist_verification_record(&cache_root, &package_path, &verified_cache);
+    trace.mark("hsp.verified-cache-recorded");
 
     Ok(SourcePackage::new(
         package_path,
@@ -128,6 +203,417 @@ pub fn open(
         source_snapshot,
         guidance,
     ))
+}
+
+fn try_open_verified_cache(package_path: &Path, cache_root: &Path) -> Option<SourcePackage> {
+    let key = package_cache_key(package_path);
+    let cached = VERIFIED_PACKAGE_CACHE
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .ok()?
+        .get(&key)
+        .cloned()?;
+    let package_digest = digest_file(package_path).ok()?;
+    if package_digest != (cached.package_size, cached.package_hash.clone()) {
+        forget_verified_cache(&key);
+        return None;
+    }
+    let source_digest = digest_file(&cached.source_cache_path).ok()?;
+    if source_digest != (cached.source_cache_size, cached.source_cache_hash.clone()) {
+        forget_verified_cache(&key);
+        return None;
+    }
+
+    let file = File::open(package_path).ok()?;
+    let mut archive = ZipArchive::new(file).ok()?;
+    let manifest_bytes =
+        read_bounded_entry(&mut archive, MANIFEST_PATH, MAX_HSP_MANIFEST_BYTES).ok()?;
+    let manifest: HspManifest = serde_json::from_slice(&manifest_bytes).ok()?;
+    if validate_manifest(&manifest).is_err() || manifest != cached.manifest {
+        forget_verified_cache(&key);
+        return None;
+    }
+    let guidance_component = required_component(&manifest, "sourceGuidance", GUIDANCE_PATH).ok()?;
+    let guidance_bytes = read_guidance_component(&mut archive, guidance_component).ok()?;
+    let guidance = parse_and_validate(&guidance_bytes).ok()?;
+    if guidance != cached.guidance {
+        forget_verified_cache(&key);
+        return None;
+    }
+    let source_cache_path = cache_path(cache_root, &manifest.source.snapshot_id).ok()?;
+    if source_cache_path != cached.source_cache_path {
+        forget_verified_cache(&key);
+        return None;
+    }
+    let Ok(source_snapshot) = HxsSnapshot::open_cached_verified(&source_cache_path) else {
+        forget_verified_cache(&key);
+        return None;
+    };
+    let metadata = source_snapshot.metadata();
+    if manifest.game_version != metadata.game_version
+        || manifest.scope != metadata.scope
+        || manifest.source.language != metadata.source_language
+        || manifest.source.content_id != metadata.content_id
+        || manifest.source.snapshot_id != metadata.snapshot_id
+    {
+        forget_verified_cache(&key);
+        return None;
+    }
+
+    Some(SourcePackage::new(
+        package_path.to_owned(),
+        manifest,
+        source_cache_path,
+        source_snapshot,
+        guidance,
+    ))
+}
+
+fn try_open_persistent_verified_cache(
+    package_path: &Path,
+    cache_root: &Path,
+) -> Option<SourcePackage> {
+    let record_path = persistent_record_path(cache_root, package_path);
+    let metadata = fs::symlink_metadata(&record_path).ok()?;
+    if metadata.file_type().is_symlink()
+        || !metadata.is_file()
+        || metadata.len() > MAX_VERIFICATION_RECORD_BYTES
+    {
+        let _ = fs::remove_file(&record_path);
+        return None;
+    }
+    let bytes = fs::read(&record_path).ok()?;
+    let record = serde_json::from_slice::<PersistentVerificationRecord>(&bytes).ok();
+    let Some(record) = record else {
+        let _ = fs::remove_file(&record_path);
+        return None;
+    };
+    let result = try_open_persistent_record(package_path, cache_root, &record);
+    #[cfg(test)]
+    if result.is_some() {
+        PERSISTENT_CACHE_HITS.fetch_add(1, Ordering::SeqCst);
+    }
+    if result.is_none() {
+        let _ = fs::remove_file(&record_path);
+    }
+    result
+}
+
+fn try_open_persistent_record(
+    package_path: &Path,
+    cache_root: &Path,
+    record: &PersistentVerificationRecord,
+) -> Option<SourcePackage> {
+    if record.version != VERIFICATION_CACHE_VERSION
+        || record.package_path != canonical_path_string(package_path)?
+        || !is_sha256(&record.package_hash)
+        || !is_sha256(&record.source_cache_hash)
+    {
+        return None;
+    }
+    let package_digest = digest_file(package_path).ok()?;
+    if package_digest != (record.package_size, record.package_hash.clone()) {
+        return None;
+    }
+
+    let source_cache_path = cache_path(cache_root, &record.snapshot_id).ok()?;
+    if canonical_path_string(&source_cache_path)? != record.source_cache_path {
+        return None;
+    }
+
+    let file = File::open(package_path).ok()?;
+    let mut archive = ZipArchive::new(file).ok()?;
+    validate_archive_names(&mut archive).ok()?;
+    let manifest_bytes =
+        read_bounded_entry(&mut archive, MANIFEST_PATH, MAX_HSP_MANIFEST_BYTES).ok()?;
+    let manifest: HspManifest = serde_json::from_slice(&manifest_bytes).ok()?;
+    validate_manifest(&manifest).ok()?;
+    if manifest.package_id != record.package_id
+        || manifest.source.language != record.source_language
+        || manifest.source.content_id != record.content_id
+        || manifest.source.snapshot_id != record.snapshot_id
+        || manifest.game_version != record.game_version
+        || manifest.scope != record.scope
+    {
+        return None;
+    }
+
+    let expected_entries = manifest
+        .components
+        .iter()
+        .map(|component| component.path.clone())
+        .chain(std::iter::once(MANIFEST_PATH.to_owned()))
+        .collect::<HashSet<_>>();
+    let archive_entries = (0..archive.len())
+        .map(|index| {
+            archive
+                .by_index(index)
+                .ok()
+                .map(|entry| entry.name().to_owned())
+        })
+        .collect::<Option<HashSet<_>>>()?;
+    if archive_entries != expected_entries {
+        return None;
+    }
+
+    let source_component = required_component(&manifest, "sourceHxs", SOURCE_PATH).ok()?;
+    let source_component_size = u64::try_from(source_component.size).ok()?;
+    let source_digest = digest_file(&source_cache_path).ok()?;
+    if source_digest != (record.source_cache_size, record.source_cache_hash.clone())
+        || source_digest != (source_component_size, source_component.sha256.clone())
+    {
+        return None;
+    }
+    let guidance_component = required_component(&manifest, "sourceGuidance", GUIDANCE_PATH).ok()?;
+    let guidance_bytes = read_guidance_component(&mut archive, guidance_component).ok()?;
+    let guidance = parse_and_validate(&guidance_bytes).ok()?;
+    let source_snapshot = HxsSnapshot::open_cached_verified(&source_cache_path).ok()?;
+    let metadata = source_snapshot.metadata();
+    if manifest.game_version != metadata.game_version
+        || manifest.scope != metadata.scope
+        || manifest.source.language != metadata.source_language
+        || manifest.source.content_id != metadata.content_id
+        || manifest.source.snapshot_id != metadata.snapshot_id
+        || metadata.source_language != record.source_language
+        || metadata.content_id != record.content_id
+        || metadata.snapshot_id != record.snapshot_id
+    {
+        return None;
+    }
+    validate_relationships(&guidance, &source_snapshot).ok()?;
+
+    let verified_cache = VerifiedPackageCache {
+        package_size: record.package_size,
+        package_hash: record.package_hash.clone(),
+        source_cache_path: source_cache_path.clone(),
+        source_cache_size: record.source_cache_size,
+        source_cache_hash: record.source_cache_hash.clone(),
+        manifest: manifest.clone(),
+        guidance: guidance.clone(),
+    };
+    remember_verified_cache(package_path, verified_cache);
+    Some(SourcePackage::new(
+        package_path.to_owned(),
+        manifest,
+        source_cache_path,
+        source_snapshot,
+        guidance,
+    ))
+}
+
+fn persist_verification_record(
+    cache_root: &Path,
+    package_path: &Path,
+    cache: &VerifiedPackageCache,
+) -> bool {
+    let Some(package_path) = canonical_path_string(package_path) else {
+        return false;
+    };
+    let Some(source_cache_path) = canonical_path_string(&cache.source_cache_path) else {
+        return false;
+    };
+    let record = PersistentVerificationRecord {
+        version: VERIFICATION_CACHE_VERSION,
+        package_path,
+        package_size: cache.package_size,
+        package_hash: cache.package_hash.clone(),
+        package_id: cache.manifest.package_id.clone(),
+        source_cache_path,
+        source_cache_size: cache.source_cache_size,
+        source_cache_hash: cache.source_cache_hash.clone(),
+        source_language: cache.manifest.source.language.clone(),
+        content_id: cache.manifest.source.content_id.clone(),
+        snapshot_id: cache.manifest.source.snapshot_id.clone(),
+        game_version: cache.manifest.game_version.clone(),
+        scope: cache.manifest.scope.clone(),
+    };
+    let Ok(bytes) = serde_json::to_vec(&record) else {
+        return false;
+    };
+    let record_path = persistent_record_path(cache_root, Path::new(&record.package_path));
+    write_persistent_record(cache_root, &record_path, &bytes)
+}
+
+fn relocate_persistent_record(cache_root: &Path, from: &Path, to: &Path) -> bool {
+    let old_record_path = persistent_record_path(cache_root, from);
+    let Ok(bytes) = fs::read(&old_record_path) else {
+        return false;
+    };
+    let Ok(mut record) = serde_json::from_slice::<PersistentVerificationRecord>(&bytes) else {
+        return false;
+    };
+    let Some(package_path) = canonical_path_string(to) else {
+        return false;
+    };
+    record.package_path = package_path;
+    let Ok(bytes) = serde_json::to_vec(&record) else {
+        return false;
+    };
+    let record_path = persistent_record_path(cache_root, to);
+    write_persistent_record(cache_root, &record_path, &bytes)
+}
+
+fn write_persistent_record(cache_root: &Path, record_path: &Path, bytes: &[u8]) -> bool {
+    let directory = cache_root.join(VERIFICATION_CACHE_DIRECTORY);
+    if fs::create_dir_all(&directory).is_err() {
+        return false;
+    }
+    let temporary_path = directory.join(format!(
+        ".{}.{}.tmp",
+        record_path
+            .file_stem()
+            .and_then(|name| name.to_str())
+            .unwrap_or("verification"),
+        std::process::id()
+    ));
+    let Ok(mut temporary) = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&temporary_path)
+    else {
+        return false;
+    };
+    if temporary.write_all(bytes).is_err()
+        || temporary.flush().is_err()
+        || temporary.sync_all().is_err()
+    {
+        let _ = fs::remove_file(&temporary_path);
+        return false;
+    }
+    drop(temporary);
+    let _ = fs::remove_file(record_path);
+    if fs::rename(&temporary_path, record_path).is_err() {
+        let _ = fs::remove_file(&temporary_path);
+        return false;
+    }
+    true
+}
+
+fn persistent_record_path(cache_root: &Path, package_path: &Path) -> PathBuf {
+    let key = package_cache_key(package_path);
+    let digest = Sha256::digest(key.to_string_lossy().as_bytes());
+    let digest = to_hash_string(digest.into());
+    let file_name = digest
+        .strip_prefix("sha256:")
+        .expect("sha256 helper always prefixes its output");
+    cache_root
+        .join(VERIFICATION_CACHE_DIRECTORY)
+        .join(format!("{file_name}.json"))
+}
+
+fn canonical_path_string(path: &Path) -> Option<String> {
+    fs::canonicalize(path)
+        .ok()
+        .map(|path| path.to_string_lossy().into_owned())
+}
+
+fn remember_verified_cache(package_path: &Path, cache: VerifiedPackageCache) {
+    if let Ok(mut entries) = VERIFIED_PACKAGE_CACHE
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+    {
+        entries.insert(package_cache_key(package_path), cache);
+    }
+}
+
+fn forget_verified_cache(package_key: &Path) {
+    if let Ok(mut entries) = VERIFIED_PACKAGE_CACHE
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+    {
+        entries.remove(package_key);
+    }
+}
+
+pub(crate) fn relocate_verified_cache(from: &Path, to: &Path, cache_root: &Path) {
+    let process_cache = if let Ok(mut entries) = VERIFIED_PACKAGE_CACHE
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+    {
+        entries.remove(&package_cache_key(from))
+    } else {
+        None
+    };
+
+    if let Some(cache) = process_cache {
+        let final_record_written = persist_verification_record(cache_root, to, &cache);
+        if let Ok(mut entries) = VERIFIED_PACKAGE_CACHE
+            .get_or_init(|| Mutex::new(HashMap::new()))
+            .lock()
+        {
+            entries.insert(package_cache_key(to), cache);
+        }
+        let old_record_path = persistent_record_path(cache_root, from);
+        let final_record_path = persistent_record_path(cache_root, to);
+        if old_record_path != final_record_path {
+            let _ = fs::remove_file(old_record_path);
+        }
+        if !final_record_written {
+            let _ = fs::remove_file(final_record_path);
+        }
+    } else {
+        let final_record_written = relocate_persistent_record(cache_root, from, to);
+        let old_record_path = persistent_record_path(cache_root, from);
+        let final_record_path = persistent_record_path(cache_root, to);
+        if old_record_path != final_record_path {
+            let _ = fs::remove_file(old_record_path);
+        }
+        if !final_record_written {
+            let _ = fs::remove_file(final_record_path);
+        }
+    }
+}
+
+fn package_cache_key(package_path: &Path) -> PathBuf {
+    if let Ok(path) = fs::canonicalize(package_path) {
+        return path;
+    }
+    let Some(file_name) = package_path.file_name() else {
+        return package_path.to_owned();
+    };
+    package_path
+        .parent()
+        .and_then(|parent| fs::canonicalize(parent).ok())
+        .map_or_else(|| package_path.to_owned(), |parent| parent.join(file_name))
+}
+
+fn digest_file(path: &Path) -> Result<(u64, String), HspError> {
+    let mut file = File::open(path).map_err(|source| HspError::Io {
+        path: path.to_owned(),
+        message: source.to_string(),
+    })?;
+    sha256_reader(&mut file).map_err(|source| HspError::Io {
+        path: path.to_owned(),
+        message: source.to_string(),
+    })
+}
+
+struct PerfTrace {
+    enabled: bool,
+    started: Instant,
+    last: Cell<Instant>,
+}
+
+impl PerfTrace {
+    fn new() -> Self {
+        Self {
+            enabled: std::env::var("AERIA_PERF_TRACE").as_deref() == Ok("1"),
+            started: Instant::now(),
+            last: Cell::new(Instant::now()),
+        }
+    }
+
+    fn mark(&self, phase: &str) {
+        if self.enabled {
+            let now = Instant::now();
+            let duration = now.duration_since(self.last.get()).as_secs_f64() * 1_000.0;
+            self.last.set(now);
+            eprintln!(
+                "[aeria-perf] {phase}: duration_ms={duration:.3} total_ms={:.3}",
+                self.started.elapsed().as_secs_f64() * 1_000.0
+            );
+        }
+    }
 }
 
 fn cleanup_materialized_source(materialized: bool, path: &Path) {
@@ -643,7 +1129,11 @@ fn is_canonical_language(language: &str) -> bool {
 mod tests {
     use std::io::Cursor;
 
+    use tempfile::tempdir;
+
     use super::*;
+
+    static VERIFICATION_CACHE_TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
     #[test]
     fn bounded_component_stream_aborts_on_the_first_byte_over_expected_size() {
@@ -661,5 +1151,159 @@ mod tests {
             .expect_err("oversized stream");
 
         assert!(error.to_string().contains("exceeding 3"));
+    }
+
+    #[test]
+    fn relocation_moves_persistent_trust_to_final_path_and_rejects_tampering() {
+        let _cache_test_guard = VERIFICATION_CACHE_TEST_LOCK
+            .get_or_init(|| Mutex::new(()))
+            .lock()
+            .expect("cache test lock");
+        let directory = tempdir().expect("test directory");
+        let staging = directory.path().join("source-packages/staging/source.hsp");
+        let final_root = directory.path().join("source-packages");
+        fs::create_dir_all(staging.parent().expect("staging parent")).expect("staging directory");
+        fs::copy(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/synthetic.hsp"),
+            &staging,
+        )
+        .expect("staging package");
+        let cache = directory.path().join("cache");
+
+        let package = SourcePackage::open(&staging, &cache).expect("staging validation");
+        let old_record_path = persistent_record_path(&cache, &staging);
+        assert!(old_record_path.is_file());
+        let package_id = package.package_id().to_owned();
+        let final_path = final_root.join(format!(
+            "{}.hsp",
+            package_id.strip_prefix("sha256:").expect("package hash")
+        ));
+        fs::rename(&staging, &final_path).expect("atomic final publication");
+
+        let relocated = package.relocate_package_path(&final_path, &cache);
+        let final_record_path = persistent_record_path(&cache, &final_path);
+        assert_eq!(relocated.package_path(), final_path);
+        assert!(!old_record_path.exists());
+        assert!(final_record_path.is_file());
+        let record: serde_json::Value =
+            serde_json::from_slice(&fs::read(&final_record_path).expect("final record"))
+                .expect("final record JSON");
+        assert_eq!(
+            record["packagePath"],
+            serde_json::Value::String(
+                fs::canonicalize(&final_path)
+                    .expect("canonical final path")
+                    .to_string_lossy()
+                    .into_owned()
+            )
+        );
+        assert_eq!(record["packageId"], package_id);
+
+        if let Ok(mut entries) = VERIFIED_PACKAGE_CACHE
+            .get_or_init(|| Mutex::new(HashMap::new()))
+            .lock()
+        {
+            entries.clear();
+        }
+        PERSISTENT_CACHE_HITS.store(0, Ordering::SeqCst);
+        let reopened = SourcePackage::open(&final_path, &cache).expect("persistent final reopen");
+        assert_eq!(reopened.package_id(), package_id);
+        assert_eq!(PERSISTENT_CACHE_HITS.load(Ordering::SeqCst), 1);
+
+        fs::write(&final_path, b"tampered final package").expect("tamper final package");
+        assert!(SourcePackage::open(&final_path, &cache).is_err());
+        assert!(!final_record_path.exists());
+    }
+
+    #[test]
+    fn persistent_record_cannot_override_manifest_source_hxs_digest() {
+        let _cache_test_guard = VERIFICATION_CACHE_TEST_LOCK
+            .get_or_init(|| Mutex::new(()))
+            .lock()
+            .expect("cache test lock");
+        let directory = tempdir().expect("test directory");
+        let staging = directory.path().join("source-packages/staging/source.hsp");
+        let final_root = directory.path().join("source-packages");
+        fs::create_dir_all(staging.parent().expect("staging parent")).expect("staging directory");
+        fs::copy(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/synthetic.hsp"),
+            &staging,
+        )
+        .expect("staging package");
+        let cache = directory.path().join("cache");
+
+        let package = SourcePackage::open(&staging, &cache).expect("staging validation");
+        let package_id = package.package_id().to_owned();
+        let final_path = final_root.join(format!(
+            "{}.hsp",
+            package_id.strip_prefix("sha256:").expect("package hash")
+        ));
+        fs::rename(&staging, &final_path).expect("atomic final publication");
+        let relocated = package.relocate_package_path(&final_path, &cache);
+        let hxs_path = relocated.materialized_hxs_path().to_owned();
+        let canonical_hxs = fs::read(&hxs_path).expect("canonical cached HXS");
+        let record_path = persistent_record_path(&cache, &final_path);
+        drop(relocated);
+
+        if let Ok(mut entries) = VERIFIED_PACKAGE_CACHE
+            .get_or_init(|| Mutex::new(HashMap::new()))
+            .lock()
+        {
+            entries.clear();
+        }
+        fs::OpenOptions::new()
+            .append(true)
+            .open(&hxs_path)
+            .expect("tampered HXS")
+            .write_all(b"tampered but still readable SQLite tail")
+            .expect("tamper HXS");
+        let tampered_digest = digest_file(&hxs_path).expect("tampered HXS digest");
+        let mut archive = ZipArchive::new(File::open(&final_path).expect("final HSP"))
+            .expect("final HSP archive");
+        let manifest: HspManifest = serde_json::from_slice(
+            &read_bounded_entry(&mut archive, MANIFEST_PATH, MAX_HSP_MANIFEST_BYTES)
+                .expect("manifest"),
+        )
+        .expect("manifest JSON");
+        let source_component =
+            required_component(&manifest, "sourceHxs", SOURCE_PATH).expect("source component");
+        assert_ne!(
+            tampered_digest,
+            (
+                u64::try_from(source_component.size).expect("source component size"),
+                source_component.sha256.clone()
+            )
+        );
+        assert!(
+            HxsSnapshot::open_cached_verified(&hxs_path).is_ok(),
+            "tampered HXS should remain readable by the cache-only opener"
+        );
+
+        let mut record: PersistentVerificationRecord =
+            serde_json::from_slice(&fs::read(&record_path).expect("verification record"))
+                .expect("verification record JSON");
+        record.source_cache_size = tampered_digest.0;
+        record.source_cache_hash = tampered_digest.1;
+        fs::write(
+            &record_path,
+            serde_json::to_vec(&record).expect("tampered verification record JSON"),
+        )
+        .expect("tampered verification record");
+
+        PERSISTENT_CACHE_HITS.store(0, Ordering::SeqCst);
+        let reopened = SourcePackage::open(&final_path, &cache).expect("rebuild from HSP");
+        assert_eq!(PERSISTENT_CACHE_HITS.load(Ordering::SeqCst), 0);
+        assert_eq!(
+            fs::read(reopened.materialized_hxs_path()).expect("rebuilt HXS"),
+            canonical_hxs
+        );
+        let repaired_record: PersistentVerificationRecord =
+            serde_json::from_slice(&fs::read(&record_path).expect("repaired record"))
+                .expect("repaired record JSON");
+        assert_eq!(
+            repaired_record.source_cache_size,
+            canonical_hxs.len() as u64
+        );
+        assert_ne!(repaired_record.source_cache_hash, record.source_cache_hash);
     }
 }
