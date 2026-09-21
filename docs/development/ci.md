@@ -8,6 +8,7 @@ Frontend CI runs:
 
 ```text
 pnpm install --frozen-lockfile
+pnpm test
 pnpm typecheck
 pnpm build
 ```
@@ -34,6 +35,14 @@ Workspace persistence also runs its focused locked test suite on
 
 ```text
 cargo test -p aeria-workspace --locked
+```
+
+The Windows Atlas job also runs the local project-registry persistence and
+recovery suite because `aeria-projects` has Windows-specific publication and
+restore behavior:
+
+```text
+cargo test -p aeria-projects --all-targets --locked
 ```
 
 When CI gains or removes a project-wide quality gate, update this document with the workflow change.

@@ -6,12 +6,14 @@ mod state;
 use serde::Serialize;
 
 pub use commands::{
-    cancel_source_package, close_project, current_project, initialize_project,
-    initialize_project_from_game, open_project, page_translation_rows, set_translation_note,
-    set_translation_review_state, set_translation_target,
+    cancel_source_package, close_project, current_project, forget_recent_project,
+    initialize_project, initialize_project_from_game, list_recent_projects, open_project,
+    open_recent_project, page_translation_rows, set_translation_note, set_translation_review_state,
+    set_translation_target,
 };
 pub use dto::{
-    ProjectSheetDto, ProjectSummaryDto, ReviewStateDto, SourceBindingDto, TranslationCellDto,
+    ProjectOpenResultDto, ProjectSheetDto, ProjectSummaryDto, RecentProjectAvailability,
+    RecentProjectDto, ReviewStateDto, SourceBindingDto, TranslationCellDto,
     TranslationContextCellDto, TranslationOverlayDto, TranslationRowCursorDto, TranslationRowDto,
     TranslationRowPageDto, TranslationUnitIdDto,
 };
@@ -50,6 +52,9 @@ pub fn run() {
             cancel_source_package,
             current_project,
             close_project,
+            list_recent_projects,
+            open_recent_project,
+            forget_recent_project,
             page_translation_rows,
             set_translation_target,
             set_translation_note,

@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { currentProject, normalizeCommandError } from "./ipc";
 import { EditorShell } from "./components/EditorShell";
 import { ProjectLauncher } from "./components/ProjectLauncher";
-import type { CommandError, ProjectSummaryDto } from "./types";
+import type { CommandError, ProjectOpenResultDto, ProjectSummaryDto } from "./types";
 
 type StartupState = "starting" | "launcher";
 
@@ -10,6 +10,12 @@ export function App() {
   const [project, setProject] = useState<ProjectSummaryDto | null>(null);
   const [startupState, setStartupState] = useState<StartupState>("starting");
   const [startupError, setStartupError] = useState<CommandError | null>(null);
+  const [projectWarning, setProjectWarning] = useState<CommandError | null>(null);
+
+  function handleProjectReady(result: ProjectOpenResultDto) {
+    setProject(result.project);
+    setProjectWarning(result.warning);
+  }
 
   useEffect(() => {
     let active = true;
@@ -47,8 +53,18 @@ export function App() {
   }
 
   if (!project) {
-    return <ProjectLauncher initialError={startupError} onProjectReady={setProject} />;
+    return <ProjectLauncher initialError={startupError} onProjectReady={handleProjectReady} />;
   }
 
-  return <EditorShell project={project} onClosed={() => setProject(null)} />;
+  return (
+    <EditorShell
+      project={project}
+      applicationWarning={projectWarning}
+      onDismissApplicationWarning={() => setProjectWarning(null)}
+      onClosed={() => {
+        setProject(null);
+        setProjectWarning(null);
+      }}
+    />
+  );
 }

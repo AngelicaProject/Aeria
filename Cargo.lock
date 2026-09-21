@@ -37,10 +37,16 @@ dependencies = [
  "aeria-atlas",
  "aeria-core",
  "aeria-hsp",
+ "aeria-hxs",
+ "aeria-projects",
  "aeria-workspace",
+ "rusqlite",
  "serde",
+ "serde_json",
+ "sha2 0.11.0",
  "tauri",
  "tauri-build",
+ "zip",
 ]
 
 [[package]]
@@ -71,6 +77,18 @@ dependencies = [
  "rusqlite",
  "sha2 0.11.0",
  "thiserror 2.0.20",
+]
+
+[[package]]
+name = "aeria-projects"
+version = "0.1.0"
+dependencies = [
+ "fs2",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.20",
+ "uuid",
 ]
 
 [[package]]
@@ -1040,6 +1058,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cb4cb245038516f5f85277875cdaa4f7d2c9a0fa0468de06ed190163b1581fcf"
 dependencies = [
  "percent-encoding",
+]
+
+[[package]]
+name = "fs2"
+version = "0.4.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9564fc758e15025b46aa6643b1b77d047d1a56a1aea6e01002ac0c7026876213"
+dependencies = [
+ "libc",
+ "winapi",
 ]
 
 [[package]]

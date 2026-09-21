@@ -14,7 +14,14 @@ project launcher
 → immediate review-state persistence
 ```
 
-The launcher can open an existing project with a repository root and HSP
+The launcher first loads the local Recent projects registry. Loading is
+presentation-only: the renderer receives typed recent-project DTOs and cheap
+filesystem availability states (`ready`, `repositoryMissing`,
+`sourcePackageMissing`, or `repositoryAndSourceMissing`). It does not read
+`projects-v1.json` or inspect app-data paths directly. Missing entries remain
+visible and offer **Remove from recents**; ready entries offer **Open**.
+
+The launcher can also open an existing project with a repository root and HSP
 source-package path, or create a project from a repository root, game
 installation, one of Atlas's supported source languages (`en`, `ja`, `de`, or
 `fr`), and a target language. During creation it displays typed Atlas phase and
@@ -42,3 +49,10 @@ source cells remain context only and are never used as permission heuristics.
 rows while its row cursor still has more source work.
 
 This first editor intentionally has no file picker, search or filtering, virtualization, structured macro controls, source update/rebase UI, export, Git controls, or AI controls. Macro text is shown literally with whitespace preserved.
+
+Registry load failures show a dismissible, non-blocking launcher warning while
+manual Open project and Create project remain available. After dismissal, the
+Recent projects section remains in a stable unavailable state rather than
+returning to its loading state. A successful project launch with a local
+registry write warning enters the editor normally and shows the warning at the
+application level. The launcher never automatically reopens the last project.

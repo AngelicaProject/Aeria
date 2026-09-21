@@ -1,9 +1,14 @@
+use std::path::Path;
+
 use aeria_core::{ReviewState, SourceBinding, TranslationUnitId};
+use aeria_projects::RegistryEntry;
 use aeria_workspace::{
     ProjectSession, TranslationCellView, TranslationContextCellView, TranslationOverlayView,
     TranslationRowCursor, TranslationRowPage, TranslationRowView,
 };
 use serde::{Deserialize, Serialize};
+
+use crate::error::CommandError;
 
 /// A source occurrence coordinate accepted and returned by desktop commands.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -117,6 +122,65 @@ impl ProjectSummaryDto {
             game_version: source_metadata.game_version,
             scope: source_metadata.scope,
             sheets,
+        }
+    }
+}
+
+/// The result of a successful project launch. Local recent-project persistence
+/// is convenience state, so its failure is returned as a warning while the
+/// active project remains usable.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectOpenResultDto {
+    pub project: ProjectSummaryDto,
+    pub warning: Option<CommandError>,
+}
+
+/// Cheap filesystem-only presentation state for one recent project.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum RecentProjectAvailability {
+    Ready,
+    RepositoryMissing,
+    SourcePackageMissing,
+    RepositoryAndSourceMissing,
+}
+
+/// Frontend-facing metadata for a local recent project.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecentProjectDto {
+    pub id: String,
+    pub repository_root: String,
+    pub source_package_path: String,
+    pub source_package_id: String,
+    pub source_language: String,
+    pub target_language: String,
+    pub game_version: String,
+    pub last_opened_at_unix_ms: u64,
+    pub availability: RecentProjectAvailability,
+}
+
+impl RecentProjectDto {
+    pub(crate) fn from_registry_entry(entry: RegistryEntry) -> Self {
+        let repository_exists = Path::new(&entry.repository_root).is_dir();
+        let source_exists = Path::new(&entry.source_package_path).is_file();
+        let availability = match (repository_exists, source_exists) {
+            (true, true) => RecentProjectAvailability::Ready,
+            (false, true) => RecentProjectAvailability::RepositoryMissing,
+            (true, false) => RecentProjectAvailability::SourcePackageMissing,
+            (false, false) => RecentProjectAvailability::RepositoryAndSourceMissing,
+        };
+        Self {
+            id: entry.id,
+            repository_root: entry.repository_root,
+            source_package_path: entry.source_package_path,
+            source_package_id: entry.source_package_id,
+            source_language: entry.source_language,
+            target_language: entry.target_language,
+            game_version: entry.game_version,
+            last_opened_at_unix_ms: entry.last_opened_at_unix_ms,
+            availability,
         }
     }
 }
@@ -260,7 +324,10 @@ impl From<TranslationUnitId> for TranslationUnitIdDto {
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use super::*;
+    use aeria_projects::RegistryEntry;
 
     #[test]
     fn source_binding_mapping_preserves_all_coordinates() {
@@ -336,6 +403,61 @@ mod tests {
         assert_eq!(
             ReviewStateDto::from(ReviewState::NeedsReview),
             ReviewStateDto::NeedsReview
+        );
+    }
+
+    #[test]
+    fn recent_availability_checks_only_filesystem_presence() {
+        let repository = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let source = repository.join("test-fixtures/synthetic.hxs");
+        let base = RegistryEntry {
+            id: "local-id".to_owned(),
+            repository_root: repository.to_string_lossy().into_owned(),
+            source_package_path: source.to_string_lossy().into_owned(),
+            source_package_id:
+                "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".to_owned(),
+            source_language: "en".to_owned(),
+            target_language: "fr".to_owned(),
+            game_version: "test".to_owned(),
+            last_opened_at_unix_ms: 1,
+        };
+        assert_eq!(
+            RecentProjectDto::from_registry_entry(base.clone()).availability,
+            RecentProjectAvailability::Ready
+        );
+
+        let mut missing_repository = base.clone();
+        missing_repository.repository_root = repository
+            .join("missing-repository")
+            .to_string_lossy()
+            .into_owned();
+        assert_eq!(
+            RecentProjectDto::from_registry_entry(missing_repository).availability,
+            RecentProjectAvailability::RepositoryMissing
+        );
+
+        let mut missing_source = base.clone();
+        missing_source.source_package_path = repository
+            .join("missing-source.hsp")
+            .to_string_lossy()
+            .into_owned();
+        assert_eq!(
+            RecentProjectDto::from_registry_entry(missing_source).availability,
+            RecentProjectAvailability::SourcePackageMissing
+        );
+
+        let mut both_missing = base;
+        both_missing.repository_root = repository
+            .join("missing-repository")
+            .to_string_lossy()
+            .into_owned();
+        both_missing.source_package_path = repository
+            .join("missing-source.hsp")
+            .to_string_lossy()
+            .into_owned();
+        assert_eq!(
+            RecentProjectDto::from_registry_entry(both_missing).availability,
+            RecentProjectAvailability::RepositoryAndSourceMissing
         );
     }
 }

@@ -17,6 +17,7 @@ jobs:
           version: 12.4.2
           run_install: false
       - run: pnpm install --frozen-lockfile
+      - run: pnpm test
       - run: pnpm typecheck
       - run: pnpm build
 
@@ -74,4 +75,5 @@ jobs:
       - name: Smoke-test pinned Harmonia Atlas sidecar
         run: pwsh -NoProfile -File tools/atlas/smoke-test-sidecar.ps1 -Target win-x64
       - run: cargo test -p aeria-atlas --all-targets --locked
+      - run: cargo test -p aeria-projects --all-targets --locked
       - run: cargo test -p aeria-desktop --lib --locked

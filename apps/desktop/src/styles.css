@@ -103,6 +103,52 @@ textarea:disabled {
   line-height: 1.5;
 }
 
+.recent-projects {
+  margin-top: 24px;
+  padding-top: 20px;
+  border-top: 1px solid var(--border);
+}
+
+.recent-projects-heading {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.recent-projects-heading h2 { margin: 0; font-size: 18px; letter-spacing: -0.02em; }
+
+.recent-project-list { display: grid; gap: 8px; margin-top: 12px; }
+
+.recent-project-card {
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel-raised);
+}
+
+.recent-project-topline,
+.recent-project-actions { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+
+.recent-project-topline strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.recent-project-path {
+  display: block;
+  overflow: hidden;
+  margin-top: 6px;
+  color: var(--muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.recent-project-meta,
+.recent-empty { margin: 7px 0 0; color: var(--muted); font-size: 12px; }
+
+.recent-project-actions { justify-content: flex-start; margin-top: 12px; }
+
+.recent-project-actions .primary-button,
+.recent-project-actions .secondary-button { min-height: 32px; padding: 6px 10px; font-size: 12px; }
+
 .eyebrow,
 .pane-kicker {
   margin: 0 0 8px;
