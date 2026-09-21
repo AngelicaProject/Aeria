@@ -80,11 +80,15 @@ recorded as a rebuildable JSON record under
 canonical package path, HSP/HXS sizes and SHA-256 hashes, package/source
 identities, cache path, and validated package metadata. On a later process
 start, Aeria rehashes both artifacts, checks the canonical paths and
-identities, rechecks archive membership and guidance relationships, and opens
-only the cached HXS catalog. Missing, malformed, unsupported, tampered, or
-mismatched records are deleted and the complete ZIP/component, SQLite
-integrity/schema, row/hash, and relationship validation runs instead. This
-cache is disposable and does not change HSP/HXS or Workspace Format contracts.
+identities, validates the manifest-owned component descriptors, rechecks
+archive membership and guidance relationships, and opens only the cached HXS
+catalog. In particular, the required `sourceHxs` descriptor's size and
+SHA-256 are authoritative for the cached HXS bytes; the persistent record's
+copies must also match but cannot replace that manifest contract. Missing,
+malformed, unsupported, tampered, or mismatched records are deleted and the
+complete ZIP/component, SQLite integrity/schema, row/hash, and relationship
+validation runs instead. This cache is disposable and does not change HSP/HXS
+or Workspace Format contracts.
 When a validated staging HSP is atomically published to its immutable
 package-ID path, the relocation operation updates both the process-local cache
 and the persistent record key and canonical `packagePath`, then removes the

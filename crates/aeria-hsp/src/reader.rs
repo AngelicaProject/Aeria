@@ -320,10 +320,6 @@ fn try_open_persistent_record(
     if canonical_path_string(&source_cache_path)? != record.source_cache_path {
         return None;
     }
-    let source_digest = digest_file(&source_cache_path).ok()?;
-    if source_digest != (record.source_cache_size, record.source_cache_hash.clone()) {
-        return None;
-    }
 
     let file = File::open(package_path).ok()?;
     let mut archive = ZipArchive::new(file).ok()?;
@@ -360,7 +356,14 @@ fn try_open_persistent_record(
         return None;
     }
 
-    let _source_component = required_component(&manifest, "sourceHxs", SOURCE_PATH).ok()?;
+    let source_component = required_component(&manifest, "sourceHxs", SOURCE_PATH).ok()?;
+    let source_component_size = u64::try_from(source_component.size).ok()?;
+    let source_digest = digest_file(&source_cache_path).ok()?;
+    if source_digest != (record.source_cache_size, record.source_cache_hash.clone())
+        || source_digest != (source_component_size, source_component.sha256.clone())
+    {
+        return None;
+    }
     let guidance_component = required_component(&manifest, "sourceGuidance", GUIDANCE_PATH).ok()?;
     let guidance_bytes = read_guidance_component(&mut archive, guidance_component).ok()?;
     let guidance = parse_and_validate(&guidance_bytes).ok()?;
@@ -1130,6 +1133,8 @@ mod tests {
 
     use super::*;
 
+    static VERIFICATION_CACHE_TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
     #[test]
     fn bounded_component_stream_aborts_on_the_first_byte_over_expected_size() {
         let component = HspComponentDescriptor {
@@ -1150,6 +1155,10 @@ mod tests {
 
     #[test]
     fn relocation_moves_persistent_trust_to_final_path_and_rejects_tampering() {
+        let _cache_test_guard = VERIFICATION_CACHE_TEST_LOCK
+            .get_or_init(|| Mutex::new(()))
+            .lock()
+            .expect("cache test lock");
         let directory = tempdir().expect("test directory");
         let staging = directory.path().join("source-packages/staging/source.hsp");
         let final_root = directory.path().join("source-packages");
@@ -1204,5 +1213,97 @@ mod tests {
         fs::write(&final_path, b"tampered final package").expect("tamper final package");
         assert!(SourcePackage::open(&final_path, &cache).is_err());
         assert!(!final_record_path.exists());
+    }
+
+    #[test]
+    fn persistent_record_cannot_override_manifest_source_hxs_digest() {
+        let _cache_test_guard = VERIFICATION_CACHE_TEST_LOCK
+            .get_or_init(|| Mutex::new(()))
+            .lock()
+            .expect("cache test lock");
+        let directory = tempdir().expect("test directory");
+        let staging = directory.path().join("source-packages/staging/source.hsp");
+        let final_root = directory.path().join("source-packages");
+        fs::create_dir_all(staging.parent().expect("staging parent")).expect("staging directory");
+        fs::copy(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/synthetic.hsp"),
+            &staging,
+        )
+        .expect("staging package");
+        let cache = directory.path().join("cache");
+
+        let package = SourcePackage::open(&staging, &cache).expect("staging validation");
+        let package_id = package.package_id().to_owned();
+        let final_path = final_root.join(format!(
+            "{}.hsp",
+            package_id.strip_prefix("sha256:").expect("package hash")
+        ));
+        fs::rename(&staging, &final_path).expect("atomic final publication");
+        let relocated = package.relocate_package_path(&final_path, &cache);
+        let hxs_path = relocated.materialized_hxs_path().to_owned();
+        let canonical_hxs = fs::read(&hxs_path).expect("canonical cached HXS");
+        let record_path = persistent_record_path(&cache, &final_path);
+        drop(relocated);
+
+        if let Ok(mut entries) = VERIFIED_PACKAGE_CACHE
+            .get_or_init(|| Mutex::new(HashMap::new()))
+            .lock()
+        {
+            entries.clear();
+        }
+        fs::OpenOptions::new()
+            .append(true)
+            .open(&hxs_path)
+            .expect("tampered HXS")
+            .write_all(b"tampered but still readable SQLite tail")
+            .expect("tamper HXS");
+        let tampered_digest = digest_file(&hxs_path).expect("tampered HXS digest");
+        let mut archive = ZipArchive::new(File::open(&final_path).expect("final HSP"))
+            .expect("final HSP archive");
+        let manifest: HspManifest = serde_json::from_slice(
+            &read_bounded_entry(&mut archive, MANIFEST_PATH, MAX_HSP_MANIFEST_BYTES)
+                .expect("manifest"),
+        )
+        .expect("manifest JSON");
+        let source_component =
+            required_component(&manifest, "sourceHxs", SOURCE_PATH).expect("source component");
+        assert_ne!(
+            tampered_digest,
+            (
+                u64::try_from(source_component.size).expect("source component size"),
+                source_component.sha256.clone()
+            )
+        );
+        assert!(
+            HxsSnapshot::open_cached_verified(&hxs_path).is_ok(),
+            "tampered HXS should remain readable by the cache-only opener"
+        );
+
+        let mut record: PersistentVerificationRecord =
+            serde_json::from_slice(&fs::read(&record_path).expect("verification record"))
+                .expect("verification record JSON");
+        record.source_cache_size = tampered_digest.0;
+        record.source_cache_hash = tampered_digest.1;
+        fs::write(
+            &record_path,
+            serde_json::to_vec(&record).expect("tampered verification record JSON"),
+        )
+        .expect("tampered verification record");
+
+        PERSISTENT_CACHE_HITS.store(0, Ordering::SeqCst);
+        let reopened = SourcePackage::open(&final_path, &cache).expect("rebuild from HSP");
+        assert_eq!(PERSISTENT_CACHE_HITS.load(Ordering::SeqCst), 0);
+        assert_eq!(
+            fs::read(reopened.materialized_hxs_path()).expect("rebuilt HXS"),
+            canonical_hxs
+        );
+        let repaired_record: PersistentVerificationRecord =
+            serde_json::from_slice(&fs::read(&record_path).expect("repaired record"))
+                .expect("repaired record JSON");
+        assert_eq!(
+            repaired_record.source_cache_size,
+            canonical_hxs.len() as u64
+        );
+        assert_ne!(repaired_record.source_cache_hash, record.source_cache_hash);
     }
 }
