@@ -23,6 +23,64 @@ pub(crate) struct VerifiedSnapshot {
     pub sheets: Vec<(i64, SheetMetadata)>,
 }
 
+/// Reads the metadata and sheet catalog after an immutable byte-level proof
+/// has been established by the package owner. The caller must compare the
+/// complete HXS bytes with a snapshot that already passed `validate_and_read`.
+pub(crate) fn read_cached_snapshot(connection: &Connection) -> Result<VerifiedSnapshot, HxsError> {
+    let metadata = read_metadata(connection)?;
+    let mut sheets = Vec::new();
+    let mut names = HashSet::new();
+    let mut statement = connection
+        .prepare(
+            "SELECT id, name, variant, effective_language, column_count, row_count, \
+             schema_hash, technical_hash, string_hash, content_hash \
+             FROM sheets ORDER BY id",
+        )
+        .map_err(HxsError::storage)?;
+    let mut rows = statement.query([]).map_err(HxsError::storage)?;
+    while let Some(row) = rows.next().map_err(HxsError::storage)? {
+        let sheet_id = read_i64(row, 0, "sheets.id")?;
+        let name = read_text(row, 1, "sheets.name")?;
+        if !names.insert(name.clone()) {
+            return Err(HxsError::data(format!("duplicate sheet name '{name}'")));
+        }
+        let variant_code = read_i64(row, 2, "sheets.variant")?;
+        let variant = SheetVariant::from_code(variant_code).ok_or_else(|| {
+            HxsError::data(format!("unsupported HXS sheet variant {variant_code}"))
+        })?;
+        let effective_language = read_text(row, 3, "sheets.effective_language")?;
+        let column_count = read_non_negative_u64(row, 4, "sheets.column_count")?;
+        let row_count = read_non_negative_u64(row, 5, "sheets.row_count")?;
+        let schema_hash = read_hash(row, 6, "sheets.schema_hash")?;
+        let technical_hash = read_hash(row, 7, "sheets.technical_hash")?;
+        let string_hash = read_hash(row, 8, "sheets.string_hash")?;
+        let content_hash = read_hash(row, 9, "sheets.content_hash")?;
+        let columns = read_columns(connection, sheet_id, &name)?;
+        if u64::try_from(columns.len()).expect("a Vec length fits in u64") != column_count {
+            return Err(HxsError::data(format!(
+                "sheet '{name}' column count does not match its columns"
+            )));
+        }
+        sheets.push((
+            sheet_id,
+            SheetMetadata {
+                name,
+                variant,
+                effective_language,
+                columns,
+                row_count,
+                hashes: SheetHashes {
+                    schema: schema_hash,
+                    technical: technical_hash,
+                    strings: string_hash,
+                    content: content_hash,
+                },
+            },
+        ));
+    }
+    Ok(VerifiedSnapshot { metadata, sheets })
+}
+
 #[allow(clippy::too_many_lines)]
 pub(crate) fn validate_and_read(connection: &Connection) -> Result<VerifiedSnapshot, HxsError> {
     validate_schema(connection)?;

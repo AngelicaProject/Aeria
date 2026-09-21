@@ -1,8 +1,10 @@
+use std::collections::HashMap;
 use std::collections::HashSet;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::sync::{Mutex, OnceLock};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use aeria_hxs::HxsSnapshot;
 use sha2::{Digest, Sha256};
@@ -11,12 +13,26 @@ use zip::ZipArchive;
 use crate::HspError;
 use crate::guidance::{parse_and_validate, validate_relationships};
 use crate::hash::{compute_package_id, is_sha256, sha256_reader, to_hash_string};
-use crate::model::{HspComponentDescriptor, HspManifest, SourcePackage};
+use crate::model::{HspComponentDescriptor, HspManifest, SourceGuidance, SourcePackage};
 use crate::{MAX_HSP_GUIDANCE_BYTES, MAX_HSP_MANIFEST_BYTES};
 
 const MANIFEST_PATH: &str = "manifest.json";
 const SOURCE_PATH: &str = "source/source.hxs";
 const GUIDANCE_PATH: &str = "guidance/source-guidance.json";
+
+#[derive(Clone)]
+struct VerifiedPackageCache {
+    package_size: u64,
+    package_hash: String,
+    source_cache_path: PathBuf,
+    source_cache_size: u64,
+    source_cache_hash: String,
+    manifest: HspManifest,
+    guidance: SourceGuidance,
+}
+
+static VERIFIED_PACKAGE_CACHE: OnceLock<Mutex<HashMap<PathBuf, VerifiedPackageCache>>> =
+    OnceLock::new();
 
 /// Opens, validates, and materializes an HSP v1 source package.
 ///
@@ -24,12 +40,18 @@ const GUIDANCE_PATH: &str = "guidance/source-guidance.json";
 ///
 /// Returns [`HspError`] when archive, manifest, component, source, guidance,
 /// relationship, or cache validation fails.
+#[allow(clippy::too_many_lines)]
 pub fn open(
     package_path: impl AsRef<Path>,
     cache_root: impl AsRef<Path>,
 ) -> Result<SourcePackage, HspError> {
+    let trace = PerfTrace::new();
     let package_path = package_path.as_ref().to_path_buf();
     let cache_root = cache_root.as_ref().to_path_buf();
+    if let Some(source_package) = try_open_verified_cache(&package_path, &cache_root) {
+        trace.mark("hsp.verified-cache-fast-path");
+        return Ok(source_package);
+    }
     let file = File::open(&package_path).map_err(|source| HspError::Io {
         path: package_path.clone(),
         message: source.to_string(),
@@ -37,6 +59,7 @@ pub fn open(
     let mut archive = ZipArchive::new(file).map_err(|source| HspError::Archive {
         message: source.to_string(),
     })?;
+    trace.mark("hsp.archive-open");
     validate_archive_names(&mut archive)?;
     let manifest_bytes = read_bounded_entry(&mut archive, MANIFEST_PATH, MAX_HSP_MANIFEST_BYTES)?;
     let manifest: HspManifest =
@@ -66,6 +89,7 @@ pub fn open(
             message: "archive membership does not exactly match the manifest".to_owned(),
         });
     }
+    trace.mark("hsp.manifest-and-membership");
 
     let source_component = required_component(&manifest, "sourceHxs", SOURCE_PATH)?;
     let guidance_component = required_component(&manifest, "sourceGuidance", GUIDANCE_PATH)?;
@@ -88,6 +112,7 @@ pub fn open(
             return Err(error);
         }
     }
+    trace.mark("hsp.component-verification");
     let source_snapshot = match HxsSnapshot::open(&materialized_source) {
         Ok(source) => source,
         Err(source) => {
@@ -95,6 +120,7 @@ pub fn open(
             return Err(HspError::Hxs { source });
         }
     };
+    trace.mark("hsp.hxs-snapshot-open");
     let guidance = match parse_and_validate(&guidance_bytes) {
         Ok(guidance) => guidance,
         Err(message) => {
@@ -120,6 +146,23 @@ pub fn open(
             message: source.to_string(),
         });
     }
+    trace.mark("hsp.guidance-relationships");
+
+    let (package_size, package_hash) = digest_file(&package_path)?;
+    let (source_cache_size, source_cache_hash) = digest_file(&materialized_source)?;
+    remember_verified_cache(
+        &package_path,
+        VerifiedPackageCache {
+            package_size,
+            package_hash,
+            source_cache_path: materialized_source.clone(),
+            source_cache_size,
+            source_cache_hash,
+            manifest: manifest.clone(),
+            guidance: guidance.clone(),
+        },
+    );
+    trace.mark("hsp.verified-cache-recorded");
 
     Ok(SourcePackage::new(
         package_path,
@@ -128,6 +171,136 @@ pub fn open(
         source_snapshot,
         guidance,
     ))
+}
+
+fn try_open_verified_cache(package_path: &Path, cache_root: &Path) -> Option<SourcePackage> {
+    let key = package_cache_key(package_path);
+    let cached = VERIFIED_PACKAGE_CACHE
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .ok()?
+        .get(&key)
+        .cloned()?;
+    let package_digest = digest_file(package_path).ok()?;
+    if package_digest != (cached.package_size, cached.package_hash.clone()) {
+        forget_verified_cache(&key);
+        return None;
+    }
+    let source_digest = digest_file(&cached.source_cache_path).ok()?;
+    if source_digest != (cached.source_cache_size, cached.source_cache_hash.clone()) {
+        forget_verified_cache(&key);
+        return None;
+    }
+
+    let file = File::open(package_path).ok()?;
+    let mut archive = ZipArchive::new(file).ok()?;
+    let manifest_bytes =
+        read_bounded_entry(&mut archive, MANIFEST_PATH, MAX_HSP_MANIFEST_BYTES).ok()?;
+    let manifest: HspManifest = serde_json::from_slice(&manifest_bytes).ok()?;
+    if validate_manifest(&manifest).is_err() || manifest != cached.manifest {
+        forget_verified_cache(&key);
+        return None;
+    }
+    let guidance_component = required_component(&manifest, "sourceGuidance", GUIDANCE_PATH).ok()?;
+    let guidance_bytes = read_guidance_component(&mut archive, guidance_component).ok()?;
+    let guidance = parse_and_validate(&guidance_bytes).ok()?;
+    if guidance != cached.guidance {
+        forget_verified_cache(&key);
+        return None;
+    }
+    let source_cache_path = cache_path(cache_root, &manifest.source.snapshot_id).ok()?;
+    if source_cache_path != cached.source_cache_path {
+        forget_verified_cache(&key);
+        return None;
+    }
+    let Ok(source_snapshot) = HxsSnapshot::open_cached_verified(&source_cache_path) else {
+        forget_verified_cache(&key);
+        return None;
+    };
+    let metadata = source_snapshot.metadata();
+    if manifest.game_version != metadata.game_version
+        || manifest.scope != metadata.scope
+        || manifest.source.language != metadata.source_language
+        || manifest.source.content_id != metadata.content_id
+        || manifest.source.snapshot_id != metadata.snapshot_id
+    {
+        forget_verified_cache(&key);
+        return None;
+    }
+
+    Some(SourcePackage::new(
+        package_path.to_owned(),
+        manifest,
+        source_cache_path,
+        source_snapshot,
+        guidance,
+    ))
+}
+
+fn remember_verified_cache(package_path: &Path, cache: VerifiedPackageCache) {
+    if let Ok(mut entries) = VERIFIED_PACKAGE_CACHE
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+    {
+        entries.insert(package_cache_key(package_path), cache);
+    }
+}
+
+fn forget_verified_cache(package_key: &Path) {
+    if let Ok(mut entries) = VERIFIED_PACKAGE_CACHE
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+    {
+        entries.remove(package_key);
+    }
+}
+
+pub(crate) fn relocate_verified_cache(from: &Path, to: &Path) {
+    if let Ok(mut entries) = VERIFIED_PACKAGE_CACHE
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        && let Some(cache) = entries.remove(&package_cache_key(from))
+    {
+        entries.insert(package_cache_key(to), cache);
+    }
+}
+
+fn package_cache_key(package_path: &Path) -> PathBuf {
+    fs::canonicalize(package_path).unwrap_or_else(|_| package_path.to_owned())
+}
+
+fn digest_file(path: &Path) -> Result<(u64, String), HspError> {
+    let mut file = File::open(path).map_err(|source| HspError::Io {
+        path: path.to_owned(),
+        message: source.to_string(),
+    })?;
+    sha256_reader(&mut file).map_err(|source| HspError::Io {
+        path: path.to_owned(),
+        message: source.to_string(),
+    })
+}
+
+struct PerfTrace {
+    enabled: bool,
+    started: Instant,
+}
+
+impl PerfTrace {
+    fn new() -> Self {
+        Self {
+            enabled: std::env::var("AERIA_PERF_TRACE").as_deref() == Ok("1"),
+            started: Instant::now(),
+        }
+    }
+
+    fn mark(&self, phase: &str) {
+        if self.enabled {
+            eprintln!(
+                "[aeria-perf] {phase}: {} ms",
+                self.started.elapsed().as_secs_f64() * 1_000.0
+            );
+        }
+    }
 }
 
 fn cleanup_materialized_source(materialized: bool, path: &Path) {

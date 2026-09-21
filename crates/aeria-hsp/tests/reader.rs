@@ -87,6 +87,19 @@ fn valid_cache_is_reused_only_after_component_verification() {
 }
 
 #[test]
+fn verified_reopen_does_not_trust_a_tampered_package() {
+    let directory = tempdir().expect("test directory");
+    let package_path = directory.path().join("source.hsp");
+    fs::copy(fixture_path(), &package_path).expect("package copy");
+    let cache = directory.path().join("cache");
+
+    SourcePackage::open(&package_path, &cache).expect("first open");
+    fs::write(&package_path, b"tampered package").expect("tamper package");
+
+    assert!(SourcePackage::open(&package_path, &cache).is_err());
+}
+
+#[test]
 fn validated_package_can_relocate_its_runtime_path_without_reopening() {
     let cache = tempdir().expect("cache directory");
     let package = SourcePackage::open(fixture_path(), cache.path()).expect("valid package");

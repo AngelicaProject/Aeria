@@ -1,3 +1,4 @@
+import { memo } from "react";
 import { rowKey } from "../binding";
 import type { TranslationRowCursorDto, TranslationRowDto } from "../types";
 
@@ -17,7 +18,7 @@ function translatedCount(row: TranslationRowDto): number {
   return row.cells.filter((cell) => cell.translation !== null).length;
 }
 
-export function TranslationList({
+export const TranslationList = memo(function TranslationList({
   rows,
   selectedRow,
   disabled,
@@ -99,4 +100,4 @@ export function TranslationList({
       )}
     </section>
   );
-}
+});

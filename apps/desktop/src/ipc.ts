@@ -9,7 +9,7 @@ import type {
   SourcePackageJobDto,
   TranslationRowCursorDto,
   TranslationRowPageDto,
-  TranslationUnitIdDto,
+  TranslationOverlayDto,
 } from "./types";
 
 export function normalizeCommandError(error: unknown): CommandError {
@@ -114,8 +114,8 @@ export function pageTranslationRows(
 export function setTranslationTarget(
   sourceBinding: SourceBinding,
   targetMacro: string,
-): Promise<TranslationUnitIdDto> {
-  return call<TranslationUnitIdDto>("set_translation_target", {
+): Promise<TranslationOverlayDto> {
+  return call<TranslationOverlayDto>("set_translation_target", {
     sourceBinding,
     targetMacro,
   });
@@ -124,13 +124,13 @@ export function setTranslationTarget(
 export function setTranslationNote(
   translationUnitId: string,
   note: string | null,
-): Promise<void> {
-  return call<void>("set_translation_note", { translationUnitId, note });
+): Promise<TranslationOverlayDto> {
+  return call<TranslationOverlayDto>("set_translation_note", { translationUnitId, note });
 }
 
 export function setTranslationReviewState(
   translationUnitId: string,
   reviewState: ReviewState,
-): Promise<void> {
-  return call<void>("set_translation_review_state", { translationUnitId, reviewState });
+): Promise<TranslationOverlayDto> {
+  return call<TranslationOverlayDto>("set_translation_review_state", { translationUnitId, reviewState });
 }

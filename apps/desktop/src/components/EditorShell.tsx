@@ -13,6 +13,7 @@ import type {
   ProjectSummaryDto,
   ReviewState,
   TranslationCellDto,
+  TranslationOverlayDto,
   TranslationRowCursorDto,
   TranslationRowDto,
 } from "../types";
@@ -40,33 +41,6 @@ function cursorForRow(row: TranslationRowDto): TranslationRowCursorDto {
   return { sheetName: row.sheetName, rowId: row.rowId, subrowId: row.subrowId };
 }
 
-function draftsForRow(row: TranslationRowDto | null): Record<string, CellDraft> {
-  if (!row) {
-    return {};
-  }
-  return Object.fromEntries(
-    row.cells.map((cell) => [
-      bindingKey(cell.sourceBinding),
-      {
-        target: cell.translation?.targetMacro ?? "",
-        note: cell.translation?.translatorNote ?? "",
-      },
-    ]),
-  );
-}
-
-function draftForCell(cell: TranslationCellDto, drafts: Record<string, CellDraft>): CellDraft {
-  return drafts[bindingKey(cell.sourceBinding)] ?? {
-    target: cell.translation?.targetMacro ?? "",
-    note: cell.translation?.translatorNote ?? "",
-  };
-}
-
-function cellIsDirty(cell: TranslationCellDto, draft: CellDraft): boolean {
-  return draft.target !== (cell.translation?.targetMacro ?? "") ||
-    (cell.translation !== null && draft.note !== (cell.translation.translatorNote ?? ""));
-}
-
 export function EditorShell({
   project,
   applicationWarning,
@@ -77,26 +51,41 @@ export function EditorShell({
   const [selectedSheetName, setSelectedSheetName] = useState<string | null>(firstSheetName);
   const [rows, setRows] = useState<TranslationRowDto[]>([]);
   const [nextAfter, setNextAfter] = useState<TranslationRowCursorDto | null>(null);
-  const [loadedPageCount, setLoadedPageCount] = useState(0);
   const [selectedRowCursor, setSelectedRowCursor] = useState<TranslationRowCursorDto | null>(null);
-  const [drafts, setDrafts] = useState<Record<string, CellDraft>>({});
   const [sheetLoading, setSheetLoading] = useState(false);
-  const [refreshing, setRefreshing] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
   const [mutation, setMutation] = useState<CellMutation | null>(null);
   const [closing, setClosing] = useState(false);
   const [editorError, setEditorError] = useState<EditorError | null>(null);
   const requestGeneration = useRef(0);
+  const hasDirtyDraft = useRef(false);
 
   const selectedRow = useMemo(
     () => selectedRowCursor ? rows.find((row) => rowKey(row) === rowKey(selectedRowCursor)) ?? null : null,
     [rows, selectedRowCursor],
   );
 
-  const hasDirtyDraft = selectedRow?.cells.some((cell) => cellIsDirty(cell, draftForCell(cell, drafts))) ?? false;
-
   const showError = useCallback((title: string, error: unknown) => {
     setEditorError({ title, error: normalizeCommandError(error) });
+  }, []);
+
+  const handleDirtyChange = useCallback((dirty: boolean) => {
+    hasDirtyDraft.current = dirty;
+  }, []);
+
+  const applyOverlay = useCallback((sourceBinding: TranslationCellDto["sourceBinding"], translation: TranslationOverlayDto) => {
+    const targetKey = bindingKey(sourceBinding);
+    setRows((current) => current.map((row) => {
+      let changed = false;
+      const cells = row.cells.map((cell) => {
+        if (bindingKey(cell.sourceBinding) !== targetKey) {
+          return cell;
+        }
+        changed = true;
+        return { ...cell, translation };
+      });
+      return changed ? { ...row, cells } : row;
+    }));
   }, []);
 
   const beginSheetLoad = useCallback(async (sheetName: string) => {
@@ -104,9 +93,8 @@ export function EditorShell({
     setSelectedSheetName(sheetName);
     setRows([]);
     setNextAfter(null);
-    setLoadedPageCount(0);
     setSelectedRowCursor(null);
-    setDrafts({});
+    hasDirtyDraft.current = false;
     setSheetLoading(true);
     setEditorError(null);
 
@@ -117,7 +105,6 @@ export function EditorShell({
       }
       setRows(page.rows);
       setNextAfter(page.nextAfter);
-      setLoadedPageCount(1);
     } catch (error) {
       if (generation === requestGeneration.current) {
         showError("Could not load sheet", error);
@@ -135,68 +122,8 @@ export function EditorShell({
     }
   }, [beginSheetLoad, firstSheetName]);
 
-  const reloadCurrentSheet = useCallback(async (): Promise<boolean> => {
-    if (!selectedSheetName) {
-      return true;
-    }
-
-    const generation = ++requestGeneration.current;
-    const pagesToLoad = Math.max(loadedPageCount, 1);
-    const rowToRestore = selectedRowCursor;
-    let after: TranslationRowCursorDto | null = null;
-    let fetchedPages = 0;
-    const refreshedRows: TranslationRowDto[] = [];
-
-    setRefreshing(true);
-    setEditorError(null);
-
-    try {
-      for (let pageIndex = 0; pageIndex < pagesToLoad; pageIndex += 1) {
-        const page = await pageTranslationRows(selectedSheetName, after, PAGE_SIZE);
-        if (generation !== requestGeneration.current) {
-          return false;
-        }
-        for (const row of page.rows) {
-          if (!refreshedRows.some((existing) => rowKey(existing) === rowKey(row))) {
-            refreshedRows.push(row);
-          }
-        }
-        fetchedPages += 1;
-        after = page.nextAfter;
-        if (!after) {
-          break;
-        }
-      }
-
-      setRows(refreshedRows);
-      setNextAfter(after);
-      setLoadedPageCount(fetchedPages);
-
-      const restoredRow = rowToRestore
-        ? refreshedRows.find((row) => rowKey(row) === rowKey(rowToRestore)) ?? null
-        : null;
-      if (restoredRow) {
-        setSelectedRowCursor(cursorForRow(restoredRow));
-        setDrafts(draftsForRow(restoredRow));
-      } else if (rowToRestore) {
-        setSelectedRowCursor(null);
-        setDrafts({});
-      }
-      return true;
-    } catch (error) {
-      if (generation === requestGeneration.current) {
-        showError("Could not refresh rows", error);
-      }
-      return false;
-    } finally {
-      if (generation === requestGeneration.current) {
-        setRefreshing(false);
-      }
-    }
-  }, [loadedPageCount, selectedRowCursor, selectedSheetName, showError]);
-
   function confirmDiscardChanges(action: string): boolean {
-    if (!hasDirtyDraft) {
+    if (!hasDirtyDraft.current) {
       return true;
     }
     return window.confirm(`You have unsaved changes. ${action} will discard them. Continue?`);
@@ -218,45 +145,20 @@ export function EditorShell({
       return;
     }
     setSelectedRowCursor(cursor);
-    setDrafts(draftsForRow(row));
+    hasDirtyDraft.current = false;
     setEditorError(null);
   }
 
-  function updateDraft(cell: TranslationCellDto, field: keyof CellDraft, value: string) {
+  async function handleSaveTarget(cell: TranslationCellDto, draft: CellDraft, otherDirty: boolean) {
     const key = bindingKey(cell.sourceBinding);
-    const current = draftForCell(cell, drafts);
-    setDrafts((existing) => ({ ...existing, [key]: { ...current, ...existing[key], [field]: value } }));
-  }
-
-  function hasOtherDirtyDraft(cell: TranslationCellDto, includeCellNote: boolean): boolean {
-    if (!selectedRow) {
-      return false;
-    }
-    const targetKey = bindingKey(cell.sourceBinding);
-    return selectedRow.cells.some((candidate) => {
-      const key = bindingKey(candidate.sourceBinding);
-      const draft = draftForCell(candidate, drafts);
-      if (key !== targetKey) {
-        return cellIsDirty(candidate, draft);
-      }
-      if (includeCellNote) {
-        return candidate.translation !== null && draft.note !== (candidate.translation.translatorNote ?? "");
-      }
-      return draft.target !== (candidate.translation?.targetMacro ?? "");
-    });
-  }
-
-  async function handleSaveTarget(cell: TranslationCellDto) {
-    const key = bindingKey(cell.sourceBinding);
-    const draft = draftForCell(cell, drafts);
-    if (!selectedRow || !confirmMutationDiscard(hasOtherDirtyDraft(cell, true), "Saving the target will discard other unsaved changes. Continue?")) {
+    if (!selectedRow || !confirmMutationDiscard(otherDirty, "Saving the target will discard other unsaved changes. Continue?")) {
       return;
     }
     setMutation({ kind: "target", bindingKey: key });
     setEditorError(null);
     try {
-      await setTranslationTarget(cell.sourceBinding, draft.target);
-      await reloadCurrentSheet();
+      const overlay = await setTranslationTarget(cell.sourceBinding, draft.target);
+      applyOverlay(cell.sourceBinding, overlay);
     } catch (error) {
       showError("Could not save target", error);
     } finally {
@@ -264,18 +166,17 @@ export function EditorShell({
     }
   }
 
-  async function handleSaveNote(cell: TranslationCellDto) {
+  async function handleSaveNote(cell: TranslationCellDto, draft: CellDraft, otherDirty: boolean) {
     const translation = cell.translation;
     const key = bindingKey(cell.sourceBinding);
-    const draft = draftForCell(cell, drafts);
-    if (!translation || !selectedRow || !confirmMutationDiscard(hasOtherDirtyDraft(cell, false), "Saving the note will discard other unsaved changes. Continue?")) {
+    if (!translation || !selectedRow || !confirmMutationDiscard(otherDirty, "Saving the note will discard other unsaved changes. Continue?")) {
       return;
     }
     setMutation({ kind: "note", bindingKey: key });
     setEditorError(null);
     try {
-      await setTranslationNote(translation.translationUnitId, draft.note.length === 0 ? null : draft.note);
-      await reloadCurrentSheet();
+      const overlay = await setTranslationNote(translation.translationUnitId, draft.note.length === 0 ? null : draft.note);
+      applyOverlay(cell.sourceBinding, overlay);
     } catch (error) {
       showError("Could not save note", error);
     } finally {
@@ -285,15 +186,15 @@ export function EditorShell({
 
   async function handleReviewChange(cell: TranslationCellDto, reviewState: ReviewState) {
     const translation = cell.translation;
-    if (!translation || translation.reviewState === reviewState || !confirmMutationDiscard(hasDirtyDraft, "Changing review state will discard unsaved draft changes. Continue?")) {
+    if (!translation || translation.reviewState === reviewState || !confirmMutationDiscard(hasDirtyDraft.current, "Changing review state will discard unsaved draft changes. Continue?")) {
       return;
     }
     const key = bindingKey(cell.sourceBinding);
     setMutation({ kind: "review", bindingKey: key });
     setEditorError(null);
     try {
-      await setTranslationReviewState(translation.translationUnitId, reviewState);
-      await reloadCurrentSheet();
+      const overlay = await setTranslationReviewState(translation.translationUnitId, reviewState);
+      applyOverlay(cell.sourceBinding, overlay);
     } catch (error) {
       showError("Could not change review state", error);
     } finally {
@@ -302,7 +203,7 @@ export function EditorShell({
   }
 
   async function handleLoadMore() {
-    if (!selectedSheetName || !nextAfter || loadingMore || refreshing) {
+    if (!selectedSheetName || !nextAfter || loadingMore) {
       return;
     }
 
@@ -325,7 +226,6 @@ export function EditorShell({
         return appended;
       });
       setNextAfter(page.nextAfter);
-      setLoadedPageCount((current) => current + 1);
     } catch (error) {
       if (generation === requestGeneration.current) {
         showError("Could not load more rows", error);
@@ -360,7 +260,7 @@ export function EditorShell({
       <ProjectHeader
         project={project}
         closing={closing}
-        disabled={closing || sheetLoading || refreshing || mutation !== null}
+        disabled={closing || sheetLoading || mutation !== null}
         onClose={() => void handleClose()}
       />
       {applicationWarning ? (
@@ -375,28 +275,27 @@ export function EditorShell({
         <SheetSidebar
           sheets={project.sheets}
           selectedSheetName={selectedSheetName}
-          disabled={sheetLoading || refreshing || mutation !== null || closing}
+          disabled={sheetLoading || mutation !== null || closing}
           onSelect={handleSheetSelect}
         />
         <TranslationList
           rows={rows}
           selectedRow={selectedRowCursor}
-          disabled={sheetLoading || refreshing || mutation !== null || closing}
+          disabled={sheetLoading || mutation !== null || closing}
           loading={sheetLoading}
-          refreshing={refreshing}
+          refreshing={false}
           loadingMore={loadingMore}
           hasMore={nextAfter !== null}
           onSelect={handleRowSelect}
           onLoadMore={() => void handleLoadMore()}
         />
         <TranslationEditor
+          key={selectedRow ? rowKey(selectedRow) : "empty-editor"}
           row={selectedRow}
-          drafts={drafts}
           mutation={mutation}
-          onTargetChange={(cell, value) => updateDraft(cell, "target", value)}
-          onNoteChange={(cell, value) => updateDraft(cell, "note", value)}
-          onSaveTarget={(cell) => void handleSaveTarget(cell)}
-          onSaveNote={(cell) => void handleSaveNote(cell)}
+          onDirtyChange={handleDirtyChange}
+          onSaveTarget={(cell, draft, otherDirty) => void handleSaveTarget(cell, draft, otherDirty)}
+          onSaveNote={(cell, draft, otherDirty) => void handleSaveNote(cell, draft, otherDirty)}
           onReviewChange={(cell, reviewState) => void handleReviewChange(cell, reviewState)}
         />
       </div>

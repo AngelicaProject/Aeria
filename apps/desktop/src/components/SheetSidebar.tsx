@@ -1,3 +1,4 @@
+import { memo } from "react";
 import type { ProjectSheetDto } from "../types";
 
 type SheetSidebarProps = {
@@ -7,7 +8,7 @@ type SheetSidebarProps = {
   onSelect: (sheetName: string) => void;
 };
 
-export function SheetSidebar({ sheets, selectedSheetName, disabled, onSelect }: SheetSidebarProps) {
+export const SheetSidebar = memo(function SheetSidebar({ sheets, selectedSheetName, disabled, onSelect }: SheetSidebarProps) {
   return (
     <aside className="pane sheet-pane" aria-labelledby="sheets-heading">
       <div className="pane-heading">
@@ -47,4 +48,4 @@ export function SheetSidebar({ sheets, selectedSheetName, disabled, onSelect }: 
       )}
     </aside>
   );
-}
+});

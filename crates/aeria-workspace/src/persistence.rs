@@ -10,9 +10,9 @@ use std::io::{self, BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 #[cfg(test)]
-use std::sync::Mutex;
-#[cfg(test)]
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 use aeria_core::{
     ReviewState, Sha256Hash, SourceBinding, SourceFingerprint, TranslationUnit, TranslationUnitId,
@@ -110,9 +110,25 @@ pub enum WorkspaceStoreError {
 /// The interface deliberately keeps the persistence seam small: loading and
 /// initialization operate on complete workspaces, while ordinary edits
 /// rewrite only the stable ID shard selected by [`TranslationUnitId`].
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct WorkspaceStore {
     repository_root: PathBuf,
+    session_cache: Arc<Mutex<Option<PersistenceCache>>>,
+}
+
+impl PartialEq for WorkspaceStore {
+    fn eq(&self, other: &Self) -> bool {
+        self.repository_root == other.repository_root
+    }
+}
+
+impl Eq for WorkspaceStore {}
+
+#[derive(Clone, Debug)]
+struct PersistenceCache {
+    layout: ExistingLayout,
+    metadata: WorkspaceMetadata,
+    units: BTreeMap<TranslationUnitId, TranslationUnit>,
 }
 
 impl WorkspaceStore {
@@ -121,6 +137,7 @@ impl WorkspaceStore {
     pub fn new(repository_root: impl Into<PathBuf>) -> Self {
         Self {
             repository_root: repository_root.into(),
+            session_cache: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -140,7 +157,9 @@ impl WorkspaceStore {
     /// Returns an error when the managed namespace is missing, unsafe,
     /// malformed, or contains invalid unit data.
     pub fn load(&self) -> Result<Workspace, WorkspaceStoreError> {
+        let trace = PerfTrace::new();
         let layout = self.inspect_existing_layout()?;
+        trace.mark("workspace.layout");
         let metadata = read_manifest(&layout.manifest_path)?;
 
         let mut units = BTreeMap::new();
@@ -166,7 +185,15 @@ impl WorkspaceStore {
             }
         }
 
-        Workspace::from_loaded(metadata, units).map_err(WorkspaceStoreError::from)
+        let workspace = Workspace::from_loaded(metadata.clone(), units.clone())
+            .map_err(WorkspaceStoreError::from)?;
+        trace.mark("workspace.store-load");
+        self.replace_session_cache(PersistenceCache {
+            layout,
+            metadata,
+            units,
+        });
+        Ok(workspace)
     }
 
     /// Initializes a new `.aeria/` directory from an in-memory workspace.
@@ -212,9 +239,9 @@ impl WorkspaceStore {
             fs::create_dir(&units_path).map_err(|source| {
                 io_error("create initialization units directory", &units_path, source)
             })?;
-            for shard in shard_numbers {
-                let shard_path = units_path.join(shard_name(shard));
-                let bytes = canonical_shard_bytes(workspace, shard, &shard_path)?;
+            for shard in &shard_numbers {
+                let shard_path = units_path.join(shard_name(*shard));
+                let bytes = canonical_shard_bytes(workspace, *shard, &shard_path)?;
                 write_staging_file(&shard_path, &bytes)?;
             }
         }
@@ -228,12 +255,34 @@ impl WorkspaceStore {
                 source,
             ));
         }
+        let units_path = if shard_numbers.is_empty() {
+            None
+        } else {
+            Some(aeria_path.join(UNITS_DIRECTORY))
+        };
+        self.replace_session_cache(PersistenceCache {
+            layout: ExistingLayout {
+                manifest_path: aeria_path.join(MANIFEST_FILE),
+                units_path,
+                shards: shard_numbers
+                    .iter()
+                    .map(|shard| ShardFile {
+                        shard: *shard,
+                        name: shard_name(*shard),
+                        path: aeria_path.join(UNITS_DIRECTORY).join(shard_name(*shard)),
+                    })
+                    .collect(),
+            },
+            metadata: workspace.metadata().clone(),
+            units: workspace.units.clone().into_iter().collect(),
+        });
         Ok(())
     }
 
     /// Replaces exactly the selected unit in its complete canonical shard.
     ///
-    /// The selected persisted shard is fully validated and all of its other
+    /// The selected persisted shard is fully validated on the fallback path;
+    /// an open session reuses its validated layout and unit index. All other
     /// units are preserved. The temporary file is created in the repository
     /// root, outside `.aeria/`, and `tempfile` performs the cross-platform
     /// atomic replacement. Atomicity is guaranteed per canonical file; this
@@ -244,6 +293,7 @@ impl WorkspaceStore {
     /// Returns an error when the managed namespace is unsafe or its manifest
     /// does not match the workspace, the requested unit is absent, canonical
     /// serialization fails, or atomic publication fails.
+    #[allow(clippy::too_many_lines)]
     pub fn persist_unit(
         &self,
         workspace: &Workspace,
@@ -255,8 +305,15 @@ impl WorkspaceStore {
             .ok_or(WorkspaceStoreError::Domain(WorkspaceError::UnitNotFound {
                 id,
             }))?;
-        let layout = self.inspect_existing_layout()?;
-        let persisted_metadata = read_manifest(&layout.manifest_path)?;
+        let cached = self.take_session_cache();
+        let (layout, persisted_metadata, mut all_persisted_units, using_cache) =
+            if let Some(cache) = cached {
+                (cache.layout, cache.metadata, cache.units, true)
+            } else {
+                let layout = self.inspect_existing_layout()?;
+                let persisted_metadata = read_manifest(&layout.manifest_path)?;
+                (layout, persisted_metadata, BTreeMap::new(), false)
+            };
         require_metadata_match(
             workspace.metadata(),
             &persisted_metadata,
@@ -270,7 +327,16 @@ impl WorkspaceStore {
             .join(UNITS_DIRECTORY)
             .join(shard_name(shard));
         let mut persisted_units = BTreeMap::new();
-        if let Some(shard_file) = layout.shards.iter().find(|file| file.shard == shard) {
+        if using_cache {
+            for (unit_id, unit) in &all_persisted_units {
+                if unit_id.as_bytes()[0] == shard {
+                    persisted_units.insert(*unit_id, unit.clone());
+                }
+            }
+        }
+        if !using_cache
+            && let Some(shard_file) = layout.shards.iter().find(|file| file.shard == shard)
+        {
             for unit in read_shard(&shard_file.path, shard, &shard_file.name)? {
                 persisted_units.insert(unit.id(), unit);
             }
@@ -278,6 +344,12 @@ impl WorkspaceStore {
         validate_unique_shard_bindings(&persisted_units, &target_path)?;
         if let Some(persisted) = persisted_units.get(&id) {
             require_persisted_identity(persisted, &replacement, &target_path)?;
+        } else if using_cache {
+            require_new_binding_is_unowned_cached(
+                &all_persisted_units,
+                &replacement,
+                &target_path,
+            )?;
         } else {
             require_new_binding_is_unowned(
                 &layout,
@@ -287,12 +359,12 @@ impl WorkspaceStore {
                 &target_path,
             )?;
         }
-        persisted_units.insert(id, replacement);
+        persisted_units.insert(id, replacement.clone());
         let bytes = canonical_units_bytes(persisted_units.values(), &target_path)?;
 
         let created_units_path = layout.units_path.is_none();
-        let units_path = if let Some(path) = layout.units_path {
-            path
+        let units_path = if let Some(path) = &layout.units_path {
+            path.clone()
         } else {
             let path = self
                 .repository_root
@@ -303,13 +375,60 @@ impl WorkspaceStore {
             ensure_directory(&path)?;
             path
         };
+        ensure_directory(&self.repository_root.join(AERIA_DIRECTORY))?;
+        ensure_directory(&units_path)?;
         let target_path = units_path.join(shard_name(shard));
         let result = ensure_optional_regular_file(&target_path)
             .and_then(|()| atomic_publish(&self.repository_root, &target_path, &bytes));
         if result.is_err() && created_units_path {
             remove_directory_if_empty(&units_path);
         }
-        result
+        if result.is_err() {
+            self.invalidate_session_cache();
+            return result;
+        }
+
+        let mut published_layout = layout;
+        published_layout.units_path = Some(units_path.clone());
+        if !published_layout
+            .shards
+            .iter()
+            .any(|file| file.shard == shard)
+        {
+            published_layout.shards.push(ShardFile {
+                shard,
+                name: shard_name(shard),
+                path: target_path,
+            });
+            published_layout
+                .shards
+                .sort_by(|left, right| left.name.cmp(&right.name));
+        }
+        if using_cache {
+            all_persisted_units.insert(id, replacement);
+            self.replace_session_cache(PersistenceCache {
+                layout: published_layout,
+                metadata: persisted_metadata,
+                units: all_persisted_units,
+            });
+        }
+        Ok(())
+    }
+
+    fn take_session_cache(&self) -> Option<PersistenceCache> {
+        self.session_cache.lock().ok()?.take()
+    }
+
+    fn replace_session_cache(&self, cache: PersistenceCache) {
+        if let Ok(mut current) = self.session_cache.lock() {
+            *current = Some(cache);
+        }
+    }
+
+    fn invalidate_session_cache(&self) {
+        if let Ok(mut current) = self.session_cache.lock() {
+            *current = None;
+        }
     }
 
     fn ensure_repository_root(&self) -> Result<(), WorkspaceStoreError> {
@@ -428,12 +547,37 @@ impl WorkspaceStore {
     }
 }
 
+struct PerfTrace {
+    enabled: bool,
+    started: Instant,
+}
+
+impl PerfTrace {
+    fn new() -> Self {
+        Self {
+            enabled: std::env::var("AERIA_PERF_TRACE").as_deref() == Ok("1"),
+            started: Instant::now(),
+        }
+    }
+
+    fn mark(&self, phase: &str) {
+        if self.enabled {
+            eprintln!(
+                "[aeria-perf] {phase}: {} ms",
+                self.started.elapsed().as_secs_f64() * 1_000.0
+            );
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
 struct ExistingLayout {
     manifest_path: PathBuf,
     units_path: Option<PathBuf>,
     shards: Vec<ShardFile>,
 }
 
+#[derive(Clone, Debug)]
 struct ShardFile {
     shard: u8,
     name: String,
@@ -889,6 +1033,27 @@ fn require_new_binding_is_unowned(
     Ok(())
 }
 
+fn require_new_binding_is_unowned_cached(
+    persisted_units: &BTreeMap<TranslationUnitId, TranslationUnit>,
+    replacement: &TranslationUnit,
+    path: &Path,
+) -> Result<(), WorkspaceStoreError> {
+    if persisted_units
+        .values()
+        .any(|unit| unit.source_binding() == replacement.source_binding())
+    {
+        return Err(invalid(
+            path,
+            None,
+            format!(
+                "SourceBinding {:?} is already owned by a persisted unit",
+                replacement.source_binding()
+            ),
+        ));
+    }
+    Ok(())
+}
+
 fn canonical_manifest_bytes(
     workspace: &Workspace,
     path: &Path,
@@ -1305,7 +1470,7 @@ mod tests {
     }
 
     #[test]
-    fn ordinary_persistence_reads_only_the_selected_shard() {
+    fn ordinary_persistence_uses_the_validated_session_cache() {
         let _test_lock = PERSISTENCE_TEST_LOCK.lock().expect("test lock");
         let repository = tempfile::tempdir().expect("temporary repository");
         let aeria_path = repository.path().join(AERIA_DIRECTORY);
@@ -1351,7 +1516,7 @@ mod tests {
             .persist_unit(&workspace, id)
             .expect("ordinary update persists");
 
-        assert_eq!(READ_SHARD_COUNT.load(Ordering::SeqCst), 1);
+        assert_eq!(READ_SHARD_COUNT.load(Ordering::SeqCst), 0);
 
         workspace
             .update_note(id, Some("ordinary note".to_owned()))
@@ -1360,7 +1525,7 @@ mod tests {
         store
             .persist_unit(&workspace, id)
             .expect("ordinary note persists");
-        assert_eq!(READ_SHARD_COUNT.load(Ordering::SeqCst), 1);
+        assert_eq!(READ_SHARD_COUNT.load(Ordering::SeqCst), 0);
 
         workspace
             .update_review_state(id, ReviewState::Reviewed)
@@ -1369,6 +1534,6 @@ mod tests {
         store
             .persist_unit(&workspace, id)
             .expect("ordinary review state persists");
-        assert_eq!(READ_SHARD_COUNT.load(Ordering::SeqCst), 1);
+        assert_eq!(READ_SHARD_COUNT.load(Ordering::SeqCst), 0);
     }
 }

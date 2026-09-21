@@ -71,6 +71,19 @@ it does not change String-cell identity or any HXS hash contract.
 
 The reader verifies rows as a stream and does not require the complete snapshot to be resident in memory. This is a source inspection interface only: it does not persist workspace state, edit translations, or export runtime data.
 
+Within one desktop process, a successfully fully verified HSP and its
+materialized HXS may be reopened through an in-memory immutable-byte cache.
+The fast path rehashes both files, re-parses the manifest/guidance, and opens
+only the HXS metadata/sheet catalog. Any path, byte, cache, or metadata
+mismatch discards the entry and falls back to the complete ZIP/component,
+SQLite integrity/schema, row/hash, and relationship validation. The cache is
+not persisted and does not change HSP/HXS or Workspace Format contracts.
+
+Set `AERIA_PERF_TRACE=1` to emit elapsed phases for HSP archive/component
+verification, HXS identity and full validation, the verified-cache path, and
+WorkspaceStore loading. This is an optional diagnostic trace, not a runtime
+behavior switch for validation.
+
 ## Hash contract used by rebase
 
 HXS v1 hashes are canonical source facts, not relocation-invariant identity

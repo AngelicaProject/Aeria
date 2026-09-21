@@ -19,7 +19,7 @@ use tauri::{Emitter, Manager, State};
 
 use crate::dto::{
     ProjectOpenResultDto, ProjectSummaryDto, RecentProjectDto, ReviewStateDto, SourceBindingDto,
-    SourcePackageJobDto, TranslationRowCursorDto, TranslationRowPageDto, TranslationUnitIdDto,
+    SourcePackageJobDto, TranslationOverlayDto, TranslationRowCursorDto, TranslationRowPageDto,
 };
 use crate::error::CommandError;
 use crate::state::DesktopState;
@@ -29,6 +29,16 @@ type CommandResult<T> = Result<T, CommandError>;
 const SOURCE_PACKAGES_DIRECTORY: &str = "source-packages";
 const STAGING_DIRECTORY: &str = "staging";
 const STAGING_FILE: &str = "source.hsp";
+
+async fn run_blocking<T, F>(operation: F) -> CommandResult<T>
+where
+    T: Send + 'static,
+    F: FnOnce() -> CommandResult<T> + Send + 'static,
+{
+    tauri::async_runtime::spawn_blocking(operation)
+        .await
+        .map_err(|error| CommandError::internal_state(format!("desktop worker failed: {error}")))?
+}
 
 fn app_registry_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     app.path()
@@ -90,9 +100,8 @@ pub struct SourcePackageEventPayload {
 ///
 /// Returns a typed command error when source verification, workspace loading,
 /// compatibility validation, or state locking fails.
-pub fn open_project(
+pub async fn open_project(
     app: tauri::AppHandle,
-    state: State<'_, DesktopState>,
     repository_root: String,
     source_package_path: String,
 ) -> CommandResult<ProjectOpenResultDto> {
@@ -101,9 +110,13 @@ pub fn open_project(
         .app_cache_dir()
         .map_err(|error| CommandError::new("cachePath", error.to_string()))?;
     let registry_path = app_registry_path(&app);
-    let project =
-        open_project_with_state(&state, repository_root, source_package_path, cache_root)?;
-    Ok(remember_project(&state, project, registry_path))
+    run_blocking(move || {
+        let state = app.state::<DesktopState>();
+        let project =
+            open_project_with_state(&state, repository_root, source_package_path, cache_root)?;
+        Ok(remember_project(&state, project, registry_path))
+    })
+    .await
 }
 
 pub(crate) fn open_project_with_state(
@@ -125,9 +138,8 @@ pub(crate) fn open_project_with_state(
 ///
 /// Returns a typed command error when source verification, workspace
 /// initialization, or state locking fails.
-pub fn initialize_project(
+pub async fn initialize_project(
     app: tauri::AppHandle,
-    state: State<'_, DesktopState>,
     repository_root: String,
     source_package_path: String,
     target_language: String,
@@ -137,14 +149,18 @@ pub fn initialize_project(
         .app_cache_dir()
         .map_err(|error| CommandError::new("cachePath", error.to_string()))?;
     let registry_path = app_registry_path(&app);
-    let project = initialize_project_with_state(
-        &state,
-        repository_root,
-        source_package_path,
-        cache_root,
-        target_language,
-    )?;
-    Ok(remember_project(&state, project, registry_path))
+    run_blocking(move || {
+        let state = app.state::<DesktopState>();
+        let project = initialize_project_with_state(
+            &state,
+            repository_root,
+            source_package_path,
+            cache_root,
+            target_language,
+        )?;
+        Ok(remember_project(&state, project, registry_path))
+    })
+    .await
 }
 
 pub(crate) fn initialize_project_with_state(
@@ -172,22 +188,23 @@ pub(crate) fn initialize_project_with_state(
 ///
 /// Returns a typed registry error when app-data cannot be resolved or the
 /// registry cannot be loaded.
-pub fn list_recent_projects(
-    app: tauri::AppHandle,
-    state: State<'_, DesktopState>,
-) -> CommandResult<Vec<RecentProjectDto>> {
+pub async fn list_recent_projects(app: tauri::AppHandle) -> CommandResult<Vec<RecentProjectDto>> {
     let path = app_registry_path(&app)
         .map_err(|message| CommandError::new("projectRegistryRead", message))?;
-    let _lock = state.lock_registry()?;
-    ProjectRegistry::new(path)
-        .load()
-        .map(|projects| {
-            projects
-                .into_iter()
-                .map(RecentProjectDto::from_registry_entry)
-                .collect()
-        })
-        .map_err(|error| CommandError::registry_read(&error))
+    run_blocking(move || {
+        let state = app.state::<DesktopState>();
+        let _lock = state.lock_registry()?;
+        ProjectRegistry::new(path)
+            .load()
+            .map(|projects| {
+                projects
+                    .into_iter()
+                    .map(RecentProjectDto::from_registry_entry)
+                    .collect()
+            })
+            .map_err(|error| CommandError::registry_read(&error))
+    })
+    .await
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -199,9 +216,8 @@ pub fn list_recent_projects(
 /// Returns a typed error when the registry entry is missing, either remembered
 /// path is unavailable, project validation fails, or the source package ID no
 /// longer matches the remembered association.
-pub fn open_recent_project(
+pub async fn open_recent_project(
     app: tauri::AppHandle,
-    state: State<'_, DesktopState>,
     project_id: String,
 ) -> CommandResult<ProjectOpenResultDto> {
     let cache_root = app
@@ -210,7 +226,11 @@ pub fn open_recent_project(
         .map_err(|error| CommandError::new("cachePath", error.to_string()))?;
     let registry_path = app_registry_path(&app)
         .map_err(|message| CommandError::new("projectRegistryRead", message))?;
-    open_recent_project_from_registry(&state, &project_id, cache_root, registry_path)
+    run_blocking(move || {
+        let state = app.state::<DesktopState>();
+        open_recent_project_from_registry(&state, &project_id, cache_root, registry_path)
+    })
+    .await
 }
 
 fn open_recent_project_from_registry(
@@ -297,14 +317,14 @@ fn open_recent_project_with_entry(
 ///
 /// Returns a typed registry error when app-data cannot be resolved, the entry
 /// is absent, or the updated registry cannot be published.
-pub fn forget_recent_project(
-    app: tauri::AppHandle,
-    state: State<'_, DesktopState>,
-    project_id: String,
-) -> CommandResult<()> {
+pub async fn forget_recent_project(app: tauri::AppHandle, project_id: String) -> CommandResult<()> {
     let path = app_registry_path(&app)
         .map_err(|message| CommandError::new("projectRegistryWrite", message))?;
-    forget_recent_project_from_registry(&state, &path, &project_id)
+    run_blocking(move || {
+        let state = app.state::<DesktopState>();
+        forget_recent_project_from_registry(&state, &path, &project_id)
+    })
+    .await
 }
 
 fn forget_recent_project_from_registry(
@@ -762,13 +782,17 @@ pub(crate) fn close_project_with_state(state: &DesktopState) -> CommandResult<()
 ///
 /// Returns a typed command error when no project is open, the page request is
 /// invalid, the source cannot be read, or source integrity fails.
-pub fn page_translation_rows(
-    state: State<'_, DesktopState>,
+pub async fn page_translation_rows(
+    app: tauri::AppHandle,
     sheet_name: String,
     after: Option<TranslationRowCursorDto>,
     limit: u32,
 ) -> CommandResult<TranslationRowPageDto> {
-    page_translation_rows_with_state(&state, &sheet_name, after, limit)
+    run_blocking(move || {
+        let state = app.state::<DesktopState>();
+        page_translation_rows_with_state(&state, &sheet_name, after, limit)
+    })
+    .await
 }
 
 pub(crate) fn page_translation_rows_with_state(
@@ -794,26 +818,51 @@ pub(crate) fn page_translation_rows_with_state(
 ///
 /// Returns a typed command error when no project is open or the backend rejects
 /// the source, target, or persistence operation.
-pub fn set_translation_target(
-    state: State<'_, DesktopState>,
+pub async fn set_translation_target(
+    app: tauri::AppHandle,
     source_binding: SourceBindingDto,
     target_macro: String,
-) -> CommandResult<TranslationUnitIdDto> {
-    set_translation_target_with_state(&state, source_binding, &target_macro)
+) -> CommandResult<TranslationOverlayDto> {
+    run_blocking(move || {
+        let state = app.state::<DesktopState>();
+        set_translation_target_with_state(&state, source_binding, &target_macro)
+    })
+    .await
 }
 
 pub(crate) fn set_translation_target_with_state(
     state: &DesktopState,
     source_binding: SourceBindingDto,
     target_macro: &str,
-) -> CommandResult<TranslationUnitIdDto> {
+) -> CommandResult<TranslationOverlayDto> {
     let source_binding = SourceBinding::from(source_binding);
     let mut project = state.lock_project()?;
     let project = project.as_mut().ok_or_else(CommandError::no_project)?;
     project
         .set_target(&source_binding, target_macro)
-        .map(Into::into)
         .map_err(CommandError::from)
+        .and_then(|id| translation_overlay(project, id))
+}
+
+fn translation_overlay(
+    project: &ProjectSession,
+    translation_unit_id: TranslationUnitId,
+) -> CommandResult<TranslationOverlayDto> {
+    let unit = project
+        .workspace()
+        .unit(translation_unit_id)
+        .ok_or_else(|| {
+            CommandError::new(
+                "translationWorkspace",
+                format!("translation unit was not found: {translation_unit_id}"),
+            )
+        })?;
+    Ok(TranslationOverlayDto {
+        translation_unit_id: unit.id().to_string(),
+        target_macro: unit.target_macro().to_owned(),
+        review_state: unit.review_state().into(),
+        translator_note: unit.translator_note().map(str::to_owned),
+    })
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -824,25 +873,30 @@ pub(crate) fn set_translation_target_with_state(
 ///
 /// Returns a typed command error when the ID is invalid, no project is open,
 /// or the backend rejects the operation.
-pub fn set_translation_note(
-    state: State<'_, DesktopState>,
+pub async fn set_translation_note(
+    app: tauri::AppHandle,
     translation_unit_id: String,
     note: Option<String>,
-) -> CommandResult<()> {
-    set_translation_note_with_state(&state, &translation_unit_id, note)
+) -> CommandResult<TranslationOverlayDto> {
+    run_blocking(move || {
+        let state = app.state::<DesktopState>();
+        set_translation_note_with_state(&state, &translation_unit_id, note)
+    })
+    .await
 }
 
 pub(crate) fn set_translation_note_with_state(
     state: &DesktopState,
     translation_unit_id: &str,
     note: Option<String>,
-) -> CommandResult<()> {
+) -> CommandResult<TranslationOverlayDto> {
     let mut project = state.lock_project()?;
     let project = project.as_mut().ok_or_else(CommandError::no_project)?;
     let translation_unit_id = parse_translation_unit_id(translation_unit_id)?;
     project
         .set_note(translation_unit_id, note)
         .map_err(CommandError::from)
+        .and_then(|()| translation_overlay(project, translation_unit_id))
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -853,19 +907,23 @@ pub(crate) fn set_translation_note_with_state(
 ///
 /// Returns a typed command error when the ID is invalid, no project is open,
 /// or the backend rejects the operation.
-pub fn set_translation_review_state(
-    state: State<'_, DesktopState>,
+pub async fn set_translation_review_state(
+    app: tauri::AppHandle,
     translation_unit_id: String,
     review_state: ReviewStateDto,
-) -> CommandResult<()> {
-    set_translation_review_state_with_state(&state, &translation_unit_id, review_state)
+) -> CommandResult<TranslationOverlayDto> {
+    run_blocking(move || {
+        let state = app.state::<DesktopState>();
+        set_translation_review_state_with_state(&state, &translation_unit_id, review_state)
+    })
+    .await
 }
 
 pub(crate) fn set_translation_review_state_with_state(
     state: &DesktopState,
     translation_unit_id: &str,
     review_state: ReviewStateDto,
-) -> CommandResult<()> {
+) -> CommandResult<TranslationOverlayDto> {
     let mut project = state.lock_project()?;
     let project = project.as_mut().ok_or_else(CommandError::no_project)?;
     let translation_unit_id = parse_translation_unit_id(translation_unit_id)?;
@@ -873,6 +931,7 @@ pub(crate) fn set_translation_review_state_with_state(
     project
         .set_review_state(translation_unit_id, review_state)
         .map_err(CommandError::from)
+        .and_then(|()| translation_overlay(project, translation_unit_id))
 }
 
 fn parse_translation_unit_id(value: &str) -> CommandResult<TranslationUnitId> {
@@ -1560,10 +1619,16 @@ mod tests {
             .expect("update target")
             .translation_unit_id;
         assert_eq!(second_id, first_id);
-        set_translation_note_with_state(&state, &first_id, Some("checked".to_owned()))
-            .expect("set note");
-        set_translation_review_state_with_state(&state, &first_id, ReviewStateDto::Reviewed)
-            .expect("set review state");
+        let note_overlay =
+            set_translation_note_with_state(&state, &first_id, Some("checked".to_owned()))
+                .expect("set note");
+        assert_eq!(note_overlay.translation_unit_id, first_id);
+        assert_eq!(note_overlay.translator_note.as_deref(), Some("checked"));
+        let review_overlay =
+            set_translation_review_state_with_state(&state, &first_id, ReviewStateDto::Reviewed)
+                .expect("set review state");
+        assert_eq!(review_overlay.translation_unit_id, first_id);
+        assert_eq!(review_overlay.review_state, ReviewStateDto::Reviewed);
 
         close_project_with_state(&state).expect("close project");
         assert_eq!(current_project_with_state(&state).expect("closed"), None);

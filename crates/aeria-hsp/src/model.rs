@@ -253,7 +253,9 @@ impl SourcePackage {
     /// does not reopen the archive or repeat any HSP, HXS, or HSG validation.
     #[must_use]
     pub fn relocate_package_path(mut self, package_path: impl Into<PathBuf>) -> Self {
-        self.package_path = package_path.into();
+        let package_path = package_path.into();
+        crate::reader::relocate_verified_cache(&self.package_path, &package_path);
+        self.package_path = package_path;
         self
     }
 
