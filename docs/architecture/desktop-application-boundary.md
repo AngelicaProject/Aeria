@@ -96,7 +96,12 @@ SQLite access. Translation-unit IDs cross IPC only in their canonical textual
 form, and review states use an explicit camelCase protocol enum.
 
 Source-package creation is the one desktop process workflow that owns an Atlas
-child job. The build stages the v0.2.0 sidecar with Tauri's target-triple
+child job. The renderer first starts the desktop job and receives its opaque
+job ID before the Atlas worker starts; the long-running initialization command
+uses that ID to claim the active cancellation token. Progress events report
+Atlas state only and are not the source of job identity, so cancellation is
+available even before the first external-process event arrives. The build
+stages the v0.2.0 sidecar with Tauri's target-triple
 filename convention, while packaged runtime lookup resolves
 `harmonia-atlas[.exe]` beside the Aeria executable. Rust first honors the
 explicit `AERIA_ATLAS_PATH` development/test override, then the packaged

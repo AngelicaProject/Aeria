@@ -6,6 +6,7 @@ import type {
   RecentProjectDto,
   ReviewState,
   SourceBinding,
+  SourcePackageJobDto,
   TranslationRowCursorDto,
   TranslationRowPageDto,
   TranslationUnitIdDto,
@@ -59,17 +60,23 @@ export function initializeProject(
 }
 
 export function initializeProjectFromGame(
+  jobId: string,
   repositoryRoot: string,
   gamePath: string,
   sourceLanguage: string,
   targetLanguage: string,
 ): Promise<ProjectOpenResultDto> {
   return call<ProjectOpenResultDto>("initialize_project_from_game", {
+    jobId,
     repositoryRoot,
     gamePath,
     sourceLanguage,
     targetLanguage,
   });
+}
+
+export function startSourcePackage(): Promise<SourcePackageJobDto> {
+  return call<SourcePackageJobDto>("start_source_package");
 }
 
 export function listRecentProjects(): Promise<RecentProjectDto[]> {

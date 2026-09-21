@@ -10,6 +10,13 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::CommandError;
 
+/// Opaque identity for an active source-package generation job.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SourcePackageJobDto {
+    pub job_id: String,
+}
+
 /// A source occurrence coordinate accepted and returned by desktop commands.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]

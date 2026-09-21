@@ -17,12 +17,12 @@ pub struct DesktopState {
 struct AtlasJob {
     id: String,
     cancellation: CancellationHandle,
+    token: CancellationToken,
 }
 
 #[derive(Debug)]
 pub(crate) struct StartedAtlasJob {
     pub id: String,
-    pub token: CancellationToken,
 }
 
 impl DesktopState {
@@ -67,8 +67,9 @@ impl DesktopState {
         *active = Some(AtlasJob {
             id: id.clone(),
             cancellation,
+            token,
         });
-        Ok(StartedAtlasJob { id, token })
+        Ok(StartedAtlasJob { id })
     }
 
     pub(crate) fn cancel_atlas_job(&self, id: &str) -> Result<(), CommandError> {
@@ -80,6 +81,19 @@ impl DesktopState {
         })?;
         job.cancellation.cancel();
         Ok(())
+    }
+
+    pub(crate) fn atlas_job_token(&self, id: &str) -> Result<CancellationToken, CommandError> {
+        let active = self.atlas_job.lock().map_err(|_| {
+            CommandError::internal_state("desktop Atlas job state lock is poisoned")
+        })?;
+        active
+            .as_ref()
+            .filter(|job| job.id == id)
+            .map(|job| job.token.clone())
+            .ok_or_else(|| {
+                CommandError::new("atlasCancelled", "the requested Atlas job is not active")
+            })
     }
 
     pub(crate) fn finish_atlas_job(&self, id: &str) -> Result<(), CommandError> {
@@ -150,10 +164,29 @@ mod tests {
         state
             .cancel_atlas_job(&first.id)
             .expect("active Atlas job cancels");
-        assert!(first.token.is_cancelled());
+        assert!(
+            state
+                .atlas_job_token(&first.id)
+                .expect("active Atlas job token")
+                .is_cancelled()
+        );
         state.finish_atlas_job(&first.id).expect("finish Atlas job");
         state
             .start_atlas_job()
             .expect("a later Atlas job can start");
+    }
+
+    #[test]
+    fn atlas_job_token_is_only_available_for_the_active_job() {
+        let state = DesktopState::new();
+        let started = state.start_atlas_job().expect("Atlas job");
+
+        assert!(state.atlas_job_token(&started.id).is_ok());
+        assert_eq!(
+            state
+                .atlas_job_token("atlas-0000000000000002")
+                .expect_err("stale job ID"),
+            CommandError::new("atlasCancelled", "the requested Atlas job is not active")
+        );
     }
 }

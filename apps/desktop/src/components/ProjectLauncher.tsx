@@ -8,6 +8,7 @@ import {
   normalizeCommandError,
   openProject,
   openRecentProject,
+  startSourcePackage,
 } from "../ipc";
 import type {
   AtlasEvent,
@@ -164,7 +165,18 @@ export function ProjectLauncher({ initialError, onProjectReady }: ProjectLaunche
     try {
       const result = mode === "open"
         ? await openProject(repositoryRoot, sourcePackagePath)
-        : await initializeProjectFromGame(repositoryRoot, gamePath, sourceLanguage, targetLanguage);
+        : await (async () => {
+          const started = await startSourcePackage();
+          jobIdRef.current = started.jobId;
+          setJobId(started.jobId);
+          return initializeProjectFromGame(
+            started.jobId,
+            repositoryRoot,
+            gamePath,
+            sourceLanguage,
+            targetLanguage,
+          );
+        })();
       onProjectReady(result);
     } catch (caughtError) {
       setError({

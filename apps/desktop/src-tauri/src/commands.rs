@@ -5,7 +5,8 @@ use std::str::FromStr;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use aeria_atlas::{
-    AtlasEvent, AtlasPackageRequest, AtlasPackageResult, AtlasPackageRunner, CancellationToken,
+    AtlasError, AtlasEvent, AtlasPackageRequest, AtlasPackageResult, AtlasPackageRunner,
+    CancellationToken,
 };
 use aeria_core::{ReviewState, SourceBinding, TranslationUnitId};
 use aeria_hsp::SourcePackage;
@@ -18,7 +19,7 @@ use tauri::{Emitter, Manager, State};
 
 use crate::dto::{
     ProjectOpenResultDto, ProjectSummaryDto, RecentProjectDto, ReviewStateDto, SourceBindingDto,
-    TranslationRowCursorDto, TranslationRowPageDto, TranslationUnitIdDto,
+    SourcePackageJobDto, TranslationRowCursorDto, TranslationRowPageDto, TranslationUnitIdDto,
 };
 use crate::error::CommandError;
 use crate::state::DesktopState;
@@ -317,26 +318,38 @@ fn forget_recent_project_from_registry(
         .map_err(|error| CommandError::registry_write(&error))
 }
 
+/// Reserves an opaque job identity for source-package generation.
+///
+/// # Errors
+///
+/// Returns a typed error when another Atlas job is active or desktop state is
+/// unavailable.
+#[tauri::command(rename_all = "camelCase")]
+#[allow(clippy::needless_pass_by_value)]
+pub fn start_source_package(state: State<'_, DesktopState>) -> CommandResult<SourcePackageJobDto> {
+    let started = state.start_atlas_job()?;
+    Ok(SourcePackageJobDto { job_id: started.id })
+}
+
 /// Generates a source package from a local game installation and initializes
 /// the project from the already validated package.
 ///
 /// # Errors
 ///
-/// Returns a typed error when another Atlas job is active, Atlas cannot run,
+/// Returns a typed error when the job is no longer active, Atlas cannot run,
 /// package publication or validation fails, or workspace initialization fails.
 #[tauri::command(rename_all = "camelCase")]
 #[allow(clippy::too_many_arguments)]
 pub async fn initialize_project_from_game(
     app: tauri::AppHandle,
     state: State<'_, DesktopState>,
+    job_id: String,
     repository_root: String,
     game_path: String,
     source_language: String,
     target_language: String,
 ) -> CommandResult<ProjectOpenResultDto> {
-    let started = state.start_atlas_job()?;
-    let job_id = started.id.clone();
-    let token = started.token;
+    let token = state.atlas_job_token(&job_id)?;
     let worker_job_id = job_id.clone();
     let worker_token = token.clone();
     let worker_app = app.clone();
@@ -434,11 +447,15 @@ fn initialize_project_from_game_inner(
                     job_id: event_job_id.clone(),
                     event: event.clone(),
                 };
-                let _ = app_handle.emit("source-package-event", payload);
+                if let Err(error) = app_handle.emit("source-package-event", payload) {
+                    eprintln!(
+                        "failed to emit source-package-event for Atlas job {event_job_id}: {error}"
+                    );
+                }
             },
             cancellation,
         )
-        .map_err(CommandError::from)?;
+        .map_err(|error| atlas_runner_error(error, cancellation, &staging_path))?;
 
     require_not_cancelled_with_staging(cancellation, &staging_path)?;
     let source_package = validate_and_publish_package(
@@ -639,6 +656,26 @@ fn remove_staging_package(path: &Path, operation: &str) -> CommandResult<()> {
 
 fn cancelled_error() -> CommandError {
     CommandError::new("atlasCancelled", "Atlas project creation was cancelled")
+}
+
+fn atlas_runner_error(
+    error: AtlasError,
+    cancellation: &CancellationToken,
+    staging_path: &Path,
+) -> CommandError {
+    if cancellation.is_cancelled() {
+        return match remove_staging_package(staging_path, "remove cancelled staging package") {
+            Ok(()) => cancelled_error(),
+            Err(cleanup_error) => CommandError::new(
+                "atlasCancelled",
+                format!(
+                    "Atlas project creation was cancelled: {}",
+                    cleanup_error.message
+                ),
+            ),
+        };
+    }
+    CommandError::from(error)
 }
 
 fn require_not_cancelled(cancellation: &CancellationToken) -> CommandResult<()> {
@@ -1788,5 +1825,26 @@ mod tests {
         );
         assert!(!temp.path().join(".aeria").exists());
         state.finish_atlas_job(&started.id).expect("finish job");
+    }
+
+    #[test]
+    fn cancellation_after_runner_error_removes_partial_staging() {
+        let temp = TestRepository::new("cancelled-runner-staging");
+        let staging = temp.path().join("staging/source.hsp");
+        fs::create_dir_all(staging.parent().expect("staging parent")).expect("staging");
+        fs::write(&staging, b"partial Atlas output").expect("partial staging");
+        let (token, handle) = CancellationToken::new();
+        handle.cancel();
+
+        let error = atlas_runner_error(
+            AtlasError::Cancelled {
+                stderr_tail: String::new(),
+            },
+            &token,
+            &staging,
+        );
+
+        assert_eq!(error.code, "atlasCancelled");
+        assert!(!staging.exists());
     }
 }
