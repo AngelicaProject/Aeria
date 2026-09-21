@@ -8,6 +8,7 @@ Frontend CI runs:
 
 ```text
 pnpm install --frozen-lockfile
+pnpm test
 pnpm typecheck
 pnpm build
 ```

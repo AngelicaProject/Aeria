@@ -5,6 +5,7 @@ import {
   initialRecentProjectsState,
   reduceRecentProjectsState,
 } from "../src/recentProjectsState.ts";
+import { launcherErrorTitle } from "../src/launcherErrorState.ts";
 
 const project = {
   id: "local-project",
@@ -39,4 +40,9 @@ test("successful recent-project removal updates the loaded list locally", () => 
     reduceRecentProjectsState(loaded, { type: "removed", projectId: project.id }),
     { status: "loaded", projects: [] },
   );
+});
+
+test("recent-project open errors use a recent-project-specific title", () => {
+  assert.equal(launcherErrorTitle("recentOpen"), "Could not reopen recent project");
+  assert.equal(launcherErrorTitle("create"), "Could not create project");
 });

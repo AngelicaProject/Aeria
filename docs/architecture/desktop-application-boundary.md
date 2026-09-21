@@ -40,12 +40,18 @@ ordered newest first with the local ID as a deterministic tie-breaker and is
 bounded to 50 entries. Missing paths remain visible until explicitly removed.
 
 Registry v1 loading validates the version, IDs, paths, package identity, and
-metadata without canonicalizing stale paths. Malformed or newer registries
-produce typed errors and are not replaced with an empty file. Writes use a
-same-directory flushed and synced temporary file followed by atomic rename
-where supported; Windows uses an owned previous-file recovery path. A valid
-final file wins over recovery state, and an owned previous file is recovered
-only when the final file is missing.
+metadata without canonicalizing stale paths. It rejects documents with more
+than 50 projects and files larger than 256 KiB before full JSON
+deserialization. Malformed, oversized, or newer registries produce
+typed errors and are not replaced with an empty file. Every registry
+transaction acquires an exclusive OS file lock in app-data before cleanup or
+recovery, load, read-modify-write mutation, and atomic publication; the lock
+is released only after the transaction completes. This lock is required for
+multiple Aeria processes to share the fixed final, partial, and previous
+paths safely. Writes use a same-directory flushed and synced temporary file
+followed by atomic rename where supported; Windows uses an owned previous-file
+recovery path. A valid final file wins over recovery state, and an owned
+previous file is recovered only when the final file is missing.
 
 The launcher can list recents using filesystem presence only, without opening
 HSP/HXS data or creating a `ProjectSession`. Ready entries can be opened by

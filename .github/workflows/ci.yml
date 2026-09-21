@@ -17,6 +17,7 @@ jobs:
           version: 12.4.2
           run_install: false
       - run: pnpm install --frozen-lockfile
+      - run: pnpm test
       - run: pnpm typecheck
       - run: pnpm build
 

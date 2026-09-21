@@ -7,12 +7,12 @@
 #![forbid(unsafe_code)]
 
 use std::collections::HashSet;
-#[cfg(unix)]
 use std::fs::File;
 use std::fs::{self, OpenOptions};
-use std::io::{self, Write};
+use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 
+use fs2::FileExt;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use thiserror::Error;
@@ -20,12 +20,14 @@ use uuid::Uuid;
 
 pub const FORMAT_VERSION: u32 = 1;
 pub const RETENTION_LIMIT: usize = 50;
+pub const MAX_REGISTRY_FILE_BYTES: u64 = 256 * 1024;
 
 /// The filename used by the desktop application under its app-data directory.
 pub const REGISTRY_FILE_NAME: &str = "projects-v1.json";
 
 const PARTIAL_FILE_NAME: &str = "projects-v1.json.partial";
 const PREVIOUS_FILE_NAME: &str = "projects-v1.json.previous";
+const LOCK_FILE_NAME: &str = "projects-v1.json.lock";
 
 /// Metadata obtained from an already opened or initialized project.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -106,6 +108,16 @@ pub struct ProjectRegistry {
     path: PathBuf,
 }
 
+struct RegistryLock {
+    file: File,
+}
+
+impl Drop for RegistryLock {
+    fn drop(&mut self) {
+        let _ = self.file.unlock();
+    }
+}
+
 impl ProjectRegistry {
     #[must_use]
     pub fn new(path: impl Into<PathBuf>) -> Self {
@@ -128,6 +140,11 @@ impl ProjectRegistry {
     /// Returns a typed error when the registry is malformed, unsupported, or
     /// cannot be read or recovered.
     pub fn load(&self) -> Result<Vec<RegistryEntry>, RegistryError> {
+        let _lock = self.acquire_lock()?;
+        self.load_locked()
+    }
+
+    fn load_locked(&self) -> Result<Vec<RegistryEntry>, RegistryError> {
         self.cleanup_partial()?;
 
         if self.path.is_file() {
@@ -192,7 +209,11 @@ impl ProjectRegistry {
     ) -> Result<RegistryEntry, RegistryError> {
         let repository_root = canonicalize(&metadata.repository_root)?;
         let source_package_path = canonicalize(&metadata.source_package_path)?;
-        let mut projects = self.load()?;
+        let _lock = self.acquire_lock()?;
+        let mut projects = self.load_locked()?;
+
+        #[cfg(test)]
+        pause_test_writer_after_load();
 
         let existing = projects
             .iter()
@@ -231,7 +252,8 @@ impl ProjectRegistry {
     /// Returns a typed error when the registry is invalid, the ID is absent,
     /// or the updated document cannot be published.
     pub fn remove(&self, id: &str) -> Result<(), RegistryError> {
-        let mut projects = self.load()?;
+        let _lock = self.acquire_lock()?;
+        let mut projects = self.load_locked()?;
         let original_len = projects.len();
         projects.retain(|project| project.id != id);
         if projects.len() == original_len {
@@ -244,10 +266,30 @@ impl ProjectRegistry {
     }
 
     fn read_document(path: &Path) -> Result<RegistryDocument, RegistryError> {
-        let contents = fs::read_to_string(path)
+        let file =
+            File::open(path).map_err(|source| io_error("read registry file", path, source))?;
+        let length = file
+            .metadata()
+            .map_err(|source| io_error("inspect registry file", path, source))?
+            .len();
+        if length > MAX_REGISTRY_FILE_BYTES {
+            return invalid_data(
+                path,
+                format!("registry file exceeds the {MAX_REGISTRY_FILE_BYTES}-byte limit"),
+            );
+        }
+        let mut contents = Vec::new();
+        file.take(MAX_REGISTRY_FILE_BYTES + 1)
+            .read_to_end(&mut contents)
             .map_err(|source| io_error("read registry file", path, source))?;
+        if contents.len() as u64 > MAX_REGISTRY_FILE_BYTES {
+            return invalid_data(
+                path,
+                format!("registry file exceeds the {MAX_REGISTRY_FILE_BYTES}-byte limit"),
+            );
+        }
         let value: Value =
-            serde_json::from_str(&contents).map_err(|source| RegistryError::InvalidJson {
+            serde_json::from_slice(&contents).map_err(|source| RegistryError::InvalidJson {
                 path: path.to_owned(),
                 message: source.to_string(),
             })?;
@@ -314,6 +356,27 @@ impl ProjectRegistry {
     fn previous_path(&self) -> PathBuf {
         sibling(&self.path, PREVIOUS_FILE_NAME)
     }
+
+    fn lock_path(&self) -> PathBuf {
+        sibling(&self.path, LOCK_FILE_NAME)
+    }
+
+    fn acquire_lock(&self) -> Result<RegistryLock, RegistryError> {
+        let parent = self.path.parent().unwrap_or_else(|| Path::new("."));
+        fs::create_dir_all(parent)
+            .map_err(|source| io_error("create registry directory", parent, source))?;
+        let path = self.lock_path();
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&path)
+            .map_err(|source| io_error("open registry lock file", &path, source))?;
+        file.lock_exclusive()
+            .map_err(|source| io_error("lock registry file", &path, source))?;
+        Ok(RegistryLock { file })
+    }
 }
 
 fn canonicalize(path: &Path) -> Result<PathBuf, RegistryError> {
@@ -326,6 +389,13 @@ fn validate_document(document: &RegistryDocument, path: &Path) -> Result<(), Reg
             path: path.to_owned(),
             version: u64::from(document.format_version),
         });
+    }
+
+    if document.projects.len() > RETENTION_LIMIT {
+        return invalid_data(
+            path,
+            format!("projects must contain at most {RETENTION_LIMIT} entries"),
+        );
     }
 
     let mut ids = HashSet::with_capacity(document.projects.len());
@@ -383,7 +453,7 @@ fn canonical_bytes(document: &RegistryDocument, path: &Path) -> Result<Vec<u8>, 
     Ok(bytes)
 }
 
-fn invalid_data(path: &Path, message: impl Into<String>) -> Result<(), RegistryError> {
+fn invalid_data<T>(path: &Path, message: impl Into<String>) -> Result<T, RegistryError> {
     Err(RegistryError::InvalidData {
         path: path.to_owned(),
         message: message.into(),
@@ -468,8 +538,31 @@ pub fn is_canonical_package_id(value: &str) -> bool {
 }
 
 #[cfg(test)]
+fn pause_test_writer_after_load() {
+    let Ok(index) = std::env::var("AERIA_PROJECTS_TEST_WRITER_INDEX") else {
+        return;
+    };
+    if index != "0" {
+        return;
+    }
+    let Ok(ready_path) = std::env::var("AERIA_PROJECTS_TEST_WRITER_READY") else {
+        return;
+    };
+    let Ok(release_path) = std::env::var("AERIA_PROJECTS_TEST_WRITER_RELEASE") else {
+        return;
+    };
+    fs::write(ready_path, b"ready").expect("signal test writer lock acquisition");
+    while !Path::new(&release_path).exists() {
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
+    use std::process::Command;
+    use std::thread;
+    use std::time::{Duration, Instant};
     use tempfile::{TempDir, tempdir};
 
     const PACKAGE_ID: &str =
@@ -554,6 +647,40 @@ mod tests {
             Err(RegistryError::InvalidJson { .. })
         ));
         assert_eq!(fs::read(store.path()).expect("contents"), original);
+    }
+
+    #[test]
+    fn oversized_registry_is_rejected_before_deserialization() {
+        let temp = tempdir().expect("tempdir");
+        let store = registry(&temp);
+        let mut oversized = br#"{"formatVersion":1,"projects":[]}"#.to_vec();
+        oversized.resize(
+            usize::try_from(MAX_REGISTRY_FILE_BYTES + 1).expect("test size fits usize"),
+            b' ',
+        );
+        fs::write(store.path(), oversized).expect("write");
+        assert!(matches!(
+            store.load(),
+            Err(RegistryError::InvalidData { .. })
+        ));
+    }
+
+    #[test]
+    fn documents_with_more_than_the_retention_limit_are_rejected() {
+        let temp = tempdir().expect("tempdir");
+        let store = registry(&temp);
+        let projects = (0..=RETENTION_LIMIT)
+            .map(|index| entry(&format!("project-{index}"), index as u64))
+            .collect();
+        fs::write(
+            store.path(),
+            serde_json::to_vec(&document(projects)).expect("json"),
+        )
+        .expect("write");
+        assert!(matches!(
+            store.load(),
+            Err(RegistryError::InvalidData { .. })
+        ));
     }
 
     #[test]
@@ -708,5 +835,86 @@ mod tests {
             Err(RegistryError::InvalidJson { .. })
         ));
         assert_eq!(fs::read(store.path()).expect("final bytes"), b"{not-json");
+    }
+
+    #[test]
+    fn registry_writer_helper_process() {
+        let Some(root) = std::env::var_os("AERIA_PROJECTS_TEST_WRITER_ROOT") else {
+            return;
+        };
+        let root = PathBuf::from(root);
+        let index = std::env::var("AERIA_PROJECTS_TEST_WRITER_INDEX")
+            .expect("writer index")
+            .parse::<usize>()
+            .expect("numeric writer index");
+        let repository_root = root.join(format!("project-{index}"));
+        fs::create_dir_all(&repository_root).expect("repository");
+        let source_package_path = root.join(format!("project-{index}.hsp"));
+        fs::write(&source_package_path, b"hsp").expect("source package");
+        let metadata = ProjectMetadata {
+            repository_root,
+            source_package_path,
+            source_package_id: PACKAGE_ID.to_owned(),
+            source_language: "en".to_owned(),
+            target_language: "fr".to_owned(),
+            game_version: "test-game".to_owned(),
+        };
+        ProjectRegistry::new(root.join(REGISTRY_FILE_NAME))
+            .upsert(&metadata, index as u64)
+            .expect("concurrent upsert");
+    }
+
+    #[test]
+    fn concurrent_process_upserts_preserve_all_entries() {
+        let temp = tempdir().expect("tempdir");
+        let ready_path = temp.path().join("writer-ready");
+        let release_path = temp.path().join("writer-release");
+        let executable = std::env::current_exe().expect("test executable");
+        let helper = "tests::registry_writer_helper_process";
+        let mut children = Vec::new();
+        children.push(
+            Command::new(&executable)
+                .args(["--exact", helper])
+                .env("AERIA_PROJECTS_TEST_WRITER_ROOT", temp.path())
+                .env("AERIA_PROJECTS_TEST_WRITER_INDEX", "0")
+                .env("AERIA_PROJECTS_TEST_WRITER_READY", &ready_path)
+                .env("AERIA_PROJECTS_TEST_WRITER_RELEASE", &release_path)
+                .spawn()
+                .expect("first writer"),
+        );
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !ready_path.exists() {
+            assert!(
+                Instant::now() < deadline,
+                "first writer did not acquire lock"
+            );
+            thread::sleep(Duration::from_millis(10));
+        }
+
+        for index in 1..=8 {
+            children.push(
+                Command::new(&executable)
+                    .args(["--exact", helper])
+                    .env("AERIA_PROJECTS_TEST_WRITER_ROOT", temp.path())
+                    .env("AERIA_PROJECTS_TEST_WRITER_INDEX", index.to_string())
+                    .spawn()
+                    .expect("concurrent writer"),
+            );
+        }
+        fs::write(&release_path, b"release").expect("release writers");
+
+        for mut child in children {
+            assert!(child.wait().expect("writer status").success());
+        }
+
+        let projects = registry(&temp).load().expect("load concurrent registry");
+        assert_eq!(projects.len(), 9);
+        for index in 0..=8 {
+            assert!(projects.iter().any(|project| {
+                project
+                    .repository_root
+                    .ends_with(format!("project-{index}").as_str())
+            }));
+        }
     }
 }

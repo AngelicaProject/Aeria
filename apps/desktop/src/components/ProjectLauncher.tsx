@@ -23,6 +23,10 @@ import {
   reduceRecentProjectsState,
   type RecentProjectsState,
 } from "../recentProjectsState";
+import {
+  launcherErrorTitle,
+  type LauncherError,
+} from "../launcherErrorState";
 
 type LauncherMode = "open" | "create";
 
@@ -83,14 +87,18 @@ export function ProjectLauncher({ initialError, onProjectReady }: ProjectLaunche
   const [jobId, setJobId] = useState<string | null>(null);
   const [cancelRequested, setCancelRequested] = useState(false);
   const [progress, setProgress] = useState<AtlasEvent | null>(null);
-  const [error, setError] = useState<CommandError | null>(initialError);
+  const [error, setError] = useState<LauncherError | null>(
+    initialError ? { operation: "open", error: initialError } : null,
+  );
   const [recentState, setRecentState] = useState<RecentProjectsState>(initialRecentProjectsState);
   const [recentActionError, setRecentActionError] = useState<CommandError | null>(null);
   const [recentBusyId, setRecentBusyId] = useState<string | null>(null);
   const busyRef = useRef<LauncherMode | null>(null);
   const jobIdRef = useRef<string | null>(null);
 
-  useEffect(() => setError(initialError), [initialError]);
+  useEffect(() => {
+    setError(initialError ? { operation: "open", error: initialError } : null);
+  }, [initialError]);
 
   useEffect(() => {
     let disposed = false;
@@ -143,7 +151,10 @@ export function ProjectLauncher({ initialError, onProjectReady }: ProjectLaunche
         : await initializeProjectFromGame(repositoryRoot, gamePath, sourceLanguage, targetLanguage);
       onProjectReady(result);
     } catch (caughtError) {
-      setError(normalizeCommandError(caughtError));
+      setError({
+        operation: mode,
+        error: normalizeCommandError(caughtError),
+      });
     } finally {
       busyRef.current = null;
       jobIdRef.current = null;
@@ -160,7 +171,10 @@ export function ProjectLauncher({ initialError, onProjectReady }: ProjectLaunche
       const result = await openRecentProject(project.id);
       onProjectReady(result);
     } catch (caughtError) {
-      setError(normalizeCommandError(caughtError));
+      setError({
+        operation: "recentOpen",
+        error: normalizeCommandError(caughtError),
+      });
     } finally {
       setRecentBusyId(null);
     }
@@ -190,7 +204,10 @@ export function ProjectLauncher({ initialError, onProjectReady }: ProjectLaunche
       await cancelSourcePackage(jobId);
     } catch (caughtError) {
       setCancelRequested(false);
-      setError(normalizeCommandError(caughtError));
+      setError({
+        operation: "create",
+        error: normalizeCommandError(caughtError),
+      });
     }
   }
 
@@ -207,8 +224,8 @@ export function ProjectLauncher({ initialError, onProjectReady }: ProjectLaunche
         </div>
         {error ? (
           <ErrorBanner
-            title={mode === "create" ? "Could not create project" : "Could not open project"}
-            error={error}
+            title={launcherErrorTitle(error.operation)}
+            error={error.error}
             onDismiss={() => setError(null)}
           />
         ) : null}
