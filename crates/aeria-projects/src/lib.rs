@@ -319,6 +319,12 @@ impl ProjectRegistry {
     fn write_document(&self, document: &RegistryDocument) -> Result<(), RegistryError> {
         validate_document(document, &self.path)?;
         let bytes = canonical_bytes(document, &self.path)?;
+        if bytes.len() as u64 > MAX_REGISTRY_FILE_BYTES {
+            return invalid_data(
+                &self.path,
+                format!("serialized registry exceeds the {MAX_REGISTRY_FILE_BYTES}-byte limit"),
+            );
+        }
         let parent = self.path.parent().unwrap_or_else(|| Path::new("."));
         fs::create_dir_all(parent)
             .map_err(|source| io_error("create registry directory", parent, source))?;
@@ -681,6 +687,44 @@ mod tests {
             store.load(),
             Err(RegistryError::InvalidData { .. })
         ));
+    }
+
+    #[test]
+    fn oversized_upsert_preserves_existing_registry_and_is_loadable() {
+        let temp = tempdir().expect("tempdir");
+        let store = registry(&temp);
+        store
+            .upsert(&metadata(&temp, "existing"), 1)
+            .expect("initial upsert");
+        let original = fs::read(store.path()).expect("original registry");
+
+        let mut oversized = metadata(&temp, "oversized");
+        oversized.game_version =
+            "g".repeat(usize::try_from(MAX_REGISTRY_FILE_BYTES).expect("test size fits usize"));
+        let error = store
+            .upsert(&oversized, 2)
+            .expect_err("oversized registry write");
+        assert!(matches!(error, RegistryError::InvalidData { .. }));
+        assert_eq!(fs::read(store.path()).expect("final registry"), original);
+        assert!(!store.partial_path().exists());
+        assert_eq!(store.load().expect("load preserved registry").len(), 1);
+    }
+
+    #[test]
+    fn oversized_first_write_leaves_no_registry_artifacts() {
+        let temp = tempdir().expect("tempdir");
+        let store = registry(&temp);
+        let mut oversized = metadata(&temp, "oversized");
+        oversized.game_version =
+            "g".repeat(usize::try_from(MAX_REGISTRY_FILE_BYTES).expect("test size fits usize"));
+
+        let error = store
+            .upsert(&oversized, 1)
+            .expect_err("oversized registry write");
+        assert!(matches!(error, RegistryError::InvalidData { .. }));
+        assert!(!store.path().exists());
+        assert!(!store.partial_path().exists());
+        assert!(store.load().expect("load missing registry").is_empty());
     }
 
     #[test]
