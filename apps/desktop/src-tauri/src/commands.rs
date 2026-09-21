@@ -652,7 +652,7 @@ where
             Ok(()) => {
                 fs::remove_file(&backup_path)
                     .map_err(|error| storage_error("remove invalid package backup", &error))?;
-                Ok(validated.relocate_package_path(final_path))
+                Ok(validated.relocate_package_path(final_path, cache_root))
             }
             Err(error) => {
                 let _ = fs::rename(&backup_path, &final_path);
@@ -662,7 +662,7 @@ where
     } else {
         fs::rename(staging_path, &final_path)
             .map_err(|error| storage_error("atomically publish source package", &error))?;
-        Ok(validated.relocate_package_path(final_path))
+        Ok(validated.relocate_package_path(final_path, cache_root))
     }
 }
 

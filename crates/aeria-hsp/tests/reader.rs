@@ -161,7 +161,7 @@ fn validated_package_can_relocate_its_runtime_path_without_reopening() {
     let package = SourcePackage::open(fixture_path(), cache.path()).expect("valid package");
     let package_id = package.package_id().to_owned();
     let source_snapshot_id = package.source_snapshot_id().to_owned();
-    let relocated = package.relocate_package_path("published.hsp");
+    let relocated = package.relocate_package_path("published.hsp", cache.path());
 
     assert_eq!(relocated.package_path(), Path::new("published.hsp"));
     assert_eq!(relocated.package_id(), package_id);

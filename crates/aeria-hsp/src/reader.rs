@@ -4,6 +4,8 @@ use std::collections::HashSet;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
+#[cfg(test)]
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
@@ -56,6 +58,8 @@ struct PersistentVerificationRecord {
 
 static VERIFIED_PACKAGE_CACHE: OnceLock<Mutex<HashMap<PathBuf, VerifiedPackageCache>>> =
     OnceLock::new();
+#[cfg(test)]
+static PERSISTENT_CACHE_HITS: AtomicUsize = AtomicUsize::new(0);
 
 /// Opens, validates, and materializes an HSP v1 source package.
 ///
@@ -285,6 +289,10 @@ fn try_open_persistent_verified_cache(
         return None;
     };
     let result = try_open_persistent_record(package_path, cache_root, &record);
+    #[cfg(test)]
+    if result.is_some() {
+        PERSISTENT_CACHE_HITS.fetch_add(1, Ordering::SeqCst);
+    }
     if result.is_none() {
         let _ = fs::remove_file(&record_path);
     }
@@ -394,12 +402,12 @@ fn persist_verification_record(
     cache_root: &Path,
     package_path: &Path,
     cache: &VerifiedPackageCache,
-) {
+) -> bool {
     let Some(package_path) = canonical_path_string(package_path) else {
-        return;
+        return false;
     };
     let Some(source_cache_path) = canonical_path_string(&cache.source_cache_path) else {
-        return;
+        return false;
     };
     let record = PersistentVerificationRecord {
         version: VERIFICATION_CACHE_VERSION,
@@ -417,13 +425,36 @@ fn persist_verification_record(
         scope: cache.manifest.scope.clone(),
     };
     let Ok(bytes) = serde_json::to_vec(&record) else {
-        return;
+        return false;
     };
+    let record_path = persistent_record_path(cache_root, Path::new(&record.package_path));
+    write_persistent_record(cache_root, &record_path, &bytes)
+}
+
+fn relocate_persistent_record(cache_root: &Path, from: &Path, to: &Path) -> bool {
+    let old_record_path = persistent_record_path(cache_root, from);
+    let Ok(bytes) = fs::read(&old_record_path) else {
+        return false;
+    };
+    let Ok(mut record) = serde_json::from_slice::<PersistentVerificationRecord>(&bytes) else {
+        return false;
+    };
+    let Some(package_path) = canonical_path_string(to) else {
+        return false;
+    };
+    record.package_path = package_path;
+    let Ok(bytes) = serde_json::to_vec(&record) else {
+        return false;
+    };
+    let record_path = persistent_record_path(cache_root, to);
+    write_persistent_record(cache_root, &record_path, &bytes)
+}
+
+fn write_persistent_record(cache_root: &Path, record_path: &Path, bytes: &[u8]) -> bool {
     let directory = cache_root.join(VERIFICATION_CACHE_DIRECTORY);
     if fs::create_dir_all(&directory).is_err() {
-        return;
+        return false;
     }
-    let record_path = persistent_record_path(cache_root, Path::new(&record.package_path));
     let temporary_path = directory.join(format!(
         ".{}.{}.tmp",
         record_path
@@ -437,20 +468,22 @@ fn persist_verification_record(
         .create_new(true)
         .open(&temporary_path)
     else {
-        return;
+        return false;
     };
-    if temporary.write_all(&bytes).is_err()
+    if temporary.write_all(bytes).is_err()
         || temporary.flush().is_err()
         || temporary.sync_all().is_err()
     {
         let _ = fs::remove_file(&temporary_path);
-        return;
+        return false;
     }
     drop(temporary);
-    let _ = fs::remove_file(&record_path);
-    if fs::rename(&temporary_path, &record_path).is_err() {
+    let _ = fs::remove_file(record_path);
+    if fs::rename(&temporary_path, record_path).is_err() {
         let _ = fs::remove_file(&temporary_path);
+        return false;
     }
+    true
 }
 
 fn persistent_record_path(cache_root: &Path, package_path: &Path) -> PathBuf {
@@ -489,18 +522,56 @@ fn forget_verified_cache(package_key: &Path) {
     }
 }
 
-pub(crate) fn relocate_verified_cache(from: &Path, to: &Path) {
-    if let Ok(mut entries) = VERIFIED_PACKAGE_CACHE
+pub(crate) fn relocate_verified_cache(from: &Path, to: &Path, cache_root: &Path) {
+    let process_cache = if let Ok(mut entries) = VERIFIED_PACKAGE_CACHE
         .get_or_init(|| Mutex::new(HashMap::new()))
         .lock()
-        && let Some(cache) = entries.remove(&package_cache_key(from))
     {
-        entries.insert(package_cache_key(to), cache);
+        entries.remove(&package_cache_key(from))
+    } else {
+        None
+    };
+
+    if let Some(cache) = process_cache {
+        let final_record_written = persist_verification_record(cache_root, to, &cache);
+        if let Ok(mut entries) = VERIFIED_PACKAGE_CACHE
+            .get_or_init(|| Mutex::new(HashMap::new()))
+            .lock()
+        {
+            entries.insert(package_cache_key(to), cache);
+        }
+        let old_record_path = persistent_record_path(cache_root, from);
+        let final_record_path = persistent_record_path(cache_root, to);
+        if old_record_path != final_record_path {
+            let _ = fs::remove_file(old_record_path);
+        }
+        if !final_record_written {
+            let _ = fs::remove_file(final_record_path);
+        }
+    } else {
+        let final_record_written = relocate_persistent_record(cache_root, from, to);
+        let old_record_path = persistent_record_path(cache_root, from);
+        let final_record_path = persistent_record_path(cache_root, to);
+        if old_record_path != final_record_path {
+            let _ = fs::remove_file(old_record_path);
+        }
+        if !final_record_written {
+            let _ = fs::remove_file(final_record_path);
+        }
     }
 }
 
 fn package_cache_key(package_path: &Path) -> PathBuf {
-    fs::canonicalize(package_path).unwrap_or_else(|_| package_path.to_owned())
+    if let Ok(path) = fs::canonicalize(package_path) {
+        return path;
+    }
+    let Some(file_name) = package_path.file_name() else {
+        return package_path.to_owned();
+    };
+    package_path
+        .parent()
+        .and_then(|parent| fs::canonicalize(parent).ok())
+        .map_or_else(|| package_path.to_owned(), |parent| parent.join(file_name))
 }
 
 fn digest_file(path: &Path) -> Result<(u64, String), HspError> {
@@ -1055,6 +1126,8 @@ fn is_canonical_language(language: &str) -> bool {
 mod tests {
     use std::io::Cursor;
 
+    use tempfile::tempdir;
+
     use super::*;
 
     #[test]
@@ -1073,5 +1146,63 @@ mod tests {
             .expect_err("oversized stream");
 
         assert!(error.to_string().contains("exceeding 3"));
+    }
+
+    #[test]
+    fn relocation_moves_persistent_trust_to_final_path_and_rejects_tampering() {
+        let directory = tempdir().expect("test directory");
+        let staging = directory.path().join("source-packages/staging/source.hsp");
+        let final_root = directory.path().join("source-packages");
+        fs::create_dir_all(staging.parent().expect("staging parent")).expect("staging directory");
+        fs::copy(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/synthetic.hsp"),
+            &staging,
+        )
+        .expect("staging package");
+        let cache = directory.path().join("cache");
+
+        let package = SourcePackage::open(&staging, &cache).expect("staging validation");
+        let old_record_path = persistent_record_path(&cache, &staging);
+        assert!(old_record_path.is_file());
+        let package_id = package.package_id().to_owned();
+        let final_path = final_root.join(format!(
+            "{}.hsp",
+            package_id.strip_prefix("sha256:").expect("package hash")
+        ));
+        fs::rename(&staging, &final_path).expect("atomic final publication");
+
+        let relocated = package.relocate_package_path(&final_path, &cache);
+        let final_record_path = persistent_record_path(&cache, &final_path);
+        assert_eq!(relocated.package_path(), final_path);
+        assert!(!old_record_path.exists());
+        assert!(final_record_path.is_file());
+        let record: serde_json::Value =
+            serde_json::from_slice(&fs::read(&final_record_path).expect("final record"))
+                .expect("final record JSON");
+        assert_eq!(
+            record["packagePath"],
+            serde_json::Value::String(
+                fs::canonicalize(&final_path)
+                    .expect("canonical final path")
+                    .to_string_lossy()
+                    .into_owned()
+            )
+        );
+        assert_eq!(record["packageId"], package_id);
+
+        if let Ok(mut entries) = VERIFIED_PACKAGE_CACHE
+            .get_or_init(|| Mutex::new(HashMap::new()))
+            .lock()
+        {
+            entries.clear();
+        }
+        PERSISTENT_CACHE_HITS.store(0, Ordering::SeqCst);
+        let reopened = SourcePackage::open(&final_path, &cache).expect("persistent final reopen");
+        assert_eq!(reopened.package_id(), package_id);
+        assert_eq!(PERSISTENT_CACHE_HITS.load(Ordering::SeqCst), 1);
+
+        fs::write(&final_path, b"tampered final package").expect("tamper final package");
+        assert!(SourcePackage::open(&final_path, &cache).is_err());
+        assert!(!final_record_path.exists());
     }
 }

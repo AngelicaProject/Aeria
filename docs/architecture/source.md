@@ -85,6 +85,12 @@ only the cached HXS catalog. Missing, malformed, unsupported, tampered, or
 mismatched records are deleted and the complete ZIP/component, SQLite
 integrity/schema, row/hash, and relationship validation runs instead. This
 cache is disposable and does not change HSP/HXS or Workspace Format contracts.
+When a validated staging HSP is atomically published to its immutable
+package-ID path, the relocation operation updates both the process-local cache
+and the persistent record key and canonical `packagePath`, then removes the
+staging record. A failure to write disposable cache state does not roll back
+the published HSP; it removes the stale staging record so the next open uses
+full validation.
 
 Set `AERIA_PERF_TRACE=1` to emit both per-phase duration and cumulative
 elapsed time for HSP identity/hash work, HSP archive/component verification,
