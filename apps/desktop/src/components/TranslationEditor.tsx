@@ -1,6 +1,7 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { bindingKey, domKey, rowKey } from "../binding";
 import type { ReviewState, SourceBinding, TranslationCellDto, TranslationRowDto } from "../types";
+import { UiIcon } from "../ui/primitives/UiIcon";
 
 export type CellDraft = {
   target: string;
@@ -192,7 +193,7 @@ export const TranslationEditor = memo(function TranslationEditor({
   }, []);
 
   if (!row || !selectedCell) {
-    return <section className="editor-pane empty-editor" aria-label="Translation editor"><div><span className="empty-editor-mark" aria-hidden="true">↗</span><h2>Select a row to edit</h2><p>Choose a source occurrence from the Lens to inspect its context and translation fields.</p></div></section>;
+    return <section className="editor-pane empty-editor" aria-label="Translation editor"><div><span className="empty-editor-mark"><UiIcon icon="arrowUpRight" size="lg" /></span><h2>Select a row to edit</h2><p>Choose a source occurrence from the Lens to inspect its context and translation fields.</p></div></section>;
   }
 
   const selectedKey = bindingKey(selectedCell.sourceBinding);

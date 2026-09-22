@@ -1,17 +1,18 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
-import { Icon } from "../ui/primitives/Icon";
+import { UiIcon } from "../ui/primitives/UiIcon";
 import type { ProjectSheetDto } from "../types";
 import {
   buildSheetTree,
   collapseSheetTree,
   expandSheetAncestors,
+  formatSheetCount,
   visibleSheetTreeEntries,
   type SheetTree,
   type SheetTreeEntry,
   type SheetTreeFolder,
 } from "../sheetExplorer";
 
-const SHEET_ROW_HEIGHT = 29;
+const SHEET_ROW_HEIGHT = 28;
 const SHEET_OVERSCAN = 12;
 
 type SheetSidebarProps = {
@@ -32,6 +33,10 @@ type SheetSidebarProps = {
 
 function entryDepth(entry: SheetTreeEntry): number {
   return entry.kind === "folder" ? entry.path.split("/").length - 1 : entry.parentPath ? entry.parentPath.split("/").length : 0;
+}
+
+function treeRowStyle(depth: number): CSSProperties {
+  return { "--tree-offset": `${Math.min(depth, 3) * 4}px` } as CSSProperties;
 }
 
 function folderContainsSelected(folder: SheetTreeFolder, selectedSheetName: string | null): boolean {
@@ -214,7 +219,7 @@ export const SheetSidebar = memo(function SheetSidebar({
     <section className={`sheet-sidebar-body${filterOpen ? " has-sheet-filter" : ""}`} aria-label="Sheet Explorer">
       {filterOpen ? (
         <div className="sheet-filter">
-          <Icon name="search" size={14} />
+          <UiIcon icon="search" size="sm" />
           <input
             ref={filterRef}
             value={query}
@@ -230,7 +235,7 @@ export const SheetSidebar = memo(function SheetSidebar({
               setQuery("");
               onFilterOpenChange(false);
             }}
-          ><Icon name="close" size={12} /></button>
+          ><UiIcon icon="x" size="xs" /></button>
         </div>
       ) : null}
 
@@ -257,7 +262,7 @@ export const SheetSidebar = memo(function SheetSidebar({
                   return (
                     <button
                       className={folderContainsSelected(entry, selectedSheetName) ? "sheet-tree-row folder-row contains-selected" : "sheet-tree-row folder-row"}
-                      style={{ "--tree-depth": depth } as CSSProperties}
+                      style={treeRowStyle(depth)}
                       type="button"
                       role="treeitem"
                       aria-expanded={open}
@@ -274,11 +279,11 @@ export const SheetSidebar = memo(function SheetSidebar({
                         }
                       }}
                     >
-                      <Icon name={open ? "chevronDown" : "chevronRight"} size={12} />
-                      <Icon name="folder" size={14} className="sheet-tree-folder-icon" />
+                      <span className="sheet-tree-chevron" aria-hidden="true"><UiIcon icon={open ? "chevronDown" : "chevronRight"} size="xs" /></span>
+                      <span className="sheet-tree-icon sheet-tree-folder-icon" aria-hidden="true"><UiIcon icon={open ? "folderOpen" : "folder"} size="sm" /></span>
                       <span className="sheet-tree-name">{entry.name}</span>
                       <small className="sheet-tree-count">
-                        {entry.descendantCount.toLocaleString()} {entry.descendantCount === 1 ? "sheet" : "sheets"}
+                        {formatSheetCount(entry.descendantCount)}
                       </small>
                     </button>
                   );
@@ -289,7 +294,7 @@ export const SheetSidebar = memo(function SheetSidebar({
                   <button
                     ref={selected ? selectedRef : undefined}
                     className={`${selected ? "sheet-tree-row leaf-row active" : "sheet-tree-row leaf-row"}${count === 0 ? " is-empty-sheet" : ""}`}
-                    style={{ "--tree-depth": depth } as CSSProperties}
+                    style={treeRowStyle(depth)}
                     type="button"
                     role="treeitem"
                     aria-selected={selected}
@@ -300,13 +305,12 @@ export const SheetSidebar = memo(function SheetSidebar({
                     key={entry.sheet.name}
                     onClick={() => onSelect(entry.sheet.name)}
                     onDoubleClick={() => onSelect(entry.sheet.name, true)}
-                    title={`${entry.sheet.name}\n${entry.sheet.rowCount.toLocaleString()} source rows · ${count.toLocaleString()} translatable strings`}
+                    title={`${entry.sheet.name}\n${entry.sheet.rowCount.toLocaleString()} source rows`}
                   >
-                    <span className="sheet-tree-leaf-mark" aria-hidden="true" />
-                    <span className="sheet-tree-indent" aria-hidden="true" />
-                    <span className="sheet-tree-main"><strong>{entry.name}</strong></span>
+                    <span className="sheet-tree-icon sheet-tree-sheet-icon" aria-hidden="true"><UiIcon icon="table2" size="sm" /></span>
+                    <span className="sheet-tree-name">{entry.name}</span>
                     <small className="sheet-tree-count">
-                      {count === 0 ? "No strings" : `${count.toLocaleString()} ${count === 1 ? "string" : "strings"}`}
+                      {formatSheetCount(count)}
                     </small>
                   </button>
                 );

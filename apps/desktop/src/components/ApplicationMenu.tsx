@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
-import { Icon } from "../ui/primitives/Icon";
+import { UiIcon } from "../ui/primitives/UiIcon";
 
 export type ApplicationMenuCommandItem = {
   kind: "command";
@@ -154,7 +154,7 @@ function MenuPopup({
                 onClick={() => openSubmenu(level, item.id)}
               >
                 <span>{item.label}</span>
-                <span className="application-menu-entry-end">{item.shortcut ? <kbd>{item.shortcut}</kbd> : null}<Icon name="chevron" size={12} /></span>
+                <span className="application-menu-entry-end">{item.shortcut ? <kbd>{item.shortcut}</kbd> : null}<UiIcon icon="chevronDown" size="xs" /></span>
               </button>
               {submenuOpen ? <MenuPopup {...{ items: item.items, level: level + 1, activeIndices, openSubmenuPath, setActiveIndex, openSubmenu, closeSubmenusFrom, onSelect, onClose, onRootNavigate }} /> : null}
             </div>

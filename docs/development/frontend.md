@@ -20,3 +20,5 @@ The project launcher uses a fixed shell so switching between Recent, Open, Creat
 Recent project headers and rows share one four-column grid: `1fr 110px 90px 140px`. Keep that template in one CSS custom property or shared class so labels and values cannot drift apart.
 
 Tailwind CSS and accessible primitive libraries such as Radix are approved directions, but dependencies should be added when their first real component is implemented.
+
+Ordinary renderer icons use the shared `UiIcon` mapping backed by `lucide-react`. Choose from its fixed `xs`, `sm`, `md`, and `lg` sizes; do not add inline SVGs, icon-font glyphs, emoji, or Unicode icon characters in feature components. Keep approved custom or native window icons centralized in the shared icon layer, and preserve semantic color through `currentColor`.

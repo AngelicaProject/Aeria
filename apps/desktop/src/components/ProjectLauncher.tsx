@@ -33,7 +33,7 @@ import {
   sourcePackageListenerError,
   type LauncherError,
 } from "../launcherErrorState";
-import { Icon } from "../ui/primitives/Icon";
+import { UiIcon } from "../ui/primitives/UiIcon";
 import { SelectMenu } from "../ui/primitives/SelectMenu";
 import { useTheme } from "../ui/theme/theme";
 import { themeRegistry } from "../ui/theme/registry";
@@ -127,7 +127,7 @@ function BrowseField({ id, label, value, placeholder, hint, directory = false, d
           required
         />
         <button className="icon-button picker-button" type="button" aria-label={`Choose ${label.toLowerCase()}`} disabled={disabled} onClick={() => void handleBrowse()}>
-          <Icon name="folder" size={14} />
+          <UiIcon icon="folder" size="sm" />
         </button>
       </div>
       {hint ? <small className="field-hint">{hint}</small> : null}
@@ -156,7 +156,7 @@ function RecentProjectActions({ project, disabled, onOpen, onRemove }: RecentPro
 
   return (
     <div className="project-actions-menu" ref={rootRef}>
-      <button className="button icon-button" type="button" aria-label={`Actions for ${displayPathName(project.repositoryRoot)}`} aria-haspopup="menu" aria-expanded={open} disabled={disabled} onClick={() => setOpen((current) => !current)}><Icon name="more" size={15} /></button>
+      <button className="button icon-button" type="button" aria-label={`Actions for ${displayPathName(project.repositoryRoot)}`} aria-haspopup="menu" aria-expanded={open} disabled={disabled} onClick={() => setOpen((current) => !current)}><UiIcon icon="ellipsis" size="md" /></button>
       {open ? <div className="project-actions-popup" role="menu"><button type="button" role="menuitem" disabled={project.availability !== "ready"} onClick={() => { setOpen(false); onOpen(); }}>Open</button><button type="button" role="menuitem" onClick={() => { setOpen(false); onRemove(); }}>Remove from Recent Projects…</button></div> : null}
     </div>
   );
@@ -293,7 +293,7 @@ export function ProjectLauncher({ initialError, onProjectReady }: ProjectLaunche
           <nav className="launcher-nav" aria-label="Project launcher">
             {(["recent", "open", "create", "settings"] as const).map((item) => (
               <button className={mode === item ? "launcher-nav-button active" : "launcher-nav-button"} type="button" key={item} onClick={() => setMode(item)}>
-                {item === "settings" ? <Icon name="settings" size={14} /> : null}
+                {item === "settings" ? <UiIcon icon="settings" size="sm" /> : null}
                 <span>{item.slice(0, 1).toUpperCase() + item.slice(1)}</span>
               </button>
             ))}
@@ -319,7 +319,7 @@ export function ProjectLauncher({ initialError, onProjectReady }: ProjectLaunche
                   {recentState.projects.map((project) => (
                     <article className="project-plate" key={project.id}>
                       <button className="project-open-area" type="button" disabled={launcherDisabled || project.availability !== "ready"} onClick={() => void handleRecentOpen(project)}>
-                        <span className="project-icon"><Icon name="folder" size={18} /></span>
+                        <span className="project-icon"><UiIcon icon="folder" size="lg" /></span>
                         <div className="project-main">
                           <strong className="project-name">{displayPathName(project.repositoryRoot)}</strong>
                           <code className="project-path" title={displayPath(project.repositoryRoot)}>{displayPath(project.repositoryRoot)}</code>

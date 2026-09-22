@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Icon } from "./Icon";
+import { UiIcon } from "./UiIcon";
 
 export type SelectOption = { value: string; label: string; disabled?: boolean };
 
@@ -63,7 +63,7 @@ export function SelectMenu({ value, options, onChange, label, disabled = false }
         onKeyDown={handleKeyDown}
       >
         <span>{selected?.label ?? "Select"}</span>
-        <Icon name="chevron" size={13} />
+        <UiIcon icon="chevronDown" size="xs" />
       </button>
       {open ? (
         <div className="select-menu-list" role="listbox" aria-label={label}>

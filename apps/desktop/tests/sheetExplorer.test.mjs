@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   buildSheetTree,
   expandSheetAncestors,
+  formatSheetCount,
   findSheetMatches,
   visibleSheetTreeEntries,
 } from "../src/sheetExplorer.ts";
@@ -33,4 +34,9 @@ test("sheet explorer uses natural order and quick find returns basename and brea
   const expanded = expandSheetAncestors(new Set(), "quest/028/StmBdz720_02823");
   assert.deepEqual([...expanded], ["quest", "quest/028"]);
   assert.deepEqual(findSheetMatches(sheets, "720").map((match) => [match.basename, match.breadcrumb, match.sheet.name]), [["StmBdz720_02823", "quest › 028", "quest/028/StmBdz720_02823"]]);
+});
+
+test("sheet explorer counts use stable space grouping", () => {
+  assert.equal(formatSheetCount(7912), "7 912");
+  assert.equal(formatSheetCount(0), "0");
 });
