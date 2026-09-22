@@ -4,6 +4,7 @@ import { Icon } from "../ui/primitives/Icon";
 type DockPanelProps = PropsWithChildren<{
   title: string;
   meta?: ReactNode;
+  headerActions?: ReactNode;
   className?: string;
   panelId?: string;
   moveTargets?: readonly { id: string; label: string }[];
@@ -18,6 +19,7 @@ type DockPanelProps = PropsWithChildren<{
 export function DockPanel({
   title,
   meta,
+  headerActions,
   className = "",
   panelId,
   moveTargets = [],
@@ -50,6 +52,7 @@ export function DockPanel({
     >
       <header className="dock-header" draggable={Boolean(panelId && onDragStart)} onDragStart={(event) => { if (panelId) { event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("text/aeria-panel", panelId); onDragStart?.(panelId); } }}>
         <span className="dock-title">{title}</span>{meta ? <span className="dock-meta">{meta}</span> : null}<span className="dock-spacer" />
+        {headerActions ? <div className="dock-header-actions" role="group" aria-label={`${title} actions`}>{headerActions}</div> : null}
         <button className="dock-action" type="button" aria-label={`${title} options`} aria-haspopup="menu" aria-expanded={menuOpen} onClick={() => setMenuOpen((current) => !current)}><Icon name="more" size={15} /></button>
         {menuOpen ? <div className="dock-panel-menu" role="menu">
           {moveTargets.map((target) => <button type="button" role="menuitem" key={target.id} onClick={() => { onMove?.(target.id); setMenuOpen(false); }}>Move {target.label}</button>)}

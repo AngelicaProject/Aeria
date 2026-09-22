@@ -1,5 +1,7 @@
-import { createContext, useContext, useMemo, useState, type PropsWithChildren } from "react";
+import { createContext, useContext, useEffect, useMemo, useState, type PropsWithChildren } from "react";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { defaultThemeId, findTheme, type ThemeDefinition } from "./registry";
+import { hasWindowsBackdrop } from "./windowBackdrop";
 
 type ThemeContextValue = {
   theme: ThemeDefinition;
@@ -14,6 +16,11 @@ export function ThemeProvider({ children }: PropsWithChildren) {
   const [themeId, setThemeId] = useState(defaultThemeId);
   const [accentOverride, setAccentOverride] = useState<string | null>(null);
   const theme = findTheme(themeId);
+  const nativeBackdrop = hasWindowsBackdrop();
+  useEffect(() => {
+    if (!nativeBackdrop) return;
+    void getCurrentWindow().setTheme(theme.appearance === "light" ? "light" : "dark").catch(() => undefined);
+  }, [nativeBackdrop, theme.appearance]);
   const style = useMemo(() => {
     const { tokens } = theme;
     return {
@@ -46,7 +53,7 @@ export function ThemeProvider({ children }: PropsWithChildren) {
 
   return (
     <ThemeContext.Provider value={{ theme, setThemeId, accentOverride, setAccentOverride }}>
-      <div className="theme-root" data-theme-id={theme.id} data-theme-appearance={theme.appearance} style={style}>
+      <div className="theme-root" data-theme-id={theme.id} data-theme-appearance={theme.appearance} data-native-backdrop={nativeBackdrop ? "true" : undefined} style={style}>
         {children}
       </div>
     </ThemeContext.Provider>

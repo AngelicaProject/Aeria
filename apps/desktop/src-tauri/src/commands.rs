@@ -1582,6 +1582,7 @@ mod tests {
                 name: "Synthetic".to_owned(),
                 effective_language: "en".to_owned(),
                 row_count: 1,
+                translatable_cell_count: 1,
             }]
         );
         assert_eq!(

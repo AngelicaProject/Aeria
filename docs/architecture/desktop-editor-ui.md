@@ -50,12 +50,19 @@ context only and are never used as permission heuristics.
 `Load more` continues to be explicit; a source page may return zero visible
 rows while its row cursor still has more source work.
 
-The Sheets tool is an IDE-style presentation of the already-loaded
-`ProjectSheetDto[]`: slash-separated names form collapsible folders for display
-only, while the canonical sheet name is passed unchanged to Rust. Quick Find
-is a transient renderer-only overlay (Ctrl+F or the Sheets header action), not a
-permanent filter field. Project Search is a separate workbench tool and shows a
-truthful unavailable state until a domain search backend exists.
+The Sheets tool presents the already-loaded `ProjectSheetDto[]`: slash-separated
+names form collapsible folders for display only, while the canonical sheet name
+is passed unchanged to Rust. Its per-sheet translatable-cell count comes from the
+validated HSG permission index, not the HXS physical row count. Sheets with no
+permitted source strings are hidden by default. Hovering or focusing the Sheets
+dock reveals icon actions to show empty sheets, open the name filter, reveal the
+active sheet, and collapse folders. The filter takes space only while open, and
+Ctrl+F focuses it. Folder rows show descendant sheet counts, and sheet rows show
+their HSG-approved source-string counts. Reveal active clears explorer filters
+before locating the selected sheet; Collapse all clears the name filter and
+closes every folder. The flattened visible tree is virtualized for large source
+catalogs. Project Search is a separate workbench tool and shows a truthful
+unavailable state until a domain search backend exists.
 
 Center documents use preview tabs for single-click sheet browsing. A second
 click pins a preview, and starting a local draft pins it automatically.
@@ -63,6 +70,15 @@ Pinned/preview tabs can be activated, closed, reordered, and closed with
 Ctrl+W; each tab's dirty indicator is presentation state only. Dock panels
 retain serializable presentation state, can be resized, and floatable tools
 use real Tauri webview windows that share the active Rust project session.
+
+On supported Windows versions, the workbench window uses the system Acrylic
+backdrop and follows the selected light or dark theme. The backdrop is visible
+through the activity rails and gaps between panels. The top chrome shares the
+workbench backdrop without a separate fill or dividing border. The document,
+dock panels, and status bar use opaque, softly tinted theme surfaces. The
+document and side dock panels share rounded corners. The launcher stays opaque.
+Other platforms use a theme-colored backdrop. High Contrast Dark keeps the
+workbench shell opaque.
 
 This first editor intentionally has no structured macro controls, source
 update/rebase UI, or export. The workbench retains truthful Git and AI dock

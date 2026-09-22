@@ -15,7 +15,7 @@ The renderer is a full React/TypeScript application, not a thin HTML skin, but p
 
 ## Project launcher layout
 
-The project launcher uses a fixed shell so switching between Recent, Open, Create, and Settings does not resize the desktop window. Its integrated titlebar is 36px high, and only the content region may scroll. The Tauri launcher window is 900×560 with matching minimum dimensions.
+The project launcher uses a fixed shell so switching between Recent, Open, Create, and Settings does not resize the desktop window. Its integrated titlebar is 36px high, and only the content region may scroll. The Tauri launcher window is 900×560 with matching minimum dimensions. It opens centered and recenters when returning from the workbench.
 
 Recent project headers and rows share one four-column grid: `1fr 110px 90px 140px`. Keep that template in one CSS custom property or shared class so labels and values cannot drift apart.
 

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState, type CSSProperties } from "react";
 import { flushSync } from "react-dom";
-import { getCurrentWindow } from "@tauri-apps/api/window";
+import { Effect, getCurrentWindow } from "@tauri-apps/api/window";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import {
   closeProject,
@@ -20,10 +20,12 @@ import type {
   TranslationOverlayDto,
   TranslationRowCursorDto,
   TranslationRowDto,
+  ProjectSheetDto,
 } from "../types";
 import { ErrorBanner } from "./ErrorBanner";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { ActivityRail } from "./ActivityRail";
+import { Icon } from "../ui/primitives/Icon";
 import { BottomPanel } from "./BottomPanel";
 import { DocumentTabs, type DocumentTab } from "./DocumentTabs";
 import { DockPanel } from "./DockPanel";
@@ -39,6 +41,7 @@ import { initialWorkbenchLayout, reduceWorkbenchLayout } from "../ui/layout";
 import type { TranslationOccurrenceView } from "../translationOccurrences";
 import { documentIdForSheet, initialDocumentTabsState, reduceDocumentTabs, type DocumentTabsState } from "../documentTabs";
 import { initialDockLayout, reduceDockLayout, type DockRegion } from "../dockLayout";
+import { hasWindowsBackdrop } from "../ui/theme/windowBackdrop";
 
 const PAGE_SIZE = 100;
 
@@ -76,6 +79,11 @@ export function EditorShell({
   onClosed,
 }: EditorShellProps) {
   const firstSheetName = project.sheets[0]?.name ?? null;
+  const sheetsByName = useMemo(() => {
+    const byName = new Map<string, ProjectSheetDto>();
+    for (const sheet of project.sheets) byName.set(sheet.name, sheet);
+    return byName;
+  }, [project.sheets]);
   const [selectedSheetName, setSelectedSheetName] = useState<string | null>(firstSheetName);
   const [loadedSheetName, setLoadedSheetName] = useState<string | null>(null);
   const [rows, setRows] = useState<TranslationRowDto[]>([]);
@@ -93,6 +101,10 @@ export function EditorShell({
   const [documentTabs, setDocumentTabs] = useState<DocumentTabsState>(() => firstSheetName ? reduceDocumentTabs(initialDocumentTabsState, { type: "openSheet", sheetName: firstSheetName }) : initialDocumentTabsState);
   const [leftTool, setLeftTool] = useState<"sheets" | "search">("sheets");
   const [quickFindSignal, setQuickFindSignal] = useState(0);
+  const [hideEmptySheets, setHideEmptySheets] = useState(true);
+  const [sheetFilterOpen, setSheetFilterOpen] = useState(false);
+  const [revealSheetSignal, setRevealSheetSignal] = useState(0);
+  const [collapseSheetsSignal, setCollapseSheetsSignal] = useState(0);
   const [detachedPanel, setDetachedPanel] = useState<DetachedPanel | null>(null);
   const [dockLayoutState, setDockLayoutState] = useState(initialDockLayout);
   const [activeTool, setActiveTool] = useState<WorkbenchTool>("ai");
@@ -515,11 +527,15 @@ export function EditorShell({
     if (!definitions) return [];
     return (["left", "right", "bottom"] as const).filter((region) => region !== currentRegion && (panelId === "tasks" || panelId === "gitChanges" || panelId === "diagnostics" ? region !== "left" : panelId === "ai" || panelId === "git" ? region !== "left" : true)).map((region) => ({ id: region, label: region[0]!.toUpperCase() + region.slice(1) }));
   }, [dockLayoutState.placements]);
-  const handleQuickFind = useCallback(() => {
-    setLeftTool("sheets");
-    dispatchLayout({ type: "setRegionVisibility", regionId: "leftDock", visible: true });
+  const focusSheetFilter = useCallback(() => {
+    setSheetFilterOpen(true);
     setQuickFindSignal((current) => current + 1);
   }, []);
+  const handleQuickFind = useCallback(() => {
+    handlePanelMove("sheets", "left");
+    dispatchLayout({ type: "setRegionVisibility", regionId: "leftDock", visible: true });
+    focusSheetFilter();
+  }, [focusSheetFilter, handlePanelMove]);
   const detachPanel = useCallback(async (panel: DetachedPanel) => {
     if (detachedPanel === panel) return;
     try {
@@ -534,6 +550,7 @@ export function EditorShell({
         height: panel === "tasks" || panel === "gitChanges" || panel === "diagnostics" ? 280 : 620,
         decorations: false,
         resizable: true,
+        ...(hasWindowsBackdrop() ? { transparent: true, windowEffects: { effects: [Effect.Acrylic] } } : {}),
       });
       if (existing) {
         await detached.show();
@@ -558,7 +575,11 @@ export function EditorShell({
     }
   }, [detachedPanel, dockLayoutState.placements, showError]);
   const documents: DocumentTab[] = documentTabs.tabs.map((document) => {
-    const detail = document.id === documentTabs.activeId && loadedSheetName === document.sheetName ? `${rows.length.toLocaleString()} rows loaded` : null;
+    const sheet = sheetsByName.get(document.sheetName);
+    let detail: string | null = null;
+    if (document.id === documentTabs.activeId && loadedSheetName === document.sheetName) {
+      detail = sheet?.translatableCellCount === 0 ? "No translatable strings" : `${rows.length.toLocaleString()} rows loaded`;
+    }
     return {
       id: document.id,
       label: document.label,
@@ -569,6 +590,20 @@ export function EditorShell({
       dirty: document.dirty,
     };
   });
+  const sheetHeaderActions = <>
+    <button
+      className="dock-action"
+      type="button"
+      aria-label="Hide empty sheets"
+      aria-pressed={hideEmptySheets}
+      title={hideEmptySheets ? "Show empty sheets" : "Hide empty sheets"}
+      disabled={closing}
+      onClick={() => setHideEmptySheets((current) => !current)}
+    ><Icon name={hideEmptySheets ? "eyeOff" : "eye"} size={14} /></button>
+    <button className="dock-action" type="button" aria-label="Filter sheets" title="Filter sheets (Ctrl+F)" disabled={closing} onClick={focusSheetFilter}><Icon name="search" size={14} /></button>
+    <button className="dock-action" type="button" aria-label="Reveal active sheet" title="Reveal active sheet" disabled={closing || !selectedSheetName} onClick={() => setRevealSheetSignal((current) => current + 1)}><Icon name="target" size={14} /></button>
+    <button className="dock-action" type="button" aria-label="Collapse all sheet folders" title="Collapse all folders" disabled={closing} onClick={() => setCollapseSheetsSignal((current) => current + 1)}><Icon name="collapse" size={14} /></button>
+  </>;
 
   return (
     <main className="app-shell editor-shell">
@@ -602,8 +637,8 @@ export function EditorShell({
         } as CSSProperties}
       >
         <ActivityRail side="left" items={[{ id: "sheets", label: "Sheets", icon: "folder", active: leftDockOpen && leftPanelId === "sheets", onSelect: () => { handlePanelMove("sheets", "left"); dispatchLayout({ type: "setRegionVisibility", regionId: "leftDock", visible: true }); } }, { id: "search", label: "Search", icon: "search", active: leftDockOpen && leftPanelId === "search", onSelect: () => handleToolSelect("search") }]} />
-        <DockPanel panelId={leftPanelId ?? "sheets"} title={leftPanelId === "sheets" ? "Sheets" : "Search"} meta={leftPanelId === "sheets" ? project.sheets.length.toLocaleString() : "unavailable"} moveTargets={leftPanelId ? panelMoveTargets(leftPanelId, "left") : []} onMove={(region) => leftPanelId && handlePanelMove(leftPanelId, region)} canFloat={leftPanelId === "search"} onFloat={() => void detachPanel("search")} onDropPanel={(panelId) => handlePanelDrop("left", panelId)} className={leftDockOpen && detachedPanel !== leftPanelId ? "sheets-dock" : "sheets-dock is-hidden-dock"}>
-          {leftPanelId === "sheets" ? <SheetSidebar sheets={project.sheets} selectedSheetName={selectedSheetName} disabled={closing} active={leftDockOpen && leftPanelId === "sheets"} quickFindSignal={quickFindSignal} onSelect={handleSheetSelect} /> : <WorkbenchToolDock activeTool="search" gitMode={gitMode} selectedBinding={selectedBinding} onGitModeChange={setGitMode} />}
+        <DockPanel panelId={leftPanelId ?? "sheets"} title={leftPanelId === "sheets" ? "Sheets" : "Search"} meta={leftPanelId === "sheets" ? project.sheets.length.toLocaleString() : "unavailable"} headerActions={leftPanelId === "sheets" ? sheetHeaderActions : undefined} moveTargets={leftPanelId ? panelMoveTargets(leftPanelId, "left") : []} onMove={(region) => leftPanelId && handlePanelMove(leftPanelId, region)} canFloat={leftPanelId === "search"} onFloat={() => void detachPanel("search")} onDropPanel={(panelId) => handlePanelDrop("left", panelId)} className={leftDockOpen && detachedPanel !== leftPanelId ? "sheets-dock" : "sheets-dock is-hidden-dock"}>
+          {leftPanelId === "sheets" ? <SheetSidebar sheets={project.sheets} selectedSheetName={selectedSheetName} disabled={closing} active={leftDockOpen && leftPanelId === "sheets"} hideEmpty={hideEmptySheets} onHideEmptyChange={setHideEmptySheets} filterOpen={sheetFilterOpen} onFilterOpenChange={setSheetFilterOpen} onOpenFilter={focusSheetFilter} quickFindSignal={quickFindSignal} revealSignal={revealSheetSignal} collapseSignal={collapseSheetsSignal} onSelect={handleSheetSelect} /> : <WorkbenchToolDock activeTool="search" gitMode={gitMode} selectedBinding={selectedBinding} onGitModeChange={setGitMode} />}
         </DockPanel>
         <ResizeHandle axis="x" label="Resize sheets panel" onDelta={resizeLeftDock} />
         <div className="workbench-content">
@@ -619,11 +654,48 @@ export function EditorShell({
               </div>
             )}
           </div>
-          {layout.regions.bottomPanel.visible ? <><ResizeHandle axis="y" label="Resize bottom panel" onDelta={resizeBottomPanel} />{bottomPanelId === "tasks" || bottomPanelId === "gitChanges" || bottomPanelId === "diagnostics" ? <BottomPanel panelId={bottomPanelId} activeTab={bottomPanelId} onTabChange={(tab) => { dispatchLayout({ type: "setActiveTab", regionId: "bottomPanel", tabId: tab }); setDockLayoutState((current) => reduceDockLayout(current, { type: "activate", panelId: tab })); }} onCollapse={() => dispatchLayout({ type: "setRegionVisibility", regionId: "bottomPanel", visible: false })} onDetach={() => void detachPanel(bottomPanelId)} onDropPanel={(panelId) => handlePanelDrop("bottom", panelId)} /> : <div className="bottom-panel bottom-dock-content" onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); const panelId = event.dataTransfer.getData("text/aeria-panel"); if (panelId) handlePanelDrop("bottom", panelId); }}>{bottomPanelId === "sheets" ? <SheetSidebar sheets={project.sheets} selectedSheetName={selectedSheetName} disabled={closing} active quickFindSignal={quickFindSignal} onSelect={handleSheetSelect} /> : <WorkbenchToolDock activeTool={bottomPanelId === "git" ? "git" : bottomPanelId === "search" ? "search" : "ai"} gitMode={gitMode} selectedBinding={selectedBinding} onGitModeChange={setGitMode} />}</div>}</> : null}
+          {layout.regions.bottomPanel.visible ? <>
+            <ResizeHandle axis="y" label="Resize bottom panel" onDelta={resizeBottomPanel} />
+            {bottomPanelId === "tasks" || bottomPanelId === "gitChanges" || bottomPanelId === "diagnostics" ? (
+              <BottomPanel
+                panelId={bottomPanelId}
+                activeTab={bottomPanelId}
+                onTabChange={(tab) => {
+                  dispatchLayout({ type: "setActiveTab", regionId: "bottomPanel", tabId: tab });
+                  setDockLayoutState((current) => reduceDockLayout(current, { type: "activate", panelId: tab }));
+                }}
+                onCollapse={() => dispatchLayout({ type: "setRegionVisibility", regionId: "bottomPanel", visible: false })}
+                onDetach={() => void detachPanel(bottomPanelId)}
+                onDropPanel={(panelId) => handlePanelDrop("bottom", panelId)}
+              />
+            ) : (
+              <div
+                className={bottomPanelId === "sheets" ? "bottom-panel bottom-dock-content bottom-sheet-dock" : "bottom-panel bottom-dock-content"}
+                onDragOver={(event) => event.preventDefault()}
+                onDrop={(event) => {
+                  event.preventDefault();
+                  const panelId = event.dataTransfer.getData("text/aeria-panel");
+                  if (panelId) handlePanelDrop("bottom", panelId);
+                }}
+              >
+                {bottomPanelId === "sheets" ? <>
+                  <header className="dock-header">
+                    <span className="dock-title">Sheets</span>
+                    <span className="dock-meta">{project.sheets.length.toLocaleString()}</span>
+                    <span className="dock-spacer" />
+                    <div className="dock-header-actions" role="group" aria-label="Sheets actions">{sheetHeaderActions}</div>
+                  </header>
+                  <SheetSidebar sheets={project.sheets} selectedSheetName={selectedSheetName} disabled={closing} active hideEmpty={hideEmptySheets} onHideEmptyChange={setHideEmptySheets} filterOpen={sheetFilterOpen} onFilterOpenChange={setSheetFilterOpen} onOpenFilter={focusSheetFilter} quickFindSignal={quickFindSignal} revealSignal={revealSheetSignal} collapseSignal={collapseSheetsSignal} onSelect={handleSheetSelect} />
+                </> : (
+                  <WorkbenchToolDock activeTool={bottomPanelId === "git" ? "git" : bottomPanelId === "search" ? "search" : "ai"} gitMode={gitMode} selectedBinding={selectedBinding} onGitModeChange={setGitMode} />
+                )}
+              </div>
+            )}
+          </> : null}
         </div>
         <ResizeHandle axis="x" label="Resize auxiliary dock" onDelta={resizeRightDock} />
-          <DockPanel panelId={rightPanelId ?? activeTool} title={rightPanelId === "ai" ? "AI" : rightPanelId === "git" ? "Git" : rightPanelId === "sheets" ? "Sheets" : "Search"} meta={rightPanelId === "sheets" ? project.sheets.length.toLocaleString() : "unavailable"} moveTargets={rightPanelId ? panelMoveTargets(rightPanelId, "right") : []} onMove={(region) => rightPanelId && handlePanelMove(rightPanelId, region)} canFloat={rightPanelId === "ai" || rightPanelId === "git" || rightPanelId === "search"} onFloat={() => void detachPanel(rightPanelId === "search" ? "search" : rightPanelId === "git" ? "git" : "ai")} onDropPanel={(panelId) => handlePanelDrop("right", panelId)} className={layout.regions.rightDock.visible && detachedPanel !== rightPanelId ? "right-tool-dock" : "right-tool-dock is-hidden-dock"}>
-            {rightPanelId === "sheets" ? <SheetSidebar sheets={project.sheets} selectedSheetName={selectedSheetName} disabled={closing} active={layout.regions.rightDock.visible} quickFindSignal={quickFindSignal} onSelect={handleSheetSelect} /> : <WorkbenchToolDock activeTool={rightPanelId === "search" ? "search" : rightPanelId === "git" ? "git" : "ai"} gitMode={gitMode} selectedBinding={selectedBinding} onGitModeChange={setGitMode} />}
+          <DockPanel panelId={rightPanelId ?? activeTool} title={rightPanelId === "ai" ? "AI" : rightPanelId === "git" ? "Git" : rightPanelId === "sheets" ? "Sheets" : "Search"} meta={rightPanelId === "sheets" ? project.sheets.length.toLocaleString() : "unavailable"} headerActions={rightPanelId === "sheets" ? sheetHeaderActions : undefined} moveTargets={rightPanelId ? panelMoveTargets(rightPanelId, "right") : []} onMove={(region) => rightPanelId && handlePanelMove(rightPanelId, region)} canFloat={rightPanelId === "ai" || rightPanelId === "git" || rightPanelId === "search"} onFloat={() => void detachPanel(rightPanelId === "search" ? "search" : rightPanelId === "git" ? "git" : "ai")} onDropPanel={(panelId) => handlePanelDrop("right", panelId)} className={layout.regions.rightDock.visible && detachedPanel !== rightPanelId ? "right-tool-dock" : "right-tool-dock is-hidden-dock"}>
+            {rightPanelId === "sheets" ? <SheetSidebar sheets={project.sheets} selectedSheetName={selectedSheetName} disabled={closing} active={layout.regions.rightDock.visible} hideEmpty={hideEmptySheets} onHideEmptyChange={setHideEmptySheets} filterOpen={sheetFilterOpen} onFilterOpenChange={setSheetFilterOpen} onOpenFilter={focusSheetFilter} quickFindSignal={quickFindSignal} revealSignal={revealSheetSignal} collapseSignal={collapseSheetsSignal} onSelect={handleSheetSelect} /> : <WorkbenchToolDock activeTool={rightPanelId === "search" ? "search" : rightPanelId === "git" ? "git" : "ai"} gitMode={gitMode} selectedBinding={selectedBinding} onGitModeChange={setGitMode} />}
           </DockPanel>
         <ActivityRail side="right" items={[{ id: "ai", label: "AI", icon: "sparkles", active: layout.regions.rightDock.visible && activeTool === "ai", onSelect: () => handleToolSelect("ai") }, { id: "git", label: "Git", icon: "branch", active: layout.regions.rightDock.visible && activeTool === "git", onSelect: () => handleToolSelect("git") }]} />
       </div>

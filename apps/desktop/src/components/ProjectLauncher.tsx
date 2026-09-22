@@ -319,10 +319,11 @@ export function ProjectLauncher({ initialError, onProjectReady }: ProjectLaunche
                   {recentState.projects.map((project) => (
                     <article className="project-plate" key={project.id}>
                       <button className="project-open-area" type="button" disabled={launcherDisabled || project.availability !== "ready"} onClick={() => void handleRecentOpen(project)}>
+                        <span className="project-icon"><Icon name="folder" size={18} /></span>
                         <div className="project-main">
-                        <strong className="project-name">{displayPathName(project.repositoryRoot)}</strong>
-                        <code className="project-path" title={displayPath(project.repositoryRoot)}>{displayPath(project.repositoryRoot)}</code>
-                        <span className={project.availability === "ready" ? "project-meta" : "project-meta issue"}>{project.availability === "ready" ? `${languageLabel(project.sourceLanguage)} source` : availabilityLabel(project.availability)}</span>
+                          <strong className="project-name">{displayPathName(project.repositoryRoot)}</strong>
+                          <code className="project-path" title={displayPath(project.repositoryRoot)}>{displayPath(project.repositoryRoot)}</code>
+                          <span className={project.availability === "ready" ? "project-meta" : "project-meta issue"}>{project.availability === "ready" ? `${languageLabel(project.sourceLanguage)} source` : availabilityLabel(project.availability)}</span>
                         </div>
                       </button>
                       <div className="project-actions">

@@ -183,6 +183,15 @@ impl GuidanceIndex {
                 .is_ok()
     }
 
+    /// Returns the number of source String cells granted for translation in a sheet.
+    #[must_use]
+    pub fn translatable_cell_count(&self, sheet_name: &str) -> usize {
+        self.sheets
+            .get(sheet_name)
+            .filter(|sheet| sheet.status == GuidanceSheetStatus::Compatible)
+            .map_or(0, |sheet| sheet.occurrences.len())
+    }
+
     /// Returns the validated schema hash for a guidance sheet, if present.
     #[must_use]
     pub fn schema_hash(&self, sheet_name: &str) -> Option<&str> {

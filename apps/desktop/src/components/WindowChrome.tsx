@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { isTauri } from "@tauri-apps/api/core";
 import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
 import { ApplicationMenu, type ApplicationMenuDefinition } from "./ApplicationMenu";
 import { Icon } from "../ui/primitives/Icon";
@@ -86,8 +87,8 @@ export function WindowChrome({ context, detail, mode, projectName, onClose, onCl
         });
         if (active) unlistenResize = cleanupResize;
         else cleanupResize();
-      } catch {
-        // The renderer can also run in a browser during development.
+      } catch (error) {
+        if (isTauri()) console.warn("Could not configure the Aeria window", error);
       }
     })();
 
@@ -127,7 +128,7 @@ export function WindowChrome({ context, detail, mode, projectName, onClose, onCl
         { id: "file", label: "File", items: [menuCommand({ id: "close", label: "Close project", onSelect: onCloseProject ?? handleClose })] },
         { id: "view", label: "View", items: [menuCommand({ id: "sheets", label: "Sheets panel", ...(onToggleDock ? { onSelect: onToggleDock } : {}) }), menuCommand({ id: "search", label: "Project Search", ...(onSelectTool ? { onSelect: () => onSelectTool("search") } : {}) }), menuCommand({ id: "bottom", label: "Bottom panel", ...(onToggleBottom ? { onSelect: onToggleBottom } : {}) })] },
         { id: "project", label: "Project", items: [menuCommand({ id: "close-project", label: "Close project", onSelect: onCloseProject ?? handleClose })] },
-        { id: "sheet", label: "Sheet", items: [menuCommand({ id: "quick-find", label: "Quick Find sheets", shortcut: "Ctrl+F", ...(onQuickFind ? { onSelect: onQuickFind } : {}) })] },
+        { id: "sheet", label: "Sheet", items: [menuCommand({ id: "quick-find", label: "Filter sheets", shortcut: "Ctrl+F", ...(onQuickFind ? { onSelect: onQuickFind } : {}) })] },
         { id: "translation", label: "Translation", items: [menuCommand({ id: "translation-unavailable", label: "Translation commands unavailable", disabled: true })] },
         { id: "ai", label: "AI", items: [menuCommand({ id: "open-ai", label: "Open AI panel", onSelect: () => onSelectTool?.("ai") })] },
         { id: "git", label: "Git", items: [menuCommand({ id: "open-git", label: "Open Git panel", onSelect: () => onSelectTool?.("git") })] },

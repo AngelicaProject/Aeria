@@ -3,7 +3,7 @@ import type { SVGProps } from "react";
 export type IconName =
   | "folder" | "search" | "branch" | "sparkles" | "more" | "chevron"
   | "chevronDown" | "chevronRight" | "close" | "minimize" | "maximize"
-  | "plus" | "settings" | "target" | "collapse" | "external" | "help" | "file";
+  | "plus" | "settings" | "target" | "collapse" | "external" | "help" | "file" | "eye" | "eyeOff";
 
 export function Icon({ name, size = 16, ...props }: { name: IconName; size?: number } & Omit<SVGProps<SVGSVGElement>, "name">) {
   const common = { viewBox: "0 0 24 24", width: size, height: size, fill: "none", stroke: "currentColor", strokeWidth: 1.7, strokeLinecap: "round" as const, strokeLinejoin: "round" as const, "aria-hidden": true, ...props };
@@ -23,6 +23,8 @@ export function Icon({ name, size = 16, ...props }: { name: IconName; size?: num
     case "settings": return <svg {...common}><circle cx="12" cy="12" r="3.5" /><path d="m19 13.5 1.5 1-.9 1.7-1.8-.4a7 7 0 0 1-1.4 1.1l-.2 1.8h-2l-.7-1.7a7 7 0 0 1-1.8 0l-.7 1.7h-2l-.2-1.8a7 7 0 0 1-1.4-1.1l-1.8.4-.9-1.7 1.5-1a7 7 0 0 1 0-1.8l-1.5-1 .9-1.7 1.8.4a7 7 0 0 1 1.4-1.1l.2-1.8h2l.7 1.7a7 7 0 0 1 1.8 0l.7-1.7h2l.2 1.8a7 7 0 0 1 1.4 1.1l1.8-.4.9 1.7-1.5 1a7 7 0 0 1 0 1.8Z" /></svg>;
     case "target": return <svg {...common}><circle cx="12" cy="12" r="3" /><path d="M3 12h3M18 12h3M12 3v3M12 18v3" /></svg>;
     case "collapse": return <svg {...common}><path d="m7 14 5-5 5 5" /></svg>;
+    case "eye": return <svg {...common}><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12Z" /><circle cx="12" cy="12" r="3" /></svg>;
+    case "eyeOff": return <svg {...common}><path d="m3 3 18 18M10.6 10.6a2 2 0 0 0 2.8 2.8M9.9 5.2A10.8 10.8 0 0 1 12 5c6.4 0 10 7 10 7a16.8 16.8 0 0 1-4 4.9M6.2 6.2C3.6 7.8 2 12 2 12s3.6 7 10 7a10.8 10.8 0 0 0 2.1-.2" /></svg>;
     case "external": return <svg {...common}><path d="M9 5H5v14h14v-4M13 5h6v6M19 5l-8 8" /></svg>;
     case "help": return <svg {...common}><circle cx="12" cy="12" r="9" /><path d="M9.7 9a2.4 2.4 0 1 1 3.5 2.1c-.8.4-1.2.9-1.2 1.9M12 16.5h.01" /></svg>;
     case "file": return <svg {...common}><path d="M6 3.5h8l4 4v13H6z" /><path d="M14 3.5v4h4" /></svg>;
