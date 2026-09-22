@@ -15,9 +15,7 @@ export function ProjectHeader({ project, closing, disabled, onClose }: ProjectHe
         <strong className="project-path">{displayPath(project.repositoryRoot)}</strong>
       </div>
       <div className="project-facts">
-        <span className="language-pair">
-          {project.sourceLanguage} <span aria-hidden="true">→</span> {project.targetLanguage}
-        </span>
+        <span className="language-pair">Source {project.sourceLanguage}</span>
         <span className="project-meta">
           {project.gameVersion || "Unknown game version"} · {project.scope || "project"}
         </span>

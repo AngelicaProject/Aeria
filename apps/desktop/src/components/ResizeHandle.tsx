@@ -19,7 +19,7 @@ export function ResizeHandle({ axis, label, onDelta }: ResizeHandleProps) {
     }
     function handlePointerUp() {
       startRef.current = null;
-      document.body.classList.remove("resizing-layout");
+      document.body.classList.remove("resizing-layout-x", "resizing-layout-y");
     }
     window.addEventListener("pointermove", handlePointerMove);
     window.addEventListener("pointerup", handlePointerUp);
@@ -29,5 +29,5 @@ export function ResizeHandle({ axis, label, onDelta }: ResizeHandleProps) {
     };
   }, [axis, onDelta]);
 
-  return <div className={`resize-handle ${axis === "x" ? "resize-handle-x" : "resize-handle-y"}`} role="separator" aria-label={label} onPointerDown={(event) => { event.currentTarget.setPointerCapture?.(event.pointerId); startRef.current = axis === "x" ? event.clientX : event.clientY; document.body.classList.add("resizing-layout"); }} />;
+  return <div className={`resize-handle ${axis === "x" ? "resize-handle-x" : "resize-handle-y"}`} role="separator" aria-label={label} onPointerDown={(event) => { event.currentTarget.setPointerCapture?.(event.pointerId); startRef.current = axis === "x" ? event.clientX : event.clientY; document.body.classList.add(axis === "x" ? "resizing-layout-x" : "resizing-layout-y"); }} />;
 }

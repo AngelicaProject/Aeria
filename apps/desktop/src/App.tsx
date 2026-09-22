@@ -2,7 +2,6 @@ import { useEffect, useState } from "react";
 import { currentProject, normalizeCommandError } from "./ipc";
 import { EditorShell } from "./components/EditorShell";
 import { ProjectLauncher } from "./components/ProjectLauncher";
-import { WindowChrome } from "./components/WindowChrome";
 import type { CommandError, ProjectOpenResultDto, ProjectSummaryDto } from "./types";
 import { ThemeProvider } from "./ui/theme/theme";
 
@@ -46,7 +45,6 @@ function AppContent() {
   if (startupState === "starting") {
     return (
       <main className="status-shell">
-        <WindowChrome context="Starting" mode="launcher" />
         <div className="status-card" aria-live="polite">
           <span className="spinner" aria-hidden="true" />
           <p>Checking the active project…</p>

@@ -29,3 +29,14 @@ test("layout reducer keeps panel and document topology separate from visibility"
   assert.equal(tabbed.regions.translation.activeTabId, "review");
   assert.equal(tabbed.activeDocumentId, "review");
 });
+
+test("layout reducer keeps right dock and bottom panel state independent", () => {
+  const resized = reduceWorkbenchLayout(initialWorkbenchLayout, { type: "resizeRegion", regionId: "rightDock", delta: 500 });
+  const bottom = reduceWorkbenchLayout(resized, { type: "resizeRegion", regionId: "bottomPanel", delta: -500 });
+  const hidden = reduceWorkbenchLayout(bottom, { type: "setRegionVisibility", regionId: "bottomPanel", visible: false });
+
+  assert.equal(resized.regions.rightDock.size, 500);
+  assert.equal(bottom.regions.bottomPanel.size, 100);
+  assert.equal(hidden.regions.rightDock.visible, true);
+  assert.equal(hidden.regions.bottomPanel.visible, false);
+});

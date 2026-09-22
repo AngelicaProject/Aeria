@@ -135,6 +135,33 @@ function BrowseField({ id, label, value, placeholder, hint, directory = false, d
   );
 }
 
+type RecentProjectActionsProps = {
+  project: RecentProjectDto;
+  disabled: boolean;
+  onOpen: () => void;
+  onRemove: () => void;
+};
+
+function RecentProjectActions({ project, disabled, onOpen, onRemove }: RecentProjectActionsProps) {
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    function handlePointerDown(event: PointerEvent) {
+      if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
+    }
+    window.addEventListener("pointerdown", handlePointerDown);
+    return () => window.removeEventListener("pointerdown", handlePointerDown);
+  }, []);
+
+  return (
+    <div className="project-actions-menu" ref={rootRef}>
+      <button className="button icon-button" type="button" aria-label={`Actions for ${displayPathName(project.repositoryRoot)}`} aria-haspopup="menu" aria-expanded={open} disabled={disabled} onClick={() => setOpen((current) => !current)}><Icon name="more" size={15} /></button>
+      {open ? <div className="project-actions-popup" role="menu"><button type="button" role="menuitem" disabled={project.availability !== "ready"} onClick={() => { setOpen(false); onOpen(); }}>Open</button><button type="button" role="menuitem" onClick={() => { setOpen(false); onRemove(); }}>Remove from Recent Projects…</button></div> : null}
+    </div>
+  );
+}
+
 export function ProjectLauncher({ initialError, onProjectReady }: ProjectLauncherProps) {
   const [mode, setMode] = useState<LauncherMode>("recent");
   const [repositoryRoot, setRepositoryRoot] = useState("");
@@ -144,7 +171,6 @@ export function ProjectLauncher({ initialError, onProjectReady }: ProjectLaunche
   const [busy, setBusy] = useState<Exclude<LauncherMode, "recent" | "settings"> | null>(null);
   const [jobId, setJobId] = useState<string | null>(null);
   const [cancelRequested, setCancelRequested] = useState(false);
-  const [sourcePackageEventsReady, setSourcePackageEventsReady] = useState(false);
   const [progress, setProgress] = useState<AtlasEvent | null>(null);
   const [error, setError] = useState<LauncherError | null>(initialError ? { operation: "open", error: initialError } : null);
   const [recentState, setRecentState] = useState<RecentProjectsState>(initialRecentProjectsState);
@@ -174,11 +200,10 @@ export function ProjectLauncher({ initialError, onProjectReady }: ProjectLaunche
       setProgress(payload.event);
     }).then((cleanup) => {
       if (disposed) cleanup();
-      else { unlisten = cleanup; setSourcePackageEventsReady(true); }
+      else { unlisten = cleanup; }
     }).catch((caughtError: unknown) => {
       if (disposed) return;
       if (import.meta.env.DEV) console.error("failed to register source-package-event listener", caughtError);
-      setSourcePackageEventsReady(false);
       setError({ operation: "create", error: sourcePackageListenerError() });
     });
     return () => { disposed = true; unlisten?.(); };
@@ -187,16 +212,6 @@ export function ProjectLauncher({ initialError, onProjectReady }: ProjectLaunche
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (mode !== "open" && mode !== "create") return;
-    if (mode === "create") {
-      setError({
-        operation: "create",
-        error: {
-          code: "targetLanguageRequired",
-          message: "Project creation is unavailable until Aeria defines a project-settings boundary for the required target language.",
-        },
-      });
-      return;
-    }
     busyRef.current = mode;
     jobIdRef.current = null;
     flushSync(() => {
@@ -207,7 +222,14 @@ export function ProjectLauncher({ initialError, onProjectReady }: ProjectLaunche
       setCancelRequested(false);
     });
     try {
-      const result = await openProject(repositoryRoot, sourcePackagePath);
+      const result = mode === "open"
+        ? await openProject(repositoryRoot, sourcePackagePath)
+        : await (async () => {
+            const started = await startSourcePackage();
+            jobIdRef.current = started.jobId;
+            setJobId(started.jobId);
+            return initializeProjectFromGame(started.jobId, repositoryRoot, gamePath, sourceLanguage, "und");
+          })();
       onProjectReady(result);
     } catch (caughtError) {
       setError({ operation: mode, error: normalizeCommandError(caughtError) });
@@ -289,15 +311,16 @@ export function ProjectLauncher({ initialError, onProjectReady }: ProjectLaunche
                 <div className="project-list">
                   {recentState.projects.map((project) => (
                     <article className="project-plate" key={project.id}>
-                      <div className="project-mark" aria-hidden="true">{displayPathName(project.repositoryRoot).slice(0, 1).toUpperCase()}</div>
-                      <div className="project-main">
+                      <button className="project-open-area" type="button" disabled={launcherDisabled || project.availability !== "ready"} onClick={() => void handleRecentOpen(project)}>
+                        <div className="project-main">
                         <strong className="project-name">{displayPathName(project.repositoryRoot)}</strong>
                         <code className="project-path" title={displayPath(project.repositoryRoot)}>{displayPath(project.repositoryRoot)}</code>
                         <span className={project.availability === "ready" ? "project-meta" : "project-meta issue"}>{project.availability === "ready" ? `${languageLabel(project.sourceLanguage)} source` : availabilityLabel(project.availability)}</span>
-                      </div>
+                        </div>
+                      </button>
                       <div className="project-actions">
                         {project.availability === "ready" ? <button className="button primary-button compact-button" type="button" disabled={launcherDisabled} onClick={() => void handleRecentOpen(project)}>{recentBusyId === project.id ? "Opening…" : "Open"}</button> : null}
-                        <button className="button icon-button" type="button" aria-label={`Remove ${displayPathName(project.repositoryRoot)} from recent projects`} disabled={launcherDisabled} onClick={() => void handleRecentRemove(project)}><Icon name="close" size={15} /></button>
+                        <RecentProjectActions project={project} disabled={launcherDisabled} onOpen={() => void handleRecentOpen(project)} onRemove={() => void handleRecentRemove(project)} />
                       </div>
                     </article>
                   ))}
@@ -315,10 +338,10 @@ export function ProjectLauncher({ initialError, onProjectReady }: ProjectLaunche
                   <>
                     <BrowseField id="game-path" label="Game installation" value={gamePath} onChange={setGamePath} onError={handlePickerError} placeholder="C:\\Games\\FINAL FANTASY XIV" directory disabled={launcherDisabled} />
                     <div className="launcher-field"><label htmlFor="source-language">Source language</label><SelectMenu value={sourceLanguage} options={sourceLanguages} onChange={setSourceLanguage} label="Source language" disabled={launcherDisabled} /></div>
-                    <p className="form-note">Creation is paused: the current workspace contract still requires a target language, and project-settings semantics are outside this corrective UI pass.</p>
+                    <p className="form-note">New projects use the neutral target-language tag <code>und</code> until project settings can choose a real translation target.</p>
                   </>
                 )}
-                <button className="button primary-button launcher-submit" type="submit" disabled={launcherDisabled || (mode === "create" && !sourcePackageEventsReady)}>{busy === "open" ? "Opening…" : busy === "create" ? "Creating…" : mode === "open" ? "Open project" : "Create project"}</button>
+                <button className="button primary-button launcher-submit" type="submit" disabled={launcherDisabled}>{busy === "open" ? "Opening…" : busy === "create" ? "Creating…" : mode === "open" ? "Open project" : "Create project"}</button>
               </form>
               {busy === "create" ? <section className="atlas-progress" aria-label="Source package progress"><div className="atlas-progress-heading"><span className="spinner" /><strong>{phaseLabel(progress)}</strong></div><div className="progress-facts"><span>Sheet<strong>{details.sheet ?? "—"}</strong></span><span>Language<strong>{details.language ?? "—"}</strong></span><span>Rows<strong>{details.rows === null ? "—" : details.rows.toLocaleString()}</strong></span></div><button className="button secondary-button cancel-button" type="button" onClick={() => void handleCancel()} disabled={jobId === null || cancelRequested}>{cancelRequested ? "Cancelling…" : "Cancel"}</button></section> : null}
             </section>

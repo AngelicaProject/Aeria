@@ -24,14 +24,14 @@ visible and offer **Remove from recents**; ready entries offer **Open**.
 The launcher can also open an existing project with a repository root and HSP
 source-package path. The Create surface accepts a repository root, game
 installation, and one of Atlas's supported source languages (`en`, `ja`, `de`, or
-`fr`), but submission currently stops at a typed boundary error because the
-existing workspace contract still requires a target language and this UI pass
-does not invent project-settings semantics. Once a project is active, the
+`fr`). Until project settings can choose a real target language, creation uses
+the explicit neutral compatibility tag `und`; it is never displayed as a user
+translation target and does not reinterpret existing overlays. Once a project is active, the
 renderer uses the sheets in
 `ProjectSummaryDto`, pages one sheet at a time with a limit of 100 entries, and
 offers an explicit **Load more** action.
 
-The renderer owns only ephemeral drafts, navigation, paging, and loading/error presentation. Rust remains authoritative for source bindings, workspace state, validation, classification, and mutation semantics. The middle pane selects a logical row by `sheetName`, `rowId`, and `subrowId`; the editor renders context cells read-only and every translatable cell in physical column order. Until EXDSchema exists, fields are labelled `Column N`.
+The renderer owns only ephemeral drafts, navigation, paging, and loading/error presentation. Rust remains authoritative for source bindings, workspace state, validation, classification, and mutation semantics. The middle pane receives row pages but renders a flattened occurrence view: one `TranslationCellDto` is one Lens lane, identified by `sheetName`, `rowId`, `subrowId`, and `columnIndex`. A logical row remains the grouping context. The editor selects one occurrence at a time and keeps compact field navigation for multi-cell rows; unrelated drafts remain in the row-local draft map. Until EXDSchema exists, fields are labelled `Column N`.
 
 Each cell has an independent target draft, note draft, translation-unit ID,
 and review state. Target and note text do not autosave: both use explicit save
@@ -43,13 +43,18 @@ from authoritative DTOs, and restores the selected row coordinate.
 
 Unsaved target or note drafts are marked and protected by a discard confirmation when changing rows, changing sheets, closing the project, or performing a mutation that would refresh away another dirty cell draft. The UI distinguishes an absent translation overlay from an overlay whose target is explicitly empty.
 
-Row list previews show the `rowId:subrowId` coordinate, the first
-guidance-allowed source text, and a neutral translated-fields count. Blocked
-source cells remain context only and are never used as permission heuristics.
+Lens previews show one occurrence per lane with the `rowId:subrowId`
+coordinate on the first lane, its `col N` field identity, clipped source and
+target previews, and that occurrence's review state. Blocked source cells remain
+context only and are never used as permission heuristics.
 `Load more` continues to be explicit; a source page may return zero visible
 rows while its row cursor still has more source work.
 
-This first editor intentionally has no file picker, search or filtering, virtualization, structured macro controls, source update/rebase UI, export, Git controls, or AI controls. Macro text is shown literally with whitespace preserved.
+This first editor intentionally has no search or filtering, virtualization,
+structured macro controls, source update/rebase UI, or export. The workbench
+retains truthful Git and AI dock slots, bottom-panel tabs, and status/layout
+infrastructure even when those backends are unavailable. Macro text is shown
+literally with whitespace preserved.
 
 Registry load failures show a dismissible, non-blocking launcher warning while
 manual Open project and Create project remain available. After dismissal, the

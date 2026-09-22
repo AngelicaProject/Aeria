@@ -18,6 +18,8 @@ export type WorkbenchLayoutState = {
 export type WorkbenchRegions = {
   leftDock: LayoutRegion;
   translation: LayoutRegion;
+  rightDock: LayoutRegion;
+  bottomPanel: LayoutRegion;
   [regionId: string]: LayoutRegion;
 };
 
@@ -64,6 +66,28 @@ export const initialWorkbenchLayout: WorkbenchLayoutState = {
       size: 390,
       minSize: 300,
       maxSize: 620,
+      resizable: true,
+    },
+    rightDock: {
+      id: "rightDock",
+      panelIds: ["ai", "git"],
+      documentIds: [],
+      activeTabId: "ai",
+      visible: true,
+      size: 330,
+      minSize: 250,
+      maxSize: 500,
+      resizable: true,
+    },
+    bottomPanel: {
+      id: "bottomPanel",
+      panelIds: ["tasks", "gitChanges", "diagnostics"],
+      documentIds: [],
+      activeTabId: "tasks",
+      visible: true,
+      size: 152,
+      minSize: 100,
+      maxSize: 300,
       resizable: true,
     },
   },

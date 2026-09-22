@@ -14,6 +14,7 @@ import type {
   CommandError,
   ProjectSummaryDto,
   ReviewState,
+  SourceBinding,
   TranslationCellDto,
   TranslationOverlayDto,
   TranslationRowCursorDto,
@@ -22,7 +23,8 @@ import type {
 import { ErrorBanner } from "./ErrorBanner";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { ActivityRail } from "./ActivityRail";
-import { DocumentTabs } from "./DocumentTabs";
+import { BottomPanel, type BottomPanelTab } from "./BottomPanel";
+import { DocumentTabs, type DocumentTab } from "./DocumentTabs";
 import { DockPanel } from "./DockPanel";
 import { ResizeHandle } from "./ResizeHandle";
 import { SheetSidebar } from "./SheetSidebar";
@@ -30,8 +32,10 @@ import { StatusBar } from "./StatusBar";
 import { CellDraft, CellMutation, TranslationEditor } from "./TranslationEditor";
 import { TranslationList } from "./TranslationList";
 import { WindowChrome } from "./WindowChrome";
+import { WorkbenchToolDock, type GitPresentationMode, type WorkbenchTool } from "./WorkbenchToolDock";
 import { displayPathName } from "../pathDisplay";
 import { initialWorkbenchLayout, reduceWorkbenchLayout } from "../ui/layout";
+import type { TranslationOccurrenceView } from "../translationOccurrences";
 
 const PAGE_SIZE = 100;
 
@@ -72,13 +76,17 @@ export function EditorShell({
   const [rows, setRows] = useState<TranslationRowDto[]>([]);
   const [nextAfter, setNextAfter] = useState<TranslationRowCursorDto | null>(null);
   const [selectedRowCursor, setSelectedRowCursor] = useState<TranslationRowCursorDto | null>(null);
+  const [selectedBinding, setSelectedBinding] = useState<SourceBinding | null>(null);
   const [sheetLoading, setSheetLoading] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
   const [mutations, setMutations] = useState<CellMutation[]>([]);
+  const [dirty, setDirty] = useState(false);
   const [closing, setClosing] = useState(false);
   const [editorError, setEditorError] = useState<EditorError | null>(null);
   const [discardRequest, setDiscardRequest] = useState<DiscardRequest | null>(null);
   const [layout, dispatchLayout] = useReducer(reduceWorkbenchLayout, initialWorkbenchLayout);
+  const [activeTool, setActiveTool] = useState<WorkbenchTool>("ai");
+  const [gitMode, setGitMode] = useState<GitPresentationMode>("collaboration");
   const leftDockOpen = layout.regions.leftDock.visible;
   const requestGeneration = useRef(0);
   const hasDirtyDraft = useRef(false);
@@ -98,6 +106,7 @@ export function EditorShell({
 
   const handleDirtyChange = useCallback((dirty: boolean) => {
     hasDirtyDraft.current = dirty;
+    setDirty(dirty);
   }, []);
 
   const applyOverlay = useCallback((sourceBinding: TranslationCellDto["sourceBinding"], translation: TranslationOverlayDto) => {
@@ -120,7 +129,7 @@ export function EditorShell({
     const resetForSheet = () => {
       setSelectedSheetName(sheetName);
       setNextAfter(null);
-      setSelectedRowCursor(null);
+      setDirty(false);
       hasDirtyDraft.current = false;
       setSheetLoading(true);
       setEditorError(null);
@@ -139,6 +148,9 @@ export function EditorShell({
       setRows(page.rows);
       setLoadedSheetName(sheetName);
       setNextAfter(page.nextAfter);
+      const firstRow = page.rows[0];
+      setSelectedRowCursor(firstRow ? cursorForRow(firstRow) : null);
+      setSelectedBinding(firstRow?.cells[0]?.sourceBinding ?? null);
     } catch (error) {
       if (generation === requestGeneration.current) {
         showError("Could not load sheet", error);
@@ -220,20 +232,29 @@ export function EditorShell({
     void beginSheetLoad(sheetName);
   }, [beginSheetLoad, requestDiscardConfirmation, selectedSheetName]);
 
-  const handleRowSelect = useCallback(async (row: TranslationRowDto) => {
-    const cursor = cursorForRow(row);
-    if (selectedRowCursor && rowKey(selectedRowCursor) === rowKey(cursor)) {
-      return;
-    }
-    if (!(await requestDiscardConfirmation("Changing rows will discard your unsaved changes."))) {
-      return;
-    }
+  const handleOccurrenceSelect = useCallback(async (occurrence: TranslationOccurrenceView) => {
+    const cursor = {
+      sheetName: occurrence.binding.sheetName,
+      rowId: occurrence.binding.rowId,
+      subrowId: occurrence.binding.subrowId,
+    };
+    const sameRow = selectedRowCursor !== null && rowKey(selectedRowCursor) === occurrence.rowKey;
+    if (!sameRow && !(await requestDiscardConfirmation("Changing rows will discard your unsaved changes."))) return;
+
     flushSync(() => {
       setSelectedRowCursor(cursor);
-      hasDirtyDraft.current = false;
+      setSelectedBinding(occurrence.binding);
+      if (!sameRow) {
+        hasDirtyDraft.current = false;
+        setDirty(false);
+      }
       setEditorError(null);
     });
   }, [requestDiscardConfirmation, selectedRowCursor]);
+
+  const handleFieldSelect = useCallback((binding: SourceBinding) => {
+    setSelectedBinding(binding);
+  }, []);
 
   const confirmMutationDiscard = useCallback((shouldConfirm: boolean, message: string): Promise<boolean> => {
     return shouldConfirm ? requestDiscardConfirmation(message) : Promise.resolve(true);
@@ -334,6 +355,10 @@ export function EditorShell({
         }
         return appended;
       });
+      if (rows.length === 0 && page.rows[0]) {
+        setSelectedRowCursor(cursorForRow(page.rows[0]));
+        setSelectedBinding(page.rows[0].cells[0]?.sourceBinding ?? null);
+      }
       setNextAfter(page.nextAfter);
     } catch (error) {
       if (generation === requestGeneration.current) {
@@ -342,7 +367,7 @@ export function EditorShell({
     } finally {
       setLoadingMore(false);
     }
-  }, [loadingMore, nextAfter, selectedSheetName, showError]);
+  }, [loadingMore, nextAfter, rows.length, selectedSheetName, showError]);
 
   const handleClose = useCallback(async () => {
     if (!(await requestDiscardConfirmation("Closing the project will discard your unsaved changes."))) {
@@ -391,6 +416,27 @@ export function EditorShell({
   const handleReviewChangeClick = useCallback((cell: TranslationCellDto, reviewState: ReviewState, discardDrafts: () => void) => {
     void handleReviewChange(cell, reviewState, discardDrafts);
   }, [handleReviewChange]);
+  const resizeRightDock = useCallback((delta: number) => {
+    dispatchLayout({ type: "resizeRegion", regionId: "rightDock", delta: -delta });
+  }, []);
+  const resizeBottomPanel = useCallback((delta: number) => {
+    dispatchLayout({ type: "resizeRegion", regionId: "bottomPanel", delta: -delta });
+  }, []);
+  const handleToolSelect = useCallback((tool: WorkbenchTool) => {
+    if (activeTool === tool && layout.regions.rightDock.visible) {
+      dispatchLayout({ type: "setRegionVisibility", regionId: "rightDock", visible: false });
+      return;
+    }
+    setActiveTool(tool);
+    dispatchLayout({ type: "setRegionVisibility", regionId: "rightDock", visible: true });
+    dispatchLayout({ type: "setActiveTab", regionId: "rightDock", tabId: tool });
+  }, [activeTool, layout.regions.rightDock.visible]);
+  const bottomTab = (layout.regions.bottomPanel.activeTabId ?? "tasks") as BottomPanelTab;
+  const documents: DocumentTab[] = [{
+    id: "sheet",
+    label: selectedSheetName ?? "Sheet",
+    detail: loadedSheetName ? `${rows.length.toLocaleString()} rows loaded` : "loading",
+  }];
 
   return (
     <main className="app-shell editor-shell">
@@ -413,60 +459,39 @@ export function EditorShell({
         {editorError ? <ErrorBanner title={editorError.title} error={editorError.error} onDismiss={() => setEditorError(null)} /> : null}
       </div>
       <div
-        className={leftDockOpen ? "workbench-frame" : "workbench-frame dock-closed"}
-        style={{ "--left-dock-width": `${layout.regions.leftDock.size}px` } as CSSProperties}
+        className="workbench-frame"
+        style={{
+          "--left-dock-width": leftDockOpen ? `${layout.regions.leftDock.size}px` : "0px",
+          "--right-dock-width": layout.regions.rightDock.visible ? `${layout.regions.rightDock.size}px` : "0px",
+          "--bottom-panel-height": layout.regions.bottomPanel.visible ? `${layout.regions.bottomPanel.size}px` : "0px",
+        } as CSSProperties}
       >
         <ActivityRail side="left" items={[{ id: "sheets", label: "Sheets", icon: "folder", active: leftDockOpen, onSelect: () => dispatchLayout({ type: "toggleRegion", regionId: "leftDock" }) }]} />
-        {leftDockOpen ? (
-          <>
-            <DockPanel title="Sheets" meta={project.sheets.length.toLocaleString()} className="sheets-dock">
-              <SheetSidebar sheets={project.sheets} selectedSheetName={selectedSheetName} disabled={closing} onSelect={handleSheetSelect} />
-            </DockPanel>
-            <ResizeHandle axis="x" label="Resize sheets panel" onDelta={resizeLeftDock} />
-          </>
-        ) : null}
+        <DockPanel title="Sheets" meta={project.sheets.length.toLocaleString()} className={leftDockOpen ? "sheets-dock" : "sheets-dock is-hidden-dock"}>
+          <SheetSidebar sheets={project.sheets} selectedSheetName={selectedSheetName} disabled={closing} onSelect={handleSheetSelect} />
+        </DockPanel>
+        <ResizeHandle axis="x" label="Resize sheets panel" onDelta={resizeLeftDock} />
         <div className="workbench-content">
-          <DocumentTabs label={selectedSheetName ?? "Sheet"} detail={loadedSheetName ? `${rows.length.toLocaleString()} loaded` : "loading"} />
-          {sheetHasNoRows ? (
-            <div className="empty-document" role="status">
-              <strong>No translatable rows</strong>
-              <p>This sheet does not contain any source String cells that can be translated.</p>
-            </div>
-          ) : (
-            <div className="sheet-document" style={{ "--translation-width": `${layout.regions.translation.size}px` } as CSSProperties}>
-              <TranslationList
-                rows={rows}
-                selectedRow={selectedRowCursor}
-                selectedSheetName={selectedSheetName}
-                loadedSheetName={loadedSheetName}
-                disabled={closing}
-                loading={sheetLoading}
-                refreshing={false}
-                loadingMore={loadingMore}
-                hasMore={nextAfter !== null}
-                onSelect={handleRowSelect}
-                onLoadMore={handleLoadMoreClick}
-              />
-              <ResizeHandle axis="x" label="Resize translation editor" onDelta={resizeTranslation} />
-              <TranslationEditor
-                key={selectedRow ? rowKey(selectedRow) : "empty-editor"}
-                row={selectedRow}
-                mutations={mutations}
-                onDirtyChange={handleDirtyChange}
-                onSaveTarget={handleSaveTargetClick}
-                onSaveNote={handleSaveNoteClick}
-                onReviewChange={handleReviewChangeClick}
-              />
-            </div>
-          )}
-          <StatusBar
-            sheetName={selectedSheetName}
-            rowCount={rows.length}
-            loading={sheetLoading}
-            repositoryRoot={project.repositoryRoot}
-            sourceLanguage={project.sourceLanguage}
-          />
+          <div className="workbench-main-content">
+            <DocumentTabs documents={documents} activeDocumentId={layout.activeDocumentId} onSelect={(documentId) => dispatchLayout({ type: "setActiveDocument", documentId })} onClose={() => undefined} />
+            {sheetHasNoRows ? (
+              <div className="empty-document" role="status"><strong>No translatable rows</strong><p>This sheet does not contain any source String cells that can be translated.</p></div>
+            ) : (
+              <div className="sheet-document" style={{ "--translation-width": `${layout.regions.translation.size}px` } as CSSProperties}>
+                <TranslationList rows={rows} selectedBinding={selectedBinding} selectedSheetName={selectedSheetName} loadedSheetName={loadedSheetName} disabled={closing} loading={sheetLoading} refreshing={false} loadingMore={loadingMore} hasMore={nextAfter !== null} onSelect={handleOccurrenceSelect} onLoadMore={handleLoadMoreClick} />
+                <ResizeHandle axis="x" label="Resize translation editor" onDelta={resizeTranslation} />
+                <TranslationEditor key={selectedRow ? rowKey(selectedRow) : "empty-editor"} row={selectedRow} selectedBinding={selectedBinding} mutations={mutations} onDirtyChange={handleDirtyChange} onSelectCell={handleFieldSelect} onSaveTarget={handleSaveTargetClick} onSaveNote={handleSaveNoteClick} onReviewChange={handleReviewChangeClick} />
+              </div>
+            )}
+            <StatusBar sheetName={selectedSheetName} rowCount={rows.length} loading={sheetLoading} repositoryRoot={project.repositoryRoot} sourceLanguage={project.sourceLanguage} sourceSnapshotId={project.sourceSnapshotId} selectedBinding={selectedBinding} dirty={dirty} />
+          </div>
+          {layout.regions.bottomPanel.visible ? <><ResizeHandle axis="y" label="Resize bottom panel" onDelta={resizeBottomPanel} /><BottomPanel activeTab={bottomTab} onTabChange={(tab) => dispatchLayout({ type: "setActiveTab", regionId: "bottomPanel", tabId: tab })} /></> : null}
         </div>
+        <ResizeHandle axis="x" label="Resize auxiliary dock" onDelta={resizeRightDock} />
+        <DockPanel title={activeTool === "ai" ? "AI" : "Git"} meta="unavailable" className={layout.regions.rightDock.visible ? "right-tool-dock" : "right-tool-dock is-hidden-dock"}>
+          <WorkbenchToolDock activeTool={activeTool} gitMode={gitMode} selectedBinding={selectedBinding} onGitModeChange={setGitMode} />
+        </DockPanel>
+        <ActivityRail side="right" items={[{ id: "ai", label: "AI", icon: "sparkles", active: layout.regions.rightDock.visible && activeTool === "ai", onSelect: () => handleToolSelect("ai") }, { id: "git", label: "Git", icon: "branch", active: layout.regions.rightDock.visible && activeTool === "git", onSelect: () => handleToolSelect("git") }]} />
       </div>
       <ConfirmDialog
         open={discardRequest !== null}
