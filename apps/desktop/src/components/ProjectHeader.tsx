@@ -1,4 +1,5 @@
 import type { ProjectSummaryDto } from "../types";
+import { displayPath } from "../pathDisplay";
 
 type ProjectHeaderProps = {
   project: ProjectSummaryDto;
@@ -10,14 +11,11 @@ type ProjectHeaderProps = {
 export function ProjectHeader({ project, closing, disabled, onClose }: ProjectHeaderProps) {
   return (
     <header className="project-header">
-      <div className="brand-lockup">
-        <span className="brand-name">Aeria</span>
-        <span className="brand-context">translation workspace</span>
+      <div className="project-summary" title={`${displayPath(project.repositoryRoot)}\n${displayPath(project.sourcePackagePath)}`}>
+        <strong className="project-path">{displayPath(project.repositoryRoot)}</strong>
       </div>
-      <div className="project-summary" title={`${project.repositoryRoot}\n${project.sourcePackagePath}`}>
-        <span className="language-pair">
-          {project.sourceLanguage} <span aria-hidden="true">→</span> {project.targetLanguage}
-        </span>
+      <div className="project-facts">
+        <span className="language-pair">Source {project.sourceLanguage}</span>
         <span className="project-meta">
           {project.gameVersion || "Unknown game version"} · {project.scope || "project"}
         </span>

@@ -6,12 +6,13 @@
   "scripts": {
     "dev": "vite --host 127.0.0.1 --port 1420",
     "build": "tsc -b && vite build",
-    "test": "node --experimental-strip-types tests/recentProjectsState.test.mjs",
+    "test": "node --experimental-strip-types --test tests/recentProjectsState.test.mjs tests/pathDisplay.test.mjs tests/layout.test.mjs tests/translationOccurrences.test.mjs tests/sheetExplorer.test.mjs tests/documentTabs.test.mjs tests/dockLayout.test.mjs",
     "typecheck": "tsc -b --pretty false",
     "tauri": "tauri"
   },
   "dependencies": {
     "@tauri-apps/api": "2.11.1",
+    "@tauri-apps/plugin-dialog": "2.4.0",
     "react": "19.3.0",
     "react-dom": "19.3.0"
   },

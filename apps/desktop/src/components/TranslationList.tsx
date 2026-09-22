@@ -1,26 +1,35 @@
-import { memo } from "react";
-import { rowKey } from "../binding";
-import type { TranslationRowCursorDto, TranslationRowDto } from "../types";
+import { memo, useMemo } from "react";
+import { bindingKey } from "../binding";
+import { flattenTranslationRows, type TranslationOccurrenceView } from "../translationOccurrences";
+import type { SourceBinding, TranslationRowDto } from "../types";
 
 type TranslationListProps = {
   rows: TranslationRowDto[];
-  selectedRow: TranslationRowCursorDto | null;
+  selectedBinding: SourceBinding | null;
+  selectedSheetName: string | null;
+  loadedSheetName: string | null;
   disabled: boolean;
   loading: boolean;
   refreshing: boolean;
   loadingMore: boolean;
   hasMore: boolean;
-  onSelect: (row: TranslationRowDto) => void;
+  onSelect: (occurrence: TranslationOccurrenceView) => void;
   onLoadMore: () => void;
 };
 
-function translatedCount(row: TranslationRowDto): number {
-  return row.cells.filter((cell) => cell.translation !== null).length;
+function rowCoordinate(occurrence: TranslationOccurrenceView): string {
+  return `${occurrence.binding.rowId}:${occurrence.binding.subrowId}`;
+}
+
+function fieldLabel(occurrence: TranslationOccurrenceView): string {
+  return `col ${occurrence.binding.columnIndex}`;
 }
 
 export const TranslationList = memo(function TranslationList({
   rows,
-  selectedRow,
+  selectedBinding,
+  selectedSheetName,
+  loadedSheetName,
   disabled,
   loading,
   refreshing,
@@ -29,29 +38,29 @@ export const TranslationList = memo(function TranslationList({
   onSelect,
   onLoadMore,
 }: TranslationListProps) {
+  const occurrences = useMemo(() => flattenTranslationRows(rows), [rows]);
+  const selectedKey = selectedBinding ? bindingKey(selectedBinding) : null;
+  const showingPreviousSheet = loading && rows.length > 0 && selectedSheetName !== loadedSheetName;
+
   return (
-    <section className="pane entry-pane" aria-labelledby="entries-heading">
+    <section className="pane entry-pane" aria-labelledby="entries-heading" aria-busy={loading}>
       <div className="pane-heading">
         <div>
-          <p className="pane-kicker">Source order</p>
-          <h2 id="entries-heading">Translation rows</h2>
+          <h2 id="entries-heading">Strings Lens</h2>
+          <span className="pane-subtitle">{selectedSheetName ?? "Select a sheet"}</span>
         </div>
-        <span className="pane-count">{rows.length}</span>
+        <span className="pane-count">{rows.length} rows loaded</span>
       </div>
 
-      {loading ? (
+      {loading && rows.length === 0 ? (
         <div className="list-state" aria-live="polite">
           <span className="spinner" aria-hidden="true" />
           Loading sheet…
         </div>
-      ) : rows.length === 0 ? (
+      ) : occurrences.length === 0 ? (
         <div className="empty-pane">
           <strong>{hasMore ? "No translatable text in this page" : "No source strings"}</strong>
-          <p>
-            {hasMore
-              ? "Load more to continue through the source rows."
-              : "This sheet has no entries to translate."}
-          </p>
+          <p>{hasMore ? "Load more to continue through the source rows." : "This sheet has no entries to translate."}</p>
           {hasMore ? (
             <button className="secondary-button load-more" type="button" onClick={onLoadMore} disabled={disabled || loadingMore || refreshing}>
               {loadingMore ? "Loading…" : "Load more"}
@@ -60,31 +69,34 @@ export const TranslationList = memo(function TranslationList({
         </div>
       ) : (
         <>
+          <div className="entry-list-header" aria-hidden="true">
+            <span>Row</span>
+            <span>Field</span>
+            <span>Source</span>
+            <span>Target</span>
+            <span>Review</span>
+          </div>
           <div className={refreshing ? "entry-list is-refreshing" : "entry-list"}>
-            {rows.map((row) => {
-              const selected = selectedRow !== null && rowKey(row) === rowKey(selectedRow);
-              const translated = translatedCount(row);
-              const preview = row.cells[0]?.sourceMacro ?? "(empty source macro)";
+            {occurrences.map((occurrence) => {
+              const selected = selectedKey === bindingKey(occurrence.binding);
+              const reviewLabel = occurrence.reviewState === "needsReview" ? "Needs review" : occurrence.reviewState === "reviewed" ? "Reviewed" : occurrence.reviewState === "draft" ? "Draft" : "—";
               return (
                 <button
-                  className={selected ? "entry-row active" : "entry-row"}
+                  className={`entry-row ${occurrence.firstInRow ? "row-group-first" : "row-group-middle"} ${occurrence.lastInRow ? "row-group-last" : ""} ${selected ? "active" : ""}`}
                   type="button"
-                  key={rowKey(row)}
+                  key={bindingKey(occurrence.binding)}
                   aria-pressed={selected}
                   disabled={disabled}
-                  onClick={() => onSelect(row)}
+                  onClick={() => onSelect(occurrence)}
                 >
-                  <span className="entry-row-topline">
-                    <code>
-                      {row.rowId}:{row.subrowId}
-                    </code>
-                    <span className="status-pill">
-                      {translated}/{row.cells.length} translated
-                    </span>
+                  <span className="entry-row-coordinate">{occurrence.firstInRow ? rowCoordinate(occurrence) : ""}</span>
+                  <span className="entry-field-cell">
+                    <span className="entry-field-label">{fieldLabel(occurrence)}</span>
+                    {occurrence.firstInRow && occurrence.fieldCountInRow > 1 ? <small>{occurrence.fieldCountInRow} fields</small> : null}
                   </span>
-                  {row.context[0] ? <span className="entry-context">{row.context[0].sourceMacro}</span> : null}
-                  {row.cells.length > 1 ? <span className="entry-field-count">{row.cells.length} text fields</span> : null}
-                  <span className="entry-preview">{preview}</span>
+                  <span className="entry-preview" title={occurrence.sourceMacro}>{occurrence.sourceMacro || "(empty source macro)"}</span>
+                  <span className={occurrence.targetMacro === null ? "entry-target-preview empty" : "entry-target-preview"} title={occurrence.targetMacro ?? "Untranslated"}>{occurrence.targetMacro ?? "—"}</span>
+                  <span className={`entry-review ${occurrence.reviewState ? `review-${occurrence.reviewState}` : "entry-review-empty"}`} aria-label={reviewLabel}>{reviewLabel}</span>
                 </button>
               );
             })}
@@ -98,6 +110,12 @@ export const TranslationList = memo(function TranslationList({
           ) : null}
         </>
       )}
+      {showingPreviousSheet ? (
+        <div className="pane-loading-layer" aria-live="polite">
+          <span className="spinner" aria-hidden="true" />
+          Loading {selectedSheetName}…
+        </div>
+      ) : null}
     </section>
   );
 });

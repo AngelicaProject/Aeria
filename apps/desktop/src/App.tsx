@@ -3,10 +3,17 @@ import { currentProject, normalizeCommandError } from "./ipc";
 import { EditorShell } from "./components/EditorShell";
 import { ProjectLauncher } from "./components/ProjectLauncher";
 import type { CommandError, ProjectOpenResultDto, ProjectSummaryDto } from "./types";
+import { ThemeProvider } from "./ui/theme/theme";
+import { DetachedToolWindow } from "./components/DetachedToolWindow";
 
 type StartupState = "starting" | "launcher";
 
-export function App() {
+function AppContent() {
+  const detachedPanel = new URLSearchParams(window.location.search).get("detached");
+  if (detachedPanel === "search" || detachedPanel === "ai" || detachedPanel === "git" || detachedPanel === "tasks" || detachedPanel === "gitChanges" || detachedPanel === "diagnostics") {
+    return <DetachedToolWindow panel={detachedPanel} />;
+  }
+
   const [project, setProject] = useState<ProjectSummaryDto | null>(null);
   const [startupState, setStartupState] = useState<StartupState>("starting");
   const [startupError, setStartupError] = useState<CommandError | null>(null);
@@ -44,7 +51,7 @@ export function App() {
   if (startupState === "starting") {
     return (
       <main className="status-shell">
-        <div className="status-card">
+        <div className="status-card" aria-live="polite">
           <span className="spinner" aria-hidden="true" />
           <p>Checking the active project…</p>
         </div>
@@ -66,5 +73,13 @@ export function App() {
         setProjectWarning(null);
       }}
     />
+  );
+}
+
+export function App() {
+  return (
+    <ThemeProvider>
+      <AppContent />
+    </ThemeProvider>
   );
 }

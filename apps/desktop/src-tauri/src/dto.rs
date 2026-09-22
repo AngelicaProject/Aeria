@@ -85,6 +85,7 @@ pub struct ProjectSheetDto {
     pub name: String,
     pub effective_language: String,
     pub row_count: u64,
+    pub translatable_cell_count: usize,
 }
 
 /// Owned metadata for the currently active project.
@@ -111,10 +112,17 @@ impl ProjectSummaryDto {
             .source()
             .sheets()
             .into_iter()
-            .map(|sheet| ProjectSheetDto {
-                name: sheet.name,
-                effective_language: sheet.effective_language,
-                row_count: sheet.row_count,
+            .map(|sheet| {
+                let translatable_cell_count = session
+                    .source_package()
+                    .guidance_index()
+                    .translatable_cell_count(&sheet.name);
+                ProjectSheetDto {
+                    name: sheet.name,
+                    effective_language: sheet.effective_language,
+                    row_count: sheet.row_count,
+                    translatable_cell_count,
+                }
             })
             .collect();
 

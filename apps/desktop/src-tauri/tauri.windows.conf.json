@@ -1,0 +1,21 @@
+{
+  "app": {
+    "windows": [
+      {
+        "title": "Aeria",
+        "width": 900,
+        "height": 560,
+        "minWidth": 900,
+        "minHeight": 560,
+        "center": true,
+        "decorations": false,
+        "resizable": false,
+        "transparent": true,
+        "theme": "Dark",
+        "windowEffects": {
+          "effects": ["acrylic"]
+        }
+      }
+    ]
+  }
+}

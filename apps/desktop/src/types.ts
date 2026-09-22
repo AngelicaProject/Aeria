@@ -53,6 +53,7 @@ export type ProjectSheetDto = {
   name: string;
   effectiveLanguage: string;
   rowCount: number;
+  translatableCellCount: number;
 };
 
 export type ProjectSummaryDto = {
