@@ -212,6 +212,11 @@ export const TranslationEditor = memo(function TranslationEditor({
     onDirtyChange(rowDirty);
   }, [onDirtyChange, rowDirty]);
 
+  const handleRevert = useCallback(() => {
+    setDrafts(draftsForRow(row));
+    onDirtyChange(false);
+  }, [onDirtyChange, row]);
+
   const updateDraft = useCallback((cell: TranslationCellDto, field: keyof CellDraft, value: string) => {
     const key = bindingKey(cell.sourceBinding);
     setDrafts((current) => ({
@@ -242,20 +247,20 @@ export const TranslationEditor = memo(function TranslationEditor({
       <div className="editor-scroll">
         <div className="editor-heading">
           <div>
-            <p className="pane-kicker">Selected row</p>
             <h2>Editor</h2>
+            <span className="pane-subtitle">{row.sheetName} · {row.rowId}:{row.subrowId}</span>
           </div>
-          {rowDirty ? <span className="dirty-indicator">Unsaved changes</span> : null}
-        </div>
-
-        <div className="row-coordinate editor-section">
-          <span className="pane-kicker">Source coordinate</span>
-          <code className="coordinate">{row.sheetName} · {row.rowId}:{row.subrowId}</code>
+          <div className="editor-heading-actions">
+            {rowDirty ? <span className="dirty-indicator">Unsaved changes</span> : null}
+            <button className="secondary-button compact-button" type="button" onClick={handleRevert} disabled={!rowDirty || mutation !== null}>
+              Revert
+            </button>
+          </div>
         </div>
 
         {row.context.length > 0 ? (
           <div className="editor-section context-section">
-            <div className="field-heading"><label>Context</label></div>
+            <div className="field-heading"><label>Context cells</label></div>
             <div className="context-list">
               {row.context.map((cell) => (
                 <code key={`${cell.columnIndex}:${cell.sourceMacro}`}>

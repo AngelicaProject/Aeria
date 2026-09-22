@@ -10,11 +10,11 @@ type ProjectHeaderProps = {
 export function ProjectHeader({ project, closing, disabled, onClose }: ProjectHeaderProps) {
   return (
     <header className="project-header">
-      <div className="brand-lockup">
-        <span className="brand-name">Aeria</span>
-        <span className="brand-context">translation workspace</span>
-      </div>
       <div className="project-summary" title={`${project.repositoryRoot}\n${project.sourcePackagePath}`}>
+        <span className="project-label">Translation project</span>
+        <strong className="project-path">{project.repositoryRoot}</strong>
+      </div>
+      <div className="project-facts">
         <span className="language-pair">
           {project.sourceLanguage} <span aria-hidden="true">→</span> {project.targetLanguage}
         </span>

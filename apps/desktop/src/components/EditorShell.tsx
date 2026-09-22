@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { flushSync } from "react-dom";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
   closeProject,
   normalizeCommandError,
@@ -19,10 +20,13 @@ import type {
   TranslationRowDto,
 } from "../types";
 import { ErrorBanner } from "./ErrorBanner";
+import { ActivityRail } from "./ActivityRail";
 import { ProjectHeader } from "./ProjectHeader";
 import { SheetSidebar } from "./SheetSidebar";
+import { StatusBar } from "./StatusBar";
 import { CellDraft, CellMutation, TranslationEditor } from "./TranslationEditor";
 import { TranslationList } from "./TranslationList";
+import { WindowChrome } from "./WindowChrome";
 
 const PAGE_SIZE = 100;
 
@@ -42,6 +46,10 @@ function cursorForRow(row: TranslationRowDto): TranslationRowCursorDto {
   return { sheetName: row.sheetName, rowId: row.rowId, subrowId: row.subrowId };
 }
 
+function repositoryName(path: string): string {
+  return path.split(/[\\/]/).filter(Boolean).at(-1) ?? path;
+}
+
 export function EditorShell({
   project,
   applicationWarning,
@@ -50,6 +58,7 @@ export function EditorShell({
 }: EditorShellProps) {
   const firstSheetName = project.sheets[0]?.name ?? null;
   const [selectedSheetName, setSelectedSheetName] = useState<string | null>(firstSheetName);
+  const [loadedSheetName, setLoadedSheetName] = useState<string | null>(null);
   const [rows, setRows] = useState<TranslationRowDto[]>([]);
   const [nextAfter, setNextAfter] = useState<TranslationRowCursorDto | null>(null);
   const [selectedRowCursor, setSelectedRowCursor] = useState<TranslationRowCursorDto | null>(null);
@@ -93,7 +102,6 @@ export function EditorShell({
     const generation = ++requestGeneration.current;
     const resetForSheet = () => {
       setSelectedSheetName(sheetName);
-      setRows([]);
       setNextAfter(null);
       setSelectedRowCursor(null);
       hasDirtyDraft.current = false;
@@ -112,6 +120,7 @@ export function EditorShell({
         return;
       }
       setRows(page.rows);
+      setLoadedSheetName(sheetName);
       setNextAfter(page.nextAfter);
     } catch (error) {
       if (generation === requestGeneration.current) {
@@ -276,6 +285,13 @@ export function EditorShell({
   const handleCloseClick = useCallback(() => {
     void handleClose();
   }, [handleClose]);
+
+  const handleWindowClose = useCallback(() => {
+    if (!confirmDiscardChanges("Closing Aeria")) {
+      return;
+    }
+    void getCurrentWindow().close().catch(() => undefined);
+  }, [confirmDiscardChanges]);
   const handleLoadMoreClick = useCallback(() => {
     void handleLoadMore();
   }, [handleLoadMore]);
@@ -291,47 +307,70 @@ export function EditorShell({
 
   return (
     <main className="app-shell editor-shell">
-      <ProjectHeader
-        project={project}
-        closing={closing}
-        disabled={closing || sheetLoading || mutation !== null}
-        onClose={handleCloseClick}
+      <WindowChrome
+        context={repositoryName(project.repositoryRoot)}
+        detail={`${project.sourceLanguage} → ${project.targetLanguage}`}
+        mode="workbench"
+        onClose={handleWindowClose}
       />
-      {applicationWarning ? (
-        <ErrorBanner
-          title="Project opened with a Recent projects warning"
-          error={applicationWarning}
-          onDismiss={onDismissApplicationWarning}
-        />
-      ) : null}
-      {editorError ? <ErrorBanner title={editorError.title} error={editorError.error} onDismiss={() => setEditorError(null)} /> : null}
-      <div className="editor-layout">
-        <SheetSidebar
-          sheets={project.sheets}
-          selectedSheetName={selectedSheetName}
+      <div className="editor-notices">
+        <ProjectHeader
+          project={project}
+          closing={closing}
           disabled={closing}
-          onSelect={handleSheetSelect}
+          onClose={handleCloseClick}
         />
-        <TranslationList
-          rows={rows}
-          selectedRow={selectedRowCursor}
-          disabled={closing}
-          loading={sheetLoading}
-          refreshing={false}
-          loadingMore={loadingMore}
-          hasMore={nextAfter !== null}
-          onSelect={handleRowSelect}
-          onLoadMore={handleLoadMoreClick}
-        />
-        <TranslationEditor
-          key={selectedRow ? rowKey(selectedRow) : "empty-editor"}
-          row={selectedRow}
-          mutation={mutation}
-          onDirtyChange={handleDirtyChange}
-          onSaveTarget={handleSaveTargetClick}
-          onSaveNote={handleSaveNoteClick}
-          onReviewChange={handleReviewChangeClick}
-        />
+        {applicationWarning ? (
+          <ErrorBanner
+            title="Project opened with a Recent projects warning"
+            error={applicationWarning}
+            onDismiss={onDismissApplicationWarning}
+          />
+        ) : null}
+        {editorError ? <ErrorBanner title={editorError.title} error={editorError.error} onDismiss={() => setEditorError(null)} /> : null}
+      </div>
+      <div className="workbench-frame">
+        <ActivityRail active="sheets" />
+        <div className="workbench-content">
+          <div className="editor-layout">
+            <SheetSidebar
+              sheets={project.sheets}
+              selectedSheetName={selectedSheetName}
+              disabled={closing}
+              onSelect={handleSheetSelect}
+            />
+            <TranslationList
+              rows={rows}
+              selectedRow={selectedRowCursor}
+              selectedSheetName={selectedSheetName}
+              loadedSheetName={loadedSheetName}
+              disabled={closing}
+              loading={sheetLoading}
+              refreshing={false}
+              loadingMore={loadingMore}
+              hasMore={nextAfter !== null}
+              onSelect={handleRowSelect}
+              onLoadMore={handleLoadMoreClick}
+            />
+            <TranslationEditor
+              key={selectedRow ? rowKey(selectedRow) : "empty-editor"}
+              row={selectedRow}
+              mutation={mutation}
+              onDirtyChange={handleDirtyChange}
+              onSaveTarget={handleSaveTargetClick}
+              onSaveNote={handleSaveNoteClick}
+              onReviewChange={handleReviewChangeClick}
+            />
+          </div>
+          <StatusBar
+            sheetName={selectedSheetName}
+            rowCount={rows.length}
+            loading={sheetLoading}
+            repositoryRoot={project.repositoryRoot}
+            sourceLanguage={project.sourceLanguage}
+            targetLanguage={project.targetLanguage}
+          />
+        </div>
       </div>
     </main>
   );

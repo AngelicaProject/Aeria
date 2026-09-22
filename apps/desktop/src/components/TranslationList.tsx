@@ -5,6 +5,8 @@ import type { TranslationRowCursorDto, TranslationRowDto } from "../types";
 type TranslationListProps = {
   rows: TranslationRowDto[];
   selectedRow: TranslationRowCursorDto | null;
+  selectedSheetName: string | null;
+  loadedSheetName: string | null;
   disabled: boolean;
   loading: boolean;
   refreshing: boolean;
@@ -21,6 +23,8 @@ function translatedCount(row: TranslationRowDto): number {
 export const TranslationList = memo(function TranslationList({
   rows,
   selectedRow,
+  selectedSheetName,
+  loadedSheetName,
   disabled,
   loading,
   refreshing,
@@ -29,17 +33,19 @@ export const TranslationList = memo(function TranslationList({
   onSelect,
   onLoadMore,
 }: TranslationListProps) {
+  const showingPreviousSheet = loading && rows.length > 0 && selectedSheetName !== loadedSheetName;
+
   return (
-    <section className="pane entry-pane" aria-labelledby="entries-heading">
+    <section className="pane entry-pane" aria-labelledby="entries-heading" aria-busy={loading}>
       <div className="pane-heading">
         <div>
-          <p className="pane-kicker">Source order</p>
           <h2 id="entries-heading">Translation rows</h2>
+          <span className="pane-subtitle">{selectedSheetName ?? "Select a sheet"}</span>
         </div>
         <span className="pane-count">{rows.length}</span>
       </div>
 
-      {loading ? (
+      {loading && rows.length === 0 ? (
         <div className="list-state" aria-live="polite">
           <span className="spinner" aria-hidden="true" />
           Loading sheet…
@@ -84,7 +90,12 @@ export const TranslationList = memo(function TranslationList({
                   </span>
                   {row.context[0] ? <span className="entry-context">{row.context[0].sourceMacro}</span> : null}
                   {row.cells.length > 1 ? <span className="entry-field-count">{row.cells.length} text fields</span> : null}
-                  <span className="entry-preview">{preview}</span>
+                  <span className="entry-cell-preview">
+                    <span className="entry-preview" title={preview}>{preview}</span>
+                    <span className="entry-target-preview" title={row.cells[0]?.translation?.targetMacro ?? "No target saved"}>
+                      {row.cells[0]?.translation?.targetMacro || "—"}
+                    </span>
+                  </span>
                 </button>
               );
             })}
@@ -98,6 +109,12 @@ export const TranslationList = memo(function TranslationList({
           ) : null}
         </>
       )}
+      {showingPreviousSheet ? (
+        <div className="pane-loading-layer" aria-live="polite">
+          <span className="spinner" aria-hidden="true" />
+          Loading {selectedSheetName}…
+        </div>
+      ) : null}
     </section>
   );
 });

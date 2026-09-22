@@ -32,6 +32,21 @@ offers an explicit **Load more** action.
 
 The renderer owns only ephemeral drafts, navigation, paging, and loading/error presentation. Rust remains authoritative for source bindings, workspace state, validation, classification, and mutation semantics. The middle pane selects a logical row by `sheetName`, `rowId`, and `subrowId`; the editor renders context cells read-only and every translatable cell in physical column order. Until EXDSchema exists, fields are labelled `Column N`.
 
+The desktop surface uses a custom titlebar and a compact launcher with explicit
+`Recent`, `Open`, and `Create` modes. The active project is presented as a
+dense workbench with an activity rail, sheet pane, bounded row pane, editor
+pane, and status bar. Launcher availability continues to use only the typed
+registry states; the workbench status bar and progress area likewise expose
+only values present in the project and Atlas DTOs.
+
+Navigation feedback is immediate and scoped to the conflicting surface. Sheet
+selection updates before its bounded row request completes while the existing
+row viewport remains covered by a local loading state. Draft text is kept in
+the editor feature, and mutations do not disable the sheet navigation or
+window chrome. Fixed pane headers, reserved loading controls, and local
+loading overlays keep the layout and scroll position stable during reads and
+writes.
+
 Each cell has an independent target draft, note draft, translation-unit ID,
 and review state. Target and note text do not autosave: both use explicit save
 actions. Review-state changes persist immediately. Mutations still address one

@@ -13,7 +13,6 @@ export const SheetSidebar = memo(function SheetSidebar({ sheets, selectedSheetNa
     <aside className="pane sheet-pane" aria-labelledby="sheets-heading">
       <div className="pane-heading">
         <div>
-          <p className="pane-kicker">Project</p>
           <h2 id="sheets-heading">Sheets</h2>
         </div>
         <span className="pane-count">{sheets.length}</span>
@@ -39,7 +38,7 @@ export const SheetSidebar = memo(function SheetSidebar({ sheets, selectedSheetNa
               >
                 <span className="sheet-row-name">{sheet.name}</span>
                 <span className="sheet-row-meta">
-                  {sheet.rowCount.toLocaleString()} rows · {sheet.effectiveLanguage}
+                  {sheet.rowCount.toLocaleString()} rows
                 </span>
               </button>
             );
