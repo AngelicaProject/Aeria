@@ -4,10 +4,16 @@ import { EditorShell } from "./components/EditorShell";
 import { ProjectLauncher } from "./components/ProjectLauncher";
 import type { CommandError, ProjectOpenResultDto, ProjectSummaryDto } from "./types";
 import { ThemeProvider } from "./ui/theme/theme";
+import { DetachedToolWindow } from "./components/DetachedToolWindow";
 
 type StartupState = "starting" | "launcher";
 
 function AppContent() {
+  const detachedPanel = new URLSearchParams(window.location.search).get("detached");
+  if (detachedPanel === "search" || detachedPanel === "ai" || detachedPanel === "git" || detachedPanel === "tasks" || detachedPanel === "gitChanges" || detachedPanel === "diagnostics") {
+    return <DetachedToolWindow panel={detachedPanel} />;
+  }
+
   const [project, setProject] = useState<ProjectSummaryDto | null>(null);
   const [startupState, setStartupState] = useState<StartupState>("starting");
   const [startupError, setStartupError] = useState<CommandError | null>(null);

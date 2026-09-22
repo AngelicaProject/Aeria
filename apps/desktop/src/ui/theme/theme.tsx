@@ -4,12 +4,15 @@ import { defaultThemeId, findTheme, type ThemeDefinition } from "./registry";
 type ThemeContextValue = {
   theme: ThemeDefinition;
   setThemeId: (themeId: string) => void;
+  accentOverride: string | null;
+  setAccentOverride: (accent: string | null) => void;
 };
 
 const ThemeContext = createContext<ThemeContextValue | null>(null);
 
 export function ThemeProvider({ children }: PropsWithChildren) {
   const [themeId, setThemeId] = useState(defaultThemeId);
+  const [accentOverride, setAccentOverride] = useState<string | null>(null);
   const theme = findTheme(themeId);
   const style = useMemo(() => {
     const { tokens } = theme;
@@ -23,7 +26,7 @@ export function ThemeProvider({ children }: PropsWithChildren) {
       "--color-text": tokens.text,
       "--color-subtext": tokens.subtext,
       "--color-overlay": tokens.overlay,
-      "--color-accent": tokens.accent,
+      "--color-accent": accentOverride ?? tokens.accent,
       "--color-accent-fg": tokens.accentForeground,
       "--color-danger": tokens.danger,
       "--color-warning": tokens.warning,
@@ -39,10 +42,10 @@ export function ThemeProvider({ children }: PropsWithChildren) {
       "--font-size-mono": "10.5px",
       "--font-size-macro": "11.5px",
     } as React.CSSProperties;
-  }, [theme]);
+  }, [accentOverride, theme]);
 
   return (
-    <ThemeContext.Provider value={{ theme, setThemeId }}>
+    <ThemeContext.Provider value={{ theme, setThemeId, accentOverride, setAccentOverride }}>
       <div className="theme-root" data-theme-id={theme.id} data-theme-appearance={theme.appearance} style={style}>
         {children}
       </div>

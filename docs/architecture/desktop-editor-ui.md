@@ -50,11 +50,25 @@ context only and are never used as permission heuristics.
 `Load more` continues to be explicit; a source page may return zero visible
 rows while its row cursor still has more source work.
 
-This first editor intentionally has no search or filtering, virtualization,
-structured macro controls, source update/rebase UI, or export. The workbench
-retains truthful Git and AI dock slots, bottom-panel tabs, and status/layout
-infrastructure even when those backends are unavailable. Macro text is shown
-literally with whitespace preserved.
+The Sheets tool is an IDE-style presentation of the already-loaded
+`ProjectSheetDto[]`: slash-separated names form collapsible folders for display
+only, while the canonical sheet name is passed unchanged to Rust. Quick Find
+is a transient renderer-only overlay (Ctrl+F or the Sheets header action), not a
+permanent filter field. Project Search is a separate workbench tool and shows a
+truthful unavailable state until a domain search backend exists.
+
+Center documents use preview tabs for single-click sheet browsing. A second
+click pins a preview, and starting a local draft pins it automatically.
+Pinned/preview tabs can be activated, closed, reordered, and closed with
+Ctrl+W; each tab's dirty indicator is presentation state only. Dock panels
+retain serializable presentation state, can be resized, and floatable tools
+use real Tauri webview windows that share the active Rust project session.
+
+This first editor intentionally has no structured macro controls, source
+update/rebase UI, or export. The workbench retains truthful Git and AI dock
+slots, bottom-panel tabs, and status/layout infrastructure even when those
+backends are unavailable. Macro text is shown literally with whitespace
+preserved.
 
 Registry load failures show a dismissible, non-blocking launcher warning while
 manual Open project and Create project remain available. After dismissal, the

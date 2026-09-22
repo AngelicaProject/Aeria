@@ -178,7 +178,7 @@ export function ProjectLauncher({ initialError, onProjectReady }: ProjectLaunche
   const [recentBusyId, setRecentBusyId] = useState<string | null>(null);
   const busyRef = useRef<Exclude<LauncherMode, "recent" | "settings"> | null>(null);
   const jobIdRef = useRef<string | null>(null);
-  const { theme, setThemeId } = useTheme();
+  const { theme, setThemeId, accentOverride, setAccentOverride } = useTheme();
 
   useEffect(() => setError(initialError ? { operation: "open", error: initialError } : null), [initialError]);
 
@@ -272,6 +272,13 @@ export function ProjectLauncher({ initialError, onProjectReady }: ProjectLaunche
   const details = progressDetails(progress);
   const launcherDisabled = busy !== null || recentBusyId !== null;
   const themeOptions = themeRegistry.map((entry) => ({ value: entry.id, label: `${entry.family ?? "Themes"} · ${entry.displayName}` }));
+  const accentOptions = [
+    { value: "", label: "Use theme default" },
+    { value: "#c6a0f6", label: "Violet" },
+    { value: "#8aadf4", label: "Blue" },
+    { value: "#a6da95", label: "Green" },
+    { value: "#f5a97f", label: "Peach" },
+  ];
   const handlePickerError = (message: string) => setError({ operation: mode === "open" ? "open" : "create", error: { code: "pathPicker", message } });
 
   return (
@@ -285,7 +292,7 @@ export function ProjectLauncher({ initialError, onProjectReady }: ProjectLaunche
           </div>
           <nav className="launcher-nav" aria-label="Project launcher">
             {(["recent", "open", "create", "settings"] as const).map((item) => (
-              <button className={mode === item ? "launcher-nav-button active" : "launcher-nav-button"} type="button" key={item} disabled={launcherDisabled} onClick={() => setMode(item)}>
+              <button className={mode === item ? "launcher-nav-button active" : "launcher-nav-button"} type="button" key={item} onClick={() => setMode(item)}>
                 {item === "settings" ? <Icon name="settings" size={14} /> : null}
                 <span>{item.slice(0, 1).toUpperCase() + item.slice(1)}</span>
               </button>
@@ -338,7 +345,6 @@ export function ProjectLauncher({ initialError, onProjectReady }: ProjectLaunche
                   <>
                     <BrowseField id="game-path" label="Game installation" value={gamePath} onChange={setGamePath} onError={handlePickerError} placeholder="C:\\Games\\FINAL FANTASY XIV" directory disabled={launcherDisabled} />
                     <div className="launcher-field"><label htmlFor="source-language">Source language</label><SelectMenu value={sourceLanguage} options={sourceLanguages} onChange={setSourceLanguage} label="Source language" disabled={launcherDisabled} /></div>
-                    <p className="form-note">New projects use the neutral target-language tag <code>und</code> until project settings can choose a real translation target.</p>
                   </>
                 )}
                 <button className="button primary-button launcher-submit" type="submit" disabled={launcherDisabled}>{busy === "open" ? "Opening…" : busy === "create" ? "Creating…" : mode === "open" ? "Open project" : "Create project"}</button>
@@ -351,7 +357,7 @@ export function ProjectLauncher({ initialError, onProjectReady }: ProjectLaunche
             <section className="launcher-view" aria-labelledby="settings-title">
               <div className="launcher-view-head"><div><h1 id="settings-title">Settings</h1><p>Appearance defaults for Aeria.</p></div></div>
               <div className="settings-panel">
-                <section className="settings-section"><h2>Appearance</h2><div className="setting-row"><span className="setting-label">Theme</span><SelectMenu value={theme.id} options={themeOptions} onChange={setThemeId} label="Theme" /></div><div className="setting-row"><span className="setting-label">Accent override</span><span className="setting-value">Use theme default <small>Optional</small></span></div></section>
+                <section className="settings-section"><h2>Appearance</h2><div className="setting-row"><span className="setting-label">Theme</span><SelectMenu value={theme.id} options={themeOptions} onChange={setThemeId} label="Theme" /></div><div className="setting-row"><span className="setting-label">Accent override</span><SelectMenu value={accentOverride ?? ""} options={accentOptions} onChange={(value) => setAccentOverride(value || null)} label="Accent override" /></div></section>
                 <section className="settings-section"><h2>Typography</h2><div className="setting-row"><span className="setting-label">Interface</span><span className="setting-value">Segoe UI Variable <small>12 px</small></span></div><div className="setting-row"><span className="setting-label">Content</span><span className="setting-value">Segoe UI Variable <small>12 / 13 px</small></span></div><div className="setting-row"><span className="setting-label">Monospace</span><span className="setting-value">Cascadia Mono <small>10.5 / 11.5 px</small></span></div></section>
               </div>
             </section>

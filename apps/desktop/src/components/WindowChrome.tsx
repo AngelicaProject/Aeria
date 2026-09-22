@@ -12,6 +12,9 @@ type WindowChromeProps = {
   onClose?: () => void;
   onCloseProject?: () => void;
   onToggleDock?: () => void;
+  onToggleBottom?: () => void;
+  onSelectTool?: (tool: "search" | "ai" | "git") => void;
+  onQuickFind?: () => void;
 };
 
 const launcherSize = { width: 900, height: 560 } as const;
@@ -40,7 +43,7 @@ function saveGeometry(geometry: SavedGeometry): void {
   }
 }
 
-export function WindowChrome({ context, detail, mode, projectName, onClose, onCloseProject, onToggleDock }: WindowChromeProps) {
+export function WindowChrome({ context, detail, mode, projectName, onClose, onCloseProject, onToggleDock, onToggleBottom, onSelectTool, onQuickFind }: WindowChromeProps) {
   const [maximized, setMaximized] = useState(false);
 
   useEffect(() => {
@@ -114,12 +117,22 @@ export function WindowChrome({ context, detail, mode, projectName, onClose, onCl
     try { void getCurrentWindow().close().catch(() => undefined); } catch { /* browser fallback */ }
   }
 
+  function menuCommand(spec: Omit<import("./ApplicationMenu").ApplicationMenuCommandItem, "kind">): import("./ApplicationMenu").ApplicationMenuCommandItem {
+    const { onSelect, ...rest } = spec;
+    return onSelect ? { ...rest, kind: "command", onSelect } : { ...rest, kind: "command", disabled: true };
+  }
+
   const menus: readonly ApplicationMenuDefinition[] = mode === "workbench"
     ? [
-        { id: "file", label: "File", items: [{ kind: "command", id: "close", label: "Close project", shortcut: "Ctrl+W", onSelect: onCloseProject ?? handleClose }] },
-        { id: "view", label: "View", items: [{ kind: "command", id: "sheets", label: "Sheets panel", onSelect: onToggleDock ?? (() => undefined) }] },
-        { id: "project", label: "Project", items: [{ kind: "command", id: "close-project", label: "Close project", onSelect: onCloseProject ?? handleClose }] },
-        { id: "window", label: "Window", items: [{ kind: "command", id: "minimize", label: "Minimize", onSelect: handleMinimize }, { kind: "command", id: "maximize", label: maximized ? "Restore" : "Maximize", onSelect: () => void handleToggleMaximize() }] },
+        { id: "file", label: "File", items: [menuCommand({ id: "close", label: "Close project", onSelect: onCloseProject ?? handleClose })] },
+        { id: "view", label: "View", items: [menuCommand({ id: "sheets", label: "Sheets panel", ...(onToggleDock ? { onSelect: onToggleDock } : {}) }), menuCommand({ id: "search", label: "Project Search", ...(onSelectTool ? { onSelect: () => onSelectTool("search") } : {}) }), menuCommand({ id: "bottom", label: "Bottom panel", ...(onToggleBottom ? { onSelect: onToggleBottom } : {}) })] },
+        { id: "project", label: "Project", items: [menuCommand({ id: "close-project", label: "Close project", onSelect: onCloseProject ?? handleClose })] },
+        { id: "sheet", label: "Sheet", items: [menuCommand({ id: "quick-find", label: "Quick Find sheets", shortcut: "Ctrl+F", ...(onQuickFind ? { onSelect: onQuickFind } : {}) })] },
+        { id: "translation", label: "Translation", items: [menuCommand({ id: "translation-unavailable", label: "Translation commands unavailable", disabled: true })] },
+        { id: "ai", label: "AI", items: [menuCommand({ id: "open-ai", label: "Open AI panel", onSelect: () => onSelectTool?.("ai") })] },
+        { id: "git", label: "Git", items: [menuCommand({ id: "open-git", label: "Open Git panel", onSelect: () => onSelectTool?.("git") })] },
+        { id: "window", label: "Window", items: [menuCommand({ id: "minimize", label: "Minimize", onSelect: handleMinimize }), menuCommand({ id: "maximize", label: maximized ? "Restore" : "Maximize", onSelect: () => void handleToggleMaximize() })] },
+        { id: "help", label: "Help", items: [menuCommand({ id: "about", label: "About Aeria", disabled: true })] },
       ]
     : [];
 

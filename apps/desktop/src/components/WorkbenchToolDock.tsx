@@ -1,6 +1,6 @@
 import type { SourceBinding } from "../types";
 
-export type WorkbenchTool = "ai" | "git";
+export type WorkbenchTool = "search" | "ai" | "git";
 export type GitPresentationMode = "collaboration" | "advanced";
 
 type WorkbenchToolDockProps = {
@@ -11,6 +11,9 @@ type WorkbenchToolDockProps = {
 };
 
 export function WorkbenchToolDock({ activeTool, gitMode, selectedBinding, onGitModeChange }: WorkbenchToolDockProps) {
+  if (activeTool === "search") {
+    return <section className="tool-dock-content" aria-label="Project search"><div className="tool-dock-empty"><strong>Project search not available in this build</strong><p>Search will use the project backend when it is available. Sheet Quick Find remains local to the Sheets tool.</p></div></section>;
+  }
   if (activeTool === "ai") {
     return <section className="tool-dock-content" aria-label="AI tool"><div className="tool-dock-empty"><strong>AI not configured</strong><p>Configure translation assistance to use this workbench slot.</p>{selectedBinding ? <code>{selectedBinding.sheetName} · {selectedBinding.rowId}:{selectedBinding.subrowId} · col {selectedBinding.columnIndex}</code> : null}</div></section>;
   }
