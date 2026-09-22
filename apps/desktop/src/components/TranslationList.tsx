@@ -1,6 +1,6 @@
 import { memo } from "react";
 import { rowKey } from "../binding";
-import type { TranslationRowCursorDto, TranslationRowDto } from "../types";
+import type { ReviewState, TranslationRowCursorDto, TranslationRowDto } from "../types";
 
 type TranslationListProps = {
   rows: TranslationRowDto[];
@@ -15,6 +15,18 @@ type TranslationListProps = {
   onSelect: (row: TranslationRowDto) => void;
   onLoadMore: () => void;
 };
+
+const reviewLabels: Record<ReviewState, string> = {
+  draft: "Draft",
+  reviewed: "Reviewed",
+  needsReview: "Needs review",
+};
+
+function rowPreview(row: TranslationRowDto, target: boolean): string {
+  return row.cells
+    .map((cell) => target ? cell.translation?.targetMacro ?? "—" : cell.sourceMacro)
+    .join(" · ");
+}
 
 export const TranslationList = memo(function TranslationList({
   rows,
@@ -66,12 +78,15 @@ export const TranslationList = memo(function TranslationList({
             <span>Row</span>
             <span>Source</span>
             <span>Target</span>
+            <span>Review</span>
           </div>
           <div className={refreshing ? "entry-list is-refreshing" : "entry-list"}>
             {rows.map((row) => {
               const selected = selectedRow !== null && rowKey(row) === rowKey(selectedRow);
-              const source = row.cells[0]?.sourceMacro ?? "(empty source macro)";
-              const target = row.cells[0]?.translation?.targetMacro ?? "";
+              const source = rowPreview(row, false) || "(empty source macro)";
+              const target = rowPreview(row, true);
+              const hasTarget = row.cells.some((cell) => Boolean(cell.translation?.targetMacro));
+              const reviewStates = [...new Set(row.cells.flatMap((cell) => cell.translation ? [cell.translation.reviewState] : []))];
               return (
                 <button
                   className={selected ? "entry-row active" : "entry-row"}
@@ -82,9 +97,16 @@ export const TranslationList = memo(function TranslationList({
                   onClick={() => onSelect(row)}
                 >
                   <code className="entry-row-coordinate">{row.rowId}:{row.subrowId}</code>
-                  <span className="entry-preview" title={source}>{source}</span>
-                  <span className={target ? "entry-target-preview" : "entry-target-preview empty"} title={target || "No target saved"}>
+                  <span className="entry-preview" title={source}>
+                    {source}
+                    {row.cells.length > 1 ? <small>{row.cells.length} text fields</small> : null}
+                  </span>
+                  <span className={hasTarget ? "entry-target-preview" : "entry-target-preview empty"} title={hasTarget ? target : "No target saved"}>
                     {target || "—"}
+                    {row.cells.length > 1 ? <small>{row.cells.length} text fields</small> : null}
+                  </span>
+                  <span className="entry-review" aria-label={reviewStates.map((state) => reviewLabels[state]).join(", ") || "No review state"}>
+                    {reviewStates.length > 0 ? reviewStates.map((state) => <small className={`review-chip review-${state}`} key={state}>{reviewLabels[state]}</small>) : <small className="entry-review-empty">—</small>}
                   </span>
                 </button>
               );

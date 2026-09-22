@@ -368,7 +368,7 @@ fn manifest_json(metadata: &WorkspaceMetadata) -> String {
         &mut output,
         2,
         "targetLanguage",
-        metadata.target_language().unwrap_or_default(),
+        metadata.target_language(),
         true,
     );
     push_pretty_string_field(

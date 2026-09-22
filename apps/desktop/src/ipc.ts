@@ -50,14 +50,13 @@ export function openProject(repositoryRoot: string, sourcePackagePath: string): 
 export function initializeProject(
   repositoryRoot: string,
   sourcePackagePath: string,
-  targetLanguage?: string,
+  targetLanguage: string,
 ): Promise<ProjectOpenResultDto> {
-  const args: Record<string, unknown> = {
+  return call<ProjectOpenResultDto>("initialize_project", {
     repositoryRoot,
     sourcePackagePath,
-  };
-  if (targetLanguage !== undefined) args.targetLanguage = targetLanguage;
-  return call<ProjectOpenResultDto>("initialize_project", args);
+    targetLanguage,
+  });
 }
 
 export function initializeProjectFromGame(
@@ -65,16 +64,15 @@ export function initializeProjectFromGame(
   repositoryRoot: string,
   gamePath: string,
   sourceLanguage: string,
-  targetLanguage?: string,
+  targetLanguage: string,
 ): Promise<ProjectOpenResultDto> {
-  const args: Record<string, unknown> = {
+  return call<ProjectOpenResultDto>("initialize_project_from_game", {
     jobId,
     repositoryRoot,
     gamePath,
     sourceLanguage,
-  };
-  if (targetLanguage !== undefined) args.targetLanguage = targetLanguage;
-  return call<ProjectOpenResultDto>("initialize_project_from_game", args);
+    targetLanguage,
+  });
 }
 
 export function startSourcePackage(): Promise<SourcePackageJobDto> {
@@ -99,10 +97,6 @@ export function cancelSourcePackage(jobId: string): Promise<void> {
 
 export function closeProject(): Promise<void> {
   return call<void>("close_project");
-}
-
-export function setProjectTargetLanguage(targetLanguage: string): Promise<ProjectOpenResultDto> {
-  return call<ProjectOpenResultDto>("set_project_target_language", { targetLanguage });
 }
 
 export function pageTranslationRows(

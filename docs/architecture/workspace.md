@@ -14,7 +14,7 @@ The in-memory workspace keeps a deterministic ordered index by `TranslationUnitI
 
 ## Project/source binding
 
-Workspace metadata records one source language, an optional target language during initial setup, the current verified HXS `contentId`, and the current verified HXS `snapshotId`. Once configured, exactly one target language is canonical per workspace; target-language selection is not repeated on individual units.
+Workspace metadata records one source language, one target language, the current verified HXS `contentId`, and the current verified HXS `snapshotId`. Exactly one target language is canonical per workspace; target-language selection is not repeated on individual units.
 
 The workspace source adapter accepts an already verified `HxsSnapshot`. It checks that the requested sheet, row, subrow, and String column exist, copies only the verified cell and row hashes into a `SourceFingerprint`, and derives a new v1 `TranslationUnitId`. It does not reopen or independently verify SQLite internals.
 
@@ -26,7 +26,7 @@ Manual target edits use `aeria-se` intrinsic validation. Understood syntax and o
 
 ## Project scope
 
-Exactly one target language is canonical per configured project. A newly created project may remain unconfigured until the project settings command assigns it.
+Exactly one target language is canonical per project.
 
 Project-shared data may include:
 

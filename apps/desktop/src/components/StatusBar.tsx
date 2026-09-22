@@ -6,7 +6,6 @@ type StatusBarProps = {
   loading: boolean;
   repositoryRoot: string;
   sourceLanguage: string;
-  targetLanguage: string | null;
 };
 
 function shortenPath(path: string): string {
@@ -24,14 +23,13 @@ export function StatusBar({
   loading,
   repositoryRoot,
   sourceLanguage,
-  targetLanguage,
 }: StatusBarProps) {
   return (
     <footer className="status-bar" aria-live="polite">
       <span className="status-item status-repository" title={displayPath(repositoryRoot)}>
         {shortenPath(repositoryRoot)}
       </span>
-      <span className="status-item">{sourceLanguage} → {targetLanguage ?? "target not configured"}</span>
+      <span className="status-item">Source {sourceLanguage}</span>
       <span className="status-item status-sheet">
         {sheetName ?? "No sheet selected"}
       </span>

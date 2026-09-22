@@ -31,7 +31,7 @@ import { CellDraft, CellMutation, TranslationEditor } from "./TranslationEditor"
 import { TranslationList } from "./TranslationList";
 import { WindowChrome } from "./WindowChrome";
 import { displayPathName } from "../pathDisplay";
-import { initialDockLayout, reduceDockLayout } from "../ui/layout";
+import { initialWorkbenchLayout, reduceWorkbenchLayout } from "../ui/layout";
 
 const PAGE_SIZE = 100;
 
@@ -78,10 +78,11 @@ export function EditorShell({
   const [closing, setClosing] = useState(false);
   const [editorError, setEditorError] = useState<EditorError | null>(null);
   const [discardRequest, setDiscardRequest] = useState<DiscardRequest | null>(null);
-  const [dockLayout, dispatchDockLayout] = useReducer(reduceDockLayout, initialDockLayout);
-  const [leftDockOpen, setLeftDockOpen] = useState(true);
+  const [layout, dispatchLayout] = useReducer(reduceWorkbenchLayout, initialWorkbenchLayout);
+  const leftDockOpen = layout.regions.leftDock.visible;
   const requestGeneration = useRef(0);
   const hasDirtyDraft = useRef(false);
+  const allowWindowClose = useRef(false);
   const discardRequestRef = useRef<DiscardRequest | null>(null);
   const mutationKeys = useRef(new Set<string>());
 
@@ -89,6 +90,7 @@ export function EditorShell({
     () => selectedRowCursor ? rows.find((row) => rowKey(row) === rowKey(selectedRowCursor)) ?? null : null,
     [rows, selectedRowCursor],
   );
+  const sheetHasNoRows = selectedSheetName !== null && loadedSheetName === selectedSheetName && !sheetLoading && rows.length === 0 && nextAfter === null;
 
   const showError = useCallback((title: string, error: unknown) => {
     setEditorError({ title, error: normalizeCommandError(error) });
@@ -174,6 +176,42 @@ export function EditorShell({
     setDiscardRequest(null);
     request?.resolve(confirmed);
   }, []);
+
+  useEffect(() => {
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+    void getCurrentWindow()
+      .onCloseRequested((event) => {
+        if (allowWindowClose.current) {
+          allowWindowClose.current = false;
+          return;
+        }
+        if (!hasDirtyDraft.current) {
+          return;
+        }
+        event.preventDefault();
+        void (async () => {
+          if (!(await requestDiscardConfirmation("Closing Aeria will discard your unsaved changes."))) {
+            return;
+          }
+          allowWindowClose.current = true;
+          try {
+            await getCurrentWindow().close();
+          } catch {
+            allowWindowClose.current = false;
+          }
+        })();
+      })
+      .then((cleanup) => {
+        if (disposed) cleanup();
+        else unlisten = cleanup;
+      })
+      .catch(() => undefined);
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, [requestDiscardConfirmation]);
 
   const handleSheetSelect = useCallback(async (sheetName: string) => {
     if (sheetName === selectedSheetName || !(await requestDiscardConfirmation("Changing sheets will discard your unsaved changes."))) {
@@ -328,16 +366,21 @@ export function EditorShell({
     if (!(await requestDiscardConfirmation("Closing Aeria will discard your unsaved changes."))) {
       return;
     }
-    void getCurrentWindow().close().catch(() => undefined);
+    allowWindowClose.current = true;
+    try {
+      await getCurrentWindow().close();
+    } catch {
+      allowWindowClose.current = false;
+    }
   }, [requestDiscardConfirmation]);
   const handleLoadMoreClick = useCallback(() => {
     void handleLoadMore();
   }, [handleLoadMore]);
   const resizeLeftDock = useCallback((delta: number) => {
-    dispatchDockLayout({ type: "resizeLeftDock", delta });
+    dispatchLayout({ type: "resizeRegion", regionId: "leftDock", delta });
   }, []);
   const resizeTranslation = useCallback((delta: number) => {
-    dispatchDockLayout({ type: "resizeTranslation", delta });
+    dispatchLayout({ type: "resizeRegion", regionId: "translation", delta: -delta });
   }, []);
   const handleSaveTargetClick = useCallback((cell: TranslationCellDto, draft: CellDraft, otherDirty: boolean, discardOtherDrafts: () => void) => {
     void handleSaveTarget(cell, draft, otherDirty, discardOtherDrafts);
@@ -353,10 +396,9 @@ export function EditorShell({
     <main className="app-shell editor-shell">
       <WindowChrome
         context={repositoryName(project.repositoryRoot)}
-        detail={`${project.sourceLanguage} → ${project.targetLanguage ?? "target not configured"}`}
         projectName={repositoryName(project.repositoryRoot)}
         mode="workbench"
-        onToggleDock={() => setLeftDockOpen((current) => !current)}
+        onToggleDock={() => dispatchLayout({ type: "toggleRegion", regionId: "leftDock" })}
         onCloseProject={() => void handleClose()}
         onClose={() => void handleWindowClose()}
       />
@@ -372,9 +414,9 @@ export function EditorShell({
       </div>
       <div
         className={leftDockOpen ? "workbench-frame" : "workbench-frame dock-closed"}
-        style={{ "--left-dock-width": `${dockLayout.leftDockWidth}px` } as CSSProperties}
+        style={{ "--left-dock-width": `${layout.regions.leftDock.size}px` } as CSSProperties}
       >
-        <ActivityRail side="left" items={[{ id: "sheets", label: "Sheets", icon: "folder", active: leftDockOpen, onSelect: () => setLeftDockOpen((current) => !current) }]} />
+        <ActivityRail side="left" items={[{ id: "sheets", label: "Sheets", icon: "folder", active: leftDockOpen, onSelect: () => dispatchLayout({ type: "toggleRegion", regionId: "leftDock" }) }]} />
         {leftDockOpen ? (
           <>
             <DockPanel title="Sheets" meta={project.sheets.length.toLocaleString()} className="sheets-dock">
@@ -384,39 +426,45 @@ export function EditorShell({
           </>
         ) : null}
         <div className="workbench-content">
-          <DocumentTabs label={selectedSheetName ?? "Sheet"} detail={loadedSheetName ? `${rows.length.toLocaleString()} rows` : "loading"} />
-          <div className="sheet-document" style={{ "--translation-width": `${dockLayout.translationWidth}px` } as CSSProperties}>
-            <TranslationList
-              rows={rows}
-              selectedRow={selectedRowCursor}
-              selectedSheetName={selectedSheetName}
-              loadedSheetName={loadedSheetName}
-              disabled={closing}
-              loading={sheetLoading}
-              refreshing={false}
-              loadingMore={loadingMore}
-              hasMore={nextAfter !== null}
-              onSelect={handleRowSelect}
-              onLoadMore={handleLoadMoreClick}
-            />
-            <ResizeHandle axis="x" label="Resize translation editor" onDelta={resizeTranslation} />
-            <TranslationEditor
-              key={selectedRow ? rowKey(selectedRow) : "empty-editor"}
-              row={selectedRow}
-              mutations={mutations}
-              onDirtyChange={handleDirtyChange}
-              onSaveTarget={handleSaveTargetClick}
-              onSaveNote={handleSaveNoteClick}
-              onReviewChange={handleReviewChangeClick}
-            />
-          </div>
+          <DocumentTabs label={selectedSheetName ?? "Sheet"} detail={loadedSheetName ? `${rows.length.toLocaleString()} loaded` : "loading"} />
+          {sheetHasNoRows ? (
+            <div className="empty-document" role="status">
+              <strong>No translatable rows</strong>
+              <p>This sheet does not contain any source String cells that can be translated.</p>
+            </div>
+          ) : (
+            <div className="sheet-document" style={{ "--translation-width": `${layout.regions.translation.size}px` } as CSSProperties}>
+              <TranslationList
+                rows={rows}
+                selectedRow={selectedRowCursor}
+                selectedSheetName={selectedSheetName}
+                loadedSheetName={loadedSheetName}
+                disabled={closing}
+                loading={sheetLoading}
+                refreshing={false}
+                loadingMore={loadingMore}
+                hasMore={nextAfter !== null}
+                onSelect={handleRowSelect}
+                onLoadMore={handleLoadMoreClick}
+              />
+              <ResizeHandle axis="x" label="Resize translation editor" onDelta={resizeTranslation} />
+              <TranslationEditor
+                key={selectedRow ? rowKey(selectedRow) : "empty-editor"}
+                row={selectedRow}
+                mutations={mutations}
+                onDirtyChange={handleDirtyChange}
+                onSaveTarget={handleSaveTargetClick}
+                onSaveNote={handleSaveNoteClick}
+                onReviewChange={handleReviewChangeClick}
+              />
+            </div>
+          )}
           <StatusBar
             sheetName={selectedSheetName}
             rowCount={rows.length}
             loading={sheetLoading}
             repositoryRoot={project.repositoryRoot}
             sourceLanguage={project.sourceLanguage}
-            targetLanguage={project.targetLanguage}
           />
         </div>
       </div>

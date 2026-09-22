@@ -108,38 +108,13 @@ impl Workspace {
         snapshot: &HxsSnapshot,
         target_language: impl Into<String>,
     ) -> Result<Self, WorkspaceError> {
-        Self::from_verified_snapshot_with_target_language(snapshot, Some(target_language.into()))
-    }
-
-    /// Creates an empty workspace whose target language can be configured later.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the verified source metadata is invalid.
-    pub fn from_verified_snapshot_without_target_language(
-        snapshot: &HxsSnapshot,
-    ) -> Result<Self, WorkspaceError> {
-        Self::from_verified_snapshot_with_target_language(snapshot, None)
-    }
-
-    fn from_verified_snapshot_with_target_language(
-        snapshot: &HxsSnapshot,
-        target_language: Option<String>,
-    ) -> Result<Self, WorkspaceError> {
         let source = snapshot.metadata();
-        let metadata = match target_language {
-            Some(target_language) => WorkspaceMetadata::new(
-                source.source_language,
-                target_language,
-                source.content_id,
-                source.snapshot_id,
-            )?,
-            None => WorkspaceMetadata::new_without_target_language(
-                source.source_language,
-                source.content_id,
-                source.snapshot_id,
-            )?,
-        };
+        let metadata = WorkspaceMetadata::new(
+            source.source_language,
+            target_language,
+            source.content_id,
+            source.snapshot_id,
+        )?;
         Ok(Self::new(metadata))
     }
 
@@ -147,20 +122,6 @@ impl Workspace {
     #[must_use]
     pub const fn metadata(&self) -> &WorkspaceMetadata {
         &self.metadata
-    }
-
-    /// Updates the optional project target-language setting.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the configured target language is empty or
-    /// whitespace-only.
-    pub fn set_target_language(
-        &mut self,
-        target_language: Option<String>,
-    ) -> Result<(), WorkspaceError> {
-        self.metadata.set_target_language(target_language)?;
-        Ok(())
     }
 
     /// Returns sparse units in deterministic translation-unit ID order.

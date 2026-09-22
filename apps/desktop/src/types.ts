@@ -60,7 +60,7 @@ export type ProjectSummaryDto = {
   sourcePackagePath: string;
   sourcePackageId: string;
   sourceLanguage: string;
-  targetLanguage: string | null;
+  targetLanguage: string;
   sourceContentId: string;
   sourceSnapshotId: string;
   gameVersion: string;
@@ -85,7 +85,7 @@ export type RecentProjectDto = {
   sourcePackagePath: string;
   sourcePackageId: string;
   sourceLanguage: string;
-  targetLanguage: string | null;
+  targetLanguage: string;
   gameVersion: string;
   lastOpenedAtUnixMs: number;
   availability: RecentProjectAvailability;

@@ -67,10 +67,8 @@ field order below, and one LF after the closing `}`:
 }
 ```
 
-All five fields are required. `targetLanguage` is either a non-empty UTF-8
-string or JSON `null` while a newly created project is awaiting project
-settings. `formatVersion` is the JSON integer `1`, not a string. Language
-values are UTF-8 strings. `contentId` and `snapshotId` are
+All five fields are required. `formatVersion` is the JSON integer `1`, not a
+string. Language values are UTF-8 strings. `contentId` and `snapshotId` are
 the current verified HXS identifiers, preserved in their canonical
 `sha256:<64 lowercase hexadecimal characters>` form.
 
@@ -170,10 +168,9 @@ data or return a partially validated workspace.
   unknown or duplicate fields. Field order and insignificant JSON whitespace
   are not semantic requirements for reading. Wrong JSON types, non-canonical
   ID/hash spellings, arrays, fractional numbers, and values outside the
-  documented coordinate ranges are invalid. Source language and a configured
-  target language must satisfy the current `WorkspaceMetadata` domain
-  contract: UTF-8 strings that are not empty or whitespace-only. A null target
-  language is valid only for an unconfigured project. `contentId` and `snapshotId` must be
+  documented coordinate ranges are invalid. Source and target languages must
+  satisfy the current `WorkspaceMetadata` domain contract: UTF-8 strings that
+  are not empty or whitespace-only. `contentId` and `snapshotId` must be
   non-empty valid canonical HXS IDs in the
   `sha256:<64 lowercase hexadecimal characters>` form.
 - Every record's `id` must be placed in the shard derived from its raw ID
@@ -206,10 +203,9 @@ above.
 
 ## Domain scope and compatibility
 
-The workspace is sparse and has at most one canonical target language during
-initial setup. The persisted project-level facts are the format version,
-source language, optional target language, current HXS `contentId`, and current
-HXS `snapshotId`. The persisted
+The workspace is sparse and has exactly one canonical target language. The
+persisted project-level facts are the format version, source language, target
+language, current HXS `contentId`, and current HXS `snapshotId`. The persisted
 unit-level facts are the stable ID, current source binding, source fingerprint,
 target macro string, review state, and optional translator note.
 

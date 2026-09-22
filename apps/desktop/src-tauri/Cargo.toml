@@ -25,6 +25,7 @@ aeria-projects = { path = "../../../crates/aeria-projects" }
 aeria-workspace = { path = "../../../crates/aeria-workspace" }
 serde = { version = "1.0", features = ["derive"] }
 tauri = { version = "2.11.5", features = [] }
+tauri-plugin-dialog = "2.4.0"
 
 [lints]
 workspace = true

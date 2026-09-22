@@ -248,7 +248,7 @@ fn initializes_and_reopens_a_new_project_without_persisting_the_source_path() {
         session.workspace().metadata().source_language(),
         source_metadata.source_language
     );
-    assert_eq!(session.workspace().metadata().target_language(), Some("fr"));
+    assert_eq!(session.workspace().metadata().target_language(), "fr");
     assert_eq!(
         session.workspace().metadata().source_content_id(),
         source_metadata.content_id

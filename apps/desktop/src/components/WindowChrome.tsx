@@ -43,9 +43,11 @@ export function WindowChrome({ context, detail, mode, projectName, onClose, onCl
           }
         }
         if (active) setMaximized(await window.isMaximized());
-        unlistenResize = await window.onResized(async () => {
+        const cleanupResize = await window.onResized(async () => {
           if (active) setMaximized(await window.isMaximized());
         });
+        if (active) unlistenResize = cleanupResize;
+        else cleanupResize();
       } catch {
         // The renderer can also run in a browser during development.
       }
@@ -90,12 +92,12 @@ export function WindowChrome({ context, detail, mode, projectName, onClose, onCl
 
   const menus: readonly ApplicationMenuDefinition[] = mode === "workbench"
     ? [
-        { id: "file", label: "File", items: [{ id: "close", label: "Close project", shortcut: "Ctrl+W", onSelect: onCloseProject ?? handleClose }] },
-        { id: "view", label: "View", items: [{ id: "sheets", label: "Sheets panel", onSelect: onToggleDock ?? (() => undefined) }] },
-        { id: "project", label: "Project", items: [{ id: "close-project", label: "Close project", onSelect: onCloseProject ?? handleClose }] },
+        { id: "file", label: "File", items: [{ kind: "command", id: "close", label: "Close project", shortcut: "Ctrl+W", onSelect: onCloseProject ?? handleClose }] },
+        { id: "view", label: "View", items: [{ kind: "command", id: "sheets", label: "Sheets panel", onSelect: onToggleDock ?? (() => undefined) }] },
+        { id: "project", label: "Project", items: [{ kind: "command", id: "close-project", label: "Close project", onSelect: onCloseProject ?? handleClose }] },
         { id: "window", label: "Window", items: [
-          { id: "minimize", label: "Minimize", onSelect: handleMinimize },
-          { id: "maximize", label: maximized ? "Restore" : "Maximize", onSelect: () => void handleToggleMaximize() },
+          { kind: "command", id: "minimize", label: "Minimize", onSelect: handleMinimize },
+          { kind: "command", id: "maximize", label: maximized ? "Restore" : "Maximize", onSelect: () => void handleToggleMaximize() },
         ] },
       ]
     : [];
@@ -108,8 +110,8 @@ export function WindowChrome({ context, detail, mode, projectName, onClose, onCl
             <span className="chrome-project-name">{projectName ?? context}</span>
             {detail ? <span className="chrome-project-detail">{detail}</span> : null}
           </div>
-          <div className="chrome-drag-region" data-tauri-drag-region />
           <ApplicationMenu menus={menus} />
+          <div className="chrome-drag-region" data-tauri-drag-region />
         </>
       ) : (
         <div className="chrome-brand" aria-label="Aeria">Aeria</div>

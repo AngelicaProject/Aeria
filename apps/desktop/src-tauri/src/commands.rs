@@ -142,7 +142,7 @@ pub async fn initialize_project(
     app: tauri::AppHandle,
     repository_root: String,
     source_package_path: String,
-    target_language: Option<String>,
+    target_language: String,
 ) -> CommandResult<ProjectOpenResultDto> {
     let cache_root = app
         .path()
@@ -168,21 +168,14 @@ pub(crate) fn initialize_project_with_state(
     repository_root: String,
     source_package_path: String,
     cache_root: PathBuf,
-    target_language: Option<String>,
+    target_language: String,
 ) -> CommandResult<ProjectSummaryDto> {
-    let replacement = match target_language {
-        Some(target_language) => ProjectSession::initialize(
-            repository_root,
-            source_package_path,
-            cache_root,
-            target_language,
-        ),
-        None => ProjectSession::initialize_without_target_language(
-            repository_root,
-            source_package_path,
-            cache_root,
-        ),
-    }
+    let replacement = ProjectSession::initialize(
+        repository_root,
+        source_package_path,
+        cache_root,
+        target_language,
+    )
     .map_err(CommandError::from)?;
     replace_project(state, replacement)
 }
@@ -374,7 +367,7 @@ pub async fn initialize_project_from_game(
     repository_root: String,
     game_path: String,
     source_language: String,
-    target_language: Option<String>,
+    target_language: String,
 ) -> CommandResult<ProjectOpenResultDto> {
     let token = state.atlas_job_token(&job_id)?;
     let worker_job_id = job_id.clone();
@@ -401,17 +394,11 @@ pub async fn initialize_project_from_game(
         Ok(prepared) => {
             let result = state.with_atlas_publication(&job_id, &token, |_| {
                 require_not_cancelled(&token)?;
-                let replacement = match prepared.target_language {
-                    Some(target_language) => ProjectSession::initialize_from_source_package(
-                        prepared.repository_root,
-                        prepared.source_package,
-                        target_language,
-                    ),
-                    None => ProjectSession::initialize_from_source_package_without_target_language(
-                        prepared.repository_root,
-                        prepared.source_package,
-                    ),
-                }
+                let replacement = ProjectSession::initialize_from_source_package(
+                    prepared.repository_root,
+                    prepared.source_package,
+                    prepared.target_language,
+                )
                 .map_err(CommandError::from)?;
                 require_not_cancelled(&token)?;
                 replace_project(&state, replacement)
@@ -447,7 +434,7 @@ fn initialize_project_from_game_inner(
     repository_root: String,
     game_path: String,
     source_language: String,
-    target_language: Option<String>,
+    target_language: String,
 ) -> Result<PreparedAtlasProject, CommandError> {
     let executable_path = resolve_atlas_executable(app)?;
     let app_data = app
@@ -509,7 +496,7 @@ fn initialize_project_from_game_inner(
 struct PreparedAtlasProject {
     repository_root: String,
     source_package: SourcePackage,
-    target_language: Option<String>,
+    target_language: String,
 }
 
 fn resolve_atlas_executable(app: &tauri::AppHandle) -> CommandResult<PathBuf> {
@@ -772,32 +759,6 @@ pub(crate) fn current_project_with_state(
 
 #[tauri::command(rename_all = "camelCase")]
 #[allow(clippy::needless_pass_by_value)]
-/// Configures the active project's optional target language.
-///
-/// # Errors
-///
-/// Returns a typed command error when no project is open, the target language
-/// is invalid, or the workspace/Recent projects state cannot be updated.
-pub async fn set_project_target_language(
-    app: tauri::AppHandle,
-    target_language: String,
-) -> CommandResult<ProjectOpenResultDto> {
-    let registry_path = app_registry_path(&app);
-    run_blocking(move || {
-        let state = app.state::<DesktopState>();
-        let mut project = state.lock_project()?;
-        let project = project.as_mut().ok_or_else(CommandError::no_project)?;
-        project
-            .set_target_language(Some(target_language))
-            .map_err(CommandError::from)?;
-        let summary = ProjectSummaryDto::from_session(project);
-        Ok(remember_project(&state, summary, registry_path))
-    })
-    .await
-}
-
-#[tauri::command(rename_all = "camelCase")]
-#[allow(clippy::needless_pass_by_value)]
 /// Closes the active project. Closing an already closed desktop is successful.
 ///
 /// # Errors
@@ -1043,7 +1004,7 @@ mod tests {
             repository.path().to_string_lossy().into_owned(),
             source.to_string_lossy().into_owned(),
             cache_root,
-            Some("fr".to_owned()),
+            "fr".to_owned(),
         )
         .expect("initialize project");
         let path = registry_path(&repository);
@@ -1396,7 +1357,7 @@ mod tests {
             repository.path().to_string_lossy().into_owned(),
             source.to_string_lossy().into_owned(),
             cache_root,
-            Some("fr".to_owned()),
+            "fr".to_owned(),
         )
         .expect("initialize project");
         let blocked_parent = repository.path().join("not-a-directory");
@@ -1428,7 +1389,7 @@ mod tests {
             repository.path().to_string_lossy().into_owned(),
             source.to_string_lossy().into_owned(),
             repository.path().join("cache"),
-            Some("fr".to_owned()),
+            "fr".to_owned(),
         )
         .expect("initialize project");
         let path = registry_path(&repository);
@@ -1598,7 +1559,7 @@ mod tests {
             repository.path().to_string_lossy().into_owned(),
             source.to_string_lossy().into_owned(),
             cache_root.clone(),
-            Some("fr".to_owned()),
+            "fr".to_owned(),
         )
         .expect("initialize project");
         assert_eq!(
@@ -1610,7 +1571,7 @@ mod tests {
             source.to_string_lossy().into_owned()
         );
         assert_eq!(summary.source_language, "en");
-        assert_eq!(summary.target_language.as_deref(), Some("fr"));
+        assert_eq!(summary.target_language, "fr");
         assert!(summary.source_content_id.starts_with("sha256:"));
         assert!(summary.source_snapshot_id.starts_with("sha256:"));
         assert_eq!(summary.game_version, "test-game");

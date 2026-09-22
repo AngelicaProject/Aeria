@@ -283,13 +283,13 @@ impl FromStr for TranslationUnitId {
 
 /// Project/source metadata held once by a workspace.
 ///
-/// A workspace has at most one target language. New projects may be created
-/// before that presentation setting is chosen; translation units remain
-/// bound to the source language and do not carry a competing target field.
+/// A workspace has exactly one target language because this value contains a
+/// single canonical target-language field and has no per-unit target-language
+/// alternative.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct WorkspaceMetadata {
     source_language: String,
-    target_language: Option<String>,
+    target_language: String,
     source_content_id: String,
     source_snapshot_id: String,
 }
@@ -313,6 +313,7 @@ impl WorkspaceMetadata {
         let source_snapshot_id = source_snapshot_id.into();
         for (value, field) in [
             (&source_language, "source language"),
+            (&target_language, "target language"),
             (&source_content_id, "source content ID"),
             (&source_snapshot_id, "source snapshot ID"),
         ] {
@@ -320,14 +321,9 @@ impl WorkspaceMetadata {
                 return Err(DomainValueError::EmptyValue { field });
             }
         }
-        if target_language.trim().is_empty() {
-            return Err(DomainValueError::EmptyValue {
-                field: "target language",
-            });
-        }
         Ok(Self {
             source_language,
-            target_language: Some(target_language),
+            target_language,
             source_content_id,
             source_snapshot_id,
         })
@@ -341,60 +337,8 @@ impl WorkspaceMetadata {
 
     /// Returns the one canonical target language.
     #[must_use]
-    pub fn target_language(&self) -> Option<&str> {
-        self.target_language.as_deref()
-    }
-
-    /// Creates metadata for a project whose target language is configured later.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when a required source or HXS identifier is empty.
-    pub fn new_without_target_language(
-        source_language: impl Into<String>,
-        source_content_id: impl Into<String>,
-        source_snapshot_id: impl Into<String>,
-    ) -> Result<Self, DomainValueError> {
-        let source_language = source_language.into();
-        let source_content_id = source_content_id.into();
-        let source_snapshot_id = source_snapshot_id.into();
-        for (value, field) in [
-            (&source_language, "source language"),
-            (&source_content_id, "source content ID"),
-            (&source_snapshot_id, "source snapshot ID"),
-        ] {
-            if value.trim().is_empty() {
-                return Err(DomainValueError::EmptyValue { field });
-            }
-        }
-        Ok(Self {
-            source_language,
-            target_language: None,
-            source_content_id,
-            source_snapshot_id,
-        })
-    }
-
-    /// Changes the optional project target-language setting.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when a configured target language is empty or
-    /// whitespace-only.
-    pub fn set_target_language(
-        &mut self,
-        target_language: Option<String>,
-    ) -> Result<(), DomainValueError> {
-        if target_language
-            .as_deref()
-            .is_some_and(|value| value.trim().is_empty())
-        {
-            return Err(DomainValueError::EmptyValue {
-                field: "target language",
-            });
-        }
-        self.target_language = target_language;
-        Ok(())
+    pub fn target_language(&self) -> &str {
+        &self.target_language
     }
 
     /// Returns the current verified HXS content ID.
@@ -740,23 +684,7 @@ mod tests {
         let metadata =
             WorkspaceMetadata::new("en", "fr", "content", "snapshot").expect("valid metadata");
         assert_eq!(metadata.source_language(), "en");
-        assert_eq!(metadata.target_language(), Some("fr"));
+        assert_eq!(metadata.target_language(), "fr");
         assert!(WorkspaceMetadata::new("en", "", "content", "snapshot").is_err());
-    }
-
-    #[test]
-    fn workspace_metadata_can_be_configured_after_project_creation() {
-        let mut metadata =
-            WorkspaceMetadata::new_without_target_language("en", "content", "snapshot")
-                .expect("valid unconfigured metadata");
-        assert_eq!(metadata.target_language(), None);
-        metadata
-            .set_target_language(Some("ru".to_owned()))
-            .expect("target language");
-        assert_eq!(metadata.target_language(), Some("ru"));
-        metadata
-            .set_target_language(None)
-            .expect("clear target language");
-        assert_eq!(metadata.target_language(), None);
     }
 }

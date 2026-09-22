@@ -36,7 +36,7 @@ pub struct ProjectMetadata {
     pub source_package_path: PathBuf,
     pub source_package_id: String,
     pub source_language: String,
-    pub target_language: Option<String>,
+    pub target_language: String,
     pub game_version: String,
 }
 
@@ -54,7 +54,7 @@ pub struct RegistryEntry {
     #[serde(rename = "sourceLanguage")]
     pub source_language: String,
     #[serde(rename = "targetLanguage")]
-    pub target_language: Option<String>,
+    pub target_language: String,
     #[serde(rename = "gameVersion")]
     pub game_version: String,
     #[serde(rename = "lastOpenedAtUnixMs")]
@@ -416,17 +416,11 @@ fn validate_document(document: &RegistryDocument, path: &Path) -> Result<(), Reg
             ("repositoryRoot", &project.repository_root),
             ("sourcePackagePath", &project.source_package_path),
             ("sourceLanguage", &project.source_language),
+            ("targetLanguage", &project.target_language),
         ] {
             if value.trim().is_empty() {
                 return invalid_data(path, format!("{name} must not be empty"));
             }
-        }
-        if project
-            .target_language
-            .as_deref()
-            .is_some_and(|target| target.trim().is_empty())
-        {
-            return invalid_data(path, "targetLanguage must not be empty");
         }
         if !is_canonical_package_id(&project.source_package_id) {
             return invalid_data(
@@ -594,7 +588,7 @@ mod tests {
             source_package_path,
             source_package_id: PACKAGE_ID.to_owned(),
             source_language: "en".to_owned(),
-            target_language: Some("fr".to_owned()),
+            target_language: "fr".to_owned(),
             game_version: "test-game".to_owned(),
         }
     }
@@ -613,7 +607,7 @@ mod tests {
             source_package_path: format!("C:/sources/{id}.hsp"),
             source_package_id: PACKAGE_ID.to_owned(),
             source_language: "en".to_owned(),
-            target_language: Some("fr".to_owned()),
+            target_language: "fr".to_owned(),
             game_version: "test".to_owned(),
             last_opened_at_unix_ms: timestamp,
         }
@@ -802,10 +796,10 @@ mod tests {
         refreshed.source_package_path = temp.path().join("replacement.hsp");
         fs::write(&refreshed.source_package_path, b"hsp").expect("replacement");
         refreshed.source_package_id = PACKAGE_ID.replace('0', "f");
-        refreshed.target_language = Some("de".to_owned());
+        refreshed.target_language = "de".to_owned();
         let second = store.upsert(&refreshed, 2).expect("refresh");
         assert_eq!(second.id, first.id);
-        assert_eq!(second.target_language.as_deref(), Some("de"));
+        assert_eq!(second.target_language, "de");
         assert_eq!(second.last_opened_at_unix_ms, 2);
         assert_eq!(store.load().expect("load").len(), 1);
     }
@@ -906,7 +900,7 @@ mod tests {
             source_package_path,
             source_package_id: PACKAGE_ID.to_owned(),
             source_language: "en".to_owned(),
-            target_language: Some("fr".to_owned()),
+            target_language: "fr".to_owned(),
             game_version: "test-game".to_owned(),
         };
         ProjectRegistry::new(root.join(REGISTRY_FILE_NAME))

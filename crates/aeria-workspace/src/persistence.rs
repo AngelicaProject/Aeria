@@ -303,35 +303,6 @@ impl WorkspaceStore {
         Ok(())
     }
 
-    /// Persists only the project metadata after a presentation setting changes.
-    ///
-    /// Source identity fields must still match the loaded manifest. Sparse
-    /// translation shards are not rewritten.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the managed workspace is unavailable, has changed
-    /// externally, or the canonical manifest cannot be published.
-    pub fn persist_metadata(&self, workspace: &Workspace) -> Result<(), WorkspaceStoreError> {
-        let layout = self.inspect_existing_layout()?;
-        let persisted = read_manifest(&layout.manifest_path)?;
-        if persisted.source_language() != workspace.metadata().source_language()
-            || persisted.source_content_id() != workspace.metadata().source_content_id()
-            || persisted.source_snapshot_id() != workspace.metadata().source_snapshot_id()
-        {
-            return Err(WorkspaceStoreError::ExternalChange {
-                path: layout.manifest_path,
-            });
-        }
-        let bytes = canonical_manifest_bytes(workspace, &layout.manifest_path)?;
-        if let Err(error) = atomic_publish(&self.repository_root, &layout.manifest_path, &bytes) {
-            self.invalidate_session_cache();
-            return Err(error);
-        }
-        self.invalidate_session_cache();
-        Ok(())
-    }
-
     /// Replaces exactly the selected unit in its complete canonical shard.
     ///
     /// The selected persisted shard is fully validated on the fallback path;
@@ -780,18 +751,11 @@ struct ManifestDto {
     #[serde(rename = "sourceLanguage")]
     source_language: String,
     #[serde(rename = "targetLanguage")]
-    target_language: ManifestTargetLanguage,
+    target_language: String,
     #[serde(rename = "contentId")]
     content_id: String,
     #[serde(rename = "snapshotId")]
     snapshot_id: String,
-}
-
-#[derive(Deserialize)]
-#[serde(untagged)]
-enum ManifestTargetLanguage {
-    Value(String),
-    Null(()),
 }
 
 #[derive(Deserialize)]
@@ -842,7 +806,7 @@ struct CanonicalManifestDto<'a> {
     #[serde(rename = "sourceLanguage")]
     source_language: &'a str,
     #[serde(rename = "targetLanguage")]
-    target_language: Option<&'a str>,
+    target_language: &'a str,
     #[serde(rename = "contentId")]
     content_id: &'a str,
     #[serde(rename = "snapshotId")]
@@ -905,20 +869,13 @@ fn read_manifest(path: &Path) -> Result<WorkspaceMetadata, WorkspaceStoreError> 
     }
     validate_hxs_id(&manifest.content_id, "contentId", path, None)?;
     validate_hxs_id(&manifest.snapshot_id, "snapshotId", path, None)?;
-    let metadata = match manifest.target_language {
-        ManifestTargetLanguage::Value(target_language) => WorkspaceMetadata::new(
-            manifest.source_language,
-            target_language,
-            manifest.content_id,
-            manifest.snapshot_id,
-        ),
-        ManifestTargetLanguage::Null(()) => WorkspaceMetadata::new_without_target_language(
-            manifest.source_language,
-            manifest.content_id,
-            manifest.snapshot_id,
-        ),
-    };
-    metadata.map_err(|source| invalid(path, None, format!("invalid manifest metadata: {source}")))
+    WorkspaceMetadata::new(
+        manifest.source_language,
+        manifest.target_language,
+        manifest.content_id,
+        manifest.snapshot_id,
+    )
+    .map_err(|source| invalid(path, None, format!("invalid manifest metadata: {source}")))
 }
 
 fn read_shard(
@@ -1118,10 +1075,7 @@ fn validate_workspace_metadata(
             "sourceLanguage must not be empty or whitespace-only",
         ));
     }
-    if metadata
-        .target_language()
-        .is_some_and(|target_language| target_language.trim().is_empty())
-    {
+    if metadata.target_language().trim().is_empty() {
         return Err(invalid(
             path,
             None,

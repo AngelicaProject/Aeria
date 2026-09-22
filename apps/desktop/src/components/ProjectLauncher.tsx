@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { flushSync } from "react-dom";
 import { listen } from "@tauri-apps/api/event";
+import { open as openNativeDialog } from "@tauri-apps/plugin-dialog";
 import {
   cancelSourcePackage,
   forgetRecentProject,
@@ -95,21 +96,22 @@ type BrowseFieldProps = {
   directory?: boolean;
   disabled: boolean;
   onChange: (value: string) => void;
+  onError: (message: string) => void;
 };
 
-function selectedPath(file: File, directory: boolean): string {
-  const filePath = (file as File & { path?: string }).path;
-  if (!filePath) return directory ? file.webkitRelativePath.split("/")[0] ?? file.name : file.name;
-  if (!directory || !file.webkitRelativePath) return filePath;
-  const relativeParts = file.webkitRelativePath.split("/");
-  const relativeFilePath = relativeParts.slice(1).join("\\");
-  const normalizedPath = filePath.replaceAll("/", "\\");
-  const suffix = relativeFilePath ? `\\${relativeFilePath}` : "";
-  return suffix && normalizedPath.endsWith(suffix) ? normalizedPath.slice(0, -suffix.length) : filePath;
-}
+function BrowseField({ id, label, value, placeholder, hint, directory = false, disabled, onChange, onError }: BrowseFieldProps) {
+  async function handleBrowse() {
+    try {
+      const options = directory
+        ? { directory: true, multiple: false }
+        : { directory: false, multiple: false, filters: [{ name: "Harmonia source package", extensions: ["hsp"] }] };
+      const selection = await openNativeDialog(options);
+      if (typeof selection === "string") onChange(selection);
+    } catch (error) {
+      onError(error instanceof Error ? error.message : "The native path picker failed.");
+    }
+  }
 
-function BrowseField({ id, label, value, placeholder, hint, directory = false, disabled, onChange }: BrowseFieldProps) {
-  const pickerRef = useRef<HTMLInputElement>(null);
   return (
     <div className="launcher-field">
       <label htmlFor={id}>{label}</label>
@@ -124,22 +126,9 @@ function BrowseField({ id, label, value, placeholder, hint, directory = false, d
           disabled={disabled}
           required
         />
-        <button className="icon-button picker-button" type="button" aria-label={`Choose ${label.toLowerCase()}`} disabled={disabled} onClick={() => pickerRef.current?.click()}>
+        <button className="icon-button picker-button" type="button" aria-label={`Choose ${label.toLowerCase()}`} disabled={disabled} onClick={() => void handleBrowse()}>
           <Icon name="folder" size={14} />
         </button>
-        <input
-          ref={pickerRef}
-          className="visually-hidden"
-          type="file"
-          tabIndex={-1}
-          aria-hidden="true"
-          onChange={(event) => {
-            const file = event.target.files?.[0];
-            if (file) onChange(selectedPath(file, directory));
-            event.target.value = "";
-          }}
-          {...(directory ? { webkitdirectory: "", directory: "" } : {})}
-        />
       </div>
       {hint ? <small className="field-hint">{hint}</small> : null}
     </div>
@@ -198,8 +187,14 @@ export function ProjectLauncher({ initialError, onProjectReady }: ProjectLaunche
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (mode !== "open" && mode !== "create") return;
-    if (mode === "create" && !sourcePackageEventsReady) {
-      setError({ operation: "create", error: sourcePackageListenerError() });
+    if (mode === "create") {
+      setError({
+        operation: "create",
+        error: {
+          code: "targetLanguageRequired",
+          message: "Project creation is unavailable until Aeria defines a project-settings boundary for the required target language.",
+        },
+      });
       return;
     }
     busyRef.current = mode;
@@ -212,14 +207,7 @@ export function ProjectLauncher({ initialError, onProjectReady }: ProjectLaunche
       setCancelRequested(false);
     });
     try {
-      const result = mode === "open"
-        ? await openProject(repositoryRoot, sourcePackagePath)
-        : await (async () => {
-            const started = await startSourcePackage();
-            jobIdRef.current = started.jobId;
-            setJobId(started.jobId);
-            return initializeProjectFromGame(started.jobId, repositoryRoot, gamePath, sourceLanguage);
-          })();
+      const result = await openProject(repositoryRoot, sourcePackagePath);
       onProjectReady(result);
     } catch (caughtError) {
       setError({ operation: mode, error: normalizeCommandError(caughtError) });
@@ -262,6 +250,7 @@ export function ProjectLauncher({ initialError, onProjectReady }: ProjectLaunche
   const details = progressDetails(progress);
   const launcherDisabled = busy !== null || recentBusyId !== null;
   const themeOptions = themeRegistry.map((entry) => ({ value: entry.id, label: `${entry.family ?? "Themes"} · ${entry.displayName}` }));
+  const handlePickerError = (message: string) => setError({ operation: mode === "open" ? "open" : "create", error: { code: "pathPicker", message } });
 
   return (
     <main className="launcher-shell">
@@ -321,12 +310,12 @@ export function ProjectLauncher({ initialError, onProjectReady }: ProjectLaunche
             <section className="launcher-view" aria-labelledby={`${mode}-title`}>
               <div className="launcher-view-head"><div><h1 id={`${mode}-title`}>{mode === "open" ? "Open project" : "Create project"}</h1><p>{mode === "open" ? "Open an existing local Aeria repository." : "Create a local project from an installed FFXIV source."}</p></div></div>
               <form className="launcher-form" onSubmit={handleSubmit}>
-                <BrowseField id="repository-root" label="Repository root" value={repositoryRoot} onChange={setRepositoryRoot} placeholder="C:\\Projects\\my-translation" directory disabled={launcherDisabled} />
-                {mode === "open" ? <BrowseField id="source-package-path" label="HSP source package" value={sourcePackagePath} onChange={setSourcePackagePath} placeholder="C:\\Sources\\source-en.hsp" hint="Exported .hsp package this repository was built from." disabled={launcherDisabled} /> : (
+                <BrowseField id="repository-root" label="Repository root" value={repositoryRoot} onChange={setRepositoryRoot} onError={handlePickerError} placeholder="C:\\Projects\\my-translation" directory disabled={launcherDisabled} />
+                {mode === "open" ? <BrowseField id="source-package-path" label="HSP source package" value={sourcePackagePath} onChange={setSourcePackagePath} onError={handlePickerError} placeholder="C:\\Sources\\source-en.hsp" hint="Exported .hsp package this repository was built from." disabled={launcherDisabled} /> : (
                   <>
-                    <BrowseField id="game-path" label="Game installation" value={gamePath} onChange={setGamePath} placeholder="C:\\Games\\FINAL FANTASY XIV" directory disabled={launcherDisabled} />
+                    <BrowseField id="game-path" label="Game installation" value={gamePath} onChange={setGamePath} onError={handlePickerError} placeholder="C:\\Games\\FINAL FANTASY XIV" directory disabled={launcherDisabled} />
                     <div className="launcher-field"><label htmlFor="source-language">Source language</label><SelectMenu value={sourceLanguage} options={sourceLanguages} onChange={setSourceLanguage} label="Source language" disabled={launcherDisabled} /></div>
-                    <p className="form-note">Target language is configured after project creation; it is not part of launcher setup.</p>
+                    <p className="form-note">Creation is paused: the current workspace contract still requires a target language, and project-settings semantics are outside this corrective UI pass.</p>
                   </>
                 )}
                 <button className="button primary-button launcher-submit" type="submit" disabled={launcherDisabled || (mode === "create" && !sourcePackageEventsReady)}>{busy === "open" ? "Opening…" : busy === "create" ? "Creating…" : mode === "open" ? "Open project" : "Create project"}</button>

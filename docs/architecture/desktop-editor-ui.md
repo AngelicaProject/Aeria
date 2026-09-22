@@ -22,12 +22,12 @@ filesystem availability states (`ready`, `repositoryMissing`,
 visible and offer **Remove from recents**; ready entries offer **Open**.
 
 The launcher can also open an existing project with a repository root and HSP
-source-package path, or create a project from a repository root, game
+source-package path. The Create surface accepts a repository root, game
 installation, and one of Atlas's supported source languages (`en`, `ja`, `de`, or
-`fr`). Target language is configured after creation through the project settings
-boundary. During creation it displays typed Atlas phase and
-progress events and offers cancellation. Raw stdout is never exposed to the
-renderer. Once a project is active, the renderer uses the sheets in
+`fr`), but submission currently stops at a typed boundary error because the
+existing workspace contract still requires a target language and this UI pass
+does not invent project-settings semantics. Once a project is active, the
+renderer uses the sheets in
 `ProjectSummaryDto`, pages one sheet at a time with a limit of 100 entries, and
 offers an explicit **Load more** action.
 
