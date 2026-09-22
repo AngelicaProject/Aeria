@@ -20,7 +20,7 @@ import type {
   TranslationRowDto,
 } from "../types";
 import { ErrorBanner } from "./ErrorBanner";
-import { ActivityRail } from "./ActivityRail";
+import { ConfirmDialog } from "./ConfirmDialog";
 import { ProjectHeader } from "./ProjectHeader";
 import { SheetSidebar } from "./SheetSidebar";
 import { StatusBar } from "./StatusBar";
@@ -34,6 +34,11 @@ const PAGE_SIZE = 100;
 type EditorError = {
   title: string;
   error: CommandError;
+};
+
+type DiscardRequest = {
+  message: string;
+  resolve: (confirmed: boolean) => void;
 };
 
 type EditorShellProps = {
@@ -65,11 +70,14 @@ export function EditorShell({
   const [selectedRowCursor, setSelectedRowCursor] = useState<TranslationRowCursorDto | null>(null);
   const [sheetLoading, setSheetLoading] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
-  const [mutation, setMutation] = useState<CellMutation | null>(null);
+  const [mutations, setMutations] = useState<CellMutation[]>([]);
   const [closing, setClosing] = useState(false);
   const [editorError, setEditorError] = useState<EditorError | null>(null);
+  const [discardRequest, setDiscardRequest] = useState<DiscardRequest | null>(null);
   const requestGeneration = useRef(0);
   const hasDirtyDraft = useRef(false);
+  const discardRequestRef = useRef<DiscardRequest | null>(null);
+  const mutationKeys = useRef(new Set<string>());
 
   const selectedRow = useMemo(
     () => selectedRowCursor ? rows.find((row) => rowKey(row) === rowKey(selectedRowCursor)) ?? null : null,
@@ -140,26 +148,40 @@ export function EditorShell({
     }
   }, [beginSheetLoad, firstSheetName]);
 
-  const confirmDiscardChanges = useCallback((action: string): boolean => {
+  const requestDiscardConfirmation = useCallback((message: string): Promise<boolean> => {
     if (!hasDirtyDraft.current) {
-      return true;
+      return Promise.resolve(true);
     }
-    return window.confirm(`You have unsaved changes. ${action} will discard them. Continue?`);
+    if (discardRequestRef.current) {
+      return Promise.resolve(false);
+    }
+    return new Promise((resolve) => {
+      const request = { message, resolve };
+      discardRequestRef.current = request;
+      setDiscardRequest(request);
+    });
   }, []);
 
-  const handleSheetSelect = useCallback((sheetName: string) => {
-    if (sheetName === selectedSheetName || !confirmDiscardChanges("Changing sheets")) {
+  const resolveDiscardConfirmation = useCallback((confirmed: boolean) => {
+    const request = discardRequestRef.current;
+    discardRequestRef.current = null;
+    setDiscardRequest(null);
+    request?.resolve(confirmed);
+  }, []);
+
+  const handleSheetSelect = useCallback(async (sheetName: string) => {
+    if (sheetName === selectedSheetName || !(await requestDiscardConfirmation("Changing sheets will discard your unsaved changes."))) {
       return;
     }
     void beginSheetLoad(sheetName);
-  }, [beginSheetLoad, confirmDiscardChanges, selectedSheetName]);
+  }, [beginSheetLoad, requestDiscardConfirmation, selectedSheetName]);
 
-  const handleRowSelect = useCallback((row: TranslationRowDto) => {
+  const handleRowSelect = useCallback(async (row: TranslationRowDto) => {
     const cursor = cursorForRow(row);
     if (selectedRowCursor && rowKey(selectedRowCursor) === rowKey(cursor)) {
       return;
     }
-    if (!confirmDiscardChanges("Changing rows")) {
+    if (!(await requestDiscardConfirmation("Changing rows will discard your unsaved changes."))) {
       return;
     }
     flushSync(() => {
@@ -167,19 +189,22 @@ export function EditorShell({
       hasDirtyDraft.current = false;
       setEditorError(null);
     });
-  }, [confirmDiscardChanges, selectedRowCursor]);
+  }, [requestDiscardConfirmation, selectedRowCursor]);
 
-  const confirmMutationDiscard = useCallback((shouldConfirm: boolean, message: string): boolean => {
-    return !shouldConfirm || window.confirm(message);
-  }, []);
+  const confirmMutationDiscard = useCallback((shouldConfirm: boolean, message: string): Promise<boolean> => {
+    return shouldConfirm ? requestDiscardConfirmation(message) : Promise.resolve(true);
+  }, [requestDiscardConfirmation]);
 
-  const handleSaveTarget = useCallback(async (cell: TranslationCellDto, draft: CellDraft, otherDirty: boolean) => {
+  const handleSaveTarget = useCallback(async (cell: TranslationCellDto, draft: CellDraft, otherDirty: boolean, discardOtherDrafts: () => void) => {
     const key = bindingKey(cell.sourceBinding);
-    if (!selectedRow || !confirmMutationDiscard(otherDirty, "Saving the target will discard other unsaved changes. Continue?")) {
+    if (!selectedRow || !(await confirmMutationDiscard(otherDirty, "Saving the target will discard other unsaved changes."))) {
       return;
     }
+    if (otherDirty) discardOtherDrafts();
+    if (mutationKeys.current.has(key)) return;
     flushSync(() => {
-      setMutation({ kind: "target", bindingKey: key });
+      mutationKeys.current.add(key);
+      setMutations((current) => [...current, { kind: "target", bindingKey: key }]);
       setEditorError(null);
     });
     try {
@@ -188,18 +213,22 @@ export function EditorShell({
     } catch (error) {
       showError("Could not save target", error);
     } finally {
-      setMutation(null);
+      mutationKeys.current.delete(key);
+      setMutations((current) => current.filter((mutation) => mutation.bindingKey !== key));
     }
   }, [applyOverlay, confirmMutationDiscard, selectedRow, showError]);
 
-  const handleSaveNote = useCallback(async (cell: TranslationCellDto, draft: CellDraft, otherDirty: boolean) => {
+  const handleSaveNote = useCallback(async (cell: TranslationCellDto, draft: CellDraft, otherDirty: boolean, discardOtherDrafts: () => void) => {
     const translation = cell.translation;
     const key = bindingKey(cell.sourceBinding);
-    if (!translation || !selectedRow || !confirmMutationDiscard(otherDirty, "Saving the note will discard other unsaved changes. Continue?")) {
+    if (!translation || !selectedRow || !(await confirmMutationDiscard(otherDirty, "Saving the note will discard other unsaved changes."))) {
       return;
     }
+    if (otherDirty) discardOtherDrafts();
+    if (mutationKeys.current.has(key)) return;
     flushSync(() => {
-      setMutation({ kind: "note", bindingKey: key });
+      mutationKeys.current.add(key);
+      setMutations((current) => [...current, { kind: "note", bindingKey: key }]);
       setEditorError(null);
     });
     try {
@@ -208,18 +237,23 @@ export function EditorShell({
     } catch (error) {
       showError("Could not save note", error);
     } finally {
-      setMutation(null);
+      mutationKeys.current.delete(key);
+      setMutations((current) => current.filter((mutation) => mutation.bindingKey !== key));
     }
   }, [applyOverlay, confirmMutationDiscard, selectedRow, showError]);
 
-  const handleReviewChange = useCallback(async (cell: TranslationCellDto, reviewState: ReviewState) => {
+  const handleReviewChange = useCallback(async (cell: TranslationCellDto, reviewState: ReviewState, discardDrafts: () => void) => {
     const translation = cell.translation;
-    if (!translation || translation.reviewState === reviewState || !confirmMutationDiscard(hasDirtyDraft.current, "Changing review state will discard unsaved draft changes. Continue?")) {
+    const shouldDiscardDrafts = hasDirtyDraft.current;
+    if (!translation || translation.reviewState === reviewState || !(await confirmMutationDiscard(shouldDiscardDrafts, "Changing review state will discard your unsaved changes."))) {
       return;
     }
+    if (shouldDiscardDrafts) discardDrafts();
     const key = bindingKey(cell.sourceBinding);
+    if (mutationKeys.current.has(key)) return;
     flushSync(() => {
-      setMutation({ kind: "review", bindingKey: key });
+      mutationKeys.current.add(key);
+      setMutations((current) => [...current, { kind: "review", bindingKey: key }]);
       setEditorError(null);
     });
     try {
@@ -228,7 +262,8 @@ export function EditorShell({
     } catch (error) {
       showError("Could not change review state", error);
     } finally {
-      setMutation(null);
+      mutationKeys.current.delete(key);
+      setMutations((current) => current.filter((mutation) => mutation.bindingKey !== key));
     }
   }, [applyOverlay, confirmMutationDiscard, showError]);
 
@@ -266,7 +301,7 @@ export function EditorShell({
   }, [loadingMore, nextAfter, selectedSheetName, showError]);
 
   const handleClose = useCallback(async () => {
-    if (!confirmDiscardChanges("Closing the project")) {
+    if (!(await requestDiscardConfirmation("Closing the project will discard your unsaved changes."))) {
       return;
     }
     flushSync(() => {
@@ -281,29 +316,29 @@ export function EditorShell({
       setClosing(false);
       showError("Could not close project", error);
     }
-  }, [confirmDiscardChanges, onClosed, showError]);
+  }, [onClosed, requestDiscardConfirmation, showError]);
 
   const handleCloseClick = useCallback(() => {
     void handleClose();
   }, [handleClose]);
 
-  const handleWindowClose = useCallback(() => {
-    if (!confirmDiscardChanges("Closing Aeria")) {
+  const handleWindowClose = useCallback(async () => {
+    if (!(await requestDiscardConfirmation("Closing Aeria will discard your unsaved changes."))) {
       return;
     }
     void getCurrentWindow().close().catch(() => undefined);
-  }, [confirmDiscardChanges]);
+  }, [requestDiscardConfirmation]);
   const handleLoadMoreClick = useCallback(() => {
     void handleLoadMore();
   }, [handleLoadMore]);
-  const handleSaveTargetClick = useCallback((cell: TranslationCellDto, draft: CellDraft, otherDirty: boolean) => {
-    void handleSaveTarget(cell, draft, otherDirty);
+  const handleSaveTargetClick = useCallback((cell: TranslationCellDto, draft: CellDraft, otherDirty: boolean, discardOtherDrafts: () => void) => {
+    void handleSaveTarget(cell, draft, otherDirty, discardOtherDrafts);
   }, [handleSaveTarget]);
-  const handleSaveNoteClick = useCallback((cell: TranslationCellDto, draft: CellDraft, otherDirty: boolean) => {
-    void handleSaveNote(cell, draft, otherDirty);
+  const handleSaveNoteClick = useCallback((cell: TranslationCellDto, draft: CellDraft, otherDirty: boolean, discardOtherDrafts: () => void) => {
+    void handleSaveNote(cell, draft, otherDirty, discardOtherDrafts);
   }, [handleSaveNote]);
-  const handleReviewChangeClick = useCallback((cell: TranslationCellDto, reviewState: ReviewState) => {
-    void handleReviewChange(cell, reviewState);
+  const handleReviewChangeClick = useCallback((cell: TranslationCellDto, reviewState: ReviewState, discardDrafts: () => void) => {
+    void handleReviewChange(cell, reviewState, discardDrafts);
   }, [handleReviewChange]);
 
   return (
@@ -312,7 +347,7 @@ export function EditorShell({
         context={repositoryName(project.repositoryRoot)}
         detail={`${project.sourceLanguage} → ${project.targetLanguage}`}
         mode="workbench"
-        onClose={handleWindowClose}
+        onClose={() => void handleWindowClose()}
       />
       <div className="editor-notices">
         <ProjectHeader
@@ -331,7 +366,6 @@ export function EditorShell({
         {editorError ? <ErrorBanner title={editorError.title} error={editorError.error} onDismiss={() => setEditorError(null)} /> : null}
       </div>
       <div className="workbench-frame">
-        <ActivityRail active="sheets" />
         <div className="workbench-content">
           <div className="editor-layout">
             <SheetSidebar
@@ -356,7 +390,7 @@ export function EditorShell({
             <TranslationEditor
               key={selectedRow ? rowKey(selectedRow) : "empty-editor"}
               row={selectedRow}
-              mutation={mutation}
+              mutations={mutations}
               onDirtyChange={handleDirtyChange}
               onSaveTarget={handleSaveTargetClick}
               onSaveNote={handleSaveNoteClick}
@@ -373,6 +407,12 @@ export function EditorShell({
           />
         </div>
       </div>
+      <ConfirmDialog
+        open={discardRequest !== null}
+        message={discardRequest?.message ?? ""}
+        onKeepEditing={() => resolveDiscardConfirmation(false)}
+        onDiscard={() => resolveDiscardConfirmation(true)}
+      />
     </main>
   );
 }

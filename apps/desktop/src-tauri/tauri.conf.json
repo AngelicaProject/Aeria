@@ -14,9 +14,9 @@
       {
         "title": "Aeria",
         "width": 980,
-        "height": 720,
-        "minWidth": 900,
-        "minHeight": 600,
+        "height": 620,
+        "minWidth": 680,
+        "minHeight": 440,
         "decorations": false,
         "resizable": false
       }

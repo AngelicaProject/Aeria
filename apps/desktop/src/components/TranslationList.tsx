@@ -16,10 +16,6 @@ type TranslationListProps = {
   onLoadMore: () => void;
 };
 
-function translatedCount(row: TranslationRowDto): number {
-  return row.cells.filter((cell) => cell.translation !== null).length;
-}
-
 export const TranslationList = memo(function TranslationList({
   rows,
   selectedRow,
@@ -66,11 +62,16 @@ export const TranslationList = memo(function TranslationList({
         </div>
       ) : (
         <>
+          <div className="entry-list-header" aria-hidden="true">
+            <span>Row</span>
+            <span>Source</span>
+            <span>Target</span>
+          </div>
           <div className={refreshing ? "entry-list is-refreshing" : "entry-list"}>
             {rows.map((row) => {
               const selected = selectedRow !== null && rowKey(row) === rowKey(selectedRow);
-              const translated = translatedCount(row);
-              const preview = row.cells[0]?.sourceMacro ?? "(empty source macro)";
+              const source = row.cells[0]?.sourceMacro ?? "(empty source macro)";
+              const target = row.cells[0]?.translation?.targetMacro ?? "";
               return (
                 <button
                   className={selected ? "entry-row active" : "entry-row"}
@@ -80,21 +81,10 @@ export const TranslationList = memo(function TranslationList({
                   disabled={disabled}
                   onClick={() => onSelect(row)}
                 >
-                  <span className="entry-row-topline">
-                    <code>
-                      {row.rowId}:{row.subrowId}
-                    </code>
-                    <span className="status-pill">
-                      {translated}/{row.cells.length} translated
-                    </span>
-                  </span>
-                  {row.context[0] ? <span className="entry-context">{row.context[0].sourceMacro}</span> : null}
-                  {row.cells.length > 1 ? <span className="entry-field-count">{row.cells.length} text fields</span> : null}
-                  <span className="entry-cell-preview">
-                    <span className="entry-preview" title={preview}>{preview}</span>
-                    <span className="entry-target-preview" title={row.cells[0]?.translation?.targetMacro ?? "No target saved"}>
-                      {row.cells[0]?.translation?.targetMacro || "—"}
-                    </span>
+                  <code className="entry-row-coordinate">{row.rowId}:{row.subrowId}</code>
+                  <span className="entry-preview" title={source}>{source}</span>
+                  <span className={target ? "entry-target-preview" : "entry-target-preview empty"} title={target || "No target saved"}>
+                    {target || "—"}
                   </span>
                 </button>
               );

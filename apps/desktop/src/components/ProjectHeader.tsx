@@ -12,7 +12,6 @@ export function ProjectHeader({ project, closing, disabled, onClose }: ProjectHe
   return (
     <header className="project-header">
       <div className="project-summary" title={`${displayPath(project.repositoryRoot)}\n${displayPath(project.sourcePackagePath)}`}>
-        <span className="project-label">Translation project</span>
         <strong className="project-path">{displayPath(project.repositoryRoot)}</strong>
       </div>
       <div className="project-facts">

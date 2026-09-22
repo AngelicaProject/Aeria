@@ -255,14 +255,10 @@ export function ProjectLauncher({ initialError, onProjectReady }: ProjectLaunche
 
   return (
     <main className="launcher-shell">
-      <WindowChrome context="Project launcher" detail={modeLabel} mode="launcher" />
+      <WindowChrome context="Project launcher" detail={modeLabel} mode="launcher" launcherMode={mode} />
       <section className="launcher-panel" aria-labelledby="launcher-title">
         <div className="launcher-heading">
-          <div>
-            <span className="launcher-section-label">Translation workspace</span>
-            <h1 id="launcher-title">Open a project</h1>
-          </div>
-          <span className="launcher-version">Aeria desktop</span>
+          <h1 id="launcher-title">{modeLabel}</h1>
         </div>
 
         {error ? (
@@ -293,7 +289,7 @@ export function ProjectLauncher({ initialError, onProjectReady }: ProjectLaunche
           <section className="recent-projects" aria-labelledby="recent-projects-title">
             <div className="section-heading">
               <div>
-                <h2 id="recent-projects-title">Recent projects</h2>
+                <h2 id="recent-projects-title">Workspaces</h2>
                 <p>Workspaces opened on this machine.</p>
               </div>
               {recentState.status === "loaded" ? <span className="pane-count">{recentState.projects.length}</span> : null}
@@ -363,11 +359,6 @@ export function ProjectLauncher({ initialError, onProjectReady }: ProjectLaunche
           </section>
         ) : (
           <form className="launcher-form" onSubmit={handleSubmit}>
-            <div className="form-heading">
-              <h2>{mode === "open" ? "Open project" : "Create project"}</h2>
-              <p>{mode === "open" ? "Use an existing repository and HSP source package." : "Build a source package from a game installation."}</p>
-            </div>
-
             <label htmlFor="repository-root">Repository root</label>
             <input id="repository-root" value={repositoryRoot}
               onChange={(event) => setRepositoryRoot(event.target.value)}
@@ -433,13 +424,6 @@ export function ProjectLauncher({ initialError, onProjectReady }: ProjectLaunche
           </section>
         ) : null}
 
-        <p className="launcher-footnote">
-          {mode === "create"
-            ? "Atlas builds and validates the source package in app data. It is not stored in the translation repository."
-            : mode === "open"
-              ? "Paths are entered directly for now. A file picker will come later."
-              : "Select a ready project to reopen it, or remove unavailable entries from this list."}
-        </p>
       </section>
     </main>
   );
