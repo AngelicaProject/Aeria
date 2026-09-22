@@ -33,6 +33,10 @@ const naturalCollator = new Intl.Collator(undefined, {
   sensitivity: "base",
 });
 
+export function formatSheetCount(count: number): string {
+  return count.toLocaleString("fr-FR").replace(/\u202f/g, " ");
+}
+
 function compareNames(left: string, right: string): number {
   return naturalCollator.compare(left, right);
 }

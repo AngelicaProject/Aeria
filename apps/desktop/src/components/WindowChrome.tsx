@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { isTauri } from "@tauri-apps/api/core";
 import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
 import { ApplicationMenu, type ApplicationMenuDefinition } from "./ApplicationMenu";
-import { Icon } from "../ui/primitives/Icon";
+import { UiIcon } from "../ui/primitives/UiIcon";
 import appIcon from "../assets/app-icon-20.png";
 
 type WindowChromeProps = {
@@ -156,9 +156,9 @@ export function WindowChrome({ context, detail, mode, projectName, onClose, onCl
         </>
       )}
       <div className="window-controls" aria-label="Window controls">
-        <button className="window-control" type="button" aria-label="Minimize window" onClick={handleMinimize}><Icon name="minimize" size={13} /></button>
-        {mode === "workbench" ? <button className="window-control" type="button" aria-label={maximized ? "Restore window" : "Maximize window"} onClick={() => void handleToggleMaximize()}><Icon name="maximize" size={13} /></button> : null}
-        <button className="window-control close" type="button" aria-label="Close window" onClick={handleClose}><Icon name="close" size={13} /></button>
+        <button className="window-control" type="button" aria-label="Minimize window" onClick={handleMinimize}><UiIcon icon="minus" size="xs" /></button>
+        {mode === "workbench" ? <button className="window-control" type="button" aria-label={maximized ? "Restore window" : "Maximize window"} onClick={() => void handleToggleMaximize()}><UiIcon icon={maximized ? "copy" : "square"} size="xs" /></button> : null}
+        <button className="window-control close" type="button" aria-label="Close window" onClick={handleClose}><UiIcon icon="x" size="xs" /></button>
       </div>
     </header>
   );

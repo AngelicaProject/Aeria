@@ -1,8 +1,8 @@
-import { Icon, type IconName } from "../ui/primitives/Icon";
+import { UiIcon, type UiIconName } from "../ui/primitives/UiIcon";
 
 type ActivityRailProps = {
   side: "left" | "right";
-  items: readonly { id: string; label: string; icon: IconName; active?: boolean; onSelect?: () => void }[];
+  items: readonly { id: string; label: string; icon: UiIconName; active?: boolean; onSelect?: () => void }[];
 };
 
 export function ActivityRail({ side, items }: ActivityRailProps) {
@@ -10,7 +10,7 @@ export function ActivityRail({ side, items }: ActivityRailProps) {
     <aside className={`activity-rail ${side}-rail`} aria-label={`${side} activity rail`}>
       {items.map((item) => (
         <button className={item.active ? "rail-button active" : "rail-button"} type="button" aria-label={item.label} title={item.label} key={item.id} onClick={item.onSelect}>
-          <Icon name={item.icon} size={16} />
+          <UiIcon icon={item.icon} size="md" />
         </button>
       ))}
     </aside>

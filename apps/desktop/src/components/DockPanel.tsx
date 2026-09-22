@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState, type PropsWithChildren, type ReactNode } from "react";
-import { Icon } from "../ui/primitives/Icon";
+import { UiIcon } from "../ui/primitives/UiIcon";
 
 type DockPanelProps = PropsWithChildren<{
   title: string;
   meta?: ReactNode;
+  metaClassName?: string | undefined;
   headerActions?: ReactNode;
   className?: string;
   panelId?: string;
@@ -19,6 +20,7 @@ type DockPanelProps = PropsWithChildren<{
 export function DockPanel({
   title,
   meta,
+  metaClassName,
   headerActions,
   className = "",
   panelId,
@@ -51,9 +53,9 @@ export function DockPanel({
       onDrop={(event) => { event.preventDefault(); const dragged = event.dataTransfer.getData("text/aeria-panel"); if (dragged) onDropPanel?.(dragged); }}
     >
       <header className="dock-header" draggable={Boolean(panelId && onDragStart)} onDragStart={(event) => { if (panelId) { event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("text/aeria-panel", panelId); onDragStart?.(panelId); } }}>
-        <span className="dock-title">{title}</span>{meta ? <span className="dock-meta">{meta}</span> : null}<span className="dock-spacer" />
+        <span className="dock-title">{title}</span>{meta ? <span className={`dock-meta${metaClassName ? ` ${metaClassName}` : ""}`}>{meta}</span> : null}<span className="dock-spacer" />
         {headerActions ? <div className="dock-header-actions" role="group" aria-label={`${title} actions`}>{headerActions}</div> : null}
-        <button className="dock-action" type="button" aria-label={`${title} options`} aria-haspopup="menu" aria-expanded={menuOpen} onClick={() => setMenuOpen((current) => !current)}><Icon name="more" size={15} /></button>
+        <button className="dock-action" type="button" aria-label={`${title} options`} aria-haspopup="menu" aria-expanded={menuOpen} onClick={() => setMenuOpen((current) => !current)}><UiIcon icon="ellipsis" size="md" /></button>
         {menuOpen ? <div className="dock-panel-menu" role="menu">
           {moveTargets.map((target) => <button type="button" role="menuitem" key={target.id} onClick={() => { onMove?.(target.id); setMenuOpen(false); }}>Move {target.label}</button>)}
           {canFloat ? <button type="button" role="menuitem" onClick={() => { onFloat?.(); setMenuOpen(false); }}>Float / Detach</button> : null}

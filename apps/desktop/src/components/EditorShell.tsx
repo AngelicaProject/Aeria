@@ -25,7 +25,8 @@ import type {
 import { ErrorBanner } from "./ErrorBanner";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { ActivityRail } from "./ActivityRail";
-import { Icon } from "../ui/primitives/Icon";
+import { UiIcon } from "../ui/primitives/UiIcon";
+import { formatSheetCount } from "../sheetExplorer";
 import { BottomPanel } from "./BottomPanel";
 import { DocumentTabs, type DocumentTab } from "./DocumentTabs";
 import { DockPanel } from "./DockPanel";
@@ -599,10 +600,10 @@ export function EditorShell({
       title={hideEmptySheets ? "Show empty sheets" : "Hide empty sheets"}
       disabled={closing}
       onClick={() => setHideEmptySheets((current) => !current)}
-    ><Icon name={hideEmptySheets ? "eyeOff" : "eye"} size={14} /></button>
-    <button className="dock-action" type="button" aria-label="Filter sheets" title="Filter sheets (Ctrl+F)" disabled={closing} onClick={focusSheetFilter}><Icon name="search" size={14} /></button>
-    <button className="dock-action" type="button" aria-label="Reveal active sheet" title="Reveal active sheet" disabled={closing || !selectedSheetName} onClick={() => setRevealSheetSignal((current) => current + 1)}><Icon name="target" size={14} /></button>
-    <button className="dock-action" type="button" aria-label="Collapse all sheet folders" title="Collapse all folders" disabled={closing} onClick={() => setCollapseSheetsSignal((current) => current + 1)}><Icon name="collapse" size={14} /></button>
+    ><UiIcon icon={hideEmptySheets ? "eyeOff" : "eye"} size="sm" /></button>
+    <button className="dock-action" type="button" aria-label="Filter sheets" title="Filter sheets (Ctrl+F)" disabled={closing} onClick={focusSheetFilter}><UiIcon icon="search" size="sm" /></button>
+    <button className="dock-action" type="button" aria-label="Reveal active sheet" title="Reveal active sheet" disabled={closing || !selectedSheetName} onClick={() => setRevealSheetSignal((current) => current + 1)}><UiIcon icon="locateFixed" size="sm" /></button>
+    <button className="dock-action" type="button" aria-label="Collapse all sheet folders" title="Collapse all folders" disabled={closing} onClick={() => setCollapseSheetsSignal((current) => current + 1)}><UiIcon icon="chevronsUp" size="sm" /></button>
   </>;
 
   return (
@@ -637,7 +638,7 @@ export function EditorShell({
         } as CSSProperties}
       >
         <ActivityRail side="left" items={[{ id: "sheets", label: "Sheets", icon: "folder", active: leftDockOpen && leftPanelId === "sheets", onSelect: () => { handlePanelMove("sheets", "left"); dispatchLayout({ type: "setRegionVisibility", regionId: "leftDock", visible: true }); } }, { id: "search", label: "Search", icon: "search", active: leftDockOpen && leftPanelId === "search", onSelect: () => handleToolSelect("search") }]} />
-        <DockPanel panelId={leftPanelId ?? "sheets"} title={leftPanelId === "sheets" ? "Sheets" : "Search"} meta={leftPanelId === "sheets" ? project.sheets.length.toLocaleString() : "unavailable"} headerActions={leftPanelId === "sheets" ? sheetHeaderActions : undefined} moveTargets={leftPanelId ? panelMoveTargets(leftPanelId, "left") : []} onMove={(region) => leftPanelId && handlePanelMove(leftPanelId, region)} canFloat={leftPanelId === "search"} onFloat={() => void detachPanel("search")} onDropPanel={(panelId) => handlePanelDrop("left", panelId)} className={leftDockOpen && detachedPanel !== leftPanelId ? "sheets-dock" : "sheets-dock is-hidden-dock"}>
+        <DockPanel panelId={leftPanelId ?? "sheets"} title={leftPanelId === "sheets" ? "Sheets" : "Search"} meta={leftPanelId === "sheets" ? formatSheetCount(project.sheets.length) : "unavailable"} metaClassName={leftPanelId === "sheets" ? "sheet-count-meta" : undefined} headerActions={leftPanelId === "sheets" ? sheetHeaderActions : undefined} moveTargets={leftPanelId ? panelMoveTargets(leftPanelId, "left") : []} onMove={(region) => leftPanelId && handlePanelMove(leftPanelId, region)} canFloat={leftPanelId === "search"} onFloat={() => void detachPanel("search")} onDropPanel={(panelId) => handlePanelDrop("left", panelId)} className={leftDockOpen && detachedPanel !== leftPanelId ? "sheets-dock" : "sheets-dock is-hidden-dock"}>
           {leftPanelId === "sheets" ? <SheetSidebar sheets={project.sheets} selectedSheetName={selectedSheetName} disabled={closing} active={leftDockOpen && leftPanelId === "sheets"} hideEmpty={hideEmptySheets} onHideEmptyChange={setHideEmptySheets} filterOpen={sheetFilterOpen} onFilterOpenChange={setSheetFilterOpen} onOpenFilter={focusSheetFilter} quickFindSignal={quickFindSignal} revealSignal={revealSheetSignal} collapseSignal={collapseSheetsSignal} onSelect={handleSheetSelect} /> : <WorkbenchToolDock activeTool="search" gitMode={gitMode} selectedBinding={selectedBinding} onGitModeChange={setGitMode} />}
         </DockPanel>
         <ResizeHandle axis="x" label="Resize sheets panel" onDelta={resizeLeftDock} />
@@ -681,7 +682,7 @@ export function EditorShell({
                 {bottomPanelId === "sheets" ? <>
                   <header className="dock-header">
                     <span className="dock-title">Sheets</span>
-                    <span className="dock-meta">{project.sheets.length.toLocaleString()}</span>
+                    <span className="dock-meta sheet-count-meta">{formatSheetCount(project.sheets.length)}</span>
                     <span className="dock-spacer" />
                     <div className="dock-header-actions" role="group" aria-label="Sheets actions">{sheetHeaderActions}</div>
                   </header>
@@ -694,10 +695,10 @@ export function EditorShell({
           </> : null}
         </div>
         <ResizeHandle axis="x" label="Resize auxiliary dock" onDelta={resizeRightDock} />
-          <DockPanel panelId={rightPanelId ?? activeTool} title={rightPanelId === "ai" ? "AI" : rightPanelId === "git" ? "Git" : rightPanelId === "sheets" ? "Sheets" : "Search"} meta={rightPanelId === "sheets" ? project.sheets.length.toLocaleString() : "unavailable"} headerActions={rightPanelId === "sheets" ? sheetHeaderActions : undefined} moveTargets={rightPanelId ? panelMoveTargets(rightPanelId, "right") : []} onMove={(region) => rightPanelId && handlePanelMove(rightPanelId, region)} canFloat={rightPanelId === "ai" || rightPanelId === "git" || rightPanelId === "search"} onFloat={() => void detachPanel(rightPanelId === "search" ? "search" : rightPanelId === "git" ? "git" : "ai")} onDropPanel={(panelId) => handlePanelDrop("right", panelId)} className={layout.regions.rightDock.visible && detachedPanel !== rightPanelId ? "right-tool-dock" : "right-tool-dock is-hidden-dock"}>
+          <DockPanel panelId={rightPanelId ?? activeTool} title={rightPanelId === "ai" ? "AI" : rightPanelId === "git" ? "Git" : rightPanelId === "sheets" ? "Sheets" : "Search"} meta={rightPanelId === "sheets" ? formatSheetCount(project.sheets.length) : "unavailable"} metaClassName={rightPanelId === "sheets" ? "sheet-count-meta" : undefined} headerActions={rightPanelId === "sheets" ? sheetHeaderActions : undefined} moveTargets={rightPanelId ? panelMoveTargets(rightPanelId, "right") : []} onMove={(region) => rightPanelId && handlePanelMove(rightPanelId, region)} canFloat={rightPanelId === "ai" || rightPanelId === "git" || rightPanelId === "search"} onFloat={() => void detachPanel(rightPanelId === "search" ? "search" : rightPanelId === "git" ? "git" : "ai")} onDropPanel={(panelId) => handlePanelDrop("right", panelId)} className={layout.regions.rightDock.visible && detachedPanel !== rightPanelId ? "right-tool-dock" : "right-tool-dock is-hidden-dock"}>
             {rightPanelId === "sheets" ? <SheetSidebar sheets={project.sheets} selectedSheetName={selectedSheetName} disabled={closing} active={layout.regions.rightDock.visible} hideEmpty={hideEmptySheets} onHideEmptyChange={setHideEmptySheets} filterOpen={sheetFilterOpen} onFilterOpenChange={setSheetFilterOpen} onOpenFilter={focusSheetFilter} quickFindSignal={quickFindSignal} revealSignal={revealSheetSignal} collapseSignal={collapseSheetsSignal} onSelect={handleSheetSelect} /> : <WorkbenchToolDock activeTool={rightPanelId === "search" ? "search" : rightPanelId === "git" ? "git" : "ai"} gitMode={gitMode} selectedBinding={selectedBinding} onGitModeChange={setGitMode} />}
           </DockPanel>
-        <ActivityRail side="right" items={[{ id: "ai", label: "AI", icon: "sparkles", active: layout.regions.rightDock.visible && activeTool === "ai", onSelect: () => handleToolSelect("ai") }, { id: "git", label: "Git", icon: "branch", active: layout.regions.rightDock.visible && activeTool === "git", onSelect: () => handleToolSelect("git") }]} />
+        <ActivityRail side="right" items={[{ id: "ai", label: "AI", icon: "sparkles", active: layout.regions.rightDock.visible && activeTool === "ai", onSelect: () => handleToolSelect("ai") }, { id: "git", label: "Git", icon: "gitBranch", active: layout.regions.rightDock.visible && activeTool === "git", onSelect: () => handleToolSelect("git") }]} />
       </div>
       <StatusBar sheetName={selectedSheetName} rowCount={rows.length} loading={sheetLoading} repositoryRoot={project.repositoryRoot} sourceLanguage={project.sourceLanguage} sourceSnapshotId={project.sourceSnapshotId} selectedBinding={selectedBinding} dirty={dirty} />
       <ConfirmDialog
