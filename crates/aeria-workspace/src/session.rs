@@ -185,6 +185,32 @@ impl ProjectSession {
         Self::initialize_from_source_package(repository_root, source_package, target_language)
     }
 
+    /// Initializes a project before a target language has been configured.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when source verification or workspace publication
+    /// fails.
+    pub fn initialize_without_target_language(
+        repository_root: impl Into<PathBuf>,
+        source_package_path: impl Into<PathBuf>,
+        cache_root: impl Into<PathBuf>,
+    ) -> Result<Self, ProjectSessionError> {
+        let repository_root = repository_root.into();
+        let source_package_path = source_package_path.into();
+        let source_package =
+            SourcePackage::open(&source_package_path, cache_root.into()).map_err(|source| {
+                ProjectSessionError::Source {
+                    path: source_package_path.clone(),
+                    source,
+                }
+            })?;
+        Self::initialize_from_source_package_without_target_language(
+            repository_root,
+            source_package,
+        )
+    }
+
     /// Initializes a project from a package that has already been fully
     /// validated by [`SourcePackage::open`]. This constructor is used by the
     /// Atlas creation flow so the package is not reopened and source evidence
@@ -225,6 +251,40 @@ impl ProjectSession {
         })
     }
 
+    /// Initializes a project from a verified package without a target language.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when workspace construction or publication fails.
+    pub fn initialize_from_source_package_without_target_language(
+        repository_root: impl Into<PathBuf>,
+        source_package: SourcePackage,
+    ) -> Result<Self, ProjectSessionError> {
+        let repository_root = repository_root.into();
+        let source_package_path = source_package.package_path().to_owned();
+        let workspace =
+            Workspace::from_verified_snapshot_without_target_language(source_package.source())
+                .map_err(|source| ProjectSessionError::Workspace {
+                    repository_root: repository_root.clone(),
+                    source_package_path: source_package_path.clone(),
+                    source,
+                })?;
+        let store = WorkspaceStore::new(repository_root.clone());
+        store
+            .initialize(&workspace)
+            .map_err(|source| ProjectSessionError::Store {
+                repository_root: repository_root.clone(),
+                source,
+            })?;
+        Ok(Self {
+            repository_root,
+            source_package_path,
+            store,
+            workspace,
+            source_package,
+        })
+    }
+
     /// Returns the local repository root for this project.
     #[must_use]
     pub fn repository_root(&self) -> &Path {
@@ -235,6 +295,34 @@ impl ProjectSession {
     #[must_use]
     pub fn source_package_path(&self) -> &Path {
         &self.source_package_path
+    }
+
+    /// Changes the optional target-language setting and persists its manifest.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the target language is invalid or the managed
+    /// workspace cannot be updated.
+    pub fn set_target_language(
+        &mut self,
+        target_language: Option<String>,
+    ) -> Result<(), ProjectSessionError> {
+        let mut candidate = self.workspace.clone();
+        candidate
+            .set_target_language(target_language)
+            .map_err(|source| ProjectSessionError::Workspace {
+                repository_root: self.repository_root.clone(),
+                source_package_path: self.source_package_path.clone(),
+                source,
+            })?;
+        self.store
+            .persist_metadata(&candidate)
+            .map_err(|source| ProjectSessionError::Store {
+                repository_root: self.repository_root.clone(),
+                source,
+            })?;
+        self.workspace = candidate;
+        Ok(())
     }
 
     /// Returns the loaded sparse workspace.

@@ -32,15 +32,24 @@ import {
   sourcePackageListenerError,
   type LauncherError,
 } from "../launcherErrorState";
+import { Icon } from "../ui/primitives/Icon";
+import { SelectMenu } from "../ui/primitives/SelectMenu";
+import { useTheme } from "../ui/theme/theme";
+import { themeRegistry } from "../ui/theme/registry";
 
-type LauncherMode = "recent" | "open" | "create";
+type LauncherMode = "recent" | "open" | "create" | "settings";
 
 type ProjectLauncherProps = {
   initialError: CommandError | null;
   onProjectReady: (result: ProjectOpenResultDto) => void;
 };
 
-const sourceLanguages = ["en", "ja", "de", "fr"] as const;
+const sourceLanguages = [
+  { value: "en", label: "English" },
+  { value: "ja", label: "Japanese" },
+  { value: "de", label: "German" },
+  { value: "fr", label: "French" },
+] as const;
 
 function phaseLabel(event: AtlasEvent | null): string {
   if (!event) return "Preparing source package";
@@ -64,10 +73,6 @@ function progressDetails(event: AtlasEvent | null): { sheet: string | null; lang
   return { sheet: event.sheet, language: event.language, rows: event.rowsProcessed };
 }
 
-function repositoryName(path: string): string {
-  return displayPathName(path);
-}
-
 function availabilityLabel(availability: RecentProjectAvailability): string {
   switch (availability) {
     case "ready": return "Ready";
@@ -77,8 +82,68 @@ function availabilityLabel(availability: RecentProjectAvailability): string {
   }
 }
 
-function lastOpenedLabel(timestamp: number): string {
-  return new Date(timestamp).toLocaleString();
+function languageLabel(value: string): string {
+  return sourceLanguages.find((language) => language.value === value)?.label ?? value;
+}
+
+type BrowseFieldProps = {
+  id: string;
+  label: string;
+  value: string;
+  placeholder: string;
+  hint?: string;
+  directory?: boolean;
+  disabled: boolean;
+  onChange: (value: string) => void;
+};
+
+function selectedPath(file: File, directory: boolean): string {
+  const filePath = (file as File & { path?: string }).path;
+  if (!filePath) return directory ? file.webkitRelativePath.split("/")[0] ?? file.name : file.name;
+  if (!directory || !file.webkitRelativePath) return filePath;
+  const relativeParts = file.webkitRelativePath.split("/");
+  const relativeFilePath = relativeParts.slice(1).join("\\");
+  const normalizedPath = filePath.replaceAll("/", "\\");
+  const suffix = relativeFilePath ? `\\${relativeFilePath}` : "";
+  return suffix && normalizedPath.endsWith(suffix) ? normalizedPath.slice(0, -suffix.length) : filePath;
+}
+
+function BrowseField({ id, label, value, placeholder, hint, directory = false, disabled, onChange }: BrowseFieldProps) {
+  const pickerRef = useRef<HTMLInputElement>(null);
+  return (
+    <div className="launcher-field">
+      <label htmlFor={id}>{label}</label>
+      <div className="path-picker">
+        <input
+          className="path-input"
+          id={id}
+          value={value}
+          onChange={(event) => onChange(event.target.value)}
+          placeholder={placeholder}
+          autoComplete="off"
+          disabled={disabled}
+          required
+        />
+        <button className="icon-button picker-button" type="button" aria-label={`Choose ${label.toLowerCase()}`} disabled={disabled} onClick={() => pickerRef.current?.click()}>
+          <Icon name="folder" size={14} />
+        </button>
+        <input
+          ref={pickerRef}
+          className="visually-hidden"
+          type="file"
+          tabIndex={-1}
+          aria-hidden="true"
+          onChange={(event) => {
+            const file = event.target.files?.[0];
+            if (file) onChange(selectedPath(file, directory));
+            event.target.value = "";
+          }}
+          {...(directory ? { webkitdirectory: "", directory: "" } : {})}
+        />
+      </div>
+      {hint ? <small className="field-hint">{hint}</small> : null}
+    </div>
+  );
 }
 
 export function ProjectLauncher({ initialError, onProjectReady }: ProjectLauncherProps) {
@@ -86,42 +151,28 @@ export function ProjectLauncher({ initialError, onProjectReady }: ProjectLaunche
   const [repositoryRoot, setRepositoryRoot] = useState("");
   const [sourcePackagePath, setSourcePackagePath] = useState("");
   const [gamePath, setGamePath] = useState("");
-  const [sourceLanguage, setSourceLanguage] = useState<(typeof sourceLanguages)[number]>("en");
-  const [targetLanguage, setTargetLanguage] = useState("");
-  const [busy, setBusy] = useState<Exclude<LauncherMode, "recent"> | null>(null);
+  const [sourceLanguage, setSourceLanguage] = useState("en");
+  const [busy, setBusy] = useState<Exclude<LauncherMode, "recent" | "settings"> | null>(null);
   const [jobId, setJobId] = useState<string | null>(null);
   const [cancelRequested, setCancelRequested] = useState(false);
   const [sourcePackageEventsReady, setSourcePackageEventsReady] = useState(false);
   const [progress, setProgress] = useState<AtlasEvent | null>(null);
-  const [error, setError] = useState<LauncherError | null>(
-    initialError ? { operation: "open", error: initialError } : null,
-  );
+  const [error, setError] = useState<LauncherError | null>(initialError ? { operation: "open", error: initialError } : null);
   const [recentState, setRecentState] = useState<RecentProjectsState>(initialRecentProjectsState);
   const [recentActionError, setRecentActionError] = useState<CommandError | null>(null);
   const [recentBusyId, setRecentBusyId] = useState<string | null>(null);
-  const busyRef = useRef<Exclude<LauncherMode, "recent"> | null>(null);
+  const busyRef = useRef<Exclude<LauncherMode, "recent" | "settings"> | null>(null);
   const jobIdRef = useRef<string | null>(null);
+  const { theme, setThemeId } = useTheme();
 
-  useEffect(() => {
-    setError(initialError ? { operation: "open", error: initialError } : null);
-  }, [initialError]);
+  useEffect(() => setError(initialError ? { operation: "open", error: initialError } : null), [initialError]);
 
   useEffect(() => {
     let disposed = false;
     void listRecentProjects()
-      .then((projects) => {
-        if (!disposed) {
-          setRecentState({ status: "loaded", projects });
-        }
-      })
-      .catch((caughtError: unknown) => {
-        if (!disposed) {
-          setRecentState({ status: "failed", error: normalizeCommandError(caughtError) });
-        }
-      });
-    return () => {
-      disposed = true;
-    };
+      .then((projects) => { if (!disposed) setRecentState({ status: "loaded", projects }); })
+      .catch((caughtError: unknown) => { if (!disposed) setRecentState({ status: "failed", error: normalizeCommandError(caughtError) }); });
+    return () => { disposed = true; };
   }, []);
 
   useEffect(() => {
@@ -134,27 +185,19 @@ export function ProjectLauncher({ initialError, onProjectReady }: ProjectLaunche
       setProgress(payload.event);
     }).then((cleanup) => {
       if (disposed) cleanup();
-      else {
-        unlisten = cleanup;
-        setSourcePackageEventsReady(true);
-      }
+      else { unlisten = cleanup; setSourcePackageEventsReady(true); }
     }).catch((caughtError: unknown) => {
       if (disposed) return;
-      if (import.meta.env.DEV) {
-        console.error("failed to register source-package-event listener", caughtError);
-      }
+      if (import.meta.env.DEV) console.error("failed to register source-package-event listener", caughtError);
       setSourcePackageEventsReady(false);
       setError({ operation: "create", error: sourcePackageListenerError() });
     });
-    return () => {
-      disposed = true;
-      unlisten?.();
-    };
+    return () => { disposed = true; unlisten?.(); };
   }, []);
 
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (mode === "recent") return;
+    if (mode !== "open" && mode !== "create") return;
     if (mode === "create" && !sourcePackageEventsReady) {
       setError({ operation: "create", error: sourcePackageListenerError() });
       return;
@@ -172,23 +215,14 @@ export function ProjectLauncher({ initialError, onProjectReady }: ProjectLaunche
       const result = mode === "open"
         ? await openProject(repositoryRoot, sourcePackagePath)
         : await (async () => {
-          const started = await startSourcePackage();
-          jobIdRef.current = started.jobId;
-          setJobId(started.jobId);
-          return initializeProjectFromGame(
-            started.jobId,
-            repositoryRoot,
-            gamePath,
-            sourceLanguage,
-            targetLanguage,
-          );
-        })();
+            const started = await startSourcePackage();
+            jobIdRef.current = started.jobId;
+            setJobId(started.jobId);
+            return initializeProjectFromGame(started.jobId, repositoryRoot, gamePath, sourceLanguage);
+          })();
       onProjectReady(result);
     } catch (caughtError) {
-      setError({
-        operation: mode,
-        error: normalizeCommandError(caughtError),
-      });
+      setError({ operation: mode, error: normalizeCommandError(caughtError) });
     } finally {
       busyRef.current = null;
       jobIdRef.current = null;
@@ -199,232 +233,119 @@ export function ProjectLauncher({ initialError, onProjectReady }: ProjectLaunche
 
   async function handleRecentOpen(project: RecentProjectDto) {
     if (project.availability !== "ready" || busy !== null || recentBusyId !== null) return;
-    flushSync(() => {
-      setRecentBusyId(project.id);
-      setError(null);
-    });
-    try {
-      const result = await openRecentProject(project.id);
-      onProjectReady(result);
-    } catch (caughtError) {
-      setError({
-        operation: "recentOpen",
-        error: normalizeCommandError(caughtError),
-      });
-    } finally {
-      setRecentBusyId(null);
-    }
+    flushSync(() => { setRecentBusyId(project.id); setError(null); });
+    try { onProjectReady(await openRecentProject(project.id)); }
+    catch (caughtError) { setError({ operation: "recentOpen", error: normalizeCommandError(caughtError) }); }
+    finally { setRecentBusyId(null); }
   }
 
   async function handleRecentRemove(project: RecentProjectDto) {
     if (busy !== null || recentBusyId !== null) return;
-    flushSync(() => {
-      setRecentBusyId(project.id);
-      setRecentActionError(null);
-    });
+    flushSync(() => { setRecentBusyId(project.id); setRecentActionError(null); });
     try {
       await forgetRecentProject(project.id);
-      setRecentState((current) => reduceRecentProjectsState(current, {
-        type: "removed",
-        projectId: project.id,
-      }));
-    } catch (caughtError) {
-      setRecentActionError(normalizeCommandError(caughtError));
-    } finally {
-      setRecentBusyId(null);
-    }
+      setRecentState((current) => reduceRecentProjectsState(current, { type: "removed", projectId: project.id }));
+    } catch (caughtError) { setRecentActionError(normalizeCommandError(caughtError)); }
+    finally { setRecentBusyId(null); }
   }
 
   async function handleCancel() {
     if (!jobId || cancelRequested) return;
     flushSync(() => setCancelRequested(true));
-    try {
-      await cancelSourcePackage(jobId);
-    } catch (caughtError) {
+    try { await cancelSourcePackage(jobId); }
+    catch (caughtError) {
       setCancelRequested(false);
-      setError({
-        operation: "create",
-        error: normalizeCommandError(caughtError),
-      });
+      setError({ operation: "create", error: normalizeCommandError(caughtError) });
     }
   }
 
   const details = progressDetails(progress);
   const launcherDisabled = busy !== null || recentBusyId !== null;
-  const modeLabel = mode === "recent" ? "Recent projects" : mode === "open" ? "Open project" : "Create project";
+  const themeOptions = themeRegistry.map((entry) => ({ value: entry.id, label: `${entry.family ?? "Themes"} · ${entry.displayName}` }));
 
   return (
     <main className="launcher-shell">
-      <WindowChrome context="Project launcher" detail={modeLabel} mode="launcher" launcherMode={mode} />
-      <section className="launcher-panel" aria-labelledby="launcher-title">
-        <div className="launcher-heading">
-          <h1 id="launcher-title">{modeLabel}</h1>
-        </div>
+      <WindowChrome context="Aeria" mode="launcher" />
+      <div className="launcher-layout">
+        <aside className="launcher-sidebar">
+          <div className="launcher-sidebar-head">
+            <strong>Projects</strong>
+            <span>Open or create a local Aeria workspace.</span>
+          </div>
+          <nav className="launcher-nav" aria-label="Project launcher">
+            {(["recent", "open", "create", "settings"] as const).map((item) => (
+              <button className={mode === item ? "launcher-nav-button active" : "launcher-nav-button"} type="button" key={item} disabled={launcherDisabled} onClick={() => setMode(item)}>
+                {item === "settings" ? <Icon name="settings" size={14} /> : null}
+                <span>{item.slice(0, 1).toUpperCase() + item.slice(1)}</span>
+              </button>
+            ))}
+          </nav>
+          <div className="launcher-sidebar-foot">Aeria desktop</div>
+        </aside>
 
-        {error ? (
-          <ErrorBanner
-            title={launcherErrorTitle(error.operation)}
-            error={error.error}
-            onDismiss={() => setError(null)}
-          />
-        ) : null}
-
-        <nav className="launcher-tabs" role="tablist" aria-label="Project action">
-          {(["recent", "open", "create"] as const).map((tab) => (
-            <button
-              className={mode === tab ? "tab-button active" : "tab-button"}
-              type="button"
-              role="tab"
-              key={tab}
-              aria-selected={mode === tab}
-              disabled={launcherDisabled}
-              onClick={() => setMode(tab)}
-            >
-              {tab === "recent" ? "Recent" : tab === "open" ? "Open" : "Create"}
-            </button>
-          ))}
-        </nav>
-
-        {mode === "recent" ? (
-          <section className="recent-projects" aria-labelledby="recent-projects-title">
-            <div className="section-heading">
-              <div>
-                <h2 id="recent-projects-title">Workspaces</h2>
-                <p>Workspaces opened on this machine.</p>
+        <section className="launcher-content" aria-live="polite">
+          {error ? <ErrorBanner title={launcherErrorTitle(error.operation)} error={error.error} onDismiss={() => setError(null)} /> : null}
+          {mode === "recent" ? (
+            <section className="launcher-view" aria-labelledby="recent-title">
+              <div className="launcher-view-head">
+                <div><h1 id="recent-title">Recent projects</h1><p>Continue working in a local project.</p></div>
+                <span className="count-badge">{recentState.status === "loaded" ? recentState.projects.length : "—"}</span>
               </div>
-              {recentState.status === "loaded" ? <span className="pane-count">{recentState.projects.length}</span> : null}
-            </div>
-            {recentState.status === "failed" && recentState.error ? (
-              <ErrorBanner
-                title="Recent projects unavailable"
-                error={recentState.error}
-                onDismiss={() => setRecentState((current) => reduceRecentProjectsState(current, { type: "dismissError" }))}
-              />
-            ) : null}
-            {recentActionError ? (
-              <ErrorBanner
-                title="Could not remove recent project"
-                error={recentActionError}
-                onDismiss={() => setRecentActionError(null)}
-              />
-            ) : null}
-            {recentState.status === "loading" ? (
-              <div className="launcher-list-state" aria-live="polite">
-                <span className="spinner" aria-hidden="true" />
-                Loading recent projects…
-              </div>
-            ) : null}
-            {recentState.status === "failed" ? <p className="recent-empty">Recent projects unavailable.</p> : null}
-            {recentState.status === "loaded" && recentState.projects.length === 0 ? (
-              <p className="recent-empty">Projects you successfully open or create will appear here.</p>
-            ) : null}
-            {recentState.status === "loaded" && recentState.projects.length > 0 ? (
-              <div className="recent-project-list">
-                {recentState.projects.map((project) => (
-                  <article className="recent-project-row" key={project.id}>
-                    <div className="recent-project-identity">
-                      <strong>{repositoryName(project.repositoryRoot)}</strong>
-                      <code title={displayPath(project.repositoryRoot)}>{displayPath(project.repositoryRoot)}</code>
-                    </div>
-                    <span className="recent-project-language">{project.sourceLanguage} → {project.targetLanguage}</span>
-                    <span className="recent-project-game">{project.gameVersion || "Unknown game version"}</span>
-                    <span className="recent-project-opened">{lastOpenedLabel(project.lastOpenedAtUnixMs)}</span>
-                    <span className={project.availability === "ready" ? "availability ready" : "availability"}>
-                      {availabilityLabel(project.availability)}
-                    </span>
-                    <div className="recent-project-actions">
-                      {project.availability === "ready" ? (
-                        <button
-                          className="primary-button compact-button"
-                          type="button"
-                          onClick={() => void handleRecentOpen(project)}
-                          disabled={launcherDisabled}
-                        >
-                          {recentBusyId === project.id ? "Opening…" : "Open"}
-                        </button>
-                      ) : null}
-                      <button
-                        className="text-button"
-                        type="button"
-                        onClick={() => void handleRecentRemove(project)}
-                        disabled={launcherDisabled}
-                      >
-                        {recentBusyId === project.id ? "Working…" : "Remove"}
-                      </button>
-                    </div>
-                  </article>
-                ))}
-              </div>
-            ) : null}
-          </section>
-        ) : (
-          <form className="launcher-form" onSubmit={handleSubmit}>
-            <label htmlFor="repository-root">Repository root</label>
-            <input id="repository-root" value={repositoryRoot}
-              onChange={(event) => setRepositoryRoot(event.target.value)}
-              placeholder="C:\\Projects\\my-translation" autoComplete="off" disabled={launcherDisabled} required />
-
-            {mode === "open" ? (
-              <>
-                <label htmlFor="source-package-path">HSP source package path</label>
-                <input id="source-package-path" value={sourcePackagePath}
-                  onChange={(event) => setSourcePackagePath(event.target.value)}
-                  placeholder="C:\\Sources\\source-en.hsp" autoComplete="off" disabled={launcherDisabled} required />
-              </>
-            ) : (
-              <>
-                <label htmlFor="game-path">Game installation path</label>
-                <input id="game-path" value={gamePath}
-                  onChange={(event) => setGamePath(event.target.value)}
-                  placeholder="C:\\Games\\FINAL FANTASY XIV" autoComplete="off" disabled={launcherDisabled} required />
-                <div className="form-columns">
-                  <div>
-                    <label htmlFor="source-language">Source language</label>
-                    <select id="source-language" value={sourceLanguage}
-                      onChange={(event) => setSourceLanguage(event.target.value as (typeof sourceLanguages)[number])}
-                      disabled={launcherDisabled}>
-                      {sourceLanguages.map((language) => <option key={language} value={language}>{language}</option>)}
-                    </select>
-                  </div>
-                  <div>
-                    <label htmlFor="target-language">Target language</label>
-                    <input id="target-language" value={targetLanguage}
-                      onChange={(event) => setTargetLanguage(event.target.value)}
-                      placeholder="fr, ru, es" autoComplete="off" disabled={launcherDisabled} required />
-                  </div>
+              {recentState.status === "failed" && recentState.error ? <ErrorBanner title="Recent projects unavailable" error={recentState.error} onDismiss={() => setRecentState((current) => reduceRecentProjectsState(current, { type: "dismissError" }))} /> : null}
+              {recentActionError ? <ErrorBanner title="Could not remove recent project" error={recentActionError} onDismiss={() => setRecentActionError(null)} /> : null}
+              {recentState.status === "loading" ? <div className="launcher-list-state"><span className="spinner" /> Loading recent projects…</div> : null}
+              {recentState.status === "failed" ? <p className="recent-empty">Recent projects unavailable.</p> : null}
+              {recentState.status === "loaded" && recentState.projects.length === 0 ? <p className="recent-empty">Projects you successfully open or create will appear here.</p> : null}
+              {recentState.status === "loaded" && recentState.projects.length > 0 ? (
+                <div className="project-list">
+                  {recentState.projects.map((project) => (
+                    <article className="project-plate" key={project.id}>
+                      <div className="project-mark" aria-hidden="true">{displayPathName(project.repositoryRoot).slice(0, 1).toUpperCase()}</div>
+                      <div className="project-main">
+                        <strong className="project-name">{displayPathName(project.repositoryRoot)}</strong>
+                        <code className="project-path" title={displayPath(project.repositoryRoot)}>{displayPath(project.repositoryRoot)}</code>
+                        <span className={project.availability === "ready" ? "project-meta" : "project-meta issue"}>{project.availability === "ready" ? `${languageLabel(project.sourceLanguage)} source` : availabilityLabel(project.availability)}</span>
+                      </div>
+                      <div className="project-actions">
+                        {project.availability === "ready" ? <button className="button primary-button compact-button" type="button" disabled={launcherDisabled} onClick={() => void handleRecentOpen(project)}>{recentBusyId === project.id ? "Opening…" : "Open"}</button> : null}
+                        <button className="button icon-button" type="button" aria-label={`Remove ${displayPathName(project.repositoryRoot)} from recent projects`} disabled={launcherDisabled} onClick={() => void handleRecentRemove(project)}><Icon name="close" size={15} /></button>
+                      </div>
+                    </article>
+                  ))}
                 </div>
-              </>
-            )}
+              ) : null}
+            </section>
+          ) : null}
 
-            <button
-              className="primary-button launcher-submit"
-              type="submit"
-              disabled={launcherDisabled || (mode === "create" && !sourcePackageEventsReady)}
-            >
-              {busy === "open" ? "Opening…" : busy === "create" ? "Creating…" : mode === "open" ? "Open project" : "Create project"}
-            </button>
-          </form>
-        )}
+          {mode === "open" || mode === "create" ? (
+            <section className="launcher-view" aria-labelledby={`${mode}-title`}>
+              <div className="launcher-view-head"><div><h1 id={`${mode}-title`}>{mode === "open" ? "Open project" : "Create project"}</h1><p>{mode === "open" ? "Open an existing local Aeria repository." : "Create a local project from an installed FFXIV source."}</p></div></div>
+              <form className="launcher-form" onSubmit={handleSubmit}>
+                <BrowseField id="repository-root" label="Repository root" value={repositoryRoot} onChange={setRepositoryRoot} placeholder="C:\\Projects\\my-translation" directory disabled={launcherDisabled} />
+                {mode === "open" ? <BrowseField id="source-package-path" label="HSP source package" value={sourcePackagePath} onChange={setSourcePackagePath} placeholder="C:\\Sources\\source-en.hsp" hint="Exported .hsp package this repository was built from." disabled={launcherDisabled} /> : (
+                  <>
+                    <BrowseField id="game-path" label="Game installation" value={gamePath} onChange={setGamePath} placeholder="C:\\Games\\FINAL FANTASY XIV" directory disabled={launcherDisabled} />
+                    <div className="launcher-field"><label htmlFor="source-language">Source language</label><SelectMenu value={sourceLanguage} options={sourceLanguages} onChange={setSourceLanguage} label="Source language" disabled={launcherDisabled} /></div>
+                    <p className="form-note">Target language is configured after project creation; it is not part of launcher setup.</p>
+                  </>
+                )}
+                <button className="button primary-button launcher-submit" type="submit" disabled={launcherDisabled || (mode === "create" && !sourcePackageEventsReady)}>{busy === "open" ? "Opening…" : busy === "create" ? "Creating…" : mode === "open" ? "Open project" : "Create project"}</button>
+              </form>
+              {busy === "create" ? <section className="atlas-progress" aria-label="Source package progress"><div className="atlas-progress-heading"><span className="spinner" /><strong>{phaseLabel(progress)}</strong></div><div className="progress-facts"><span>Sheet<strong>{details.sheet ?? "—"}</strong></span><span>Language<strong>{details.language ?? "—"}</strong></span><span>Rows<strong>{details.rows === null ? "—" : details.rows.toLocaleString()}</strong></span></div><button className="button secondary-button cancel-button" type="button" onClick={() => void handleCancel()} disabled={jobId === null || cancelRequested}>{cancelRequested ? "Cancelling…" : "Cancel"}</button></section> : null}
+            </section>
+          ) : null}
 
-        {busy === "create" ? (
-          <section className="atlas-progress" aria-live="polite" aria-label="Source package progress">
-            <div className="atlas-progress-heading">
-              <span className="spinner" aria-hidden="true" />
-              <strong>{phaseLabel(progress)}</strong>
-            </div>
-            <div className="progress-facts">
-              <span>Sheet <strong>{details.sheet ?? "—"}</strong></span>
-              <span>Language <strong>{details.language ?? "—"}</strong></span>
-              <span>Rows <strong>{details.rows === null ? "—" : details.rows.toLocaleString()}</strong></span>
-            </div>
-            <button className="secondary-button cancel-button" type="button"
-              onClick={() => void handleCancel()} disabled={jobId === null || cancelRequested}>
-              {cancelRequested ? "Cancelling…" : "Cancel"}
-            </button>
-          </section>
-        ) : null}
-
-      </section>
+          {mode === "settings" ? (
+            <section className="launcher-view" aria-labelledby="settings-title">
+              <div className="launcher-view-head"><div><h1 id="settings-title">Settings</h1><p>Appearance defaults for Aeria.</p></div></div>
+              <div className="settings-panel">
+                <section className="settings-section"><h2>Appearance</h2><div className="setting-row"><span className="setting-label">Theme</span><SelectMenu value={theme.id} options={themeOptions} onChange={setThemeId} label="Theme" /></div><div className="setting-row"><span className="setting-label">Accent override</span><span className="setting-value">Use theme default <small>Optional</small></span></div></section>
+                <section className="settings-section"><h2>Typography</h2><div className="setting-row"><span className="setting-label">Interface</span><span className="setting-value">Segoe UI Variable <small>12 px</small></span></div><div className="setting-row"><span className="setting-label">Content</span><span className="setting-value">Segoe UI Variable <small>12 / 13 px</small></span></div><div className="setting-row"><span className="setting-label">Monospace</span><span className="setting-value">Cascadia Mono <small>10.5 / 11.5 px</small></span></div></section>
+              </div>
+            </section>
+          ) : null}
+        </section>
+      </div>
     </main>
   );
 }

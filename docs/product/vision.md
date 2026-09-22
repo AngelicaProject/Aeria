@@ -4,7 +4,7 @@
 
 Aeria is a desktop application for creating, maintaining, and reviewing FINAL FANTASY XIV translations.
 
-Each project represents one target language. It may be maintained by one person or by hundreds of contributors. Aeria does not require its own collaboration service: projects can use ordinary Git repositories and existing hosting platforms.
+Each configured project represents one target language. A project may be created before that setting is chosen, then configured through project settings. It may be maintained by one person or by hundreds of contributors. Aeria does not require its own collaboration service: projects can use ordinary Git repositories and existing hosting platforms.
 
 ## Why Aeria exists
 
@@ -18,7 +18,7 @@ Aeria is built around three problems:
 
 ## Project model
 
-- One project has exactly one target language.
+- One configured project has exactly one target language.
 - Additional official source languages may be enabled locally as optional context for an individual translator.
 - The project repository stores translated/project state, not the complete source corpus.
 - A project may be used by one person or by a community through branches and pull requests.

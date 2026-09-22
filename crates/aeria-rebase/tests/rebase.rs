@@ -1374,7 +1374,9 @@ fn baseline_and_snapshot_preconditions_are_errors() {
     let mut wrong_language_metadata = workspace.metadata().clone();
     wrong_language_metadata = aeria_core::WorkspaceMetadata::new(
         "ja",
-        wrong_language_metadata.target_language(),
+        wrong_language_metadata
+            .target_language()
+            .expect("configured target language"),
         wrong_language_metadata.source_content_id(),
         wrong_language_metadata.source_snapshot_id(),
     )

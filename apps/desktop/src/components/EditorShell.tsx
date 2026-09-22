@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState, type CSSProperties } from "react";
 import { flushSync } from "react-dom";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
@@ -21,13 +21,17 @@ import type {
 } from "../types";
 import { ErrorBanner } from "./ErrorBanner";
 import { ConfirmDialog } from "./ConfirmDialog";
-import { ProjectHeader } from "./ProjectHeader";
+import { ActivityRail } from "./ActivityRail";
+import { DocumentTabs } from "./DocumentTabs";
+import { DockPanel } from "./DockPanel";
+import { ResizeHandle } from "./ResizeHandle";
 import { SheetSidebar } from "./SheetSidebar";
 import { StatusBar } from "./StatusBar";
 import { CellDraft, CellMutation, TranslationEditor } from "./TranslationEditor";
 import { TranslationList } from "./TranslationList";
 import { WindowChrome } from "./WindowChrome";
 import { displayPathName } from "../pathDisplay";
+import { initialDockLayout, reduceDockLayout } from "../ui/layout";
 
 const PAGE_SIZE = 100;
 
@@ -74,6 +78,8 @@ export function EditorShell({
   const [closing, setClosing] = useState(false);
   const [editorError, setEditorError] = useState<EditorError | null>(null);
   const [discardRequest, setDiscardRequest] = useState<DiscardRequest | null>(null);
+  const [dockLayout, dispatchDockLayout] = useReducer(reduceDockLayout, initialDockLayout);
+  const [leftDockOpen, setLeftDockOpen] = useState(true);
   const requestGeneration = useRef(0);
   const hasDirtyDraft = useRef(false);
   const discardRequestRef = useRef<DiscardRequest | null>(null);
@@ -318,10 +324,6 @@ export function EditorShell({
     }
   }, [onClosed, requestDiscardConfirmation, showError]);
 
-  const handleCloseClick = useCallback(() => {
-    void handleClose();
-  }, [handleClose]);
-
   const handleWindowClose = useCallback(async () => {
     if (!(await requestDiscardConfirmation("Closing Aeria will discard your unsaved changes."))) {
       return;
@@ -331,6 +333,12 @@ export function EditorShell({
   const handleLoadMoreClick = useCallback(() => {
     void handleLoadMore();
   }, [handleLoadMore]);
+  const resizeLeftDock = useCallback((delta: number) => {
+    dispatchDockLayout({ type: "resizeLeftDock", delta });
+  }, []);
+  const resizeTranslation = useCallback((delta: number) => {
+    dispatchDockLayout({ type: "resizeTranslation", delta });
+  }, []);
   const handleSaveTargetClick = useCallback((cell: TranslationCellDto, draft: CellDraft, otherDirty: boolean, discardOtherDrafts: () => void) => {
     void handleSaveTarget(cell, draft, otherDirty, discardOtherDrafts);
   }, [handleSaveTarget]);
@@ -345,17 +353,14 @@ export function EditorShell({
     <main className="app-shell editor-shell">
       <WindowChrome
         context={repositoryName(project.repositoryRoot)}
-        detail={`${project.sourceLanguage} → ${project.targetLanguage}`}
+        detail={`${project.sourceLanguage} → ${project.targetLanguage ?? "target not configured"}`}
+        projectName={repositoryName(project.repositoryRoot)}
         mode="workbench"
+        onToggleDock={() => setLeftDockOpen((current) => !current)}
+        onCloseProject={() => void handleClose()}
         onClose={() => void handleWindowClose()}
       />
-      <div className="editor-notices">
-        <ProjectHeader
-          project={project}
-          closing={closing}
-          disabled={closing}
-          onClose={handleCloseClick}
-        />
+      <div className="editor-notices" aria-live="polite">
         {applicationWarning ? (
           <ErrorBanner
             title="Project opened with a Recent projects warning"
@@ -365,15 +370,22 @@ export function EditorShell({
         ) : null}
         {editorError ? <ErrorBanner title={editorError.title} error={editorError.error} onDismiss={() => setEditorError(null)} /> : null}
       </div>
-      <div className="workbench-frame">
+      <div
+        className={leftDockOpen ? "workbench-frame" : "workbench-frame dock-closed"}
+        style={{ "--left-dock-width": `${dockLayout.leftDockWidth}px` } as CSSProperties}
+      >
+        <ActivityRail side="left" items={[{ id: "sheets", label: "Sheets", icon: "folder", active: leftDockOpen, onSelect: () => setLeftDockOpen((current) => !current) }]} />
+        {leftDockOpen ? (
+          <>
+            <DockPanel title="Sheets" meta={project.sheets.length.toLocaleString()} className="sheets-dock">
+              <SheetSidebar sheets={project.sheets} selectedSheetName={selectedSheetName} disabled={closing} onSelect={handleSheetSelect} />
+            </DockPanel>
+            <ResizeHandle axis="x" label="Resize sheets panel" onDelta={resizeLeftDock} />
+          </>
+        ) : null}
         <div className="workbench-content">
-          <div className="editor-layout">
-            <SheetSidebar
-              sheets={project.sheets}
-              selectedSheetName={selectedSheetName}
-              disabled={closing}
-              onSelect={handleSheetSelect}
-            />
+          <DocumentTabs label={selectedSheetName ?? "Sheet"} detail={loadedSheetName ? `${rows.length.toLocaleString()} rows` : "loading"} />
+          <div className="sheet-document" style={{ "--translation-width": `${dockLayout.translationWidth}px` } as CSSProperties}>
             <TranslationList
               rows={rows}
               selectedRow={selectedRowCursor}
@@ -387,6 +399,7 @@ export function EditorShell({
               onSelect={handleRowSelect}
               onLoadMore={handleLoadMoreClick}
             />
+            <ResizeHandle axis="x" label="Resize translation editor" onDelta={resizeTranslation} />
             <TranslationEditor
               key={selectedRow ? rowKey(selectedRow) : "empty-editor"}
               row={selectedRow}

@@ -8,8 +8,8 @@ use serde::Serialize;
 pub use commands::{
     cancel_source_package, close_project, current_project, forget_recent_project,
     initialize_project, initialize_project_from_game, list_recent_projects, open_project,
-    open_recent_project, page_translation_rows, set_translation_note, set_translation_review_state,
-    set_translation_target, start_source_package,
+    open_recent_project, page_translation_rows, set_project_target_language, set_translation_note,
+    set_translation_review_state, set_translation_target, start_source_package,
 };
 pub use dto::{
     ProjectOpenResultDto, ProjectSheetDto, ProjectSummaryDto, RecentProjectAvailability,
@@ -57,6 +57,7 @@ pub fn run() {
             open_recent_project,
             forget_recent_project,
             page_translation_rows,
+            set_project_target_language,
             set_translation_target,
             set_translation_note,
             set_translation_review_state

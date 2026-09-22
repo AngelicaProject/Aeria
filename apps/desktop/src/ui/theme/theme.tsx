@@ -1,0 +1,59 @@
+import { createContext, useContext, useMemo, useState, type PropsWithChildren } from "react";
+import { defaultThemeId, findTheme, type ThemeDefinition } from "./registry";
+
+type ThemeContextValue = {
+  theme: ThemeDefinition;
+  setThemeId: (themeId: string) => void;
+};
+
+const ThemeContext = createContext<ThemeContextValue | null>(null);
+
+export function ThemeProvider({ children }: PropsWithChildren) {
+  const [themeId, setThemeId] = useState(defaultThemeId);
+  const theme = findTheme(themeId);
+  const style = useMemo(() => {
+    const { tokens } = theme;
+    return {
+      "--color-crust": tokens.crust,
+      "--color-mantle": tokens.mantle,
+      "--color-base": tokens.base,
+      "--color-surface-0": tokens.surface0,
+      "--color-surface-1": tokens.surface1,
+      "--color-surface-2": tokens.surface2,
+      "--color-text": tokens.text,
+      "--color-subtext": tokens.subtext,
+      "--color-overlay": tokens.overlay,
+      "--color-accent": tokens.accent,
+      "--color-accent-fg": tokens.accentForeground,
+      "--color-danger": tokens.danger,
+      "--color-warning": tokens.warning,
+      "--color-success": tokens.success,
+      "--font-ui": '"Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif',
+      "--font-content": '"Segoe UI Variable Text", "Segoe UI", "Yu Gothic UI", "Meiryo", "Microsoft YaHei UI", "Malgun Gothic", sans-serif',
+      "--font-mono": '"Cascadia Mono", "Cascadia Code", Consolas, monospace',
+      "--font-size-ui": "12px",
+      "--font-size-compact": "11px",
+      "--font-size-status": "10.5px",
+      "--font-size-content": "12px",
+      "--font-size-editor": "13px",
+      "--font-size-mono": "10.5px",
+      "--font-size-macro": "11.5px",
+    } as React.CSSProperties;
+  }, [theme]);
+
+  return (
+    <ThemeContext.Provider value={{ theme, setThemeId }}>
+      <div className="theme-root" data-theme-id={theme.id} data-theme-appearance={theme.appearance} style={style}>
+        {children}
+      </div>
+    </ThemeContext.Provider>
+  );
+}
+
+export function useTheme(): ThemeContextValue {
+  const context = useContext(ThemeContext);
+  if (!context) {
+    throw new Error("useTheme must be used inside ThemeProvider");
+  }
+  return context;
+}

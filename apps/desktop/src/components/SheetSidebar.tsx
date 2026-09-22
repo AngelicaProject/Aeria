@@ -10,14 +10,7 @@ type SheetSidebarProps = {
 
 export const SheetSidebar = memo(function SheetSidebar({ sheets, selectedSheetName, disabled, onSelect }: SheetSidebarProps) {
   return (
-    <aside className="pane sheet-pane" aria-labelledby="sheets-heading">
-      <div className="pane-heading">
-        <div>
-          <h2 id="sheets-heading">Sheets</h2>
-        </div>
-        <span className="pane-count">{sheets.length}</span>
-      </div>
-
+    <div className="sheet-sidebar-body">
       {sheets.length === 0 ? (
         <div className="empty-pane">
           <strong>No sheets</strong>
@@ -45,6 +38,6 @@ export const SheetSidebar = memo(function SheetSidebar({ sheets, selectedSheetNa
           })}
         </div>
       )}
-    </aside>
+    </div>
   );
 });

@@ -23,8 +23,9 @@ visible and offer **Remove from recents**; ready entries offer **Open**.
 
 The launcher can also open an existing project with a repository root and HSP
 source-package path, or create a project from a repository root, game
-installation, one of Atlas's supported source languages (`en`, `ja`, `de`, or
-`fr`), and a target language. During creation it displays typed Atlas phase and
+installation, and one of Atlas's supported source languages (`en`, `ja`, `de`, or
+`fr`). Target language is configured after creation through the project settings
+boundary. During creation it displays typed Atlas phase and
 progress events and offers cancellation. Raw stdout is never exposed to the
 renderer. Once a project is active, the renderer uses the sheets in
 `ProjectSummaryDto`, pages one sheet at a time with a limit of 100 entries, and

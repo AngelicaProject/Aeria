@@ -13,4 +13,10 @@ The renderer is a full React/TypeScript application, not a thin HTML skin, but p
 - CodeMirror 6 is the preferred starting point for the structured translation editor; Monaco is not required unless future requirements justify its weight.
 - Dark theme ships first; the design system must not make a future light theme prohibitively expensive.
 
+## Project launcher layout
+
+The project launcher uses a fixed shell so switching between Recent, Open, Create, and Settings does not resize the desktop window. Its integrated titlebar is 36px high, and only the content region may scroll. The Tauri launcher window is 900×560 with matching minimum dimensions.
+
+Recent project headers and rows share one four-column grid: `1fr 110px 90px 140px`. Keep that template in one CSS custom property or shared class so labels and values cannot drift apart.
+
 Tailwind CSS and accessible primitive libraries such as Radix are approved directions, but dependencies should be added when their first real component is implemented.

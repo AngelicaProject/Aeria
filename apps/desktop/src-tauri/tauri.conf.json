@@ -13,10 +13,10 @@
     "windows": [
       {
         "title": "Aeria",
-        "width": 980,
-        "height": 620,
-        "minWidth": 680,
-        "minHeight": 440,
+        "width": 900,
+        "height": 560,
+        "minWidth": 900,
+        "minHeight": 560,
         "decorations": false,
         "resizable": false
       }

@@ -4,10 +4,11 @@ import { EditorShell } from "./components/EditorShell";
 import { ProjectLauncher } from "./components/ProjectLauncher";
 import { WindowChrome } from "./components/WindowChrome";
 import type { CommandError, ProjectOpenResultDto, ProjectSummaryDto } from "./types";
+import { ThemeProvider } from "./ui/theme/theme";
 
 type StartupState = "starting" | "launcher";
 
-export function App() {
+function AppContent() {
   const [project, setProject] = useState<ProjectSummaryDto | null>(null);
   const [startupState, setStartupState] = useState<StartupState>("starting");
   const [startupError, setStartupError] = useState<CommandError | null>(null);
@@ -68,5 +69,13 @@ export function App() {
         setProjectWarning(null);
       }}
     />
+  );
+}
+
+export function App() {
+  return (
+    <ThemeProvider>
+      <AppContent />
+    </ThemeProvider>
   );
 }

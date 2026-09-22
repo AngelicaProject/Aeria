@@ -1,47 +1,51 @@
 import { useEffect, useState } from "react";
 import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
+import { ApplicationMenu, type ApplicationMenuDefinition } from "./ApplicationMenu";
+import { Icon } from "../ui/primitives/Icon";
 
 type WindowChromeProps = {
   context: string;
   detail?: string;
   mode: "launcher" | "workbench";
-  launcherMode?: "recent" | "open" | "create";
+  projectName?: string;
   onClose?: () => void;
+  onCloseProject?: () => void;
+  onToggleDock?: () => void;
 };
 
-const launcherSizes = {
-  recent: { width: 980, height: 620 },
-  open: { width: 720, height: 500 },
-  create: { width: 760, height: 600 },
-} as const;
+const launcherSize = { width: 900, height: 560 } as const;
+const launcherMinimum = { width: 900, height: 560 } as const;
+const workbenchMinimum = { width: 1140, height: 710 } as const;
 
-const launcherMinimums = {
-  recent: { width: 900, height: 560 },
-  open: { width: 680, height: 440 },
-  create: { width: 720, height: 520 },
-} as const;
+let workbenchInitialized = false;
 
-const workbenchSize = { width: 1440, height: 900 } as const;
-const workbenchMinimum = { width: 900, height: 600 } as const;
-
-export function WindowChrome({ context, detail, mode, launcherMode = "recent", onClose }: WindowChromeProps) {
+export function WindowChrome({ context, detail, mode, projectName, onClose, onCloseProject, onToggleDock }: WindowChromeProps) {
   const [maximized, setMaximized] = useState(false);
 
   useEffect(() => {
     let active = true;
+    let unlistenResize: (() => void) | undefined;
 
     void (async () => {
       try {
         const window = getCurrentWindow();
-        const size = mode === "workbench" ? workbenchSize : launcherSizes[launcherMode];
-        const minimum = mode === "workbench" ? workbenchMinimum : launcherMinimums[launcherMode];
-
-        if (mode === "launcher") await window.unmaximize();
-        await window.setResizable(mode === "workbench");
-        await window.setMinSize(new LogicalSize(minimum.width, minimum.height));
-        await window.setSize(new LogicalSize(size.width, size.height));
-        const isMaximized = mode === "workbench" && await window.isMaximized();
-        if (active) setMaximized(isMaximized);
+        if (mode === "launcher") {
+          await window.unmaximize();
+          await window.setResizable(false);
+          await window.setMinSize(new LogicalSize(launcherMinimum.width, launcherMinimum.height));
+          await window.setSize(new LogicalSize(launcherSize.width, launcherSize.height));
+        } else {
+          await window.setResizable(true);
+          await window.setMinSize(new LogicalSize(workbenchMinimum.width, workbenchMinimum.height));
+          if (!workbenchInitialized) {
+            workbenchInitialized = true;
+            await window.maximize();
+          }
+        }
+        if (active) setMaximized(await window.isMaximized());
+        unlistenResize = await window.onResized(async () => {
+          if (active) setMaximized(await window.isMaximized());
+        });
       } catch {
         // The renderer can also run in a browser during development.
       }
@@ -49,8 +53,9 @@ export function WindowChrome({ context, detail, mode, launcherMode = "recent", o
 
     return () => {
       active = false;
+      unlistenResize?.();
     };
-  }, [launcherMode, mode]);
+  }, [mode]);
 
   async function handleToggleMaximize() {
     try {
@@ -83,36 +88,43 @@ export function WindowChrome({ context, detail, mode, launcherMode = "recent", o
     }
   }
 
+  const menus: readonly ApplicationMenuDefinition[] = mode === "workbench"
+    ? [
+        { id: "file", label: "File", items: [{ id: "close", label: "Close project", shortcut: "Ctrl+W", onSelect: onCloseProject ?? handleClose }] },
+        { id: "view", label: "View", items: [{ id: "sheets", label: "Sheets panel", onSelect: onToggleDock ?? (() => undefined) }] },
+        { id: "project", label: "Project", items: [{ id: "close-project", label: "Close project", onSelect: onCloseProject ?? handleClose }] },
+        { id: "window", label: "Window", items: [
+          { id: "minimize", label: "Minimize", onSelect: handleMinimize },
+          { id: "maximize", label: maximized ? "Restore" : "Maximize", onSelect: () => void handleToggleMaximize() },
+        ] },
+      ]
+    : [];
+
   return (
-    <header className="window-chrome">
-      <div className="chrome-brand" aria-label="Aeria">
-        <span className="chrome-mark" aria-hidden="true">A</span>
-        <span className="chrome-name">Aeria</span>
-      </div>
-      <div
-        className="chrome-drag-region"
-        data-tauri-drag-region
-        onDoubleClick={mode === "workbench" ? () => void handleToggleMaximize() : undefined}
-      >
-        <span>{context}</span>
-        {detail ? <span className="chrome-detail">{detail}</span> : null}
-      </div>
+    <header className={mode === "workbench" ? "app-chrome workbench-chrome" : "app-chrome launcher-chrome"}>
+      {mode === "workbench" ? (
+        <>
+          <div className="chrome-project" title={context}>
+            <span className="chrome-project-name">{projectName ?? context}</span>
+            {detail ? <span className="chrome-project-detail">{detail}</span> : null}
+          </div>
+          <div className="chrome-drag-region" data-tauri-drag-region />
+          <ApplicationMenu menus={menus} />
+        </>
+      ) : (
+        <div className="chrome-brand" aria-label="Aeria">Aeria</div>
+      )}
       <div className="window-controls" aria-label="Window controls">
         <button className="window-control" type="button" aria-label="Minimize window" onClick={handleMinimize}>
-          <span aria-hidden="true">−</span>
+          <Icon name="minimize" size={13} />
         </button>
         {mode === "workbench" ? (
-          <button
-            className="window-control maximize"
-            type="button"
-            aria-label={maximized ? "Restore window" : "Maximize window"}
-            onClick={() => void handleToggleMaximize()}
-          >
-            <span aria-hidden="true">{maximized ? "❐" : "□"}</span>
+          <button className="window-control" type="button" aria-label={maximized ? "Restore window" : "Maximize window"} onClick={() => void handleToggleMaximize()}>
+            <Icon name="maximize" size={13} />
           </button>
         ) : null}
         <button className="window-control close" type="button" aria-label="Close window" onClick={handleClose}>
-          <span aria-hidden="true">×</span>
+          <Icon name="close" size={13} />
         </button>
       </div>
     </header>
