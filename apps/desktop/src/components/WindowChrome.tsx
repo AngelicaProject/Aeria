@@ -30,14 +30,6 @@ export function WindowChrome({ context, detail, mode, onClose }: WindowChromePro
     }
   }, [mode]);
 
-  function handleDrag() {
-    try {
-      void getCurrentWindow().startDragging().catch(() => undefined);
-    } catch {
-      // Window dragging is only available in the desktop shell.
-    }
-  }
-
   function handleMinimize() {
     try {
       void getCurrentWindow().minimize().catch(() => undefined);
@@ -64,10 +56,10 @@ export function WindowChrome({ context, detail, mode, onClose }: WindowChromePro
         <span className="chrome-mark" aria-hidden="true">A</span>
         <span className="chrome-name">Aeria</span>
       </div>
-      <button className="chrome-drag-region" type="button" onMouseDown={handleDrag} aria-label="Move window">
+      <div className="chrome-drag-region" data-tauri-drag-region>
         <span>{context}</span>
         {detail ? <span className="chrome-detail">{detail}</span> : null}
-      </button>
+      </div>
       <div className="window-controls" aria-label="Window controls">
         <button className="window-control" type="button" aria-label="Minimize window" onClick={handleMinimize}>
           <span aria-hidden="true">−</span>

@@ -1,3 +1,5 @@
+import { displayPath } from "../pathDisplay";
+
 type StatusBarProps = {
   sheetName: string | null;
   rowCount: number;
@@ -8,9 +10,10 @@ type StatusBarProps = {
 };
 
 function shortenPath(path: string): string {
-  const parts = path.split(/[\\/]/).filter(Boolean);
+  const display = displayPath(path);
+  const parts = display.split(/[\\/]/).filter(Boolean);
   if (parts.length <= 3) {
-    return path;
+    return display;
   }
   return `${parts[0]}\\…\\${parts.slice(-2).join("\\")}`;
 }
@@ -25,7 +28,7 @@ export function StatusBar({
 }: StatusBarProps) {
   return (
     <footer className="status-bar" aria-live="polite">
-      <span className="status-item status-repository" title={repositoryRoot}>
+      <span className="status-item status-repository" title={displayPath(repositoryRoot)}>
         {shortenPath(repositoryRoot)}
       </span>
       <span className="status-item">{sourceLanguage} → {targetLanguage}</span>

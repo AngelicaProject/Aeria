@@ -21,6 +21,7 @@ import type {
 } from "../types";
 import { ErrorBanner } from "./ErrorBanner";
 import { WindowChrome } from "./WindowChrome";
+import { displayPath, displayPathName } from "../pathDisplay";
 import {
   initialRecentProjectsState,
   reduceRecentProjectsState,
@@ -64,7 +65,7 @@ function progressDetails(event: AtlasEvent | null): { sheet: string | null; lang
 }
 
 function repositoryName(path: string): string {
-  return path.split(/[\\/]/).filter(Boolean).at(-1) ?? path;
+  return displayPathName(path);
 }
 
 function availabilityLabel(availability: RecentProjectAvailability): string {
@@ -327,7 +328,7 @@ export function ProjectLauncher({ initialError, onProjectReady }: ProjectLaunche
                   <article className="recent-project-row" key={project.id}>
                     <div className="recent-project-identity">
                       <strong>{repositoryName(project.repositoryRoot)}</strong>
-                      <code title={project.repositoryRoot}>{project.repositoryRoot}</code>
+                      <code title={displayPath(project.repositoryRoot)}>{displayPath(project.repositoryRoot)}</code>
                     </div>
                     <span className="recent-project-language">{project.sourceLanguage} → {project.targetLanguage}</span>
                     <span className="recent-project-game">{project.gameVersion || "Unknown game version"}</span>

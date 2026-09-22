@@ -27,6 +27,7 @@ import { StatusBar } from "./StatusBar";
 import { CellDraft, CellMutation, TranslationEditor } from "./TranslationEditor";
 import { TranslationList } from "./TranslationList";
 import { WindowChrome } from "./WindowChrome";
+import { displayPathName } from "../pathDisplay";
 
 const PAGE_SIZE = 100;
 
@@ -47,7 +48,7 @@ function cursorForRow(row: TranslationRowDto): TranslationRowCursorDto {
 }
 
 function repositoryName(path: string): string {
-  return path.split(/[\\/]/).filter(Boolean).at(-1) ?? path;
+  return displayPathName(path);
 }
 
 export function EditorShell({

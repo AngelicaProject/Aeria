@@ -9,13 +9,13 @@
   --text: #e1e5e8;
   --muted: #8b949c;
   --muted-strong: #aab2b9;
-  --accent: #6da5a1;
-  --accent-strong: #92c4be;
-  --accent-soft: rgba(109, 165, 161, 0.14);
+  --accent: #7f8d9d;
+  --accent-strong: #c0cbd5;
+  --accent-soft: rgba(127, 141, 157, 0.16);
   --danger: #cf7b7b;
   --danger-soft: rgba(126, 49, 55, 0.28);
-  --warning: #c6a76a;
-  --success: #7db39d;
+  --warning: #b4adb0;
+  --success: #b4bec4;
   --chrome-height: 36px;
   font-family: "IBM Plex Sans", "Segoe UI", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
   background: var(--canvas);
@@ -95,6 +95,7 @@ textarea:disabled {
   gap: 8px;
   width: 124px;
   padding-left: 12px;
+  -webkit-app-region: no-drag;
 }
 
 .chrome-mark {
@@ -129,7 +130,8 @@ textarea:disabled {
   color: var(--muted);
   font-size: 11px;
   text-align: left;
-  cursor: default;
+  cursor: move;
+  -webkit-app-region: drag;
 }
 
 .chrome-drag-region > span:first-child {
@@ -148,6 +150,7 @@ textarea:disabled {
 .window-controls {
   display: flex;
   align-self: stretch;
+  -webkit-app-region: no-drag;
 }
 
 .window-control {
@@ -440,7 +443,7 @@ textarea::placeholder { color: #626c74; }
   line-height: 1.35;
 }
 
-.availability.ready { color: var(--success); }
+.availability.ready { color: var(--accent-strong); }
 
 .recent-project-actions {
   display: flex;
