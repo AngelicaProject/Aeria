@@ -3,6 +3,7 @@
 use aeria_core::{ReviewState, SourceBinding, SourceFingerprint, TranslationUnitId};
 use aeria_hxs::{HxsError, StringRowCoordinate};
 use std::cell::Cell;
+use std::collections::BTreeMap;
 use std::time::Instant;
 use thiserror::Error;
 
@@ -268,6 +269,57 @@ impl ProjectSession {
                 })
             })
             .transpose()
+    }
+}
+
+/// Workspace coverage for one sheet's HSG-permitted occurrences.
+///
+/// `translated` counts Workspace units, including explicitly empty targets.
+/// `reviewed` and `needs_review` are subsets of `translated`.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct SheetTranslationProgress {
+    pub sheet_name: String,
+    pub translated: usize,
+    pub reviewed: usize,
+    pub needs_review: usize,
+}
+
+impl ProjectSession {
+    /// Summarizes Workspace units per sheet, ordered by sheet name.
+    ///
+    /// Only units whose binding is permitted by the HSG index are counted, so
+    /// every count is bounded by the sheet's translatable cell count. Sheets
+    /// without units are omitted. This reads in-memory Workspace state only; it
+    /// does not re-verify source fingerprints.
+    #[must_use]
+    pub fn translation_progress(&self) -> Vec<SheetTranslationProgress> {
+        let guidance = self.source_package.guidance_index();
+        let mut by_sheet: BTreeMap<&str, SheetTranslationProgress> = BTreeMap::new();
+        for unit in self.workspace().units() {
+            let binding = unit.source_binding();
+            if !guidance.is_translatable(
+                binding.sheet_name(),
+                binding.row_id(),
+                binding.subrow_id(),
+                binding.column_index(),
+            ) {
+                continue;
+            }
+            let progress =
+                by_sheet
+                    .entry(binding.sheet_name())
+                    .or_insert_with(|| SheetTranslationProgress {
+                        sheet_name: binding.sheet_name().to_owned(),
+                        ..SheetTranslationProgress::default()
+                    });
+            progress.translated += 1;
+            match unit.review_state() {
+                ReviewState::Reviewed => progress.reviewed += 1,
+                ReviewState::NeedsReview => progress.needs_review += 1,
+                ReviewState::Draft => {}
+            }
+        }
+        by_sheet.into_values().collect()
     }
 }
 

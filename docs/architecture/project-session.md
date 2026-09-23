@@ -59,6 +59,15 @@ validated `SourcePackage` into the session. The constructor does not reopen the
 archive, so source evidence validation is not repeated before Workspace Format
 v1 initialization.
 
+## Reloading after repository changes
+
+`ProjectSession::reload_workspace()` reloads Workspace Format v1 from disk
+after the repository changed outside the ordinary mutation path, such as a
+Git merge. The reloaded workspace passes the same validation, source
+compatibility, and source-guidance checks as opening. On failure the session
+keeps its previous state; the Git integration that triggered the reload is
+then rolled back.
+
 ## Ownership and scope
 
 ```text

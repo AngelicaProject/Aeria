@@ -1,7 +1,12 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { forwardRef, memo, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
 import { bindingKey, domKey, rowKey } from "../binding";
-import type { ReviewState, SourceBinding, TranslationCellDto, TranslationRowDto } from "../types";
+import type { ReviewState, SourceBinding, TranslationCellDto, TranslationRowDto, UnitChangeKind } from "../types";
+import { diffWords } from "../textDiff";
+import { IconButton } from "../ui/primitives/IconButton";
+import { Segmented } from "../ui/primitives/Segmented";
 import { UiIcon } from "../ui/primitives/UiIcon";
+import { MacroEditor, focusMacroEditor } from "./MacroEditor";
+import { ReviewDot, reviewLabel } from "./ReviewDot";
 
 export type CellDraft = {
   target: string;
@@ -13,21 +18,63 @@ export type CellMutation = {
   bindingKey: string;
 };
 
+export type SaveTargetHandler = (cell: TranslationCellDto, draft: CellDraft, otherDirty: boolean, discardOtherDrafts: () => void, advance: boolean) => void;
+
+/** The committed state of the selected string when it has uncommitted changes. */
+export type CheckpointBaseline = {
+  kind: UnitChangeKind;
+  /** Target at the last checkpoint; null when the string is new since then. */
+  target: string | null;
+  reviewChanged: boolean;
+  noteChanged: boolean;
+};
+
+function CheckpointDiff({ baseline, current }: { baseline: CheckpointBaseline; current: string }) {
+  if (baseline.target === null) {
+    return <div className="checkpoint-diff"><span className="checkpoint-diff-label added">New since the last checkpoint</span></div>;
+  }
+  const textChanged = baseline.target !== current;
+  const extra = [baseline.reviewChanged ? "review state" : null, baseline.noteChanged ? "note" : null].filter(Boolean).join(" and ");
+  return (
+    <div className="checkpoint-diff">
+      <span className="checkpoint-diff-label">{textChanged ? "Changes since the last checkpoint" : extra ? `Text unchanged; ${extra} changed since the last checkpoint` : "Same text as the last checkpoint"}</span>
+      {textChanged ? (
+        <div className="checkpoint-diff-text">
+          {diffWords(baseline.target, current).map((part, index) => part.kind === "same"
+            ? <span key={index}>{part.text}</span>
+            : part.kind === "added" ? <ins key={index}>{part.text}</ins> : <del key={index}>{part.text}</del>)}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+export type TranslationEditorHandle = {
+  saveTarget: (advance: boolean) => void;
+  revert: () => void;
+  copySource: () => void;
+};
+
 type TranslationEditorProps = {
   row: TranslationRowDto | null;
   selectedBinding: SourceBinding | null;
+  sourceLanguage: string;
   mutations: CellMutation[];
   onDirtyChange: (dirty: boolean) => void;
   onSelectCell: (binding: SourceBinding) => void;
-  onSaveTarget: (cell: TranslationCellDto, draft: CellDraft, otherDirty: boolean, discardOtherDrafts: () => void) => void;
+  onSaveTarget: SaveTargetHandler;
   onSaveNote: (cell: TranslationCellDto, draft: CellDraft, otherDirty: boolean, discardOtherDrafts: () => void) => void;
   onReviewChange: (cell: TranslationCellDto, reviewState: ReviewState, discardDrafts: () => void) => void;
+  onNavigate: (direction: 1 | -1) => void;
+  /** Returns true once when the target should take focus after navigation. */
+  takeFocusRequest: () => boolean;
+  checkpoint: CheckpointBaseline | null;
 };
 
-const reviewStates: Array<{ value: ReviewState; label: string }> = [
+const reviewOptions: Array<{ value: ReviewState; label: string }> = [
   { value: "draft", label: "Draft" },
-  { value: "reviewed", label: "Reviewed" },
   { value: "needsReview", label: "Needs review" },
+  { value: "reviewed", label: "Reviewed" },
 ];
 
 function draftsForRow(row: TranslationRowDto | null): Record<string, CellDraft> {
@@ -62,88 +109,30 @@ function hasOtherDirtyDraft(row: TranslationRowDto, targetCell: TranslationCellD
   });
 }
 
-type TranslationCellEditorProps = {
-  cell: TranslationCellDto;
-  draft: CellDraft;
-  mutation: CellMutation["kind"] | null;
-  onDraftChange: (cell: TranslationCellDto, field: keyof CellDraft, value: string) => void;
-  onSaveTarget: TranslationEditorProps["onSaveTarget"];
-  onSaveNote: TranslationEditorProps["onSaveNote"];
-  onReviewChange: TranslationEditorProps["onReviewChange"];
-  getOtherDirty: (cell: TranslationCellDto, field: "target" | "note") => boolean;
-  discardDrafts: (keepBindingKey: string | null, keepField: keyof CellDraft | null) => void;
-};
+function Kbd({ keys }: { keys: string[] }) {
+  return <span className="kbd-combo">{keys.map((key) => <kbd key={key}>{key}</kbd>)}</span>;
+}
 
-const TranslationCellEditor = memo(function TranslationCellEditor({
-  cell,
-  draft,
-  mutation,
-  onDraftChange,
-  onSaveTarget,
-  onSaveNote,
-  onReviewChange,
-  getOtherDirty,
-  discardDrafts,
-}: TranslationCellEditorProps) {
-  const key = bindingKey(cell.sourceBinding);
-  const domId = domKey(key);
-  const targetDirty = draft.target !== (cell.translation?.targetMacro ?? "");
-  const noteDirty = cell.translation !== null && draft.note !== (cell.translation.translatorNote ?? "");
-  const cellBusy = mutation !== null;
-  const targetCanSave = !cellBusy && (cell.translation === null || targetDirty);
-  const noteCanSave = !cellBusy && cell.translation !== null && noteDirty;
-
-  return (
-    <div className="editor-section translation-cell-editor" aria-busy={cellBusy}>
-      <div className="field-heading"><label>Column {cell.sourceBinding.columnIndex}</label>{targetDirty || noteDirty ? <span className="field-dirty">edited</span> : null}</div>
-      <div className="macro-display" aria-label={`Full source macro for column ${cell.sourceBinding.columnIndex}`}>{cell.sourceMacro}</div>
-
-      <div className="field-heading target-heading"><label htmlFor={`target-text-${domId}`}>Target</label>{targetDirty ? <span className="field-dirty">edited</span> : null}</div>
-      <textarea id={`target-text-${domId}`} value={draft.target} onChange={(event) => onDraftChange(cell, "target", event.target.value)} placeholder="Enter a translation…" rows={7} disabled={cellBusy} />
-      <div className="field-actions">
-        <button className="primary-button" type="button" onClick={() => onSaveTarget(cell, draft, getOtherDirty(cell, "target"), () => discardDrafts(key, "target"))} disabled={!targetCanSave}>
-          {mutation === "target" ? "Saving…" : "Save target"}
-        </button>
-        {cell.translation === null ? <span className="field-hint">Saving an empty target creates an explicit translation entry.</span> : null}
-      </div>
-
-      <div className="review-section cell-review-section">
-        <div className="field-heading"><label>Review</label>{mutation === "review" ? <span className="field-hint mutation-status">Saving…</span> : !cell.translation ? <span className="field-hint">Save the target first.</span> : null}</div>
-        <div className="review-controls" role="group" aria-label={`Review state for column ${cell.sourceBinding.columnIndex}`}>
-          {reviewStates.map((state) => (
-            <button className={cell.translation?.reviewState === state.value ? "review-button active" : "review-button"} type="button" key={state.value} aria-pressed={cell.translation?.reviewState === state.value} disabled={cell.translation === null || cellBusy} onClick={() => onReviewChange(cell, state.value, () => discardDrafts(null, null))}>
-              {state.label}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      <div className="field-heading note-heading"><label htmlFor={`translator-note-${domId}`}>Translator note</label>{noteDirty ? <span className="field-dirty">edited</span> : null}</div>
-      <textarea id={`translator-note-${domId}`} value={draft.note} onChange={(event) => onDraftChange(cell, "note", event.target.value)} placeholder={cell.translation ? "Add context for another translator…" : "Save the target first to enable notes."} rows={4} disabled={!cell.translation || cellBusy} />
-      <div className="field-actions">
-        <button className="secondary-button" type="button" onClick={() => onSaveNote(cell, draft, getOtherDirty(cell, "note"), () => discardDrafts(key, "note"))} disabled={!noteCanSave}>
-          {mutation === "note" ? "Saving…" : "Save note"}
-        </button>
-        {!cell.translation ? <span className="field-hint">Save the target first to create this translation entry.</span> : null}
-      </div>
-    </div>
-  );
-});
-
-export const TranslationEditor = memo(function TranslationEditor({
+const TranslationEditorImpl = forwardRef<TranslationEditorHandle, TranslationEditorProps>(function TranslationEditor({
   row,
   selectedBinding,
+  sourceLanguage,
   mutations,
   onDirtyChange,
   onSelectCell,
   onSaveTarget,
   onSaveNote,
   onReviewChange,
-}: TranslationEditorProps) {
+  onNavigate,
+  takeFocusRequest,
+  checkpoint,
+}, ref) {
+  const [showDiff, setShowDiff] = useState(true);
   const [drafts, setDrafts] = useState<Record<string, CellDraft>>({});
   const draftsRef = useRef(drafts);
   const rowRef = useRef(row);
   const previousRowRef = useRef<TranslationRowDto | null>(null);
+  const targetHostRef = useRef<HTMLDivElement>(null);
   draftsRef.current = drafts;
   rowRef.current = row;
 
@@ -165,20 +154,18 @@ export const TranslationEditor = memo(function TranslationEditor({
   useEffect(() => onDirtyChange(rowDirty), [onDirtyChange, rowDirty]);
 
   const selectedCell = row?.cells.find((cell) => selectedBinding && bindingKey(cell.sourceBinding) === bindingKey(selectedBinding)) ?? row?.cells[0] ?? null;
-
-  const handleRevert = useCallback(() => {
-    setDrafts(draftsForRow(row));
-    onDirtyChange(false);
-  }, [onDirtyChange, row]);
+  const selectedKey = selectedCell ? bindingKey(selectedCell.sourceBinding) : null;
+  const mutation = mutations.find((candidate) => candidate.bindingKey === selectedKey)?.kind ?? null;
+  const draft = selectedCell ? draftForCell(selectedCell, drafts) : null;
+  const targetDirty = selectedCell !== null && draft !== null && draft.target !== (selectedCell.translation?.targetMacro ?? "");
+  const noteDirty = selectedCell?.translation != null && draft !== null && draft.note !== (selectedCell.translation.translatorNote ?? "");
+  const cellBusy = mutation !== null;
+  const targetCanSave = selectedCell !== null && !cellBusy && (selectedCell.translation === null || targetDirty);
+  const noteCanSave = selectedCell?.translation != null && !cellBusy && noteDirty;
 
   const updateDraft = useCallback((cell: TranslationCellDto, field: keyof CellDraft, value: string) => {
     const key = bindingKey(cell.sourceBinding);
     setDrafts((current) => ({ ...current, [key]: { ...draftForCell(cell, current), [field]: value } }));
-  }, []);
-
-  const getOtherDirty = useCallback((cell: TranslationCellDto, field: "target" | "note") => {
-    const currentRow = rowRef.current;
-    return currentRow ? hasOtherDirtyDraft(currentRow, cell, draftsRef.current, field) : false;
   }, []);
 
   const discardDrafts = useCallback((keepBindingKey: string | null, keepField: keyof CellDraft | null) => {
@@ -192,34 +179,177 @@ export const TranslationEditor = memo(function TranslationEditor({
     })));
   }, []);
 
-  if (!row || !selectedCell) {
-    return <section className="editor-pane empty-editor" aria-label="Translation editor"><div><span className="empty-editor-mark"><UiIcon icon="arrowUpRight" size="lg" /></span><h2>Select a row to edit</h2><p>Choose a source occurrence from the Lens to inspect its context and translation fields.</p></div></section>;
+  const saveTarget = useCallback((advance: boolean) => {
+    const currentRow = rowRef.current;
+    if (!currentRow || !selectedCell || cellBusy) return;
+    if (!targetCanSave) {
+      if (advance) onNavigate(1);
+      return;
+    }
+    const currentDraft = draftForCell(selectedCell, draftsRef.current);
+    const otherDirty = hasOtherDirtyDraft(currentRow, selectedCell, draftsRef.current, "target");
+    onSaveTarget(selectedCell, currentDraft, otherDirty, () => discardDrafts(bindingKey(selectedCell.sourceBinding), "target"), advance);
+  }, [cellBusy, discardDrafts, onNavigate, onSaveTarget, selectedCell, targetCanSave]);
+
+  const saveNote = useCallback(() => {
+    const currentRow = rowRef.current;
+    if (!currentRow || !selectedCell || !noteCanSave) return;
+    const otherDirty = hasOtherDirtyDraft(currentRow, selectedCell, draftsRef.current, "note");
+    onSaveNote(selectedCell, draftForCell(selectedCell, draftsRef.current), otherDirty, () => discardDrafts(bindingKey(selectedCell.sourceBinding), "note"));
+  }, [discardDrafts, noteCanSave, onSaveNote, selectedCell]);
+
+  const revert = useCallback(() => {
+    setDrafts(draftsForRow(rowRef.current));
+    onDirtyChange(false);
+  }, [onDirtyChange]);
+
+  const copySource = useCallback(() => {
+    if (selectedCell && !cellBusy) updateDraft(selectedCell, "target", selectedCell.sourceMacro);
+  }, [cellBusy, selectedCell, updateDraft]);
+
+  useImperativeHandle(ref, () => ({ saveTarget, revert, copySource }), [copySource, revert, saveTarget]);
+
+  useEffect(() => {
+    if (selectedKey !== null && takeFocusRequest()) focusMacroEditor(targetHostRef.current);
+  }, [selectedKey, takeFocusRequest]);
+
+  if (!row || !selectedCell || !draft) {
+    return (
+      <section className="editor editor-empty" aria-label="Translation editor">
+        <div className="empty-state">
+          <UiIcon icon="languages" size="xl" />
+          <strong>Select a string to translate</strong>
+          <p>Pick a row in the list above. <Kbd keys={["Alt", "Down"]} /> moves to the next string.</p>
+        </div>
+      </section>
+    );
   }
 
-  const selectedKey = bindingKey(selectedCell.sourceBinding);
-  const mutation = mutations.find((candidate) => candidate.bindingKey === selectedKey)?.kind ?? null;
+  const translation = selectedCell.translation;
+  const domId = domKey(bindingKey(selectedCell.sourceBinding));
 
   return (
-    <section className="editor-pane" aria-label="Translation editor">
-      <div className="editor-scroll">
-        <div className="editor-heading">
-          <div><h2>Translation</h2><span className="pane-subtitle">{row.sheetName} · {row.rowId}:{row.subrowId} · col {selectedCell.sourceBinding.columnIndex}</span></div>
-          <div className="editor-heading-actions">{rowDirty ? <span className="dirty-indicator">Unsaved changes</span> : null}<button className="secondary-button compact-button" type="button" onClick={handleRevert} disabled={!rowDirty || mutations.length > 0}>Revert</button></div>
+    <section className="editor" aria-label="Translation editor" aria-busy={cellBusy}>
+      <header className="editor-bar">
+        <div className="editor-ident">
+          <ReviewDot state={translation?.reviewState ?? null} />
+          <span className="editor-coord mono" title={`${row.sheetName} row ${row.rowId}, subrow ${row.subrowId}`}>{row.rowId}:{row.subrowId}</span>
+          {row.cells.length > 1 ? (
+            <div className="field-tabs" role="tablist" aria-label="Fields in this row">
+              {row.cells.map((cell) => {
+                const key = bindingKey(cell.sourceBinding);
+                const active = key === selectedKey;
+                const dirty = cellIsDirty(cell, draftForCell(cell, drafts));
+                return (
+                  <button className={active ? "field-tab active" : "field-tab"} type="button" role="tab" aria-selected={active} key={key} onClick={() => onSelectCell(cell.sourceBinding)}>
+                    <ReviewDot state={cell.translation?.reviewState ?? null} />
+                    col {cell.sourceBinding.columnIndex}
+                    {dirty ? <span className="dirty-mark" aria-label="edited" /> : null}
+                  </button>
+                );
+              })}
+            </div>
+          ) : <span className="editor-field mono">col {selectedCell.sourceBinding.columnIndex}</span>}
+        </div>
+        <div className="editor-view-switch">
+        <Segmented
+          label="Editor view"
+          value="text"
+          onChange={() => undefined}
+          options={[
+            { value: "text", label: "Text" },
+            { value: "preview", label: <><UiIcon icon="gamepad" size="xs" /> In-game</>, disabled: true, title: "In-game preview is not available in this build" },
+          ]}
+        />
+        </div>
+        <div className="editor-bar-end">
+          {rowDirty ? <span className="pill pill-warn">Unsaved</span> : null}
+          <div className="review-control" title={translation ? undefined : "Save a target first"}>
+            <Segmented
+              label="Review state"
+              value={translation?.reviewState ?? null}
+              disabled={!translation || cellBusy}
+              onChange={(state) => onReviewChange(selectedCell, state, () => discardDrafts(null, null))}
+              options={reviewOptions.map((option) => ({ value: option.value, label: <><ReviewDot decorative state={option.value} />{option.label}</>, className: `review-${option.value}` }))}
+            />
+          </div>
+          <IconButton icon="undo" label="Revert unsaved changes" disabled={!rowDirty || mutations.length > 0} onClick={revert} />
+        </div>
+      </header>
+
+      <div className="editor-grid">
+        <div className="editor-pane editor-source">
+          <div className="editor-pane-head">
+            <span className="eyebrow">Source</span>
+            <span className="chip">{sourceLanguage.toUpperCase()}</span>
+            <span className="spacer" />
+            <IconButton icon="copyPlus" label="Copy source to target" disabled={cellBusy} onClick={copySource} />
+          </div>
+          <MacroEditor className="editor-surface" value={selectedCell.sourceMacro} readOnly ariaLabel={`Source text for column ${selectedCell.sourceBinding.columnIndex}`} placeholder="(empty source)" onNavigate={onNavigate} />
+          {row.context.length > 0 ? (
+            <details className="context-block">
+              <summary><UiIcon icon="chevronRight" size="xs" />Context <span className="count">{row.context.length}</span></summary>
+              <ul>{row.context.map((cell) => <li key={`${cell.columnIndex}:${cell.sourceMacro}`}><span className="mono">col {cell.columnIndex}</span><span>{cell.sourceMacro}</span></li>)}</ul>
+            </details>
+          ) : null}
         </div>
 
-        {row.cells.length > 1 ? (
-          <div className="field-navigator" role="tablist" aria-label="Translation fields">
-            {row.cells.map((cell) => {
-              const active = bindingKey(cell.sourceBinding) === selectedKey;
-              return <button className={active ? "field-tab active" : "field-tab"} type="button" role="tab" aria-selected={active} key={bindingKey(cell.sourceBinding)} onClick={() => onSelectCell(cell.sourceBinding)}>col {cell.sourceBinding.columnIndex}</button>;
-            })}
+        <div className="editor-pane editor-target" ref={targetHostRef}>
+          <div className="editor-pane-head">
+            <span className="eyebrow">Target</span>
+            {targetDirty ? <span className="edited-label">edited</span> : null}
+            {mutation === "target" ? <span className="saving-label"><span className="spinner spinner-xs" />Saving</span> : null}
+            <span className="spacer" />
+            {checkpoint ? <IconButton icon="gitCompareArrows" label={showDiff ? "Hide changes since the last checkpoint" : "Show changes since the last checkpoint"} pressed={showDiff} onClick={() => setShowDiff((current) => !current)} className={`git-mark git-mark-${checkpoint.kind}`} /> : null}
           </div>
-        ) : null}
+          {checkpoint && showDiff ? <CheckpointDiff baseline={checkpoint} current={draft.target} /> : null}
+          <MacroEditor
+            key={bindingKey(selectedCell.sourceBinding)}
+            className="editor-surface"
+            value={draft.target}
+            ariaLabel={`Target text for column ${selectedCell.sourceBinding.columnIndex}`}
+            placeholder="Type the translation…"
+            disabled={cellBusy}
+            onChange={(value) => updateDraft(selectedCell, "target", value)}
+            onSave={() => saveTarget(false)}
+            onSaveAndNext={() => saveTarget(true)}
+            onNavigate={onNavigate}
+          />
+          <div className="editor-pane-foot">
+            <span className="editor-hint">
+              {translation === null && !targetDirty ? "Saving an empty target creates an explicit translation entry." : targetDirty ? "Unsaved" : null}
+            </span>
+            <button className="button button-secondary" type="button" disabled={cellBusy} title={targetCanSave ? "Save and go to the next string (Ctrl+Enter)" : "Go to the next string (Alt+Down)"} onClick={() => saveTarget(true)}>
+              {targetCanSave ? "Save & next" : "Next"}<UiIcon icon="arrowDown" size="xs" />
+            </button>
+            <button className="button button-primary" type="button" disabled={!targetCanSave} title="Save target (Ctrl+S)" onClick={() => saveTarget(false)}>
+              {mutation === "target" ? "Saving…" : "Save"}<kbd className="button-kbd">Ctrl S</kbd>
+            </button>
+          </div>
+        </div>
 
-        {row.context.length > 0 ? <div className="editor-section context-section"><div className="field-heading"><label>Context cells</label></div><div className="context-list">{row.context.map((cell) => <code key={`${cell.columnIndex}:${cell.sourceMacro}`}>Column {cell.columnIndex} · {cell.sourceMacro}</code>)}</div></div> : null}
-
-        <TranslationCellEditor cell={selectedCell} draft={draftForCell(selectedCell, drafts)} mutation={mutation} onDraftChange={updateDraft} onSaveTarget={onSaveTarget} onSaveNote={onSaveNote} onReviewChange={onReviewChange} getOtherDirty={getOtherDirty} discardDrafts={discardDrafts} />
+        <aside className="editor-pane editor-note">
+          <div className="editor-pane-head">
+            <label className="eyebrow" htmlFor={`translator-note-${domId}`}>Translator note</label>
+            {noteDirty ? <span className="edited-label">edited</span> : null}
+          </div>
+          <textarea
+            id={`translator-note-${domId}`}
+            className="note-input"
+            value={draft.note}
+            onChange={(event) => updateDraft(selectedCell, "note", event.target.value)}
+            onKeyDown={(event) => { if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s") { event.preventDefault(); saveNote(); } }}
+            placeholder={translation ? "Context for other translators…" : "Save a target to add a note."}
+            disabled={!translation || cellBusy}
+          />
+          <div className="editor-pane-foot">
+            <span className="editor-hint">{translation ? reviewLabel(translation.reviewState) : "No translation yet"}</span>
+            <button className="button button-secondary" type="button" onClick={saveNote} disabled={!noteCanSave}>{mutation === "note" ? "Saving…" : "Save note"}</button>
+          </div>
+        </aside>
       </div>
     </section>
   );
 });
+
+export const TranslationEditor = memo(TranslationEditorImpl);

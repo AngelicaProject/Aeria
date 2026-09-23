@@ -1,23 +1,31 @@
 mod commands;
 mod dto;
 mod error;
+mod git;
 mod state;
 
 use serde::Serialize;
+use tauri::Manager;
 
 pub use commands::{
     cancel_source_package, close_project, current_project, forget_recent_project,
     initialize_project, initialize_project_from_game, list_recent_projects, open_project,
     open_recent_project, page_translation_rows, set_translation_note, set_translation_review_state,
-    set_translation_target, start_source_package,
+    set_translation_target, start_source_package, translation_progress,
 };
 pub use dto::{
     ProjectOpenResultDto, ProjectSheetDto, ProjectSummaryDto, RecentProjectAvailability,
-    RecentProjectDto, ReviewStateDto, SourceBindingDto, SourcePackageJobDto, TranslationCellDto,
-    TranslationContextCellDto, TranslationOverlayDto, TranslationRowCursorDto, TranslationRowDto,
-    TranslationRowPageDto, TranslationUnitIdDto,
+    RecentProjectDto, ReviewStateDto, SheetProgressDto, SourceBindingDto, SourcePackageJobDto,
+    TranslationCellDto, TranslationContextCellDto, TranslationOverlayDto, TranslationRowCursorDto,
+    TranslationRowDto, TranslationRowPageDto, TranslationUnitIdDto,
 };
 pub use error::CommandError;
+pub use git::{
+    git_branches, git_checkpoint, git_clone_repository, git_commit_changes, git_contributors,
+    git_create_branch, git_finish_contribution, git_initialize, git_log, git_overview,
+    git_pending_changes, git_set_collaboration, git_set_identity, git_set_remote,
+    git_switch_branch, git_sync, git_unit_attribution, git_unit_history,
+};
 pub use state::DesktopState;
 
 #[derive(Serialize)]
@@ -45,6 +53,11 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(DesktopState::new())
+        .setup(|app| {
+            app.state::<DesktopState>()
+                .set_git(git::resolve_git(app.handle()));
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             app_info,
             open_project,
@@ -60,7 +73,26 @@ pub fn run() {
             page_translation_rows,
             set_translation_target,
             set_translation_note,
-            set_translation_review_state
+            set_translation_review_state,
+            translation_progress,
+            git_overview,
+            git_initialize,
+            git_set_identity,
+            git_set_remote,
+            git_pending_changes,
+            git_checkpoint,
+            git_log,
+            git_commit_changes,
+            git_unit_history,
+            git_contributors,
+            git_sync,
+            git_clone_repository,
+            git_unit_attribution,
+            git_branches,
+            git_create_branch,
+            git_switch_branch,
+            git_set_collaboration,
+            git_finish_contribution
         ])
         .run(tauri::generate_context!())
         .expect("failed to run Aeria desktop application");

@@ -1,3 +1,5 @@
+import { editorThemes } from "./editorThemes.ts";
+
 export type ThemeAppearance = "light" | "dark" | "highContrast";
 
 export type ThemeTokens = {
@@ -15,6 +17,8 @@ export type ThemeTokens = {
   danger: string;
   warning: string;
   success: string;
+  /** Macro token color in source/target editors; derived from accent when absent. */
+  macro?: string;
 };
 
 export type ThemeDefinition = {
@@ -95,7 +99,31 @@ const mocha: ThemeTokens = {
   success: "#a6e3a1",
 };
 
+/**
+ * Aeria's own default: cool ink neutrals with a teal accent and periwinkle
+ * macro tokens, tuned to sit on top of the Windows Acrylic backdrop.
+ */
+const tide: ThemeTokens = {
+  crust: "#0c0f14",
+  mantle: "#11151b",
+  base: "#161a21",
+  surface0: "#212631",
+  surface1: "#2e3441",
+  surface2: "#3d4454",
+  text: "#e3e7ee",
+  subtext: "#adb5c3",
+  overlay: "#737c8e",
+  accent: "#5ec4bd",
+  accentForeground: "#05201d",
+  danger: "#f0808d",
+  warning: "#e8b46b",
+  success: "#7fcf9a",
+  macro: "#a3b3ff",
+};
+
 export const themeRegistry: readonly ThemeDefinition[] = [
+  ...editorThemes,
+  { id: "aeria-tide", displayName: "Tide", family: "Aeria", appearance: "dark", source: "builtin", tokens: tide },
   {
     id: "aeria-graphite",
     displayName: "Graphite",
@@ -138,10 +166,10 @@ export const themeRegistry: readonly ThemeDefinition[] = [
       accentForeground: "#101015",
     },
   },
-  { id: "catppuccin-latte", displayName: "Latte", family: "Catppuccin", appearance: "light", source: "builtin", tokens: latte },
-  { id: "catppuccin-frappe", displayName: "Frappé", family: "Catppuccin", appearance: "dark", source: "builtin", tokens: frappe },
-  { id: "catppuccin-macchiato", displayName: "Macchiato", family: "Catppuccin", appearance: "dark", source: "builtin", tokens: macchiato },
-  { id: "catppuccin-mocha", displayName: "Mocha", family: "Catppuccin", appearance: "dark", source: "builtin", tokens: mocha },
+  { id: "catppuccin-latte", displayName: "Latte", family: "Catppuccin", appearance: "light", source: "builtin", tokens: { ...latte, macro: "#1e66f5" } },
+  { id: "catppuccin-frappe", displayName: "Frappé", family: "Catppuccin", appearance: "dark", source: "builtin", tokens: { ...frappe, macro: "#8caaee" } },
+  { id: "catppuccin-macchiato", displayName: "Macchiato", family: "Catppuccin", appearance: "dark", source: "builtin", tokens: { ...macchiato, macro: "#8aadf4" } },
+  { id: "catppuccin-mocha", displayName: "Mocha", family: "Catppuccin", appearance: "dark", source: "builtin", tokens: { ...mocha, macro: "#89b4fa" } },
   {
     id: "high-contrast-dark",
     displayName: "High Contrast Dark",
@@ -163,11 +191,12 @@ export const themeRegistry: readonly ThemeDefinition[] = [
       danger: "#ff6b6b",
       warning: "#ffff00",
       success: "#00ff00",
+      macro: "#ffff00",
     },
   },
 ];
 
-export const defaultThemeId = "catppuccin-macchiato";
+export const defaultThemeId = "one-dark-pro";
 
 export function findTheme(themeId: string): ThemeDefinition {
   return themeRegistry.find((theme) => theme.id === themeId) ?? themeRegistry[0]!;

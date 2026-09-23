@@ -87,6 +87,13 @@ the backend contract. The DTO is row-centric, while each contained cell keeps
 its existing `SourceBinding` and overlay. Tauri performs DTO and error mapping,
 not business logic, and does not access HXS or SQLite directly.
 
+`translation_progress` returns per-sheet `SheetProgressDto` coverage for the
+active project from `ProjectSession::translation_progress` (see
+[`translation-read.md`](./translation-read.md#translation-progress)). The
+renderer re-reads it after each committed translation mutation or workspace
+reload and never derives sheet-wide progress from loaded row pages.
+`app_info` returns the application name and version for display.
+
 Filesystem, HSP/HXS, SQLite, workspace loading, row paging, and ordinary
 translation mutations run inside Tauri blocking workers. The async command
 handlers do not hold `DesktopState` or the project mutex across an await;
@@ -94,6 +101,26 @@ worker-side access still goes through the single `ProjectSession` mutex, so
 mutations remain serialized. Target, note, and review commands return the
 compact committed `TranslationOverlayDto` for the changed cell; the renderer
 patches that cell instead of reloading the current sheet.
+
+Git collaboration commands (`git_overview`, `git_initialize`,
+`git_set_identity`, `git_set_remote`, `git_pending_changes`,
+`git_checkpoint`, `git_log`, `git_commit_changes`, `git_unit_history`,
+`git_unit_attribution`, `git_contributors`, `git_sync`, `git_branches`,
+`git_create_branch`, `git_switch_branch`, `git_set_collaboration`,
+`git_finish_contribution`, and `git_clone_repository`) delegate to
+`aeria-git` for the active project's repository root; see
+[`git.md`](./git.md). The Git executable is selected once at application
+setup (override, bundled runtime, then `PATH`) and kept in `DesktopState`.
+Checkpoint, the integration step of sync, branch switches, and finishing a
+contribution hold the project mutex so they cannot interleave with
+translation mutations; fetch and push run without it. Operations that change
+the working tree reload the active `ProjectSession` and are rolled back if
+the reload fails. Same-unit sync conflicts are returned in the sync result,
+not as an error, so the renderer can collect per-unit resolutions and sync
+again. Project-wide attribution is cached in memory per repository root and
+`HEAD`; it is derived data and never persisted. Git failures map to stable
+`git*` error codes such as `gitUnavailable`, `gitIdentityMissing`,
+`gitMergeConflict`, `gitIncomingRejected`, and `gitInvalidSettings`.
 
 Commands that require an active project report `noProjectOpen` before
 validating project-scoped payload such as translation-unit IDs.

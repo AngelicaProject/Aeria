@@ -886,7 +886,105 @@ fn read_shard(
     #[cfg(test)]
     READ_SHARD_COUNT.fetch_add(1, Ordering::SeqCst);
     let file = File::open(path).map_err(|source| io_error("open unit shard", path, source))?;
-    let mut reader = BufReader::new(file);
+    decode_shard(BufReader::new(file), path, shard, shard_name)
+}
+
+/// Returns the repository-relative Workspace Format v1 shard path that stores
+/// `id` with `/` separators, for example `.aeria/units/7a.jsonl`.
+#[must_use]
+pub fn unit_shard_path(id: TranslationUnitId) -> String {
+    format!(
+        "{AERIA_DIRECTORY}/{UNITS_DIRECTORY}/{}",
+        shard_name(id.as_bytes()[0])
+    )
+}
+
+/// Decodes one complete Workspace Format v1 unit shard held in memory, such
+/// as a historical revision read from Git.
+///
+/// `path` names the shard (its file name selects the expected shard) and is
+/// used in errors. The full reader contract applies: the shard must be
+/// non-empty, strictly ordered, and every record must be valid.
+///
+/// # Errors
+///
+/// Returns [`WorkspaceStoreError::ManagedPath`] when `path` is not a shard
+/// file name, or [`WorkspaceStoreError::InvalidData`] for invalid contents.
+pub fn decode_unit_shard(
+    bytes: &[u8],
+    path: &Path,
+) -> Result<Vec<TranslationUnit>, WorkspaceStoreError> {
+    let (shard, name) = shard_from_path(path)?;
+    decode_shard(bytes, path, shard, &name)
+}
+
+/// Decodes one Workspace Format v1 unit record line, such as a line taken
+/// from a historical Git diff of `path`.
+///
+/// The record is validated exactly as a shard reader would validate it,
+/// including shard placement and intrinsic target validation.
+///
+/// # Errors
+///
+/// Returns [`WorkspaceStoreError::ManagedPath`] when `path` is not a shard
+/// file name, or [`WorkspaceStoreError::InvalidData`] for an invalid record.
+pub fn decode_unit_record(line: &str, path: &Path) -> Result<TranslationUnit, WorkspaceStoreError> {
+    let (shard, name) = shard_from_path(path)?;
+    let line = line.strip_suffix('\n').unwrap_or(line);
+    let line = line.strip_suffix('\r').unwrap_or(line);
+    let dto: UnitDto = serde_json::from_str(line)
+        .map_err(|source| invalid(path, None, format!("unit JSON is invalid: {source}")))?;
+    unit_from_dto(dto, path, 0, shard, &name)
+}
+
+/// Encodes the canonical Workspace Format v1 bytes of one unit shard, for
+/// example the result of a semantic merge. Units are written in ascending ID
+/// order. An empty result means the shard must be absent.
+///
+/// # Errors
+///
+/// Returns [`WorkspaceStoreError::ManagedPath`] when `path` is not a shard
+/// file name, [`WorkspaceStoreError::InvalidData`] when a unit belongs to a
+/// different shard or appears twice, or a serialization error.
+pub fn encode_unit_shard(
+    units: &[TranslationUnit],
+    path: &Path,
+) -> Result<Vec<u8>, WorkspaceStoreError> {
+    let (shard, name) = shard_from_path(path)?;
+    let mut ordered: Vec<&TranslationUnit> = units.iter().collect();
+    ordered.sort_by_key(|unit| unit.id());
+    for pair in ordered.windows(2) {
+        if pair[0].id() == pair[1].id() {
+            return Err(invalid(
+                path,
+                None,
+                format!("duplicate TranslationUnitId {}", pair[0].id()),
+            ));
+        }
+    }
+    if let Some(unit) = ordered.iter().find(|unit| unit.id().as_bytes()[0] != shard) {
+        return Err(invalid(
+            path,
+            None,
+            format!("TranslationUnitId {} does not belong in {name}", unit.id()),
+        ));
+    }
+    canonical_units_bytes(ordered, path)
+}
+
+fn shard_from_path(path: &Path) -> Result<(u8, String), WorkspaceStoreError> {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .and_then(|name| parse_shard_name(name).map(|shard| (shard, name.to_owned())))
+        .ok_or_else(|| managed_path_error(path, "expected a [0-9a-f]{2}.jsonl unit shard"))
+}
+
+fn decode_shard(
+    mut reader: impl BufRead,
+    path: &Path,
+    shard: u8,
+    shard_name: &str,
+) -> Result<Vec<TranslationUnit>, WorkspaceStoreError> {
     let mut records = Vec::new();
     let mut previous_id = None;
     let mut line_number = 0usize;

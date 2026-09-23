@@ -5,17 +5,19 @@ type ErrorBannerProps = {
   title: string;
   error: CommandError;
   onDismiss: () => void;
+  tone?: "error" | "warning";
 };
 
-export function ErrorBanner({ title, error, onDismiss }: ErrorBannerProps) {
+export function ErrorBanner({ title, error, onDismiss, tone = "error" }: ErrorBannerProps) {
   return (
-    <div className="error-banner" role="alert">
-      <div>
+    <div className={`notice notice-${tone}`} role="alert">
+      <UiIcon icon={tone === "error" ? "circleAlert" : "triangleAlert"} size="md" className="notice-icon" />
+      <div className="notice-text">
         <strong>{title}</strong>
         <p>{error.message}</p>
-        <span className="error-code">{error.code}</span>
+        <code className="notice-code">{error.code}</code>
       </div>
-      <button className="icon-button" type="button" aria-label="Dismiss error" onClick={onDismiss}>
+      <button className="icon-button icon-button-ghost" type="button" aria-label="Dismiss" onClick={onDismiss}>
         <UiIcon icon="x" size="sm" />
       </button>
     </div>

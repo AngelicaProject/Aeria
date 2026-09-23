@@ -85,3 +85,17 @@ The desktop maps this page to owned row DTOs and keeps page-size bounds and
 integrity failures intact. Mutation commands remain cell-level:
 `set_translation_target`, `set_translation_note`, and
 `set_translation_review_state`.
+
+## Translation progress
+
+`ProjectSession::translation_progress` summarizes in-memory Workspace units per
+sheet: `translated` counts units (including explicitly empty targets), and
+`reviewed` and `needs_review` are subsets of it. Only units whose binding the
+HSG index permits are counted, so every count is bounded by the sheet's
+translatable cell count. Sheets without units are omitted, and results are
+ordered by sheet name.
+
+The summary reads no HXS rows and does not re-verify fingerprints; a stale unit
+still surfaces as an integrity error when its row is paged. It is presentation
+data for progress indicators, never an input to identity, rebase, merge, or
+export decisions.

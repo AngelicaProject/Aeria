@@ -1,19 +1,16 @@
 import { useEffect, useState } from "react";
+import { Tooltip } from "radix-ui";
 import { currentProject, normalizeCommandError } from "./ipc";
 import { EditorShell } from "./components/EditorShell";
 import { ProjectLauncher } from "./components/ProjectLauncher";
 import type { CommandError, ProjectOpenResultDto, ProjectSummaryDto } from "./types";
 import { ThemeProvider } from "./ui/theme/theme";
-import { DetachedToolWindow } from "./components/DetachedToolWindow";
+import { PreferencesProvider } from "./ui/preferences";
+import { DetachedToolWindow, isDetachedPanel } from "./components/DetachedToolWindow";
 
 type StartupState = "starting" | "launcher";
 
-function AppContent() {
-  const detachedPanel = new URLSearchParams(window.location.search).get("detached");
-  if (detachedPanel === "search" || detachedPanel === "ai" || detachedPanel === "git" || detachedPanel === "tasks" || detachedPanel === "gitChanges" || detachedPanel === "diagnostics") {
-    return <DetachedToolWindow panel={detachedPanel} />;
-  }
-
+function MainWindow() {
   const [project, setProject] = useState<ProjectSummaryDto | null>(null);
   const [startupState, setStartupState] = useState<StartupState>("starting");
   const [startupError, setStartupError] = useState<CommandError | null>(null);
@@ -29,16 +26,12 @@ function AppContent() {
 
     void currentProject()
       .then((current) => {
-        if (!active) {
-          return;
-        }
+        if (!active) return;
         setProject(current);
         setStartupState("launcher");
       })
       .catch((error: unknown) => {
-        if (!active) {
-          return;
-        }
+        if (!active) return;
         setStartupError(normalizeCommandError(error));
         setStartupState("launcher");
       });
@@ -50,11 +43,9 @@ function AppContent() {
 
   if (startupState === "starting") {
     return (
-      <main className="status-shell">
-        <div className="status-card" aria-live="polite">
-          <span className="spinner" aria-hidden="true" />
-          <p>Checking the active project…</p>
-        </div>
+      <main className="startup" aria-live="polite">
+        <span className="spinner" aria-hidden="true" />
+        <span className="visually-hidden">Checking the active project…</span>
       </main>
     );
   }
@@ -76,10 +67,16 @@ function AppContent() {
   );
 }
 
+const detachedPanel = new URLSearchParams(window.location.search).get("detached");
+
 export function App() {
   return (
     <ThemeProvider>
-      <AppContent />
+      <PreferencesProvider>
+        <Tooltip.Provider delayDuration={500} skipDelayDuration={200}>
+          {isDetachedPanel(detachedPanel) ? <DetachedToolWindow panel={detachedPanel} /> : <MainWindow />}
+        </Tooltip.Provider>
+      </PreferencesProvider>
     </ThemeProvider>
   );
 }

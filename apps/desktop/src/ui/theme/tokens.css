@@ -1,34 +1,151 @@
+/*
+ * Semantic design tokens.
+ *
+ * Themes provide raw palette values (`--color-*`, set on <html> by
+ * ThemeProvider). Components only consume the semantic tokens below, so a new
+ * theme or appearance never requires component CSS changes.
+ */
 :root {
   color-scheme: dark;
+
   --font-ui: "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+  --font-display: "Segoe UI Variable Display", "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
   --font-content: "Segoe UI Variable Text", "Segoe UI", "Yu Gothic UI", "Meiryo", "Microsoft YaHei UI", "Malgun Gothic", sans-serif;
   --font-mono: "Cascadia Mono", "Cascadia Code", Consolas, monospace;
-  --font-size-ui: 12px;
-  --font-size-compact: 11px;
-  --font-size-status: 10.5px;
-  --font-size-content: 12px;
-  --font-size-editor: 13px;
-  --font-size-mono: 10.5px;
-  --font-size-macro: 11.5px;
+
+  --text-2xs: 10.5px;
+  --text-xs: 11px;
+  --text-sm: 12px;
+  --text-md: 13px;
+  --text-lg: 14px;
+  --text-xl: 18px;
+  --text-2xl: 26px;
+
+  --radius-xs: 4px;
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 10px;
+  --radius-xl: 14px;
+
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+
+  --titlebar-height: 40px;
+  --statusbar-height: 26px;
+  --rail-width: 44px;
+  --gutter: 6px;
+  --control-height: 28px;
+
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --duration-fast: 90ms;
+  --duration: 160ms;
+
+  /* Fallbacks until ThemeProvider applies a theme. */
+  --color-crust: #0c0f14;
+  --color-mantle: #11151b;
+  --color-base: #161a21;
+  --color-surface-0: #212631;
+  --color-surface-1: #2e3441;
+  --color-surface-2: #3d4454;
+  --color-text: #e3e7ee;
+  --color-subtext: #adb5c3;
+  --color-overlay: #737c8e;
+  --color-accent: #5ec4bd;
+  --color-accent-fg: #05201d;
+  --color-danger: #f0808d;
+  --color-warning: #e8b46b;
+  --color-success: #7fcf9a;
+
+  /* Surfaces, back to front. */
+  --backdrop: color-mix(in srgb, var(--color-crust) 70%, var(--color-mantle));
+  --backdrop-glow: color-mix(in srgb, var(--color-accent) 7%, transparent);
+  --panel: color-mix(in srgb, var(--color-base) 94%, var(--color-surface-0));
+  --panel-raised: color-mix(in srgb, var(--color-base) 72%, var(--color-surface-0));
+  --panel-sunken: color-mix(in srgb, var(--color-base) 80%, var(--color-crust));
+  --popover: color-mix(in srgb, var(--color-base) 55%, var(--color-surface-0));
+  --field: color-mix(in srgb, var(--color-crust) 38%, var(--color-base));
+
+  /* Interaction overlays work on any surface. */
+  --hover: color-mix(in srgb, var(--color-text) 6%, transparent);
+  --pressed: color-mix(in srgb, var(--color-text) 10%, transparent);
+  --selected: color-mix(in srgb, var(--color-accent) 15%, transparent);
+  --selected-strong: color-mix(in srgb, var(--color-accent) 24%, transparent);
+
+  --line: color-mix(in srgb, var(--color-text) 7%, transparent);
+  --line-strong: color-mix(in srgb, var(--color-text) 13%, transparent);
+  --line-focus: color-mix(in srgb, var(--color-accent) 70%, transparent);
+
+  --fg: var(--color-text);
+  --fg-muted: var(--color-subtext);
+  --fg-subtle: var(--color-overlay);
+  --fg-faint: color-mix(in srgb, var(--color-overlay) 60%, var(--color-base));
+
+  --accent: var(--color-accent);
+  --accent-fg: var(--color-accent-fg);
+  --accent-text: color-mix(in srgb, var(--color-accent) 80%, var(--color-text));
+  --accent-soft: color-mix(in srgb, var(--color-accent) 14%, transparent);
+
+  --ok: var(--color-success);
+  --warn: var(--color-warning);
+  --bad: var(--color-danger);
+  --ok-soft: color-mix(in srgb, var(--color-success) 14%, transparent);
+  --warn-soft: color-mix(in srgb, var(--color-warning) 14%, transparent);
+  --bad-soft: color-mix(in srgb, var(--color-danger) 14%, transparent);
+
+  --macro: var(--color-macro, color-mix(in srgb, var(--color-accent) 60%, var(--color-text)));
+  --macro-soft: color-mix(in srgb, var(--macro) 11%, transparent);
+
+  --review-none: color-mix(in srgb, var(--color-overlay) 70%, transparent);
+  --review-draft: var(--color-warning);
+  --review-needs: var(--color-danger);
+  --review-done: var(--color-success);
+
+  --shadow-panel: 0 1px 0 0 color-mix(in srgb, var(--color-text) 4%, transparent) inset, 0 10px 30px -18px rgb(0 0 0 / 0.55);
+  --shadow-pop: 0 18px 50px -12px rgb(0 0 0 / 0.55), 0 0 0 1px var(--line-strong);
+  --shadow-control: 0 1px 0 0 color-mix(in srgb, var(--color-text) 5%, transparent) inset;
 }
 
-.theme-root {
-  --color-border: var(--color-surface-0);
-  --color-border-strong: var(--color-surface-1);
-  --color-muted: var(--color-overlay);
-  --color-surface-quiet: color-mix(in srgb, var(--color-surface-0) 50%, var(--color-base));
-  --color-accent-soft: color-mix(in srgb, var(--color-accent) 16%, transparent);
-  --color-danger-soft: color-mix(in srgb, var(--color-danger) 18%, transparent);
-  --color-scroll-thumb: var(--color-surface-1);
-  --color-scroll-thumb-hover: var(--color-surface-2);
-  --color-scroll-thumb-active: var(--color-overlay);
-  --color-chrome-height: 36px;
-  min-width: 0;
-  min-height: 100%;
-  background: var(--color-base);
-  color: var(--color-text);
-  font-family: var(--font-ui);
+/* Translucent shell: the system Acrylic backdrop shows through the chrome. */
+:root[data-native-backdrop="true"] {
+  --backdrop: color-mix(in srgb, var(--color-mantle) 40%, transparent);
 }
 
-.theme-root[data-theme-appearance="light"] { color-scheme: light; }
-.theme-root[data-theme-appearance="highContrast"] { color-scheme: dark; }
+:root[data-theme-appearance="light"] {
+  color-scheme: light;
+  --backdrop: color-mix(in srgb, var(--color-crust) 80%, var(--color-mantle));
+  --panel: color-mix(in srgb, var(--color-base) 70%, white);
+  --panel-raised: var(--color-base);
+  --panel-sunken: color-mix(in srgb, var(--color-mantle) 70%, var(--color-base));
+  --popover: color-mix(in srgb, var(--color-base) 60%, white);
+  --field: color-mix(in srgb, var(--color-base) 40%, white);
+  --hover: color-mix(in srgb, var(--color-text) 6%, transparent);
+  --pressed: color-mix(in srgb, var(--color-text) 10%, transparent);
+  --line: color-mix(in srgb, var(--color-text) 10%, transparent);
+  --line-strong: color-mix(in srgb, var(--color-text) 18%, transparent);
+  --accent-text: color-mix(in srgb, var(--color-accent) 85%, var(--color-text));
+  --shadow-panel: 0 1px 2px rgb(0 0 0 / 0.06), 0 8px 24px -16px rgb(0 0 0 / 0.25);
+  --shadow-pop: 0 18px 48px -12px rgb(0 0 0 / 0.25), 0 0 0 1px var(--line-strong);
+}
+
+:root[data-theme-appearance="light"][data-native-backdrop="true"] {
+  --backdrop: color-mix(in srgb, var(--color-mantle) 45%, transparent);
+}
+
+:root[data-theme-appearance="highContrast"] {
+  --backdrop: var(--color-crust);
+  --backdrop-glow: transparent;
+  --panel: var(--color-base);
+  --panel-raised: var(--color-base);
+  --panel-sunken: var(--color-base);
+  --popover: var(--color-base);
+  --field: var(--color-base);
+  --line: var(--color-surface-2);
+  --line-strong: var(--color-overlay);
+  --fg-faint: var(--color-overlay);
+  --shadow-panel: none;
+  --shadow-pop: 0 0 0 1px var(--color-text);
+}

@@ -36,6 +36,7 @@ version = "0.1.0"
 dependencies = [
  "aeria-atlas",
  "aeria-core",
+ "aeria-git",
  "aeria-hsp",
  "aeria-hxs",
  "aeria-projects",
@@ -47,6 +48,7 @@ dependencies = [
  "tauri",
  "tauri-build",
  "tauri-plugin-dialog",
+ "tempfile",
  "zip",
 ]
 
@@ -57,6 +59,13 @@ version = "0.1.0"
 [[package]]
 name = "aeria-git"
 version = "0.1.0"
+dependencies = [
+ "aeria-core",
+ "aeria-workspace",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.20",
+]
 
 [[package]]
 name = "aeria-hsp"

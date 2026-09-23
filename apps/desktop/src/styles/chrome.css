@@ -1,0 +1,79 @@
+/* Integrated titlebar: shares the window backdrop, no fill, no divider. */
+
+.titlebar {
+  position: relative;
+  z-index: 30;
+  display: flex;
+  flex: none;
+  align-items: center;
+  height: var(--titlebar-height);
+  padding-left: 8px;
+  color: var(--fg-muted);
+}
+
+.titlebar-brand {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 8px;
+  height: 100%;
+  padding: 0 6px 0 4px;
+}
+.titlebar-icon { width: 18px; height: 18px; pointer-events: none; }
+
+.app-menubar { display: flex; flex: none; align-items: center; gap: 1px; height: 100%; }
+.app-menubar-trigger {
+  height: 28px;
+  padding: 0 9px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--fg-muted);
+  font-size: var(--text-sm);
+  outline: none;
+}
+.app-menubar-trigger:hover,
+.app-menubar-trigger[data-highlighted],
+.app-menubar-trigger[data-state="open"] { background: var(--hover); color: var(--fg); }
+
+.titlebar-drag {
+  display: flex;
+  flex: 1 1 auto;
+  align-self: stretch;
+  align-items: center;
+  justify-content: center;
+  min-width: 40px;
+}
+.titlebar-title {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  max-width: 100%;
+  overflow: hidden;
+  color: var(--fg-subtle);
+  font-size: var(--text-sm);
+  white-space: nowrap;
+  pointer-events: none;
+}
+.titlebar-title strong { overflow: hidden; color: var(--fg-muted); font-weight: 600; text-overflow: ellipsis; }
+.titlebar-title span { overflow: hidden; text-overflow: ellipsis; }
+.titlebar-title-sep { color: var(--fg-faint); }
+
+.titlebar-actions { display: flex; flex: none; align-items: center; gap: 2px; margin-right: 8px; }
+
+.window-controls { display: flex; flex: none; align-self: stretch; }
+.window-control {
+  display: grid;
+  place-items: center;
+  width: 46px;
+  height: 100%;
+  border: 0;
+  background: transparent;
+  color: var(--fg-muted);
+  transition: background var(--duration-fast), color var(--duration-fast);
+}
+.window-control:hover { background: var(--hover); color: var(--fg); }
+.window-control:active { background: var(--pressed); }
+.window-control.close:hover { background: #c42b1c; color: #fff; }
+.window-control.close:active { background: #b22a1b; color: #fff; }
+.window-control:focus-visible { outline-offset: -2px; }

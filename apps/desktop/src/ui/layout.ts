@@ -17,7 +17,8 @@ export type WorkbenchLayoutState = {
 
 export type WorkbenchRegions = {
   leftDock: LayoutRegion;
-  translation: LayoutRegion;
+  /** Height of the translation editor below the string list. */
+  editor: LayoutRegion;
   rightDock: LayoutRegion;
   bottomPanel: LayoutRegion;
   [regionId: string]: LayoutRegion;
@@ -52,20 +53,20 @@ export const initialWorkbenchLayout: WorkbenchLayoutState = {
       documentIds: [],
       activeTabId: "sheets",
       visible: true,
-      size: 238,
+      size: 260,
       minSize: 190,
-      maxSize: 360,
+      maxSize: 420,
       resizable: true,
     },
-    translation: {
-      id: "translation",
+    editor: {
+      id: "editor",
       panelIds: [],
       documentIds: ["sheet"],
       activeTabId: "sheet",
       visible: true,
-      size: 390,
-      minSize: 300,
-      maxSize: 620,
+      size: 320,
+      minSize: 220,
+      maxSize: 680,
       resizable: true,
     },
     rightDock: {
@@ -74,9 +75,9 @@ export const initialWorkbenchLayout: WorkbenchLayoutState = {
       documentIds: [],
       activeTabId: "ai",
       visible: true,
-      size: 330,
-      minSize: 250,
-      maxSize: 500,
+      size: 340,
+      minSize: 260,
+      maxSize: 560,
       resizable: true,
     },
     bottomPanel: {
@@ -84,8 +85,8 @@ export const initialWorkbenchLayout: WorkbenchLayoutState = {
       panelIds: ["tasks", "gitChanges", "diagnostics"],
       documentIds: [],
       activeTabId: "tasks",
-      visible: true,
-      size: 152,
+      visible: false,
+      size: 160,
       minSize: 100,
       maxSize: 300,
       resizable: true,

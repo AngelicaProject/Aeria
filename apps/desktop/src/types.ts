@@ -69,6 +69,14 @@ export type ProjectSummaryDto = {
   sheets: ProjectSheetDto[];
 };
 
+/** Workspace coverage for one sheet; sheets without translations are omitted. */
+export type SheetProgressDto = {
+  sheetName: string;
+  translated: number;
+  reviewed: number;
+  needsReview: number;
+};
+
 export type ProjectOpenResultDto = {
   project: ProjectSummaryDto;
   warning: CommandError | null;
@@ -131,4 +139,192 @@ export type TranslationRowPageDto = {
 
 export type TranslationUnitIdDto = {
   translationUnitId: string;
+};
+
+export type GitFileKind =
+  | "added"
+  | "modified"
+  | "deleted"
+  | "renamed"
+  | "copied"
+  | "typeChanged"
+  | "untracked"
+  | "conflicted";
+
+export type GitFileDto = {
+  path: string;
+  originalPath: string | null;
+  kind: GitFileKind;
+  staged: boolean;
+  translationData: boolean;
+};
+
+export type GitStatusDto = {
+  branch: string | null;
+  head: string | null;
+  upstream: string | null;
+  ahead: number;
+  behind: number;
+  mergeInProgress: boolean;
+  hasTranslationChanges: boolean;
+  files: GitFileDto[];
+};
+
+export type GitConfigScope = "system" | "global" | "repository" | "worktree" | "command";
+
+/** The translator identity is the Git author identity. */
+export type TranslatorIdentityDto = {
+  name: string | null;
+  email: string | null;
+  nameScope: GitConfigScope | null;
+  emailScope: GitConfigScope | null;
+};
+
+export type GitRemoteDto = {
+  name: string;
+  url: string;
+};
+
+export type GitRuntimeDto = {
+  /** `git --version` output, or null when Git cannot be run. */
+  version: string | null;
+  origin: "system" | "bundled" | "override";
+};
+
+export type CollaborationPolicy = "direct" | "pullRequest";
+
+export type CollaborationDto = {
+  policy: CollaborationPolicy;
+  mainBranch: string | null;
+};
+
+export type ContributionDto = {
+  mainBranch: string;
+  /** Null while on the main branch. */
+  branch: string | null;
+  published: boolean;
+  unmergedCommits: number;
+};
+
+export type GitOverviewDto = {
+  runtime: GitRuntimeDto;
+  repository: GitStatusDto | null;
+  identity: TranslatorIdentityDto | null;
+  remotes: GitRemoteDto[];
+  collaboration: CollaborationDto | null;
+  contribution: ContributionDto | null;
+};
+
+export type GitBranchDto = {
+  name: string;
+  remote: boolean;
+  current: boolean;
+  upstream: string | null;
+};
+
+export type AttributionDto = {
+  commit: string;
+  authorName: string;
+  authorEmail: string;
+  authoredAt: number;
+};
+
+export type UnitAttributionDto = {
+  translationUnitId: string;
+  translatedBy: AttributionDto | null;
+  reviewedBy: AttributionDto | null;
+  lastChangedBy: AttributionDto | null;
+};
+
+export type GitCommitDto = {
+  id: string;
+  parents: string[];
+  authorName: string;
+  authorEmail: string;
+  /** Seconds since the Unix epoch. */
+  authoredAt: number;
+  subject: string;
+};
+
+export type UnitVersionDto = {
+  sourceBinding: SourceBinding;
+  targetMacro: string;
+  reviewState: ReviewState;
+  translatorNote: string | null;
+};
+
+export type UnitChangeKind = "added" | "modified" | "removed";
+
+export type UnitChangeDto = {
+  translationUnitId: string;
+  kind: UnitChangeKind;
+  before: UnitVersionDto | null;
+  after: UnitVersionDto | null;
+  targetChanged: boolean;
+  reviewChanged: boolean;
+  noteChanged: boolean;
+};
+
+export type RecordVersionDto =
+  | { state: "absent" }
+  | { state: "valid"; unit: UnitVersionDto }
+  | { state: "invalid"; message: string };
+
+export type UnitRevisionDto = {
+  commit: GitCommitDto;
+  kind: UnitChangeKind;
+  before: RecordVersionDto;
+  after: RecordVersionDto;
+};
+
+export type UnitHistoryDto = {
+  translationUnitId: string;
+  pending: UnitChangeDto | null;
+  revisions: UnitRevisionDto[];
+  truncated: boolean;
+  translatedBy: AttributionDto | null;
+  reviewedBy: AttributionDto | null;
+};
+
+export type GitCommitChangesDto = {
+  commit: GitCommitDto;
+  changes: UnitChangeDto[];
+  branchCreated: string | null;
+};
+
+export type ContributorDto = {
+  name: string;
+  email: string;
+  translated: number;
+  reviewed: number;
+  lastAuthoredAt: number;
+};
+
+export type UnitConflictDto = {
+  translationUnitId: string;
+  base: UnitVersionDto | null;
+  ours: UnitVersionDto | null;
+  theirs: UnitVersionDto | null;
+};
+
+export type ConflictResolution = "ours" | "theirs";
+
+export type UnitResolutionDto = {
+  translationUnitId: string;
+  resolution: ConflictResolution;
+};
+
+export type GitIntegration = "upToDate" | "fastForward" | "merged";
+
+export type GitSyncDto = {
+  integration: GitIntegration;
+  pushed: boolean;
+  workspaceChanged: boolean;
+  /** When non-empty nothing was integrated; sync again with resolutions. */
+  conflicts: UnitConflictDto[];
+};
+
+export type GitFinishDto = {
+  integration: GitIntegration;
+  deletedBranch: string | null;
 };

@@ -1,7 +1,9 @@
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
 use aeria_atlas::{CancellationHandle, CancellationToken};
+use aeria_git::{GitExecutable, UnitAttribution};
 use aeria_workspace::ProjectSession;
 
 use crate::error::CommandError;
@@ -12,6 +14,16 @@ pub struct DesktopState {
     registry: Mutex<()>,
     atlas_job: Mutex<Option<AtlasJob>>,
     next_atlas_job_id: AtomicU64,
+    git: OnceLock<GitExecutable>,
+    attribution: Mutex<Option<AttributionCache>>,
+}
+
+/// Committed unit attribution for one repository commit. It is derived from
+/// Git history, so it is disposable and keyed by the exact `HEAD`.
+pub(crate) struct AttributionCache {
+    pub root: PathBuf,
+    pub head: String,
+    pub units: Arc<Vec<UnitAttribution>>,
 }
 
 struct AtlasJob {
@@ -34,6 +46,39 @@ impl DesktopState {
             registry: Mutex::new(()),
             atlas_job: Mutex::new(None),
             next_atlas_job_id: AtomicU64::new(1),
+            git: OnceLock::new(),
+            attribution: Mutex::new(None),
+        }
+    }
+
+    /// Selects the Git executable once, at application setup.
+    pub fn set_git(&self, git: GitExecutable) {
+        let _ = self.git.set(git);
+    }
+
+    /// Returns the selected Git executable, or `git` from `PATH`.
+    pub(crate) fn git(&self) -> GitExecutable {
+        self.git
+            .get()
+            .cloned()
+            .unwrap_or_else(GitExecutable::system)
+    }
+
+    pub(crate) fn cached_attribution(
+        &self,
+        root: &std::path::Path,
+        head: &str,
+    ) -> Option<Arc<Vec<UnitAttribution>>> {
+        let cache = self.attribution.lock().ok()?;
+        cache
+            .as_ref()
+            .filter(|cache| cache.root == root && cache.head == head)
+            .map(|cache| Arc::clone(&cache.units))
+    }
+
+    pub(crate) fn store_attribution(&self, cache: AttributionCache) {
+        if let Ok(mut current) = self.attribution.lock() {
+            *current = Some(cache);
         }
     }
 

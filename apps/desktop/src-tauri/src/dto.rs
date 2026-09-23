@@ -3,8 +3,8 @@ use std::path::Path;
 use aeria_core::{ReviewState, SourceBinding, TranslationUnitId};
 use aeria_projects::RegistryEntry;
 use aeria_workspace::{
-    ProjectSession, TranslationCellView, TranslationContextCellView, TranslationOverlayView,
-    TranslationRowCursor, TranslationRowPage, TranslationRowView,
+    ProjectSession, SheetTranslationProgress, TranslationCellView, TranslationContextCellView,
+    TranslationOverlayView, TranslationRowCursor, TranslationRowPage, TranslationRowView,
 };
 use serde::{Deserialize, Serialize};
 
@@ -137,6 +137,28 @@ impl ProjectSummaryDto {
             game_version: source_metadata.game_version,
             scope: source_metadata.scope,
             sheets,
+        }
+    }
+}
+
+/// Workspace coverage for one sheet. Counts are bounded by the sheet's
+/// `translatableCellCount`; sheets without translations are omitted.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SheetProgressDto {
+    pub sheet_name: String,
+    pub translated: usize,
+    pub reviewed: usize,
+    pub needs_review: usize,
+}
+
+impl From<SheetTranslationProgress> for SheetProgressDto {
+    fn from(progress: SheetTranslationProgress) -> Self {
+        Self {
+            sheet_name: progress.sheet_name,
+            translated: progress.translated,
+            reviewed: progress.reviewed,
+            needs_review: progress.needs_review,
         }
     }
 }

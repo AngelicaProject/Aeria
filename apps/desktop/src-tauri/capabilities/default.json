@@ -1,8 +1,16 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Allow the main window to receive source-package progress events.",
-  "windows": ["main", "aeria-tool-search", "aeria-tool-ai", "aeria-tool-git", "aeria-tool-tasks", "aeria-tool-gitChanges", "aeria-tool-diagnostics"],
+  "description": "Main and tool windows: events, native dialogs, window chrome, and tool windows.",
+  "windows": [
+    "main",
+    "aeria-tool-search",
+    "aeria-tool-ai",
+    "aeria-tool-git",
+    "aeria-tool-tasks",
+    "aeria-tool-gitChanges",
+    "aeria-tool-diagnostics"
+  ],
   "permissions": [
     "core:event:allow-listen",
     "core:event:allow-unlisten",
@@ -21,6 +29,12 @@
     "core:window:allow-start-dragging",
     "core:window:allow-show",
     "core:window:allow-unmaximize",
-    "core:webview:allow-create-webview-window"
+    "core:webview:allow-create-webview-window",
+    "core:window:default",
+    "core:webview:default",
+    "core:window:allow-destroy",
+    "core:window:allow-toggle-maximize",
+    "core:window:allow-set-maximizable",
+    "core:webview:allow-set-webview-zoom"
   ]
 }

@@ -1,5 +1,6 @@
 use aeria_atlas::AtlasError;
 use aeria_core::TranslationUnitIdParseError;
+use aeria_git::GitError;
 use aeria_projects::RegistryError;
 use aeria_workspace::{
     ProjectSessionError, TranslationMutationError, TranslationReadError, WorkspaceError,
@@ -136,6 +137,33 @@ fn workspace_error_code(error: &WorkspaceError) -> &'static str {
         | WorkspaceError::SourceContentMismatch { .. }
         | WorkspaceError::SourceSnapshotMismatch { .. }
         | WorkspaceError::Identity(_) => "translationWorkspace",
+    }
+}
+
+impl From<GitError> for CommandError {
+    fn from(error: GitError) -> Self {
+        let code = match &error {
+            GitError::GitUnavailable { .. } => "gitUnavailable",
+            GitError::CommandFailed { .. } => "gitCommandFailed",
+            GitError::Parse { .. } => "gitProtocol",
+            GitError::NotARepository { .. } => "gitNotRepository",
+            GitError::AlreadyARepository { .. } => "gitAlreadyRepository",
+            GitError::InvalidInput { .. } => "gitInvalidInput",
+            GitError::IdentityMissing => "gitIdentityMissing",
+            GitError::NothingToCommit => "gitNothingToCommit",
+            GitError::UncommittedTranslations => "gitUncommittedTranslations",
+            GitError::DetachedHead => "gitDetachedHead",
+            GitError::UnbornHead => "gitNoCommits",
+            GitError::MergeInProgress => "gitMergeInProgress",
+            GitError::NoRemote => "gitNoRemote",
+            GitError::MergeConflict { .. } => "gitMergeConflict",
+            GitError::IncomingRejected { .. } => "gitIncomingRejected",
+            GitError::TranslationConflicts { .. } => "gitTranslationConflicts",
+            GitError::InvalidSettings { .. } => "gitInvalidSettings",
+            GitError::Workspace(_) => "gitWorkspaceData",
+            GitError::Io { .. } => "gitIo",
+        };
+        Self::new(code, error.to_string())
     }
 }
 
