@@ -1,0 +1,10 @@
+{
+  "version": "2.55.0.windows.5",
+  "artifacts": {
+    "win-x64": {
+      "url": "https://github.com/git-for-windows/git/releases/download/v2.55.0.windows.5/MinGit-2.55.0.5-64-bit.zip",
+      "sha256": "56d7b226b7693196cfc71fef26568f536c4a021ab6c37ff2db4287bed908e96e",
+      "source": "https://github.com/git-for-windows/git/tree/v2.55.0.windows.5"
+    }
+  }
+}

@@ -7,5 +7,14 @@ license.workspace = true
 repository.workspace = true
 description = "Git repository operations and semantic collaboration helpers."
 
+[dependencies]
+aeria-core = { path = "../aeria-core" }
+aeria-workspace = { path = "../aeria-workspace" }
+serde_json = "1.0.151"
+thiserror = "2.0.20"
+
+[dev-dependencies]
+tempfile = "3.27.0"
+
 [lints]
 workspace = true

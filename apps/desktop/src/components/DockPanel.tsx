@@ -1,68 +1,78 @@
-import { useEffect, useRef, useState, type PropsWithChildren, type ReactNode } from "react";
+import type { PropsWithChildren, ReactNode } from "react";
+import { DropdownMenu } from "radix-ui";
 import { UiIcon } from "../ui/primitives/UiIcon";
 
 type DockPanelProps = PropsWithChildren<{
   title: string;
   meta?: ReactNode;
-  metaClassName?: string | undefined;
   headerActions?: ReactNode;
   className?: string;
+  hidden?: boolean;
   panelId?: string;
   moveTargets?: readonly { id: string; label: string }[];
   canFloat?: boolean;
   onMove?: (regionId: string) => void;
   onFloat?: () => void;
   onHide?: () => void;
-  onDragStart?: (panelId: string) => void;
   onDropPanel?: (panelId: string) => void;
 }>;
 
 export function DockPanel({
   title,
   meta,
-  metaClassName,
   headerActions,
   className = "",
+  hidden = false,
   panelId,
   moveTargets = [],
   canFloat = false,
   onMove,
   onFloat,
   onHide,
-  onDragStart,
   onDropPanel,
   children,
 }: DockPanelProps) {
-  const [menuOpen, setMenuOpen] = useState(false);
-  const rootRef = useRef<HTMLElement>(null);
-
-  useEffect(() => {
-    if (!menuOpen) return;
-    function closeMenu(event: PointerEvent) {
-      if (!rootRef.current?.contains(event.target as Node)) setMenuOpen(false);
-    }
-    window.addEventListener("pointerdown", closeMenu);
-    return () => window.removeEventListener("pointerdown", closeMenu);
-  }, [menuOpen]);
-
+  const hasMenu = moveTargets.length > 0 || canFloat || Boolean(onHide);
   return (
     <section
-      className={`dock-panel ${className}`}
-      ref={rootRef}
+      className={`panel dock-panel${className ? ` ${className}` : ""}`}
+      aria-label={title}
+      hidden={hidden}
       onDragOver={(event) => { if (onDropPanel) event.preventDefault(); }}
       onDrop={(event) => { event.preventDefault(); const dragged = event.dataTransfer.getData("text/aeria-panel"); if (dragged) onDropPanel?.(dragged); }}
     >
-      <header className="dock-header" draggable={Boolean(panelId && onDragStart)} onDragStart={(event) => { if (panelId) { event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("text/aeria-panel", panelId); onDragStart?.(panelId); } }}>
-        <span className="dock-title">{title}</span>{meta ? <span className={`dock-meta${metaClassName ? ` ${metaClassName}` : ""}`}>{meta}</span> : null}<span className="dock-spacer" />
-        {headerActions ? <div className="dock-header-actions" role="group" aria-label={`${title} actions`}>{headerActions}</div> : null}
-        <button className="dock-action" type="button" aria-label={`${title} options`} aria-haspopup="menu" aria-expanded={menuOpen} onClick={() => setMenuOpen((current) => !current)}><UiIcon icon="ellipsis" size="md" /></button>
-        {menuOpen ? <div className="dock-panel-menu" role="menu">
-          {moveTargets.map((target) => <button type="button" role="menuitem" key={target.id} onClick={() => { onMove?.(target.id); setMenuOpen(false); }}>Move {target.label}</button>)}
-          {canFloat ? <button type="button" role="menuitem" onClick={() => { onFloat?.(); setMenuOpen(false); }}>Float / Detach</button> : null}
-          {onHide ? <button type="button" role="menuitem" onClick={() => { onHide(); setMenuOpen(false); }}>Close / Hide</button> : null}
-        </div> : null}
+      <header
+        className="panel-header"
+        draggable={Boolean(panelId)}
+        onDragStart={(event) => { if (panelId) { event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("text/aeria-panel", panelId); } }}
+      >
+        <span className="panel-title">{title}</span>
+        {meta ? <span className="panel-meta">{meta}</span> : null}
+        <span className="spacer" />
+        {headerActions ? <div className="panel-actions" role="group" aria-label={`${title} actions`}>{headerActions}</div> : null}
+        {hasMenu ? (
+          <DropdownMenu.Root>
+            <DropdownMenu.Trigger asChild>
+              <button className="icon-button icon-button-ghost" type="button" aria-label={`${title} options`}><UiIcon icon="ellipsis" size="md" /></button>
+            </DropdownMenu.Trigger>
+            <DropdownMenu.Portal>
+              <DropdownMenu.Content className="menu-content" align="end" sideOffset={4}>
+                {moveTargets.map((target) => (
+                  <DropdownMenu.Item className="menu-item" key={target.id} onSelect={() => onMove?.(target.id)}>
+                    <span className="menu-item-label">Move to {target.label.toLowerCase()}</span>
+                  </DropdownMenu.Item>
+                ))}
+                {canFloat ? <DropdownMenu.Item className="menu-item" onSelect={() => onFloat?.()}><span className="menu-item-label">Open in new window</span></DropdownMenu.Item> : null}
+                {onHide ? <>
+                  {moveTargets.length > 0 || canFloat ? <DropdownMenu.Separator className="menu-separator" /> : null}
+                  <DropdownMenu.Item className="menu-item" onSelect={onHide}><span className="menu-item-label">Hide</span></DropdownMenu.Item>
+                </> : null}
+              </DropdownMenu.Content>
+            </DropdownMenu.Portal>
+          </DropdownMenu.Root>
+        ) : null}
       </header>
-      <div className="dock-body">{children}</div>
+      <div className="panel-body">{children}</div>
     </section>
   );
 }

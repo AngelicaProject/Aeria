@@ -47,7 +47,7 @@ export const dockPanelDefinitions: readonly DockPanelDefinition[] = [
 export const initialDockLayout: DockLayoutState = {
   groups: [
     { id: "left-main", region: "left", panelIds: ["sheets", "search"], activePanelId: "sheets" },
-    { id: "right-main", region: "right", panelIds: ["ai", "git"], activePanelId: "ai" },
+    { id: "right-main", region: "right", panelIds: ["git", "ai"], activePanelId: "git" },
     { id: "bottom-main", region: "bottom", panelIds: ["tasks", "gitChanges", "diagnostics"], activePanelId: "tasks" },
   ],
   placements: dockPanelDefinitions.map((definition) => ({

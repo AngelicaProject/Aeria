@@ -1,4 +1,7 @@
-import type { SourceBinding } from "../types";
+import type { SourceBinding, UnitChangeDto } from "../types";
+import { Segmented } from "../ui/primitives/Segmented";
+import { UiIcon } from "../ui/primitives/UiIcon";
+import { GitPanel } from "./GitPanel";
 
 export type WorkbenchTool = "search" | "ai" | "git";
 export type GitPresentationMode = "collaboration" | "advanced";
@@ -8,23 +11,54 @@ type WorkbenchToolDockProps = {
   gitMode: GitPresentationMode;
   selectedBinding: SourceBinding | null;
   onGitModeChange: (mode: GitPresentationMode) => void;
+  selectedUnitId?: string | null;
+  workspaceRevision?: number;
+  onWorkspaceChanged?: () => void;
+  onRestoreTarget?: (targetMacro: string) => void;
+  pending?: { changes: UnitChangeDto[] | null; refresh: () => Promise<void> };
+  onRevealBinding?: (binding: SourceBinding) => void;
 };
 
-export function WorkbenchToolDock({ activeTool, gitMode, selectedBinding, onGitModeChange }: WorkbenchToolDockProps) {
+export function toolTitle(tool: WorkbenchTool): string {
+  return tool === "ai" ? "AI assist" : tool === "git" ? "Git" : "Search";
+}
+
+export function WorkbenchToolDock({ activeTool, gitMode, selectedBinding, onGitModeChange, selectedUnitId, workspaceRevision, onWorkspaceChanged, onRestoreTarget, pending, onRevealBinding }: WorkbenchToolDockProps) {
   if (activeTool === "search") {
-    return <section className="tool-dock-content" aria-label="Project search"><div className="tool-dock-empty"><strong>Project search not available in this build</strong><p>Search will use the project backend when it is available. Sheet Quick Find remains local to the Sheets tool.</p></div></section>;
+    return (
+      <section className="tool-content" aria-label="Project search">
+        <div className="empty-state">
+          <UiIcon icon="search" size="xl" />
+          <strong>Project search isn't available yet</strong>
+          <p>Search will use the project backend once it exists. To find a sheet by name, use the sheet filter (Ctrl+F).</p>
+        </div>
+      </section>
+    );
   }
   if (activeTool === "ai") {
-    return <section className="tool-dock-content" aria-label="AI tool"><div className="tool-dock-empty"><strong>AI not configured</strong><p>Configure translation assistance to use this workbench slot.</p>{selectedBinding ? <code>{selectedBinding.sheetName} · {selectedBinding.rowId}:{selectedBinding.subrowId} · col {selectedBinding.columnIndex}</code> : null}</div></section>;
+    return (
+      <section className="tool-content" aria-label="AI assist">
+        <div className="empty-state">
+          <UiIcon icon="sparkles" size="xl" />
+          <strong>AI assist isn't configured</strong>
+          <p>Translation suggestions will appear here once a provider is set up.</p>
+          {selectedBinding ? <code className="chip mono">{selectedBinding.sheetName} {selectedBinding.rowId}:{selectedBinding.subrowId} · col {selectedBinding.columnIndex}</code> : null}
+        </div>
+      </section>
+    );
   }
 
   return (
-    <section className="tool-dock-content git-tool" aria-label="Git tool">
-      <div className="git-mode-switch" role="tablist" aria-label="Git presentation mode">
-        <button className={gitMode === "collaboration" ? "git-mode-button active" : "git-mode-button"} type="button" role="tab" aria-selected={gitMode === "collaboration"} onClick={() => onGitModeChange("collaboration")}>Collaboration</button>
-        <button className={gitMode === "advanced" ? "git-mode-button active" : "git-mode-button"} type="button" role="tab" aria-selected={gitMode === "advanced"} onClick={() => onGitModeChange("advanced")}>Advanced Git</button>
+    <section className="tool-content git-tool" aria-label="Git">
+      <div className="git-mode">
+        <Segmented
+          label="Git view"
+          value={gitMode}
+          onChange={onGitModeChange}
+          options={[{ value: "collaboration", label: "Collaboration" }, { value: "advanced", label: "Advanced" }]}
+        />
       </div>
-      <div className="tool-dock-empty"><strong>Git not available</strong><p>{gitMode === "collaboration" ? "Collaboration changes will appear here when Git is connected." : "Advanced Git presentation is ready for the shared Git state."}</p></div>
+      <GitPanel mode={gitMode} selectedUnitId={selectedUnitId ?? null} workspaceRevision={workspaceRevision ?? 0} onWorkspaceChanged={onWorkspaceChanged} onRestoreTarget={onRestoreTarget} pending={pending} onRevealBinding={onRevealBinding} />
     </section>
   );
 }

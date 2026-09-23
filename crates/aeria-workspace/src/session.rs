@@ -118,34 +118,7 @@ impl ProjectSession {
         let repository_root = repository_root.into();
         let source_package_path = source_package.package_path().to_owned();
         let store = WorkspaceStore::new(repository_root.clone());
-        let workspace = store.load().map_err(|source| ProjectSessionError::Store {
-            repository_root: repository_root.clone(),
-            source,
-        })?;
-        workspace
-            .require_compatible_snapshot(source_package.source())
-            .map_err(|source| ProjectSessionError::Compatibility {
-                repository_root: repository_root.clone(),
-                source_package_path: source_package_path.clone(),
-                source,
-            })?;
-        trace.mark("workspace.compatibility");
-
-        if let Some(unit) = workspace.units().find(|unit| {
-            let binding = unit.source_binding();
-            !source_package.guidance_index().is_translatable(
-                binding.sheet_name(),
-                binding.row_id(),
-                binding.subrow_id(),
-                binding.column_index(),
-            )
-        }) {
-            return Err(ProjectSessionError::BlockedWorkspaceUnit {
-                repository_root,
-                translation_unit_id: unit.id(),
-                source_binding: unit.source_binding().clone(),
-            });
-        }
+        let workspace = load_compatible_workspace(&repository_root, &store, &source_package)?;
         trace.mark("workspace.guidance");
 
         Ok(Self {
@@ -225,6 +198,27 @@ impl ProjectSession {
         })
     }
 
+    /// Reloads the workspace from disk after the repository changed outside
+    /// the ordinary mutation path, for example after a Git merge.
+    ///
+    /// The reloaded state passes the same validation, source compatibility,
+    /// and source-guidance checks as [`ProjectSession::open_from_source_package`].
+    /// On failure the session keeps its previous in-memory state, whose store
+    /// cache fails closed on the next mutation.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed error when the on-disk workspace is invalid,
+    /// incompatible with the session source, or contains blocked units.
+    pub fn reload_workspace(&mut self) -> Result<(), ProjectSessionError> {
+        let store = WorkspaceStore::new(self.repository_root.clone());
+        let workspace =
+            load_compatible_workspace(&self.repository_root, &store, &self.source_package)?;
+        self.store = store;
+        self.workspace = workspace;
+        Ok(())
+    }
+
     /// Returns the local repository root for this project.
     #[must_use]
     pub fn repository_root(&self) -> &Path {
@@ -254,6 +248,41 @@ impl ProjectSession {
     pub fn source_package(&self) -> &SourcePackage {
         &self.source_package
     }
+}
+
+fn load_compatible_workspace(
+    repository_root: &Path,
+    store: &WorkspaceStore,
+    source_package: &SourcePackage,
+) -> Result<Workspace, ProjectSessionError> {
+    let workspace = store.load().map_err(|source| ProjectSessionError::Store {
+        repository_root: repository_root.to_owned(),
+        source,
+    })?;
+    workspace
+        .require_compatible_snapshot(source_package.source())
+        .map_err(|source| ProjectSessionError::Compatibility {
+            repository_root: repository_root.to_owned(),
+            source_package_path: source_package.package_path().to_owned(),
+            source,
+        })?;
+
+    if let Some(unit) = workspace.units().find(|unit| {
+        let binding = unit.source_binding();
+        !source_package.guidance_index().is_translatable(
+            binding.sheet_name(),
+            binding.row_id(),
+            binding.subrow_id(),
+            binding.column_index(),
+        )
+    }) {
+        return Err(ProjectSessionError::BlockedWorkspaceUnit {
+            repository_root: repository_root.to_owned(),
+            translation_unit_id: unit.id(),
+            source_binding: unit.source_binding().clone(),
+        });
+    }
+    Ok(workspace)
 }
 
 struct PerfTrace {

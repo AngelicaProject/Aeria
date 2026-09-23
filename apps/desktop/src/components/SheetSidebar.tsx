@@ -1,6 +1,6 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { UiIcon } from "../ui/primitives/UiIcon";
-import type { ProjectSheetDto } from "../types";
+import type { ProjectSheetDto, SheetProgressDto } from "../types";
 import {
   buildSheetTree,
   collapseSheetTree,
@@ -12,7 +12,7 @@ import {
   type SheetTreeFolder,
 } from "../sheetExplorer";
 
-const SHEET_ROW_HEIGHT = 28;
+const SHEET_ROW_HEIGHT = 30;
 const SHEET_OVERSCAN = 12;
 
 type SheetSidebarProps = {
@@ -29,6 +29,7 @@ type SheetSidebarProps = {
   revealSignal?: number;
   collapseSignal?: number;
   onSelect: (sheetName: string, pin?: boolean) => void;
+  progress?: ReadonlyMap<string, SheetProgressDto>;
 };
 
 function entryDepth(entry: SheetTreeEntry): number {
@@ -83,6 +84,7 @@ export const SheetSidebar = memo(function SheetSidebar({
   revealSignal = 0,
   collapseSignal = 0,
   onSelect,
+  progress,
 }: SheetSidebarProps) {
   const [expandedFolders, setExpandedFolders] = useState<Set<string>>(() => new Set());
   const [query, setQuery] = useState("");
@@ -166,26 +168,37 @@ export const SheetSidebar = memo(function SheetSidebar({
     if (isReveal) requestAnimationFrame(() => requestAnimationFrame(() => selectedRef.current?.scrollIntoView({ block: "nearest" })));
   }, [hideEmpty, query]);
 
+  // Reveal changes only the filters that actually hide the active sheet.
   const revealSelected = useCallback(() => {
     if (!selectedSheetName) return;
+    const selectedSheet = sheets.find((sheet) => sheet.name === selectedSheetName);
+    const normalizedQuery = query.trim().toLocaleLowerCase();
+    const showEmpty = hideEmpty && (selectedSheet?.translatableCellCount ?? 0) === 0;
+    const clearQuery = normalizedQuery.length > 0 && !selectedSheetName.toLocaleLowerCase().includes(normalizedQuery);
+    const nextHideEmpty = hideEmpty && !showEmpty;
+    const nextQuery = clearQuery ? "" : normalizedQuery;
     const expanded = expandSheetAncestors(expandedFolders, selectedSheetName);
-    const allTree = buildSheetTree(sheets);
-    const revealEntries = visibleSheetTreeEntries(allTree, expanded);
+    const revealTree = buildSheetTree(sheets.filter((sheet) =>
+      (!nextHideEmpty || sheet.translatableCellCount > 0)
+      && (!nextQuery || sheet.name.toLocaleLowerCase().includes(nextQuery)),
+    ));
+    const revealEntries = visibleSheetTreeEntries(revealTree, nextQuery ? collectFolderPaths(revealTree) : expanded);
     const selectedIndex = revealEntries.findIndex((entry) => entry.kind === "leaf" && entry.sheet.name === selectedSheetName);
     const targetScroll = selectedIndex < 0 ? 0 : Math.min(
-      selectedIndex * SHEET_ROW_HEIGHT,
+      Math.max(0, selectedIndex * SHEET_ROW_HEIGHT - viewportHeight / 2),
       Math.max(0, revealEntries.length * SHEET_ROW_HEIGHT - viewportHeight),
     );
-    const filtersWillChange = hideEmpty || query.length > 0;
+    const filtersWillChange = showEmpty || clearQuery;
     pendingRevealScroll.current = filtersWillChange ? targetScroll : null;
-    onHideEmptyChange(false);
-    setQuery("");
-    onFilterOpenChange(false);
+    if (showEmpty) onHideEmptyChange(false);
+    if (clearQuery) {
+      setQuery("");
+      onFilterOpenChange(false);
+    }
     setExpandedFolders(expanded);
     if (!filtersWillChange) {
       if (treeViewportRef.current) treeViewportRef.current.scrollTop = targetScroll;
       setScrollTop(targetScroll);
-      requestAnimationFrame(() => selectedRef.current?.scrollIntoView({ block: "nearest" }));
     }
   }, [expandedFolders, hideEmpty, onFilterOpenChange, onHideEmptyChange, query, selectedSheetName, sheets, viewportHeight]);
 
@@ -228,7 +241,7 @@ export const SheetSidebar = memo(function SheetSidebar({
             aria-label="Filter sheets by name"
           />
           <button
-            className="icon-button"
+            className="icon-button icon-button-ghost"
             type="button"
             aria-label="Close sheet filter"
             onClick={() => {
@@ -290,10 +303,12 @@ export const SheetSidebar = memo(function SheetSidebar({
                 }
                 const selected = entry.sheet.name === selectedSheetName;
                 const count = entry.sheet.translatableCellCount;
+                const sheetProgress = progress?.get(entry.sheet.name);
+                const share = sheetProgress && count > 0 ? Math.min(1, sheetProgress.translated / count) : 0;
                 return (
                   <button
                     ref={selected ? selectedRef : undefined}
-                    className={`${selected ? "sheet-tree-row leaf-row active" : "sheet-tree-row leaf-row"}${count === 0 ? " is-empty-sheet" : ""}`}
+                    className={`${selected ? "sheet-tree-row leaf-row active" : "sheet-tree-row leaf-row"}${count === 0 ? " is-empty-sheet" : ""}${share >= 1 ? " is-complete" : ""}`}
                     style={treeRowStyle(depth)}
                     type="button"
                     role="treeitem"
@@ -305,13 +320,14 @@ export const SheetSidebar = memo(function SheetSidebar({
                     key={entry.sheet.name}
                     onClick={() => onSelect(entry.sheet.name)}
                     onDoubleClick={() => onSelect(entry.sheet.name, true)}
-                    title={`${entry.sheet.name}\n${entry.sheet.rowCount.toLocaleString()} source rows`}
+                    title={`${entry.sheet.name}\n${entry.sheet.rowCount.toLocaleString()} source rows${sheetProgress ? `\n${sheetProgress.translated.toLocaleString()} of ${count.toLocaleString()} strings translated` : ""}`}
                   >
                     <span className="sheet-tree-icon sheet-tree-sheet-icon" aria-hidden="true"><UiIcon icon="table2" size="sm" /></span>
                     <span className="sheet-tree-name">{entry.name}</span>
                     <small className="sheet-tree-count">
                       {formatSheetCount(count)}
                     </small>
+                    {share > 0 ? <span className="sheet-tree-progress" aria-hidden="true"><span style={{ width: `${share * 100}%` }} /></span> : null}
                   </button>
                 );
               })}

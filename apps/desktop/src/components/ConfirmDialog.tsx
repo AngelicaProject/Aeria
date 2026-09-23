@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { AlertDialog } from "radix-ui";
 
 type ConfirmDialogProps = {
   open: boolean;
@@ -8,37 +8,19 @@ type ConfirmDialogProps = {
 };
 
 export function ConfirmDialog({ open, message, onKeepEditing, onDiscard }: ConfirmDialogProps) {
-  const keepEditingRef = useRef<HTMLButtonElement>(null);
-
-  useEffect(() => {
-    if (!open) return;
-
-    keepEditingRef.current?.focus();
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onKeepEditing();
-    };
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [onKeepEditing, open]);
-
-  if (!open) return null;
-
   return (
-    <div className="dialog-backdrop" role="presentation" onMouseDown={(event) => {
-      if (event.target === event.currentTarget) onKeepEditing();
-    }}>
-      <section className="confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="discard-dialog-title" aria-describedby="discard-dialog-message">
-        <h2 id="discard-dialog-title">Unsaved changes</h2>
-        <p id="discard-dialog-message">{message}</p>
-        <div className="dialog-actions">
-          <button ref={keepEditingRef} className="secondary-button" type="button" onClick={onKeepEditing}>
-            Keep editing
-          </button>
-          <button className="danger-button" type="button" onClick={onDiscard}>
-            Discard changes
-          </button>
-        </div>
-      </section>
-    </div>
+    <AlertDialog.Root open={open} onOpenChange={(next) => { if (!next) onKeepEditing(); }}>
+      <AlertDialog.Portal>
+        <AlertDialog.Overlay className="dialog-overlay" />
+        <AlertDialog.Content className="dialog confirm-dialog">
+          <AlertDialog.Title className="dialog-title">Discard unsaved changes?</AlertDialog.Title>
+          <AlertDialog.Description className="dialog-description">{message}</AlertDialog.Description>
+          <div className="dialog-actions">
+            <AlertDialog.Cancel className="button button-secondary">Keep editing</AlertDialog.Cancel>
+            <AlertDialog.Action className="button button-danger" onClick={onDiscard}>Discard changes</AlertDialog.Action>
+          </div>
+        </AlertDialog.Content>
+      </AlertDialog.Portal>
+    </AlertDialog.Root>
   );
 }

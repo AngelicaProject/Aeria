@@ -15,10 +15,16 @@ The renderer is a full React/TypeScript application, not a thin HTML skin, but p
 
 ## Project launcher layout
 
-The project launcher uses a fixed shell so switching between Recent, Open, Create, and Settings does not resize the desktop window. Its integrated titlebar is 36px high, and only the content region may scroll. The Tauri launcher window is 900×560 with matching minimum dimensions. It opens centered and recenters when returning from the workbench.
+The Tauri launcher window is 900×560 with matching minimum dimensions and is not resizable. It opens centered and recenters when returning from the workbench. The launcher is one screen: a fixed-width action column and a panel that swaps between Recent projects and the Open or New project form. Switching views never resizes the window, and only the panel content scrolls.
 
-Recent project headers and rows share one four-column grid: `1fr 110px 90px 140px`. Keep that template in one CSS custom property or shared class so labels and values cannot drift apart.
+## Styling and primitives
 
-Tailwind CSS and accessible primitive libraries such as Radix are approved directions, but dependencies should be added when their first real component is implemented.
+Styles live in `src/styles/` by surface (`base`, `primitives`, `chrome`, `launcher`, `workbench`, `editor`, `git`, `overlays`). Component CSS uses only the semantic tokens in `src/ui/theme/tokens.css` (`--panel`, `--line`, `--fg-muted`, `--accent`, `--review-*`, and so on), never raw theme palette values, so themes and appearances stay cheap to add. Theme palettes are applied to `<html>` so portalled popovers resolve them.
 
-Ordinary renderer icons use the shared `UiIcon` mapping backed by `lucide-react`. Choose from its fixed `xs`, `sm`, `md`, and `lg` sizes; do not add inline SVGs, icon-font glyphs, emoji, or Unicode icon characters in feature components. Keep approved custom or native window icons centralized in the shared icon layer, and preserve semantic color through `currentColor`.
+Renderer preferences go through `usePreferences` (`src/ui/preferences.tsx`, parsed by `preferencesModel.ts`); appearance goes through `useTheme`. Both validate stored values and fall back to defaults.
+
+Window APIs used by the renderer must be granted in `src-tauri/capabilities/default.json`. In particular, `onCloseRequested` destroys the window after its handler runs, so closing requires `core:window:allow-destroy`, and read-only window getters come from `core:window:default`.
+
+Menus, dialogs, tooltips, and selects use Radix primitives (`radix-ui`) styled with the shared `menu-*`, `dialog*`, and `tooltip` classes. Icon-only buttons use `IconButton`, which requires an accessible label and shows it as a tooltip. Source and target text use `MacroEditor` (CodeMirror 6); long lists use `@tanstack/react-virtual` or the existing fixed-height virtual tree.
+
+Ordinary renderer icons use the shared `UiIcon` mapping backed by `lucide-react`. Choose from its fixed `xs`, `sm`, `md`, `lg`, and `xl` sizes (`xl` is for empty-state illustrations); do not add inline SVGs, icon-font glyphs, emoji, or Unicode icon characters in feature components. Keep approved custom or native window icons centralized in the shared icon layer, and preserve semantic color through `currentColor`.

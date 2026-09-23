@@ -20,11 +20,14 @@ mod read;
 mod session;
 
 pub use mutation::TranslationMutationError;
-pub use persistence::{WorkspaceStore, WorkspaceStoreError};
+pub use persistence::{
+    WorkspaceStore, WorkspaceStoreError, decode_unit_record, decode_unit_shard, encode_unit_shard,
+    unit_shard_path,
+};
 pub use read::{
-    MAX_TRANSLATION_PAGE_SIZE, TranslationCellView, TranslationContextCellView,
-    TranslationOverlayView, TranslationReadError, TranslationRowCursor, TranslationRowPage,
-    TranslationRowView,
+    MAX_TRANSLATION_PAGE_SIZE, SheetTranslationProgress, TranslationCellView,
+    TranslationContextCellView, TranslationOverlayView, TranslationReadError, TranslationRowCursor,
+    TranslationRowPage, TranslationRowView,
 };
 pub use session::{ProjectSession, ProjectSessionError};
 

@@ -13,9 +13,16 @@
         "transparent": true,
         "theme": "Dark",
         "windowEffects": {
-          "effects": ["acrylic"]
+          "effects": [
+            "acrylic"
+          ]
         }
       }
     ]
+  },
+  "bundle": {
+    "resources": {
+      "binaries/mingit": "git"
+    }
   }
 }

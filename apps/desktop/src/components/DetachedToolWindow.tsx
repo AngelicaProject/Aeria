@@ -4,13 +4,18 @@ import type { CommandError, ProjectSummaryDto } from "../types";
 import { BottomPanel, type BottomPanelTab } from "./BottomPanel";
 import { ErrorBanner } from "./ErrorBanner";
 import { WindowChrome } from "./WindowChrome";
-import { WorkbenchToolDock, type GitPresentationMode, type WorkbenchTool } from "./WorkbenchToolDock";
+import { WorkbenchToolDock, toolTitle, type GitPresentationMode, type WorkbenchTool } from "./WorkbenchToolDock";
 import { displayPathName } from "../pathDisplay";
 
-type DetachedPanel = "search" | "ai" | "git" | "tasks" | "gitChanges" | "diagnostics";
+export type DetachedPanel = "search" | "ai" | "git" | "tasks" | "gitChanges" | "diagnostics";
 
-function panelTitle(panel: DetachedPanel): string {
-  return panel === "search" ? "Search" : panel === "ai" ? "AI" : panel === "git" ? "Git" : panel === "gitChanges" ? "Git Changes" : panel === "diagnostics" ? "Diagnostics" : "Tasks";
+export function isDetachedPanel(value: string | null): value is DetachedPanel {
+  return value === "search" || value === "ai" || value === "git" || value === "tasks" || value === "gitChanges" || value === "diagnostics";
+}
+
+export function detachedPanelTitle(panel: DetachedPanel): string {
+  if (panel === "search" || panel === "ai" || panel === "git") return toolTitle(panel);
+  return panel === "gitChanges" ? "Git changes" : panel === "diagnostics" ? "Diagnostics" : "Tasks";
 }
 
 export function DetachedToolWindow({ panel }: { panel: DetachedPanel }) {
@@ -23,16 +28,21 @@ export function DetachedToolWindow({ panel }: { panel: DetachedPanel }) {
     void currentProject().then(setProject).catch((caughtError: unknown) => setError(normalizeCommandError(caughtError)));
   }, []);
 
+  const tool = panel === "search" || panel === "ai" || panel === "git";
+
   return (
-    <main className="app-shell editor-shell detached-tool-shell">
-      <WindowChrome context={project ? displayPathName(project.repositoryRoot) : "Aeria"} projectName={project ? displayPathName(project.repositoryRoot) : "Aeria"} mode="workbench" />
-      {error ? <ErrorBanner title="Detached tool unavailable" error={error} onDismiss={() => setError(null)} /> : null}
-      <section className="detached-tool-panel">
-        <header className="dock-header"><span className="dock-title">{panelTitle(panel)}</span><span className="dock-meta">shared session</span></header>
-        <div className="detached-tool-body">
-          {panel === "search" || panel === "ai" || panel === "git" ? <WorkbenchToolDock activeTool={panel as WorkbenchTool} gitMode={gitMode} selectedBinding={null} onGitModeChange={setGitMode} /> : <BottomPanel activeTab={bottomTab} onTabChange={setBottomTab} />}
+    <main className="detached-shell">
+        <WindowChrome mode="detached" title={detachedPanelTitle(panel)} subtitle={project ? displayPathName(project.repositoryRoot) : null} />
+        {error ? <div className="notices"><ErrorBanner title="Tool window unavailable" error={error} onDismiss={() => setError(null)} /></div> : null}
+        <div className="detached-body">
+          {tool ? (
+            <section className="panel">
+              <div className="panel-body">
+                <WorkbenchToolDock activeTool={panel as WorkbenchTool} gitMode={gitMode} selectedBinding={null} onGitModeChange={setGitMode} />
+              </div>
+            </section>
+          ) : <BottomPanel activeTab={bottomTab} onTabChange={setBottomTab} />}
         </div>
-      </section>
     </main>
   );
 }

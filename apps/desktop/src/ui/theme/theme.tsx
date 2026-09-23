@@ -1,27 +1,78 @@
-import { createContext, useContext, useEffect, useMemo, useState, type PropsWithChildren } from "react";
+import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useState, type PropsWithChildren } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { defaultThemeId, findTheme, type ThemeDefinition } from "./registry";
 import { hasWindowsBackdrop } from "./windowBackdrop";
+
+type AppearancePreferences = {
+  themeId: string;
+  accentOverride: string | null;
+  reduceTransparency: boolean;
+};
 
 type ThemeContextValue = {
   theme: ThemeDefinition;
   setThemeId: (themeId: string) => void;
   accentOverride: string | null;
   setAccentOverride: (accent: string | null) => void;
+  reduceTransparency: boolean;
+  setReduceTransparency: (reduce: boolean) => void;
 };
+
+const preferencesKey = "aeria.appearance";
+const defaultPreferences: AppearancePreferences = { themeId: defaultThemeId, accentOverride: null, reduceTransparency: false };
+
+/** Appearance is a per-machine renderer convenience, never project data. */
+function readPreferences(): AppearancePreferences {
+  try {
+    const stored = JSON.parse(localStorage.getItem(preferencesKey) ?? "null") as Partial<AppearancePreferences> | null;
+    if (!stored) return defaultPreferences;
+    return {
+      themeId: typeof stored.themeId === "string" ? stored.themeId : defaultThemeId,
+      accentOverride: typeof stored.accentOverride === "string" ? stored.accentOverride : null,
+      reduceTransparency: stored.reduceTransparency === true,
+    };
+  } catch {
+    return defaultPreferences;
+  }
+}
+
+function writePreferences(preferences: AppearancePreferences): void {
+  try {
+    localStorage.setItem(preferencesKey, JSON.stringify(preferences));
+  } catch {
+    // Appearance persistence must never block the editor.
+  }
+}
 
 const ThemeContext = createContext<ThemeContextValue | null>(null);
 
 export function ThemeProvider({ children }: PropsWithChildren) {
-  const [themeId, setThemeId] = useState(defaultThemeId);
-  const [accentOverride, setAccentOverride] = useState<string | null>(null);
-  const theme = findTheme(themeId);
+  const [preferences, setPreferences] = useState(readPreferences);
+  const theme = findTheme(preferences.themeId);
   const nativeBackdrop = hasWindowsBackdrop();
+
+  useEffect(() => {
+    function handleStorage(event: StorageEvent) {
+      if (event.key === preferencesKey) setPreferences(readPreferences());
+    }
+    window.addEventListener("storage", handleStorage);
+    return () => window.removeEventListener("storage", handleStorage);
+  }, []);
+
   useEffect(() => {
     if (!nativeBackdrop) return;
     void getCurrentWindow().setTheme(theme.appearance === "light" ? "light" : "dark").catch(() => undefined);
   }, [nativeBackdrop, theme.appearance]);
-  const style = useMemo(() => {
+
+  const update = useCallback((patch: Partial<AppearancePreferences>) => {
+    setPreferences((current) => {
+      const next = { ...current, ...patch };
+      writePreferences(next);
+      return next;
+    });
+  }, []);
+
+  const tokens = useMemo(() => {
     const { tokens } = theme;
     return {
       "--color-crust": tokens.crust,
@@ -33,29 +84,43 @@ export function ThemeProvider({ children }: PropsWithChildren) {
       "--color-text": tokens.text,
       "--color-subtext": tokens.subtext,
       "--color-overlay": tokens.overlay,
-      "--color-accent": accentOverride ?? tokens.accent,
+      "--color-accent": preferences.accentOverride ?? tokens.accent,
       "--color-accent-fg": tokens.accentForeground,
       "--color-danger": tokens.danger,
       "--color-warning": tokens.warning,
       "--color-success": tokens.success,
-      "--font-ui": '"Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif',
-      "--font-content": '"Segoe UI Variable Text", "Segoe UI", "Yu Gothic UI", "Meiryo", "Microsoft YaHei UI", "Malgun Gothic", sans-serif',
-      "--font-mono": '"Cascadia Mono", "Cascadia Code", Consolas, monospace',
-      "--font-size-ui": "12px",
-      "--font-size-compact": "11px",
-      "--font-size-status": "10.5px",
-      "--font-size-content": "12px",
-      "--font-size-editor": "13px",
-      "--font-size-mono": "10.5px",
-      "--font-size-macro": "11.5px",
-    } as React.CSSProperties;
-  }, [accentOverride, theme]);
+      "--color-macro": tokens.macro ?? null,
+    } satisfies Record<string, string | null>;
+  }, [preferences.accentOverride, theme]);
+
+  const value = useMemo<ThemeContextValue>(() => ({
+    theme,
+    setThemeId: (themeId) => update({ themeId }),
+    accentOverride: preferences.accentOverride,
+    setAccentOverride: (accentOverride) => update({ accentOverride }),
+    reduceTransparency: preferences.reduceTransparency,
+    setReduceTransparency: (reduceTransparency) => update({ reduceTransparency }),
+  }), [preferences.accentOverride, preferences.reduceTransparency, theme, update]);
+
+  const translucent = nativeBackdrop && !preferences.reduceTransparency && theme.appearance !== "highContrast";
+
+  // Tokens live on <html> so Radix portals (menus, dialogs, tooltips) that
+  // render outside the React root still resolve theme variables.
+  useLayoutEffect(() => {
+    const root = document.documentElement;
+    for (const [name, tokenValue] of Object.entries(tokens)) {
+      if (tokenValue === null) root.style.removeProperty(name);
+      else root.style.setProperty(name, tokenValue);
+    }
+    root.dataset.themeId = theme.id;
+    root.dataset.themeAppearance = theme.appearance;
+    if (translucent) root.dataset.nativeBackdrop = "true";
+    else delete root.dataset.nativeBackdrop;
+  }, [theme.appearance, theme.id, tokens, translucent]);
 
   return (
-    <ThemeContext.Provider value={{ theme, setThemeId, accentOverride, setAccentOverride }}>
-      <div className="theme-root" data-theme-id={theme.id} data-theme-appearance={theme.appearance} data-native-backdrop={nativeBackdrop ? "true" : undefined} style={style}>
-        {children}
-      </div>
+    <ThemeContext.Provider value={value}>
+      <div className="theme-root">{children}</div>
     </ThemeContext.Provider>
   );
 }

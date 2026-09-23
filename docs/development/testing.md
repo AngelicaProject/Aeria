@@ -15,3 +15,9 @@ Prioritize deterministic fixtures and regression cases around the highest-risk b
 - Packaging smoke tests on supported release targets.
 
 Tests must not depend on a user's installed game, credentials, network availability, or private repository data.
+
+`aeria-git` and desktop Git tests require a Git executable: `AERIA_GIT_PATH`
+when set (Windows CI points it at the staged MinGit), otherwise `git` on
+`PATH`. They isolate Git from user and system configuration
+(`GIT_CONFIG_GLOBAL`, `GIT_CONFIG_NOSYSTEM`) and use only temporary
+repositories and local bare remotes.

@@ -18,8 +18,9 @@ use serde::Serialize;
 use tauri::{Emitter, Manager, State};
 
 use crate::dto::{
-    ProjectOpenResultDto, ProjectSummaryDto, RecentProjectDto, ReviewStateDto, SourceBindingDto,
-    SourcePackageJobDto, TranslationOverlayDto, TranslationRowCursorDto, TranslationRowPageDto,
+    ProjectOpenResultDto, ProjectSummaryDto, RecentProjectDto, ReviewStateDto, SheetProgressDto,
+    SourceBindingDto, SourcePackageJobDto, TranslationOverlayDto, TranslationRowCursorDto,
+    TranslationRowPageDto,
 };
 use crate::error::CommandError;
 use crate::state::DesktopState;
@@ -30,7 +31,7 @@ const SOURCE_PACKAGES_DIRECTORY: &str = "source-packages";
 const STAGING_DIRECTORY: &str = "staging";
 const STAGING_FILE: &str = "source.hsp";
 
-async fn run_blocking<T, F>(operation: F) -> CommandResult<T>
+pub(crate) async fn run_blocking<T, F>(operation: F) -> CommandResult<T>
 where
     T: Send + 'static,
     F: FnOnce() -> CommandResult<T> + Send + 'static,
@@ -759,6 +760,32 @@ pub(crate) fn current_project_with_state(
 
 #[tauri::command(rename_all = "camelCase")]
 #[allow(clippy::needless_pass_by_value)]
+/// Returns per-sheet Workspace coverage for the active project.
+///
+/// # Errors
+///
+/// Returns a typed command error when no project is open or the desktop state
+/// lock cannot be read.
+pub fn translation_progress(
+    state: State<'_, DesktopState>,
+) -> CommandResult<Vec<SheetProgressDto>> {
+    translation_progress_with_state(&state)
+}
+
+pub(crate) fn translation_progress_with_state(
+    state: &DesktopState,
+) -> CommandResult<Vec<SheetProgressDto>> {
+    let project = state.lock_project()?;
+    let project = project.as_ref().ok_or_else(CommandError::no_project)?;
+    Ok(project
+        .translation_progress()
+        .into_iter()
+        .map(SheetProgressDto::from)
+        .collect())
+}
+
+#[tauri::command(rename_all = "camelCase")]
+#[allow(clippy::needless_pass_by_value)]
 /// Closes the active project. Closing an already closed desktop is successful.
 ///
 /// # Errors
@@ -934,7 +961,7 @@ pub(crate) fn set_translation_review_state_with_state(
         .and_then(|()| translation_overlay(project, translation_unit_id))
 }
 
-fn parse_translation_unit_id(value: &str) -> CommandResult<TranslationUnitId> {
+pub(crate) fn parse_translation_unit_id(value: &str) -> CommandResult<TranslationUnitId> {
     TranslationUnitId::from_str(value).map_err(CommandError::from)
 }
 
@@ -1594,6 +1621,10 @@ mod tests {
             page_translation_rows_with_state(&state, "Synthetic", None, 1).expect("initial page");
         assert_eq!(page.rows[0].cells[0].source_macro, "one");
         assert!(page.rows[0].cells[0].translation.is_none());
+        assert_eq!(
+            translation_progress_with_state(&state).expect("empty progress"),
+            Vec::new()
+        );
 
         let active_invalid_note =
             set_translation_note_with_state(&state, "not-a-tu", None).expect_err("invalid ID");
@@ -1630,8 +1661,23 @@ mod tests {
                 .expect("set review state");
         assert_eq!(review_overlay.translation_unit_id, first_id);
         assert_eq!(review_overlay.review_state, ReviewStateDto::Reviewed);
+        assert_eq!(
+            translation_progress_with_state(&state).expect("progress"),
+            vec![SheetProgressDto {
+                sheet_name: "Synthetic".to_owned(),
+                translated: 1,
+                reviewed: 1,
+                needs_review: 0,
+            }]
+        );
 
         close_project_with_state(&state).expect("close project");
+        assert_eq!(
+            translation_progress_with_state(&state)
+                .expect_err("closed progress")
+                .code,
+            CommandError::no_project().code
+        );
         assert_eq!(current_project_with_state(&state).expect("closed"), None);
         open_project_with_state(
             &state,

@@ -270,6 +270,54 @@ mod tests {
     }
 
     #[test]
+    fn reload_workspace_adopts_external_changes_and_keeps_state_on_failure() {
+        let _test_lock = persistence_test_lock();
+        let fixture = write_fixture();
+        let repository = tempfile::tempdir().expect("temporary repository");
+        let binding = SourceBinding::new("Synthetic", 42, 0, 0);
+        let mut writer = ProjectSession::initialize(
+            repository.path(),
+            &fixture.path,
+            repository.path().join("cache"),
+            "fr",
+        )
+        .expect("init");
+        let mut reader = ProjectSession::open(
+            repository.path(),
+            &fixture.path,
+            repository.path().join("cache-reader"),
+        )
+        .expect("open");
+
+        let id = writer.set_target(&binding, "Bonjour").expect("target");
+        assert!(reader.workspace().unit(id).is_none());
+        reader.reload_workspace().expect("reload");
+        assert_eq!(
+            reader.workspace().unit(id).expect("unit").target_macro(),
+            "Bonjour"
+        );
+        reader
+            .set_target(&binding, "Salut")
+            .expect("reloaded session can mutate");
+
+        let shard = repository.path().join(crate::unit_shard_path(id));
+        fs::write(
+            &shard,
+            "not json
+",
+        )
+        .expect("corrupt shard");
+        assert!(matches!(
+            reader.reload_workspace(),
+            Err(crate::ProjectSessionError::Store { .. })
+        ));
+        assert_eq!(
+            reader.workspace().unit(id).expect("unit").target_macro(),
+            "Salut"
+        );
+    }
+
+    #[test]
     fn first_unit_persistence_failure_rolls_back_creation() {
         let _test_lock = persistence_test_lock();
         let fixture = write_fixture();
