@@ -116,6 +116,7 @@ impl From<TranslationReadError> for CommandError {
 impl From<TranslationMutationError> for CommandError {
     fn from(error: TranslationMutationError) -> Self {
         let code = match &error {
+            TranslationMutationError::EmptyTarget => "emptyTranslationTarget",
             TranslationMutationError::SourceNotTranslatable { .. } => "sourceNotTranslatable",
             TranslationMutationError::Workspace(error) => workspace_error_code(error),
             TranslationMutationError::Persistence(_) => "translationPersistence",
@@ -200,6 +201,9 @@ mod tests {
         let read_error =
             CommandError::from(TranslationReadError::InvalidPageLimit { limit: 0, max: 256 });
         assert_eq!(read_error.code, "translationRead");
+
+        let empty_target_error = CommandError::from(TranslationMutationError::EmptyTarget);
+        assert_eq!(empty_target_error.code, "emptyTranslationTarget");
 
         let mutation_error = CommandError::from(TranslationMutationError::Workspace(
             WorkspaceError::UnitNotFound {

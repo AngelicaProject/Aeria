@@ -136,10 +136,13 @@ with the source macro text.
 
 Each cell has an independent target draft, note draft, translation-unit ID,
 and review state. Target and note text do not autosave: both use explicit save
-actions. Review-state changes persist immediately. Mutations still address one
-cell-level `SourceBinding` at a time, and each successful mutation patches that
-cell from the returned `TranslationOverlayDto`. A row is dirty when any
-contained cell has a dirty target or note.
+actions. Empty or whitespace-only target drafts cannot be saved; the editor
+keeps Save disabled until the target contains non-whitespace content, and the
+Rust mutation API enforces the same rule. Review-state changes persist
+immediately. Mutations still address one cell-level `SourceBinding` at a time,
+and each successful mutation patches that cell from the returned
+`TranslationOverlayDto`. A row is dirty when any contained cell has a dirty
+target or note.
 
 When the selected string has uncommitted Git changes, the target pane shows a
 word-level diff between the last checkpoint and the current draft, or notes that

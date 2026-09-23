@@ -10,6 +10,10 @@ use crate::{ProjectSession, WorkspaceError, WorkspaceStoreError};
 /// Errors raised while applying one transactional translation mutation.
 #[derive(Debug, Error)]
 pub enum TranslationMutationError {
+    /// The requested target contains no non-whitespace content.
+    #[error("translation target must not be empty or whitespace-only")]
+    EmptyTarget,
+
     /// The exact source occurrence is not granted by the verified HSG.
     #[error(
         "source occurrence is not translatable according to source guidance: {source_binding:?}"
@@ -42,17 +46,21 @@ impl ProjectSession {
     ///
     /// A missing unit is created with a stable ID derived from the verified
     /// HXS occurrence. An existing unit keeps its durable ID and uses the
-    /// normal workspace target-edit semantics. An explicitly empty target is
-    /// a real sparse unit, not an instruction to remove one.
+    /// normal workspace target-edit semantics. Empty and whitespace-only
+    /// targets are rejected before any workspace or persistence mutation.
     ///
     /// # Errors
     ///
-    /// Returns a typed workspace, persistence, or source-integrity error.
+    /// Returns a typed empty-target, workspace, persistence, or
+    /// source-integrity error.
     pub fn set_target(
         &mut self,
         source_binding: &SourceBinding,
         target_macro: &str,
     ) -> Result<TranslationUnitId, TranslationMutationError> {
+        if target_macro.trim().is_empty() {
+            return Err(TranslationMutationError::EmptyTarget);
+        }
         if !self.source_package.guidance_index().is_translatable(
             source_binding.sheet_name(),
             source_binding.row_id(),

@@ -807,35 +807,46 @@ fn session_mutations_create_update_and_read_back_the_committed_state() {
 }
 
 #[test]
-fn empty_target_creates_explicit_sparse_state() {
+fn empty_and_whitespace_targets_are_rejected_without_mutating_workspace_or_files() {
     let fixture = write_fixture();
     let repository = tempfile::tempdir().expect("temporary repository");
-    let binding = SourceBinding::new("Synthetic", 7, 0, 0);
+    let binding = SourceBinding::new("Synthetic", 42, 0, 0);
     let mut session = initialize_project(&repository, &fixture.package_path, "fr");
+    let before = managed_files(repository.path());
+
+    for target in ["", " \t\n", "\u{2003}"] {
+        assert!(matches!(
+            session.set_target(&binding, target),
+            Err(TranslationMutationError::EmptyTarget)
+        ));
+        assert!(
+            session
+                .workspace()
+                .unit_by_source_binding(&binding)
+                .is_none()
+        );
+        assert_eq!(before, managed_files(repository.path()));
+    }
 
     let id = session
-        .set_target(&binding, "")
-        .expect("empty target should create a unit");
-    let page = session
-        .page_translation_rows("Synthetic", None, 2)
-        .expect("read explicit empty target");
-    let overlay = page.rows[0].cells[0]
-        .translation
-        .as_ref()
-        .expect("empty target remains present");
-    assert_eq!(overlay.translation_unit_id, id);
-    assert_eq!(overlay.target_macro, "");
-
-    drop(session);
-    let reopened = open_project(&repository, &fixture.package_path);
-    assert_eq!(
-        reopened
-            .workspace()
-            .unit(id)
-            .expect("empty unit")
-            .target_macro(),
-        ""
-    );
+        .set_target(&binding, "Bonjour")
+        .expect("non-empty target should create a unit");
+    let before_existing = managed_files(repository.path());
+    for target in ["", " \t\n", "\u{2003}"] {
+        assert!(matches!(
+            session.set_target(&binding, target),
+            Err(TranslationMutationError::EmptyTarget)
+        ));
+        assert_eq!(
+            session
+                .workspace()
+                .unit(id)
+                .expect("unit remains")
+                .target_macro(),
+            "Bonjour"
+        );
+        assert_eq!(before_existing, managed_files(repository.path()));
+    }
 }
 
 #[test]
