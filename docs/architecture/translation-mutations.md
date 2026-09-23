@@ -34,9 +34,10 @@ creates the sparse unit. When a unit already exists, its durable ID, binding,
 and source fingerprint are preserved while the existing workspace target
 semantics apply.
 
-An empty target is explicit state. The first `set_target(binding, "")`
-creates a real `TranslationUnit` with an empty `target_macro`; it does not
-mean that the source is untranslated and does not delete a unit.
+`set_target` rejects empty or whitespace-only targets before changing the
+in-memory workspace or writing a shard. Existing Workspace Format v1 records
+with an empty target remain readable under the frozen persisted contract, but
+ordinary target edits cannot create or update a unit to an empty value.
 
 Target changes reset review state to `Draft` through
 `Workspace::update_target`. Setting the identical target is a successful

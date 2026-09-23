@@ -158,9 +158,10 @@ const TranslationEditorImpl = forwardRef<TranslationEditorHandle, TranslationEdi
   const mutation = mutations.find((candidate) => candidate.bindingKey === selectedKey)?.kind ?? null;
   const draft = selectedCell ? draftForCell(selectedCell, drafts) : null;
   const targetDirty = selectedCell !== null && draft !== null && draft.target !== (selectedCell.translation?.targetMacro ?? "");
+  const targetIsBlank = draft !== null && draft.target.trim().length === 0;
   const noteDirty = selectedCell?.translation != null && draft !== null && draft.note !== (selectedCell.translation.translatorNote ?? "");
   const cellBusy = mutation !== null;
-  const targetCanSave = selectedCell !== null && !cellBusy && (selectedCell.translation === null || targetDirty);
+  const targetCanSave = selectedCell !== null && !cellBusy && !targetIsBlank && (selectedCell.translation === null || targetDirty);
   const noteCanSave = selectedCell?.translation != null && !cellBusy && noteDirty;
 
   const updateDraft = useCallback((cell: TranslationCellDto, field: keyof CellDraft, value: string) => {
@@ -317,12 +318,12 @@ const TranslationEditorImpl = forwardRef<TranslationEditorHandle, TranslationEdi
           />
           <div className="editor-pane-foot">
             <span className="editor-hint">
-              {translation === null && !targetDirty ? "Saving an empty target creates an explicit translation entry." : targetDirty ? "Unsaved" : null}
+              {targetIsBlank ? "Enter a translation before saving." : targetDirty ? "Unsaved" : null}
             </span>
             <button className="button button-secondary" type="button" disabled={cellBusy} title={targetCanSave ? "Save and go to the next string (Ctrl+Enter)" : "Go to the next string (Alt+Down)"} onClick={() => saveTarget(true)}>
               {targetCanSave ? "Save & next" : "Next"}<UiIcon icon="arrowDown" size="xs" />
             </button>
-            <button className="button button-primary" type="button" disabled={!targetCanSave} title="Save target (Ctrl+S)" onClick={() => saveTarget(false)}>
+            <button className="button button-primary" type="button" disabled={!targetCanSave} title={targetIsBlank ? "Enter a translation before saving (Ctrl+S)" : "Save target (Ctrl+S)"} onClick={() => saveTarget(false)}>
               {mutation === "target" ? "Saving…" : "Save"}<kbd className="button-kbd">Ctrl S</kbd>
             </button>
           </div>

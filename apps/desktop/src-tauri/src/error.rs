@@ -116,6 +116,7 @@ impl From<TranslationReadError> for CommandError {
 impl From<TranslationMutationError> for CommandError {
     fn from(error: TranslationMutationError) -> Self {
         let code = match &error {
+            TranslationMutationError::EmptyTarget => "emptyTranslationTarget",
             TranslationMutationError::SourceNotTranslatable { .. } => "sourceNotTranslatable",
             TranslationMutationError::Workspace(error) => workspace_error_code(error),
             TranslationMutationError::Persistence(_) => "translationPersistence",
