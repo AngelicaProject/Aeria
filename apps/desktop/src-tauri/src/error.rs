@@ -202,6 +202,9 @@ mod tests {
             CommandError::from(TranslationReadError::InvalidPageLimit { limit: 0, max: 256 });
         assert_eq!(read_error.code, "translationRead");
 
+        let empty_target_error = CommandError::from(TranslationMutationError::EmptyTarget);
+        assert_eq!(empty_target_error.code, "emptyTranslationTarget");
+
         let mutation_error = CommandError::from(TranslationMutationError::Workspace(
             WorkspaceError::UnitNotFound {
                 id: TranslationUnitId::from_bytes([0; 32]),
