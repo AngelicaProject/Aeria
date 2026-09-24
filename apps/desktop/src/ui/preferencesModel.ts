@@ -1,3 +1,5 @@
+import { languagePreferences, type LanguagePreference } from "../i18n/translate.ts";
+
 /**
  * Per-machine renderer preferences. They are presentation conveniences stored
  * in local storage and never enter project data.
@@ -5,6 +7,7 @@
 export type ListDensity = "compact" | "comfortable";
 
 export type Preferences = {
+  language: LanguagePreference;
   interfaceZoom: number;
   editorFontSize: number;
   highlightMacros: boolean;
@@ -17,6 +20,7 @@ export const interfaceZoomOptions = [0.9, 1, 1.1, 1.25] as const;
 export const editorFontSizes = [12, 13, 14, 15, 16, 18, 20] as const;
 
 export const defaultPreferences: Preferences = {
+  language: "system",
   interfaceZoom: 1,
   editorFontSize: 14,
   highlightMacros: true,
@@ -40,6 +44,7 @@ export function parsePreferences(raw: string | null): Preferences {
   }
   const boolean = (key: keyof Preferences) => typeof stored[key] === "boolean" ? stored[key] as boolean : defaultPreferences[key] as boolean;
   return {
+    language: pick(stored.language, languagePreferences, defaultPreferences.language),
     interfaceZoom: pick(stored.interfaceZoom, interfaceZoomOptions, defaultPreferences.interfaceZoom),
     editorFontSize: pick(stored.editorFontSize, editorFontSizes, defaultPreferences.editorFontSize),
     highlightMacros: boolean("highlightMacros"),

@@ -12,3 +12,9 @@ test("preferences fall back to defaults for missing, malformed, or unknown value
   assert.equal(parsed.highlightMacros, false);
   assert.equal(parsed.focusTargetOnNext, defaultPreferences.focusTargetOnNext);
 });
+
+test("interface language accepts supported choices only", () => {
+  assert.equal(parsePreferences(JSON.stringify({ language: "ru" })).language, "ru");
+  assert.equal(parsePreferences(JSON.stringify({ language: "system" })).language, "system");
+  assert.equal(parsePreferences(JSON.stringify({ language: "de" })).language, defaultPreferences.language);
+});

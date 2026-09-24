@@ -1,10 +1,14 @@
 use std::path::Path;
 
-use aeria_core::{ReviewState, SourceBinding, TranslationUnitId};
+use aeria_core::{
+    DetachReason, ReviewState, SourceBinding, SourceStatus, TranslationUnit, TranslationUnitId,
+};
 use aeria_projects::RegistryEntry;
+use aeria_rebase::SheetSchemaUpdate;
 use aeria_workspace::{
-    ProjectSession, SheetTranslationProgress, TranslationCellView, TranslationContextCellView,
-    TranslationOverlayView, TranslationRowCursor, TranslationRowPage, TranslationRowView,
+    ProjectSession, SheetTranslationProgress, SourceUpdateReport, TranslationCellView,
+    TranslationContextCellView, TranslationOverlayView, TranslationRowCursor, TranslationRowPage,
+    TranslationRowView,
 };
 use serde::{Deserialize, Serialize};
 
@@ -102,6 +106,7 @@ pub struct ProjectSummaryDto {
     pub game_version: String,
     pub scope: String,
     pub sheets: Vec<ProjectSheetDto>,
+    pub detached_unit_count: usize,
 }
 
 impl ProjectSummaryDto {
@@ -133,10 +138,11 @@ impl ProjectSummaryDto {
             source_language: workspace_metadata.source_language().to_owned(),
             target_language: workspace_metadata.target_language().to_owned(),
             source_content_id: workspace_metadata.source_content_id().to_owned(),
-            source_snapshot_id: workspace_metadata.source_snapshot_id().to_owned(),
+            source_snapshot_id: source_metadata.snapshot_id,
             game_version: source_metadata.game_version,
             scope: source_metadata.scope,
             sheets,
+            detached_unit_count: session.detached_units().count(),
         }
     }
 }
@@ -171,6 +177,135 @@ impl From<SheetTranslationProgress> for SheetProgressDto {
 pub struct ProjectOpenResultDto {
     pub project: ProjectSummaryDto,
     pub warning: Option<CommandError>,
+    /// Present when opening applied a source update.
+    pub source_update: Option<SourceUpdateReportDto>,
+}
+
+/// Why a translation unit is detached from the current source.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum DetachReasonDto {
+    SheetRemoved,
+    SheetUnavailable,
+    RowRemoved,
+    CellRemoved,
+    ColumnUnresolved,
+    NotTranslatable,
+    BindingConflict,
+}
+
+impl From<DetachReason> for DetachReasonDto {
+    fn from(reason: DetachReason) -> Self {
+        match reason {
+            DetachReason::SheetRemoved => Self::SheetRemoved,
+            DetachReason::SheetUnavailable => Self::SheetUnavailable,
+            DetachReason::RowRemoved => Self::RowRemoved,
+            DetachReason::CellRemoved => Self::CellRemoved,
+            DetachReason::ColumnUnresolved => Self::ColumnUnresolved,
+            DetachReason::NotTranslatable => Self::NotTranslatable,
+            DetachReason::BindingConflict => Self::BindingConflict,
+        }
+    }
+}
+
+/// A sheet whose managed units were bound in another schema generation.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SheetSchemaUpdateDto {
+    pub sheet_name: String,
+    pub removed: bool,
+    /// The sheet still exists in the game but the source could not read it.
+    pub unavailable: bool,
+    pub mapped_columns: usize,
+    pub unresolved_columns: usize,
+}
+
+impl From<&SheetSchemaUpdate> for SheetSchemaUpdateDto {
+    fn from(update: &SheetSchemaUpdate) -> Self {
+        let mapped_columns = update
+            .columns
+            .iter()
+            .filter(|column| column.column.is_some())
+            .count();
+        Self {
+            sheet_name: update.sheet_name.clone(),
+            removed: update.schema_hash.is_none() && !update.unavailable,
+            unavailable: update.unavailable,
+            mapped_columns,
+            unresolved_columns: update.columns.len() - mapped_columns,
+        }
+    }
+}
+
+/// Counts and schema changes of a previewed or applied source update.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SourceUpdateReportDto {
+    pub previous_content_id: String,
+    pub content_id: String,
+    pub game_version: String,
+    pub previous_format_version: u8,
+    pub unchanged: usize,
+    pub encoding_changed: usize,
+    pub source_changed: usize,
+    pub detached: usize,
+    pub newly_detached: usize,
+    pub reattached: usize,
+    pub column_mapped: usize,
+    pub row_moved: usize,
+    pub changed_units: usize,
+    pub sheet_schema_updates: Vec<SheetSchemaUpdateDto>,
+}
+
+impl From<&SourceUpdateReport> for SourceUpdateReportDto {
+    fn from(report: &SourceUpdateReport) -> Self {
+        let plan = &report.plan;
+        let summary = plan.summary;
+        Self {
+            previous_content_id: plan.previous_content_id.clone(),
+            content_id: plan.source_snapshot.content_id.clone(),
+            game_version: plan.source_snapshot.game_version.clone(),
+            previous_format_version: report.previous_format_version,
+            unchanged: summary.unchanged,
+            encoding_changed: summary.encoding_changed,
+            source_changed: summary.source_changed,
+            detached: summary.detached,
+            newly_detached: summary.newly_detached,
+            reattached: summary.reattached,
+            column_mapped: summary.column_mapped,
+            row_moved: summary.row_moved,
+            changed_units: summary.changed_units,
+            sheet_schema_updates: plan.sheet_schema_updates.iter().map(Into::into).collect(),
+        }
+    }
+}
+
+/// A translation unit preserved without a current source occurrence.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DetachedUnitDto {
+    pub translation_unit_id: String,
+    pub last_source_binding: SourceBindingDto,
+    pub reason: DetachReasonDto,
+    pub target_macro: String,
+    pub review_state: ReviewStateDto,
+    pub translator_note: Option<String>,
+}
+
+impl DetachedUnitDto {
+    pub(crate) fn from_unit(unit: &TranslationUnit) -> Option<Self> {
+        let SourceStatus::Detached(reason) = unit.source_status() else {
+            return None;
+        };
+        Some(Self {
+            translation_unit_id: unit.id().to_string(),
+            last_source_binding: unit.source_binding().into(),
+            reason: reason.into(),
+            target_macro: unit.target_macro().to_owned(),
+            review_state: unit.review_state().into(),
+            translator_note: unit.translator_note().map(str::to_owned),
+        })
+    }
 }
 
 /// Cheap filesystem-only presentation state for one recent project.
@@ -270,6 +405,8 @@ impl From<TranslationContextCellView> for TranslationContextCellDto {
 pub struct TranslationCellDto {
     pub source_binding: SourceBindingDto,
     pub source_macro: String,
+    /// The source has no letters outside protected structure.
+    pub formatting_only: bool,
     pub translation: Option<TranslationOverlayDto>,
 }
 
@@ -278,6 +415,7 @@ impl From<TranslationCellView> for TranslationCellDto {
         Self {
             source_binding: (&cell.source_binding).into(),
             source_macro: cell.source_macro,
+            formatting_only: cell.formatting_only,
             translation: cell.translation.map(Into::into),
         }
     }
@@ -392,6 +530,7 @@ mod tests {
                     TranslationCellView {
                         source_binding: translated_binding,
                         source_macro: "source".to_owned(),
+                        formatting_only: false,
                         translation: Some(TranslationOverlayView {
                             translation_unit_id: translated_id,
                             target_macro: String::new(),
@@ -401,7 +540,8 @@ mod tests {
                     },
                     TranslationCellView {
                         source_binding: empty_binding,
-                        source_macro: "untranslated".to_owned(),
+                        source_macro: "...".to_owned(),
+                        formatting_only: true,
                         translation: None,
                     },
                 ],
@@ -424,7 +564,34 @@ mod tests {
         assert_eq!(overlay.review_state, ReviewStateDto::NeedsReview);
         assert_eq!(overlay.translator_note.as_deref(), Some("check later"));
         assert!(dto.rows[0].cells[1].translation.is_none());
+        assert!(!dto.rows[0].cells[0].formatting_only);
+        assert!(dto.rows[0].cells[1].formatting_only);
         assert_eq!(dto.next_after.expect("cursor").row_id, 7);
+    }
+
+    #[test]
+    fn only_detached_units_map_to_detached_dtos() {
+        let unit = TranslationUnit::new(
+            TranslationUnitId::from_bytes([0xcd; 32]),
+            SourceBinding::new("Addon", 4021, 0, 2),
+            aeria_core::SourceFingerprint::new(
+                aeria_core::Sha256Hash::from_bytes([1; 32]),
+                None,
+                aeria_core::Sha256Hash::from_bytes([2; 32]),
+            ),
+            "Готово",
+        );
+        assert!(DetachedUnitDto::from_unit(&unit).is_none());
+
+        let mut detached = unit;
+        detached.set_review_state(ReviewState::Reviewed);
+        detached.detach(DetachReason::ColumnUnresolved);
+        let dto = DetachedUnitDto::from_unit(&detached).expect("detached unit");
+        assert_eq!(dto.reason, DetachReasonDto::ColumnUnresolved);
+        assert_eq!(dto.last_source_binding.row_id, 4021);
+        assert_eq!(dto.last_source_binding.column_index, 2);
+        assert_eq!(dto.target_macro, "Готово");
+        assert_eq!(dto.review_state, ReviewStateDto::Reviewed);
     }
 
     #[test]

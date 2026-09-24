@@ -9,13 +9,15 @@ use tauri::Manager;
 
 pub use commands::{
     cancel_source_package, close_project, current_project, forget_recent_project,
-    initialize_project, initialize_project_from_game, list_recent_projects, open_project,
-    open_recent_project, page_translation_rows, set_translation_note, set_translation_review_state,
-    set_translation_target, start_source_package, translation_progress,
+    initialize_project, initialize_project_from_game, list_detached_units, list_recent_projects,
+    open_project, open_recent_project, page_translation_rows, preview_source_update,
+    set_translation_note, set_translation_review_state, set_translation_target,
+    start_source_package, translation_progress, update_project_from_game,
 };
 pub use dto::{
-    ProjectOpenResultDto, ProjectSheetDto, ProjectSummaryDto, RecentProjectAvailability,
-    RecentProjectDto, ReviewStateDto, SheetProgressDto, SourceBindingDto, SourcePackageJobDto,
+    DetachReasonDto, DetachedUnitDto, ProjectOpenResultDto, ProjectSheetDto, ProjectSummaryDto,
+    RecentProjectAvailability, RecentProjectDto, ReviewStateDto, SheetProgressDto,
+    SheetSchemaUpdateDto, SourceBindingDto, SourcePackageJobDto, SourceUpdateReportDto,
     TranslationCellDto, TranslationContextCellDto, TranslationOverlayDto, TranslationRowCursorDto,
     TranslationRowDto, TranslationRowPageDto, TranslationUnitIdDto,
 };
@@ -64,6 +66,9 @@ pub fn run() {
             initialize_project,
             start_source_package,
             initialize_project_from_game,
+            update_project_from_game,
+            preview_source_update,
+            list_detached_units,
             cancel_source_package,
             current_project,
             close_project,

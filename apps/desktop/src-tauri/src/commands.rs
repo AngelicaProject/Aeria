@@ -12,15 +12,15 @@ use aeria_core::{ReviewState, SourceBinding, TranslationUnitId};
 use aeria_hsp::SourcePackage;
 use aeria_projects::{ProjectMetadata, ProjectRegistry, REGISTRY_FILE_NAME, RegistryEntry};
 use aeria_workspace::TranslationRowCursor;
-use aeria_workspace::{ProjectSession, ProjectSessionError};
+use aeria_workspace::{ProjectSession, ProjectSessionError, WorkspaceStore};
 use serde::Serialize;
 
 use tauri::{Emitter, Manager, State};
 
 use crate::dto::{
-    ProjectOpenResultDto, ProjectSummaryDto, RecentProjectDto, ReviewStateDto, SheetProgressDto,
-    SourceBindingDto, SourcePackageJobDto, TranslationOverlayDto, TranslationRowCursorDto,
-    TranslationRowPageDto,
+    DetachedUnitDto, ProjectOpenResultDto, ProjectSummaryDto, RecentProjectDto, ReviewStateDto,
+    SheetProgressDto, SourceBindingDto, SourcePackageJobDto, SourceUpdateReportDto,
+    TranslationOverlayDto, TranslationRowCursorDto, TranslationRowPageDto,
 };
 use crate::error::CommandError;
 use crate::state::DesktopState;
@@ -53,6 +53,15 @@ fn remember_project(
     project: ProjectSummaryDto,
     registry_path: Result<PathBuf, String>,
 ) -> ProjectOpenResultDto {
+    remember_project_with_update(state, project, registry_path, None)
+}
+
+fn remember_project_with_update(
+    state: &DesktopState,
+    project: ProjectSummaryDto,
+    registry_path: Result<PathBuf, String>,
+    source_update: Option<SourceUpdateReportDto>,
+) -> ProjectOpenResultDto {
     let warning = match registry_path {
         Ok(path) => {
             let timestamp = SystemTime::now()
@@ -83,7 +92,11 @@ fn remember_project(
         }
         Err(message) => Some(CommandError::new("projectRegistryWrite", message)),
     };
-    ProjectOpenResultDto { project, warning }
+    ProjectOpenResultDto {
+        project,
+        warning,
+        source_update,
+    }
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -97,14 +110,19 @@ pub struct SourcePackageEventPayload {
 #[allow(clippy::needless_pass_by_value)]
 /// Opens an existing project and makes it the active desktop project.
 ///
+/// When the workspace is not current for the package source, the command
+/// fails with `sourceUpdateRequired` unless `accept_source_update` is set, in
+/// which case the deterministic source update is applied first.
+///
 /// # Errors
 ///
 /// Returns a typed command error when source verification, workspace loading,
-/// compatibility validation, or state locking fails.
+/// compatibility validation, the source update, or state locking fails.
 pub async fn open_project(
     app: tauri::AppHandle,
     repository_root: String,
     source_package_path: String,
+    accept_source_update: Option<bool>,
 ) -> CommandResult<ProjectOpenResultDto> {
     let cache_root = app
         .path()
@@ -113,13 +131,24 @@ pub async fn open_project(
     let registry_path = app_registry_path(&app);
     run_blocking(move || {
         let state = app.state::<DesktopState>();
-        let project =
-            open_project_with_state(&state, repository_root, source_package_path, cache_root)?;
-        Ok(remember_project(&state, project, registry_path))
+        let source_package = open_source_package(Path::new(&source_package_path), cache_root)?;
+        let (project, source_update) = open_package_with_state(
+            &state,
+            repository_root,
+            source_package,
+            accept_source_update.unwrap_or(false),
+        )?;
+        Ok(remember_project_with_update(
+            &state,
+            project,
+            registry_path,
+            source_update,
+        ))
     })
     .await
 }
 
+#[cfg(test)]
 pub(crate) fn open_project_with_state(
     state: &DesktopState,
     repository_root: String,
@@ -129,6 +158,98 @@ pub(crate) fn open_project_with_state(
     let replacement = ProjectSession::open(repository_root, source_package_path, cache_root)
         .map_err(CommandError::from)?;
     replace_project(state, replacement)
+}
+
+fn open_source_package(path: &Path, cache_root: PathBuf) -> CommandResult<SourcePackage> {
+    SourcePackage::open(path, cache_root).map_err(|source| {
+        CommandError::from(ProjectSessionError::Source {
+            path: path.to_owned(),
+            source,
+        })
+    })
+}
+
+/// Opens a project from a validated package, applying a required source
+/// update only when the caller accepted it.
+pub(crate) fn open_package_with_state(
+    state: &DesktopState,
+    repository_root: impl Into<PathBuf>,
+    source_package: SourcePackage,
+    accept_source_update: bool,
+) -> CommandResult<(ProjectSummaryDto, Option<SourceUpdateReportDto>)> {
+    if !accept_source_update {
+        let replacement = ProjectSession::open_from_source_package(repository_root, source_package)
+            .map_err(CommandError::from)?;
+        return Ok((replace_project(state, replacement)?, None));
+    }
+    let (replacement, report) =
+        ProjectSession::open_with_source_update(repository_root, source_package)
+            .map_err(CommandError::from)?;
+    let report = report.as_ref().map(SourceUpdateReportDto::from);
+    Ok((replace_project(state, replacement)?, report))
+}
+
+#[tauri::command(rename_all = "camelCase")]
+#[allow(clippy::needless_pass_by_value)]
+/// Plans the source update that opening a project with a package would
+/// apply, without writing anything or changing the active project.
+///
+/// # Errors
+///
+/// Returns a typed command error when the package or workspace cannot be
+/// read, the source language differs, or the plan cannot be built.
+pub async fn preview_source_update(
+    app: tauri::AppHandle,
+    repository_root: String,
+    source_package_path: String,
+) -> CommandResult<SourceUpdateReportDto> {
+    let cache_root = app
+        .path()
+        .app_cache_dir()
+        .map_err(|error| CommandError::new("cachePath", error.to_string()))?;
+    run_blocking(move || {
+        preview_source_update_with_paths(
+            Path::new(&repository_root),
+            Path::new(&source_package_path),
+            cache_root,
+        )
+    })
+    .await
+}
+
+pub(crate) fn preview_source_update_with_paths(
+    repository_root: &Path,
+    source_package_path: &Path,
+    cache_root: PathBuf,
+) -> CommandResult<SourceUpdateReportDto> {
+    let source_package = open_source_package(source_package_path, cache_root)?;
+    ProjectSession::preview_source_update(repository_root, &source_package)
+        .map(|report| SourceUpdateReportDto::from(&report))
+        .map_err(CommandError::from)
+}
+
+#[tauri::command(rename_all = "camelCase")]
+#[allow(clippy::needless_pass_by_value)]
+/// Lists translation units of the active project that are preserved without
+/// a current source occurrence.
+///
+/// # Errors
+///
+/// Returns a typed command error when no project is open or the desktop state
+/// lock cannot be read.
+pub fn list_detached_units(state: State<'_, DesktopState>) -> CommandResult<Vec<DetachedUnitDto>> {
+    list_detached_units_with_state(&state)
+}
+
+pub(crate) fn list_detached_units_with_state(
+    state: &DesktopState,
+) -> CommandResult<Vec<DetachedUnitDto>> {
+    let project = state.lock_project()?;
+    let project = project.as_ref().ok_or_else(CommandError::no_project)?;
+    Ok(project
+        .detached_units()
+        .filter_map(DetachedUnitDto::from_unit)
+        .collect())
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -220,6 +341,7 @@ pub async fn list_recent_projects(app: tauri::AppHandle) -> CommandResult<Vec<Re
 pub async fn open_recent_project(
     app: tauri::AppHandle,
     project_id: String,
+    accept_source_update: Option<bool>,
 ) -> CommandResult<ProjectOpenResultDto> {
     let cache_root = app
         .path()
@@ -229,7 +351,13 @@ pub async fn open_recent_project(
         .map_err(|message| CommandError::new("projectRegistryRead", message))?;
     run_blocking(move || {
         let state = app.state::<DesktopState>();
-        open_recent_project_from_registry(&state, &project_id, cache_root, registry_path)
+        open_recent_project_from_registry(
+            &state,
+            &project_id,
+            cache_root,
+            registry_path,
+            accept_source_update.unwrap_or(false),
+        )
     })
     .await
 }
@@ -239,6 +367,7 @@ fn open_recent_project_from_registry(
     project_id: &str,
     cache_root: PathBuf,
     registry_path: PathBuf,
+    accept_source_update: bool,
 ) -> CommandResult<ProjectOpenResultDto> {
     let entry = {
         let _lock = state.lock_registry()?;
@@ -256,14 +385,31 @@ fn open_recent_project_from_registry(
             })?
     };
 
-    open_recent_project_with_entry(state, &entry, cache_root, registry_path)
+    open_recent_project_with_entry_and_update(
+        state,
+        &entry,
+        cache_root,
+        registry_path,
+        accept_source_update,
+    )
 }
 
+#[cfg(test)]
 fn open_recent_project_with_entry(
     state: &DesktopState,
     entry: &RegistryEntry,
     cache_root: PathBuf,
     registry_path: PathBuf,
+) -> CommandResult<ProjectOpenResultDto> {
+    open_recent_project_with_entry_and_update(state, entry, cache_root, registry_path, false)
+}
+
+fn open_recent_project_with_entry_and_update(
+    state: &DesktopState,
+    entry: &RegistryEntry,
+    cache_root: PathBuf,
+    registry_path: PathBuf,
+    accept_source_update: bool,
 ) -> CommandResult<ProjectOpenResultDto> {
     let repository_root = PathBuf::from(&entry.repository_root);
     if !repository_root.is_dir() {
@@ -304,10 +450,14 @@ fn open_recent_project_with_entry(
         ));
     }
 
-    let replacement = ProjectSession::open_from_source_package(repository_root, source_package)
-        .map_err(CommandError::from)?;
-    let project = replace_project(state, replacement)?;
-    Ok(remember_project(state, project, Ok(registry_path)))
+    let (project, source_update) =
+        open_package_with_state(state, repository_root, source_package, accept_source_update)?;
+    Ok(remember_project_with_update(
+        state,
+        project,
+        Ok(registry_path),
+        source_update,
+    ))
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -415,6 +565,67 @@ pub async fn initialize_project_from_game(
     }
 }
 
+/// Generates a source package from the local game installation for an
+/// existing project and opens the project with the deterministic source
+/// update applied. The source language is read from the project.
+///
+/// # Errors
+///
+/// Returns a typed error when the job is no longer active, the project cannot
+/// be read, Atlas cannot run, package publication or validation fails, or the
+/// source update fails.
+#[tauri::command(rename_all = "camelCase")]
+pub async fn update_project_from_game(
+    app: tauri::AppHandle,
+    state: State<'_, DesktopState>,
+    job_id: String,
+    repository_root: String,
+    game_path: String,
+) -> CommandResult<ProjectOpenResultDto> {
+    let token = state.atlas_job_token(&job_id)?;
+    let worker_job_id = job_id.clone();
+    let worker_token = token.clone();
+    let worker_app = app.clone();
+    let worker_root = repository_root.clone();
+    let worker = tauri::async_runtime::spawn_blocking(move || {
+        let source_language = WorkspaceStore::new(&worker_root)
+            .read_metadata()
+            .map_err(CommandError::from)?
+            .source_language()
+            .to_owned();
+        generate_source_package(
+            &worker_app,
+            &worker_job_id,
+            &worker_token,
+            game_path,
+            source_language,
+        )
+    });
+    let result = match worker.await {
+        Ok(result) => result,
+        Err(error) => Err(CommandError::internal_state(format!(
+            "Atlas update worker failed: {error}"
+        ))),
+    };
+    match result {
+        Ok(source_package) => {
+            let result = state.with_atlas_publication(&job_id, &token, |_| {
+                require_not_cancelled(&token)?;
+                open_package_with_state(&state, repository_root, source_package, true)
+            });
+            state.finish_atlas_job(&job_id)?;
+            let registry_path = app_registry_path(&app);
+            result.map(|(project, source_update)| {
+                remember_project_with_update(&state, project, registry_path, source_update)
+            })
+        }
+        Err(error) => {
+            state.finish_atlas_job(&job_id)?;
+            Err(error)
+        }
+    }
+}
+
 /// Cancels the active source-package generation job with the supplied ID.
 ///
 /// # Errors
@@ -437,6 +648,24 @@ fn initialize_project_from_game_inner(
     source_language: String,
     target_language: String,
 ) -> Result<PreparedAtlasProject, CommandError> {
+    let source_package =
+        generate_source_package(app, job_id, cancellation, game_path, source_language)?;
+    Ok(PreparedAtlasProject {
+        repository_root,
+        source_package,
+        target_language,
+    })
+}
+
+/// Runs Atlas for one installed game and returns the validated, published
+/// immutable source package.
+fn generate_source_package(
+    app: &tauri::AppHandle,
+    job_id: &str,
+    cancellation: &CancellationToken,
+    game_path: String,
+    source_language: String,
+) -> Result<SourcePackage, CommandError> {
     let executable_path = resolve_atlas_executable(app)?;
     let app_data = app
         .path()
@@ -487,11 +716,7 @@ fn initialize_project_from_game_inner(
         cancellation,
     )?;
     require_not_cancelled(cancellation)?;
-    Ok(PreparedAtlasProject {
-        repository_root,
-        source_package,
-        target_language,
-    })
+    Ok(source_package)
 }
 
 struct PreparedAtlasProject {
@@ -1238,6 +1463,7 @@ mod tests {
             &entry.id,
             repository.path().join("cache"),
             path,
+            false,
         )
         .expect("open recent project");
         assert_eq!(
@@ -1260,6 +1486,7 @@ mod tests {
             "missing-local-id",
             repository.path().join("cache"),
             path,
+            false,
         )
         .expect_err("unknown recent project");
         assert_eq!(error.code, "recentProjectNotFound");
@@ -1322,7 +1549,7 @@ mod tests {
     }
 
     #[test]
-    fn recent_project_replacement_mismatch_precedes_workspace_compatibility() {
+    fn recent_project_replacement_mismatch_is_reported_even_for_compatible_content() {
         let (repository, state, registry_path, entry) =
             seed_recent_project("recent-replacement-mismatch");
         let remembered_entry = entry.clone();
@@ -1343,15 +1570,12 @@ mod tests {
                 .expect("replacement package should be valid");
         assert_ne!(replacement.package_id(), entry.source_package_id);
 
-        let compatibility_error = match ProjectSession::open(
+        ProjectSession::open(
             repository.path(),
             &source_path,
             repository.path().join("direct-cache"),
-        ) {
-            Ok(_) => panic!("replacement package should be workspace-incompatible"),
-            Err(error) => CommandError::from(error),
-        };
-        assert_eq!(compatibility_error.code, "projectCompatibility");
+        )
+        .expect("a replacement with identical content is workspace-compatible");
 
         let error =
             open_recent_project_with_entry(&state, &entry, cache_root, registry_path.clone())

@@ -3,6 +3,7 @@ import { isTauri } from "@tauri-apps/api/core";
 import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
 import { ApplicationMenu, type ApplicationMenuDefinition } from "./ApplicationMenu";
 import { UiIcon } from "../ui/primitives/UiIcon";
+import { useI18n } from "../ui/i18n";
 import appIcon from "../assets/app-icon-20.png";
 
 type WindowChromeProps = {
@@ -69,6 +70,7 @@ async function configureWindow(mode: WindowChromeProps["mode"]): Promise<void> {
 }
 
 export function WindowChrome({ mode, title, subtitle, center, menus = [], actions, onClose }: WindowChromeProps) {
+  const { t } = useI18n();
   const [maximized, setMaximized] = useState(false);
 
   useEffect(() => {
@@ -143,10 +145,10 @@ export function WindowChrome({ mode, title, subtitle, center, menus = [], action
         ) : null}
       </div>
       {actions ? <div className="titlebar-actions">{actions}</div> : null}
-      <div className="window-controls" role="group" aria-label="Window controls">
-        <button className="window-control" type="button" aria-label="Minimize window" onClick={handleMinimize}><UiIcon icon="minus" size="sm" /></button>
-        {resizable ? <button className="window-control" type="button" aria-label={maximized ? "Restore window" : "Maximize window"} onClick={() => void handleToggleMaximize()}><UiIcon icon={maximized ? "copy" : "square"} size="xs" /></button> : null}
-        <button className="window-control close" type="button" aria-label="Close window" onClick={handleClose}><UiIcon icon="x" size="sm" /></button>
+      <div className="window-controls" role="group" aria-label={t("window.controls")}>
+        <button className="window-control" type="button" aria-label={t("window.minimize")} onClick={handleMinimize}><UiIcon icon="minus" size="sm" /></button>
+        {resizable ? <button className="window-control" type="button" aria-label={t(maximized ? "window.restore" : "window.maximize")} onClick={() => void handleToggleMaximize()}><UiIcon icon={maximized ? "copy" : "square"} size="xs" /></button> : null}
+        <button className="window-control close" type="button" aria-label={t("window.close")} onClick={handleClose}><UiIcon icon="x" size="sm" /></button>
       </div>
     </header>
   );

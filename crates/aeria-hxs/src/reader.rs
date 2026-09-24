@@ -7,14 +7,14 @@ use rusqlite::{Connection, OpenFlags, params};
 
 use crate::error::HxsError;
 use crate::types::{
-    EvidenceStringOccurrence, EvidenceStringRow, EvidenceStringRowPage, RowPage, RowRecord,
-    SheetMetadata, SnapshotMetadata, StringCell, StringOccurrenceCoordinate,
+    EvidenceStringOccurrence, EvidenceStringRow, EvidenceStringRowPage, ExcludedSheet, RowPage,
+    RowRecord, SheetMetadata, SnapshotMetadata, StringCell, StringOccurrenceCoordinate,
     StringOccurrenceFingerprint, StringOccurrencePage, StringOccurrenceRecord,
     StringOccurrenceRecordPage, StringRowCoordinate, StringRowRecord, StringRowRecordPage,
 };
 use crate::validation::{
-    APPLICATION_ID, FORMAT_VERSION, VerifiedSnapshot, read_cached_snapshot, read_row_record,
-    read_string_cell, validate_and_read,
+    APPLICATION_ID, LATEST_FORMAT_VERSION, VerifiedSnapshot, is_supported_format_version,
+    read_cached_snapshot, read_row_record, read_string_cell, validate_and_read,
 };
 use crate::{
     MAX_EVIDENCE_STRING_ROW_PAGE_SIZE, MAX_ROW_PAGE_SIZE, MAX_STRING_OCCURRENCE_PAGE_SIZE,
@@ -26,15 +26,16 @@ pub struct HxsSnapshot {
     connection: Connection,
     metadata: SnapshotMetadata,
     sheets: Vec<SheetMetadata>,
+    excluded_sheets: Vec<ExcludedSheet>,
     sheet_ids: HashMap<String, i64>,
 }
 
 impl HxsSnapshot {
-    /// Opens and fully verifies an HXS v1 file without taking ownership of or modifying it.
+    /// Opens and fully verifies an HXS v1 or v2 file without taking ownership of or modifying it.
     ///
     /// # Errors
     ///
-    /// Returns an error when the file cannot be opened read-only, does not have the HXS v1
+    /// Returns an error when the file cannot be opened read-only, does not have a supported HXS
     /// identity, has an invalid schema, or fails any logical verification check.
     pub fn open(path: impl AsRef<Path>) -> Result<Self, HxsError> {
         let trace = PerfTrace::new();
@@ -46,7 +47,11 @@ impl HxsSnapshot {
             .map_err(HxsError::storage)?;
         validate_identity(&connection)?;
         trace.mark("hxs.identity");
-        let VerifiedSnapshot { metadata, sheets } = validate_and_read(&connection)?;
+        let VerifiedSnapshot {
+            metadata,
+            sheets,
+            excluded_sheets,
+        } = validate_and_read(&connection)?;
         trace.mark("hxs.schema-integrity-and-row-hash-validation");
         let sheet_ids = sheets
             .iter()
@@ -56,6 +61,7 @@ impl HxsSnapshot {
             connection,
             metadata,
             sheets: sheets.into_iter().map(|(_, sheet)| sheet).collect(),
+            excluded_sheets,
             sheet_ids,
         })
     }
@@ -78,7 +84,11 @@ impl HxsSnapshot {
             .execute_batch("PRAGMA query_only = ON; PRAGMA foreign_keys = ON;")
             .map_err(HxsError::storage)?;
         validate_identity(&connection)?;
-        let VerifiedSnapshot { metadata, sheets } = read_cached_snapshot(&connection)?;
+        let VerifiedSnapshot {
+            metadata,
+            sheets,
+            excluded_sheets,
+        } = read_cached_snapshot(&connection)?;
         let sheet_ids = sheets
             .iter()
             .map(|(id, sheet)| (sheet.name.clone(), *id))
@@ -87,6 +97,7 @@ impl HxsSnapshot {
             connection,
             metadata,
             sheets: sheets.into_iter().map(|(_, sheet)| sheet).collect(),
+            excluded_sheets,
             sheet_ids,
         })
     }
@@ -101,6 +112,13 @@ impl HxsSnapshot {
     #[must_use]
     pub fn sheets(&self) -> Vec<SheetMetadata> {
         self.sheets.clone()
+    }
+
+    /// Enumerates catalog sheets that the producer could not store, ordered by
+    /// ordinal name. Always empty for HXS v1.
+    #[must_use]
+    pub fn excluded_sheets(&self) -> &[ExcludedSheet] {
+        &self.excluded_sheets
     }
 
     /// Returns verified metadata for one sheet, if it exists.
@@ -869,9 +887,9 @@ fn validate_identity(connection: &Connection) -> Result<(), HxsError> {
         });
     }
     let format_version = read_pragma_i64(connection, "user_version")?;
-    if format_version != FORMAT_VERSION {
+    if !is_supported_format_version(format_version) {
         return Err(HxsError::UnsupportedFormatVersion {
-            expected: FORMAT_VERSION,
+            expected: LATEST_FORMAT_VERSION,
             found: format_version,
         });
     }

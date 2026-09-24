@@ -7,6 +7,8 @@ import { Segmented } from "../ui/primitives/Segmented";
 import { UiIcon } from "../ui/primitives/UiIcon";
 import { MacroEditor, focusMacroEditor } from "./MacroEditor";
 import { ReviewDot, reviewLabel } from "./ReviewDot";
+import { useI18n } from "../ui/i18n";
+import type { MessageKey } from "../i18n/translate";
 
 export type CellDraft = {
   target: string;
@@ -29,15 +31,22 @@ export type CheckpointBaseline = {
   noteChanged: boolean;
 };
 
+function unchangedTextLabel(baseline: CheckpointBaseline): MessageKey {
+  if (baseline.reviewChanged && baseline.noteChanged) return "editor.diff.reviewAndNoteChanged";
+  if (baseline.reviewChanged) return "editor.diff.reviewChanged";
+  if (baseline.noteChanged) return "editor.diff.noteChanged";
+  return "editor.diff.same";
+}
+
 function CheckpointDiff({ baseline, current }: { baseline: CheckpointBaseline; current: string }) {
+  const { t } = useI18n();
   if (baseline.target === null) {
-    return <div className="checkpoint-diff"><span className="checkpoint-diff-label added">New since the last checkpoint</span></div>;
+    return <div className="checkpoint-diff"><span className="checkpoint-diff-label added">{t("editor.diff.new")}</span></div>;
   }
   const textChanged = baseline.target !== current;
-  const extra = [baseline.reviewChanged ? "review state" : null, baseline.noteChanged ? "note" : null].filter(Boolean).join(" and ");
   return (
     <div className="checkpoint-diff">
-      <span className="checkpoint-diff-label">{textChanged ? "Changes since the last checkpoint" : extra ? `Text unchanged; ${extra} changed since the last checkpoint` : "Same text as the last checkpoint"}</span>
+      <span className="checkpoint-diff-label">{t(textChanged ? "editor.diff.changed" : unchangedTextLabel(baseline))}</span>
       {textChanged ? (
         <div className="checkpoint-diff-text">
           {diffWords(baseline.target, current).map((part, index) => part.kind === "same"
@@ -71,11 +80,7 @@ type TranslationEditorProps = {
   checkpoint: CheckpointBaseline | null;
 };
 
-const reviewOptions: Array<{ value: ReviewState; label: string }> = [
-  { value: "draft", label: "Draft" },
-  { value: "needsReview", label: "Needs review" },
-  { value: "reviewed", label: "Reviewed" },
-];
+const reviewOptions: readonly ReviewState[] = ["draft", "needsReview", "reviewed"];
 
 function draftsForRow(row: TranslationRowDto | null): Record<string, CellDraft> {
   if (!row) return {};
@@ -127,6 +132,7 @@ const TranslationEditorImpl = forwardRef<TranslationEditorHandle, TranslationEdi
   takeFocusRequest,
   checkpoint,
 }, ref) {
+  const { t } = useI18n();
   const [showDiff, setShowDiff] = useState(true);
   const [drafts, setDrafts] = useState<Record<string, CellDraft>>({});
   const draftsRef = useRef(drafts);
@@ -216,11 +222,11 @@ const TranslationEditorImpl = forwardRef<TranslationEditorHandle, TranslationEdi
 
   if (!row || !selectedCell || !draft) {
     return (
-      <section className="editor editor-empty" aria-label="Translation editor">
+      <section className="editor editor-empty" aria-label={t("editor.label")}>
         <div className="empty-state">
           <UiIcon icon="languages" size="xl" />
-          <strong>Select a string to translate</strong>
-          <p>Pick a row in the list above. <Kbd keys={["Alt", "Down"]} /> moves to the next string.</p>
+          <strong>{t("editor.emptyTitle")}</strong>
+          <p>{t("editor.emptyHintBefore")} <Kbd keys={["Alt", "Down"]} /> {t("editor.emptyHintAfter")}</p>
         </div>
       </section>
     );
@@ -230,13 +236,13 @@ const TranslationEditorImpl = forwardRef<TranslationEditorHandle, TranslationEdi
   const domId = domKey(bindingKey(selectedCell.sourceBinding));
 
   return (
-    <section className="editor" aria-label="Translation editor" aria-busy={cellBusy}>
+    <section className="editor" aria-label={t("editor.label")} aria-busy={cellBusy}>
       <header className="editor-bar">
         <div className="editor-ident">
           <ReviewDot state={translation?.reviewState ?? null} />
-          <span className="editor-coord mono" title={`${row.sheetName} row ${row.rowId}, subrow ${row.subrowId}`}>{row.rowId}:{row.subrowId}</span>
+          <span className="editor-coord mono" title={t("editor.rowTitle", { sheet: row.sheetName, row: String(row.rowId), subrow: String(row.subrowId) })}>{row.rowId}:{row.subrowId}</span>
           {row.cells.length > 1 ? (
-            <div className="field-tabs" role="tablist" aria-label="Fields in this row">
+            <div className="field-tabs" role="tablist" aria-label={t("editor.fields")}>
               {row.cells.map((cell) => {
                 const key = bindingKey(cell.sourceBinding);
                 const active = key === selectedKey;
@@ -244,72 +250,73 @@ const TranslationEditorImpl = forwardRef<TranslationEditorHandle, TranslationEdi
                 return (
                   <button className={active ? "field-tab active" : "field-tab"} type="button" role="tab" aria-selected={active} key={key} onClick={() => onSelectCell(cell.sourceBinding)}>
                     <ReviewDot state={cell.translation?.reviewState ?? null} />
-                    col {cell.sourceBinding.columnIndex}
-                    {dirty ? <span className="dirty-mark" aria-label="edited" /> : null}
+                    {t("common.column", { column: String(cell.sourceBinding.columnIndex) })}
+                    {dirty ? <span className="dirty-mark" aria-label={t("common.edited")} /> : null}
                   </button>
                 );
               })}
             </div>
-          ) : <span className="editor-field mono">col {selectedCell.sourceBinding.columnIndex}</span>}
+          ) : <span className="editor-field mono">{t("common.column", { column: String(selectedCell.sourceBinding.columnIndex) })}</span>}
         </div>
         <div className="editor-view-switch">
         <Segmented
-          label="Editor view"
+          label={t("editor.view")}
           value="text"
           onChange={() => undefined}
           options={[
-            { value: "text", label: "Text" },
-            { value: "preview", label: <><UiIcon icon="gamepad" size="xs" /> In-game</>, disabled: true, title: "In-game preview is not available in this build" },
+            { value: "text", label: t("editor.viewText") },
+            { value: "preview", label: <><UiIcon icon="gamepad" size="xs" /> {t("editor.viewInGame")}</>, disabled: true, title: t("editor.inGameUnavailable") },
           ]}
         />
         </div>
         <div className="editor-bar-end">
-          {rowDirty ? <span className="pill pill-warn">Unsaved</span> : null}
-          <div className="review-control" title={translation ? undefined : "Save a target first"}>
+          {rowDirty ? <span className="pill pill-warn">{t("common.unsaved")}</span> : null}
+          <div className="review-control" title={translation ? undefined : t("editor.saveTargetFirst")}>
             <Segmented
-              label="Review state"
+              label={t("editor.reviewState")}
               value={translation?.reviewState ?? null}
               disabled={!translation || cellBusy}
               onChange={(state) => onReviewChange(selectedCell, state, () => discardDrafts(null, null))}
-              options={reviewOptions.map((option) => ({ value: option.value, label: <><ReviewDot decorative state={option.value} />{option.label}</>, className: `review-${option.value}` }))}
+              options={reviewOptions.map((state) => ({ value: state, label: <><ReviewDot decorative state={state} />{t(reviewLabel(state))}</>, className: `review-${state}` }))}
             />
           </div>
-          <IconButton icon="undo" label="Revert unsaved changes" disabled={!rowDirty || mutations.length > 0} onClick={revert} />
+          <IconButton icon="undo" label={t("editor.revert")} disabled={!rowDirty || mutations.length > 0} onClick={revert} />
         </div>
       </header>
 
       <div className="editor-grid">
         <div className="editor-pane editor-source">
           <div className="editor-pane-head">
-            <span className="eyebrow">Source</span>
+            <span className="eyebrow">{t("editor.source")}</span>
             <span className="chip">{sourceLanguage.toUpperCase()}</span>
+            {selectedCell.formattingOnly ? <span className="chip" title={t("list.formattingHint")}>{t("list.kind.formatting")}</span> : null}
             <span className="spacer" />
-            <IconButton icon="copyPlus" label="Copy source to target" disabled={cellBusy} onClick={copySource} />
+            <IconButton icon="copyPlus" label={t("editor.copySource")} disabled={cellBusy} onClick={copySource} />
           </div>
-          <MacroEditor className="editor-surface" value={selectedCell.sourceMacro} readOnly ariaLabel={`Source text for column ${selectedCell.sourceBinding.columnIndex}`} placeholder="(empty source)" onNavigate={onNavigate} />
+          <MacroEditor className="editor-surface" value={selectedCell.sourceMacro} readOnly ariaLabel={t("editor.sourceText", { column: String(selectedCell.sourceBinding.columnIndex) })} placeholder={t("editor.emptySource")} onNavigate={onNavigate} />
           {row.context.length > 0 ? (
             <details className="context-block">
-              <summary><UiIcon icon="chevronRight" size="xs" />Context <span className="count">{row.context.length}</span></summary>
-              <ul>{row.context.map((cell) => <li key={`${cell.columnIndex}:${cell.sourceMacro}`}><span className="mono">col {cell.columnIndex}</span><span>{cell.sourceMacro}</span></li>)}</ul>
+              <summary><UiIcon icon="chevronRight" size="xs" />{t("editor.context")} <span className="count">{row.context.length}</span></summary>
+              <ul>{row.context.map((cell) => <li key={`${cell.columnIndex}:${cell.sourceMacro}`}><span className="mono">{t("common.column", { column: String(cell.columnIndex) })}</span><span>{cell.sourceMacro}</span></li>)}</ul>
             </details>
           ) : null}
         </div>
 
         <div className="editor-pane editor-target" ref={targetHostRef}>
           <div className="editor-pane-head">
-            <span className="eyebrow">Target</span>
-            {targetDirty ? <span className="edited-label">edited</span> : null}
-            {mutation === "target" ? <span className="saving-label"><span className="spinner spinner-xs" />Saving</span> : null}
+            <span className="eyebrow">{t("editor.target")}</span>
+            {targetDirty ? <span className="edited-label">{t("common.edited")}</span> : null}
+            {mutation === "target" ? <span className="saving-label"><span className="spinner spinner-xs" />{t("editor.savingInline")}</span> : null}
             <span className="spacer" />
-            {checkpoint ? <IconButton icon="gitCompareArrows" label={showDiff ? "Hide changes since the last checkpoint" : "Show changes since the last checkpoint"} pressed={showDiff} onClick={() => setShowDiff((current) => !current)} className={`git-mark git-mark-${checkpoint.kind}`} /> : null}
+            {checkpoint ? <IconButton icon="gitCompareArrows" label={t(showDiff ? "editor.hideDiff" : "editor.showDiff")} pressed={showDiff} onClick={() => setShowDiff((current) => !current)} className={`git-mark git-mark-${checkpoint.kind}`} /> : null}
           </div>
           {checkpoint && showDiff ? <CheckpointDiff baseline={checkpoint} current={draft.target} /> : null}
           <MacroEditor
             key={bindingKey(selectedCell.sourceBinding)}
             className="editor-surface"
             value={draft.target}
-            ariaLabel={`Target text for column ${selectedCell.sourceBinding.columnIndex}`}
-            placeholder="Type the translation…"
+            ariaLabel={t("editor.targetText", { column: String(selectedCell.sourceBinding.columnIndex) })}
+            placeholder={t("editor.targetPlaceholder")}
             disabled={cellBusy}
             onChange={(value) => updateDraft(selectedCell, "target", value)}
             onSave={() => saveTarget(false)}
@@ -318,21 +325,21 @@ const TranslationEditorImpl = forwardRef<TranslationEditorHandle, TranslationEdi
           />
           <div className="editor-pane-foot">
             <span className="editor-hint">
-              {targetIsBlank ? "Enter a translation before saving." : targetDirty ? "Unsaved" : null}
+              {targetIsBlank ? t("editor.enterTranslation") : targetDirty ? t("common.unsaved") : null}
             </span>
-            <button className="button button-secondary" type="button" disabled={cellBusy} title={targetCanSave ? "Save and go to the next string (Ctrl+Enter)" : "Go to the next string (Alt+Down)"} onClick={() => saveTarget(true)}>
-              {targetCanSave ? "Save & next" : "Next"}<UiIcon icon="arrowDown" size="xs" />
+            <button className="button button-secondary" type="button" disabled={cellBusy} title={t(targetCanSave ? "editor.saveNextTitle" : "editor.nextTitle")} onClick={() => saveTarget(true)}>
+              {t(targetCanSave ? "editor.saveNext" : "editor.next")}<UiIcon icon="arrowDown" size="xs" />
             </button>
-            <button className="button button-primary" type="button" disabled={!targetCanSave} title={targetIsBlank ? "Enter a translation before saving (Ctrl+S)" : "Save target (Ctrl+S)"} onClick={() => saveTarget(false)}>
-              {mutation === "target" ? "Saving…" : "Save"}<kbd className="button-kbd">Ctrl S</kbd>
+            <button className="button button-primary" type="button" disabled={!targetCanSave} title={t(targetIsBlank ? "editor.saveBlankTitle" : "editor.saveTitle")} onClick={() => saveTarget(false)}>
+              {t(mutation === "target" ? "common.saving" : "common.save")}<kbd className="button-kbd">Ctrl S</kbd>
             </button>
           </div>
         </div>
 
         <aside className="editor-pane editor-note">
           <div className="editor-pane-head">
-            <label className="eyebrow" htmlFor={`translator-note-${domId}`}>Translator note</label>
-            {noteDirty ? <span className="edited-label">edited</span> : null}
+            <label className="eyebrow" htmlFor={`translator-note-${domId}`}>{t("editor.note")}</label>
+            {noteDirty ? <span className="edited-label">{t("common.edited")}</span> : null}
           </div>
           <textarea
             id={`translator-note-${domId}`}
@@ -340,12 +347,12 @@ const TranslationEditorImpl = forwardRef<TranslationEditorHandle, TranslationEdi
             value={draft.note}
             onChange={(event) => updateDraft(selectedCell, "note", event.target.value)}
             onKeyDown={(event) => { if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s") { event.preventDefault(); saveNote(); } }}
-            placeholder={translation ? "Context for other translators…" : "Save a target to add a note."}
+            placeholder={t(translation ? "editor.notePlaceholder" : "editor.noteDisabled")}
             disabled={!translation || cellBusy}
           />
           <div className="editor-pane-foot">
-            <span className="editor-hint">{translation ? reviewLabel(translation.reviewState) : "No translation yet"}</span>
-            <button className="button button-secondary" type="button" onClick={saveNote} disabled={!noteCanSave}>{mutation === "note" ? "Saving…" : "Save note"}</button>
+            <span className="editor-hint">{t(translation ? reviewLabel(translation.reviewState) : "editor.noTranslation")}</span>
+            <button className="button button-secondary" type="button" onClick={saveNote} disabled={!noteCanSave}>{t(mutation === "note" ? "common.saving" : "editor.saveNote")}</button>
           </div>
         </aside>
       </div>

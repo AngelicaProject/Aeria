@@ -1,16 +1,17 @@
 //! Sparse translation workspace operations over verified HXS source.
-//! This crate owns the source adapter, in-memory workspace operations, and
-//! Workspace Format v1 persistence.
+//! This crate owns the source adapter, in-memory workspace operations,
+//! Workspace Format persistence, and the atomic application of source
+//! updates planned by `aeria-rebase`.
 
 #![forbid(unsafe_code)]
 
 use std::collections::BTreeMap;
 
 use aeria_core::{
-    DomainValueError, ReviewState, Sha256Hash, SourceBinding, SourceFingerprint, TranslationUnit,
-    TranslationUnitId, TranslationUnitIdError, WorkspaceMetadata,
+    DomainValueError, ReviewState, Sha256Hash, SourceBinding, SourceFingerprint, SourceLayout,
+    TranslationUnit, TranslationUnitId, TranslationUnitIdError, WorkspaceMetadata,
 };
-use aeria_hxs::{HxsError, HxsHash, HxsSnapshot};
+use aeria_hxs::{ColumnType, HxsError, HxsHash, HxsSnapshot};
 use aeria_se::{Diagnostic, SemanticValidity, parse};
 use thiserror::Error;
 
@@ -18,6 +19,7 @@ mod mutation;
 mod persistence;
 mod read;
 mod session;
+mod update;
 
 pub use mutation::TranslationMutationError;
 pub use persistence::{
@@ -29,7 +31,8 @@ pub use read::{
     TranslationContextCellView, TranslationOverlayView, TranslationReadError, TranslationRowCursor,
     TranslationRowPage, TranslationRowView,
 };
-pub use session::{ProjectSession, ProjectSessionError};
+pub use session::{ProjectSession, ProjectSessionError, SourceUpdateRequirement};
+pub use update::SourceUpdateReport;
 
 /// Errors raised by the in-memory translation workspace.
 #[derive(Debug, Error)]
@@ -54,10 +57,6 @@ pub enum WorkspaceError {
     #[error("source content ID mismatch: workspace has {expected:?}, snapshot has {found:?}")]
     SourceContentMismatch { expected: String, found: String },
 
-    /// The workspace and verified source are bound to different snapshots.
-    #[error("source snapshot ID mismatch: workspace has {expected:?}, snapshot has {found:?}")]
-    SourceSnapshotMismatch { expected: String, found: String },
-
     /// Identity inputs exceeded the v1 canonical framing limit.
     #[error("could not derive translation-unit ID: {0}")]
     Identity(#[from] TranslationUnitIdError),
@@ -74,16 +73,22 @@ pub enum WorkspaceError {
     #[error("translation unit ID already exists: {id}")]
     DuplicateUnitId { id: TranslationUnitId },
 
-    /// A current source coordinate is already owned by another unit.
+    /// A current source coordinate is already owned by another bound unit.
     #[error("source binding already belongs to another translation unit: {binding:?}")]
     DuplicateSourceBinding { binding: SourceBinding },
+
+    /// The operation requires a bound unit, but the unit is detached.
+    #[error("translation unit {id} is detached from the current source")]
+    DetachedUnit { id: TranslationUnitId },
 }
 
 /// A deterministic, sparse in-memory translation workspace.
 ///
 /// Only units explicitly created by the caller are held. Source cells are
 /// fetched on demand from an already verified [`HxsSnapshot`]; the workspace
-/// does not enumerate or cache the source corpus.
+/// does not enumerate or cache the source corpus. The binding index contains
+/// bound units only; detached units keep their last binding but own no
+/// current source occurrence.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Workspace {
     metadata: WorkspaceMetadata,
@@ -112,12 +117,8 @@ impl Workspace {
         target_language: impl Into<String>,
     ) -> Result<Self, WorkspaceError> {
         let source = snapshot.metadata();
-        let metadata = WorkspaceMetadata::new(
-            source.source_language,
-            target_language,
-            source.content_id,
-            source.snapshot_id,
-        )?;
+        let metadata =
+            WorkspaceMetadata::new(source.source_language, target_language, source.content_id)?;
         Ok(Self::new(metadata))
     }
 
@@ -138,7 +139,12 @@ impl Workspace {
         self.units.get(&id)
     }
 
-    /// Finds a unit by its current source coordinate.
+    /// Returns detached units in deterministic translation-unit ID order.
+    pub fn detached_units(&self) -> impl Iterator<Item = &TranslationUnit> {
+        self.units.values().filter(|unit| !unit.is_bound())
+    }
+
+    /// Finds the bound unit at a current source coordinate.
     #[must_use]
     pub fn unit_by_source_binding(&self, binding: &SourceBinding) -> Option<&TranslationUnit> {
         self.source_bindings
@@ -169,7 +175,7 @@ impl Workspace {
         target_macro: &str,
     ) -> Result<TranslationUnitId, WorkspaceError> {
         let binding = SourceBinding::new(sheet_name, row_id, subrow_id, column_index);
-        self.create_unit_from_verified_source(snapshot, binding, target_macro)
+        self.create_unit_from_verified_source(snapshot, binding, target_macro, None)
     }
 
     /// Updates a target after validating its intrinsic `SeString` syntax.
@@ -218,19 +224,24 @@ impl Workspace {
         Ok(())
     }
 
-    fn create_unit_from_verified_source(
+    /// Creates a draft unit from a verified String cell with the row key of
+    /// its row, when the sheet is keyed.
+    pub(crate) fn create_unit_from_verified_source(
         &mut self,
         snapshot: &HxsSnapshot,
         binding: SourceBinding,
         target_macro: &str,
+        row_key: Option<Sha256Hash>,
     ) -> Result<TranslationUnitId, WorkspaceError> {
         self.require_compatible_snapshot(snapshot)?;
-        let fingerprint = verified_fingerprint(snapshot, &binding)?;
+        let (fingerprint, layout) = verified_source(snapshot, &binding)?;
         validate_target(target_macro)?;
         let id =
             TranslationUnitId::derive(self.metadata.source_language(), &binding, &fingerprint)?;
 
-        let unit = TranslationUnit::new(id, binding, fingerprint, target_macro);
+        let unit = TranslationUnit::new(id, binding, fingerprint, target_macro)
+            .with_source_layout(layout)
+            .with_source_row_key(row_key);
         self.insert_unit(unit)?;
         Ok(id)
     }
@@ -241,18 +252,21 @@ impl Workspace {
         if self.units.contains_key(&id) {
             return Err(WorkspaceError::DuplicateUnitId { id });
         }
-        if self.source_bindings.contains_key(&binding) {
-            return Err(WorkspaceError::DuplicateSourceBinding { binding });
+        if unit.is_bound() {
+            if self.source_bindings.contains_key(&binding) {
+                return Err(WorkspaceError::DuplicateSourceBinding { binding });
+            }
+            self.source_bindings.insert(binding, id);
         }
-
         self.units.insert(id, unit);
-        self.source_bindings.insert(binding, id);
         Ok(())
     }
 
     pub(crate) fn remove_unit(&mut self, id: TranslationUnitId) -> Option<TranslationUnit> {
         let unit = self.units.remove(&id)?;
-        self.source_bindings.remove(unit.source_binding());
+        if unit.is_bound() {
+            self.source_bindings.remove(unit.source_binding());
+        }
         Some(unit)
     }
 
@@ -264,8 +278,8 @@ impl Workspace {
             .get_mut(&id)
             .expect("transaction rollback target must still exist");
         debug_assert_eq!(existing.source_binding(), &binding);
+        debug_assert_eq!(existing.source_status(), unit.source_status());
         *existing = unit;
-        debug_assert_eq!(self.source_bindings.get(&binding), Some(&id));
     }
 
     fn from_loaded(
@@ -273,7 +287,7 @@ impl Workspace {
         units: BTreeMap<TranslationUnitId, TranslationUnit>,
     ) -> Result<Self, WorkspaceError> {
         let mut source_bindings = BTreeMap::new();
-        for (id, unit) in &units {
+        for (id, unit) in units.iter().filter(|(_, unit)| unit.is_bound()) {
             let binding = unit.source_binding().clone();
             if source_bindings.insert(binding.clone(), *id).is_some() {
                 return Err(WorkspaceError::DuplicateSourceBinding { binding });
@@ -305,9 +319,14 @@ impl Workspace {
     }
 
     fn unit_mut(&mut self, id: TranslationUnitId) -> Result<&mut TranslationUnit, WorkspaceError> {
-        self.units
+        let unit = self
+            .units
             .get_mut(&id)
-            .ok_or(WorkspaceError::UnitNotFound { id })
+            .ok_or(WorkspaceError::UnitNotFound { id })?;
+        if !unit.is_bound() {
+            return Err(WorkspaceError::DetachedUnit { id });
+        }
+        Ok(unit)
     }
 
     pub(crate) fn require_compatible_snapshot(
@@ -327,14 +346,28 @@ impl Workspace {
                 found: source.content_id,
             });
         }
-        if source.snapshot_id != self.metadata.source_snapshot_id() {
-            return Err(WorkspaceError::SourceSnapshotMismatch {
-                expected: self.metadata.source_snapshot_id().to_owned(),
-                found: source.snapshot_id,
-            });
-        }
         Ok(())
     }
+}
+
+/// Reads the verified fingerprint and layout of one String occurrence.
+pub(crate) fn verified_source(
+    snapshot: &HxsSnapshot,
+    binding: &SourceBinding,
+) -> Result<(SourceFingerprint, SourceLayout), WorkspaceError> {
+    let not_found = || WorkspaceError::SourceCellNotFound {
+        binding: binding.clone(),
+    };
+    let sheet = snapshot.sheet(binding.sheet_name()).ok_or_else(not_found)?;
+    let column = sheet
+        .columns
+        .iter()
+        .find(|column| {
+            column.index == binding.column_index() && column.column_type == ColumnType::String
+        })
+        .ok_or_else(not_found)?;
+    let layout = source_layout_from_hashes(&sheet.hashes.schema, column.offset);
+    Ok((verified_fingerprint(snapshot, binding)?, layout))
 }
 
 fn verified_fingerprint(
@@ -375,6 +408,16 @@ pub(crate) fn source_fingerprint_from_hashes(
     )
 }
 
+pub(crate) fn source_layout_from_hashes(
+    sheet_schema_hash: &HxsHash,
+    column_offset: u32,
+) -> SourceLayout {
+    SourceLayout::new(
+        Sha256Hash::from_bytes(*sheet_schema_hash.as_bytes()),
+        column_offset,
+    )
+}
+
 fn validate_target(target_macro: &str) -> Result<(), WorkspaceError> {
     let validation = parse(target_macro).semantic_validation();
     if matches!(
@@ -406,7 +449,7 @@ mod tests {
     }
 
     fn test_metadata() -> WorkspaceMetadata {
-        WorkspaceMetadata::new("en", "fr", "content", "snapshot").expect("test metadata is valid")
+        WorkspaceMetadata::new("en", "fr", "content").expect("test metadata is valid")
     }
 
     fn assert_index_consistent(workspace: &Workspace) {

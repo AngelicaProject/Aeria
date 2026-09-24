@@ -12,11 +12,11 @@ pub use error::HxsError;
 pub use reader::HxsSnapshot;
 pub use types::{
     ColumnMetadata, ColumnType, EvidenceStringOccurrence, EvidenceStringRow, EvidenceStringRowPage,
-    HxsHash, ProducerMetadata, RowHashes, RowPage, RowRecord, SheetHashes, SheetMetadata,
-    SheetVariant, SnapshotCounts, SnapshotMetadata, StringCell, StringCellHashes,
-    StringOccurrenceCoordinate, StringOccurrenceFingerprint, StringOccurrencePage,
-    StringOccurrenceRecord, StringOccurrenceRecordPage, StringRowCoordinate, StringRowRecord,
-    StringRowRecordPage,
+    ExcludedSheet, HxsHash, ProducerMetadata, RowHashes, RowPage, RowRecord, SheetExclusionReason,
+    SheetHashes, SheetMetadata, SheetVariant, SnapshotCounts, SnapshotMetadata, StringCell,
+    StringCellHashes, StringOccurrenceCoordinate, StringOccurrenceFingerprint,
+    StringOccurrencePage, StringOccurrenceRecord, StringOccurrenceRecordPage, StringRowCoordinate,
+    StringRowRecord, StringRowRecordPage,
 };
 
 /// Maximum number of rows returned by one [`HxsSnapshot::page_rows`] call.

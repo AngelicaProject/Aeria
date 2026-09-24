@@ -1,8 +1,10 @@
 # Workspace Format v1 layout evaluation
 
-This document records the evidence supporting the frozen contract in
-[`workspace-v1.md`](./workspace-v1.md). It is rationale, not a second format
-specification.
+This document records the evidence supporting the repository layout first
+frozen in [`workspace-v1.md`](./workspace-v1.md). Workspace Format v2 keeps
+this layout, sharding, and encoding unchanged, so the evidence applies to
+[`workspace-v2.md`](./workspace-v2.md) as well. It is rationale, not a second
+format specification.
 
 ## Reproduction
 
@@ -135,5 +137,5 @@ metadata overhead. Pretty JSON was rejected because its human-readability
 benefit did not justify multi-line record churn and larger repository state.
 
 The exact selected layout, syntax, ordering, escaping, nullable fields, and
-shard derivation are therefore frozen in `workspace-v1.md`. Production
-reader/writer implementation is intentionally deferred to the next change.
+shard derivation were therefore frozen in `workspace-v1.md` and carried
+over unchanged into `workspace-v2.md`.

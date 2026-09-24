@@ -1,6 +1,6 @@
 //! Translation-unit-level interpretation of Git history and changes.
 //!
-//! Workspace Format v1 stores one unit per JSONL line in a shard selected by
+//! The workspace format stores one unit per JSONL line in a shard selected by
 //! its stable ID, so a unit's history is exactly the history of that line.
 //! Everything here is derived deterministically from repository data.
 
@@ -94,9 +94,9 @@ impl UnitChange {
 pub enum RecordVersion {
     /// The unit did not exist.
     Absent,
-    /// A valid Workspace Format v1 record.
-    Valid(TranslationUnit),
-    /// The historical record is not valid Workspace Format v1 data, for
+    /// A valid workspace unit record.
+    Valid(Box<TranslationUnit>),
+    /// The historical record is not valid workspace data, for
     /// example because it was edited by hand. It is reported, never repaired.
     Invalid { message: String },
 }
@@ -175,7 +175,7 @@ impl GitRepository {
     /// # Errors
     ///
     /// Returns an error when Git fails or a committed or working-tree shard
-    /// is not valid Workspace Format v1 data.
+    /// is not valid workspace data.
     pub fn pending_changes(&self) -> Result<Vec<UnitChange>, GitError> {
         let status = self.status()?;
         let shards: BTreeSet<&str> = status
@@ -441,7 +441,7 @@ impl GitRepository {
                     continue;
                 };
                 let version = match decode_unit_record(record, Path::new(&unit_shard_path(id))) {
-                    Ok(unit) => RecordVersion::Valid(unit),
+                    Ok(unit) => RecordVersion::Valid(Box::new(unit)),
                     Err(error) => RecordVersion::Invalid {
                         message: error.to_string(),
                     },
@@ -707,7 +707,7 @@ fn credit(
         return (None, None);
     };
     let valid = |version: &RecordVersion| match version {
-        RecordVersion::Valid(unit) => Some(unit.clone()),
+        RecordVersion::Valid(unit) => Some((**unit).clone()),
         _ => None,
     };
     let has_current_text = |unit: &Option<TranslationUnit>| {

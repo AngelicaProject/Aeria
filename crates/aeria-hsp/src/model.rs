@@ -102,6 +102,8 @@ pub enum GuidanceIncompatibilityReason {
     ColumnDefinitionMismatch,
     SchemaHashMismatch,
     RowTopologyMismatch,
+    /// An input excluded the sheet or failed while reading it.
+    UnreadableInInput,
 }
 
 /// One HSG sheet allowlist.

@@ -175,6 +175,7 @@ impl crate::model::GuidanceIncompatibilityReason {
             Self::ColumnDefinitionMismatch => "columnDefinitionMismatch",
             Self::SchemaHashMismatch => "schemaHashMismatch",
             Self::RowTopologyMismatch => "rowTopologyMismatch",
+            Self::UnreadableInInput => "unreadableInInput",
         }
     }
 }

@@ -3,7 +3,7 @@ use std::fmt::Write as _;
 use std::path::PathBuf;
 
 use aeria_core::{
-    ReviewState, Sha256Hash, SourceBinding, SourceFingerprint, TranslationUnit, TranslationUnitId,
+    DetachReason, ReviewState, SourceBinding, SourceStatus, TranslationUnit, TranslationUnitId,
 };
 use aeria_hxs::HxsSnapshot;
 use aeria_rebase::candidates::{
@@ -11,8 +11,9 @@ use aeria_rebase::candidates::{
     MAX_RESULT_LIMIT,
 };
 use aeria_rebase::{
-    AutomaticEvidence, CandidateEvidence, CandidateEvidenceSummary, RebaseError, RebaseOutcome,
-    RebasePlanner, SourceContextStatus, UnitRebasePlan, plan_rebase,
+    CandidateEvidence, ColumnContinuity, ColumnMappingEvidence, Continuity, RowContinuity, RowKeys,
+    SourceContextStatus, SourceUpdateError, SourceUpdatePlan, UnitUpdate, UnitUpdateOutcome,
+    plan_source_update,
 };
 use aeria_workspace::Workspace;
 use rusqlite::{Connection, params};
@@ -21,6 +22,7 @@ use tempfile::TempDir;
 
 const SYNTHETIC_SCHEMA: &str = include_str!("../../aeria-hxs/tests/fixtures/synthetic_v1.sql");
 const APPLICATION_ID: i64 = 0x4841_544c;
+const SHEET: &str = "台詞";
 
 #[derive(Clone)]
 struct CellSpec {
@@ -47,6 +49,8 @@ struct SnapshotSpec {
     sheet_name: String,
     rows: Vec<RowSpec>,
     reverse_insertion: bool,
+    /// Sheets listed as unreadable; a non-empty list writes HXS v2.
+    excluded_sheets: Vec<String>,
 }
 
 struct Fixture {
@@ -60,46 +64,989 @@ impl Drop for Fixture {
     }
 }
 
+fn plan(workspace: &Workspace, snapshot: &HxsSnapshot) -> SourceUpdatePlan {
+    plan_source_update(workspace.metadata(), workspace.units(), snapshot, |_| true)
+        .expect("plan succeeds")
+}
+
+fn entry(plan: &SourceUpdatePlan, id: TranslationUnitId) -> &UnitUpdate {
+    plan.entries()
+        .iter()
+        .find(|entry| entry.translation_unit_id == id)
+        .expect("plan entry")
+}
+
+fn proposed_binding(entry: &UnitUpdate) -> &SourceBinding {
+    &entry.proposed.as_ref().expect("bound outcome").binding
+}
+
+fn open(fixture: &Fixture) -> HxsSnapshot {
+    HxsSnapshot::open(&fixture.path).expect("verified HXS")
+}
+
 #[test]
-fn identical_snapshot_is_unchanged_and_planning_is_pure_and_deterministic() {
+fn identical_snapshot_keeps_every_unit_and_planning_is_pure_and_deterministic() {
     let spec = snapshot("old", vec![row(1, "Привет", Some(b"raw".to_vec()), &[1])]);
     let old_fixture = write_snapshot(&spec);
     let new_fixture = write_snapshot(&spec);
-    let old = HxsSnapshot::open(&old_fixture.path).expect("old HXS");
-    let new = HxsSnapshot::open(&new_fixture.path).expect("new HXS");
+    let old = open(&old_fixture);
+    let new = open(&new_fixture);
     let mut workspace = Workspace::from_verified_snapshot(&old, "fr").expect("workspace");
     let id = workspace
-        .create_unit_from_hxs(&old, "台詞", 1, 0, 0, "<future(1)>target")
+        .create_unit_from_hxs(&old, SHEET, 1, 0, 0, "<future(1)>target")
         .expect("unit");
     workspace
         .update_review_state(id, ReviewState::Reviewed)
         .expect("review state");
     let before = workspace.clone();
 
-    let first =
-        plan_rebase(workspace.metadata(), workspace.units(), &old, &new).expect("plan succeeds");
-    let second = RebasePlanner::plan(workspace.metadata(), workspace.units(), &old, &new)
-        .expect("same plan succeeds");
+    let first = plan(&workspace, &new);
     let mut reversed_units: Vec<_> = workspace.units().collect();
     reversed_units.reverse();
-    let third = plan_rebase(workspace.metadata(), reversed_units, &old, &new)
+    let second = plan_source_update(workspace.metadata(), reversed_units, &new, |_| true)
         .expect("reversed units plan succeeds");
 
     assert_eq!(first, second);
-    assert_eq!(first, third);
     assert_eq!(workspace, before);
+    assert!(!first.changes_content_id());
+    assert!(first.sheet_schema_updates.is_empty());
     assert_eq!(first.summary.unchanged, 1);
-    assert_eq!(first.unit_entries[0].translation_unit_id, id);
-    assert_eq!(first.unit_entries[0].outcome, RebaseOutcome::Unchanged);
+    assert_eq!(first.summary.changed_units, 0);
+    let entry = entry(&first, id);
+    assert_eq!(entry.outcome, UnitUpdateOutcome::Unchanged);
+    assert_eq!(entry.continuity, Some(Continuity::SAME_BINDING));
+    assert_eq!(entry.context_status, Some(SourceContextStatus::Unchanged));
+    assert!(!entry.changes_unit());
+}
+
+#[test]
+fn surviving_bindings_classify_content_and_context_separately() {
+    let old_fixture = write_snapshot(&snapshot(
+        "old",
+        vec![
+            row(1, "Alpha", None, &[1]),
+            row(2, "Beta", Some(b"beta".to_vec()), &[2]),
+            row(3, "Gamma", None, &[3]),
+            row(4, "Delta", Some(b"delta".to_vec()), &[4]),
+        ],
+    ));
+    let new_fixture = write_snapshot(&snapshot(
+        "new",
+        vec![
+            row(1, "Alpha", None, &[1]),
+            row(2, "Beta", Some(b"beta".to_vec()), &[9]),
+            row(3, "Gamma revised", None, &[3]),
+            row(4, "Delta", Some(b"delta-bytes".to_vec()), &[4]),
+        ],
+    ));
+    let old = open(&old_fixture);
+    let new = open(&new_fixture);
+    let mut workspace = Workspace::from_verified_snapshot(&old, "fr").expect("workspace");
+    let ids: Vec<_> = (1..=4)
+        .map(|row_id| {
+            workspace
+                .create_unit_from_hxs(&old, SHEET, row_id, 0, 0, "target")
+                .expect("unit")
+        })
+        .collect();
+
+    let plan = plan(&workspace, &new);
+    assert!(plan.changes_content_id());
+    assert!(plan.sheet_schema_updates.is_empty());
+    let expected = [
+        (UnitUpdateOutcome::Unchanged, SourceContextStatus::Unchanged),
+        (UnitUpdateOutcome::Unchanged, SourceContextStatus::Changed),
+        (
+            UnitUpdateOutcome::SourceChanged,
+            SourceContextStatus::Unchanged,
+        ),
+        (
+            UnitUpdateOutcome::EncodingChanged,
+            SourceContextStatus::Unchanged,
+        ),
+    ];
+    for (id, (outcome, context)) in ids.iter().zip(expected) {
+        let entry = entry(&plan, *id);
+        assert_eq!(entry.outcome, outcome);
+        assert_eq!(entry.context_status, Some(context));
+        assert_eq!(entry.continuity, Some(Continuity::SAME_BINDING));
+        assert_eq!(proposed_binding(entry), &entry.previous_binding);
+    }
+    assert!(!entry(&plan, ids[0]).changes_unit());
+    assert!(
+        entry(&plan, ids[1]).changes_unit(),
+        "a context-only change still refreshes the fingerprint"
+    );
+    assert_eq!(plan.summary.unchanged, 2);
+    assert_eq!(plan.summary.source_changed, 1);
+    assert_eq!(plan.summary.encoding_changed, 1);
+    assert_eq!(plan.summary.changed_units, 3);
+}
+
+#[test]
+fn missing_rows_and_sheets_detach_units_and_keep_their_last_facts() {
+    let old_fixture = write_snapshot(&snapshot(
+        "old",
+        vec![row(1, "kept", None, &[1]), row(2, "removed", None, &[2])],
+    ));
+    let without_row = write_snapshot(&snapshot("new", vec![row(1, "kept", None, &[1])]));
+    let renamed_sheet = write_snapshot(&renamed(
+        snapshot(
+            "new",
+            vec![row(1, "kept", None, &[1]), row(2, "removed", None, &[2])],
+        ),
+        "Renamed",
+    ));
+    let old = open(&old_fixture);
+    let mut workspace = Workspace::from_verified_snapshot(&old, "fr").expect("workspace");
+    let kept = workspace
+        .create_unit_from_hxs(&old, SHEET, 1, 0, 0, "kept")
+        .expect("unit");
+    let removed = workspace
+        .create_unit_from_hxs(&old, SHEET, 2, 0, 0, "removed")
+        .expect("unit");
+
+    let plan_without_row = plan(&workspace, &open(&without_row));
     assert_eq!(
-        first.unit_entries[0].automatic_evidence,
-        Some(AutomaticEvidence::SameBinding)
+        entry(&plan_without_row, kept).outcome,
+        UnitUpdateOutcome::Unchanged
+    );
+    let detached = entry(&plan_without_row, removed);
+    assert_eq!(
+        detached.outcome,
+        UnitUpdateOutcome::Detached(DetachReason::RowRemoved)
+    );
+    assert!(detached.proposed.is_none());
+    assert!(detached.continuity.is_none());
+    assert_eq!(
+        detached.previous_binding,
+        SourceBinding::new(SHEET, 2, 0, 0)
+    );
+    assert_eq!(plan_without_row.summary.newly_detached, 1);
+
+    let plan_renamed = plan(&workspace, &open(&renamed_sheet));
+    assert!(
+        plan_renamed
+            .entries()
+            .iter()
+            .all(|entry| entry.outcome == UnitUpdateOutcome::Detached(DetachReason::SheetRemoved))
+    );
+    assert_eq!(plan_renamed.sheet_schema_updates.len(), 1);
+    assert_eq!(plan_renamed.sheet_schema_updates[0].sheet_name, SHEET);
+    assert!(plan_renamed.sheet_schema_updates[0].schema_hash.is_none());
+}
+
+#[test]
+fn a_sheet_the_new_source_cannot_read_is_unavailable_not_removed() {
+    let rows = vec![row(1, "kept", None, &[1])];
+    let old_fixture = write_snapshot(&snapshot("old", rows.clone()));
+    let old = open(&old_fixture);
+    let unreadable = write_snapshot(&with_excluded_sheet(
+        renamed(snapshot("new", rows), "Other"),
+        SHEET,
+    ));
+    let unreadable = open(&unreadable);
+    assert_eq!(unreadable.excluded_sheets().len(), 1);
+
+    let mut workspace = Workspace::from_verified_snapshot(&old, "fr").expect("workspace");
+    let unit = workspace
+        .create_unit_from_hxs(&old, SHEET, 1, 0, 0, "kept")
+        .expect("unit");
+
+    let plan = plan(&workspace, &unreadable);
+    let entry = entry(&plan, unit);
+    assert_eq!(
+        entry.outcome,
+        UnitUpdateOutcome::Detached(DetachReason::SheetUnavailable)
+    );
+    assert!(entry.proposed.is_none());
+    assert_eq!(entry.previous_binding, SourceBinding::new(SHEET, 1, 0, 0));
+    assert_eq!(plan.summary.newly_detached, 1);
+    assert_eq!(plan.sheet_schema_updates.len(), 1);
+    assert!(plan.sheet_schema_updates[0].unavailable);
+    assert!(plan.sheet_schema_updates[0].schema_hash.is_none());
+}
+
+#[test]
+fn a_shifted_row_keeps_its_binding_and_is_marked_for_review_not_rebound() {
+    let old_fixture = write_snapshot(&snapshot(
+        "old",
+        vec![row(100, "Alpha", None, &[1]), row(101, "Beta", None, &[2])],
+    ));
+    let new_fixture = write_snapshot(&snapshot(
+        "new",
+        vec![
+            row(100, "Inserted", None, &[1]),
+            row(101, "Alpha", None, &[2]),
+            row(102, "Beta", None, &[3]),
+        ],
+    ));
+    let old = open(&old_fixture);
+    let mut workspace = Workspace::from_verified_snapshot(&old, "fr").expect("workspace");
+    let alpha = workspace
+        .create_unit_from_hxs(&old, SHEET, 100, 0, 0, "alpha")
+        .expect("unit");
+    let beta = workspace
+        .create_unit_from_hxs(&old, SHEET, 101, 0, 0, "beta")
+        .expect("unit");
+
+    let plan = plan(&workspace, &open(&new_fixture));
+    for id in [alpha, beta] {
+        let entry = entry(&plan, id);
+        assert_eq!(entry.outcome, UnitUpdateOutcome::SourceChanged);
+        assert_eq!(proposed_binding(entry), &entry.previous_binding);
+    }
+}
+
+#[test]
+fn an_inserted_column_is_mapped_by_exact_content_instead_of_shifting_translations() {
+    let old_rows = (1..=4)
+        .map(|row_id| {
+            row_with_cells(
+                row_id,
+                1,
+                vec![
+                    cell(0, &format!("name {row_id}"), None),
+                    cell(2, &format!("description {row_id}"), None),
+                ],
+            )
+        })
+        .collect();
+    let new_rows = (1..=4)
+        .map(|row_id| {
+            let description = if row_id == 4 {
+                "description 4 revised".to_owned()
+            } else {
+                format!("description {row_id}")
+            };
+            row_with_cells(
+                row_id,
+                1,
+                vec![
+                    cell(2, &format!("name {row_id}"), None),
+                    cell(4, &description, None),
+                ],
+            )
+        })
+        .collect();
+    let old_fixture = write_snapshot(&snapshot("old", old_rows));
+    let new_fixture = write_snapshot(&snapshot("new", new_rows));
+    let old = open(&old_fixture);
+    let new = open(&new_fixture);
+    let mut workspace = Workspace::from_verified_snapshot(&old, "fr").expect("workspace");
+    let mut units = Vec::new();
+    for row_id in 1..=4 {
+        for column in [0, 2] {
+            let id = workspace
+                .create_unit_from_hxs(&old, SHEET, row_id, 0, column, "target")
+                .expect("unit");
+            units.push((id, row_id, column));
+        }
+    }
+
+    let plan = plan(&workspace, &new);
+    assert_eq!(plan.sheet_schema_updates.len(), 1);
+    let columns: Vec<_> = plan.sheet_schema_updates[0]
+        .columns
+        .iter()
+        .map(|mapping| (mapping.previous_column, mapping.column))
+        .collect();
+    assert_eq!(columns, vec![(0, Some(2)), (2, Some(4))]);
+    for (id, row_id, column) in units {
+        let entry = entry(&plan, id);
+        let (expected_column, supporting) = if column == 0 { (2, 4) } else { (4, 3) };
+        assert_eq!(
+            proposed_binding(entry),
+            &SourceBinding::new(SHEET, row_id, 0, expected_column),
+            "a translation never moves to a different logical column"
+        );
+        assert_eq!(
+            entry.continuity,
+            Some(Continuity::column_mapped(
+                column,
+                ColumnMappingEvidence::ExactContent {
+                    supporting,
+                    cast: supporting,
+                }
+            ))
+        );
+        let expected_outcome = if row_id == 4 && column == 2 {
+            UnitUpdateOutcome::SourceChanged
+        } else {
+            UnitUpdateOutcome::Unchanged
+        };
+        assert_eq!(entry.outcome, expected_outcome);
+    }
+    assert_eq!(plan.summary.column_mapped, 8);
+    assert_eq!(plan.summary.detached, 0);
+}
+
+#[test]
+fn without_content_evidence_only_an_unchanged_column_position_is_trusted() {
+    let old_fixture = write_snapshot(&snapshot(
+        "old",
+        vec![row(1, "a", None, &[1]), row(2, "b", None, &[2])],
+    ));
+    let appended_column = write_snapshot(&snapshot(
+        "new",
+        vec![
+            row_with_cells(1, 1, vec![cell(0, "a revised", None), cell(6, "x", None)]),
+            row_with_cells(2, 2, vec![cell(0, "b revised", None), cell(6, "y", None)]),
+        ],
+    ));
+    let moved_column = write_snapshot(&snapshot(
+        "new",
+        vec![
+            row_at(1, 2, "a revised", None, &[1]),
+            row_at(2, 2, "b revised", None, &[2]),
+        ],
+    ));
+    let old = open(&old_fixture);
+    let mut workspace = Workspace::from_verified_snapshot(&old, "fr").expect("workspace");
+    for row_id in [1, 2] {
+        workspace
+            .create_unit_from_hxs(&old, SHEET, row_id, 0, 0, "target")
+            .expect("unit");
+    }
+
+    let appended = plan(&workspace, &open(&appended_column));
+    for entry in appended.entries() {
+        assert_eq!(entry.outcome, UnitUpdateOutcome::SourceChanged);
+        assert_eq!(proposed_binding(entry), &entry.previous_binding);
+        assert_eq!(
+            entry.continuity,
+            Some(Continuity::column_mapped(
+                0,
+                ColumnMappingEvidence::UnchangedPosition
+            ))
+        );
+    }
+
+    let moved = plan(&workspace, &open(&moved_column));
+    for entry in moved.entries() {
+        assert_eq!(
+            entry.outcome,
+            UnitUpdateOutcome::Detached(DetachReason::ColumnUnresolved)
+        );
+    }
+    assert_eq!(moved.sheet_schema_updates[0].columns[0].column, None);
+}
+
+#[test]
+fn split_or_colliding_column_evidence_is_never_guessed() {
+    let split_old = write_snapshot(&snapshot(
+        "old",
+        vec![row(1, "p", None, &[1]), row(2, "q", None, &[2])],
+    ));
+    let split_new = write_snapshot(&snapshot(
+        "new",
+        vec![
+            row_with_cells(1, 1, vec![cell(2, "p", None), cell(4, "other", None)]),
+            row_with_cells(2, 2, vec![cell(2, "another", None), cell(4, "q", None)]),
+        ],
+    ));
+    let old = open(&split_old);
+    let mut workspace = Workspace::from_verified_snapshot(&old, "fr").expect("workspace");
+    for row_id in [1, 2] {
+        workspace
+            .create_unit_from_hxs(&old, SHEET, row_id, 0, 0, "target")
+            .expect("unit");
+    }
+    let split = plan(&workspace, &open(&split_new));
+    assert!(
+        split
+            .entries()
+            .iter()
+            .all(|entry| entry.outcome
+                == UnitUpdateOutcome::Detached(DetachReason::ColumnUnresolved))
+    );
+
+    let collision_old = write_snapshot(&snapshot(
+        "old",
+        vec![
+            row_with_cells(1, 1, vec![cell(0, "first", None), cell(2, "x", None)]),
+            row_with_cells(2, 2, vec![cell(0, "y", None), cell(2, "second", None)]),
+        ],
+    ));
+    let collision_new = write_snapshot(&snapshot(
+        "new",
+        vec![
+            row_at(1, 4, "first", None, &[1]),
+            row_at(2, 4, "second", None, &[2]),
+        ],
+    ));
+    let old = open(&collision_old);
+    let mut workspace = Workspace::from_verified_snapshot(&old, "fr").expect("workspace");
+    workspace
+        .create_unit_from_hxs(&old, SHEET, 1, 0, 0, "target")
+        .expect("unit");
+    workspace
+        .create_unit_from_hxs(&old, SHEET, 2, 0, 2, "target")
+        .expect("unit");
+    let collision = plan(&workspace, &open(&collision_new));
+    assert!(
+        collision
+            .entries()
+            .iter()
+            .all(|entry| entry.outcome
+                == UnitUpdateOutcome::Detached(DetachReason::ColumnUnresolved))
+    );
+    assert!(
+        collision.sheet_schema_updates[0]
+            .columns
+            .iter()
+            .all(|mapping| mapping.column.is_none())
+    );
+}
+
+#[test]
+fn guidance_detaches_blocked_occurrences_and_detached_units_reattach_later() {
+    let fixture = write_snapshot(&snapshot(
+        "old",
+        vec![row(1, "one", None, &[1]), row(2, "two", None, &[2])],
+    ));
+    let source = open(&fixture);
+    let mut workspace = Workspace::from_verified_snapshot(&source, "fr").expect("workspace");
+    workspace
+        .create_unit_from_hxs(&source, SHEET, 1, 0, 0, "one")
+        .expect("unit");
+    let blocked = workspace
+        .create_unit_from_hxs(&source, SHEET, 2, 0, 0, "two")
+        .expect("unit");
+    workspace
+        .update_review_state(blocked, ReviewState::Reviewed)
+        .expect("review");
+
+    let blocked_plan = plan_source_update(workspace.metadata(), workspace.units(), &source, |b| {
+        b.row_id() != 2
+    })
+    .expect("plan");
+    assert_eq!(
+        entry(&blocked_plan, blocked).outcome,
+        UnitUpdateOutcome::Detached(DetachReason::NotTranslatable)
+    );
+    assert_eq!(blocked_plan.summary.newly_detached, 1);
+
+    let mut detached = workspace.unit(blocked).expect("unit").clone();
+    detached.detach(DetachReason::NotTranslatable);
+    let units = [
+        workspace
+            .units()
+            .find(|unit| unit.id() != blocked)
+            .expect("permitted unit")
+            .clone(),
+        detached,
+    ];
+    let permitted =
+        plan_source_update(workspace.metadata(), units.iter(), &source, |_| true).expect("plan");
+    let reattached = entry(&permitted, blocked);
+    assert_eq!(reattached.outcome, UnitUpdateOutcome::Unchanged);
+    assert!(reattached.reattaches());
+    assert!(reattached.changes_unit());
+    assert_eq!(permitted.summary.reattached, 1);
+    assert_eq!(permitted.summary.detached, 0);
+}
+
+fn dialogue_row(row_id: u32, key: &str, text: &str) -> RowSpec {
+    row_with_cells(
+        row_id,
+        u8::try_from(row_id).expect("small test row"),
+        vec![cell(0, key, None), cell(2, text, None)],
+    )
+}
+
+fn dialogue_guidance(binding: &SourceBinding) -> bool {
+    binding.column_index() == 2
+}
+
+/// Units at column 2 of the given rows, carrying the row keys of `snapshot`.
+fn keyed_units(snapshot: &HxsSnapshot, rows: &[u32]) -> (Workspace, Vec<TranslationUnit>) {
+    let keys = RowKeys::read(snapshot, SHEET, dialogue_guidance)
+        .expect("row keys read")
+        .expect("dialogue sheet is keyed");
+    assert_eq!(keys.column(), 0);
+    let mut workspace = Workspace::from_verified_snapshot(snapshot, "fr").expect("workspace");
+    let units = rows
+        .iter()
+        .map(|&row_id| {
+            let id = workspace
+                .create_unit_from_hxs(snapshot, SHEET, row_id, 0, 2, "target")
+                .expect("unit");
+            workspace
+                .unit(id)
+                .expect("unit")
+                .clone()
+                .with_source_row_key(keys.key_of(row_id, 0))
+        })
+        .collect();
+    (workspace, units)
+}
+
+#[test]
+fn keyed_rows_follow_their_line_when_a_line_is_inserted() {
+    let old_fixture = write_snapshot(&snapshot(
+        "old",
+        vec![
+            dialogue_row(1, "TEXT_Q_001", "Hello"),
+            dialogue_row(2, "TEXT_Q_002", "Goodbye"),
+        ],
+    ));
+    let new_fixture = write_snapshot(&snapshot(
+        "new",
+        vec![
+            dialogue_row(1, "TEXT_Q_000", "Inserted"),
+            dialogue_row(2, "TEXT_Q_001", "Hello"),
+            dialogue_row(3, "TEXT_Q_002", "Goodbye"),
+        ],
+    ));
+    let old = open(&old_fixture);
+    let new = open(&new_fixture);
+    let (workspace, units) = keyed_units(&old, &[1, 2]);
+    let new_keys = RowKeys::read(&new, SHEET, dialogue_guidance)
+        .expect("row keys")
+        .expect("keyed");
+
+    let plan = plan_source_update(workspace.metadata(), units.iter(), &new, dialogue_guidance)
+        .expect("plan");
+    for (unit, (previous_row, new_row)) in units.iter().zip([(1, 2), (2, 3)]) {
+        let entry = entry(&plan, unit.id());
+        assert_eq!(entry.outcome, UnitUpdateOutcome::Unchanged);
+        assert_eq!(
+            proposed_binding(entry),
+            &SourceBinding::new(SHEET, new_row, 0, 2)
+        );
+        assert_eq!(
+            entry.continuity.map(|continuity| continuity.row),
+            Some(RowContinuity::RowKey {
+                previous_row_id: previous_row,
+                previous_subrow_id: 0,
+            })
+        );
+        assert_eq!(
+            entry
+                .proposed
+                .as_ref()
+                .and_then(|proposed| proposed.row_key),
+            new_keys.key_of(new_row, 0)
+        );
+    }
+    assert_eq!(plan.summary.row_moved, 2);
+}
+
+#[test]
+fn a_removed_keyed_line_is_detached_even_when_its_row_id_is_reused() {
+    let old_fixture = write_snapshot(&snapshot(
+        "old",
+        vec![
+            dialogue_row(1, "TEXT_Q_001", "Hello"),
+            dialogue_row(2, "TEXT_Q_002", "Goodbye"),
+        ],
+    ));
+    let new_fixture = write_snapshot(&snapshot(
+        "new",
+        vec![
+            dialogue_row(1, "TEXT_Q_001", "Hello"),
+            dialogue_row(2, "TEXT_Q_003", "A different line"),
+        ],
+    ));
+    let old = open(&old_fixture);
+    let new = open(&new_fixture);
+    let (workspace, units) = keyed_units(&old, &[1, 2]);
+
+    let plan = plan_source_update(workspace.metadata(), units.iter(), &new, dialogue_guidance)
+        .expect("plan");
+    assert_eq!(
+        entry(&plan, units[0].id()).outcome,
+        UnitUpdateOutcome::Unchanged
     );
     assert_eq!(
-        first.unit_entries[0].context_status,
-        Some(SourceContextStatus::Unchanged)
+        entry(&plan, units[1].id()).outcome,
+        UnitUpdateOutcome::Detached(DetachReason::RowRemoved)
     );
-    assert!(first.unit_entries[0].candidate_evidence.is_empty());
+}
+
+#[test]
+fn units_without_row_keys_keep_their_row_ids_and_receive_keys() {
+    let old_fixture = write_snapshot(&snapshot(
+        "old",
+        vec![
+            dialogue_row(1, "TEXT_Q_001", "Hello"),
+            dialogue_row(2, "TEXT_Q_002", "Goodbye"),
+        ],
+    ));
+    let new_fixture = write_snapshot(&snapshot(
+        "new",
+        vec![
+            dialogue_row(1, "TEXT_Q_000", "Inserted"),
+            dialogue_row(2, "TEXT_Q_001", "Hello"),
+            dialogue_row(3, "TEXT_Q_002", "Goodbye"),
+        ],
+    ));
+    let old = open(&old_fixture);
+    let new = open(&new_fixture);
+    let (workspace, units) = keyed_units(&old, &[1, 2]);
+    let keyless: Vec<TranslationUnit> = units
+        .iter()
+        .map(|unit| unit.clone().with_source_row_key(None))
+        .collect();
+    let new_keys = RowKeys::read(&new, SHEET, dialogue_guidance)
+        .expect("row keys")
+        .expect("keyed");
+
+    let plan = plan_source_update(
+        workspace.metadata(),
+        keyless.iter(),
+        &new,
+        dialogue_guidance,
+    )
+    .expect("plan");
+    for unit in &keyless {
+        let entry = entry(&plan, unit.id());
+        assert_eq!(entry.outcome, UnitUpdateOutcome::SourceChanged);
+        assert_eq!(proposed_binding(entry), &entry.previous_binding);
+        assert_eq!(
+            entry
+                .proposed
+                .as_ref()
+                .and_then(|proposed| proposed.row_key),
+            new_keys.key_of(entry.previous_binding.row_id(), 0),
+            "the next update can follow the row by its key"
+        );
+    }
+
+    let unkeyed = plan_source_update(workspace.metadata(), units.iter(), &new, |_| true)
+        .expect("plan without a key column");
+    assert!(unkeyed.entries().iter().all(|entry| {
+        entry.outcome == UnitUpdateOutcome::SourceChanged
+            && entry
+                .proposed
+                .as_ref()
+                .is_some_and(|proposed| proposed.row_key.is_none())
+    }));
+}
+
+#[test]
+fn a_binding_claimed_twice_keeps_its_current_owner_and_detaches_the_other() {
+    let fixture = write_snapshot(&snapshot("old", vec![row(1, "one", None, &[1])]));
+    let source = open(&fixture);
+    let mut workspace = Workspace::from_verified_snapshot(&source, "fr").expect("workspace");
+    let owner = workspace
+        .create_unit_from_hxs(&source, SHEET, 1, 0, 0, "owner")
+        .expect("unit");
+    let owner_unit = workspace.unit(owner).expect("unit").clone();
+    let claimant_id = TranslationUnitId::from_bytes([0; 32]);
+    assert!(claimant_id < owner);
+    let claimant = TranslationUnit::new(
+        claimant_id,
+        owner_unit.source_binding().clone(),
+        *owner_unit.source_fingerprint(),
+        "older translation",
+    )
+    .with_source_layout(owner_unit.source_layout().expect("layout"))
+    .with_source_status(SourceStatus::Detached(DetachReason::NotTranslatable));
+
+    let plan = plan_source_update(
+        workspace.metadata(),
+        [&owner_unit, &claimant],
+        &source,
+        |_| true,
+    )
+    .expect("plan");
+    assert_eq!(entry(&plan, owner).outcome, UnitUpdateOutcome::Unchanged);
+    assert_eq!(
+        entry(&plan, claimant_id).outcome,
+        UnitUpdateOutcome::Detached(DetachReason::BindingConflict)
+    );
+}
+
+#[test]
+fn workspace_format_v1_units_use_unchanged_content_or_exact_content_evidence() {
+    let old_fixture = write_snapshot(&snapshot(
+        "old",
+        vec![row(1, "one", None, &[1]), row(2, "two", None, &[2])],
+    ));
+    let new_fixture = write_snapshot(&snapshot(
+        "new",
+        vec![row(1, "one", None, &[1]), row(2, "two revised", None, &[2])],
+    ));
+    let old = open(&old_fixture);
+    let new = open(&new_fixture);
+    let mut workspace = Workspace::from_verified_snapshot(&old, "fr").expect("workspace");
+    for row_id in [1, 2] {
+        workspace
+            .create_unit_from_hxs(&old, SHEET, row_id, 0, 0, "target")
+            .expect("unit");
+    }
+    let legacy: Vec<_> = workspace
+        .units()
+        .map(|unit| {
+            let mut legacy = TranslationUnit::new(
+                unit.id(),
+                unit.source_binding().clone(),
+                *unit.source_fingerprint(),
+                unit.target_macro(),
+            );
+            legacy.set_review_state(unit.review_state());
+            legacy
+        })
+        .collect();
+    assert!(legacy.iter().all(|unit| unit.source_layout().is_none()));
+
+    let same_content =
+        plan_source_update(workspace.metadata(), legacy.iter(), &old, |_| true).expect("plan");
+    for (entry, unit) in same_content.entries().iter().zip(workspace.units()) {
+        assert_eq!(entry.outcome, UnitUpdateOutcome::Unchanged);
+        assert_eq!(entry.continuity, Some(Continuity::SAME_BINDING));
+        assert_eq!(
+            entry.proposed.as_ref().map(|proposed| proposed.layout),
+            unit.source_layout()
+        );
+    }
+
+    let new_content =
+        plan_source_update(workspace.metadata(), legacy.iter(), &new, |_| true).expect("plan");
+    assert_eq!(new_content.sheet_schema_updates.len(), 1);
+    assert!(
+        new_content.sheet_schema_updates[0]
+            .previous_schema_hash
+            .is_none()
+    );
+    let outcomes: Vec<_> = new_content
+        .entries()
+        .iter()
+        .map(|entry| (entry.previous_binding.row_id(), entry.outcome))
+        .collect();
+    assert!(outcomes.contains(&(1, UnitUpdateOutcome::Unchanged)));
+    assert!(outcomes.contains(&(2, UnitUpdateOutcome::SourceChanged)));
+    assert!(new_content.entries().iter().all(|entry| entry.continuity
+        == Some(Continuity::column_mapped(
+            0,
+            ColumnMappingEvidence::ExactContent {
+                supporting: 1,
+                cast: 1,
+            }
+        ))));
+}
+
+#[test]
+fn a_different_source_language_and_repeated_ids_are_errors() {
+    let old_fixture = write_snapshot(&snapshot("old", vec![row(1, "one", None, &[1])]));
+    let other_language = write_snapshot(&snapshot_with_language(
+        "new",
+        "ja",
+        vec![row(1, "one", None, &[1])],
+    ));
+    let old = open(&old_fixture);
+    let mut workspace = Workspace::from_verified_snapshot(&old, "fr").expect("workspace");
+    let id = workspace
+        .create_unit_from_hxs(&old, SHEET, 1, 0, 0, "target")
+        .expect("unit");
+    assert!(matches!(
+        plan_source_update(
+            workspace.metadata(),
+            workspace.units(),
+            &open(&other_language),
+            |_| true
+        ),
+        Err(SourceUpdateError::SourceLanguageMismatch { .. })
+    ));
+
+    let unit = workspace.unit(id).expect("unit");
+    assert!(matches!(
+        plan_source_update(workspace.metadata(), [unit, unit], &old, |_| true),
+        Err(SourceUpdateError::InvalidWorkspace { message }) if message.contains("duplicate")
+    ));
+}
+
+#[test]
+fn equivalent_physical_insertion_order_produces_the_same_plan() {
+    let old_spec = snapshot(
+        "old",
+        vec![row(1, "one", None, &[1]), row(2, "two", None, &[2])],
+    );
+    let mut new_spec = snapshot(
+        "new",
+        vec![row(1, "one!", None, &[9]), row(2, "two", None, &[10])],
+    );
+    new_spec.reverse_insertion = true;
+    let old_fixture = write_snapshot(&old_spec);
+    let new_fixture = write_snapshot(&new_spec);
+    let equivalent_new_fixture = write_snapshot(&snapshot(
+        "new",
+        vec![row(2, "two", None, &[10]), row(1, "one!", None, &[9])],
+    ));
+    let old = open(&old_fixture);
+    let mut workspace = Workspace::from_verified_snapshot(&old, "fr").expect("workspace");
+    workspace
+        .create_unit_from_hxs(&old, SHEET, 1, 0, 0, "one")
+        .expect("first unit");
+    workspace
+        .create_unit_from_hxs(&old, SHEET, 2, 0, 0, "two")
+        .expect("second unit");
+
+    assert_eq!(
+        plan(&workspace, &open(&new_fixture)),
+        plan(&workspace, &open(&equivalent_new_fixture))
+    );
+}
+
+#[test]
+#[allow(clippy::too_many_lines)]
+fn bounded_exhaustive_transition_model_obeys_binding_continuity_oracle() {
+    let old_fixture = write_snapshot(&snapshot(
+        "old",
+        vec![
+            row(10, "Alpha", None, &[1]),
+            row(11, "Beta", Some(b"beta".to_vec()), &[2]),
+            row(12, "Gamma", Some(b"gamma".to_vec()), &[3]),
+        ],
+    ));
+    let old = open(&old_fixture);
+    let mut workspace = Workspace::from_verified_snapshot(&old, "fr").expect("workspace");
+    for (row_id, column_index, target) in [(10, 0, "a"), (11, 0, "b"), (12, 0, "c")] {
+        workspace
+            .create_unit_from_hxs(&old, SHEET, row_id, 0, column_index, target)
+            .expect("model unit");
+    }
+    let unit_origins: BTreeMap<_, _> = workspace
+        .units()
+        .map(|unit| {
+            (
+                unit.id(),
+                usize::try_from(unit.source_binding().row_id() - 10).expect("model origin"),
+            )
+        })
+        .collect();
+    let old_content = [
+        (macro_hash("Alpha"), None, 1_u8),
+        (macro_hash("Beta"), Some(raw_hash(b"beta")), 2_u8),
+        (macro_hash("Gamma"), Some(raw_hash(b"gamma")), 3_u8),
+    ];
+    let placements = model_placements();
+    let mut states = 0_usize;
+    let mut bound = 0_usize;
+    let mut source_changed = 0_usize;
+    let mut detached = 0_usize;
+    let mut wrong_mappings = 0_usize;
+
+    for placement in placements {
+        for mutation_mask in 0_u8..8 {
+            for include_inserted in [false, true] {
+                let mut new_rows = Vec::new();
+                let mut new_content = BTreeMap::new();
+                for (origin, slot) in placement.iter().enumerate() {
+                    let Some(slot) = slot else {
+                        continue;
+                    };
+                    let (row_id, column_index) = model_slot(*slot);
+                    let mutated = mutation_mask & (1 << origin) != 0;
+                    let (macro_text, raw_value, technical) = if mutated {
+                        (
+                            format!("changed-{origin}"),
+                            Some(vec![90 + u8::try_from(origin).expect("origin")]),
+                            90 + u8::try_from(origin).expect("origin"),
+                        )
+                    } else {
+                        match origin {
+                            0 => ("Alpha".into(), None, 1),
+                            1 => ("Beta".into(), Some(b"beta".to_vec()), 2),
+                            2 => ("Gamma".into(), Some(b"gamma".to_vec()), 3),
+                            _ => unreachable!("bounded model origin"),
+                        }
+                    };
+                    new_rows.push(row_at(
+                        row_id,
+                        column_index,
+                        &macro_text,
+                        raw_value.clone(),
+                        &[technical],
+                    ));
+                    let binding = SourceBinding::new(SHEET, row_id, 0, column_index);
+                    new_content.insert(
+                        binding,
+                        (
+                            macro_hash(&macro_text),
+                            raw_value.as_deref().map(raw_hash),
+                            technical,
+                        ),
+                    );
+                }
+                if include_inserted {
+                    let occupied: BTreeSet<_> = placement.iter().flatten().copied().collect();
+                    if let Some(slot) = (0..4).find(|slot| !occupied.contains(slot)) {
+                        let (row_id, column_index) = model_slot(slot);
+                        new_rows.push(row_at(
+                            row_id,
+                            column_index,
+                            "Beta",
+                            Some(b"beta".to_vec()),
+                            &[7],
+                        ));
+                        let binding = SourceBinding::new(SHEET, row_id, 0, column_index);
+                        new_content
+                            .insert(binding, (macro_hash("Beta"), Some(raw_hash(b"beta")), 7));
+                    }
+                }
+
+                let new_fixture = write_snapshot(&snapshot("new", new_rows));
+                let new = open(&new_fixture);
+                let plan = plan(&workspace, &new);
+                states += 1;
+                let actual_ids: BTreeSet<_> = plan
+                    .entries()
+                    .iter()
+                    .map(|entry| entry.translation_unit_id)
+                    .collect();
+                let expected_ids: BTreeSet<_> = unit_origins.keys().copied().collect();
+                assert_eq!(actual_ids, expected_ids);
+                for entry in plan.entries() {
+                    let origin = unit_origins[&entry.translation_unit_id];
+                    if let Some((new_macro, new_raw, new_technical)) =
+                        new_content.get(&entry.previous_binding)
+                    {
+                        bound += 1;
+                        assert_eq!(entry.continuity, Some(Continuity::SAME_BINDING));
+                        let (old_macro, old_raw, old_technical) = old_content[origin];
+                        let expected_outcome = if old_macro != *new_macro {
+                            source_changed += 1;
+                            UnitUpdateOutcome::SourceChanged
+                        } else if old_raw != *new_raw {
+                            UnitUpdateOutcome::EncodingChanged
+                        } else {
+                            UnitUpdateOutcome::Unchanged
+                        };
+                        assert_eq!(entry.outcome, expected_outcome);
+                        assert_eq!(
+                            entry.context_status,
+                            Some(if old_technical == *new_technical {
+                                SourceContextStatus::Unchanged
+                            } else {
+                                SourceContextStatus::Changed
+                            })
+                        );
+                        if proposed_binding(entry) != &entry.previous_binding {
+                            wrong_mappings += 1;
+                        }
+                    } else {
+                        detached += 1;
+                        assert!(matches!(entry.outcome, UnitUpdateOutcome::Detached(_)));
+                        assert!(entry.proposed.is_none());
+                        assert!(entry.continuity.is_none());
+                        assert!(entry.context_status.is_none());
+                    }
+                }
+            }
+        }
+    }
+
+    println!(
+        "model states: {states}; bound entries: {bound}; source-changed entries: {source_changed}; detached entries: {detached}; wrong mappings: {wrong_mappings}"
+    );
+    assert_eq!(wrong_mappings, 0);
+    assert_eq!(states, 73 * 8 * 2);
+    assert!(bound > 0);
+    assert!(source_changed > 0);
+    assert!(detached > 0);
 }
 
 #[test]
@@ -120,7 +1067,7 @@ fn candidate_suggestions_are_bounded_and_non_authoritative() {
     let new = HxsSnapshot::open(&new_fixture.path).expect("new HXS");
     let mut workspace = Workspace::from_verified_snapshot(&old, "fr").expect("workspace");
     let id = workspace
-        .create_unit_from_hxs(&old, "台詞", 1, 0, 0, "target")
+        .create_unit_from_hxs(&old, SHEET, 1, 0, 0, "target")
         .expect("unit");
     let before = workspace.clone();
     let unit = workspace.units().next().expect("unit view");
@@ -154,7 +1101,7 @@ fn unique_exact_candidate_remains_only_a_review_suggestion() {
     let new = HxsSnapshot::open(&new_fixture.path).expect("new HXS");
     let mut workspace = Workspace::from_verified_snapshot(&old, "fr").expect("workspace");
     let id = workspace
-        .create_unit_from_hxs(&old, "台詞", 1, 0, 0, "target")
+        .create_unit_from_hxs(&old, SHEET, 1, 0, 0, "target")
         .expect("unit");
     let before = workspace.clone();
     let unit = workspace.units().next().expect("unit view");
@@ -186,7 +1133,7 @@ fn candidate_payload_snapshot_must_match_the_index_snapshot() {
     let payload_snapshot = HxsSnapshot::open(&payload_fixture.path).expect("new B HXS");
     let mut workspace = Workspace::from_verified_snapshot(&old, "fr").expect("workspace");
     let id = workspace
-        .create_unit_from_hxs(&old, "台詞", 1, 0, 0, "target")
+        .create_unit_from_hxs(&old, SHEET, 1, 0, 0, "target")
         .expect("unit");
     let unit = workspace.units().next().expect("unit view");
     let error = CandidateSuggester::from_snapshot(&index_snapshot)
@@ -245,7 +1192,7 @@ fn producer_metadata_does_not_change_candidate_payload_compatibility() {
     );
     let mut workspace = Workspace::from_verified_snapshot(&old, "fr").expect("workspace");
     let id = workspace
-        .create_unit_from_hxs(&old, "台詞", 1, 0, 0, "target")
+        .create_unit_from_hxs(&old, SHEET, 1, 0, 0, "target")
         .expect("unit");
     let unit = workspace.units().next().expect("unit view");
     let suggester = CandidateSuggester::from_snapshot(&index_snapshot).expect("candidate index");
@@ -269,7 +1216,7 @@ fn old_payload_must_match_the_managed_unit_baseline() {
     let mut workspace =
         Workspace::from_verified_snapshot(&managed_snapshot, "fr").expect("workspace");
     let id = workspace
-        .create_unit_from_hxs(&managed_snapshot, "台詞", 1, 0, 0, "target")
+        .create_unit_from_hxs(&managed_snapshot, SHEET, 1, 0, 0, "target")
         .expect("unit");
     let unit = workspace.units().next().expect("unit view");
     let error = CandidateSuggester::from_snapshot(&new)
@@ -278,9 +1225,7 @@ fn old_payload_must_match_the_managed_unit_baseline() {
         .expect_err("stale old payload must be rejected");
     assert!(matches!(
         error,
-        CandidateSuggestionError::OldBaselineVerification(
-            RebaseError::OldFingerprintMismatch { .. }
-        )
+        CandidateSuggestionError::OldBaselineMismatch { .. }
     ));
 }
 
@@ -295,7 +1240,7 @@ fn surviving_bindings_never_compete_for_candidate_suggestions() {
     let new = HxsSnapshot::open(&new_fixture.path).expect("new HXS");
     let mut workspace = Workspace::from_verified_snapshot(&old, "fr").expect("workspace");
     let id = workspace
-        .create_unit_from_hxs(&old, "台詞", 1, 0, 0, "target")
+        .create_unit_from_hxs(&old, SHEET, 1, 0, 0, "target")
         .expect("unit");
     let unit = workspace.units().next().expect("unit view");
     let suggestions = CandidateSuggester::from_snapshot(&new)
@@ -318,7 +1263,7 @@ fn duplicate_candidate_groups_are_capped_and_requested_top_k_is_clamped() {
     let new = HxsSnapshot::open(&new_fixture.path).expect("new HXS");
     let mut workspace = Workspace::from_verified_snapshot(&old, "fr").expect("workspace");
     let id = workspace
-        .create_unit_from_hxs(&old, "台詞", 1, 0, 0, "target")
+        .create_unit_from_hxs(&old, SHEET, 1, 0, 0, "target")
         .expect("unit");
     let unit = workspace.units().next().expect("unit view");
     let suggestions = CandidateSuggester::from_snapshot(&new)
@@ -340,490 +1285,6 @@ fn duplicate_candidate_groups_are_capped_and_requested_top_k_is_clamped() {
         suggestions.last().expect("last").binding.row_id(),
         100 + result_limit - 1
     );
-}
-
-#[test]
-fn same_binding_content_and_context_changes_are_classified_separately() {
-    for changed in [
-        ChangedField::Macro,
-        ChangedField::Raw,
-        ChangedField::RowTechnical,
-    ] {
-        let old_spec = snapshot("old", vec![row(1, "one", Some(b"raw".to_vec()), &[1])]);
-        let mut new_row = row(1, "one", Some(b"raw".to_vec()), &[1]);
-        match changed {
-            ChangedField::Macro => new_row.cells[0].macro_text = "two".into(),
-            ChangedField::Raw => new_row.cells[0].raw_value = Some(b"changed".to_vec()),
-            ChangedField::RowTechnical => new_row.technical = 9,
-        }
-        let new_spec = snapshot("new", vec![new_row]);
-        let old_fixture = write_snapshot(&old_spec);
-        let new_fixture = write_snapshot(&new_spec);
-        let old = HxsSnapshot::open(&old_fixture.path).expect("old HXS");
-        let new = HxsSnapshot::open(&new_fixture.path).expect("new HXS");
-        let mut workspace = Workspace::from_verified_snapshot(&old, "fr").expect("workspace");
-        let id = workspace
-            .create_unit_from_hxs(&old, "台詞", 1, 0, 0, "target")
-            .expect("unit");
-        let plan = plan_rebase(workspace.metadata(), workspace.units(), &old, &new)
-            .expect("plan succeeds");
-        let entry = &plan.unit_entries[0];
-        assert_eq!(entry.translation_unit_id, id);
-        assert_eq!(
-            entry.automatic_evidence,
-            Some(AutomaticEvidence::SameBinding)
-        );
-        assert_eq!(
-            entry.proposed_source_binding,
-            Some(SourceBinding::new("台詞", 1, 0, 0))
-        );
-        assert!(entry.proposed_source_fingerprint.is_some());
-        assert_eq!(
-            entry.context_status,
-            Some(match changed {
-                ChangedField::RowTechnical => SourceContextStatus::Changed,
-                ChangedField::Macro | ChangedField::Raw => SourceContextStatus::Unchanged,
-            })
-        );
-        assert_eq!(
-            entry.outcome,
-            match changed {
-                ChangedField::RowTechnical => RebaseOutcome::Unchanged,
-                ChangedField::Macro | ChangedField::Raw => RebaseOutcome::SourceChanged,
-            }
-        );
-    }
-}
-
-#[test]
-fn neighboring_string_changes_only_affect_their_own_translation_unit() {
-    let old_fixture = write_snapshot(&snapshot(
-        "old",
-        vec![row_with_cells(
-            1,
-            1,
-            vec![cell(0, "stable", None), cell(2, "old", None)],
-        )],
-    ));
-    let new_fixture = write_snapshot(&snapshot(
-        "new",
-        vec![row_with_cells(
-            1,
-            1,
-            vec![cell(0, "stable", None), cell(2, "new", None)],
-        )],
-    ));
-    let old = HxsSnapshot::open(&old_fixture.path).expect("old HXS");
-    let new = HxsSnapshot::open(&new_fixture.path).expect("new HXS");
-    let mut workspace = Workspace::from_verified_snapshot(&old, "fr").expect("workspace");
-    workspace
-        .create_unit_from_hxs(&old, "台詞", 1, 0, 0, "stable target")
-        .expect("stable unit");
-    workspace
-        .create_unit_from_hxs(&old, "台詞", 1, 0, 2, "changed target")
-        .expect("changed unit");
-
-    let plan =
-        plan_rebase(workspace.metadata(), workspace.units(), &old, &new).expect("plan succeeds");
-    let stable = plan
-        .unit_entries
-        .iter()
-        .find(|entry| entry.previous_source_binding.column_index() == 0)
-        .expect("stable entry");
-    assert_eq!(stable.outcome, RebaseOutcome::Unchanged);
-    assert_eq!(stable.candidate_evidence, Vec::new());
-    let changed = plan
-        .unit_entries
-        .iter()
-        .find(|entry| entry.previous_source_binding.column_index() == 2)
-        .expect("changed entry");
-    assert_eq!(changed.outcome, RebaseOutcome::SourceChanged);
-    assert_eq!(changed.candidate_evidence, Vec::new());
-    assert_eq!(plan.summary.unchanged, 1);
-    assert_eq!(plan.summary.source_changed, 1);
-    assert_eq!(plan.summary.ambiguous, 0);
-}
-
-#[test]
-fn duplicate_content_elsewhere_does_not_disqualify_a_surviving_binding() {
-    let old_fixture = write_snapshot(&snapshot("old", vec![row(1, "same", None, &[1])]));
-    let new_fixture = write_snapshot(&snapshot(
-        "new",
-        vec![row(1, "same", None, &[1]), row(2, "same", None, &[2])],
-    ));
-    let old = HxsSnapshot::open(&old_fixture.path).expect("old HXS");
-    let new = HxsSnapshot::open(&new_fixture.path).expect("new HXS");
-    let mut workspace = Workspace::from_verified_snapshot(&old, "fr").expect("workspace");
-    workspace
-        .create_unit_from_hxs(&old, "台詞", 1, 0, 0, "target")
-        .expect("unit");
-
-    let plan =
-        plan_rebase(workspace.metadata(), workspace.units(), &old, &new).expect("plan succeeds");
-    let entry = &plan.unit_entries[0];
-    assert_eq!(entry.outcome, RebaseOutcome::Unchanged);
-    assert_eq!(
-        entry.automatic_evidence,
-        Some(AutomaticEvidence::SameBinding)
-    );
-    assert!(entry.candidate_evidence.is_empty());
-    assert_eq!(plan.summary.unchanged, 1);
-    assert_eq!(plan.summary.source_changed, 0);
-    assert_eq!(plan.summary.ambiguous, 0);
-}
-
-#[test]
-fn raw_value_presence_changes_are_source_changed_at_the_same_binding() {
-    for (old_raw, new_raw) in [(Some(b"raw".to_vec()), None), (None, Some(b"raw".to_vec()))] {
-        let old_fixture = write_snapshot(&snapshot("old", vec![row(1, "same", old_raw, &[1])]));
-        let new_fixture = write_snapshot(&snapshot("new", vec![row(1, "same", new_raw, &[1])]));
-        let old = HxsSnapshot::open(&old_fixture.path).expect("old HXS");
-        let new = HxsSnapshot::open(&new_fixture.path).expect("new HXS");
-        let mut workspace = Workspace::from_verified_snapshot(&old, "fr").expect("workspace");
-        workspace
-            .create_unit_from_hxs(&old, "台詞", 1, 0, 0, "target")
-            .expect("unit");
-
-        let plan = plan_rebase(workspace.metadata(), workspace.units(), &old, &new)
-            .expect("plan succeeds");
-        let entry = &plan.unit_entries[0];
-        assert_eq!(entry.outcome, RebaseOutcome::SourceChanged);
-        assert_eq!(
-            entry.proposed_source_binding,
-            Some(SourceBinding::new("台詞", 1, 0, 0))
-        );
-        assert_eq!(entry.context_status, Some(SourceContextStatus::Unchanged));
-    }
-}
-
-#[test]
-fn exact_fingerprint_at_another_binding_is_only_a_candidate() {
-    let old_fixture = write_snapshot(&snapshot(
-        "old",
-        vec![row(1, "one", Some(b"raw".to_vec()), &[1])],
-    ));
-    let new_fixture = write_snapshot(&snapshot(
-        "new",
-        vec![row_at(1, 2, "one", Some(b"raw".to_vec()), &[1])],
-    ));
-    let old = HxsSnapshot::open(&old_fixture.path).expect("old HXS");
-    let new = HxsSnapshot::open(&new_fixture.path).expect("new HXS");
-    let mut workspace = Workspace::from_verified_snapshot(&old, "fr").expect("workspace");
-    let id = workspace
-        .create_unit_from_hxs(&old, "台詞", 1, 0, 0, "target")
-        .expect("unit");
-
-    let plan =
-        plan_rebase(workspace.metadata(), workspace.units(), &old, &new).expect("plan succeeds");
-    let entry = &plan.unit_entries[0];
-    assert_eq!(entry.translation_unit_id, id);
-    assert_eq!(entry.outcome, RebaseOutcome::Ambiguous);
-    assert_eq!(entry.automatic_evidence, None);
-    assert_eq!(
-        entry.candidate_evidence,
-        vec![
-            CandidateEvidenceSummary {
-                evidence: CandidateEvidence::CompleteFingerprint,
-                candidate_count: 1,
-            },
-            CandidateEvidenceSummary {
-                evidence: CandidateEvidence::MacroAndRawValue,
-                candidate_count: 1,
-            },
-            CandidateEvidenceSummary {
-                evidence: CandidateEvidence::MacroAndRowTechnical,
-                candidate_count: 1,
-            },
-            CandidateEvidenceSummary {
-                evidence: CandidateEvidence::ExactMacroText,
-                candidate_count: 1,
-            },
-        ]
-    );
-    assert_eq!(entry.proposed_source_binding, None);
-}
-
-#[test]
-fn exact_content_relocation_with_changed_context_is_ambiguous() {
-    let old_fixture = write_snapshot(&snapshot(
-        "old",
-        vec![row(1, "opaque <future(1)>", None, &[1])],
-    ));
-    let new_fixture = write_snapshot(&snapshot(
-        "new",
-        vec![row(9, "opaque <future(1)>", None, &[9])],
-    ));
-    let old = HxsSnapshot::open(&old_fixture.path).expect("old HXS");
-    let new = HxsSnapshot::open(&new_fixture.path).expect("new HXS");
-    let mut workspace = Workspace::from_verified_snapshot(&old, "fr").expect("workspace");
-    let id = workspace
-        .create_unit_from_hxs(&old, "台詞", 1, 0, 0, "target")
-        .expect("unit");
-
-    let plan =
-        plan_rebase(workspace.metadata(), workspace.units(), &old, &new).expect("plan succeeds");
-    let entry = &plan.unit_entries[0];
-    assert_eq!(entry.translation_unit_id, id);
-    assert_eq!(entry.outcome, RebaseOutcome::Ambiguous);
-    assert_eq!(entry.automatic_evidence, None);
-    assert_eq!(
-        entry.candidate_evidence,
-        vec![CandidateEvidenceSummary {
-            evidence: CandidateEvidence::ExactMacroText,
-            candidate_count: 1,
-        }]
-    );
-    assert_eq!(entry.proposed_source_binding, None);
-}
-
-#[test]
-fn exact_macro_and_raw_relocation_with_changed_context_is_ambiguous() {
-    let old_fixture = write_snapshot(&snapshot(
-        "old",
-        vec![row(1, "same", Some(b"raw".to_vec()), &[1])],
-    ));
-    let new_fixture = write_snapshot(&snapshot(
-        "new",
-        vec![row_at(9, 2, "same", Some(b"raw".to_vec()), &[9])],
-    ));
-    let old = HxsSnapshot::open(&old_fixture.path).expect("old HXS");
-    let new = HxsSnapshot::open(&new_fixture.path).expect("new HXS");
-    let mut workspace = Workspace::from_verified_snapshot(&old, "fr").expect("workspace");
-    workspace
-        .create_unit_from_hxs(&old, "台詞", 1, 0, 0, "target")
-        .expect("unit");
-
-    let plan =
-        plan_rebase(workspace.metadata(), workspace.units(), &old, &new).expect("plan succeeds");
-    let entry = &plan.unit_entries[0];
-    assert_eq!(entry.outcome, RebaseOutcome::Ambiguous);
-    assert_eq!(entry.automatic_evidence, None);
-    assert_eq!(
-        entry.candidate_evidence,
-        vec![
-            CandidateEvidenceSummary {
-                evidence: CandidateEvidence::MacroAndRawValue,
-                candidate_count: 1,
-            },
-            CandidateEvidenceSummary {
-                evidence: CandidateEvidence::ExactMacroText,
-                candidate_count: 1,
-            },
-        ]
-    );
-    assert_eq!(entry.proposed_source_binding, None);
-}
-
-#[test]
-fn ambiguous_unit_reports_multiple_candidate_evidence_summaries() {
-    let old_fixture = write_snapshot(&snapshot(
-        "old",
-        vec![row_at(1, 4, "same", Some(b"raw".to_vec()), &[1])],
-    ));
-    let new_fixture = write_snapshot(&snapshot(
-        "new",
-        vec![
-            row(2, "same", Some(b"raw".to_vec()), &[2]),
-            row(3, "same", Some(b"raw".to_vec()), &[3]),
-            row_at(1, 2, "same", Some(b"other".to_vec()), &[1]),
-        ],
-    ));
-    let old = HxsSnapshot::open(&old_fixture.path).expect("old HXS");
-    let new = HxsSnapshot::open(&new_fixture.path).expect("new HXS");
-    let mut workspace = Workspace::from_verified_snapshot(&old, "fr").expect("workspace");
-    workspace
-        .create_unit_from_hxs(&old, "台詞", 1, 0, 4, "target")
-        .expect("unit");
-
-    let plan =
-        plan_rebase(workspace.metadata(), workspace.units(), &old, &new).expect("plan succeeds");
-    let entry = &plan.unit_entries[0];
-    assert_eq!(entry.outcome, RebaseOutcome::Ambiguous);
-    assert_eq!(
-        entry.candidate_evidence,
-        vec![
-            CandidateEvidenceSummary {
-                evidence: CandidateEvidence::MacroAndRawValue,
-                candidate_count: 2,
-            },
-            CandidateEvidenceSummary {
-                evidence: CandidateEvidence::MacroAndRowTechnical,
-                candidate_count: 1,
-            },
-            CandidateEvidenceSummary {
-                evidence: CandidateEvidence::ExactMacroText,
-                candidate_count: 3,
-            },
-        ]
-    );
-    assert_eq!(entry.proposed_source_binding, None);
-}
-
-#[test]
-fn missing_unit_reports_all_matching_candidate_evidence_summaries() {
-    let old_fixture = write_snapshot(&snapshot(
-        "old",
-        vec![row_at(1, 4, "same", Some(b"raw".to_vec()), &[1])],
-    ));
-    let new_fixture = write_snapshot(&snapshot(
-        "new",
-        vec![row_at(1, 2, "same", Some(b"other".to_vec()), &[1])],
-    ));
-    let old = HxsSnapshot::open(&old_fixture.path).expect("old HXS");
-    let new = HxsSnapshot::open(&new_fixture.path).expect("new HXS");
-    let mut workspace = Workspace::from_verified_snapshot(&old, "fr").expect("workspace");
-    workspace
-        .create_unit_from_hxs(&old, "台詞", 1, 0, 4, "target")
-        .expect("unit");
-
-    let plan =
-        plan_rebase(workspace.metadata(), workspace.units(), &old, &new).expect("plan succeeds");
-    let entry = &plan.unit_entries[0];
-    assert_eq!(entry.outcome, RebaseOutcome::Ambiguous);
-    assert_eq!(
-        entry.candidate_evidence,
-        vec![
-            CandidateEvidenceSummary {
-                evidence: CandidateEvidence::MacroAndRowTechnical,
-                candidate_count: 1,
-            },
-            CandidateEvidenceSummary {
-                evidence: CandidateEvidence::ExactMacroText,
-                candidate_count: 1,
-            },
-        ]
-    );
-    assert_eq!(entry.proposed_source_binding, None);
-}
-
-#[test]
-fn duplicate_candidates_and_competing_units_remain_ambiguous() {
-    let old_fixture = write_snapshot(&snapshot(
-        "old",
-        vec![row(1, "same", None, &[1]), row(2, "same", None, &[2])],
-    ));
-    let new_fixture = write_snapshot(&snapshot(
-        "new",
-        vec![row(9, "same", None, &[9]), row(10, "same", None, &[10])],
-    ));
-    let old = HxsSnapshot::open(&old_fixture.path).expect("old HXS");
-    let new = HxsSnapshot::open(&new_fixture.path).expect("new HXS");
-    let mut workspace = Workspace::from_verified_snapshot(&old, "fr").expect("workspace");
-    workspace
-        .create_unit_from_hxs(&old, "台詞", 1, 0, 0, "one")
-        .expect("first unit");
-    workspace
-        .create_unit_from_hxs(&old, "台詞", 2, 0, 0, "two")
-        .expect("second unit");
-
-    let plan =
-        plan_rebase(workspace.metadata(), workspace.units(), &old, &new).expect("plan succeeds");
-    assert_eq!(plan.summary.ambiguous, 2);
-    assert!(
-        plan.unit_entries
-            .iter()
-            .all(|entry| entry.outcome == RebaseOutcome::Ambiguous)
-    );
-    assert!(plan.unit_entries.iter().all(|entry| {
-        entry.candidate_evidence
-            == vec![CandidateEvidenceSummary {
-                evidence: CandidateEvidence::ExactMacroText,
-                candidate_count: 2,
-            }]
-    }));
-}
-
-#[test]
-fn duplicate_heavy_ambiguous_plan_keeps_candidate_payload_small() {
-    let old_fixture = write_snapshot(&snapshot(
-        "old",
-        (1..=8)
-            .map(|row_id| {
-                row(
-                    row_id,
-                    "repeated",
-                    None,
-                    &[u8::try_from(row_id).expect("old duplicate row fits in a byte")],
-                )
-            })
-            .collect(),
-    ));
-    let new_rows = (10..110)
-        .map(|row_id| {
-            row(
-                row_id,
-                "repeated",
-                None,
-                &[u8::try_from(row_id).expect("duplicate test row fits in a byte")],
-            )
-        })
-        .collect();
-    let new_fixture = write_snapshot(&snapshot("new", new_rows));
-    let old = HxsSnapshot::open(&old_fixture.path).expect("old HXS");
-    let new = HxsSnapshot::open(&new_fixture.path).expect("new HXS");
-    let mut workspace = Workspace::from_verified_snapshot(&old, "fr").expect("workspace");
-    for row_id in 1..=8 {
-        workspace
-            .create_unit_from_hxs(&old, "台詞", row_id, 0, 0, "target")
-            .expect("unit");
-    }
-
-    let plan =
-        plan_rebase(workspace.metadata(), workspace.units(), &old, &new).expect("plan succeeds");
-    assert_eq!(plan.unit_entries.len(), 8);
-    assert_eq!(plan.summary.ambiguous, 8);
-    assert!(plan.unit_entries.iter().all(|entry| {
-        entry.outcome == RebaseOutcome::Ambiguous
-            && entry.candidate_evidence
-                == vec![CandidateEvidenceSummary {
-                    evidence: CandidateEvidence::ExactMacroText,
-                    candidate_count: 100,
-                }]
-    }));
-    assert!(
-        std::mem::size_of::<UnitRebasePlan>() < 64 * std::mem::size_of::<SourceBinding>(),
-        "authoritative entry must not contain 64 candidate bindings"
-    );
-}
-
-#[test]
-fn equivalent_physical_insertion_order_produces_the_same_plan() {
-    let old_spec = snapshot(
-        "old",
-        vec![row(1, "one", None, &[1]), row(2, "two", None, &[2])],
-    );
-    let mut new_spec = snapshot(
-        "new",
-        vec![row(9, "one", None, &[9]), row(10, "two", None, &[10])],
-    );
-    new_spec.reverse_insertion = true;
-    let old_fixture = write_snapshot(&old_spec);
-    let new_fixture = write_snapshot(&new_spec);
-    let equivalent_new_fixture = write_snapshot(&snapshot(
-        "new",
-        vec![row(10, "two", None, &[10]), row(9, "one", None, &[9])],
-    ));
-    let old = HxsSnapshot::open(&old_fixture.path).expect("old HXS");
-    let new = HxsSnapshot::open(&new_fixture.path).expect("new HXS");
-    let equivalent_new = HxsSnapshot::open(&equivalent_new_fixture.path).expect("new HXS");
-    let mut workspace = Workspace::from_verified_snapshot(&old, "fr").expect("workspace");
-    workspace
-        .create_unit_from_hxs(&old, "台詞", 1, 0, 0, "one")
-        .expect("first unit");
-    workspace
-        .create_unit_from_hxs(&old, "台詞", 2, 0, 0, "two")
-        .expect("second unit");
-
-    let first =
-        plan_rebase(workspace.metadata(), workspace.units(), &old, &new).expect("plan succeeds");
-    let second = plan_rebase(
-        workspace.metadata(),
-        workspace.units(),
-        &old,
-        &equivalent_new,
-    )
-    .expect("equivalent plan succeeds");
-    assert_eq!(first, second);
 }
 
 #[test]
@@ -852,7 +1313,7 @@ fn equivalent_physical_insertion_order_produces_identical_candidate_suggestions(
     let payload = HxsSnapshot::open(&payload_fixture.path).expect("payload new HXS");
     let mut workspace = Workspace::from_verified_snapshot(&old, "fr").expect("workspace");
     let id = workspace
-        .create_unit_from_hxs(&old, "台詞", 1, 0, 0, "target")
+        .create_unit_from_hxs(&old, SHEET, 1, 0, 0, "target")
         .expect("unit");
     let unit = workspace.units().next().expect("unit view");
     let suggester = CandidateSuggester::from_snapshot(&indexed).expect("candidate index");
@@ -863,578 +1324,6 @@ fn equivalent_physical_insertion_order_produces_identical_candidate_suggestions(
         .suggest(CandidateQuery::new(id), unit, &old, &payload)
         .expect("reordered payload");
     assert_eq!(from_indexed_storage, from_reordered_storage);
-}
-
-#[test]
-fn surviving_binding_continuity_wins_over_relocation_candidates() {
-    let old_fixture = write_snapshot(&snapshot(
-        "old",
-        vec![row(1, "first", None, &[1]), row(2, "second", None, &[2])],
-    ));
-    let new_fixture = write_snapshot(&snapshot("new", vec![row(1, "second", None, &[1])]));
-    let old = HxsSnapshot::open(&old_fixture.path).expect("old HXS");
-    let new = HxsSnapshot::open(&new_fixture.path).expect("new HXS");
-    let mut workspace = Workspace::from_verified_snapshot(&old, "fr").expect("workspace");
-    workspace
-        .create_unit_from_hxs(&old, "台詞", 1, 0, 0, "first")
-        .expect("first unit");
-    workspace
-        .create_unit_from_hxs(&old, "台詞", 2, 0, 0, "second")
-        .expect("second unit");
-
-    let plan =
-        plan_rebase(workspace.metadata(), workspace.units(), &old, &new).expect("plan succeeds");
-    assert_eq!(plan.summary.unchanged, 0);
-    assert_eq!(plan.summary.source_changed, 1);
-    assert_eq!(plan.summary.ambiguous, 1);
-    let changed = plan
-        .unit_entries
-        .iter()
-        .find(|entry| entry.previous_source_binding.row_id() == 1)
-        .expect("surviving binding");
-    assert_eq!(changed.outcome, RebaseOutcome::SourceChanged);
-    assert_eq!(
-        changed.proposed_source_binding,
-        Some(SourceBinding::new("台詞", 1, 0, 0))
-    );
-    assert_eq!(
-        changed.automatic_evidence,
-        Some(AutomaticEvidence::SameBinding)
-    );
-    let missing = plan
-        .unit_entries
-        .iter()
-        .find(|entry| entry.previous_source_binding.row_id() == 2)
-        .expect("missing binding");
-    assert_eq!(missing.outcome, RebaseOutcome::Ambiguous);
-    assert_eq!(missing.proposed_source_binding, None);
-}
-
-#[test]
-#[allow(clippy::too_many_lines)]
-fn coordinate_shifts_and_reused_coordinates_never_rebind_units() {
-    let old_rows = vec![
-        row(100, "Alpha", None, &[1]),
-        row(101, "Beta", None, &[2]),
-        row(102, "Gamma", None, &[3]),
-    ];
-    let cases = [
-        (
-            "plus-one shift",
-            vec![
-                row(101, "Alpha", None, &[1]),
-                row(102, "Beta", None, &[2]),
-                row(103, "Gamma", None, &[3]),
-            ],
-            (0, 2, 1),
-        ),
-        (
-            "minus-one shift",
-            vec![
-                row(99, "Alpha", None, &[1]),
-                row(100, "Beta", None, &[2]),
-                row(101, "Gamma", None, &[3]),
-            ],
-            (0, 2, 1),
-        ),
-        (
-            "large shift",
-            vec![
-                row(200, "Alpha", None, &[1]),
-                row(201, "Beta", None, &[2]),
-                row(202, "Gamma", None, &[3]),
-            ],
-            (0, 0, 3),
-        ),
-        (
-            "middle insertion",
-            vec![
-                row(100, "Alpha", None, &[1]),
-                row(101, "Inserted", None, &[9]),
-                row(102, "Beta", None, &[2]),
-                row(103, "Gamma", None, &[3]),
-            ],
-            (1, 2, 0),
-        ),
-        (
-            "middle deletion",
-            vec![row(100, "Alpha", None, &[1]), row(102, "Gamma", None, &[3])],
-            (2, 0, 1),
-        ),
-    ];
-
-    for (name, new_rows, (expected_unchanged, expected_source_changed, expected_ambiguous)) in cases
-    {
-        let old_fixture = write_snapshot(&snapshot("old", old_rows.clone()));
-        let new_fixture = write_snapshot(&snapshot("new", new_rows));
-        let old = HxsSnapshot::open(&old_fixture.path).expect("old HXS");
-        let new = HxsSnapshot::open(&new_fixture.path).expect("new HXS");
-        let mut workspace = Workspace::from_verified_snapshot(&old, "fr").expect("workspace");
-        for (row_id, target) in [(100, "a"), (101, "b"), (102, "c")] {
-            workspace
-                .create_unit_from_hxs(&old, "台詞", row_id, 0, 0, target)
-                .expect("unit");
-        }
-
-        let plan = plan_rebase(workspace.metadata(), workspace.units(), &old, &new)
-            .unwrap_or_else(|error| panic!("{name}: {error}"));
-        assert_eq!(plan.summary.unchanged, expected_unchanged, "{name}");
-        assert_eq!(
-            plan.summary.source_changed, expected_source_changed,
-            "{name}"
-        );
-        assert_eq!(plan.summary.ambiguous, expected_ambiguous, "{name}");
-        assert!(
-            plan.unit_entries.iter().all(|entry| {
-                (matches!(
-                    entry.outcome,
-                    RebaseOutcome::Unchanged | RebaseOutcome::SourceChanged
-                ) && entry.proposed_source_binding.as_ref()
-                    == Some(&entry.previous_source_binding)
-                    && entry.proposed_source_fingerprint.is_some()
-                    && entry.automatic_evidence == Some(AutomaticEvidence::SameBinding))
-                    || (entry.outcome == RebaseOutcome::Ambiguous
-                        && entry.proposed_source_binding.is_none()
-                        && entry.proposed_source_fingerprint.is_none()
-                        && entry.automatic_evidence.is_none())
-            }),
-            "{name}"
-        );
-        if name == "plus-one shift" {
-            for (old_row, descendant_row) in [(101, 102), (102, 103)] {
-                let entry = plan
-                    .unit_entries
-                    .iter()
-                    .find(|entry| entry.previous_source_binding.row_id() == old_row)
-                    .expect("shift entry");
-                assert_eq!(entry.outcome, RebaseOutcome::SourceChanged);
-                assert_eq!(
-                    entry.proposed_source_binding,
-                    Some(SourceBinding::new("台詞", old_row, 0, 0))
-                );
-                assert!(entry.candidate_evidence.is_empty());
-                assert_ne!(
-                    entry.proposed_source_binding,
-                    Some(SourceBinding::new("台詞", descendant_row, 0, 0))
-                );
-            }
-        }
-    }
-}
-
-#[test]
-fn reused_coordinate_does_not_bind_the_old_occurrence_to_an_unrelated_value() {
-    let old_fixture = write_snapshot(&snapshot(
-        "old",
-        vec![row(10, "A", None, &[1]), row(11, "B", None, &[2])],
-    ));
-    let new_fixture = write_snapshot(&snapshot(
-        "new",
-        vec![row(10, "B", None, &[2]), row(20, "A", None, &[1])],
-    ));
-    let old = HxsSnapshot::open(&old_fixture.path).expect("old HXS");
-    let new = HxsSnapshot::open(&new_fixture.path).expect("new HXS");
-    let mut workspace = Workspace::from_verified_snapshot(&old, "fr").expect("workspace");
-    workspace
-        .create_unit_from_hxs(&old, "台詞", 10, 0, 0, "a")
-        .expect("A unit");
-    workspace
-        .create_unit_from_hxs(&old, "台詞", 11, 0, 0, "b")
-        .expect("B unit");
-
-    let plan =
-        plan_rebase(workspace.metadata(), workspace.units(), &old, &new).expect("plan succeeds");
-    let reused = plan
-        .unit_entries
-        .iter()
-        .find(|entry| entry.previous_source_binding.row_id() == 10)
-        .expect("reused binding");
-    assert_eq!(reused.outcome, RebaseOutcome::SourceChanged);
-    assert_eq!(
-        reused.proposed_source_binding,
-        Some(SourceBinding::new("台詞", 10, 0, 0))
-    );
-    let missing = plan
-        .unit_entries
-        .iter()
-        .find(|entry| entry.previous_source_binding.row_id() == 11)
-        .expect("missing binding");
-    assert_eq!(missing.outcome, RebaseOutcome::Ambiguous);
-    assert_eq!(missing.proposed_source_binding, None);
-}
-
-#[test]
-fn duplicate_values_under_a_row_shift_preserve_surviving_bindings() {
-    let old_fixture = write_snapshot(&snapshot(
-        "old",
-        vec![
-            row(100, "Same", Some(b"raw".to_vec()), &[1]),
-            row(101, "Same", Some(b"raw".to_vec()), &[2]),
-            row(102, "Tail", None, &[3]),
-        ],
-    ));
-    let new_fixture = write_snapshot(&snapshot(
-        "new",
-        vec![
-            row(101, "Same", Some(b"raw".to_vec()), &[1]),
-            row(102, "Same", Some(b"raw".to_vec()), &[2]),
-            row(103, "Tail", None, &[3]),
-        ],
-    ));
-    let old = HxsSnapshot::open(&old_fixture.path).expect("old HXS");
-    let new = HxsSnapshot::open(&new_fixture.path).expect("new HXS");
-    let mut workspace = Workspace::from_verified_snapshot(&old, "fr").expect("workspace");
-    for row_id in [100, 101, 102] {
-        workspace
-            .create_unit_from_hxs(&old, "台詞", row_id, 0, 0, "target")
-            .expect("unit");
-    }
-
-    let plan =
-        plan_rebase(workspace.metadata(), workspace.units(), &old, &new).expect("plan succeeds");
-    assert_eq!(plan.summary.unchanged, 1);
-    assert_eq!(plan.summary.source_changed, 1);
-    assert_eq!(plan.summary.ambiguous, 1);
-    let ambiguous = plan
-        .unit_entries
-        .iter()
-        .find(|entry| entry.outcome == RebaseOutcome::Ambiguous)
-        .expect("removed shifted binding");
-    assert!(ambiguous.proposed_source_binding.is_none());
-    assert!(plan.unit_entries.iter().any(|entry| {
-        entry.outcome == RebaseOutcome::Unchanged
-            && entry.automatic_evidence == Some(AutomaticEvidence::SameBinding)
-    }));
-}
-
-#[test]
-#[allow(clippy::too_many_lines)]
-fn bounded_exhaustive_transition_model_obeys_binding_continuity_oracle() {
-    let old_fixture = write_snapshot(&snapshot(
-        "old",
-        vec![
-            row(10, "Alpha", None, &[1]),
-            row(11, "Beta", Some(b"beta".to_vec()), &[2]),
-            row(12, "Gamma", Some(b"gamma".to_vec()), &[3]),
-        ],
-    ));
-    let old = HxsSnapshot::open(&old_fixture.path).expect("old HXS");
-    let mut workspace = Workspace::from_verified_snapshot(&old, "fr").expect("workspace");
-    for (row_id, column_index, target) in [(10, 0, "a"), (11, 0, "b"), (12, 0, "c")] {
-        workspace
-            .create_unit_from_hxs(&old, "台詞", row_id, 0, column_index, target)
-            .expect("model unit");
-    }
-    let unit_origins: BTreeMap<_, _> = workspace
-        .units()
-        .map(|unit| {
-            (
-                unit.id(),
-                usize::try_from(unit.source_binding().row_id() - 10).expect("model origin"),
-            )
-        })
-        .collect();
-    let old_content = [
-        (macro_hash("Alpha"), None, 1_u8),
-        (macro_hash("Beta"), Some(raw_hash(b"beta")), 2_u8),
-        (macro_hash("Gamma"), Some(raw_hash(b"gamma")), 3_u8),
-    ];
-    let placements = model_placements();
-    let mut states = 0_usize;
-    let mut automatically_resolved = 0_usize;
-    let mut source_changed = 0_usize;
-    let mut unresolved = 0_usize;
-    let mut wrong_automatic_mappings = 0_usize;
-
-    for placement in placements {
-        for mutation_mask in 0_u8..8 {
-            for include_inserted in [false, true] {
-                let mut new_rows = Vec::new();
-                let mut new_content = BTreeMap::new();
-                for (origin, slot) in placement.iter().enumerate() {
-                    let Some(slot) = slot else {
-                        continue;
-                    };
-                    let (row_id, column_index) = model_slot(*slot);
-                    let mutated = mutation_mask & (1 << origin) != 0;
-                    let (macro_text, raw_value, technical) = if mutated {
-                        (
-                            format!("changed-{origin}"),
-                            Some(vec![90 + u8::try_from(origin).expect("origin")]),
-                            90 + u8::try_from(origin).expect("origin"),
-                        )
-                    } else {
-                        match origin {
-                            0 => ("Alpha".into(), None, 1),
-                            1 => ("Beta".into(), Some(b"beta".to_vec()), 2),
-                            2 => ("Gamma".into(), Some(b"gamma".to_vec()), 3),
-                            _ => unreachable!("bounded model origin"),
-                        }
-                    };
-                    new_rows.push(row_at(
-                        row_id,
-                        column_index,
-                        &macro_text,
-                        raw_value.clone(),
-                        &[technical],
-                    ));
-                    let binding = SourceBinding::new("台詞", row_id, 0, column_index);
-                    new_content.insert(
-                        binding,
-                        (
-                            macro_hash(&macro_text),
-                            raw_value.as_deref().map(raw_hash),
-                            technical,
-                        ),
-                    );
-                }
-                if include_inserted {
-                    let occupied: BTreeSet<_> = placement.iter().flatten().copied().collect();
-                    if let Some(slot) = (0..4).find(|slot| !occupied.contains(slot)) {
-                        let (row_id, column_index) = model_slot(slot);
-                        new_rows.push(row_at(
-                            row_id,
-                            column_index,
-                            "Beta",
-                            Some(b"beta".to_vec()),
-                            &[7],
-                        ));
-                        let binding = SourceBinding::new("台詞", row_id, 0, column_index);
-                        new_content
-                            .insert(binding, (macro_hash("Beta"), Some(raw_hash(b"beta")), 7));
-                    }
-                }
-
-                let new_fixture = write_snapshot(&snapshot("new", new_rows));
-                let new = HxsSnapshot::open(&new_fixture.path).expect("model new HXS");
-                let plan = plan_rebase(workspace.metadata(), workspace.units(), &old, &new)
-                    .expect("model plan succeeds");
-                states += 1;
-                let actual_ids: BTreeSet<_> = plan
-                    .unit_entries
-                    .iter()
-                    .map(|entry| entry.translation_unit_id)
-                    .collect();
-                let expected_ids: BTreeSet<_> = unit_origins.keys().copied().collect();
-                assert_eq!(actual_ids, expected_ids);
-                for entry in &plan.unit_entries {
-                    let origin = unit_origins[&entry.translation_unit_id];
-                    if let Some((new_macro, new_raw, new_technical)) =
-                        new_content.get(&entry.previous_source_binding)
-                    {
-                        automatically_resolved += 1;
-                        assert_eq!(
-                            entry.proposed_source_binding.as_ref(),
-                            Some(&entry.previous_source_binding)
-                        );
-                        assert_eq!(
-                            entry.automatic_evidence,
-                            Some(AutomaticEvidence::SameBinding)
-                        );
-                        assert!(entry.proposed_source_fingerprint.is_some());
-                        let (old_macro, old_raw, old_technical) = old_content[origin];
-                        let expected_outcome = if old_macro == *new_macro && old_raw == *new_raw {
-                            RebaseOutcome::Unchanged
-                        } else {
-                            source_changed += 1;
-                            RebaseOutcome::SourceChanged
-                        };
-                        assert_eq!(entry.outcome, expected_outcome);
-                        assert_eq!(
-                            entry.context_status,
-                            Some(if old_technical == *new_technical {
-                                SourceContextStatus::Unchanged
-                            } else {
-                                SourceContextStatus::Changed
-                            })
-                        );
-                        let binding = entry
-                            .proposed_source_binding
-                            .as_ref()
-                            .expect("surviving entry has authoritative binding");
-                        if binding != &entry.previous_source_binding {
-                            wrong_automatic_mappings += 1;
-                        }
-                    } else {
-                        unresolved += 1;
-                        assert_eq!(entry.outcome, RebaseOutcome::Ambiguous);
-                        assert!(entry.proposed_source_binding.is_none());
-                        assert!(entry.proposed_source_fingerprint.is_none());
-                        assert!(entry.automatic_evidence.is_none());
-                        assert!(entry.context_status.is_none());
-                    }
-                }
-            }
-        }
-    }
-
-    println!(
-        "model states: {states}; automatically resolved entries: {automatically_resolved}; source-changed entries: {source_changed}; unresolved entries: {unresolved}; wrong automatic mappings: {wrong_automatic_mappings}"
-    );
-    assert_eq!(wrong_automatic_mappings, 0);
-    assert_eq!(states, 73 * 8 * 2);
-    assert!(automatically_resolved > 0);
-    assert!(source_changed > 0);
-    assert!(unresolved > 0);
-}
-
-#[test]
-fn duplicate_bindings_are_rejected_across_the_complete_borrowed_input() {
-    let fixture = write_snapshot(&snapshot(
-        "old",
-        vec![row(1, "first", None, &[1]), row(2, "second", None, &[2])],
-    ));
-    let snapshot = HxsSnapshot::open(&fixture.path).expect("HXS");
-    let mut workspace = Workspace::from_verified_snapshot(&snapshot, "fr").expect("workspace");
-
-    let first_binding = SourceBinding::new("台詞", 1, 0, 0);
-    let second_binding = SourceBinding::new("台詞", 2, 0, 0);
-    let first_fingerprint = workspace
-        .create_unit_from_hxs(&snapshot, "台詞", 1, 0, 0, "first")
-        .and_then(|id| {
-            workspace
-                .unit(id)
-                .map(|unit| *unit.source_fingerprint())
-                .ok_or(aeria_workspace::WorkspaceError::UnitNotFound { id })
-        })
-        .expect("first fingerprint");
-    let second_fingerprint = workspace
-        .create_unit_from_hxs(&snapshot, "台詞", 2, 0, 0, "second")
-        .and_then(|id| {
-            workspace
-                .unit(id)
-                .map(|unit| *unit.source_fingerprint())
-                .ok_or(aeria_workspace::WorkspaceError::UnitNotFound { id })
-        })
-        .expect("second fingerprint");
-
-    let units = [
-        TranslationUnit::new(
-            TranslationUnitId::from_bytes([0; 32]),
-            first_binding.clone(),
-            first_fingerprint,
-            "",
-        ),
-        TranslationUnit::new(
-            TranslationUnitId::from_bytes([1; 32]),
-            second_binding,
-            second_fingerprint,
-            "",
-        ),
-        TranslationUnit::new(
-            TranslationUnitId::from_bytes([2; 32]),
-            first_binding,
-            first_fingerprint,
-            "",
-        ),
-    ];
-    let error = plan_rebase(workspace.metadata(), units.iter(), &snapshot, &snapshot)
-        .expect_err("duplicate binding must be rejected before matching");
-    assert!(
-        matches!(error, RebaseError::InvalidWorkspace { message } if message.contains("duplicate current source binding"))
-    );
-
-    let duplicate_id_units = [
-        TranslationUnit::new(
-            TranslationUnitId::from_bytes([0; 32]),
-            SourceBinding::new("台詞", 1, 0, 0),
-            first_fingerprint,
-            "",
-        ),
-        TranslationUnit::new(
-            TranslationUnitId::from_bytes([0; 32]),
-            SourceBinding::new("台詞", 2, 0, 0),
-            second_fingerprint,
-            "",
-        ),
-    ];
-    let error = plan_rebase(
-        workspace.metadata(),
-        duplicate_id_units.iter(),
-        &snapshot,
-        &snapshot,
-    )
-    .expect_err("duplicate ID must be rejected before matching");
-    assert!(
-        matches!(error, RebaseError::InvalidWorkspace { message } if message.contains("duplicate translation-unit ID"))
-    );
-}
-
-#[test]
-fn baseline_and_snapshot_preconditions_are_errors() {
-    let old_fixture = write_snapshot(&snapshot("old", vec![row(1, "one", None, &[1])]));
-    let new_fixture = write_snapshot(&snapshot("new", vec![row(1, "one", None, &[1])]));
-    let old = HxsSnapshot::open(&old_fixture.path).expect("old HXS");
-    let new = HxsSnapshot::open(&new_fixture.path).expect("new HXS");
-    let mut workspace = Workspace::from_verified_snapshot(&old, "fr").expect("workspace");
-    workspace
-        .create_unit_from_hxs(&old, "台詞", 1, 0, 0, "target")
-        .expect("unit");
-
-    let mut wrong_language_metadata = workspace.metadata().clone();
-    wrong_language_metadata = aeria_core::WorkspaceMetadata::new(
-        "ja",
-        wrong_language_metadata.target_language(),
-        wrong_language_metadata.source_content_id(),
-        wrong_language_metadata.source_snapshot_id(),
-    )
-    .expect("metadata");
-    assert!(matches!(
-        plan_rebase(&wrong_language_metadata, workspace.units(), &old, &new),
-        Err(RebaseError::OldSourceLanguageMismatch { .. })
-    ));
-
-    let wrong_content_metadata = aeria_core::WorkspaceMetadata::new(
-        "en",
-        "fr",
-        "wrong-content",
-        workspace.metadata().source_snapshot_id(),
-    )
-    .expect("metadata");
-    assert!(matches!(
-        plan_rebase(&wrong_content_metadata, workspace.units(), &old, &new),
-        Err(RebaseError::OldContentIdMismatch { .. })
-    ));
-
-    let new_language_fixture = write_snapshot(&snapshot_with_language(
-        "new-language",
-        "ja",
-        vec![row(1, "one", None, &[1])],
-    ));
-    let new_language = HxsSnapshot::open(&new_language_fixture.path).expect("new language HXS");
-    assert!(matches!(
-        plan_rebase(workspace.metadata(), workspace.units(), &old, &new_language),
-        Err(RebaseError::NewSourceLanguageMismatch { .. })
-    ));
-
-    let changed_old_fixture =
-        write_snapshot(&snapshot("changed-old", vec![row(1, "one", None, &[1])]));
-    let changed_old = HxsSnapshot::open(&changed_old_fixture.path).expect("changed old HXS");
-    assert!(matches!(
-        plan_rebase(workspace.metadata(), workspace.units(), &changed_old, &new),
-        Err(RebaseError::OldSnapshotIdMismatch { .. })
-    ));
-
-    let bad_fingerprint = SourceFingerprint::new(
-        Sha256Hash::from_bytes([0xa5; 32]),
-        None,
-        Sha256Hash::from_bytes([0x5a; 32]),
-    );
-    let bad_binding = SourceBinding::new("台詞", 1, 0, 0);
-    let bad_id = aeria_core::TranslationUnitId::derive("en", &bad_binding, &bad_fingerprint)
-        .expect("test identity");
-    let bad_unit = TranslationUnit::new(bad_id, bad_binding, bad_fingerprint, "target");
-    assert!(matches!(
-        plan_rebase(workspace.metadata(), [&bad_unit], &old, &new),
-        Err(RebaseError::OldFingerprintMismatch { .. })
-    ));
-}
-
-#[derive(Clone, Copy)]
-enum ChangedField {
-    Macro,
-    Raw,
-    RowTechnical,
 }
 
 fn snapshot(game_version: &str, rows: Vec<RowSpec>) -> SnapshotSpec {
@@ -1496,6 +1385,7 @@ fn snapshot_with_producer(
         sheet_name: "台詞".into(),
         rows,
         reverse_insertion: false,
+        excluded_sheets: Vec::new(),
     }
 }
 
@@ -1509,6 +1399,17 @@ fn cell(column_index: u32, macro_text: &str, raw_value: Option<Vec<u8>>) -> Cell
         macro_text: macro_text.into(),
         raw_value,
     }
+}
+
+fn with_excluded_sheet(mut spec: SnapshotSpec, sheet_name: &str) -> SnapshotSpec {
+    spec.excluded_sheets.push(sheet_name.into());
+    spec.excluded_sheets.sort();
+    spec
+}
+
+fn renamed(mut spec: SnapshotSpec, sheet_name: &str) -> SnapshotSpec {
+    spec.sheet_name = sheet_name.into();
+    spec
 }
 
 fn row_with_cells(row_id: u32, technical: u8, cells: Vec<CellSpec>) -> RowSpec {
@@ -1541,11 +1442,35 @@ fn write_snapshot(spec: &SnapshotSpec) -> Fixture {
     let path = directory.path().join("snapshot.hxs");
     let connection = Connection::open(&path).expect("fixture database");
     connection.execute_batch(SYNTHETIC_SCHEMA).expect("schema");
+    let format_version = if spec.excluded_sheets.is_empty() {
+        1
+    } else {
+        2
+    };
     connection
         .execute_batch(&format!(
-            "PRAGMA application_id = {APPLICATION_ID}; PRAGMA user_version = 1; PRAGMA foreign_keys = ON;"
+            "PRAGMA application_id = {APPLICATION_ID}; PRAGMA user_version = {format_version}; PRAGMA foreign_keys = ON;"
         ))
         .expect("identity");
+    if format_version == 2 {
+        connection
+            .execute_batch(
+                "ALTER TABLE hxs_meta ADD COLUMN excluded_sheet_count INTEGER NOT NULL DEFAULT 0;
+                 CREATE TABLE excluded_sheets (
+                     name TEXT PRIMARY KEY,
+                     reason INTEGER NOT NULL CHECK (reason IN (1, 2, 3))
+                 );",
+            )
+            .expect("HXS v2 schema");
+        for name in &spec.excluded_sheets {
+            connection
+                .execute(
+                    "INSERT INTO excluded_sheets (name, reason) VALUES (?1, 3)",
+                    params![name],
+                )
+                .expect("excluded sheet");
+        }
+    }
 
     let mut string_columns: Vec<_> = spec
         .rows
@@ -1584,12 +1509,26 @@ fn write_snapshot(spec: &SnapshotSpec) -> Fixture {
     let content_id = format!(
         "sha256:{}",
         hex(&digest(|hasher| {
-            hasher.update(b"HARMONIA-HXS-CONTENT-v1");
-            framed_text(hasher, &spec.source_language);
+            if format_version == 1 {
+                hasher.update(b"HARMONIA-HXS-CONTENT-v1");
+                framed_text(hasher, &spec.source_language);
+            } else {
+                hasher.update(b"HARMONIA-HXS-CONTENT-v2");
+                framed_text(hasher, &spec.source_language);
+                hasher.update(1_u32.to_le_bytes());
+            }
             framed_text(hasher, &spec.sheet_name);
             framed_text(hasher, &spec.source_language);
             hasher.update(schema_hash);
             hasher.update(content_hash);
+            if format_version == 2 {
+                let count = u32::try_from(spec.excluded_sheets.len()).expect("count");
+                hasher.update(count.to_le_bytes());
+                for name in &spec.excluded_sheets {
+                    framed_text(hasher, name);
+                    hasher.update(3_u32.to_le_bytes());
+                }
+            }
         }))
     );
     let snapshot_id = format!(
@@ -1689,6 +1628,14 @@ fn write_snapshot(spec: &SnapshotSpec) -> Fixture {
             ],
         )
         .expect("metadata");
+    if format_version == 2 {
+        connection
+            .execute(
+                "UPDATE hxs_meta SET format_version = 2, excluded_sheet_count = ?1",
+                params![i64::try_from(spec.excluded_sheets.len()).expect("count")],
+            )
+            .expect("HXS v2 metadata");
+    }
     drop(connection);
     Fixture {
         _directory: directory,
@@ -1880,4 +1827,583 @@ fn hex(bytes: &[u8; 32]) -> String {
         write!(&mut result, "{byte:02x}").expect("String writing cannot fail");
     }
     result
+}
+
+#[test]
+fn a_legacy_unit_on_a_column_that_is_no_longer_text_is_detached_as_cell_removed() {
+    let fixture = write_snapshot(&snapshot(
+        "game",
+        vec![row(1, "one", None, &[1]), row(2, "two", None, &[2])],
+    ));
+    let source = open(&fixture);
+    let mut workspace = Workspace::from_verified_snapshot(&source, "fr").expect("workspace");
+    let text_unit = workspace
+        .create_unit_from_hxs(&source, SHEET, 1, 0, 0, "Un")
+        .expect("unit");
+    let text_unit = workspace.unit(text_unit).expect("unit").clone();
+    // A Workspace Format v1 unit records no layout. Column 1 is the sheet's
+    // Int32 column, so no String occurrence exists at this binding.
+    let mut legacy = TranslationUnit::new(
+        TranslationUnitId::from_bytes([9; 32]),
+        SourceBinding::new(SHEET, 1, 0, 1),
+        *text_unit.source_fingerprint(),
+        "kept",
+    );
+    legacy.set_translator_note(Some("note".to_owned()));
+    let units = [text_unit.clone(), legacy.clone()];
+
+    let plan =
+        plan_source_update(workspace.metadata(), units.iter(), &source, |_| true).expect("plan");
+    assert_eq!(
+        entry(&plan, legacy.id()).outcome,
+        UnitUpdateOutcome::Detached(DetachReason::CellRemoved)
+    );
+    assert!(entry(&plan, legacy.id()).proposed.is_none());
+    assert_eq!(
+        entry(&plan, text_unit.id()).outcome,
+        UnitUpdateOutcome::Unchanged
+    );
+}
+
+#[test]
+fn a_detached_unit_reattaches_when_its_sheet_or_row_returns() {
+    let original = write_snapshot(&snapshot(
+        "7.0",
+        vec![row(1, "one", None, &[1]), row(2, "two", None, &[2])],
+    ));
+    let original = open(&original);
+    let mut workspace = Workspace::from_verified_snapshot(&original, "fr").expect("workspace");
+    let id = workspace
+        .create_unit_from_hxs(&original, SHEET, 2, 0, 0, "Deux")
+        .expect("unit");
+    let bound = workspace.unit(id).expect("unit").clone();
+
+    for (reason, returned_text, expected) in [
+        (
+            DetachReason::SheetUnavailable,
+            "two",
+            UnitUpdateOutcome::Unchanged,
+        ),
+        (
+            DetachReason::SheetRemoved,
+            "two",
+            UnitUpdateOutcome::Unchanged,
+        ),
+        (
+            DetachReason::RowRemoved,
+            "two",
+            UnitUpdateOutcome::Unchanged,
+        ),
+        (
+            DetachReason::RowRemoved,
+            "two, revised",
+            UnitUpdateOutcome::SourceChanged,
+        ),
+    ] {
+        let mut detached = bound.clone();
+        detached.detach(reason);
+        let returned = write_snapshot(&snapshot(
+            "7.2",
+            vec![row(1, "one", None, &[1]), row(2, returned_text, None, &[2])],
+        ));
+        let returned = open(&returned);
+        let plan = plan_source_update(
+            workspace.metadata(),
+            std::iter::once(&detached),
+            &returned,
+            |_| true,
+        )
+        .expect("plan");
+        let entry = entry(&plan, id);
+        assert_eq!(entry.outcome, expected, "{reason:?} -> {returned_text}");
+        assert!(entry.reattaches());
+        assert_eq!(proposed_binding(entry), &SourceBinding::new(SHEET, 2, 0, 0));
+        assert_eq!(plan.summary.reattached, 1);
+    }
+}
+
+#[test]
+fn one_patch_with_an_inserted_column_moved_lines_changed_and_removed_text_resolves_each_unit() {
+    let old_fixture = write_snapshot(&snapshot(
+        "7.0",
+        vec![
+            dialogue_row(1, "Q1", "Hello"),
+            dialogue_row(2, "Q2", "Goodbye"),
+            dialogue_row(3, "Q3", "Later"),
+            dialogue_row(4, "Q4", "Farewell"),
+        ],
+    ));
+    // A speaker column is inserted before the text, a line is inserted at
+    // the top, Q2 and Q3 swap places, Q3's text changes, and Q4 is removed.
+    let speaker_row = |row_id: u32, key: &str, speaker: &str, text: &str| {
+        row_with_cells(
+            row_id,
+            u8::try_from(row_id).expect("small row"),
+            vec![
+                cell(0, key, None),
+                cell(2, speaker, None),
+                cell(4, text, None),
+            ],
+        )
+    };
+    let new_fixture = write_snapshot(&snapshot(
+        "7.1",
+        vec![
+            speaker_row(1, "Q0", "Alisaie", "Inserted line"),
+            speaker_row(2, "Q1", "Alphinaud", "Hello"),
+            speaker_row(3, "Q3", "Alisaie", "Later, revised"),
+            speaker_row(4, "Q2", "Alphinaud", "Goodbye"),
+        ],
+    ));
+    let old = open(&old_fixture);
+    let new = open(&new_fixture);
+    let (workspace, units) = keyed_units(&old, &[1, 2, 3, 4]);
+    let translatable = |binding: &SourceBinding| binding.column_index() >= 2;
+
+    let plan =
+        plan_source_update(workspace.metadata(), units.iter(), &new, translatable).expect("plan");
+    let expected = [
+        (1, Some((2, UnitUpdateOutcome::Unchanged))),
+        (2, Some((4, UnitUpdateOutcome::Unchanged))),
+        (3, Some((3, UnitUpdateOutcome::SourceChanged))),
+        (4, None),
+    ];
+    for (unit, (previous_row, expectation)) in units.iter().zip(expected) {
+        let entry = entry(&plan, unit.id());
+        match expectation {
+            Some((row_id, outcome)) => {
+                assert_eq!(entry.outcome, outcome, "line from row {previous_row}");
+                assert_eq!(
+                    proposed_binding(entry),
+                    &SourceBinding::new(SHEET, row_id, 0, 4),
+                    "line from row {previous_row} follows its key into the text column"
+                );
+            }
+            None => assert_eq!(
+                entry.outcome,
+                UnitUpdateOutcome::Detached(DetachReason::RowRemoved)
+            ),
+        }
+    }
+    let mapping: Vec<_> = plan.sheet_schema_updates[0]
+        .columns
+        .iter()
+        .map(|mapping| (mapping.previous_column, mapping.column))
+        .collect();
+    assert_eq!(mapping, vec![(2, Some(4))]);
+    assert_eq!(plan.summary.source_changed, 1);
+    assert_eq!(plan.summary.newly_detached, 1);
+}
+
+#[test]
+fn when_row_keys_stop_being_unique_rows_keep_their_ids_and_changed_lines_need_review() {
+    let old_fixture = write_snapshot(&snapshot(
+        "7.0",
+        vec![
+            dialogue_row(1, "Q1", "Hello"),
+            dialogue_row(2, "Q2", "Goodbye"),
+        ],
+    ));
+    let new_fixture = write_snapshot(&snapshot(
+        "7.1",
+        vec![
+            dialogue_row(1, "DUP", "Inserted"),
+            dialogue_row(2, "DUP", "Hello"),
+            dialogue_row(3, "Q2", "Goodbye"),
+        ],
+    ));
+    let old = open(&old_fixture);
+    let new = open(&new_fixture);
+    assert!(
+        RowKeys::read(&new, SHEET, dialogue_guidance)
+            .expect("read")
+            .is_none(),
+        "a column with repeated values is not a row key"
+    );
+    let (workspace, units) = keyed_units(&old, &[1, 2]);
+
+    let plan = plan_source_update(workspace.metadata(), units.iter(), &new, dialogue_guidance)
+        .expect("plan");
+    for (unit, row_id) in units.iter().zip([1, 2]) {
+        let entry = entry(&plan, unit.id());
+        // The line cannot be followed, so the unit keeps its row and is never
+        // treated as unchanged against different text.
+        assert_eq!(entry.outcome, UnitUpdateOutcome::SourceChanged);
+        assert_eq!(
+            proposed_binding(entry),
+            &SourceBinding::new(SHEET, row_id, 0, 2)
+        );
+        assert_eq!(
+            entry.continuity.map(|continuity| continuity.row),
+            Some(RowContinuity::SameRow)
+        );
+        assert!(entry.proposed.as_ref().expect("bound").row_key.is_none());
+    }
+}
+
+#[test]
+fn a_row_key_column_that_moves_still_identifies_its_lines() {
+    let old_fixture = write_snapshot(&snapshot(
+        "7.0",
+        vec![
+            dialogue_row(1, "Q1", "Hello"),
+            dialogue_row(2, "Q2", "Goodbye"),
+        ],
+    ));
+    let moved_key_row = |row_id: u32, key: &str, text: &str| {
+        row_with_cells(
+            row_id,
+            u8::try_from(row_id).expect("small row"),
+            vec![cell(2, text, None), cell(4, key, None)],
+        )
+    };
+    let new_fixture = write_snapshot(&snapshot(
+        "7.1",
+        vec![
+            moved_key_row(1, "Q0", "Inserted"),
+            moved_key_row(2, "Q1", "Hello"),
+            moved_key_row(3, "Q2", "Goodbye"),
+        ],
+    ));
+    let old = open(&old_fixture);
+    let new = open(&new_fixture);
+    let new_keys = RowKeys::read(&new, SHEET, dialogue_guidance)
+        .expect("read")
+        .expect("keyed");
+    assert_eq!(new_keys.column(), 4);
+    let (workspace, units) = keyed_units(&old, &[1, 2]);
+
+    let plan = plan_source_update(workspace.metadata(), units.iter(), &new, dialogue_guidance)
+        .expect("plan");
+    for (unit, row_id) in units.iter().zip([2, 3]) {
+        let entry = entry(&plan, unit.id());
+        assert_eq!(entry.outcome, UnitUpdateOutcome::Unchanged);
+        assert_eq!(
+            proposed_binding(entry),
+            &SourceBinding::new(SHEET, row_id, 0, 2)
+        );
+    }
+}
+
+/// A small deterministic generator for randomized patches.
+struct Lcg(u64);
+
+impl Lcg {
+    fn next(&mut self) -> u64 {
+        self.0 = self
+            .0
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
+        self.0 >> 33
+    }
+
+    fn below(&mut self, bound: usize) -> usize {
+        usize::try_from(self.next() % u64::try_from(bound).expect("bound fits u64"))
+            .expect("value below bound fits usize")
+    }
+
+    fn chance(&mut self, percent: usize) -> bool {
+        self.below(100) < percent
+    }
+
+    fn text(&mut self) -> &'static str {
+        VOCABULARY[self.below(VOCABULARY.len())]
+    }
+}
+
+/// Texts are drawn from a small vocabulary so that lines collide, repeat,
+/// and move between rows and columns.
+const VOCABULARY: [&str; 6] = ["Hello", "Goodbye", "Later", "Farewell", "Yes", "No"];
+
+type RandomRow = (u32, Vec<CellSpec>);
+
+struct RandomPatch {
+    old: SnapshotSpec,
+    new: SnapshotSpec,
+    keyed: bool,
+}
+
+/// Builds an old sheet version and a patched version: removed lines, lines
+/// moved to other row IDs (keyed sheets only), edited texts, inserted lines,
+/// and sometimes an inserted column that shifts every text column.
+fn random_patch(random: &mut Lcg) -> RandomPatch {
+    let keyed = random.chance(50);
+    let first_text_column = if keyed { 2 } else { 0 };
+    let text_columns = [first_text_column, first_text_column + 2];
+    let shift = if random.chance(30) { 2 } else { 0 };
+    let mut keys = 0;
+    let mut next_key = || {
+        keys += 1;
+        format!("K{keys:03}")
+    };
+
+    let mut free: Vec<u32> = (1..=20).collect();
+    let mut old_rows: Vec<RandomRow> = Vec::new();
+    for _ in 0..3 + random.below(5) {
+        let row_id = free.remove(random.below(free.len()));
+        let mut cells: Vec<CellSpec> = text_columns
+            .iter()
+            .map(|&column| cell(column, random.text(), None))
+            .collect();
+        if keyed {
+            cells.insert(0, cell(0, &next_key(), None));
+        }
+        old_rows.push((row_id, cells));
+    }
+    old_rows.sort_by_key(|(row_id, _)| *row_id);
+
+    let mut new_rows: Vec<RandomRow> = Vec::new();
+    let taken = |rows: &[RandomRow], row_id: u32| rows.iter().any(|(id, _)| *id == row_id);
+    // A line inserted above shifts every keyed line into the next line's row.
+    let shifted = keyed && random.chance(40);
+    let next_row: BTreeMap<u32, u32> = old_rows
+        .iter()
+        .zip(old_rows.iter().skip(1))
+        .map(|((row_id, _), (next, _))| (*row_id, *next))
+        .collect();
+    for (row_id, cells) in old_rows.iter().rev() {
+        if random.chance(20) {
+            continue;
+        }
+        let mut target = *row_id;
+        if shifted {
+            target = next_row.get(row_id).copied().unwrap_or(row_id + 30);
+        } else if keyed && random.chance(40) {
+            // Any row ID, including one another line used before the patch.
+            let candidate = u32::try_from(1 + random.below(40)).expect("small");
+            if !taken(&new_rows, candidate) {
+                target = candidate;
+            }
+        }
+        if taken(&new_rows, target) {
+            continue;
+        }
+        let cells = cells
+            .iter()
+            .map(|spec| {
+                if keyed && spec.column_index == 0 {
+                    return spec.clone();
+                }
+                let text = if random.chance(25) {
+                    random.text().to_owned()
+                } else {
+                    spec.macro_text.clone()
+                };
+                cell(spec.column_index + shift, &text, None)
+            })
+            .collect();
+        new_rows.push((target, cells));
+    }
+    for _ in 0..random.below(3) {
+        let row_id = u32::try_from(41 + random.below(20)).expect("small");
+        if taken(&new_rows, row_id) {
+            continue;
+        }
+        let mut cells: Vec<CellSpec> = text_columns
+            .iter()
+            .map(|&column| cell(column + shift, random.text(), None))
+            .collect();
+        if keyed {
+            cells.insert(0, cell(0, &next_key(), None));
+        }
+        new_rows.push((row_id, cells));
+    }
+    if new_rows.is_empty() {
+        new_rows.push(old_rows[0].clone());
+    }
+    new_rows.sort_by_key(|(row_id, _)| *row_id);
+    let specs = |rows: Vec<RandomRow>| {
+        rows.into_iter()
+            .map(|(row_id, cells)| {
+                row_with_cells(row_id, u8::try_from(row_id % 7).expect("small"), cells)
+            })
+            .collect()
+    };
+    RandomPatch {
+        old: snapshot("old", specs(old_rows)),
+        new: snapshot("new", specs(new_rows)),
+        keyed,
+    }
+}
+
+fn macro_text(source: &HxsSnapshot, binding: &SourceBinding) -> Option<String> {
+    source
+        .string_cell(
+            binding.sheet_name(),
+            binding.row_id(),
+            binding.subrow_id(),
+            binding.column_index(),
+        )
+        .expect("cell lookup")
+        .map(|cell| cell.macro_text)
+}
+
+#[derive(Debug, Default)]
+struct RandomTotals {
+    unchanged: usize,
+    changed: usize,
+    followed_keys: usize,
+    column_mapped: usize,
+    reattached: usize,
+    detached: usize,
+    binding_conflicts: usize,
+}
+
+/// Randomized patches over plain and keyed sheets. Whatever the planner
+/// decides, a translation stays "unchanged" only on identical text, every
+/// other bound translation is flagged as changed, proposed facts describe the
+/// new source exactly, no two units share an occurrence, keyed lines follow
+/// their key, and planning is deterministic.
+#[test]
+#[allow(clippy::too_many_lines)]
+fn randomized_patches_never_attach_a_translation_to_different_text() {
+    let mut random = Lcg(0x00A3_71A5_EED5);
+    let mut totals = RandomTotals::default();
+    for case in 0..150 {
+        let patch = random_patch(&mut random);
+        let old_fixture = write_snapshot(&patch.old);
+        let new_fixture = write_snapshot(&patch.new);
+        let old = open(&old_fixture);
+        let new = open(&new_fixture);
+        let keyed = patch.keyed;
+        let translatable = |binding: &SourceBinding| !keyed || binding.column_index() != 0;
+
+        let old_keys = if keyed {
+            RowKeys::read(&old, SHEET, translatable).expect("keys")
+        } else {
+            None
+        };
+        let mut workspace = Workspace::from_verified_snapshot(&old, "fr").expect("workspace");
+        let mut units = Vec::new();
+        for spec in &patch.old.rows {
+            for cell_spec in &spec.cells {
+                let binding = SourceBinding::new(SHEET, spec.row_id, 0, cell_spec.column_index);
+                if !translatable(&binding) || random.chance(30) {
+                    continue;
+                }
+                let id = workspace
+                    .create_unit_from_hxs(&old, SHEET, spec.row_id, 0, cell_spec.column_index, "t")
+                    .expect("unit");
+                // Some units predate row keys, and some are already detached;
+                // both can then compete with other units for one occurrence.
+                let key = old_keys
+                    .as_ref()
+                    .and_then(|keys| keys.key_of(spec.row_id, 0))
+                    .filter(|_| !random.chance(20));
+                let mut unit = workspace
+                    .unit(id)
+                    .expect("unit")
+                    .clone()
+                    .with_source_row_key(key);
+                if random.chance(15) {
+                    unit.detach(DetachReason::RowRemoved);
+                }
+                units.push(unit);
+            }
+        }
+
+        let plan = plan_source_update(workspace.metadata(), units.iter(), &new, translatable)
+            .expect("plan");
+        let again = plan_source_update(workspace.metadata(), units.iter(), &new, translatable)
+            .expect("plan");
+        assert_eq!(plan, again, "case {case}: planning is deterministic");
+        assert_eq!(plan.entries().len(), units.len(), "case {case}");
+
+        let new_keys = if keyed {
+            RowKeys::read(&new, SHEET, translatable).expect("keys")
+        } else {
+            None
+        };
+        let current: BTreeMap<(u32, u16, u32), [u8; 32]> = new
+            .page_string_occurrences(SHEET, None, aeria_hxs::MAX_STRING_OCCURRENCE_PAGE_SIZE)
+            .expect("page")
+            .occurrences
+            .into_iter()
+            .map(|occurrence| {
+                let coordinate = occurrence.coordinate;
+                (
+                    (
+                        coordinate.row_id,
+                        coordinate.subrow_id,
+                        coordinate.column_index,
+                    ),
+                    *occurrence.macro_text_hash.as_bytes(),
+                )
+            })
+            .collect();
+        let mut claimed = BTreeSet::new();
+        for unit in &units {
+            let entry = entry(&plan, unit.id());
+            let old_text = macro_text(&old, unit.source_binding()).expect("old text");
+            let Some(proposed) = &entry.proposed else {
+                assert!(
+                    matches!(entry.outcome, UnitUpdateOutcome::Detached(_)),
+                    "case {case}: only a detached outcome has no proposal"
+                );
+                totals.detached += 1;
+                if entry.outcome == UnitUpdateOutcome::Detached(DetachReason::BindingConflict) {
+                    totals.binding_conflicts += 1;
+                }
+                continue;
+            };
+            if entry.reattaches() {
+                totals.reattached += 1;
+            }
+            let binding = &proposed.binding;
+            assert!(
+                claimed.insert(binding.clone()),
+                "case {case}: an occurrence has one owner"
+            );
+            let key = (
+                binding.row_id(),
+                binding.subrow_id(),
+                binding.column_index(),
+            );
+            assert_eq!(
+                Some(proposed.fingerprint.macro_text_hash().as_bytes()),
+                current.get(&key),
+                "case {case}: proposed facts describe the new source"
+            );
+            let new_text = macro_text(&new, binding).expect("proposed occurrence exists");
+            match entry.outcome {
+                UnitUpdateOutcome::Unchanged | UnitUpdateOutcome::EncodingChanged => {
+                    assert_eq!(
+                        new_text, old_text,
+                        "case {case}: unchanged means identical text"
+                    );
+                    totals.unchanged += 1;
+                }
+                UnitUpdateOutcome::SourceChanged => {
+                    assert_ne!(new_text, old_text, "case {case}: changed text is flagged");
+                    totals.changed += 1;
+                }
+                UnitUpdateOutcome::Detached(_) => {
+                    unreachable!("a detached outcome has no proposal")
+                }
+            }
+            let continuity = entry.continuity.expect("bound continuity");
+            if matches!(continuity.column, ColumnContinuity::Mapped { .. }) {
+                totals.column_mapped += 1;
+            }
+            if let RowContinuity::RowKey { .. } = continuity.row {
+                let keys = new_keys.as_ref().expect("row keys were used");
+                let unit_key = unit.source_row_key().expect("a keyed unit");
+                assert_eq!(
+                    keys.row_of(unit_key),
+                    Some((binding.row_id(), binding.subrow_id())),
+                    "case {case}: a keyed line follows its key"
+                );
+                totals.followed_keys += 1;
+            }
+        }
+    }
+    println!("{totals:?}");
+    // The generator must exercise every kind of outcome.
+    assert!(totals.unchanged > 100, "{totals:?}");
+    assert!(totals.changed > 30, "{totals:?}");
+    assert!(totals.followed_keys > 10, "{totals:?}");
+    assert!(totals.column_mapped > 30, "{totals:?}");
+    assert!(totals.detached > 30, "{totals:?}");
+    assert!(totals.reattached > 20, "{totals:?}");
+    assert!(totals.binding_conflicts > 5, "{totals:?}");
 }

@@ -1,4 +1,4 @@
-//! Integration tests over synthetic Workspace Format v1 repositories.
+//! Integration tests over synthetic workspace repositories.
 //!
 //! Tests require the `git` executable (`AERIA_GIT_PATH` or `PATH`). They
 //! isolate Git from user and system configuration and use only local bare
@@ -12,7 +12,7 @@ use std::process::Command;
 use aeria_core::{ReviewState, TranslationUnitId};
 use aeria_git::{
     CollaborationPolicy, CollaborationSettings, ConflictResolution, GitError, GitExecutable,
-    GitRepository, IntegrateOutcome, RecordVersion, UnitChangeKind,
+    GitRepository, IntegrateOutcome, RECONCILE_MESSAGE, RecordVersion, UnitChangeKind,
 };
 use tempfile::TempDir;
 
@@ -113,7 +113,7 @@ type Record<'a> = (TranslationUnitId, u32, &'a str, &'a str);
 
 fn record((id, row, target, review): Record<'_>) -> String {
     format!(
-        "{{\"id\":\"{id}\",\"sourceBinding\":{{\"sheetName\":\"Addon\",\"rowId\":{row},\"subrowId\":0,\"columnIndex\":0}},\"sourceFingerprint\":{{\"macroTextHash\":\"{HASH}\",\"rawValueHash\":null,\"rowTechnicalHash\":\"{HASH}\"}},\"targetMacro\":\"{target}\",\"reviewState\":\"{review}\",\"translatorNote\":null}}\n"
+        "{{\"id\":\"{id}\",\"sourceStatus\":\"bound\",\"sourceBinding\":{{\"sheetName\":\"Addon\",\"rowId\":{row},\"subrowId\":0,\"columnIndex\":0}},\"sourceFingerprint\":{{\"macroTextHash\":\"{HASH}\",\"rawValueHash\":null,\"rowTechnicalHash\":\"{HASH}\"}},\"sourceLayout\":{{\"sheetSchemaHash\":\"{HASH}\",\"columnOffset\":0}},\"sourceRowKey\":null,\"targetMacro\":\"{target}\",\"reviewState\":\"{review}\",\"translatorNote\":null}}\n"
     )
 }
 
@@ -208,6 +208,140 @@ fn checkpoint_attributes_translations_and_builds_unit_history() {
     let log = repository.log(0, 10).expect("log");
     assert_eq!(log.len(), 2);
     assert_eq!(log[0].id, review.commit.id);
+}
+
+#[test]
+fn unit_history_follows_the_identity_across_source_rebinds_only() {
+    let sandbox = Sandbox::new();
+    let repository = sandbox.project("project", "Ada");
+    let root = repository.root().to_owned();
+    let (unit, neighbour) = (id(0x7a, 1), id(0x7a, 2));
+
+    write_shard(
+        &root,
+        0x7a,
+        &[
+            (unit, 1, "Bonjour", "reviewed"),
+            (neighbour, 2, "Salut", "draft"),
+        ],
+    );
+    repository.checkpoint(None).expect("translate");
+    // A game patch moves the unit's line to row 5; the update rebinds it and
+    // marks it for review without touching the target.
+    write_shard(
+        &root,
+        0x7a,
+        &[
+            (unit, 5, "Bonjour", "needs-review"),
+            (neighbour, 2, "Salut", "draft"),
+        ],
+    );
+    repository
+        .checkpoint(Some("Update to game 7.1"))
+        .expect("source update");
+    write_shard(
+        &root,
+        0x7a,
+        &[
+            (unit, 5, "Bonjour", "needs-review"),
+            (neighbour, 2, "Salut !", "draft"),
+        ],
+    );
+    repository.checkpoint(None).expect("neighbour edit");
+    write_shard(
+        &root,
+        0x7a,
+        &[
+            (unit, 5, "Coucou", "draft"),
+            (neighbour, 2, "Salut !", "draft"),
+        ],
+    );
+    repository.checkpoint(None).expect("unit edit");
+
+    let history = repository.unit_history(unit, 10).expect("history");
+    let subjects: Vec<&str> = history
+        .revisions
+        .iter()
+        .map(|revision| revision.commit.subject.as_str())
+        .collect();
+    assert_eq!(history.revisions.len(), 3, "{subjects:?}");
+    assert_eq!(history.revisions[1].commit.subject, "Update to game 7.1");
+    let (RecordVersion::Valid(before), RecordVersion::Valid(after)) =
+        (&history.revisions[1].before, &history.revisions[1].after)
+    else {
+        panic!("expected valid records");
+    };
+    assert_eq!(before.source_binding().row_id(), 1);
+    assert_eq!(after.source_binding().row_id(), 5);
+    assert_eq!(before.target_macro(), after.target_macro());
+    assert_eq!(history.revisions[2].kind, UnitChangeKind::Added);
+    let RecordVersion::Valid(newest) = &history.revisions[0].after else {
+        panic!("expected a valid record");
+    };
+    assert_eq!(newest.target_macro(), "Coucou");
+
+    let neighbour_history = repository.unit_history(neighbour, 10).expect("history");
+    assert_eq!(neighbour_history.revisions.len(), 2);
+}
+
+#[test]
+fn integration_commits_the_reconciliation_written_while_accepting() {
+    let sandbox = Sandbox::new();
+    let remote = sandbox.bare_remote();
+    let (one, two) = (id(0x10, 1), id(0x20, 1));
+
+    let ada = sandbox.project("ada", "Ada");
+    ada.set_remote("origin", &remote).expect("remote");
+    write_shard(ada.root(), 0x10, &[(one, 1, "Un", "draft")]);
+    write_shard(ada.root(), 0x20, &[(two, 2, "Deux", "draft")]);
+    ada.checkpoint(None).expect("initial");
+    ada.push().expect("push");
+    let grace = sandbox.clone(&remote, "grace", "Grace");
+
+    write_shard(ada.root(), 0x10, &[(one, 1, "Une", "draft")]);
+    ada.checkpoint(None).expect("ada edit");
+    ada.push().expect("push");
+    write_shard(grace.root(), 0x20, &[(two, 2, "Deux !", "draft")]);
+    grace.checkpoint(None).expect("grace edit");
+
+    grace.fetch().expect("fetch");
+    let grace_root = grace.root().to_owned();
+    let outcome = grace
+        .integrate(&no_resolutions(), || {
+            // The session reconciles a merged unit with the current source.
+            write_shard(&grace_root, 0x10, &[(one, 3, "Une", "needs-review")]);
+            Ok(())
+        })
+        .expect("integrate");
+    assert_eq!(outcome, IntegrateOutcome::Merged);
+    let log = grace.log(0, 3).expect("log");
+    assert_eq!(log[0].subject, RECONCILE_MESSAGE);
+    assert_eq!(log[0].author_name, "Grace");
+    let parents = sandbox.raw_git(
+        grace.root(),
+        &["rev-list", "--parents", "-n", "1", "HEAD~1"],
+    );
+    assert_eq!(parents.split_whitespace().count(), 3, "HEAD~1 is the merge");
+    assert!(grace.status().expect("status").files.is_empty());
+    assert!(shard_text(grace.root(), 0x10).contains("\"rowId\":3"));
+    assert!(shard_text(grace.root(), 0x20).contains("\"Deux !\""));
+    assert!(grace.push().expect("push"));
+
+    // An acceptance that writes nothing adds no commit.
+    ada.fetch().expect("fetch");
+    ada.integrate(&no_resolutions(), || Ok(()))
+        .expect("ada integrates");
+    write_shard(ada.root(), 0x20, &[(two, 2, "Deux !", "reviewed")]);
+    ada.checkpoint(None).expect("ada review");
+    ada.push().expect("push");
+    let before = grace.head().expect("head");
+    grace.fetch().expect("fetch");
+    assert_eq!(
+        grace.integrate(&no_resolutions(), || Ok(())).expect("ff"),
+        IntegrateOutcome::FastForward
+    );
+    assert_ne!(grace.head().expect("head"), before);
+    assert_ne!(grace.log(0, 1).expect("log")[0].subject, RECONCILE_MESSAGE);
 }
 
 #[test]

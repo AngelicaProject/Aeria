@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
-use aeria_hxs::HxsSnapshot;
+use aeria_hxs::{HxsSnapshot, SnapshotMetadata};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use zip::ZipArchive;
@@ -160,12 +160,7 @@ pub fn open(
         }
     };
     let metadata = source_snapshot.metadata();
-    if manifest.game_version != metadata.game_version
-        || manifest.scope != metadata.scope
-        || manifest.source.language != metadata.source_language
-        || manifest.source.content_id != metadata.content_id
-        || manifest.source.snapshot_id != metadata.snapshot_id
-    {
+    if !source_identity_matches(&manifest, &metadata) {
         cleanup_materialized_source(materialized, &materialized_source);
         return Err(HspError::Relationship {
             message: "HSP manifest source identity does not match the embedded HXS".to_owned(),
@@ -250,12 +245,7 @@ fn try_open_verified_cache(package_path: &Path, cache_root: &Path) -> Option<Sou
         return None;
     };
     let metadata = source_snapshot.metadata();
-    if manifest.game_version != metadata.game_version
-        || manifest.scope != metadata.scope
-        || manifest.source.language != metadata.source_language
-        || manifest.source.content_id != metadata.content_id
-        || manifest.source.snapshot_id != metadata.snapshot_id
-    {
+    if !source_identity_matches(&manifest, &metadata) {
         forget_verified_cache(&key);
         return None;
     }
@@ -369,11 +359,7 @@ fn try_open_persistent_record(
     let guidance = parse_and_validate(&guidance_bytes).ok()?;
     let source_snapshot = HxsSnapshot::open_cached_verified(&source_cache_path).ok()?;
     let metadata = source_snapshot.metadata();
-    if manifest.game_version != metadata.game_version
-        || manifest.scope != metadata.scope
-        || manifest.source.language != metadata.source_language
-        || manifest.source.content_id != metadata.content_id
-        || manifest.source.snapshot_id != metadata.snapshot_id
+    if !source_identity_matches(&manifest, &metadata)
         || metadata.source_language != record.source_language
         || metadata.content_id != record.content_id
         || metadata.snapshot_id != record.snapshot_id
@@ -654,6 +640,24 @@ fn validate_archive_names<R: Read + io::Seek>(archive: &mut ZipArchive<R>) -> Re
     Ok(())
 }
 
+/// HXS format versions accepted as the required `sourceHxs` component.
+const SUPPORTED_SOURCE_HXS_VERSIONS: [u32; 2] = [1, 2];
+
+/// Checks that the manifest describes the embedded, verified HXS, including
+/// the HXS format version declared by the `sourceHxs` component.
+fn source_identity_matches(manifest: &HspManifest, metadata: &SnapshotMetadata) -> bool {
+    manifest.game_version == metadata.game_version
+        && manifest.scope == metadata.scope
+        && manifest.source.language == metadata.source_language
+        && manifest.source.content_id == metadata.content_id
+        && manifest.source.snapshot_id == metadata.snapshot_id
+        && manifest.components.iter().any(|component| {
+            component.required
+                && component.kind == "sourceHxs"
+                && component.format_version == metadata.format_version
+        })
+}
+
 fn validate_manifest(manifest: &HspManifest) -> Result<(), HspError> {
     if manifest.format_version != 1
         || manifest.game_version.trim().is_empty()
@@ -685,7 +689,9 @@ fn validate_manifest(manifest: &HspManifest) -> Result<(), HspError> {
         }
         if component.required && component.kind == "sourceHxs" {
             source_count += 1;
-            if component.format_version != 1 || component.path != SOURCE_PATH {
+            if !SUPPORTED_SOURCE_HXS_VERSIONS.contains(&component.format_version)
+                || component.path != SOURCE_PATH
+            {
                 return Err(HspError::Manifest {
                     message: "required sourceHxs descriptor is not the HSP v1 source".to_owned(),
                 });

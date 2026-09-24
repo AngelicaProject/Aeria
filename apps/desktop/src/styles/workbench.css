@@ -232,7 +232,6 @@
   border: 1px solid var(--line-focus);
   border-radius: var(--radius-sm);
   background: var(--field);
-  box-shadow: 0 0 0 3px var(--accent-soft);
   color: var(--fg-subtle);
 }
 .sheet-filter input { flex: 1; min-width: 0; height: 100%; border: 0; background: transparent; color: var(--fg); font-size: var(--text-sm); }
@@ -262,7 +261,7 @@
 .sheet-tree-row:hover { background: var(--hover); color: var(--fg); }
 .sheet-tree-row.active { background: var(--selected); color: var(--fg); }
 .sheet-tree-row.active .sheet-tree-sheet-icon { color: var(--accent-text); }
-.sheet-tree-row:focus-visible { outline-offset: -2px; }
+.sheet-tree-row:focus-visible { outline-offset: -1px; }
 .sheet-tree-row.is-empty-sheet { color: var(--fg-faint); }
 .sheet-tree-chevron { display: grid; flex: none; place-items: center; width: 12px; margin-left: -4px; color: var(--fg-subtle); }
 .sheet-tree-icon { display: grid; flex: none; place-items: center; color: var(--fg-faint); }
@@ -373,6 +372,18 @@
 .lens-row:not(.selected) .lens-target { color: color-mix(in srgb, var(--fg) 88%, transparent); }
 .lens-macro { color: var(--macro); font-family: var(--font-mono); font-size: 0.86em; }
 .lens-empty { color: var(--fg-faint); font-style: italic; }
+.lens-tag {
+  display: inline-block;
+  margin-right: 6px;
+  padding: 0 4px;
+  border: 1px solid var(--line-strong);
+  border-radius: 3px;
+  color: var(--fg-subtle);
+  font-family: var(--font-ui);
+  font-size: var(--text-2xs);
+  line-height: 14px;
+  vertical-align: 1px;
+}
 .lens-load-more { position: absolute; top: 0; right: 0; left: 0; display: grid; place-items: center; }
 .lens-state { display: flex; flex: 1; align-items: center; justify-content: center; gap: 10px; color: var(--fg-muted); }
 .lens-loading-layer {
@@ -404,6 +415,9 @@
 .status-item { display: inline-flex; align-items: center; gap: 5px; height: 20px; padding: 0 7px; border-radius: var(--radius-xs); }
 .status-selection { overflow: hidden; color: var(--fg-muted); text-overflow: ellipsis; }
 .status-dirty { color: var(--warn); }
+.status-button { border: 0; background: transparent; font: inherit; cursor: pointer; }
+.status-button:hover { background: var(--hover); }
+.status-attention { color: var(--warn); }
 .status-dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
 .status-path { max-width: 260px; overflow: hidden; text-overflow: ellipsis; }
 

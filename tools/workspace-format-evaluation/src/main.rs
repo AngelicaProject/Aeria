@@ -9,8 +9,8 @@ use std::process::{Command, Output};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use aeria_core::{
-    ReviewState, Sha256Hash, SourceBinding, SourceFingerprint, TranslationUnit, TranslationUnitId,
-    WorkspaceMetadata,
+    ReviewState, Sha256Hash, SourceBinding, SourceFingerprint, SourceLayout, TranslationUnit,
+    TranslationUnitId, WorkspaceMetadata,
 };
 
 const SHARD_COUNT: usize = 256;
@@ -238,7 +238,6 @@ fn generate_dataset(size: usize) -> Dataset {
         "en",
         "fr",
         format!("sha256:{}", hex(&deterministic_bytes(0, 0xC0, 32))),
-        format!("sha256:{}", hex(&deterministic_bytes(1, 0xD0, 32))),
     )
     .expect("evaluation metadata is valid");
     let mut units = (0..size)
@@ -376,13 +375,6 @@ fn manifest_json(metadata: &WorkspaceMetadata) -> String {
         2,
         "contentId",
         metadata.source_content_id(),
-        true,
-    );
-    push_pretty_string_field(
-        &mut output,
-        2,
-        "snapshotId",
-        metadata.source_snapshot_id(),
         false,
     );
     output.push_str("}\n");
@@ -770,7 +762,8 @@ fn apply_diff_scenario(dataset: &mut Dataset, scenario: DiffScenario) {
                 Some(Sha256Hash::from_bytes([0x5A; 32])),
                 Sha256Hash::from_bytes([0x3C; 32]),
             );
-            unit.update_source_after_known_change(new_binding, new_fingerprint);
+            let new_layout = SourceLayout::new(Sha256Hash::from_bytes([0x6B; 32]), 124);
+            unit.bind_after_source_update(new_binding, new_fingerprint, new_layout, None, true);
         }),
         DiffScenario::AddOne => dataset.units.push(make_unit(1_000_000)),
         DiffScenario::DeleteOne => {
@@ -1096,13 +1089,12 @@ mod tests {
             "en",
             "fr",
             "sha256:0000000000000000000000000000000000000000000000000000000000000000",
-            "sha256:1111111111111111111111111111111111111111111111111111111111111111",
         )
         .expect("golden metadata is valid");
 
         assert_eq!(
             manifest_json(&metadata),
-            "{\n  \"formatVersion\": 1,\n  \"sourceLanguage\": \"en\",\n  \"targetLanguage\": \"fr\",\n  \"contentId\": \"sha256:0000000000000000000000000000000000000000000000000000000000000000\",\n  \"snapshotId\": \"sha256:1111111111111111111111111111111111111111111111111111111111111111\"\n}\n"
+            "{\n  \"formatVersion\": 1,\n  \"sourceLanguage\": \"en\",\n  \"targetLanguage\": \"fr\",\n  \"contentId\": \"sha256:0000000000000000000000000000000000000000000000000000000000000000\"\n}\n"
         );
     }
 

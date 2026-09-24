@@ -81,8 +81,11 @@ dirty indicator is presentation state only.
 
 ## Command palette
 
-The command center (Ctrl+P) opens a palette at the top of the workbench. The
-input prefix selects its mode:
+The command center (Ctrl+P) sits in the titlebar, centered on the window, and
+opens the palette directly below it on the same center line, so neither moves
+when menus, actions, or the active sheet change. Focus is shown by a 1px
+accent border or outline; fields do not add a glow. The input prefix selects
+its mode:
 
 | Prefix | Mode |
 | --- | --- |
@@ -110,9 +113,13 @@ context only and are never used as permission heuristics.
 
 The list is virtualized, pages one sheet at a time with a limit of 100 entries,
 and keeps **Load more** explicit; a source page may return zero visible rows
-while its row cursor still has more source work. A text filter and a review
-state filter (untranslated, draft, needs review, reviewed) narrow the loaded
-occurrences only and are labelled as such. The toolbar shows sheet-wide
+while its row cursor still has more source work. A text filter, a review
+state filter (untranslated, draft, needs review, reviewed), and a string kind
+toggle pair (text only or formatting only; pressing the active one again shows
+both) narrow the loaded occurrences only and are
+labelled as such. Formatting-only strings (no letters outside macros, such as
+`...` or a number format) show a small `fmt` tag in the list and a
+**Formatting** chip in the editor's source header; they stay translatable. The toolbar shows sheet-wide
 coverage from `translation_progress`, never a figure derived from loaded pages.
 Strings with uncommitted Git changes carry a gutter marker (added or modified)
 derived from `git_pending_changes`.
@@ -229,6 +236,12 @@ Panels, the document, and dialogs use opaque theme surfaces with rounded
 corners. Reduce transparency, High Contrast Dark, and other platforms use an
 opaque theme-colored backdrop.
 
-This editor intentionally has no structured macro controls, source update or
-rebase UI, or export. The workbench retains truthful AI dock slots, bottom-panel
+The launcher offers **Update project** for an existing repository and an
+installed game, and asks for confirmation with the planned counts before a
+package with other content is applied. After an update the workbench shows a
+summary; the status bar shows the number of detached translations and opens
+their list. See [`rebase.md`](./rebase.md#desktop-workflow).
+
+This editor intentionally has no structured macro controls, manual
+reattachment of detached translations, or export. The workbench retains truthful AI dock slots, bottom-panel
 tabs, and status/layout infrastructure even when those backends are unavailable.

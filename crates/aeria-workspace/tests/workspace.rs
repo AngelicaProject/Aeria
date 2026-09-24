@@ -1,59 +1,21 @@
 use std::collections::BTreeMap;
-use std::fmt::Write as _;
 use std::fs;
-use std::io::Write;
 use std::path::{Path, PathBuf};
 
-use aeria_core::{ReviewState, Sha256Hash, SourceBinding};
-use aeria_hsp::{
-    GuidanceEvidenceInput, GuidanceOccurrence, GuidanceSheet, GuidanceSheetStatus,
-    HspComponentDescriptor, HspManifest, HspSourceIdentity, SourceGuidance,
-    compute_guidance_bundle_id, compute_package_id, compute_source_evidence_id,
-};
+use aeria_core::{DetachReason, ReviewState, Sha256Hash, SourceBinding, SourceStatus};
 use aeria_hxs::HxsSnapshot;
+use aeria_rebase::{Continuity, UnitUpdateOutcome};
 use aeria_workspace::{
-    MAX_TRANSLATION_PAGE_SIZE, ProjectSession, ProjectSessionError, TranslationMutationError,
-    TranslationReadError, TranslationRowCursor, Workspace, WorkspaceError, WorkspaceStore,
+    MAX_TRANSLATION_PAGE_SIZE, ProjectSession, ProjectSessionError, SourceUpdateRequirement,
+    TranslationMutationError, TranslationReadError, TranslationRowCursor, Workspace,
+    WorkspaceError, WorkspaceStore, WorkspaceStoreError,
 };
-use rusqlite::{Connection, params};
-use sha2::{Digest, Sha256};
 use tempfile::TempDir;
-use zip::ZipWriter;
 
-const SYNTHETIC_SCHEMA: &str = include_str!("../../aeria-hxs/tests/fixtures/synthetic_v1.sql");
-const APPLICATION_ID: i64 = 0x4841_544c;
+#[path = "support/fixture.rs"]
+mod fixture;
 
-struct Fixture {
-    _directory: TempDir,
-    path: PathBuf,
-    package_path: PathBuf,
-    one_macro_hash: [u8; 32],
-    one_row_technical_hash: [u8; 32],
-    two_macro_hash: [u8; 32],
-    two_raw_hash: [u8; 32],
-}
-
-struct ProjectionFixture {
-    _directory: TempDir,
-    path: PathBuf,
-    package_path: PathBuf,
-}
-
-struct ProjectionString {
-    column_index: u32,
-    macro_text: String,
-    macro_hash: [u8; 32],
-}
-
-struct ProjectionRow {
-    row_id: u32,
-    row_hash: [u8; 32],
-    technical_hash: [u8; 32],
-    string_hash: [u8; 32],
-    strings: Vec<ProjectionString>,
-}
-
-type StringHashSpec = (u32, [u8; 32], Option<[u8; 32]>);
+use fixture::*;
 
 #[test]
 fn creates_a_unit_from_a_verified_hxs_string_cell_without_copying_source_text() {
@@ -253,10 +215,6 @@ fn initializes_and_reopens_a_new_project_without_persisting_the_source_path() {
         session.workspace().metadata().source_content_id(),
         source_metadata.content_id
     );
-    assert_eq!(
-        session.workspace().metadata().source_snapshot_id(),
-        source_metadata.snapshot_id
-    );
     assert!(repository.path().join(".aeria/manifest.json").is_file());
     assert!(!repository.path().join(".aeria/units").exists());
     let manifest =
@@ -359,7 +317,7 @@ fn opens_existing_project_and_preserves_managed_files() {
 }
 
 #[test]
-fn opening_existing_workspace_rejects_a_binding_blocked_by_guidance() {
+fn a_permission_loss_requires_an_update_that_detaches_without_losing_the_translation() {
     let fixture = write_fixture();
     let blocked_package = write_hsp_package(&fixture.path, |_, row_id, _, column_index, _| {
         !(row_id == 42 && column_index == 0)
@@ -375,23 +333,295 @@ fn opening_existing_workspace_rejects_a_binding_blocked_by_guidance() {
         .expect("workspace should initialize");
     let before = managed_files(repository.path());
 
-    let Err(error) = ProjectSession::open(
-        repository.path(),
-        blocked_package,
-        repository.path().join("cache"),
-    ) else {
-        panic!("blocked existing unit must fail opening")
+    let cache_root = repository.path().join("cache");
+    let Err(error) = ProjectSession::open(repository.path(), &blocked_package, &cache_root) else {
+        panic!("blocked existing unit must require a source update")
     };
     assert!(matches!(
         error,
-        ProjectSessionError::BlockedWorkspaceUnit {
-            translation_unit_id,
-            source_binding,
+        ProjectSessionError::SourceUpdateRequired {
+            requirement: SourceUpdateRequirement::PermissionChanged { blocked_units: 1 },
             ..
-        } if translation_unit_id == id
-            && source_binding == SourceBinding::new("Synthetic", 42, 0, 0)
+        }
     ));
     assert_eq!(before, managed_files(repository.path()));
+
+    let package =
+        aeria_hsp::SourcePackage::open(&blocked_package, &cache_root).expect("blocked package");
+    let preview =
+        ProjectSession::preview_source_update(repository.path(), &package).expect("preview");
+    assert_eq!(preview.plan.summary.newly_detached, 1);
+    assert_eq!(before, managed_files(repository.path()));
+
+    let (session, report) = ProjectSession::open_with_source_update(repository.path(), package)
+        .expect("update detaches the blocked unit");
+    assert_eq!(report.expect("update applied").plan, preview.plan);
+    let unit = session.workspace().unit(id).expect("unit is preserved");
+    assert_eq!(
+        unit.source_status(),
+        SourceStatus::Detached(DetachReason::NotTranslatable)
+    );
+    assert_eq!(unit.target_macro(), "Bonjour");
+    assert_eq!(
+        unit.source_binding(),
+        &SourceBinding::new("Synthetic", 42, 0, 0)
+    );
+    assert_eq!(session.detached_units().count(), 1);
+    assert!(session.translation_progress().is_empty());
+    drop(session);
+
+    let reopened = ProjectSession::open(repository.path(), &blocked_package, &cache_root)
+        .expect("updated project opens without another update");
+    assert_eq!(reopened.detached_units().count(), 1);
+}
+
+#[test]
+fn identical_content_from_another_game_version_opens_without_an_update() {
+    let original_fixture = write_fixture();
+    let hotfix = write_fixture_with("en", "hotfix-game");
+    let repository = tempfile::tempdir().expect("temporary repository");
+    let mut session = initialize_project(&repository, &original_fixture.package_path, "fr");
+    session
+        .set_target(&SourceBinding::new("Synthetic", 42, 0, 0), "Bonjour")
+        .expect("target");
+    drop(session);
+    let before = managed_files(repository.path());
+
+    let session = ProjectSession::open(
+        repository.path(),
+        &hotfix.package_path,
+        repository.path().join("cache"),
+    )
+    .expect("same content from another game version opens directly");
+    assert_eq!(session.source().metadata().game_version, "hotfix-game");
+    assert_eq!(session.workspace().units().count(), 1);
+    assert_eq!(before, managed_files(repository.path()));
+}
+
+#[test]
+fn a_content_update_rebinds_marks_review_and_is_idempotent_after_interruption() {
+    let original_fixture = write_fixture();
+    let updated_fixture = write_fixture_with_text("en", "next-game", "uno");
+    let repository = tempfile::tempdir().expect("temporary repository");
+    let cache_root = repository.path().join("cache");
+    let mut session = initialize_project(&repository, &original_fixture.package_path, "fr");
+    let changed = session
+        .set_target(&SourceBinding::new("Synthetic", 42, 0, 0), "Bonjour")
+        .expect("changed unit");
+    let unchanged = session
+        .set_target(&SourceBinding::new("Synthetic", 7, 0, 0), "Deux")
+        .expect("unchanged unit");
+    session
+        .set_review_state(changed, ReviewState::Reviewed)
+        .expect("review");
+    session
+        .set_review_state(unchanged, ReviewState::Reviewed)
+        .expect("review");
+    drop(session);
+    let before_update = managed_files(repository.path());
+
+    let Err(error) = ProjectSession::open(
+        repository.path(),
+        &updated_fixture.package_path,
+        &cache_root,
+    ) else {
+        panic!("changed content must require a source update")
+    };
+    assert!(matches!(
+        error,
+        ProjectSessionError::SourceUpdateRequired {
+            requirement: SourceUpdateRequirement::ContentChanged { .. },
+            ..
+        }
+    ));
+    assert_eq!(before_update, managed_files(repository.path()));
+
+    let package = aeria_hsp::SourcePackage::open(&updated_fixture.package_path, &cache_root)
+        .expect("updated package");
+    let (session, report) = ProjectSession::open_with_source_update(repository.path(), package)
+        .expect("update applies");
+    let report = report.expect("an update was required");
+    assert_eq!(report.plan.summary.unchanged, 1);
+    assert_eq!(report.plan.summary.source_changed, 1);
+    assert_eq!(report.plan.summary.detached, 0);
+    assert!(
+        report
+            .plan
+            .entries()
+            .iter()
+            .all(|entry| entry.continuity == Some(Continuity::SAME_BINDING)
+                && entry.outcome != UnitUpdateOutcome::Detached(DetachReason::RowRemoved))
+    );
+    let changed_unit = session.workspace().unit(changed).expect("changed unit");
+    assert_eq!(changed_unit.target_macro(), "Bonjour");
+    assert_eq!(changed_unit.review_state(), ReviewState::NeedsReview);
+    let unchanged_unit = session.workspace().unit(unchanged).expect("unchanged unit");
+    assert_eq!(unchanged_unit.review_state(), ReviewState::Reviewed);
+    assert_eq!(
+        session.workspace().metadata().source_content_id(),
+        session.source().metadata().content_id
+    );
+    drop(session);
+    let after_update = managed_files(repository.path());
+
+    let manifest_path = repository.path().join(".aeria/manifest.json");
+    fs::write(&manifest_path, &before_update[&manifest_path])
+        .expect("simulate an update interrupted before the manifest");
+    let package = aeria_hsp::SourcePackage::open(&updated_fixture.package_path, &cache_root)
+        .expect("updated package");
+    let (_, report) = ProjectSession::open_with_source_update(repository.path(), package)
+        .expect("interrupted update is planned again");
+    assert_eq!(
+        report
+            .expect("update re-applied")
+            .plan
+            .summary
+            .changed_units,
+        0
+    );
+    assert_eq!(after_update, managed_files(repository.path()));
+
+    ProjectSession::open(
+        repository.path(),
+        &updated_fixture.package_path,
+        &cache_root,
+    )
+    .expect("updated project opens");
+}
+
+#[test]
+fn a_keyed_sheet_update_moves_translations_with_their_lines() {
+    let dialogue = |_: &str, _: u32, _: u16, column_index: u32, _: &str| column_index == 1;
+    let original = write_projection_fixture_with(
+        "quest-game",
+        &[
+            (1, ["TEXT_Q_001", "Hello", "", ""]),
+            (2, ["TEXT_Q_002", "Goodbye", "", ""]),
+            (3, ["TEXT_Q_003", "Removed line", "", ""]),
+        ],
+        dialogue,
+    );
+    let patched = write_projection_fixture_with(
+        "quest-patch",
+        &[
+            (1, ["TEXT_Q_000", "Inserted", "", ""]),
+            (2, ["TEXT_Q_001", "Hello", "", ""]),
+            (3, ["TEXT_Q_002", "Goodbye!", "", ""]),
+            (4, ["TEXT_Q_004", "Replacement", "", ""]),
+        ],
+        dialogue,
+    );
+    let repository = tempfile::tempdir().expect("temporary repository");
+    let cache_root = repository.path().join("cache");
+    let mut session = initialize_project(&repository, &original.package_path, "fr");
+    let hello = session
+        .set_target(&SourceBinding::new("Projection", 1, 0, 1), "Bonjour")
+        .expect("hello");
+    let goodbye = session
+        .set_target(&SourceBinding::new("Projection", 2, 0, 1), "Au revoir")
+        .expect("goodbye");
+    let removed = session
+        .set_target(&SourceBinding::new("Projection", 3, 0, 1), "Supprimé")
+        .expect("removed");
+    session
+        .set_review_state(hello, ReviewState::Reviewed)
+        .expect("review");
+    assert!(
+        [hello, goodbye, removed].iter().all(|id| session
+            .workspace()
+            .unit(*id)
+            .is_some_and(|unit| unit.source_row_key().is_some())),
+        "units in a keyed sheet record their row key"
+    );
+    drop(session);
+
+    let package =
+        aeria_hsp::SourcePackage::open(&patched.package_path, &cache_root).expect("package");
+    let (session, report) = ProjectSession::open_with_source_update(repository.path(), package)
+        .expect("update applies");
+    let report = report.expect("update required");
+    assert_eq!(report.plan.summary.row_moved, 2);
+    let hello_unit = session.workspace().unit(hello).expect("hello unit");
+    assert_eq!(
+        hello_unit.source_binding(),
+        &SourceBinding::new("Projection", 2, 0, 1)
+    );
+    assert_eq!(hello_unit.review_state(), ReviewState::Reviewed);
+    let goodbye_unit = session.workspace().unit(goodbye).expect("goodbye unit");
+    assert_eq!(
+        goodbye_unit.source_binding(),
+        &SourceBinding::new("Projection", 3, 0, 1)
+    );
+    assert_eq!(goodbye_unit.review_state(), ReviewState::NeedsReview);
+    let removed_unit = session.workspace().unit(removed).expect("removed unit");
+    assert_eq!(
+        removed_unit.source_status(),
+        SourceStatus::Detached(DetachReason::RowRemoved)
+    );
+    assert_eq!(removed_unit.target_macro(), "Supprimé");
+    drop(session);
+
+    ProjectSession::open(repository.path(), &patched.package_path, &cache_root)
+        .expect("updated project opens");
+}
+
+#[test]
+fn a_workspace_format_v1_project_is_migrated_by_a_source_update() {
+    let fixture = write_fixture();
+    let repository = tempfile::tempdir().expect("temporary repository");
+    let cache_root = repository.path().join("cache");
+    let mut session = initialize_project(&repository, &fixture.package_path, "fr");
+    let id = session
+        .set_target(&SourceBinding::new("Synthetic", 42, 0, 0), "Bonjour")
+        .expect("unit");
+    let snapshot_id = session.source().metadata().snapshot_id;
+    drop(session);
+    let current = managed_files(repository.path());
+
+    let manifest_path = repository.path().join(".aeria/manifest.json");
+    let manifest = String::from_utf8(current[&manifest_path].clone()).expect("UTF-8");
+    let legacy_manifest = manifest
+        .replace("\"formatVersion\": 2", "\"formatVersion\": 1")
+        .replace(
+            "\"\n}\n",
+            &format!("\",\n  \"snapshotId\": \"{snapshot_id}\"\n}}\n"),
+        );
+    fs::write(&manifest_path, legacy_manifest).expect("v1 manifest");
+    let shard_path = repository
+        .path()
+        .join(".aeria/units")
+        .join(format!("{:02x}.jsonl", id.as_bytes()[0]));
+    let shard = String::from_utf8(current[&shard_path].clone()).expect("UTF-8");
+    let layout_start = shard.find(",\"sourceLayout\":").expect("layout field");
+    let layout_end = shard.find(",\"targetMacro\":").expect("target field");
+    let legacy_shard = format!("{}{}", &shard[..layout_start], &shard[layout_end..])
+        .replace("\"sourceStatus\":\"bound\",", "");
+    fs::write(&shard_path, legacy_shard).expect("v1 shard");
+
+    let Err(error) = ProjectSession::open(repository.path(), &fixture.package_path, &cache_root)
+    else {
+        panic!("v1 must be migrated before editing")
+    };
+    assert!(matches!(
+        error,
+        ProjectSessionError::SourceUpdateRequired {
+            requirement: SourceUpdateRequirement::FormatMigration { version: 1 },
+            ..
+        }
+    ));
+    assert!(matches!(
+        WorkspaceStore::new(repository.path()).load(),
+        Err(WorkspaceStoreError::MigrationRequired { version: 1, .. })
+    ));
+
+    let package =
+        aeria_hsp::SourcePackage::open(&fixture.package_path, &cache_root).expect("package");
+    let (_, report) = ProjectSession::open_with_source_update(repository.path(), package)
+        .expect("v1 is migrated");
+    let report = report.expect("migration applied");
+    assert_eq!(report.previous_format_version, 1);
+    assert_eq!(report.plan.summary.unchanged, 1);
+    assert_eq!(current, managed_files(repository.path()));
 }
 
 #[test]
@@ -676,13 +906,16 @@ fn translation_read_rejects_invalid_limits_and_cross_sheet_cursors() {
 }
 
 #[test]
-fn translation_read_rejects_a_stale_sparse_unit_fingerprint_without_repairing_files() {
+fn a_stale_sparse_unit_fingerprint_is_refused_on_open_and_reconciled_without_losing_it() {
     let fixture = write_fixture();
     let source = HxsSnapshot::open(&fixture.path).expect("source");
     let mut workspace = Workspace::from_verified_snapshot(&source, "fr").expect("workspace");
     let unit_id = workspace
         .create_unit_from_hxs(&source, "Synthetic", 42, 0, 0, "Bonjour")
         .expect("unit");
+    workspace
+        .update_review_state(unit_id, ReviewState::Reviewed)
+        .expect("review");
     let repository = tempfile::tempdir().expect("temporary repository");
     WorkspaceStore::new(repository.path())
         .initialize(&workspace)
@@ -693,7 +926,6 @@ fn translation_read_rejects_a_stale_sparse_unit_fingerprint_without_repairing_fi
         .map(|entry| entry.expect("unit shard entry").path())
         .next()
         .expect("one unit shard");
-    let before = managed_files(repository.path());
     let text = fs::read_to_string(&shard).expect("unit shard text");
     let persisted_hash = hex(&fixture.one_macro_hash);
     let stale_hash = "00".repeat(32);
@@ -703,30 +935,47 @@ fn translation_read_rejects_a_stale_sparse_unit_fingerprint_without_repairing_fi
     );
     assert_ne!(updated, text, "test fixture must change the persisted hash");
     fs::write(&shard, updated).expect("stale unit fixture");
-    let before_read = managed_files(repository.path());
+    let before_open = managed_files(repository.path());
 
-    let session = open_project(&repository, &fixture.package_path);
-    let error = session
+    // The unit is never read, overlaid, or mutated as if it were current.
+    let Err(error) = ProjectSession::open(
+        repository.path(),
+        &fixture.package_path,
+        repository.path().join("cache"),
+    ) else {
+        panic!("a stale unit must not open as current");
+    };
+    assert!(matches!(
+        error,
+        ProjectSessionError::SourceUpdateRequired {
+            requirement: SourceUpdateRequirement::SourceFactsMismatch { units: 1 },
+            ..
+        }
+    ));
+    assert_eq!(before_open, managed_files(repository.path()));
+
+    let package =
+        aeria_hsp::SourcePackage::open(&fixture.package_path, repository.path().join("cache"))
+            .expect("package");
+    let (session, report) = ProjectSession::open_with_source_update(repository.path(), package)
+        .expect("reconciliation");
+    assert_eq!(report.expect("reconciled").plan.summary.source_changed, 1);
+    let unit = session.workspace().unit(unit_id).expect("unit kept");
+    assert_eq!(unit.target_macro(), "Bonjour");
+    assert_eq!(unit.review_state(), ReviewState::NeedsReview);
+    assert_eq!(
+        unit.source_binding(),
+        &SourceBinding::new("Synthetic", 42, 0, 0)
+    );
+    let page = session
         .page_translation_rows(
             "Synthetic",
             Some(&TranslationRowCursor::new("Synthetic", 7, 0)),
             2,
         )
-        .expect_err("stale unit must fail the read");
-    assert!(matches!(
-        error,
-        TranslationReadError::WorkspaceSourceMismatch {
-            translation_unit_id,
-            source_binding,
-            ..
-        } if translation_unit_id == unit_id
-            && source_binding == SourceBinding::new("Synthetic", 42, 0, 0)
-    ));
-    assert_eq!(before_read, managed_files(repository.path()));
-    assert_ne!(
-        before, before_read,
-        "the test fixture should be observably stale"
-    );
+        .expect("reconciled unit reads");
+    let overlay = page.rows[0].cells[0].translation.as_ref().expect("overlay");
+    assert_eq!(overlay.translation_unit_id, unit_id);
 }
 
 #[test]
@@ -984,38 +1233,40 @@ fn invalid_or_missing_targets_do_not_change_session_or_files() {
 }
 
 #[test]
-fn stale_source_fingerprint_blocks_all_ordinary_mutations() {
+fn files_changed_behind_an_open_session_block_mutations_until_reloaded() {
     let fixture = write_fixture();
     let repository = tempfile::tempdir().expect("temporary repository");
     let binding = SourceBinding::new("Synthetic", 42, 0, 0);
-    let mut initial = initialize_project(&repository, &fixture.package_path, "fr");
-    let id = initial
+    let mut session = initialize_project(&repository, &fixture.package_path, "fr");
+    let id = session
         .set_target(&binding, "Bonjour")
         .expect("target should create a unit");
-    drop(initial);
 
+    // Another process (for example a Git merge) replaces the shard with a
+    // stale version of the unit while this session is open.
     let shard = fs::read_dir(repository.path().join(".aeria/units"))
         .expect("unit shards")
         .map(|entry| entry.expect("unit shard entry").path())
         .next()
         .expect("one unit shard");
     let text = fs::read_to_string(&shard).expect("unit shard text");
-    let stale = text.replace(
-        &format!("\"macroTextHash\":\"{}\"", hex(&fixture.one_macro_hash)),
-        &format!("\"macroTextHash\":\"{}\"", "00".repeat(32)),
-    );
+    let stale = text
+        .replace(
+            &format!("\"macroTextHash\":\"{}\"", hex(&fixture.one_macro_hash)),
+            &format!("\"macroTextHash\":\"{}\"", "00".repeat(32)),
+        )
+        .replace("Bonjour", "Salut");
     fs::write(&shard, stale).expect("stale unit fixture");
     let before = managed_files(repository.path());
 
-    let mut session = open_project(&repository, &fixture.package_path);
     for result in [
-        session.set_target(&binding, "Salut").map(|_| ()),
+        session.set_target(&binding, "Coucou").map(|_| ()),
         session.set_note(id, Some("note".to_owned())),
         session.set_review_state(id, ReviewState::Reviewed),
     ] {
         assert!(
-            matches!(result, Err(TranslationMutationError::SourceIntegrity { translation_unit_id, source_binding, .. })
-            if translation_unit_id == id && *source_binding == binding)
+            result.is_err(),
+            "a mutation must not overwrite unseen files"
         );
     }
     assert_eq!(before, managed_files(repository.path()));
@@ -1023,14 +1274,24 @@ fn stale_source_fingerprint_blocks_all_ordinary_mutations() {
         session.workspace().unit(id).unwrap().target_macro(),
         "Bonjour"
     );
-    assert_eq!(
-        session.workspace().unit(id).unwrap().translator_note(),
-        None
-    );
-    assert_eq!(
-        session.workspace().unit(id).unwrap().review_state(),
-        ReviewState::Draft
-    );
+
+    assert!(matches!(
+        session.reload_workspace(),
+        Err(ProjectSessionError::SourceUpdateRequired {
+            requirement: SourceUpdateRequirement::SourceFactsMismatch { units: 1 },
+            ..
+        })
+    ));
+    session
+        .reload_and_reconcile_workspace()
+        .expect("reconcile")
+        .expect("reconciled");
+    let unit = session.workspace().unit(id).expect("unit kept");
+    assert_eq!(unit.target_macro(), "Salut", "the on-disk edit is kept");
+    assert_eq!(unit.review_state(), ReviewState::NeedsReview);
+    session
+        .set_target(&binding, "Coucou")
+        .expect("mutations work again after reconciliation");
 }
 
 #[test]
@@ -1066,31 +1327,6 @@ fn only_the_affected_shard_changes() {
         .join(format!("{:02x}.jsonl", second.as_bytes()[0]));
     assert_ne!(before[&first_path], after[&first_path]);
     assert_eq!(before[&second_path], after[&second_path]);
-}
-
-#[test]
-fn rejects_a_different_verified_snapshot_without_modifying_the_workspace() {
-    let original_fixture = write_fixture();
-    let different_snapshot = write_fixture_with("en", "different-game");
-    let repository = tempfile::tempdir().expect("temporary repository");
-    initialize_project(&repository, &original_fixture.package_path, "fr");
-    let before = managed_files(repository.path());
-
-    let Err(error) = ProjectSession::open(
-        repository.path(),
-        &different_snapshot.package_path,
-        repository.path().join("cache"),
-    ) else {
-        panic!("different snapshot must be rejected")
-    };
-    assert!(matches!(
-        error,
-        ProjectSessionError::Compatibility {
-            source: WorkspaceError::SourceSnapshotMismatch { .. },
-            ..
-        }
-    ));
-    assert_eq!(before, managed_files(repository.path()));
 }
 
 #[test]
@@ -1229,648 +1465,4 @@ fn assert_managed_files_omit_path(repository_root: &Path, source_path: &Path) {
     for bytes in managed_files(repository_root).values() {
         assert!(!String::from_utf8_lossy(bytes).contains(source_path.as_ref()));
     }
-}
-
-#[allow(clippy::too_many_lines)]
-fn write_fixture() -> Fixture {
-    write_fixture_with("en", "test-game")
-}
-
-#[allow(clippy::too_many_lines)]
-fn write_fixture_with(source_language: &str, game_version: &str) -> Fixture {
-    let directory = tempfile::tempdir().expect("create fixture directory");
-    let path = directory.path().join("fixture.hxs");
-    let connection = Connection::open(&path).expect("create fixture database");
-    connection
-        .execute_batch(SYNTHETIC_SCHEMA)
-        .expect("create fixture schema");
-    connection
-        .execute_batch(&format!(
-            "PRAGMA application_id = {APPLICATION_ID}; PRAGMA user_version = 1; PRAGMA foreign_keys = ON;"
-        ))
-        .expect("set HXS identity");
-
-    let one_macro_hash = macro_hash("one");
-    let two_macro_hash = macro_hash("two");
-    let two_raw_hash = raw_hash(b"raw");
-    let one_row_technical_hash = row_technical_hash("Synthetic", 42, 0);
-    let two_row_technical_hash = row_technical_hash("Synthetic", 7, 0);
-    let one_row_string_hash = row_string_hash("Synthetic", 42, 0, 0, &one_macro_hash, None);
-    let two_row_string_hash =
-        row_string_hash("Synthetic", 7, 0, 0, &two_macro_hash, Some(&two_raw_hash));
-    let one_row_hash = row_hash(
-        "Synthetic",
-        42,
-        0,
-        &one_row_technical_hash,
-        &one_row_string_hash,
-    );
-    let second_row_hash = row_hash(
-        "Synthetic",
-        7,
-        0,
-        &two_row_technical_hash,
-        &two_row_string_hash,
-    );
-    let schema_hash = schema_hash("Synthetic");
-    let sheet_technical_hash = sheet_rows_hash(
-        "HARMONIA-HXS-V1-SHEET-TECHNICAL",
-        "Synthetic",
-        &[
-            (7, 0, two_row_technical_hash),
-            (42, 0, one_row_technical_hash),
-        ],
-    );
-    let sheet_string_hash = sheet_rows_hash(
-        "HARMONIA-HXS-V1-SHEET-STRINGS",
-        "Synthetic",
-        &[(7, 0, two_row_string_hash), (42, 0, one_row_string_hash)],
-    );
-    let content_hash = digest(|hasher| {
-        hasher.update(b"HARMONIA-HXS-V1-SHEET");
-        framed_text(hasher, "Synthetic");
-        hasher.update(0_u32.to_le_bytes());
-        hasher.update(schema_hash);
-        hasher.update(sheet_technical_hash);
-        hasher.update(sheet_string_hash);
-    });
-    let content_id = format!(
-        "sha256:{}",
-        hex(&digest(|hasher| {
-            hasher.update(b"HARMONIA-HXS-CONTENT-v1");
-            framed_text(hasher, source_language);
-            framed_text(hasher, "Synthetic");
-            framed_text(hasher, source_language);
-            hasher.update(schema_hash);
-            hasher.update(content_hash);
-        }))
-    );
-    let snapshot_id = format!(
-        "sha256:{}",
-        hex(&digest(|hasher| {
-            hasher.update(b"HARMONIA-HXS-SNAPSHOT-v1");
-            framed_text(hasher, game_version);
-            framed_text(hasher, source_language);
-            framed_text(hasher, &content_id);
-        }))
-    );
-
-    connection
-        .execute(
-            "INSERT INTO sheets (id, name, variant, effective_language, column_count, row_count, schema_hash, technical_hash, string_hash, content_hash) VALUES (1, 'Synthetic', 0, ?1, 1, 2, ?2, ?3, ?4, ?5)",
-            params![source_language, schema_hash.as_slice(), sheet_technical_hash.as_slice(), sheet_string_hash.as_slice(), content_hash.as_slice()],
-        )
-        .expect("insert sheet");
-    connection
-        .execute(
-            "INSERT INTO columns (sheet_id, column_index, offset, type) VALUES (1, 0, 0, 1)",
-            [],
-        )
-        .expect("insert String column");
-    for (row_id, row_hash, row_technical_hash, row_string_hash) in [
-        (
-            42_u32,
-            one_row_hash,
-            one_row_technical_hash,
-            one_row_string_hash,
-        ),
-        (
-            7_u32,
-            second_row_hash,
-            two_row_technical_hash,
-            two_row_string_hash,
-        ),
-    ] {
-        connection
-            .execute(
-                "INSERT INTO rows (sheet_id, row_id, subrow_id, technical_payload, row_hash, technical_hash, string_hash) VALUES (1, ?1, 0, ?2, ?3, ?4, ?5)",
-            params![row_id, Vec::<u8>::new(), row_hash.as_slice(), row_technical_hash.as_slice(), row_string_hash.as_slice()],
-            )
-            .expect("insert row");
-    }
-    connection
-        .execute(
-            "INSERT INTO string_cells (sheet_id, row_id, subrow_id, column_index, macro_text, raw_value, macro_hash, raw_hash) VALUES (1, 42, 0, 0, 'one', NULL, ?1, NULL)",
-            params![one_macro_hash.as_slice()],
-        )
-        .expect("insert first String cell");
-    connection
-        .execute(
-            "INSERT INTO string_cells (sheet_id, row_id, subrow_id, column_index, macro_text, raw_value, macro_hash, raw_hash) VALUES (1, 7, 0, 0, 'two', ?1, ?2, ?3)",
-            params![b"raw".as_slice(), two_macro_hash.as_slice(), two_raw_hash.as_slice()],
-        )
-        .expect("insert second String cell");
-    connection
-        .execute(
-            "INSERT INTO hxs_meta (id, format_version, game_version, language, scope, content_id, snapshot_id, extractor_version, lumina_version, sheet_count, row_count, string_cell_count) VALUES (1, 1, ?1, ?2, 'full', ?3, ?4, 'test', '7.7.0', 1, 2, 2)",
-            params![game_version, source_language, content_id, snapshot_id],
-        )
-        .expect("insert metadata");
-
-    let package_path = write_hsp_package(&path, |_, _, _, _, _| true);
-    Fixture {
-        _directory: directory,
-        path,
-        package_path,
-        one_macro_hash,
-        one_row_technical_hash,
-        two_macro_hash,
-        two_raw_hash,
-    }
-}
-
-#[allow(clippy::too_many_lines)]
-fn write_projection_fixture() -> ProjectionFixture {
-    let directory = tempfile::tempdir().expect("create projection fixture directory");
-    let path = directory.path().join("projection.hxs");
-    let connection = Connection::open(&path).expect("create projection fixture database");
-    connection
-        .execute_batch(SYNTHETIC_SCHEMA)
-        .expect("create projection fixture schema");
-    connection
-        .execute_batch(&format!(
-            "PRAGMA application_id = {APPLICATION_ID}; PRAGMA user_version = 1; PRAGMA foreign_keys = ON;"
-        ))
-        .expect("set HXS identity");
-
-    let definitions = vec![
-        (
-            1,
-            ["Context field", "Greetings and welcome", "", ""]
-                .into_iter()
-                .map(str::to_owned)
-                .collect::<Vec<_>>(),
-        ),
-        (
-            2,
-            ["Empty context", "", "", ""]
-                .into_iter()
-                .map(str::to_owned)
-                .collect::<Vec<_>>(),
-        ),
-        (
-            3,
-            ["", "", "", ""]
-                .into_iter()
-                .map(str::to_owned)
-                .collect::<Vec<_>>(),
-        ),
-        (
-            4,
-            [
-                "fire shard",
-                "fire shards",
-                "A tiny crystalline manifestation",
-                "Fire Shard",
-            ]
-            .into_iter()
-            .map(str::to_owned)
-            .collect::<Vec<_>>(),
-        ),
-        (
-            5,
-            ["Blocked only", "", "", ""]
-                .into_iter()
-                .map(str::to_owned)
-                .collect::<Vec<_>>(),
-        ),
-    ];
-    let rows = definitions
-        .into_iter()
-        .map(|(row_id, texts)| {
-            let string_hashes = texts
-                .iter()
-                .map(|text| macro_hash(text))
-                .collect::<Vec<_>>();
-            let string_hash = row_strings_hash(
-                "Projection",
-                row_id,
-                0,
-                &(0..4)
-                    .map(|column| (column, string_hashes[column as usize], None))
-                    .collect::<Vec<_>>(),
-            );
-            let technical_hash = row_technical_hash("Projection", row_id, 0);
-            let row_hash = row_hash("Projection", row_id, 0, &technical_hash, &string_hash);
-            ProjectionRow {
-                row_id,
-                row_hash,
-                technical_hash,
-                string_hash,
-                strings: texts
-                    .into_iter()
-                    .enumerate()
-                    .map(|(column_index, macro_text)| ProjectionString {
-                        column_index: u32::try_from(column_index).expect("column fits"),
-                        macro_hash: macro_hash(&macro_text),
-                        macro_text,
-                    })
-                    .collect(),
-            }
-        })
-        .collect::<Vec<_>>();
-
-    let schema_hash =
-        schema_hash_for_columns("Projection", &[(0, 0, 1), (1, 4, 1), (2, 8, 1), (3, 12, 1)]);
-    let sheet_technical_hash = sheet_rows_hash(
-        "HARMONIA-HXS-V1-SHEET-TECHNICAL",
-        "Projection",
-        &rows
-            .iter()
-            .map(|row| (row.row_id, 0, row.technical_hash))
-            .collect::<Vec<_>>(),
-    );
-    let sheet_string_hash = sheet_rows_hash(
-        "HARMONIA-HXS-V1-SHEET-STRINGS",
-        "Projection",
-        &rows
-            .iter()
-            .map(|row| (row.row_id, 0, row.string_hash))
-            .collect::<Vec<_>>(),
-    );
-    let content_hash = digest(|hasher| {
-        hasher.update(b"HARMONIA-HXS-V1-SHEET");
-        framed_text(hasher, "Projection");
-        hasher.update(0_u32.to_le_bytes());
-        hasher.update(schema_hash);
-        hasher.update(sheet_technical_hash);
-        hasher.update(sheet_string_hash);
-    });
-    let content_id = format!(
-        "sha256:{}",
-        hex(&digest(|hasher| {
-            hasher.update(b"HARMONIA-HXS-CONTENT-v1");
-            framed_text(hasher, "en");
-            framed_text(hasher, "Projection");
-            framed_text(hasher, "en");
-            hasher.update(schema_hash);
-            hasher.update(content_hash);
-        }))
-    );
-    let snapshot_id = format!(
-        "sha256:{}",
-        hex(&digest(|hasher| {
-            hasher.update(b"HARMONIA-HXS-SNAPSHOT-v1");
-            framed_text(hasher, "projection");
-            framed_text(hasher, "en");
-            framed_text(hasher, &content_id);
-        }))
-    );
-
-    connection
-        .execute(
-            "INSERT INTO sheets (id, name, variant, effective_language, column_count, row_count, schema_hash, technical_hash, string_hash, content_hash) VALUES (1, 'Projection', 0, 'en', 4, 5, ?1, ?2, ?3, ?4)",
-            params![schema_hash.as_slice(), sheet_technical_hash.as_slice(), sheet_string_hash.as_slice(), content_hash.as_slice()],
-        )
-        .expect("insert projection sheet");
-    for (column_index, offset) in [(0_u32, 0_u32), (1, 4), (2, 8), (3, 12)] {
-        connection
-            .execute(
-                "INSERT INTO columns (sheet_id, column_index, offset, type) VALUES (1, ?1, ?2, 1)",
-                params![column_index, offset],
-            )
-            .expect("insert projection column");
-    }
-    for row in &rows {
-        connection
-            .execute(
-                "INSERT INTO rows (sheet_id, row_id, subrow_id, technical_payload, row_hash, technical_hash, string_hash) VALUES (1, ?1, 0, ?2, ?3, ?4, ?5)",
-                params![row.row_id, Vec::<u8>::new(), row.row_hash.as_slice(), row.technical_hash.as_slice(), row.string_hash.as_slice()],
-            )
-            .expect("insert projection row");
-        for string in &row.strings {
-            connection
-                .execute(
-                    "INSERT INTO string_cells (sheet_id, row_id, subrow_id, column_index, macro_text, raw_value, macro_hash, raw_hash) VALUES (1, ?1, 0, ?2, ?3, NULL, ?4, NULL)",
-                    params![row.row_id, string.column_index, string.macro_text, string.macro_hash.as_slice()],
-                )
-                .expect("insert projection String cell");
-        }
-    }
-    connection
-        .execute(
-            "INSERT INTO hxs_meta (id, format_version, game_version, language, scope, content_id, snapshot_id, extractor_version, lumina_version, sheet_count, row_count, string_cell_count) VALUES (1, 1, 'projection', 'en', 'full', ?1, ?2, 'test', '7.7.0', 1, 5, 20)",
-            params![content_id, snapshot_id],
-        )
-        .expect("insert projection metadata");
-
-    let package_path = write_hsp_package(&path, |sheet, row_id, _, column_index, _| {
-        sheet == "Projection" && matches!((row_id, column_index), (1 | 2, 1) | (4, 0..=3))
-    });
-    ProjectionFixture {
-        _directory: directory,
-        path,
-        package_path,
-    }
-}
-
-fn write_hsp_package(
-    source_path: &Path,
-    allow: impl Fn(&str, u32, u16, u32, &str) -> bool,
-) -> PathBuf {
-    let snapshot = HxsSnapshot::open(source_path).expect("source fixture verifies");
-    let metadata = snapshot.metadata();
-    let guidance = build_guidance(&snapshot, &allow);
-    let mut guidance_bytes = serde_json::to_vec(&guidance).expect("guidance JSON");
-    guidance_bytes.push(b'\n');
-    let source_bytes = fs::read(source_path).expect("source bytes");
-    let source_component = HspComponentDescriptor {
-        id: "source".to_owned(),
-        kind: "sourceHxs".to_owned(),
-        format_version: 1,
-        required: true,
-        path: "source/source.hxs".to_owned(),
-        size: i64::try_from(source_bytes.len()).expect("source size"),
-        sha256: hash_bytes(&source_bytes),
-    };
-    let guidance_component = HspComponentDescriptor {
-        id: "guidance".to_owned(),
-        kind: "sourceGuidance".to_owned(),
-        format_version: 1,
-        required: true,
-        path: "guidance/source-guidance.json".to_owned(),
-        size: i64::try_from(guidance_bytes.len()).expect("guidance size"),
-        sha256: hash_bytes(&guidance_bytes),
-    };
-    let manifest_without_id = HspManifest {
-        format_version: 1,
-        package_id: String::new(),
-        game_version: metadata.game_version,
-        scope: metadata.scope,
-        source: HspSourceIdentity {
-            language: metadata.source_language,
-            content_id: metadata.content_id,
-            snapshot_id: metadata.snapshot_id,
-        },
-        components: vec![guidance_component, source_component],
-    };
-    let manifest = HspManifest {
-        package_id: compute_package_id(&manifest_without_id).expect("package hash"),
-        ..manifest_without_id
-    };
-    let package_path = source_path.with_extension("hsp");
-    let file = fs::File::create(&package_path).expect("package file");
-    let mut archive = ZipWriter::new(file);
-    let options = zip::write::SimpleFileOptions::default();
-    archive
-        .start_file("manifest.json", options)
-        .expect("manifest entry");
-    let mut manifest_bytes = serde_json::to_vec(&manifest).expect("manifest JSON");
-    manifest_bytes.push(b'\n');
-    archive.write_all(&manifest_bytes).expect("manifest bytes");
-    archive
-        .start_file("guidance/source-guidance.json", options)
-        .expect("guidance entry");
-    archive.write_all(&guidance_bytes).expect("guidance bytes");
-    archive
-        .start_file("source/source.hxs", options)
-        .expect("source entry");
-    archive.write_all(&source_bytes).expect("source bytes");
-    archive.finish().expect("package archive");
-    package_path
-}
-
-fn build_guidance(
-    snapshot: &HxsSnapshot,
-    allow: &impl Fn(&str, u32, u16, u32, &str) -> bool,
-) -> SourceGuidance {
-    let metadata = snapshot.metadata();
-    let source_evidence_id = compute_source_evidence_id(snapshot).expect("source evidence");
-    let comparison_language = if metadata.source_language == "en" {
-        "ja"
-    } else {
-        "en"
-    };
-    let mut evidence_inputs = vec![
-        GuidanceEvidenceInput {
-            language: metadata.source_language.clone(),
-            evidence_id: source_evidence_id,
-        },
-        GuidanceEvidenceInput {
-            language: comparison_language.to_owned(),
-            evidence_id: format!("sha256:{}", "1".repeat(64)),
-        },
-    ];
-    evidence_inputs.sort_by(|left, right| left.language.cmp(&right.language));
-
-    let mut sheets = snapshot.sheets();
-    sheets.sort_by(|left, right| left.name.cmp(&right.name));
-    let guidance_sheets = sheets
-        .iter()
-        .map(|sheet| {
-            let mut occurrences = Vec::new();
-            let mut after = None;
-            loop {
-                let page = snapshot
-                    .page_string_rows(
-                        &sheet.name,
-                        after.as_ref(),
-                        aeria_hxs::MAX_STRING_ROW_PAGE_SIZE,
-                    )
-                    .expect("String rows");
-                for row in &page.rows {
-                    for occurrence in &row.occurrences {
-                        let coordinate = &occurrence.fingerprint.coordinate;
-                        if allow(
-                            &coordinate.sheet_name,
-                            coordinate.row_id,
-                            coordinate.subrow_id,
-                            coordinate.column_index,
-                            &occurrence.macro_text,
-                        ) {
-                            occurrences.push(GuidanceOccurrence {
-                                row_id: coordinate.row_id,
-                                subrow_id: coordinate.subrow_id,
-                                column_index: coordinate.column_index,
-                            });
-                        }
-                    }
-                }
-                let Some(next) = page.next_after else {
-                    break;
-                };
-                after = Some(next);
-            }
-            GuidanceSheet {
-                name: sheet.name.clone(),
-                schema_hash: format!("sha256:{}", sheet.hashes.schema.to_hex()),
-                status: GuidanceSheetStatus::Compatible,
-                translatable: occurrences,
-                incompatibility_reasons: Vec::new(),
-            }
-        })
-        .collect::<Vec<_>>();
-
-    let guidance_without_id = SourceGuidance {
-        format_version: 1,
-        game_version: metadata.game_version.clone(),
-        scope: metadata.scope.clone(),
-        bundle_id: String::new(),
-        source: aeria_hsp::GuidanceSourceIdentity {
-            language: metadata.source_language.clone(),
-            content_id: metadata.content_id.clone(),
-            snapshot_id: metadata.snapshot_id.clone(),
-        },
-        evidence_inputs,
-        sheets: guidance_sheets,
-    };
-    SourceGuidance {
-        bundle_id: compute_guidance_bundle_id(&guidance_without_id).expect("guidance hash"),
-        ..guidance_without_id
-    }
-}
-
-fn hash_bytes(bytes: &[u8]) -> String {
-    let digest: [u8; 32] = Sha256::digest(bytes).into();
-    format!("sha256:{}", hex(&digest))
-}
-
-fn macro_hash(value: &str) -> [u8; 32] {
-    digest(|hasher| {
-        hasher.update(b"HARMONIA-HXS-V1-MACRO");
-        framed_text(hasher, value);
-    })
-}
-
-fn raw_hash(value: &[u8]) -> [u8; 32] {
-    digest(|hasher| {
-        hasher.update(b"HARMONIA-HXS-V1-RAW-STRING");
-        framed_bytes(hasher, value);
-    })
-}
-
-fn schema_hash(sheet_name: &str) -> [u8; 32] {
-    digest(|hasher| {
-        hasher.update(b"HARMONIA-HXS-V1-SCHEMA");
-        framed_text(hasher, sheet_name);
-        hasher.update(0_u32.to_le_bytes());
-        hasher.update(0_u32.to_le_bytes());
-        hasher.update(0_u32.to_le_bytes());
-        hasher.update(1_u32.to_le_bytes());
-    })
-}
-
-fn schema_hash_for_columns(sheet_name: &str, columns: &[(u32, u32, u32)]) -> [u8; 32] {
-    digest(|hasher| {
-        hasher.update(b"HARMONIA-HXS-V1-SCHEMA");
-        framed_text(hasher, sheet_name);
-        hasher.update(0_u32.to_le_bytes());
-        for (index, offset, type_code) in columns {
-            hasher.update(index.to_le_bytes());
-            hasher.update(offset.to_le_bytes());
-            hasher.update(type_code.to_le_bytes());
-        }
-    })
-}
-
-fn row_technical_hash(sheet_name: &str, row_id: u32, subrow_id: u16) -> [u8; 32] {
-    digest(|hasher| {
-        hasher.update(b"HARMONIA-HXS-V1-ROW-TECHNICAL");
-        row_identity(hasher, sheet_name, row_id, subrow_id);
-    })
-}
-
-fn row_string_hash(
-    sheet_name: &str,
-    row_id: u32,
-    subrow_id: u16,
-    column_index: u32,
-    macro_hash: &[u8; 32],
-    raw_hash: Option<&[u8; 32]>,
-) -> [u8; 32] {
-    digest(|hasher| {
-        hasher.update(b"HARMONIA-HXS-V1-ROW-STRINGS");
-        row_identity(hasher, sheet_name, row_id, subrow_id);
-        hasher.update(column_index.to_le_bytes());
-        hasher.update(macro_hash);
-        hasher.update([u8::from(raw_hash.is_some())]);
-        if let Some(raw_hash) = raw_hash {
-            hasher.update(raw_hash);
-        }
-    })
-}
-
-fn row_strings_hash(
-    sheet_name: &str,
-    row_id: u32,
-    subrow_id: u16,
-    cells: &[StringHashSpec],
-) -> [u8; 32] {
-    digest(|hasher| {
-        hasher.update(b"HARMONIA-HXS-V1-ROW-STRINGS");
-        row_identity(hasher, sheet_name, row_id, subrow_id);
-        for (column_index, macro_hash, raw_hash) in cells {
-            hasher.update(column_index.to_le_bytes());
-            hasher.update(macro_hash);
-            hasher.update([u8::from(raw_hash.is_some())]);
-            if let Some(raw_hash) = raw_hash {
-                hasher.update(raw_hash);
-            }
-        }
-    })
-}
-
-fn row_hash(
-    sheet_name: &str,
-    row_id: u32,
-    subrow_id: u16,
-    technical_hash: &[u8; 32],
-    string_hash: &[u8; 32],
-) -> [u8; 32] {
-    digest(|hasher| {
-        hasher.update(b"HARMONIA-HXS-V1-ROW");
-        row_identity(hasher, sheet_name, row_id, subrow_id);
-        hasher.update(technical_hash);
-        hasher.update(string_hash);
-    })
-}
-
-fn sheet_rows_hash(domain: &str, sheet_name: &str, rows: &[(u32, u16, [u8; 32])]) -> [u8; 32] {
-    digest(|hasher| {
-        hasher.update(domain.as_bytes());
-        framed_text(hasher, sheet_name);
-        for (row_id, subrow_id, row_hash) in rows {
-            hasher.update(row_id.to_le_bytes());
-            hasher.update(u32::from(*subrow_id).to_le_bytes());
-            hasher.update(row_hash);
-        }
-    })
-}
-
-fn row_identity(hasher: &mut Sha256, sheet_name: &str, row_id: u32, subrow_id: u16) {
-    framed_text(hasher, sheet_name);
-    hasher.update(row_id.to_le_bytes());
-    hasher.update(u32::from(subrow_id).to_le_bytes());
-}
-
-fn framed_text(hasher: &mut Sha256, value: &str) {
-    hasher.update(
-        u32::try_from(value.len())
-            .expect("fixture text fits framing")
-            .to_le_bytes(),
-    );
-    hasher.update(value.as_bytes());
-}
-
-fn framed_bytes(hasher: &mut Sha256, value: &[u8]) {
-    hasher.update(
-        u32::try_from(value.len())
-            .expect("fixture bytes fit framing")
-            .to_le_bytes(),
-    );
-    hasher.update(value);
-}
-
-fn digest(update: impl FnOnce(&mut Sha256)) -> [u8; 32] {
-    let mut hasher = Sha256::new();
-    update(&mut hasher);
-    hasher.finalize().into()
-}
-
-fn hex(bytes: &[u8; 32]) -> String {
-    let mut result = String::with_capacity(64);
-    for byte in bytes {
-        write!(&mut result, "{byte:02x}").expect("writing to a String cannot fail");
-    }
-    result
 }

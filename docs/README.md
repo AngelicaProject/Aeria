@@ -18,8 +18,8 @@ Documentation is maintained with the code it describes and is the source of trut
 | Work with HXS source snapshots | [`architecture/source.md`](./architecture/source.md) |
 | Open or initialize an Aeria project session | [`architecture/project-session.md`](./architecture/project-session.md) |
 | Work with SeString / macro structure | [`architecture/strings.md`](./architecture/strings.md) |
-| Change translation identity or rebase | [`architecture/identity.md`](./architecture/identity.md), [`architecture/rebase.md`](./architecture/rebase.md) |
-| Change workspace persistence | [`architecture/workspace.md`](./architecture/workspace.md), [`formats/workspace-v1.md`](./formats/workspace-v1.md) |
+| Change translation identity or source updates | [`architecture/identity.md`](./architecture/identity.md), [`architecture/rebase.md`](./architecture/rebase.md) |
+| Change workspace persistence | [`architecture/workspace.md`](./architecture/workspace.md), [`formats/workspace-v2.md`](./formats/workspace-v2.md) |
 | Change Git collaboration behavior in Aeria | [`architecture/git.md`](./architecture/git.md) |
 | Change translation assistance | [`architecture/ai.md`](./architecture/ai.md) |
 | Change export behavior | [`architecture/export.md`](./architecture/export.md), [`formats/pack-v1.md`](./formats/pack-v1.md) |

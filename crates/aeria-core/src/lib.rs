@@ -166,6 +166,87 @@ impl SourceFingerprint {
     }
 }
 
+/// The source-layout generation a unit's binding was resolved against.
+///
+/// HXS column indexes are physical positions in one sheet schema; they are
+/// not stable across game updates that add, remove, or reorder columns. The
+/// verified sheet schema hash identifies the coordinate system of a binding,
+/// and the column offset records the physical String column position within
+/// that schema. Source updates use both facts to decide whether a persisted
+/// column index still means the same column.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct SourceLayout {
+    sheet_schema_hash: Sha256Hash,
+    column_offset: u32,
+}
+
+impl SourceLayout {
+    /// Creates layout facts from a verified HXS sheet schema and column.
+    #[must_use]
+    pub const fn new(sheet_schema_hash: Sha256Hash, column_offset: u32) -> Self {
+        Self {
+            sheet_schema_hash,
+            column_offset,
+        }
+    }
+
+    /// Returns the verified HXS sheet schema hash.
+    #[must_use]
+    pub const fn sheet_schema_hash(&self) -> Sha256Hash {
+        self.sheet_schema_hash
+    }
+
+    /// Returns the verified HXS offset of the bound String column.
+    #[must_use]
+    pub const fn column_offset(&self) -> u32 {
+        self.column_offset
+    }
+}
+
+/// Why a translation unit is no longer bound to a current source occurrence.
+///
+/// A detached unit keeps its durable ID, its last bound source facts, target,
+/// note, and review state. It is not shown at a source cell, is not exported,
+/// and is re-evaluated by every later source update.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub enum DetachReason {
+    /// The unit's sheet no longer exists in the current source.
+    SheetRemoved,
+    /// The unit's sheet exists in the game catalog but the source producer
+    /// could not read or represent it in the current source.
+    SheetUnavailable,
+    /// The unit's row/subrow no longer exists in its sheet.
+    RowRemoved,
+    /// The unit's column is no longer a String column of its sheet.
+    CellRemoved,
+    /// The sheet schema changed and the unit's column could not be mapped to
+    /// a current column deterministically.
+    ColumnUnresolved,
+    /// Source guidance does not grant translation permission for the
+    /// resolved occurrence.
+    NotTranslatable,
+    /// Another unit deterministically owns the resolved occurrence.
+    BindingConflict,
+}
+
+/// Whether a translation unit is attached to a current source occurrence.
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub enum SourceStatus {
+    /// The unit's binding and source facts describe the current source.
+    #[default]
+    Bound,
+    /// The unit is preserved without a current source occurrence.
+    Detached(DetachReason),
+}
+
+impl SourceStatus {
+    /// Returns whether the unit is bound to a current source occurrence.
+    #[must_use]
+    pub const fn is_bound(self) -> bool {
+        matches!(self, Self::Bound)
+    }
+}
+
 /// Errors raised while deriving a translation-unit identity.
 #[derive(Clone, Debug, Eq, Error, PartialEq)]
 pub enum TranslationUnitIdError {
@@ -285,13 +366,13 @@ impl FromStr for TranslationUnitId {
 ///
 /// A workspace has exactly one target language because this value contains a
 /// single canonical target-language field and has no per-unit target-language
-/// alternative.
+/// alternative. The source is identified by verified HXS content only: game
+/// versions whose extracted content is identical share one content ID.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct WorkspaceMetadata {
     source_language: String,
     target_language: String,
     source_content_id: String,
-    source_snapshot_id: String,
 }
 
 impl WorkspaceMetadata {
@@ -305,17 +386,14 @@ impl WorkspaceMetadata {
         source_language: impl Into<String>,
         target_language: impl Into<String>,
         source_content_id: impl Into<String>,
-        source_snapshot_id: impl Into<String>,
     ) -> Result<Self, DomainValueError> {
         let source_language = source_language.into();
         let target_language = target_language.into();
         let source_content_id = source_content_id.into();
-        let source_snapshot_id = source_snapshot_id.into();
         for (value, field) in [
             (&source_language, "source language"),
             (&target_language, "target language"),
             (&source_content_id, "source content ID"),
-            (&source_snapshot_id, "source snapshot ID"),
         ] {
             if value.trim().is_empty() {
                 return Err(DomainValueError::EmptyValue { field });
@@ -325,8 +403,24 @@ impl WorkspaceMetadata {
             source_language,
             target_language,
             source_content_id,
-            source_snapshot_id,
         })
+    }
+
+    /// Returns the same project metadata bound to another verified source
+    /// content ID, as produced by a source update.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the content ID is empty or whitespace-only.
+    pub fn with_source_content_id(
+        &self,
+        source_content_id: impl Into<String>,
+    ) -> Result<Self, DomainValueError> {
+        Self::new(
+            self.source_language.clone(),
+            self.target_language.clone(),
+            source_content_id,
+        )
     }
 
     /// Returns the source language.
@@ -346,12 +440,6 @@ impl WorkspaceMetadata {
     pub fn source_content_id(&self) -> &str {
         &self.source_content_id
     }
-
-    /// Returns the current verified HXS snapshot ID.
-    #[must_use]
-    pub fn source_snapshot_id(&self) -> &str {
-        &self.source_snapshot_id
-    }
 }
 
 /// Human review state for a translation unit.
@@ -370,19 +458,29 @@ pub enum ReviewState {
 /// The unit intentionally stores hashes and the current coordinate, not full
 /// source macro text. A missing unit in the workspace is distinct from a unit
 /// whose target macro string is explicitly empty.
+///
+/// The source layout is absent only for a unit read from Workspace Format v1,
+/// which did not record it; the first source update supplies it. The row key
+/// is present when the unit's sheet has a row key column (see
+/// `aeria-rebase::RowKeys`). A detached unit keeps the binding, fingerprint,
+/// layout, and row key it was last bound with.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TranslationUnit {
     id: TranslationUnitId,
+    source_status: SourceStatus,
     source_binding: SourceBinding,
     source_fingerprint: SourceFingerprint,
+    source_layout: Option<SourceLayout>,
+    source_row_key: Option<Sha256Hash>,
     target_macro: String,
     review_state: ReviewState,
     translator_note: Option<String>,
 }
 
 impl TranslationUnit {
-    /// Creates a new draft unit. Target syntax validation belongs to the
-    /// `aeria-workspace` seam because it is owned by `aeria-se`.
+    /// Creates a new bound draft unit without source layout facts. Target
+    /// syntax validation belongs to the `aeria-workspace` seam because it is
+    /// owned by `aeria-se`.
     #[must_use]
     pub fn new(
         id: TranslationUnitId,
@@ -392,12 +490,36 @@ impl TranslationUnit {
     ) -> Self {
         Self {
             id,
+            source_status: SourceStatus::Bound,
             source_binding,
             source_fingerprint,
+            source_layout: None,
+            source_row_key: None,
             target_macro: target_macro.into(),
             review_state: ReviewState::Draft,
             translator_note: None,
         }
+    }
+
+    /// Returns this unit with verified source layout facts.
+    #[must_use]
+    pub const fn with_source_layout(mut self, source_layout: SourceLayout) -> Self {
+        self.source_layout = Some(source_layout);
+        self
+    }
+
+    /// Returns this unit with the macro-text hash of its row's key.
+    #[must_use]
+    pub const fn with_source_row_key(mut self, source_row_key: Option<Sha256Hash>) -> Self {
+        self.source_row_key = source_row_key;
+        self
+    }
+
+    /// Returns this unit with a persisted source status.
+    #[must_use]
+    pub const fn with_source_status(mut self, source_status: SourceStatus) -> Self {
+        self.source_status = source_status;
+        self
     }
 
     /// Returns the stable unit ID.
@@ -406,7 +528,33 @@ impl TranslationUnit {
         self.id
     }
 
-    /// Returns the current source coordinate.
+    /// Returns whether the unit is bound or detached.
+    #[must_use]
+    pub const fn source_status(&self) -> SourceStatus {
+        self.source_status
+    }
+
+    /// Returns whether the unit is bound to a current source occurrence.
+    #[must_use]
+    pub const fn is_bound(&self) -> bool {
+        self.source_status.is_bound()
+    }
+
+    /// Returns the current source layout facts, if known.
+    #[must_use]
+    pub const fn source_layout(&self) -> Option<SourceLayout> {
+        self.source_layout
+    }
+
+    /// Returns the macro-text hash of the row key at the current binding, if
+    /// the sheet has a row key column.
+    #[must_use]
+    pub const fn source_row_key(&self) -> Option<Sha256Hash> {
+        self.source_row_key
+    }
+
+    /// Returns the current (or, for a detached unit, last bound) source
+    /// coordinate.
     #[must_use]
     pub const fn source_binding(&self) -> &SourceBinding {
         &self.source_binding
@@ -461,16 +609,31 @@ impl TranslationUnit {
         self.review_state = review_state;
     }
 
-    /// Updates source facts after an external process has established a
-    /// meaningful source change. The durable ID is intentionally retained.
-    pub fn update_source_after_known_change(
+    /// Binds the unit to source facts established by a deterministic source
+    /// update. The durable ID, target, and note are retained. A changed
+    /// source invalidates prior review.
+    pub fn bind_after_source_update(
         &mut self,
         source_binding: SourceBinding,
         source_fingerprint: SourceFingerprint,
+        source_layout: SourceLayout,
+        source_row_key: Option<Sha256Hash>,
+        source_changed: bool,
     ) {
+        self.source_status = SourceStatus::Bound;
         self.source_binding = source_binding;
         self.source_fingerprint = source_fingerprint;
-        self.review_state = ReviewState::NeedsReview;
+        self.source_layout = Some(source_layout);
+        self.source_row_key = source_row_key;
+        if source_changed {
+            self.review_state = ReviewState::NeedsReview;
+        }
+    }
+
+    /// Detaches the unit from the current source. Its last bound source
+    /// facts, target, note, and review state are retained.
+    pub const fn detach(&mut self, reason: DetachReason) {
+        self.source_status = SourceStatus::Detached(reason);
     }
 }
 
@@ -497,8 +660,9 @@ fn hex_nibble(value: u8) -> Result<u8, TranslationUnitIdParseError> {
 #[cfg(test)]
 mod tests {
     use super::{
-        ReviewState, Sha256Hash, SourceBinding, SourceFingerprint, TRANSLATION_UNIT_ID_PREFIX,
-        TranslationUnit, TranslationUnitId, TranslationUnitIdParseError, WorkspaceMetadata,
+        DetachReason, ReviewState, Sha256Hash, SourceBinding, SourceFingerprint, SourceLayout,
+        TRANSLATION_UNIT_ID_PREFIX, TranslationUnit, TranslationUnitId,
+        TranslationUnitIdParseError, WorkspaceMetadata,
     };
     use std::str::FromStr;
 
@@ -603,10 +767,8 @@ mod tests {
     fn translation_unit_id_excludes_project_and_snapshot_metadata() {
         let source_binding = binding("Synthetic", 42, 0, 0);
         let source_fingerprint = fingerprint(MACRO_HASH);
-        let first_metadata =
-            WorkspaceMetadata::new("en", "fr", "content-a", "snapshot-a").expect("metadata");
-        let second_metadata =
-            WorkspaceMetadata::new("en", "de", "content-b", "snapshot-b").expect("metadata");
+        let first_metadata = WorkspaceMetadata::new("en", "fr", "content-a").expect("metadata");
+        let second_metadata = WorkspaceMetadata::new("en", "de", "content-b").expect("metadata");
 
         assert_eq!(
             derived(
@@ -674,17 +836,43 @@ mod tests {
         unit.set_target_macro("");
         assert_eq!(unit.target_macro(), "");
         assert_eq!(unit.review_state(), ReviewState::Draft);
-        unit.update_source_after_known_change(binding, fingerprint);
+        let layout = SourceLayout::new(Sha256Hash::from_bytes([0x44; 32]), 8);
+        unit.set_review_state(ReviewState::Reviewed);
+        unit.bind_after_source_update(binding.clone(), fingerprint, layout, None, false);
+        assert_eq!(unit.review_state(), ReviewState::Reviewed);
+        assert_eq!(unit.source_layout(), Some(layout));
+        unit.detach(DetachReason::RowRemoved);
+        assert!(!unit.is_bound());
+        assert_eq!(unit.source_binding(), &binding);
+        assert_eq!(unit.target_macro(), "");
+        assert_eq!(unit.review_state(), ReviewState::Reviewed);
+        unit.bind_after_source_update(
+            binding,
+            fingerprint,
+            layout,
+            Some(Sha256Hash::from_bytes([0x55; 32])),
+            true,
+        );
+        assert_eq!(
+            unit.source_row_key(),
+            Some(Sha256Hash::from_bytes([0x55; 32]))
+        );
+        assert!(unit.is_bound());
         assert_eq!(unit.review_state(), ReviewState::NeedsReview);
         assert_eq!(unit.id(), id);
     }
 
     #[test]
     fn workspace_metadata_has_one_target_language() {
-        let metadata =
-            WorkspaceMetadata::new("en", "fr", "content", "snapshot").expect("valid metadata");
+        let metadata = WorkspaceMetadata::new("en", "fr", "content").expect("valid metadata");
         assert_eq!(metadata.source_language(), "en");
         assert_eq!(metadata.target_language(), "fr");
-        assert!(WorkspaceMetadata::new("en", "", "content", "snapshot").is_err());
+        assert!(WorkspaceMetadata::new("en", "", "content").is_err());
+        let updated = metadata
+            .with_source_content_id("next")
+            .expect("updated metadata");
+        assert_eq!(updated.source_content_id(), "next");
+        assert_eq!(updated.target_language(), "fr");
+        assert!(metadata.with_source_content_id(" ").is_err());
     }
 }

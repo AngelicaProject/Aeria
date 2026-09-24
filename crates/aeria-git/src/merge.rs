@@ -1,4 +1,4 @@
-//! Deterministic three-way merge of Workspace Format v1 unit shards by
+//! Deterministic three-way merge of workspace unit shards by
 //! translation-unit identity.
 //!
 //! Git merges JSONL shards line by line, so edits to *different* units that
@@ -97,8 +97,11 @@ pub(crate) fn merge_shard(
 /// 1. identical sides, or a side equal to the base, take the other side;
 /// 2. adding or removing a unit on one side while the other side changed it
 ///    differently is a conflict;
-/// 3. a source binding or fingerprint change on either side conflicts with
-///    any other change on the other side (source updates are rebase work);
+/// 3. the source facts (status, binding, fingerprint, layout, and row key) must be
+///    identical on both sides. A source update is deterministic, so two
+///    sides that applied the same update agree and merge their other fields;
+///    a source change on only one side conflicts with any other change on
+///    the other side;
 /// 4. target and review state merge as one pair: when only one side changed
 ///    the target, that side's target and review state win, because a new
 ///    target invalidates a review of the old one; when both changed the
@@ -119,9 +122,16 @@ pub(crate) fn merge_unit(
     }
     let (base, ours, theirs) = (base?, ours?, theirs?);
 
-    let source =
-        |unit: &TranslationUnit| (unit.source_binding().clone(), *unit.source_fingerprint());
-    if source(ours) != source(base) || source(theirs) != source(base) {
+    let source = |unit: &TranslationUnit| {
+        (
+            unit.source_status(),
+            unit.source_binding().clone(),
+            *unit.source_fingerprint(),
+            unit.source_layout(),
+            unit.source_row_key(),
+        )
+    };
+    if source(ours) != source(theirs) {
         return None;
     }
 
@@ -164,7 +174,9 @@ fn three_way<T: PartialEq + Clone>(base: &T, ours: &T, theirs: &T) -> Option<T> 
 
 #[cfg(test)]
 mod tests {
-    use aeria_core::{ReviewState, Sha256Hash, SourceBinding, SourceFingerprint};
+    use aeria_core::{
+        DetachReason, ReviewState, Sha256Hash, SourceBinding, SourceFingerprint, SourceLayout,
+    };
 
     use super::*;
 
@@ -226,6 +238,157 @@ mod tests {
             merge_unit(Some(&base), Some(&edited), Some(&noted)),
             Some(Some(unit("b", Draft, Some("context"))))
         );
+    }
+
+    fn updated(unit: &TranslationUnit) -> TranslationUnit {
+        let mut updated = unit.clone();
+        updated.bind_after_source_update(
+            SourceBinding::new("Addon", 1, 0, 2),
+            SourceFingerprint::new(
+                Sha256Hash::from_bytes([3; 32]),
+                None,
+                Sha256Hash::from_bytes([2; 32]),
+            ),
+            SourceLayout::new(Sha256Hash::from_bytes([4; 32]), 8),
+            None,
+            true,
+        );
+        updated
+    }
+
+    #[test]
+    fn identical_source_updates_on_both_sides_merge_other_fields() {
+        let base = unit("a", Reviewed, None);
+        let ours = updated(&unit("b", Draft, None));
+        let theirs = updated(&unit("a", Reviewed, Some("context")));
+        let mut expected = ours.clone();
+        expected.set_translator_note(Some("context".to_owned()));
+        assert_eq!(
+            merge_unit(Some(&base), Some(&ours), Some(&theirs)),
+            Some(Some(expected))
+        );
+
+        let mut detached_ours = unit("a", Draft, None);
+        detached_ours.detach(DetachReason::RowRemoved);
+        let mut detached_theirs = unit("a", Draft, Some("keep"));
+        detached_theirs.detach(DetachReason::RowRemoved);
+        let mut expected = detached_ours.clone();
+        expected.set_translator_note(Some("keep".to_owned()));
+        assert_eq!(
+            merge_unit(
+                Some(&unit("a", Draft, None)),
+                Some(&detached_ours),
+                Some(&detached_theirs)
+            ),
+            Some(Some(expected))
+        );
+    }
+
+    #[test]
+    fn one_sided_source_updates_conflict_with_other_changes() {
+        let base = unit("a", Draft, None);
+        assert_eq!(
+            merge_unit(
+                Some(&base),
+                Some(&updated(&base)),
+                Some(&unit("b", Draft, None))
+            ),
+            None
+        );
+        let mut detached = base.clone();
+        detached.detach(DetachReason::SheetRemoved);
+        assert_eq!(
+            merge_unit(Some(&base), Some(&detached), Some(&updated(&base))),
+            None
+        );
+    }
+
+    /// Every combination of target, review state, note, and source state on
+    /// the base and both sides, including an absent unit (15,625 merges). A
+    /// merge may only ever combine values that one side
+    /// holds, keeps one side's source facts, never loses a one-sided change,
+    /// and does not depend on which side is "ours".
+    #[test]
+    fn exhaustive_merge_never_invents_mixes_sources_or_drops_one_sided_changes() {
+        let mut states = Vec::new();
+        for target in ["a", "b"] {
+            for review in [Draft, Reviewed] {
+                for note in [None, Some("n")] {
+                    let plain = unit(target, review, note);
+                    let mut detached = plain.clone();
+                    detached.detach(DetachReason::RowRemoved);
+                    states.extend([plain.clone(), updated(&plain), detached]);
+                }
+            }
+        }
+        let options: Vec<Option<&TranslationUnit>> = std::iter::once(None)
+            .chain(states.iter().map(Some))
+            .collect();
+        let source = |unit: &TranslationUnit| {
+            (
+                unit.source_status(),
+                unit.source_binding().clone(),
+                *unit.source_fingerprint(),
+                unit.source_layout(),
+            )
+        };
+        let mut checked = 0;
+        for base in &options {
+            for ours in &options {
+                for theirs in &options {
+                    checked += 1;
+                    let merged = merge_unit(*base, *ours, *theirs);
+                    let mirrored = merge_unit(*base, *theirs, *ours);
+                    let summary = |merged: &Option<Option<TranslationUnit>>| {
+                        merged.as_ref().map(|unit| {
+                            unit.as_ref().map(|unit| {
+                                (
+                                    source(unit),
+                                    unit.target_macro().to_owned(),
+                                    unit.review_state(),
+                                    unit.translator_note().map(str::to_owned),
+                                )
+                            })
+                        })
+                    };
+                    assert_eq!(summary(&merged), summary(&mirrored), "merge is symmetric");
+
+                    if ours == base {
+                        assert_eq!(merged, Some(theirs.cloned()), "their one-sided change wins");
+                    }
+                    if theirs == base {
+                        assert_eq!(merged, Some(ours.cloned()), "our one-sided change wins");
+                    }
+                    let Some(Some(result)) = merged else { continue };
+                    let sides: Vec<&TranslationUnit> =
+                        [ours, theirs].into_iter().flatten().copied().collect();
+                    assert!(
+                        sides.iter().any(|side| source(side) == source(&result)),
+                        "source facts come from one side"
+                    );
+                    assert!(
+                        sides
+                            .iter()
+                            .any(|side| side.target_macro() == result.target_macro()),
+                        "the target comes from one side"
+                    );
+                    assert!(
+                        sides
+                            .iter()
+                            .any(|side| side.target_macro() == result.target_macro()
+                                && side.review_state() == result.review_state()),
+                        "a review state stays with the target it reviewed"
+                    );
+                    assert!(
+                        sides
+                            .iter()
+                            .any(|side| side.translator_note() == result.translator_note()),
+                        "the note comes from one side"
+                    );
+                }
+            }
+        }
+        assert_eq!(checked, 25 * 25 * 25);
     }
 
     #[test]

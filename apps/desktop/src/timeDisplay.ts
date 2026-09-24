@@ -8,12 +8,12 @@ const units: Array<[Intl.RelativeTimeFormatUnit, number]> = [
 ];
 
 /**
- * Coarse "3 days ago" label; anything under a minute is "just now". The UI is
- * English, so the default locale matches it rather than the OS locale.
+ * Coarse "3 days ago" label; anything under a minute is `justNow`. Callers
+ * pass the interface locale rather than the OS locale.
  */
-export function formatRelativeTime(timestampMs: number, nowMs: number, locale = "en"): string {
+export function formatRelativeTime(timestampMs: number, nowMs: number, locale: string, justNow: string): string {
   const elapsed = nowMs - timestampMs;
-  if (Math.abs(elapsed) < 60_000) return "just now";
+  if (Math.abs(elapsed) < 60_000) return justNow;
   const formatter = new Intl.RelativeTimeFormat(locale, { numeric: "auto" });
   for (const [unit, size] of units) {
     if (Math.abs(elapsed) >= size) return formatter.format(-Math.round(elapsed / size), unit);

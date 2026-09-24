@@ -93,8 +93,9 @@ impl From<ProjectSessionError> for CommandError {
         let code = match &error {
             ProjectSessionError::Source { .. } => "projectSource",
             ProjectSessionError::Store { .. } => "projectStore",
-            ProjectSessionError::Compatibility { .. }
-            | ProjectSessionError::BlockedWorkspaceUnit { .. } => "projectCompatibility",
+            ProjectSessionError::Compatibility { .. } => "projectCompatibility",
+            ProjectSessionError::SourceUpdateRequired { .. } => "sourceUpdateRequired",
+            ProjectSessionError::SourceUpdate { .. } => "sourceUpdate",
             ProjectSessionError::Workspace { .. } => "projectWorkspace",
         };
         Self::new(code, error.to_string())
@@ -133,10 +134,10 @@ fn workspace_error_code(error: &WorkspaceError) -> &'static str {
         | WorkspaceError::UnitNotFound { .. }
         | WorkspaceError::DuplicateUnitId { .. }
         | WorkspaceError::DuplicateSourceBinding { .. }
+        | WorkspaceError::DetachedUnit { .. }
         | WorkspaceError::InvalidMetadata(_)
         | WorkspaceError::SourceLanguageMismatch { .. }
         | WorkspaceError::SourceContentMismatch { .. }
-        | WorkspaceError::SourceSnapshotMismatch { .. }
         | WorkspaceError::Identity(_) => "translationWorkspace",
     }
 }
@@ -216,6 +217,23 @@ mod tests {
             source_binding: aeria_core::SourceBinding::new("Synthetic", 42, 0, 0),
         });
         assert_eq!(blocked_error.code, "sourceNotTranslatable");
+    }
+
+    #[test]
+    fn source_update_errors_use_stable_codes() {
+        let required = CommandError::from(ProjectSessionError::SourceUpdateRequired {
+            repository_root: PathBuf::from("repository"),
+            source_package_path: PathBuf::from("source.hsp"),
+            requirement: aeria_workspace::SourceUpdateRequirement::FormatMigration { version: 1 },
+        });
+        assert_eq!(required.code, "sourceUpdateRequired");
+
+        let detached = CommandError::from(TranslationMutationError::Workspace(
+            WorkspaceError::DetachedUnit {
+                id: TranslationUnitId::from_bytes([0; 32]),
+            },
+        ));
+        assert_eq!(detached.code, "translationWorkspace");
     }
 
     #[test]

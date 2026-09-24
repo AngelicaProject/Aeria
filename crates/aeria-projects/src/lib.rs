@@ -1,6 +1,6 @@
 //! Local, bounded recent-project registry persistence.
 //!
-//! This crate deliberately knows nothing about Tauri, Workspace Format v1, or
+//! This crate deliberately knows nothing about Tauri, the workspace format, or
 //! source-package validation. The desktop layer supplies metadata from an
 //! already successful project operation.
 

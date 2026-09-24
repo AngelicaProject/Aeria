@@ -76,4 +76,4 @@
 .window-control:active { background: var(--pressed); }
 .window-control.close:hover { background: #c42b1c; color: #fff; }
 .window-control.close:active { background: #b22a1b; color: #fff; }
-.window-control:focus-visible { outline-offset: -2px; }
+.window-control:focus-visible { outline-offset: -1px; }

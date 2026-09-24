@@ -39,22 +39,29 @@ The digest is SHA-256 over these bytes, in order:
 
 The raw-value hash, row technical hash, target language, target macro string, review state, game version, `contentId`, and `snapshotId` do not participate in the digest. This keeps equivalent source occurrences independent of a particular snapshot or project target.
 
-`TranslationUnitId` is derived only when a unit is first created. A source update or rebase retains the existing ID even when the coordinate moves, source text changes, or any source fingerprint field changes. Rebase must update the current binding and fingerprint in place; it must never recompute an existing unit ID.
+`TranslationUnitId` is derived only when a unit is first created. A source update retains the existing ID even when the column moves, the source text changes, any source fingerprint or layout field changes, or the unit is detached. It updates the source facts in place and never recomputes an existing unit ID. The source layout does not participate in the digest.
 
 ## Source occurrence rule
 
-One managed String cell is one translation unit. During a verified source
-transition, the previous `SourceBinding` is the authoritative continuity key
-when that binding exists in the new snapshot. The planner then compares only
-the cell's `macroTextHash` and `rawValueHash`:
+One managed String cell is one translation unit. A binding is interpreted in
+the sheet schema generation recorded by the unit's `SourceLayout`, because an
+HXS column index is only a position within one schema.
 
-- equal content is `Unchanged`;
-- changed content is `SourceChanged` at the same binding;
-- a changed `rowTechnicalHash` is context diagnostics, not identity evidence.
+During a source update:
 
-If the old binding is missing, the unit is `Ambiguous`. Similarity, partial
-hashes, coordinate movement, and a unique candidate at another binding never
-establish cross-binding identity. The existing `TranslationUnitId` is kept;
-future apply semantics may update the source facts in place and require review
-for `SourceChanged`, but must not recompute the ID. See
-[`rebase-safety.md`](./rebase-safety.md) for the complete transition contract.
+- in an unchanged schema generation, the previous `SourceBinding` is the
+  continuity key, except that in a keyed sheet the row is found by the
+  persisted row key, and a removed key detaches the unit;
+- in a changed generation, the sheet, row, and subrow are kept and only the
+  column is reinterpreted through a deterministic sheet-level column mapping
+  established by exact content evidence or an unchanged column position;
+- `macroTextHash` classifies the resolved occurrence as `SourceChanged`; a
+  change of `rawValueHash` alone is `EncodingChanged`; otherwise it is
+  `Unchanged`; `rowTechnicalHash` is context only;
+- a unit without an established occurrence is detached, not guessed.
+
+Similarity, partial hashes, coordinate proximity, and a unique candidate at
+another row never establish identity. A row key is an exact,
+language-invariant source value, not a similarity measure. The existing `TranslationUnitId` is
+kept in every case and is never recomputed. See
+[`rebase-safety.md`](./rebase-safety.md) for the complete rules.

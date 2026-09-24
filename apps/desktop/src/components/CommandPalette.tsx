@@ -4,6 +4,7 @@ import { palettePrefixes, parsePaletteQuery, parseRowTarget, type RowTarget } fr
 import { fuzzyFilter } from "../fuzzy";
 import type { ProjectSheetDto, SheetProgressDto } from "../types";
 import { UiIcon, type UiIconName } from "../ui/primitives/UiIcon";
+import { useI18n } from "../ui/i18n";
 
 export type PaletteCommand = {
   id: string;
@@ -47,6 +48,7 @@ function Highlighted({ text, indices = [] }: { text: string; indices?: number[] 
 
 /** Mount with a fresh `key` per opening so `initialInput` seeds the query. */
 export function CommandPalette({ open, initialInput, onOpenChange, commands, sheets, progress, recentSheets, currentSheet, onOpenSheet, onGoToRow }: CommandPaletteProps) {
+  const { t } = useI18n();
   const [input, setInput] = useState(initialInput);
   const [active, setActive] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -69,34 +71,34 @@ export function CommandPalette({ open, initialInput, onOpenChange, commands, she
         }));
       case "goto": {
         const target = parseRowTarget(query.term);
-        if (!currentSheet) return [{ key: "no-sheet", icon: "info", label: "Open a sheet first", disabled: true }];
-        if (!query.term) return [{ key: "hint", icon: "info", label: `Type a row number to go to in ${currentSheet}`, detail: "row, row:subrow, or row:subrow:column", disabled: true }];
-        if (!target) return [{ key: "invalid", icon: "circleAlert", label: "Not a row coordinate", detail: "Use row, row:subrow, or row:subrow:column", disabled: true }];
-        const coordinate = `${target.rowId}:${target.subrowId}${target.columnIndex === null ? "" : ` · col ${target.columnIndex}`}`;
-        return [{ key: "goto", icon: "arrowRight", label: `Go to ${coordinate}`, detail: currentSheet, run: close(() => onGoToRow(target)) }];
+        if (!currentSheet) return [{ key: "no-sheet", icon: "info", label: t("palette.openSheetFirst"), disabled: true }];
+        if (!query.term) return [{ key: "hint", icon: "info", label: t("palette.rowPrompt", { sheet: currentSheet }), detail: t("palette.rowFormat"), disabled: true }];
+        if (!target) return [{ key: "invalid", icon: "circleAlert", label: t("palette.invalidRow"), detail: t("palette.invalidRowHint"), disabled: true }];
+        const coordinate = `${target.rowId}:${target.subrowId}${target.columnIndex === null ? "" : ` · ${t("common.column", { column: String(target.columnIndex) })}`}`;
+        return [{ key: "goto", icon: "arrowRight", label: t("palette.goTo", { coordinate }), detail: currentSheet, run: close(() => onGoToRow(target)) }];
       }
       case "strings":
         return [{
           key: "strings-unavailable",
           icon: "search",
-          label: query.term ? `Search strings for “${query.term}”` : "Search source and target text across the project",
-          detail: "Project search is not available in this build",
+          label: query.term ? t("palette.searchStringsFor", { term: query.term }) : t("palette.searchStrings"),
+          detail: t("palette.searchUnavailable"),
           disabled: true,
         }];
       case "help":
         return palettePrefixes.filter((entry) => entry.mode !== "help").map((entry): PaletteItem => ({
           key: entry.prefix,
           icon: "info",
-          label: `${entry.prefix}  ${entry.label}`,
+          label: `${entry.prefix}  ${t(entry.label)}`,
           run: () => { setInput(entry.prefix); inputRef.current?.focus(); },
-        })).concat([{ key: "sheets", icon: "table2", label: "No prefix  Go to a sheet", run: () => { setInput(""); inputRef.current?.focus(); } }]);
+        })).concat([{ key: "sheets", icon: "table2", label: t("palette.noPrefix"), run: () => { setInput(""); inputRef.current?.focus(); } }]);
       case "sheets": {
         const sheetItem = (sheet: ProjectSheetDto, indices?: number[]): PaletteItem => {
           const sheetProgress = progress.get(sheet.name);
           const detail = sheet.translatableCellCount === 0
-            ? "no translatable strings"
-            : `${(sheetProgress?.translated ?? 0).toLocaleString()} / ${sheet.translatableCellCount.toLocaleString()} translated`;
-          return { key: sheet.name, icon: "table2", label: sheet.name, indices, detail, hint: sheet.name === currentSheet ? <span className="palette-badge">open</span> : undefined, run: close(() => onOpenSheet(sheet.name)) };
+            ? t("palette.noStrings")
+            : t("palette.sheetProgress", { translated: sheetProgress?.translated ?? 0, total: sheet.translatableCellCount });
+          return { key: sheet.name, icon: "table2", label: sheet.name, indices, detail, hint: sheet.name === currentSheet ? <span className="palette-badge">{t("palette.openBadge")}</span> : undefined, run: close(() => onOpenSheet(sheet.name)) };
         };
         if (!query.term.trim()) {
           const byName = new Map(sheets.map((sheet) => [sheet.name, sheet]));
@@ -107,7 +109,7 @@ export function CommandPalette({ open, initialInput, onOpenChange, commands, she
         return fuzzyFilter(query.term, sheets, (sheet) => sheet.name, 60).map(({ item, match }) => sheetItem(item, match.indices));
       }
     }
-  }, [commands, currentSheet, onGoToRow, onOpenChange, onOpenSheet, progress, query.mode, query.term, recentSheets, sheets]);
+  }, [commands, currentSheet, onGoToRow, onOpenChange, onOpenSheet, progress, query.mode, query.term, recentSheets, sheets, t]);
 
   useEffect(() => {
     setActive(Math.max(0, items.findIndex((item) => !item.disabled)));
@@ -138,8 +140,8 @@ export function CommandPalette({ open, initialInput, onOpenChange, commands, she
     }
   }
 
-  const placeholder = query.mode === "commands" ? "Type a command" : query.mode === "goto" ? "Row number" : "Search sheets by name — type ? for help";
-  const sectionLabel = query.mode === "commands" ? "Commands" : query.mode === "goto" ? "Go to row" : query.mode === "strings" ? "Strings" : query.mode === "help" ? "Prefixes" : query.term.trim() ? "Sheets" : "Recently opened and sheets with strings";
+  const placeholder = t(query.mode === "commands" ? "palette.placeholder.commands" : query.mode === "goto" ? "palette.placeholder.goto" : "palette.placeholder.sheets");
+  const sectionLabel = t(query.mode === "commands" ? "palette.section.commands" : query.mode === "goto" ? "palette.section.goto" : query.mode === "strings" ? "palette.section.strings" : query.mode === "help" ? "palette.section.help" : query.term.trim() ? "palette.section.sheets" : "palette.section.recent");
 
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
@@ -151,7 +153,7 @@ export function CommandPalette({ open, initialInput, onOpenChange, commands, she
           element?.focus();
           element?.setSelectionRange(element.value.length, element.value.length);
         }}>
-          <Dialog.Title className="visually-hidden">Command palette</Dialog.Title>
+          <Dialog.Title className="visually-hidden">{t("palette.title")}</Dialog.Title>
           <div className="palette-input">
             <UiIcon icon={query.mode === "commands" ? "chevronRight" : query.mode === "goto" ? "arrowRight" : "search"} size="sm" />
             <input
@@ -160,7 +162,7 @@ export function CommandPalette({ open, initialInput, onOpenChange, commands, she
               onChange={(event) => setInput(event.target.value)}
               onKeyDown={handleKeyDown}
               placeholder={placeholder}
-              aria-label="Command palette"
+              aria-label={t("palette.title")}
               aria-controls="palette-list"
               aria-activedescendant={items[active] ? `palette-item-${active}` : undefined}
               spellCheck={false}
@@ -168,7 +170,7 @@ export function CommandPalette({ open, initialInput, onOpenChange, commands, she
           </div>
           <div className="palette-section">{sectionLabel}</div>
           <div className="palette-list" id="palette-list" role="listbox" ref={listRef}>
-            {items.length === 0 ? <div className="palette-empty">No results</div> : items.map((item, index) => (
+            {items.length === 0 ? <div className="palette-empty">{t("palette.noResults")}</div> : items.map((item, index) => (
               <div
                 key={item.key}
                 id={`palette-item-${index}`}
@@ -189,11 +191,11 @@ export function CommandPalette({ open, initialInput, onOpenChange, commands, she
             ))}
           </div>
           <div className="palette-foot">
-            <span><kbd>Up</kbd><kbd>Down</kbd> navigate</span>
-            <span><kbd>Enter</kbd> open</span>
-            <span><kbd>&gt;</kbd> commands</span>
-            <span><kbd>:</kbd> go to row</span>
-            <span><kbd>#</kbd> strings</span>
+            <span><kbd>Up</kbd><kbd>Down</kbd> {t("palette.foot.navigate")}</span>
+            <span><kbd>Enter</kbd> {t("palette.foot.open")}</span>
+            <span><kbd>&gt;</kbd> {t("palette.foot.commands")}</span>
+            <span><kbd>:</kbd> {t("palette.foot.goto")}</span>
+            <span><kbd>#</kbd> {t("palette.foot.strings")}</span>
           </div>
         </Dialog.Content>
       </Dialog.Portal>

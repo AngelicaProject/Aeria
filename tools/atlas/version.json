@@ -1,17 +1,17 @@
 {
-  "version": "0.2.0",
-  "releaseBaseUrl": "https://github.com/AngelicaProject/HarmoniaAtlas/releases/download/v0.2.0",
+  "version": "0.3.0",
+  "releaseBaseUrl": "https://github.com/AngelicaProject/HarmoniaAtlas/releases/download/v0.3.0",
   "artifacts": {
     "win-x64": {
-      "name": "harmonia-atlas-v0.2.0-win-x64.zip",
-      "sha256": "8abd10e36d2714caa52b880329521a1cd4696ec3a2e584b7668a7bdc14a93285",
+      "name": "harmonia-atlas-v0.3.0-win-x64.zip",
+      "sha256": "4d03aeb384256d13c01658694a5ab63c8fcd2c5a4910442581204d5eeb2bcaa4",
       "archive": "zip",
       "executable": "harmonia-atlas.exe",
       "targetTriple": "x86_64-pc-windows-msvc"
     },
     "linux-x64": {
-      "name": "harmonia-atlas-v0.2.0-linux-x64.tar.gz",
-      "sha256": "68f094f7644d70c51354a9e89f82655db03babbc02f17236f2585d22c20e3657",
+      "name": "harmonia-atlas-v0.3.0-linux-x64.tar.gz",
+      "sha256": "53d65aa95617a8211127fba59439db381b3130d41502191ca1aac26dd2831e98",
       "archive": "tar.gz",
       "executable": "harmonia-atlas",
       "targetTriple": "x86_64-unknown-linux-gnu"

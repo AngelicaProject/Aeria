@@ -65,6 +65,7 @@ import { themeRegistry } from "../ui/theme/registry";
 import { usePreferences } from "../ui/preferences";
 import type { RowTarget } from "../commandPalette";
 import { UiIcon } from "../ui/primitives/UiIcon";
+import { useI18n, type MessageKey, type Translate } from "../ui/i18n";
 
 const PAGE_SIZE = 100;
 
@@ -85,6 +86,7 @@ type EditorShellProps = {
   project: ProjectSummaryDto;
   applicationWarning: CommandError | null;
   onDismissApplicationWarning: () => void;
+  onShowDetachedUnits: () => void;
   onClosed: () => void;
 };
 
@@ -94,10 +96,20 @@ function cursorForRow(row: TranslationRowDto): TranslationRowCursorDto {
   return { sheetName: row.sheetName, rowId: row.rowId, subrowId: row.subrowId };
 }
 
-function panelTitle(panelId: string | null): string {
-  if (panelId === "sheets") return "Sheets";
+function panelTitle(panelId: string | null): MessageKey {
+  if (panelId === "sheets") return "workbench.panel.sheets";
   if (panelId === "search" || panelId === "ai" || panelId === "git") return toolTitle(panelId);
-  return "Panel";
+  return "workbench.panel.generic";
+}
+
+const moveTargetLabels: Readonly<Record<DockRegion, MessageKey>> = {
+  left: "workbench.moveLeft",
+  right: "workbench.moveRight",
+  bottom: "workbench.moveBottom",
+};
+
+function cellCoordinates(sheet: string, target: { rowId: number; subrowId: number }): Parameters<Translate>[1] {
+  return { sheet, row: String(target.rowId), subrow: String(target.subrowId) };
 }
 
 function isEditableTarget(target: EventTarget | null): boolean {
@@ -109,6 +121,7 @@ export function EditorShell({
   project,
   applicationWarning,
   onDismissApplicationWarning,
+  onShowDetachedUnits,
   onClosed,
 }: EditorShellProps) {
   const firstSheetName = project.sheets.find((sheet) => sheet.translatableCellCount > 0)?.name ?? project.sheets[0]?.name ?? null;
@@ -119,6 +132,7 @@ export function EditorShell({
   }, [project.sheets]);
   const projectName = displayPathName(project.repositoryRoot);
   const { theme, setThemeId } = useTheme();
+  const { t } = useI18n();
 
   const [selectedSheetName, setSelectedSheetName] = useState<string | null>(firstSheetName);
   const [loadedSheetName, setLoadedSheetName] = useState<string | null>(null);
@@ -257,17 +271,17 @@ export function EditorShell({
       setSelectedBinding((revealedCell ?? row?.cells[0])?.sourceBinding ?? null);
       if (reveal && !revealedRow) {
         setEditorError({
-          title: "String not found",
+          title: t("workbench.error.stringNotFound"),
           tone: "warning",
-          error: { code: "rowNotTranslatable", message: `${sheetName} ${reveal.rowId}:${reveal.subrowId} has no translatable string in the current source.` },
+          error: { code: "rowNotTranslatable", message: t("workbench.error.rowNotTranslatable", cellCoordinates(sheetName, reveal)) },
         });
       }
     } catch (error) {
-      if (generation === requestGeneration.current) showError("Could not load sheet", error);
+      if (generation === requestGeneration.current) showError(t("workbench.error.loadSheet"), error);
     } finally {
       if (generation === requestGeneration.current) setSheetLoading(false);
     }
-  }, [showError]);
+  }, [showError, t]);
 
   useEffect(() => {
     if (firstSheetName) void beginSheetLoad(firstSheetName, false);
@@ -302,7 +316,7 @@ export function EditorShell({
         if (!hasDirtyDraft.current) return;
         event.preventDefault();
         void (async () => {
-          if (!(await requestDiscardConfirmation("Closing Aeria will discard your unsaved changes."))) return;
+          if (!(await requestDiscardConfirmation(t("workbench.discard.closeApp")))) return;
           allowWindowClose.current = true;
           try {
             await getCurrentWindow().close();
@@ -320,7 +334,7 @@ export function EditorShell({
       disposed = true;
       unlisten?.();
     };
-  }, [requestDiscardConfirmation]);
+  }, [requestDiscardConfirmation, t]);
 
   const handleSheetSelect = useCallback(async (sheetName: string, pin = false) => {
     if (sheetName === selectedSheetName) {
@@ -328,30 +342,30 @@ export function EditorShell({
       if (pin && activeId) setDocumentTabs((current) => reduceDocumentTabs(current, { type: "pin", id: activeId }));
       return;
     }
-    if (!(await requestDiscardConfirmation("Changing sheets will discard your unsaved changes."))) return;
+    if (!(await requestDiscardConfirmation(t("workbench.discard.changeSheet")))) return;
     setDocumentTabs((current) => reduceDocumentTabs(current, { type: "openSheet", sheetName, pin }));
     void beginSheetLoad(sheetName);
-  }, [beginSheetLoad, documentTabs.activeId, requestDiscardConfirmation, selectedSheetName]);
+  }, [beginSheetLoad, documentTabs.activeId, requestDiscardConfirmation, selectedSheetName, t]);
 
   const handleDocumentSelect = useCallback(async (documentId: string) => {
     const document = documentTabs.tabs.find((tab) => tab.id === documentId);
     if (!document || document.id === documentTabs.activeId) return;
-    if (!(await requestDiscardConfirmation("Changing sheets will discard your unsaved changes."))) return;
+    if (!(await requestDiscardConfirmation(t("workbench.discard.changeSheet")))) return;
     setDocumentTabs((current) => reduceDocumentTabs(current, { type: "activate", id: documentId }));
     void beginSheetLoad(document.sheetName);
-  }, [beginSheetLoad, documentTabs.activeId, documentTabs.tabs, requestDiscardConfirmation]);
+  }, [beginSheetLoad, documentTabs.activeId, documentTabs.tabs, requestDiscardConfirmation, t]);
 
   const handleDocumentClose = useCallback(async (documentId: string) => {
     const document = documentTabs.tabs.find((tab) => tab.id === documentId);
     if (!document) return;
-    if (document.id === documentTabs.activeId && !(await requestDiscardConfirmation("Closing this sheet will discard your unsaved changes."))) return;
+    if (document.id === documentTabs.activeId && !(await requestDiscardConfirmation(t("workbench.discard.closeSheet")))) return;
     const next = reduceDocumentTabs(documentTabs, { type: "close", id: documentId });
     setDocumentTabs(next);
     if (next.activeId && next.activeId !== documentTabs.activeId) {
       const nextDocument = next.tabs.find((tab) => tab.id === next.activeId);
       if (nextDocument) void beginSheetLoad(nextDocument.sheetName);
     }
-  }, [beginSheetLoad, documentTabs, requestDiscardConfirmation]);
+  }, [beginSheetLoad, documentTabs, requestDiscardConfirmation, t]);
 
   const handleDocumentPin = useCallback((documentId: string) => {
     setDocumentTabs((current) => reduceDocumentTabs(current, { type: "pin", id: documentId }));
@@ -364,7 +378,7 @@ export function EditorShell({
       subrowId: occurrence.binding.subrowId,
     };
     const sameRow = selectedRowCursor !== null && rowKey(selectedRowCursor) === occurrence.rowKey;
-    if (!sameRow && !(await requestDiscardConfirmation("Changing rows will discard your unsaved changes."))) {
+    if (!sameRow && !(await requestDiscardConfirmation(t("workbench.discard.changeRow")))) {
       focusTargetRequest.current = false;
       return;
     }
@@ -379,7 +393,7 @@ export function EditorShell({
       }
       setEditorError(null);
     });
-  }, [requestDiscardConfirmation, selectedRowCursor]);
+  }, [requestDiscardConfirmation, selectedRowCursor, t]);
 
   const navigateOccurrence = useCallback((direction: 1 | -1): boolean => {
     const next = adjacentOccurrence(visibleOccurrences, selectedBinding, direction);
@@ -438,10 +452,10 @@ export function EditorShell({
   }, [showError]);
 
   const handleSaveTarget = useCallback(async (cell: TranslationCellDto, draft: CellDraft, otherDirty: boolean, discardOtherDrafts: () => void, advance: boolean) => {
-    if (!selectedRow || !(await confirmMutationDiscard(otherDirty, "Saving the target will discard other unsaved changes."))) return;
+    if (!selectedRow || !(await confirmMutationDiscard(otherDirty, t("workbench.discard.saveTarget")))) return;
     if (otherDirty) discardOtherDrafts();
     const key = bindingKey(cell.sourceBinding);
-    const saved = await runMutation("target", key, "Could not save target", async () => {
+    const saved = await runMutation("target", key, t("workbench.error.saveTarget"), async () => {
       const overlay = await setTranslationTarget(cell.sourceBinding, draft.target);
       if (advance) {
         pendingAdvance.current = key;
@@ -453,28 +467,28 @@ export function EditorShell({
       pendingAdvance.current = null;
       focusTargetRequest.current = false;
     }
-  }, [applyOverlay, confirmMutationDiscard, preferences.focusTargetOnNext, runMutation, selectedRow]);
+  }, [applyOverlay, confirmMutationDiscard, preferences.focusTargetOnNext, runMutation, selectedRow, t]);
 
   const handleSaveNote = useCallback(async (cell: TranslationCellDto, draft: CellDraft, otherDirty: boolean, discardOtherDrafts: () => void) => {
     const translation = cell.translation;
-    if (!translation || !selectedRow || !(await confirmMutationDiscard(otherDirty, "Saving the note will discard other unsaved changes."))) return;
+    if (!translation || !selectedRow || !(await confirmMutationDiscard(otherDirty, t("workbench.discard.saveNote")))) return;
     if (otherDirty) discardOtherDrafts();
-    await runMutation("note", bindingKey(cell.sourceBinding), "Could not save note", async () => {
+    await runMutation("note", bindingKey(cell.sourceBinding), t("workbench.error.saveNote"), async () => {
       const overlay = await setTranslationNote(translation.translationUnitId, draft.note.length === 0 ? null : draft.note);
       applyOverlay(cell.sourceBinding, overlay);
     });
-  }, [applyOverlay, confirmMutationDiscard, runMutation, selectedRow]);
+  }, [applyOverlay, confirmMutationDiscard, runMutation, selectedRow, t]);
 
   const handleReviewChange = useCallback(async (cell: TranslationCellDto, reviewState: ReviewState, discardDrafts: () => void) => {
     const translation = cell.translation;
     const shouldDiscardDrafts = hasDirtyDraft.current;
-    if (!translation || translation.reviewState === reviewState || !(await confirmMutationDiscard(shouldDiscardDrafts, "Changing the review state will discard your unsaved changes."))) return;
+    if (!translation || translation.reviewState === reviewState || !(await confirmMutationDiscard(shouldDiscardDrafts, t("workbench.discard.review")))) return;
     if (shouldDiscardDrafts) discardDrafts();
-    await runMutation("review", bindingKey(cell.sourceBinding), "Could not change review state", async () => {
+    await runMutation("review", bindingKey(cell.sourceBinding), t("workbench.error.review"), async () => {
       const overlay = await setTranslationReviewState(translation.translationUnitId, reviewState);
       applyOverlay(cell.sourceBinding, overlay);
     });
-  }, [applyOverlay, confirmMutationDiscard, runMutation]);
+  }, [applyOverlay, confirmMutationDiscard, runMutation, t]);
 
   const handleLoadMore = useCallback(async () => {
     if (!selectedSheetName || !nextAfter || loadingMore) return;
@@ -495,14 +509,14 @@ export function EditorShell({
       }
       setNextAfter(page.nextAfter);
     } catch (error) {
-      if (generation === requestGeneration.current) showError("Could not load more rows", error);
+      if (generation === requestGeneration.current) showError(t("workbench.error.loadMore"), error);
     } finally {
       setLoadingMore(false);
     }
-  }, [loadingMore, nextAfter, rows.length, selectedSheetName, showError]);
+  }, [loadingMore, nextAfter, rows.length, selectedSheetName, showError, t]);
 
   const handleClose = useCallback(async () => {
-    if (!(await requestDiscardConfirmation("Closing the project will discard your unsaved changes."))) return;
+    if (!(await requestDiscardConfirmation(t("workbench.discard.closeProject")))) return;
     flushSync(() => {
       setClosing(true);
       setEditorError(null);
@@ -513,19 +527,19 @@ export function EditorShell({
       onClosed();
     } catch (error) {
       setClosing(false);
-      showError("Could not close project", error);
+      showError(t("workbench.error.closeProject"), error);
     }
-  }, [onClosed, requestDiscardConfirmation, showError]);
+  }, [onClosed, requestDiscardConfirmation, showError, t]);
 
   const handleWindowClose = useCallback(async () => {
-    if (!(await requestDiscardConfirmation("Closing Aeria will discard your unsaved changes."))) return;
+    if (!(await requestDiscardConfirmation(t("workbench.discard.closeApp")))) return;
     allowWindowClose.current = true;
     try {
       await getCurrentWindow().close();
     } catch {
       allowWindowClose.current = false;
     }
-  }, [requestDiscardConfirmation]);
+  }, [requestDiscardConfirmation, t]);
 
   const selectedUnitId = useMemo(() => {
     if (!selectedRow || !selectedBinding) return null;
@@ -589,14 +603,14 @@ export function EditorShell({
       }
     }
     if (!sheetsByName.has(sheetName)) {
-      setEditorError({ title: "Sheet not found", tone: "warning", error: { code: "sheetNotFound", message: `${sheetName} is not in the current source.` } });
+      setEditorError({ title: t("workbench.error.sheetNotFound"), tone: "warning", error: { code: "sheetNotFound", message: t("workbench.error.sheetMissing", { sheet: sheetName }) } });
       return;
     }
-    if (!(await requestDiscardConfirmation("Opening this string will discard your unsaved changes."))) return;
+    if (!(await requestDiscardConfirmation(t("workbench.discard.openString")))) return;
     if (sheetName !== selectedSheetName) setDocumentTabs((current) => reduceDocumentTabs(current, { type: "openSheet", sheetName, pin: true }));
     setLensFilter(emptyOccurrenceFilter);
     void beginSheetLoad(sheetName, true, target);
-  }, [allOccurrences, beginSheetLoad, handleOccurrenceSelect, loadedSheetName, requestDiscardConfirmation, selectedSheetName, sheetsByName, visibleOccurrences]);
+  }, [allOccurrences, beginSheetLoad, handleOccurrenceSelect, loadedSheetName, requestDiscardConfirmation, selectedSheetName, sheetsByName, t, visibleOccurrences]);
 
   const revealBinding = useCallback((binding: SourceBinding) => {
     void revealString(binding.sheetName, { rowId: binding.rowId, subrowId: binding.subrowId, columnIndex: binding.columnIndex });
@@ -613,13 +627,13 @@ export function EditorShell({
 
   const handleRestoreTarget = useCallback(async (targetMacro: string) => {
     if (!selectedBinding) return;
-    if (!(await requestDiscardConfirmation("Restoring this text will discard your unsaved changes."))) return;
+    if (!(await requestDiscardConfirmation(t("workbench.discard.restore")))) return;
     const binding = selectedBinding;
-    await runMutation("target", bindingKey(binding), "Could not restore translation", async () => {
+    await runMutation("target", bindingKey(binding), t("workbench.error.restore"), async () => {
       const overlay = await setTranslationTarget(binding, targetMacro);
       applyOverlay(binding, overlay);
     });
-  }, [applyOverlay, requestDiscardConfirmation, runMutation, selectedBinding]);
+  }, [applyOverlay, requestDiscardConfirmation, runMutation, selectedBinding, t]);
 
   // Layout ---------------------------------------------------------------
 
@@ -661,8 +675,8 @@ export function EditorShell({
     const restricted = bottomPanelIds.has(panelId) || panelId === "ai" || panelId === "git";
     return (["left", "right", "bottom"] as const)
       .filter((region) => region !== currentRegion && (!restricted || region !== "left"))
-      .map((region) => ({ id: region, label: region[0]!.toUpperCase() + region.slice(1) }));
-  }, []);
+      .map((region) => ({ id: region, label: t(moveTargetLabels[region]) }));
+  }, [t]);
 
   const focusSheetFilter = useCallback(() => {
     setSheetFilterOpen(true);
@@ -683,7 +697,7 @@ export function EditorShell({
       const wide = bottomPanelIds.has(panel);
       const existing = await WebviewWindow.getByLabel(label);
       const detached = existing ?? new WebviewWindow(label, {
-        title: `${detachedPanelTitle(panel)} · Aeria`,
+        title: `${t(detachedPanelTitle(panel))} · Aeria`,
         url: `/?detached=${panel}`,
         width: wide ? 720 : 400,
         height: wide ? 320 : 640,
@@ -704,9 +718,9 @@ export function EditorShell({
       if (originRegion) setDockLayoutState((current) => reduceDockLayout(current, { type: "float", panelId: panel }));
       setDetachedPanel(panel);
     } catch (error) {
-      showError("Could not open tool window", error);
+      showError(t("workbench.error.toolWindow"), error);
     }
-  }, [detachedPanel, dockLayoutState.placements, showError]);
+  }, [detachedPanel, dockLayoutState.placements, showError, t]);
 
   // Keyboard -------------------------------------------------------------
 
@@ -767,10 +781,10 @@ export function EditorShell({
   }));
 
   const sheetHeaderActions = <>
-    <IconButton icon={hideEmptySheets ? "eyeOff" : "eye"} label={hideEmptySheets ? "Show empty sheets" : "Hide empty sheets"} pressed={hideEmptySheets} disabled={closing} onClick={() => setHideEmptySheets((current) => !current)} />
-    <IconButton icon="search" label="Filter sheets" shortcut="Ctrl+F" disabled={closing} onClick={focusSheetFilter} />
-    <IconButton icon="locateFixed" label="Reveal active sheet" disabled={closing || !selectedSheetName} onClick={() => setRevealSheetSignal((current) => current + 1)} />
-    <IconButton icon="chevronsUp" label="Collapse all folders" disabled={closing} onClick={() => setCollapseSheetsSignal((current) => current + 1)} />
+    <IconButton icon={hideEmptySheets ? "eyeOff" : "eye"} label={t(hideEmptySheets ? "workbench.showEmptySheets" : "workbench.hideEmptySheets")} pressed={hideEmptySheets} disabled={closing} onClick={() => setHideEmptySheets((current) => !current)} />
+    <IconButton icon="search" label={t("workbench.filterSheets")} shortcut="Ctrl+F" disabled={closing} onClick={focusSheetFilter} />
+    <IconButton icon="locateFixed" label={t("workbench.revealSheet")} disabled={closing || !selectedSheetName} onClick={() => setRevealSheetSignal((current) => current + 1)} />
+    <IconButton icon="chevronsUp" label={t("workbench.collapseFolders")} disabled={closing} onClick={() => setCollapseSheetsSignal((current) => current + 1)} />
   </>;
 
   const renderPanelContent = (panelId: string, active: boolean): ReactNode => {
@@ -787,7 +801,7 @@ export function EditorShell({
     return (
       <DockPanel
         panelId={id}
-        title={panelTitle(id)}
+        title={t(panelTitle(id))}
         meta={id === "sheets" ? formatSheetCount(project.sheets.length) : undefined}
         headerActions={id === "sheets" ? sheetHeaderActions : undefined}
         moveTargets={panelMoveTargets(id, region)}
@@ -816,90 +830,102 @@ export function EditorShell({
     return panelActive(panelId, region, open);
   };
 
+  const themeLabel = (entry: (typeof themeRegistry)[number]) => t("common.themeWithFamily", { name: entry.displayName, family: entry.family ?? t("common.themesFamily") });
+
   const menus: readonly ApplicationMenuDefinition[] = [
     {
       id: "file",
-      label: "File",
+      label: t("menu.file"),
       items: [
-        { kind: "command", id: "settings", label: "Settings…", shortcut: "Ctrl+,", onSelect: () => openSettings() },
+        { kind: "command", id: "settings", label: t("menu.settings"), shortcut: "Ctrl+,", onSelect: () => openSettings() },
         { kind: "separator", id: "file-sep-1" },
-        { kind: "command", id: "close-tab", label: "Close sheet", shortcut: "Ctrl+W", ...(documentTabs.activeId ? { onSelect: () => void handleDocumentClose(documentTabs.activeId!) } : {}) },
-        { kind: "command", id: "close-project", label: "Close project", onSelect: () => void handleClose() },
+        { kind: "command", id: "close-tab", label: t("menu.closeSheet"), shortcut: "Ctrl+W", ...(documentTabs.activeId ? { onSelect: () => void handleDocumentClose(documentTabs.activeId!) } : {}) },
+        { kind: "command", id: "close-project", label: t("menu.closeProject"), onSelect: () => void handleClose() },
         { kind: "separator", id: "file-sep-2" },
-        { kind: "command", id: "exit", label: "Exit", onSelect: () => void handleWindowClose() },
+        { kind: "command", id: "exit", label: t("menu.exit"), onSelect: () => void handleWindowClose() },
       ],
     },
     {
       id: "translation",
-      label: "Translation",
+      label: t("menu.translation"),
       items: [
-        { kind: "command", id: "save", label: "Save target", shortcut: "Ctrl+S", ...(selectedRow ? { onSelect: () => editorRef.current?.saveTarget(false) } : {}) },
-        { kind: "command", id: "save-next", label: "Save and go to next", shortcut: "Ctrl+Enter", ...(selectedRow ? { onSelect: () => editorRef.current?.saveTarget(true) } : {}) },
-        { kind: "command", id: "copy-source", label: "Copy source to target", ...(selectedRow ? { onSelect: () => editorRef.current?.copySource() } : {}) },
-        { kind: "command", id: "revert", label: "Revert unsaved changes", ...(dirty ? { onSelect: () => editorRef.current?.revert() } : {}) },
+        { kind: "command", id: "save", label: t("menu.saveTarget"), shortcut: "Ctrl+S", ...(selectedRow ? { onSelect: () => editorRef.current?.saveTarget(false) } : {}) },
+        { kind: "command", id: "save-next", label: t("menu.saveAndNext"), shortcut: "Ctrl+Enter", ...(selectedRow ? { onSelect: () => editorRef.current?.saveTarget(true) } : {}) },
+        { kind: "command", id: "copy-source", label: t("menu.copySource"), ...(selectedRow ? { onSelect: () => editorRef.current?.copySource() } : {}) },
+        { kind: "command", id: "revert", label: t("menu.revert"), ...(dirty ? { onSelect: () => editorRef.current?.revert() } : {}) },
       ],
     },
     {
       id: "go",
-      label: "Go",
+      label: t("menu.go"),
       items: [
-        { kind: "command", id: "go-sheet", label: "Go to sheet…", shortcut: "Ctrl+P", onSelect: () => openPalette("") },
-        { kind: "command", id: "go-row", label: "Go to row…", shortcut: "Ctrl+G", ...(selectedSheetName ? { onSelect: () => openPalette(":") } : {}) },
-        { kind: "command", id: "command-palette", label: "Command palette…", shortcut: "Ctrl+Shift+P", onSelect: () => openPalette(">") },
+        { kind: "command", id: "go-sheet", label: t("menu.goToSheet"), shortcut: "Ctrl+P", onSelect: () => openPalette("") },
+        { kind: "command", id: "go-row", label: t("menu.goToRow"), shortcut: "Ctrl+G", ...(selectedSheetName ? { onSelect: () => openPalette(":") } : {}) },
+        { kind: "command", id: "command-palette", label: t("menu.commandPalette"), shortcut: "Ctrl+Shift+P", onSelect: () => openPalette(">") },
         { kind: "separator", id: "go-sep" },
-        { kind: "command", id: "go-next", label: "Next string", shortcut: "Alt+Down", onSelect: () => navigateOccurrence(1) },
-        { kind: "command", id: "go-previous", label: "Previous string", shortcut: "Alt+Up", onSelect: () => navigateOccurrence(-1) },
+        { kind: "command", id: "go-next", label: t("menu.nextString"), shortcut: "Alt+Down", onSelect: () => navigateOccurrence(1) },
+        { kind: "command", id: "go-previous", label: t("menu.previousString"), shortcut: "Alt+Up", onSelect: () => navigateOccurrence(-1) },
       ],
     },
     {
       id: "view",
-      label: "View",
+      label: t("menu.view"),
       items: [
-        { kind: "command", id: "sheets", label: "Sheets", shortcut: "Ctrl+B", checked: isPanelShown("sheets"), onSelect: () => showPanel("sheets", "left") },
-        { kind: "command", id: "search", label: "Search", checked: isPanelShown("search"), onSelect: () => showPanel("search", "left") },
-        { kind: "command", id: "git", label: "Git", checked: isPanelShown("git"), onSelect: () => showPanel("git", "right") },
-        { kind: "command", id: "ai", label: "AI assist", checked: isPanelShown("ai"), onSelect: () => showPanel("ai", "right") },
-        { kind: "command", id: "bottom", label: "Bottom panel", shortcut: "Ctrl+J", checked: bottomOpen, onSelect: () => dispatchLayout({ type: "toggleRegion", regionId: "bottomPanel" }) },
+        { kind: "command", id: "sheets", label: t("workbench.panel.sheets"), shortcut: "Ctrl+B", checked: isPanelShown("sheets"), onSelect: () => showPanel("sheets", "left") },
+        { kind: "command", id: "search", label: t("workbench.tool.search"), checked: isPanelShown("search"), onSelect: () => showPanel("search", "left") },
+        { kind: "command", id: "git", label: t("workbench.tool.git"), checked: isPanelShown("git"), onSelect: () => showPanel("git", "right") },
+        { kind: "command", id: "ai", label: t("workbench.tool.ai"), checked: isPanelShown("ai"), onSelect: () => showPanel("ai", "right") },
+        { kind: "command", id: "bottom", label: t("menu.bottomPanel"), shortcut: "Ctrl+J", checked: bottomOpen, onSelect: () => dispatchLayout({ type: "toggleRegion", regionId: "bottomPanel" }) },
         { kind: "separator", id: "view-sep-1" },
-        { kind: "command", id: "filter-sheets", label: "Filter sheets", shortcut: "Ctrl+F", onSelect: handleQuickFind },
-        { kind: "command", id: "reveal-sheet", label: "Reveal active sheet", ...(selectedSheetName ? { onSelect: () => { showPanel("sheets", "left", false); setRevealSheetSignal((current) => current + 1); } } : {}) },
+        { kind: "command", id: "filter-sheets", label: t("workbench.filterSheets"), shortcut: "Ctrl+F", onSelect: handleQuickFind },
+        { kind: "command", id: "reveal-sheet", label: t("workbench.revealSheet"), ...(selectedSheetName ? { onSelect: () => { showPanel("sheets", "left", false); setRevealSheetSignal((current) => current + 1); } } : {}) },
         { kind: "separator", id: "view-sep-2" },
         {
           kind: "submenu",
           id: "theme",
-          label: "Theme",
-          items: [{ kind: "radio", id: "theme-radio", label: "Theme", value: theme.id, items: themeRegistry.map((entry) => ({ value: entry.id, label: `${entry.displayName} (${entry.family ?? "Themes"})` })), onSelect: setThemeId }],
+          label: t("menu.theme"),
+          items: [{ kind: "radio", id: "theme-radio", label: t("menu.theme"), value: theme.id, items: themeRegistry.map((entry) => ({ value: entry.id, label: themeLabel(entry) })), onSelect: setThemeId }],
         },
       ],
     },
   ];
 
+  const category = {
+    go: t("command.category.go"),
+    translation: t("command.category.translation"),
+    strings: t("command.category.strings"),
+    view: t("command.category.view"),
+    git: t("command.category.git"),
+    preferences: t("command.category.preferences"),
+    theme: t("command.category.theme"),
+    file: t("command.category.file"),
+  };
   const commands: PaletteCommand[] = [
-    { id: "go-sheet", category: "Go", title: "Go to sheet", shortcut: "Ctrl+P", icon: "table2", run: () => openPalette("") },
-    { id: "go-row", category: "Go", title: "Go to row in current sheet", shortcut: "Ctrl+G", icon: "arrowRight", enabled: selectedSheetName !== null, run: () => openPalette(":") },
-    { id: "go-next", category: "Go", title: "Next string", shortcut: "Alt+Down", icon: "arrowDown", run: () => navigateOccurrence(1) },
-    { id: "go-previous", category: "Go", title: "Previous string", shortcut: "Alt+Up", icon: "arrowUp", run: () => navigateOccurrence(-1) },
-    { id: "save", category: "Translation", title: "Save target", shortcut: "Ctrl+S", icon: "save", enabled: selectedRow !== null, run: () => editorRef.current?.saveTarget(false) },
-    { id: "save-next", category: "Translation", title: "Save and go to next string", shortcut: "Ctrl+Enter", icon: "save", enabled: selectedRow !== null, run: () => editorRef.current?.saveTarget(true) },
-    { id: "copy-source", category: "Translation", title: "Copy source to target", icon: "copyPlus", enabled: selectedRow !== null, run: () => editorRef.current?.copySource() },
-    { id: "revert", category: "Translation", title: "Revert unsaved changes", icon: "undo", enabled: dirty, run: () => editorRef.current?.revert() },
-    { id: "filter-untranslated", category: "Strings", title: "Show only untranslated loaded strings", icon: "listFilter", run: () => setLensFilter({ status: "untranslated", query: "" }) },
-    { id: "filter-review", category: "Strings", title: "Show only loaded strings that need review", icon: "listFilter", run: () => setLensFilter({ status: "needsReview", query: "" }) },
-    { id: "filter-clear", category: "Strings", title: "Clear string filters", icon: "x", run: () => setLensFilter(emptyOccurrenceFilter) },
-    { id: "view-sheets", category: "View", title: "Toggle Sheets", shortcut: "Ctrl+B", icon: "table2", run: () => showPanel("sheets", "left") },
-    { id: "view-search", category: "View", title: "Toggle Search", icon: "search", run: () => showPanel("search", "left") },
-    { id: "view-git", category: "View", title: "Toggle Git", icon: "gitBranch", run: () => showPanel("git", "right") },
-    { id: "view-ai", category: "View", title: "Toggle AI assist", icon: "sparkles", run: () => showPanel("ai", "right") },
-    { id: "view-bottom", category: "View", title: "Toggle bottom panel", shortcut: "Ctrl+J", icon: "panelBottom", run: () => dispatchLayout({ type: "toggleRegion", regionId: "bottomPanel" }) },
-    { id: "view-filter-sheets", category: "View", title: "Filter sheets", shortcut: "Ctrl+F", icon: "search", run: handleQuickFind },
-    { id: "view-reveal-sheet", category: "View", title: "Reveal active sheet", icon: "locateFixed", enabled: selectedSheetName !== null, run: () => { showPanel("sheets", "left", false); setRevealSheetSignal((current) => current + 1); } },
-    { id: "git-open", category: "Git", title: "Show changes", icon: "gitBranch", run: () => showPanel("git", "right", false) },
-    { id: "prefs-settings", category: "Preferences", title: "Open settings", shortcut: "Ctrl+,", icon: "settings", run: () => openSettings() },
-    { id: "prefs-theme", category: "Preferences", title: "Color theme", icon: "palette", run: () => openSettings("appearance") },
-    { id: "prefs-shortcuts", category: "Preferences", title: "Keyboard shortcuts", icon: "listFilter", run: () => openSettings("keyboard") },
-    ...themeRegistry.map((entry): PaletteCommand => ({ id: `theme-${entry.id}`, category: "Theme", title: `${entry.displayName} (${entry.family ?? "Themes"})`, icon: "palette", run: () => setThemeId(entry.id) })),
-    { id: "file-close-sheet", category: "File", title: "Close sheet", shortcut: "Ctrl+W", icon: "x", enabled: documentTabs.activeId !== null, run: () => { if (documentTabs.activeId) void handleDocumentClose(documentTabs.activeId); } },
-    { id: "file-close-project", category: "File", title: "Close project", icon: "folder", run: () => void handleClose() },
+    { id: "go-sheet", category: category.go, title: t("command.goToSheet"), shortcut: "Ctrl+P", icon: "table2", run: () => openPalette("") },
+    { id: "go-row", category: category.go, title: t("command.goToRow"), shortcut: "Ctrl+G", icon: "arrowRight", enabled: selectedSheetName !== null, run: () => openPalette(":") },
+    { id: "go-next", category: category.go, title: t("menu.nextString"), shortcut: "Alt+Down", icon: "arrowDown", run: () => navigateOccurrence(1) },
+    { id: "go-previous", category: category.go, title: t("menu.previousString"), shortcut: "Alt+Up", icon: "arrowUp", run: () => navigateOccurrence(-1) },
+    { id: "save", category: category.translation, title: t("menu.saveTarget"), shortcut: "Ctrl+S", icon: "save", enabled: selectedRow !== null, run: () => editorRef.current?.saveTarget(false) },
+    { id: "save-next", category: category.translation, title: t("command.saveAndNext"), shortcut: "Ctrl+Enter", icon: "save", enabled: selectedRow !== null, run: () => editorRef.current?.saveTarget(true) },
+    { id: "copy-source", category: category.translation, title: t("menu.copySource"), icon: "copyPlus", enabled: selectedRow !== null, run: () => editorRef.current?.copySource() },
+    { id: "revert", category: category.translation, title: t("menu.revert"), icon: "undo", enabled: dirty, run: () => editorRef.current?.revert() },
+    { id: "filter-untranslated", category: category.strings, title: t("command.showUntranslated"), icon: "listFilter", run: () => setLensFilter({ ...emptyOccurrenceFilter, status: "untranslated" }) },
+    { id: "filter-review", category: category.strings, title: t("command.showNeedsReview"), icon: "listFilter", run: () => setLensFilter({ ...emptyOccurrenceFilter, status: "needsReview" }) },
+    { id: "filter-clear", category: category.strings, title: t("command.clearFilters"), icon: "x", run: () => setLensFilter(emptyOccurrenceFilter) },
+    { id: "view-sheets", category: category.view, title: t("command.toggleSheets"), shortcut: "Ctrl+B", icon: "table2", run: () => showPanel("sheets", "left") },
+    { id: "view-search", category: category.view, title: t("command.toggleSearch"), icon: "search", run: () => showPanel("search", "left") },
+    { id: "view-git", category: category.view, title: t("command.toggleGit"), icon: "gitBranch", run: () => showPanel("git", "right") },
+    { id: "view-ai", category: category.view, title: t("command.toggleAi"), icon: "sparkles", run: () => showPanel("ai", "right") },
+    { id: "view-bottom", category: category.view, title: t("command.toggleBottom"), shortcut: "Ctrl+J", icon: "panelBottom", run: () => dispatchLayout({ type: "toggleRegion", regionId: "bottomPanel" }) },
+    { id: "view-filter-sheets", category: category.view, title: t("workbench.filterSheets"), shortcut: "Ctrl+F", icon: "search", run: handleQuickFind },
+    { id: "view-reveal-sheet", category: category.view, title: t("workbench.revealSheet"), icon: "locateFixed", enabled: selectedSheetName !== null, run: () => { showPanel("sheets", "left", false); setRevealSheetSignal((current) => current + 1); } },
+    { id: "git-open", category: category.git, title: t("command.showChanges"), icon: "gitBranch", run: () => showPanel("git", "right", false) },
+    { id: "prefs-settings", category: category.preferences, title: t("command.openSettings"), shortcut: "Ctrl+,", icon: "settings", run: () => openSettings() },
+    { id: "prefs-theme", category: category.preferences, title: t("settings.theme.title"), icon: "palette", run: () => openSettings("appearance") },
+    { id: "prefs-shortcuts", category: category.preferences, title: t("settings.section.keyboard"), icon: "listFilter", run: () => openSettings("keyboard") },
+    ...themeRegistry.map((entry): PaletteCommand => ({ id: `theme-${entry.id}`, category: category.theme, title: themeLabel(entry), icon: "palette", run: () => setThemeId(entry.id) })),
+    { id: "file-close-sheet", category: category.file, title: t("menu.closeSheet"), shortcut: "Ctrl+W", icon: "x", enabled: documentTabs.activeId !== null, run: () => { if (documentTabs.activeId) void handleDocumentClose(documentTabs.activeId); } },
+    { id: "file-close-project", category: category.file, title: t("menu.closeProject"), icon: "folder", run: () => void handleClose() },
   ];
 
   const bottomIsTool = bottomPanelId !== null && !bottomPanelIds.has(bottomPanelId);
@@ -910,7 +936,7 @@ export function EditorShell({
         mode="workbench"
         menus={menus}
         center={(
-          <button className="command-center" type="button" onClick={() => openPalette("")} title="Go to sheet, run commands, or search (Ctrl+P)">
+          <button className="command-center" type="button" onClick={() => openPalette("")} title={t("workbench.commandCenter")}>
             <UiIcon icon="search" size="sm" />
             <span className="command-center-label"><strong>{projectName}</strong>{selectedSheetName ? <span> / {selectedSheetName}</span> : null}</span>
             <kbd>Ctrl P</kbd>
@@ -918,14 +944,14 @@ export function EditorShell({
         )}
         onClose={() => void handleWindowClose()}
         actions={<>
-          <IconButton icon="panelLeft" label="Toggle left panel" shortcut="Ctrl+B" pressed={leftDockOpen} onClick={() => dispatchLayout({ type: "toggleRegion", regionId: "leftDock" })} />
-          <IconButton icon="panelBottom" label="Toggle bottom panel" shortcut="Ctrl+J" pressed={bottomOpen} onClick={() => dispatchLayout({ type: "toggleRegion", regionId: "bottomPanel" })} />
-          <IconButton icon="panelRight" label="Toggle right panel" pressed={rightDockOpen} onClick={() => dispatchLayout({ type: "toggleRegion", regionId: "rightDock" })} />
+          <IconButton icon="panelLeft" label={t("workbench.toggleLeftPanel")} shortcut="Ctrl+B" pressed={leftDockOpen} onClick={() => dispatchLayout({ type: "toggleRegion", regionId: "leftDock" })} />
+          <IconButton icon="panelBottom" label={t("workbench.toggleBottomPanel")} shortcut="Ctrl+J" pressed={bottomOpen} onClick={() => dispatchLayout({ type: "toggleRegion", regionId: "bottomPanel" })} />
+          <IconButton icon="panelRight" label={t("workbench.toggleRightPanel")} pressed={rightDockOpen} onClick={() => dispatchLayout({ type: "toggleRegion", regionId: "rightDock" })} />
         </>}
       />
       {applicationWarning || editorError ? (
         <div className="notices" aria-live="polite">
-          {applicationWarning ? <ErrorBanner tone="warning" title="Project opened with a Recent projects warning" error={applicationWarning} onDismiss={onDismissApplicationWarning} /> : null}
+          {applicationWarning ? <ErrorBanner tone="warning" title={t("workbench.recentWarning")} error={applicationWarning} onDismiss={onDismissApplicationWarning} /> : null}
           {editorError ? <ErrorBanner title={editorError.title} error={editorError.error} onDismiss={() => setEditorError(null)} /> : null}
         </div>
       ) : null}
@@ -941,13 +967,13 @@ export function EditorShell({
         <ActivityRail
           side="left"
           items={[
-            { id: "sheets", label: "Sheets", icon: "table2", shortcut: "Ctrl+B", active: isPanelShown("sheets"), onSelect: () => showPanel("sheets", "left") },
-            { id: "search", label: "Search", icon: "search", active: isPanelShown("search"), onSelect: () => showPanel("search", "left") },
+            { id: "sheets", label: t("workbench.panel.sheets"), icon: "table2", shortcut: "Ctrl+B", active: isPanelShown("sheets"), onSelect: () => showPanel("sheets", "left") },
+            { id: "search", label: t("workbench.tool.search"), icon: "search", active: isPanelShown("search"), onSelect: () => showPanel("search", "left") },
           ]}
-          footer={[{ id: "settings", label: "Settings", icon: "settings", shortcut: "Ctrl+,", onSelect: () => openSettings() }]}
+          footer={[{ id: "settings", label: t("common.settings"), icon: "settings", shortcut: "Ctrl+,", onSelect: () => openSettings() }]}
         />
         {renderDock("left", leftPanelId, leftDockOpen)}
-        {leftDockOpen && leftPanelId && detachedPanel !== leftPanelId ? <ResizeHandle axis="x" label="Resize left panel" onDelta={(delta) => dispatchLayout({ type: "resizeRegion", regionId: "leftDock", delta })} /> : null}
+        {leftDockOpen && leftPanelId && detachedPanel !== leftPanelId ? <ResizeHandle axis="x" label={t("workbench.resizeLeft")} onDelta={(delta) => dispatchLayout({ type: "resizeRegion", regionId: "leftDock", delta })} /> : null}
 
         <div className="workbench-center">
           <section className="panel document">
@@ -961,13 +987,13 @@ export function EditorShell({
             />
             {!selectedSheetName ? (
               <div className="document-empty empty-state">
-                <strong>No sheet open</strong>
-                <p>Choose a sheet in the Sheets panel to start translating.</p>
+                <strong>{t("workbench.noSheetOpen")}</strong>
+                <p>{t("workbench.noSheetOpenHint")}</p>
               </div>
             ) : sheetHasNoRows ? (
               <div className="document-empty empty-state">
-                <strong>No translatable rows</strong>
-                <p>This sheet doesn't contain any source strings that can be translated.</p>
+                <strong>{t("workbench.noRows")}</strong>
+                <p>{t("workbench.noRowsHint")}</p>
               </div>
             ) : (
               <div className="document-split">
@@ -991,7 +1017,7 @@ export function EditorShell({
                   listStart={listStart}
                   onLoadFromStart={() => { if (selectedSheetName) void beginSheetLoad(selectedSheetName); }}
                 />
-                <ResizeHandle axis="y" label="Resize translation editor" onDelta={(delta) => dispatchLayout({ type: "resizeRegion", regionId: "editor", delta: -delta })} />
+                <ResizeHandle axis="y" label={t("workbench.resizeEditor")} onDelta={(delta) => dispatchLayout({ type: "resizeRegion", regionId: "editor", delta: -delta })} />
                 <TranslationEditor
                   ref={editorRef}
                   key={selectedRow ? rowKey(selectedRow) : "empty-editor"}
@@ -1012,11 +1038,11 @@ export function EditorShell({
             )}
           </section>
           {bottomOpen && bottomPanelId && detachedPanel !== bottomPanelId ? <>
-            <ResizeHandle axis="y" label="Resize bottom panel" onDelta={(delta) => dispatchLayout({ type: "resizeRegion", regionId: "bottomPanel", delta: -delta })} />
+            <ResizeHandle axis="y" label={t("workbench.resizeBottom")} onDelta={(delta) => dispatchLayout({ type: "resizeRegion", regionId: "bottomPanel", delta: -delta })} />
             {bottomIsTool ? (
               <DockPanel
                 panelId={bottomPanelId}
-                title={panelTitle(bottomPanelId)}
+                title={t(panelTitle(bottomPanelId))}
                 headerActions={bottomPanelId === "sheets" ? sheetHeaderActions : undefined}
                 moveTargets={panelMoveTargets(bottomPanelId, "bottom")}
                 onMove={(target) => handlePanelMove(bottomPanelId, target)}
@@ -1038,13 +1064,13 @@ export function EditorShell({
           </> : null}
         </div>
 
-        {rightDockOpen && rightPanelId && detachedPanel !== rightPanelId ? <ResizeHandle axis="x" label="Resize right panel" onDelta={(delta) => dispatchLayout({ type: "resizeRegion", regionId: "rightDock", delta: -delta })} /> : null}
+        {rightDockOpen && rightPanelId && detachedPanel !== rightPanelId ? <ResizeHandle axis="x" label={t("workbench.resizeRight")} onDelta={(delta) => dispatchLayout({ type: "resizeRegion", regionId: "rightDock", delta: -delta })} /> : null}
         {renderDock("right", rightPanelId, rightDockOpen)}
         <ActivityRail
           side="right"
           items={[
-            { id: "git", label: "Git", icon: "gitBranch", active: isPanelShown("git"), onSelect: () => showPanel("git", "right") },
-            { id: "ai", label: "AI assist", icon: "sparkles", active: isPanelShown("ai"), onSelect: () => showPanel("ai", "right") },
+            { id: "git", label: t("workbench.tool.git"), icon: "gitBranch", active: isPanelShown("git"), onSelect: () => showPanel("git", "right") },
+            { id: "ai", label: t("workbench.tool.ai"), icon: "sparkles", active: isPanelShown("ai"), onSelect: () => showPanel("ai", "right") },
           ]}
         />
       </div>
@@ -1058,6 +1084,8 @@ export function EditorShell({
         selectedBinding={selectedBinding}
         dirty={dirty}
         projectProgress={projectProgress}
+        detachedCount={project.detachedUnitCount}
+        onShowDetached={onShowDetachedUnits}
       />
       <ConfirmDialog
         open={discardRequest !== null}

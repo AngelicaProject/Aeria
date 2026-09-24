@@ -17,6 +17,10 @@ use crate::merge::{ConflictResolution, merge_shard};
 use crate::repository::{GitRepository, strip_prefix};
 use crate::semantic::is_shard_path;
 
+/// Commit message for managed changes written while accepting an
+/// integration, such as reconciling merged units with the current source.
+pub const RECONCILE_MESSAGE: &str = "Reconcile translations with the current game source";
+
 /// How incoming commits were integrated.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum IntegrateOutcome {
@@ -81,7 +85,9 @@ impl GitRepository {
     /// merge is aborted and they are returned as
     /// [`GitError::TranslationConflicts`]. Once everything merged, `accept`
     /// must validate the resulting project; on failure the branch is reset
-    /// to its starting commit.
+    /// to its starting commit. `accept` may rewrite Aeria-managed files to
+    /// reconcile merged units with the current source; such changes are
+    /// committed with [`RECONCILE_MESSAGE`].
     ///
     /// # Errors
     ///
@@ -135,11 +141,17 @@ impl GitRepository {
                 }
             }
         }
-        if outcome.changed_working_tree()
-            && let Err(reason) = accept()
-        {
-            self.reset_to(&before)?;
-            return Err(GitError::IncomingRejected { reason });
+        if outcome.changed_working_tree() {
+            if let Err(reason) = accept() {
+                self.reset_to(&before)?;
+                return Err(GitError::IncomingRejected { reason });
+            }
+            // Acceptance may reconcile the merged units with the current
+            // source. Committing that keeps the pushed history consistent.
+            if let Err(error) = self.commit_integration_changes(RECONCILE_MESSAGE) {
+                self.reset_to(&before)?;
+                return Err(error);
+            }
         }
         Ok(outcome)
     }
