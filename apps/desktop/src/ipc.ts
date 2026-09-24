@@ -1,6 +1,11 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
   AgentMode,
+  JobAction,
+  JobEvent,
+  JobSummary,
+  JobUnit,
+  JobUnitStatus,
   ProposalRecord,
   AiConnectionCheckDto,
   AiModelConfig,
@@ -293,6 +298,10 @@ export function aiSetAgentModel(selection: AiModelSelection | null): Promise<AiS
   return call<AiSettingsDto>("ai_set_agent_model", { selection });
 }
 
+export function aiSetWorkerModel(selection: AiModelSelection | null): Promise<AiSettingsDto> {
+  return call<AiSettingsDto>("ai_set_worker_model", { selection });
+}
+
 export function aiListRemoteModels(providerId: string): Promise<AiModelConfig[]> {
   return call<AiModelConfig[]>("ai_list_remote_models", { providerId });
 }
@@ -343,4 +352,24 @@ export function angelicaRejectProposal(conversationId: string, proposalId: strin
 
 export function angelicaDraft(sourceBinding: SourceBinding): Promise<{ target: string }> {
   return call<{ target: string }>("angelica_draft", { sourceBinding });
+}
+
+export function angelicaJobs(): Promise<JobSummary[]> {
+  return call<JobSummary[]>("angelica_jobs");
+}
+
+export function angelicaJobUnits(jobId: string, statuses: JobUnitStatus[]): Promise<JobUnit[]> {
+  return call<JobUnit[]>("angelica_job_units", { jobId, statuses });
+}
+
+export function angelicaJobEvents(jobId: string): Promise<JobEvent[]> {
+  return call<JobEvent[]>("angelica_job_events", { jobId });
+}
+
+export function angelicaJobControl(jobId: string, action: JobAction): Promise<JobSummary> {
+  return call<JobSummary>("angelica_job_control", { jobId, action });
+}
+
+export function angelicaJobRetry(jobId: string, statuses: JobUnitStatus[]): Promise<JobSummary> {
+  return call<JobSummary>("angelica_job_retry", { jobId, statuses });
 }

@@ -33,11 +33,13 @@ Likely UI-level dependencies such as Tailwind, Radix primitives, CodeMirror, doc
 - `keyring` (MIT OR Apache-2.0) with its default platform stores: Windows Credential Manager, the Secret Service on Linux, and the macOS Keychain.
 - `base64` (MIT OR Apache-2.0): reads the claims of ChatGPT access tokens.
 - `csv` (Unlicense OR MIT): reads and writes the project glossary.
+- `rusqlite` (MIT) with `bundled`: the local translation-job store. The bundled SQLite needs only a C compiler, which the Windows and Linux toolchains already provide.
 - `fs2`, `uuid`, `serde_json`, and `thiserror`, matching `aeria-projects`.
 
 The desktop adds `tauri-plugin-opener` (Apache-2.0 OR MIT) to open the ChatGPT
-sign-in page from Rust, and `tokio` with only `time`, already part of the Tauri
-runtime, to pace sign-in polling.
+sign-in page from Rust, and `tokio` with only `rt` and `time`, already part of
+the Tauri runtime, to pace sign-in polling and to run a translation job's
+lanes as one abortable task set.
 
 ## Renderer UI dependencies
 

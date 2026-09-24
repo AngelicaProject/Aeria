@@ -72,6 +72,8 @@ pub struct TurnConfig<'a> {
     pub context_tokens: Option<u32>,
     /// Stable per-conversation session ID for providers that use one.
     pub session: &'a str,
+    /// Most model responses in the turn.
+    pub max_rounds: usize,
 }
 
 /// How a turn ended.
@@ -113,7 +115,7 @@ pub async fn run_turn(
         .rposition(|message| matches!(message, ChatMessage::User { .. }))
         .unwrap_or(0);
     let mut usage = Usage::default();
-    for _ in 0..MAX_ROUNDS_PER_TURN {
+    for _ in 0..config.max_rounds.clamp(1, MAX_ROUNDS_PER_TURN) {
         let (context, context_turn_start) =
             fit_context(messages, turn_start, config.context_tokens);
         let request = ChatRequest {
@@ -256,7 +258,7 @@ fn size(messages: &[ChatMessage]) -> usize {
     messages
         .iter()
         .map(|message| match message {
-            ChatMessage::User { content } | ChatMessage::Tool { content, .. } => content.len(),
+            ChatMessage::User { content, .. } | ChatMessage::Tool { content, .. } => content.len(),
             ChatMessage::Assistant {
                 content,
                 tool_calls,
@@ -286,6 +288,7 @@ mod tests {
     fn user(text: &str) -> ChatMessage {
         ChatMessage::User {
             content: text.to_owned(),
+            automatic: false,
         }
     }
 
@@ -370,7 +373,7 @@ mod tests {
         let (context, start) = fit_context(&messages, 3, Some(8));
         assert_eq!(start, 0);
         assert_eq!(context.len(), 3);
-        assert!(matches!(&context[0], ChatMessage::User { content } if content == "second"));
+        assert!(matches!(&context[0], ChatMessage::User { content, .. } if content == "second"));
     }
 
     struct Tools;
@@ -448,6 +451,7 @@ mod tests {
             tools: &[],
             context_tokens: None,
             session: "conversation-1",
+            max_rounds: MAX_ROUNDS_PER_TURN,
         };
         let mut messages = vec![user("Сколько листов?")];
         let events = Mutex::new(Vec::new());

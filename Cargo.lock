@@ -18,6 +18,7 @@ dependencies = [
  "fs2",
  "keyring",
  "reqwest",
+ "rusqlite",
  "rustls",
  "serde",
  "serde_json",

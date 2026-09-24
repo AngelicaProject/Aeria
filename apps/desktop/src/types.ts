@@ -420,6 +420,8 @@ export type AiModelSelection = {
 export type AiSettingsDto = {
   providers: AiProviderDto[];
   agentModel: AiModelSelection | null;
+  /** The model for translation-job workers; Angelica's model when null. */
+  workerModel: AiModelSelection | null;
   presets: AiProviderPresetDto[];
 };
 
@@ -445,7 +447,7 @@ export type AiConnectionCheckDto = {
 export type ChatToolCall = { id: string; name: string; arguments: string };
 
 export type ChatMessage =
-  | { role: "user"; content: string }
+  | { role: "user"; content: string; automatic?: boolean }
   | { role: "assistant"; content: string; reasoning?: string; toolCalls?: ChatToolCall[] }
   | { role: "tool"; toolCallId: string; name: string; content: string };
 
@@ -485,6 +487,8 @@ export type ProposalRecord = {
   id: string;
   /** The changed project file; null for a translation. */
   file: "guidance" | "glossary" | null;
+  /** A job to start; `target` then holds its one-line summary. */
+  job?: JobProposal | null;
   location: UnitLocationDto | null;
   source: string;
   target: string;
@@ -495,3 +499,45 @@ export type ProposalRecord = {
 };
 
 export type TranslationAppliedDto = { sourceBinding: SourceBinding; overlay: TranslationOverlayDto };
+
+export type JobFilter = "untranslated" | "needsReview" | "untranslatedAndDrafts";
+
+export type JobScope = { sheets: string[]; filter: JobFilter };
+
+export type JobEstimate = { units: number; chunks: number; estimatedTokens: number };
+
+export type JobProposal = { scope: JobScope; instructions: string; concurrency: number; estimate: JobEstimate; tokenLimit: number };
+
+export type JobSpec = { scope: JobScope; instructions: string; model: AiModelSelection; tokenLimit: number; concurrency: number };
+
+export type JobStatus = "running" | "paused" | "completed" | "cancelled";
+
+export type JobUnitStatus = "pending" | "running" | "drafted" | "rejected" | "failed" | "conflict";
+
+export type JobCounts = { total: number; pending: number; running: number; drafted: number; rejected: number; failed: number; conflict: number };
+
+export type JobSummary = {
+  id: string;
+  conversationId: string;
+  status: JobStatus;
+  /** Why a paused job paused. */
+  reason: string | null;
+  spec: JobSpec;
+  createdAtUnixMs: number;
+  counts: JobCounts;
+  usage: AiUsage;
+};
+
+export type JobUnit = {
+  seq: number;
+  chunk: number;
+  location: UnitLocationDto;
+  status: JobUnitStatus;
+  attempts: number;
+  message: string | null;
+  expected: { target: string | null; reviewState: ReviewState | null };
+};
+
+export type JobEvent = { seq: number; createdAtUnixMs: number; kind: string; message: string; location: UnitLocationDto | null };
+
+export type JobAction = "pause" | "resume" | "cancel";

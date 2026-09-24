@@ -48,6 +48,9 @@ pub struct AiSettings {
     pub providers: Vec<ProviderConfig>,
     /// The default model for Angelica's conversations.
     pub agent_model: Option<ModelSelection>,
+    /// The model for translation-job workers; Angelica's model when unset.
+    #[serde(default)]
+    pub worker_model: Option<ModelSelection>,
 }
 
 impl Default for AiSettings {
@@ -56,6 +59,7 @@ impl Default for AiSettings {
             format_version: FORMAT_VERSION,
             providers: Vec::new(),
             agent_model: None,
+            worker_model: None,
         }
     }
 }
@@ -102,6 +106,13 @@ impl AiSettings {
             .is_some_and(|selection| self.selection_error(selection).is_some())
         {
             self.agent_model = None;
+        }
+        if self
+            .worker_model
+            .as_ref()
+            .is_some_and(|selection| self.selection_error(selection).is_some())
+        {
+            self.worker_model = None;
         }
     }
 
@@ -169,6 +180,11 @@ impl AiSettings {
             && let Some(message) = self.selection_error(selection)
         {
             return Err(format!("agentModel is invalid: {message}"));
+        }
+        if let Some(selection) = &self.worker_model
+            && let Some(message) = self.selection_error(selection)
+        {
+            return Err(format!("workerModel is invalid: {message}"));
         }
         Ok(())
     }

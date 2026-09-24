@@ -25,6 +25,9 @@ pub struct ToolCall {
 pub enum ChatMessage {
     User {
         content: String,
+        /// Written by Aeria, not the user, for example a job update.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        automatic: bool,
     },
     Assistant {
         content: String,
@@ -71,7 +74,7 @@ impl ChatRequest<'_> {
         messages.push(json!({ "role": "system", "content": self.system }));
         for (index, message) in self.messages.iter().enumerate() {
             messages.push(match message {
-                ChatMessage::User { content } => json!({ "role": "user", "content": content }),
+                ChatMessage::User { content, .. } => json!({ "role": "user", "content": content }),
                 ChatMessage::Assistant {
                     content,
                     reasoning,
@@ -477,6 +480,7 @@ mod tests {
         let messages = vec![
             ChatMessage::User {
                 content: "q1".to_owned(),
+                automatic: false,
             },
             ChatMessage::Assistant {
                 content: "a1".to_owned(),
@@ -485,6 +489,7 @@ mod tests {
             },
             ChatMessage::User {
                 content: "q2".to_owned(),
+                automatic: false,
             },
             ChatMessage::Assistant {
                 content: String::new(),

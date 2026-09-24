@@ -148,6 +148,7 @@ pub async fn draft_translation(
     let legend: Vec<String> = tagged.tags.iter().map(aeria_se::Tag::legend).collect();
     let mut messages = vec![ChatMessage::User {
         content: user_message(request, &tagged.text, &legend),
+        automatic: false,
     }];
     let mut usage = Usage::default();
     let mut last_errors = Vec::new();
@@ -182,6 +183,7 @@ pub async fn draft_translation(
                 "That translation was refused:\n- {}\nReply with the corrected translation only, between <translation> and </translation>.",
                 last_errors.join("\n- ")
             ),
+            automatic: false,
         });
     }
     Err(DraftError::Rejected(last_errors))

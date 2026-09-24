@@ -1,4 +1,4 @@
-import type { AgentEvent, AiModelSelection, AiProviderDto, AiUsage, ChatMessage } from "./types";
+import type { AgentEvent, AiModelSelection, AiProviderDto, AiUsage, ChatMessage, JobCounts, JobSummary } from "./types";
 
 /** Angelica's fixed name. It is never localized. */
 export const ANGELICA = "Angelica";
@@ -6,6 +6,8 @@ export const ANGELICA = "Angelica";
 /** One rendered entry of a conversation. */
 export type TranscriptItem =
   | { kind: "user"; key: string; text: string }
+  /** An update Aeria sent to Angelica, such as a finished job. */
+  | { kind: "notice"; key: string; text: string }
   | { kind: "assistant"; key: string; text: string; reasoning: string; streaming: boolean }
   | { kind: "tool"; key: string; id: string; name: string; arguments: string; result: string | null; isError: boolean };
 
@@ -25,7 +27,7 @@ export function transcriptFromMessages(messages: readonly ChatMessage[]): Transc
   const tools = new Map<string, Extract<TranscriptItem, { kind: "tool" }>>();
   messages.forEach((message, index) => {
     if (message.role === "user") {
-      items.push({ kind: "user", key: `m${index}`, text: message.content });
+      items.push({ kind: message.automatic ? "notice" : "user", key: `m${index}`, text: message.content });
     } else if (message.role === "assistant") {
       if (message.content || message.reasoning) {
         items.push({ kind: "assistant", key: `m${index}`, text: message.content, reasoning: message.reasoning ?? "", streaming: false });
@@ -188,4 +190,21 @@ export function parseReply(text: string): ReplyBlock[] {
   }
   flush();
   return blocks;
+}
+
+/** Share of a job's strings with a final outcome, from 0 to 1. */
+export function jobProgress(counts: JobCounts): number {
+  if (counts.total === 0) return 1;
+  return (counts.drafted + counts.rejected + counts.failed + counts.conflict) / counts.total;
+}
+
+/** Strings a job could not draft. */
+export function jobProblems(counts: JobCounts): number {
+  return counts.rejected + counts.failed + counts.conflict;
+}
+
+/** Jobs that still need attention first, then the newest. */
+export function sortJobs(jobs: readonly JobSummary[]): JobSummary[] {
+  const rank = (job: JobSummary) => job.status === "running" ? 0 : job.status === "paused" ? 1 : 2;
+  return [...jobs].sort((left, right) => rank(left) - rank(right) || right.createdAtUnixMs - left.createdAtUnixMs);
 }

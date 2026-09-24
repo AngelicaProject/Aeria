@@ -26,6 +26,10 @@ pub struct DesktopState {
     chatgpt_login: Mutex<Option<(String, tauri::async_runtime::JoinHandle<()>)>>,
     /// Serializes read-modify-write of conversation proposal files.
     proposals: Mutex<()>,
+    /// Running translation jobs by job ID.
+    job_runners: Mutex<Vec<(String, tauri::async_runtime::JoinHandle<()>)>>,
+    /// Job stores opened in this process; interrupted jobs are paused once.
+    job_stores: Mutex<Vec<PathBuf>>,
 }
 
 /// Committed unit attribution for one repository commit. It is derived from
@@ -63,6 +67,8 @@ impl DesktopState {
             chatgpt_tokens: tauri::async_runtime::Mutex::const_new(Vec::new()),
             chatgpt_login: Mutex::new(None),
             proposals: Mutex::new(()),
+            job_runners: Mutex::new(Vec::new()),
+            job_stores: Mutex::new(Vec::new()),
         }
     }
 
@@ -168,6 +174,52 @@ impl DesktopState {
         let (_, handle) = turns.remove(position);
         handle.abort();
         true
+    }
+
+    /// Returns `true` the first time a job store path is used.
+    pub(crate) fn first_job_store_use(&self, path: &std::path::Path) -> bool {
+        let Ok(mut stores) = self.job_stores.lock() else {
+            return false;
+        };
+        if stores.iter().any(|known| known == path) {
+            return false;
+        }
+        stores.push(path.to_owned());
+        true
+    }
+
+    /// Registers a job's runner, spawned while the registry is locked.
+    /// Returns `false`, without spawning, when the job already runs.
+    pub(crate) fn start_job_runner(
+        &self,
+        job_id: String,
+        spawn: impl FnOnce() -> tauri::async_runtime::JoinHandle<()>,
+    ) -> bool {
+        let Ok(mut runners) = self.job_runners.lock() else {
+            return false;
+        };
+        if runners.iter().any(|(id, _)| *id == job_id) {
+            return false;
+        }
+        runners.push((job_id, spawn()));
+        true
+    }
+
+    /// Forgets a runner that ended on its own.
+    pub(crate) fn finish_job_runner(&self, job_id: &str) {
+        if let Ok(mut runners) = self.job_runners.lock() {
+            runners.retain(|(id, _)| id != job_id);
+        }
+    }
+
+    /// Aborts a job's runner, if it runs.
+    pub(crate) fn stop_job_runner(&self, job_id: &str) {
+        if let Ok(mut runners) = self.job_runners.lock()
+            && let Some(position) = runners.iter().position(|(id, _)| id == job_id)
+        {
+            let (_, handle) = runners.remove(position);
+            handle.abort();
+        }
     }
 
     pub(crate) fn cached_attribution(

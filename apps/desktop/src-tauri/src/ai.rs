@@ -27,6 +27,8 @@ type CommandResult<T> = Result<T, CommandError>;
 pub struct AiSettingsDto {
     pub providers: Vec<AiProviderDto>,
     pub agent_model: Option<ModelSelection>,
+    /// The model for translation-job workers; Angelica's model when unset.
+    pub worker_model: Option<ModelSelection>,
     pub presets: Vec<AiProviderPresetDto>,
 }
 
@@ -124,6 +126,7 @@ fn settings_dto(settings: &AiSettings, secrets: &dyn SecretStore) -> AiSettingsD
             })
             .collect(),
         agent_model: settings.agent_model.clone(),
+        worker_model: settings.worker_model.clone(),
         presets: presets()
             .into_iter()
             .map(|preset| AiProviderPresetDto {
@@ -239,6 +242,18 @@ fn set_agent_model(
 ) -> CommandResult<AiSettingsDto> {
     let ((), settings) = store.update(|settings| {
         settings.agent_model = selection;
+        Ok(())
+    })?;
+    Ok(settings_dto(&settings, secrets))
+}
+
+fn set_worker_model(
+    store: &AiSettingsStore,
+    secrets: &dyn SecretStore,
+    selection: Option<ModelSelection>,
+) -> CommandResult<AiSettingsDto> {
+    let ((), settings) = store.update(|settings| {
+        settings.worker_model = selection;
         Ok(())
     })?;
     Ok(settings_dto(&settings, secrets))
@@ -625,6 +640,23 @@ pub async fn ai_set_agent_model(
 }
 
 #[tauri::command(rename_all = "camelCase")]
+/// Sets or clears the model and effort for translation-job workers.
+///
+/// # Errors
+///
+/// Returns `aiInvalidSettings` when the selection does not match a
+/// configured model and effort.
+pub async fn ai_set_worker_model(
+    app: tauri::AppHandle,
+    selection: Option<ModelSelection>,
+) -> CommandResult<AiSettingsDto> {
+    with_settings(&app, move |store, secrets| {
+        set_worker_model(store, secrets, selection)
+    })
+    .await
+}
+
+#[tauri::command(rename_all = "camelCase")]
 /// Lists the model IDs a provider reports.
 ///
 /// # Errors
@@ -867,5 +899,33 @@ mod tests {
         )
         .expect("valid selection");
         assert!(settings.agent_model.is_some());
+        assert!(settings.worker_model.is_none());
+    }
+
+    #[test]
+    fn worker_model_is_validated_like_the_agent_model() {
+        let (_directory, store) = store();
+        let secrets = MemorySecretStore::default();
+        let id = save_provider(&store, &secrets, input(None))
+            .expect("save")
+            .providers[0]
+            .id
+            .clone();
+        let selection = |model_id: &str| ModelSelection {
+            provider_id: id.clone(),
+            model_id: model_id.to_owned(),
+            effort: None,
+        };
+        assert_eq!(
+            set_worker_model(&store, &secrets, Some(selection("missing")))
+                .expect_err("unknown model")
+                .code,
+            "aiInvalidSettings"
+        );
+        let settings =
+            set_worker_model(&store, &secrets, Some(selection("glm-5.3"))).expect("valid");
+        assert_eq!(settings.worker_model, Some(selection("glm-5.3")));
+        let settings = set_worker_model(&store, &secrets, None).expect("clear");
+        assert!(settings.worker_model.is_none());
     }
 }

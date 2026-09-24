@@ -8,6 +8,7 @@ import {
   aiRemoveProvider,
   aiSaveProvider,
   aiSetAgentModel,
+  aiSetWorkerModel,
   aiSetApiKey,
   aiSettings,
   aiTestConnection,
@@ -27,7 +28,7 @@ import {
   toggleEffort,
 } from "../aiSettings";
 import type { ChatGptLoginDto, ChatGptLoginEventDto } from "../types";
-import type { AiHeaderConfig, AiModelConfig, AiProviderDto, AiProviderPresetDto, AiSettingsDto, CommandError, ReasoningEffort } from "../types";
+import type { AiHeaderConfig, AiModelConfig, AiModelSelection, AiProviderDto, AiProviderPresetDto, AiSettingsDto, CommandError, ReasoningEffort } from "../types";
 import { ErrorBanner } from "./ErrorBanner";
 import { UiIcon } from "../ui/primitives/UiIcon";
 import { useI18n } from "../ui/i18n";
@@ -84,7 +85,8 @@ export function AiProvidersSettings() {
         error ? null : <p className="muted">{t("common.loading")}</p>
       ) : (
         <>
-          <AgentModelPicker settings={settings} disabled={busy} apply={apply} />
+          <ModelPicker settings={settings} selection={settings.agentModel} disabled={busy} apply={apply} set={aiSetAgentModel} label="ai.settings.agentModel" empty="ai.settings.noAgentModel" hint="ai.settings.agentModelHint" />
+          <ModelPicker settings={settings} selection={settings.workerModel} disabled={busy} apply={apply} set={aiSetWorkerModel} label="ai.settings.workerModel" empty="ai.settings.noWorkerModel" hint="ai.settings.workerModelHint" />
           {settings.providers.map((provider) => (
             <ProviderCard key={provider.id} provider={provider} disabled={busy} apply={apply} run={run} />
           ))}
@@ -96,18 +98,29 @@ export function AiProvidersSettings() {
   );
 }
 
-function AgentModelPicker({ settings, disabled, apply }: { settings: AiSettingsDto; disabled: boolean; apply: (operation: () => Promise<AiSettingsDto>) => Promise<boolean> }) {
+type ModelPickerProps = {
+  settings: AiSettingsDto;
+  selection: AiModelSelection | null;
+  disabled: boolean;
+  apply: (operation: () => Promise<AiSettingsDto>) => Promise<boolean>;
+  set: (selection: AiModelSelection | null) => Promise<AiSettingsDto>;
+  label: MessageKey;
+  empty: MessageKey;
+  hint: MessageKey;
+};
+
+/** A default model and effort: Angelica's, or the job workers'. */
+function ModelPicker({ settings, selection, disabled, apply, set, label, empty, hint }: ModelPickerProps) {
   const { t } = useI18n();
   const modelId = useId();
   const effortId = useId();
-  const selection = settings.agentModel;
   const efforts = selectableEfforts(settings.providers, selection);
   const hasModels = settings.providers.some((provider) => provider.models.length > 0);
 
   return (
     <div className="ai-agent-model">
       <div className="field">
-        <label className="field-label" htmlFor={modelId}>{t("ai.settings.agentModel")}</label>
+        <label className="field-label" htmlFor={modelId}>{t(label)}</label>
         <select
           id={modelId}
           className="input"
@@ -115,10 +128,10 @@ function AgentModelPicker({ settings, disabled, apply }: { settings: AiSettingsD
           disabled={disabled || !hasModels}
           onChange={(event) => {
             const next = parseSelectionKey(event.target.value);
-            void apply(() => aiSetAgentModel(next ? { ...next, effort: null } : null));
+            void apply(() => set(next ? { ...next, effort: null } : null));
           }}
         >
-          <option value="">{t("ai.settings.noAgentModel")}</option>
+          <option value="">{t(empty)}</option>
           {settings.providers.filter((provider) => provider.models.length > 0).map((provider) => (
             <optgroup key={provider.id} label={provider.name}>
               {provider.models.map((model) => <option key={model.id} value={selectionKey({ providerId: provider.id, modelId: model.id })}>{model.id}</option>)}
@@ -131,14 +144,14 @@ function AgentModelPicker({ settings, disabled, apply }: { settings: AiSettingsD
           <label className="field-label" htmlFor={effortId}>{t("ai.settings.effort")}</label>
           <select id={effortId} className="input" value={selection.effort ?? ""} disabled={disabled} onChange={(event) => {
             const effort = (event.target.value || null) as ReasoningEffort | null;
-            void apply(() => aiSetAgentModel({ ...selection, effort }));
+            void apply(() => set({ ...selection, effort }));
           }}>
             <option value="">{t("ai.effort.default")}</option>
             {efforts.map((effort) => <option key={effort} value={effort}>{t(effortLabels[effort])}</option>)}
           </select>
         </div>
       ) : null}
-      <p className="field-hint">{t("ai.settings.agentModelHint")}</p>
+      <p className="field-hint">{t(hint)}</p>
     </div>
   );
 }

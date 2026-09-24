@@ -103,9 +103,15 @@ Settings are stored in local application data. API keys are stored only in the
 OS secret store and are never logged, sent to the renderer, or included in
 error messages.
 
-Milestones 1 to 4, except the `gender` construct, are implemented; their
+Milestones 1 to 5, except the `gender` construct, are implemented; their
 current behavior is described in
-[`ai.md`](./ai.md#angelica).
+[`ai.md`](./ai.md#angelica). Milestone 5 differs from this plan: scopes are
+sheets or the project with an untranslated, needs-review, or
+untranslated-and-drafts filter (selected units and changed-since-update
+filters are not implemented); workers write through the per-unit
+`set_assisted_target` instead of a bulk API; the cost ceiling is a token
+limit; and jobs are shown in the Angelica panel rather than a separate Tasks
+panel.
 
 Milestone 1 implements context windows and efforts; tool-calling, output, and
 price capabilities arrive with the milestones that use them. Current behavior is
@@ -387,11 +393,13 @@ at any time.
 
 ### Bulk writes
 
-Ordinary mutations persist one shard per unit. Jobs use a bulk assisted-write
-API in `ProjectSession` that validates each unit, groups the accepted units
-by shard, and persists each affected shard once, returning a per-unit outcome.
-This API is part of the jobs milestone and gets its own section in
-[`translation-mutations.md`](./translation-mutations.md) when implemented.
+Ordinary mutations persist one shard per unit. A bulk assisted-write API in
+`ProjectSession` that validates each unit, groups the accepted units by
+shard, and persists each affected shard once was planned for jobs. The first
+implementation writes each submitted string through `set_assisted_target`
+instead: chunks are small, and per-unit writes keep the compare-and-set and
+structure checks identical to chat writes. A bulk API remains an option if
+per-unit persistence proves slow.
 
 ## Guidance and glossary
 
@@ -478,8 +486,8 @@ Each milestone is a separate change with its own documentation update.
    change once its native form is confirmed against the source corpus.
 4. **Guidance and glossary**: `aeria-guidance.md`, `aeria-glossary.csv` with
    its format document, glossary tools, and advisory checks.
-5. **Translation jobs**: bulk assisted writes, job orchestrator and store,
-   worker subagents, supervision events, Tasks panel.
+5. **Translation jobs**: job orchestrator and store, worker subagents,
+   supervision events, and job controls in the Angelica panel.
 6. **Search tools**: source search and translation memory once
    `aeria-search` exists.
 

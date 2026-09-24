@@ -17,7 +17,7 @@ pub fn request_body(request: &ChatRequest<'_>, session: &str) -> Value {
     let mut input = Vec::with_capacity(request.messages.len());
     for message in request.messages {
         match message {
-            ChatMessage::User { content } => input.push(json!({
+            ChatMessage::User { content, .. } => input.push(json!({
                 "type": "message",
                 "role": "user",
                 "content": [{ "type": "input_text", "text": content }],
@@ -283,6 +283,7 @@ mod tests {
         let messages = vec![
             ChatMessage::User {
                 content: "q".to_owned(),
+                automatic: false,
             },
             ChatMessage::Assistant {
                 content: "looking".to_owned(),

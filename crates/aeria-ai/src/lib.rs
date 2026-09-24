@@ -14,12 +14,14 @@ pub mod client;
 pub mod conversation;
 pub mod draft;
 pub mod guidance;
+pub mod jobs;
 pub mod prompt;
 pub mod provider;
 pub mod responses;
 pub mod secrets;
 pub mod settings;
 pub mod tools;
+pub mod worker;
 
 pub use client::{ModelCheck, OpenAiCompatibleClient, ProviderEndpoint, ProviderError};
 pub use provider::{

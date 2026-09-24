@@ -4,6 +4,7 @@ mod commands;
 mod dto;
 mod error;
 mod git;
+mod jobs;
 mod state;
 
 use serde::Serialize;
@@ -13,7 +14,8 @@ pub use ai::{
     AiConnectionCheckDto, AiProviderDto, AiProviderInputDto, AiProviderPresetDto, AiSettingsDto,
     ApiKeyStateDto, ChatGptLoginDto, ChatGptLoginEventDto, ai_chatgpt_login_cancel,
     ai_chatgpt_login_start, ai_clear_api_key, ai_list_remote_models, ai_remove_provider,
-    ai_save_provider, ai_set_agent_model, ai_set_api_key, ai_settings, ai_test_connection,
+    ai_save_provider, ai_set_agent_model, ai_set_api_key, ai_set_worker_model, ai_settings,
+    ai_test_connection,
 };
 pub use angelica::{
     AngelicaDraftDto, AngelicaEventDto, ConversationDto, ConversationSummaryDto,
@@ -41,6 +43,10 @@ pub use git::{
     git_create_branch, git_finish_contribution, git_initialize, git_log, git_overview,
     git_pending_changes, git_set_collaboration, git_set_identity, git_set_remote,
     git_switch_branch, git_sync, git_unit_attribution, git_unit_history,
+};
+pub use jobs::{
+    angelica_job_control, angelica_job_events, angelica_job_retry, angelica_job_units,
+    angelica_jobs,
 };
 pub use state::DesktopState;
 
@@ -119,6 +125,7 @@ pub fn run() {
             ai_set_api_key,
             ai_clear_api_key,
             ai_set_agent_model,
+            ai_set_worker_model,
             ai_list_remote_models,
             ai_test_connection,
             ai_chatgpt_login_start,
@@ -131,7 +138,12 @@ pub fn run() {
             angelica_proposals,
             angelica_apply_proposal,
             angelica_reject_proposal,
-            angelica_draft
+            angelica_draft,
+            angelica_jobs,
+            angelica_job_units,
+            angelica_job_events,
+            angelica_job_control,
+            angelica_job_retry
         ])
         .run(tauri::generate_context!())
         .expect("failed to run Aeria desktop application");

@@ -240,6 +240,17 @@ applied or rejected together. A proposal to change `aeria-guidance.md` or
 applied proposal, patches its cell like an ordinary save, so other unsaved
 drafts and the selection are kept.
 
+A job proposal shows its sheets, filter and string count, the estimate and
+token limit, and the instructions, with **Start job** and **Reject**; job
+proposals are never applied with the others. Above the proposals, a
+collapsible list shows the project's running and paused jobs and the three
+latest finished ones: the scope, status, a progress bar, drafted and problem
+counts, tokens, the pause reason, **Pause**, **Resume**, **Cancel**, and
+**Retry problems**, and on demand the problem strings, which open in the
+editor, and the latest events. Messages Aeria sends Angelica, such as job
+reports, appear as notices, and a turn Aeria starts is shown live when its
+conversation is open.
+
 The editor's source header has **Draft with Angelica**, which fills the target
 with a validated draft for the selected string without saving it.
 
@@ -267,7 +278,8 @@ derive surfaces, lines, and state colors from each theme's palette.
 
 The AI section manages the providers described in
 [`ai.md`](./ai.md#provider-boundary). It picks Angelica's default model and,
-when the model accepts efforts, its effort. Each provider card edits the name
+when the model accepts efforts, its effort, and the same for translation jobs,
+which use Angelica's model when none is chosen. Each provider card edits the name
 and base URL (saved on blur), stores or removes the API key through a password
 field that is cleared after saving and never refilled, and lists models with
 toggles for accepted efforts, an optional context window, and a **Test**

@@ -223,6 +223,7 @@ impl OpenAiCompatibleClient {
         if endpoint.protocol == Protocol::CodexResponses {
             let messages = [ChatMessage::User {
                 content: "Reply with the single word OK.".to_owned(),
+                automatic: false,
             }];
             let request = ChatRequest {
                 model,

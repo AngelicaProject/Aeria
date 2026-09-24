@@ -4,6 +4,7 @@ import { aiSettings, angelicaApplyProposal, angelicaProposals, angelicaRejectPro
 import { ANGELICA, applyAgentEvent, contextFill, parseReply, resolveModel, toolSubject, totalTokens, transcriptFromMessages, type ReplySpan, type TranscriptItem } from "../angelica";
 import { parseSelectionKey, selectableEfforts, selectionKey } from "../aiSettings";
 import type { AgentMode, ProposalRecord, SourceBinding } from "../types";
+import { AngelicaJobs } from "./AngelicaJobs";
 import { AngelicaProposals } from "./AngelicaProposals";
 import type { AgentEvent, AiModelSelection, AiSettingsDto, AiUsage, AngelicaEventDto, CommandError, ConversationDto, ConversationSummaryDto, EditorContextDto, ReasoningEffort } from "../types";
 import type { MessageKey } from "../i18n/translate";
@@ -42,6 +43,15 @@ const toolLabels: Readonly<Record<string, MessageKey>> = {
   pending_changes: "angelica.tool.pendingChanges",
   unit_history: "angelica.tool.unitHistory",
   navigate_to: "angelica.tool.navigateTo",
+  estimate_job: "angelica.tool.estimateJob",
+  start_job: "angelica.tool.startJob",
+  job_status: "angelica.tool.jobStatus",
+  job_events: "angelica.tool.jobEvents",
+  amend_job: "angelica.tool.amendJob",
+  retry_units: "angelica.tool.retryUnits",
+  pause_job: "angelica.tool.pauseJob",
+  resume_job: "angelica.tool.resumeJob",
+  cancel_job: "angelica.tool.cancelJob",
 };
 
 const effortLabels: Readonly<Record<ReasoningEffort, MessageKey>> = {
@@ -103,6 +113,7 @@ function ToolCard({ item }: { item: Extract<TranscriptItem, { kind: "tool" }> })
 function TranscriptEntry({ item }: { item: TranscriptItem }) {
   const { t } = useI18n();
   if (item.kind === "user") return <div className="angelica-user">{item.text}</div>;
+  if (item.kind === "notice") return <div className="angelica-notice"><UiIcon icon="info" size="xs" />{item.text.replace(/^\[Aeria\]\s*/, "")}</div>;
   if (item.kind === "tool") return <ToolCard item={item} />;
   return (
     <div className="angelica-assistant">
@@ -137,6 +148,8 @@ export function AngelicaPanel({ editorContext, onOpenSettings, onReveal }: Angel
   const [error, setError] = useState<CommandError | null>(null);
   const [notice, setNotice] = useState<MessageKey | null>(null);
   const conversationIdRef = useRef<string | null>(null);
+  const runningRef = useRef(false);
+  runningRef.current = running;
   const awaitingIdRef = useRef(false);
   const bufferedRef = useRef(new Map<string, AgentEvent[]>());
   const transcriptRef = useRef<HTMLDivElement>(null);
@@ -239,6 +252,14 @@ export function AngelicaPanel({ editorContext, onOpenSettings, onReveal }: Angel
         loadConversations();
         return;
       default:
+        if (!runningRef.current) {
+          // A turn Aeria started, such as a job report: show its message.
+          runningRef.current = true;
+          setRunning(true);
+          void reloadConversation(id);
+          loadConversations();
+          return;
+        }
         setItems((current) => applyAgentEvent(current, event));
     }
   }, [loadConversations, reloadConversation]);
@@ -269,6 +290,7 @@ export function AngelicaPanel({ editorContext, onOpenSettings, onReveal }: Angel
     setError(null);
     setNotice(null);
     setRunning(true);
+    runningRef.current = true;
     stickToBottom.current = true;
     const context = attachContext ? editorContext : null;
     const isNew = conversationIdRef.current === null;
@@ -386,6 +408,8 @@ export function AngelicaPanel({ editorContext, onOpenSettings, onReveal }: Angel
         {running && !(items[items.length - 1]?.kind === "assistant") ? <div className="angelica-working">{t("angelica.working")}</div> : null}
         {notice ? <p className="field-hint">{t(notice)}</p> : null}
       </div>
+
+      <AngelicaJobs onError={setError} onReveal={onReveal} />
 
       <AngelicaProposals proposals={proposals} busy={settling} onApply={(ids) => void settle(ids, true)} onReject={(ids) => void settle(ids, false)} onReveal={onReveal} />
 

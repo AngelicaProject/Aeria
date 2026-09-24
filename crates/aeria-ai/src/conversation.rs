@@ -12,6 +12,8 @@ use thiserror::Error;
 
 use crate::chat::{ChatMessage, Usage};
 use crate::guidance::ProjectFile;
+use crate::jobs::JobProposal;
+use crate::prompt::AgentMode;
 use crate::settings::ModelSelection;
 use crate::tools::{UnitLocation, UnitState};
 
@@ -35,6 +37,9 @@ pub struct Conversation {
     pub model: Option<ModelSelection>,
     pub messages: Vec<ChatMessage>,
     pub usage: Usage,
+    /// The mode of the last message, reused for automatic job updates.
+    #[serde(default)]
+    pub mode: AgentMode,
 }
 
 impl Conversation {
@@ -50,7 +55,18 @@ impl Conversation {
             model: None,
             messages: Vec::new(),
             usage: Usage::default(),
+            mode: AgentMode::default(),
         }
+    }
+
+    /// Appends a message Aeria writes on the user's behalf, such as a job
+    /// update that wakes Angelica.
+    pub fn push_automatic(&mut self, text: &str, now_unix_ms: u64) {
+        self.messages.push(ChatMessage::User {
+            content: text.to_owned(),
+            automatic: true,
+        });
+        self.updated_at_unix_ms = now_unix_ms;
     }
 
     /// Appends a user message, titling a new conversation after it.
@@ -69,6 +85,7 @@ impl Conversation {
         }
         self.messages.push(ChatMessage::User {
             content: text.to_owned(),
+            automatic: false,
         });
         self.updated_at_unix_ms = now_unix_ms;
     }
@@ -95,6 +112,10 @@ pub struct ProposalRecord {
     /// The changed file; `None` for a translation.
     #[serde(default)]
     pub file: Option<ProjectFile>,
+    /// A job to start; `None` for other proposals. `target` holds a
+    /// one-line summary.
+    #[serde(default)]
+    pub job: Option<JobProposal>,
     /// The string of a translation; `None` for a file change.
     #[serde(default)]
     pub location: Option<UnitLocation>,
@@ -397,6 +418,7 @@ mod tests {
         let proposal = ProposalRecord {
             id: "p1".to_owned(),
             file: None,
+            job: None,
             location: Some(UnitLocation {
                 sheet: "Item".to_owned(),
                 row: 1,

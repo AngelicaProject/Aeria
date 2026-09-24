@@ -76,13 +76,12 @@ Provider settings are machine-local application data in
 `formatVersion` 1, the providers (opaque local ID, preset kind, name, base URL,
 models with ID, optional context window, and accepted efforts, the optional
 session header, and extra headers), and
-Angelica's optional default model selection (provider, model, and an effort
-the model accepts). Unknown fields, duplicate IDs, invalid URLs, and a
+Angelica's optional default model selection and the optional selection for
+translation-job workers (provider, model, and an effort the model accepts). Unknown fields, duplicate IDs, invalid URLs, and a
 selection that does not match a configured model and effort are rejected.
 The session header and extra headers are optional fields; a provider written
 without them has neither.
-Replacing or removing a provider clears a default selection it no longer
-supports.
+Replacing or removing a provider clears a selection it no longer supports.
 
 The file follows the recent-project registry's storage rules: a 256 KiB
 limit, an exclusive OS file lock around every read-modify-write, a synced
@@ -280,24 +279,85 @@ rebuilt, and checked; a refused reply is sent back with the violations, for
 at most three requests in total. The result becomes an unsaved draft in the
 editor, which the user saves explicitly.
 
+### Translation jobs
+
+A sheet, several sheets, or the whole project is translated by a job: worker
+subagents that each translate one chunk of strings, run by a deterministic
+orchestrator and supervised by Angelica.
+
+Angelica has `estimate_job` in every mode and `job_status` and `job_events`
+to report on jobs. In Ask and Auto-draft modes she also has `start_job`,
+`amend_job`, `retry_units`, `pause_job`, `resume_job`, and `cancel_job`.
+`start_job` never starts anything: it records a job proposal with the scope,
+instructions, concurrency (1 to 8), the estimate, and a token limit of twice
+the estimate (at least 200,000). The user starts the job from the proposal.
+
+A scope is a list of sheets, or every sheet with translatable strings, and a
+filter: untranslated strings (the default), strings that need review, or
+untranslated strings and drafts. Reviewed translations are never included.
+The string list is fixed when the job starts, together with each string's
+current target and review state. Strings are grouped in order into chunks of
+at most 15 strings and 6,000 source characters, never across sheets. The
+estimate is the number of strings and chunks and a rough token count.
+
+Each chunk is translated by a worker with a fresh context: fixed worker
+instructions, the project facts, guidance and matching glossary entries, the
+job's instructions as they are when the chunk starts, and its strings in
+tagged form with their legends, context cells, current translations, and
+notes. Its tools are `get_unit` and `read_rows` for context, `get_guidance`,
+`validate_target`, `submit_translations` for the strings of its own chunk
+only, and `report_issue`, which records an event for Angelica. A worker has at
+most 8 responses. A submitted translation is rebuilt and written as a draft
+through `ProjectSession::set_assisted_target` against the recorded state,
+without permission to replace a reviewed string: a string changed meanwhile
+is skipped as a conflict, and a translation that still breaks the structure
+after the worker's corrections is rejected. Strings the worker leaves
+unsubmitted fail.
+
+Jobs are machine-local application data, one SQLite database per project in
+`<app-data>/jobs/<key>.sqlite3` with the conversation key. A job records its
+conversation, specification (scope, instructions, worker model, token limit,
+concurrency), status (`running`, `paused` with a reason, `completed`,
+`cancelled`), token usage, events, and each string's chunk, status
+(`pending`, `running`, `drafted`, `rejected`, `failed`, `conflict`),
+attempts, and message. The worker model is the jobs model from the settings,
+or Angelica's default model.
+
+A running job has `concurrency` lanes. Each lane claims the next chunk,
+checks first that the job's project is still open, and pauses the job when
+the token limit is reached or when, after 40 finished strings, more than 30 %
+were rejected. A network, timeout, rate-limit, or unavailable failure returns
+the chunk's unfinished strings to the queue and waits (20 seconds times the
+failures in a row); the third failure in a row pauses the job, as does a
+rejected key. Other provider errors fail the chunk's unfinished strings.
+Pausing or cancelling returns claimed strings to the queue; a job left
+running when Aeria closed is paused the next time its project's jobs are
+read. Rejected, failed, and skipped strings can be queued again.
+
+When a job completes or pauses on its own, Aeria wakes Angelica: unless a
+turn is already running there, it adds an automatic `[Aeria]` message to the
+job's conversation and starts a turn with the conversation's last model and
+mode, so she can report and suggest what to do next.
+
 ### Conversations
 
 Conversations are machine-local application data stored per project in
 `<app-data>/conversations/<key>/<id>.json`, where the key is derived from a
 SHA-256 hash of the repository root and the ID is a UUID. They are never
 written to a repository. A conversation records its title (from the first
-message), the model and effort last used, the messages including tool calls
-and results, and the provider-reported token usage. Files are written through a
+message), the model, effort, and mode last used, the messages including tool
+calls and results, and the provider-reported token usage. Messages Aeria adds
+for Angelica, such as job reports, are user messages marked `automatic`. Files are written through a
 synced temporary file and rename and are limited to 16 MiB; a damaged file is
 reported when opened and skipped in the list.
 
 ## Batch workflow
 
-A batch job may target selected units, new units, changed units, or untranslated units.
+Batch translation runs as [translation jobs](#translation-jobs):
 
 - jobs are resumable and stored locally
-- cost/token estimates are shown before large work
-- related units may be batched for context/cost efficiency
+- a token estimate is shown before a job starts
+- related strings are batched per sheet for context and cost efficiency
 - provider or structural failures are isolated and retryable
 - successfully validated results are written directly as `draft` changes in the Git working tree
 - a failed/unsafe result is not persisted as a successful translation

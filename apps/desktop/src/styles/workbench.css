@@ -513,6 +513,30 @@ button.angelica-chip:hover { background: var(--hover); color: var(--fg); }
 .angelica-proposals-bulk { display: flex; gap: 4px; }
 .angelica-proposals-bulk .button { height: 22px; padding: 0 8px; font-size: var(--text-2xs); }
 .angelica-proposals ul { display: grid; gap: 6px; margin: 0; padding: 0 10px 8px; list-style: none; }
+.angelica-notice { display: flex; align-items: flex-start; gap: 6px; padding: 5px 8px; border-left: 2px solid var(--accent); color: var(--fg-muted); font-size: var(--text-xs); white-space: pre-wrap; overflow-wrap: anywhere; }
+.angelica-notice svg { flex: none; margin-top: 2px; color: var(--accent-text); }
+.angelica-job-facts { display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; margin: 0; font-size: var(--text-xs); }
+.angelica-job-facts dt { color: var(--fg-muted); }
+.angelica-job-facts dd { margin: 0; overflow-wrap: anywhere; white-space: pre-wrap; }
+.angelica-jobs { flex: none; max-height: 35%; overflow-y: auto; border-top: 1px solid var(--line); }
+.angelica-jobs > summary { position: sticky; top: 0; padding: 6px 10px; background: var(--panel); color: var(--fg-muted); font-size: var(--text-xs); font-weight: 600; cursor: pointer; }
+.angelica-jobs > ul { display: grid; gap: 6px; margin: 0; padding: 0 10px 8px; list-style: none; }
+.angelica-job { display: grid; gap: 5px; padding: 6px 8px; border: 1px solid var(--line); border-radius: var(--radius-sm); font-size: var(--text-xs); }
+.angelica-job.paused { border-color: color-mix(in srgb, var(--bad) 40%, transparent); }
+.angelica-job-head { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+.angelica-job-scope { overflow: hidden; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.angelica-job-bar { height: 4px; overflow: hidden; border-radius: 2px; background: var(--line); }
+.angelica-job-bar > span { display: block; height: 100%; background: var(--accent); transition: width 0.3s ease; }
+.angelica-job-stats { display: flex; flex-wrap: wrap; gap: 4px 10px; color: var(--fg-muted); }
+.angelica-job-problems { color: var(--bad); }
+.angelica-job-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 4px; }
+.angelica-job-actions .button { height: 24px; padding: 0 8px; font-size: var(--text-2xs); }
+.angelica-job-more > summary { color: var(--fg-muted); cursor: pointer; }
+.angelica-job-details { display: grid; gap: 6px; padding-top: 4px; }
+.angelica-job-instructions { margin: 0; color: var(--fg-subtle); white-space: pre-wrap; }
+.angelica-job-units, .angelica-job-events { display: grid; gap: 3px; margin: 0; padding: 0; list-style: none; }
+.angelica-job-units li, .angelica-job-events li { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.angelica-job-message { color: var(--fg-subtle); overflow-wrap: anywhere; }
 .angelica-proposal { display: grid; gap: 4px; padding: 6px 8px; border: 1px solid var(--line); border-radius: var(--radius-sm); }
 .angelica-proposal.conflict,
 .angelica-proposal.failed { border-color: color-mix(in srgb, var(--bad) 40%, transparent); }

@@ -1,8 +1,9 @@
 import { diffWords } from "../textDiff";
-import type { ProposalRecord, SourceBinding } from "../types";
+import type { JobProposal, ProposalRecord, SourceBinding } from "../types";
 import { useI18n } from "../ui/i18n";
 import { UiIcon } from "../ui/primitives/UiIcon";
 import type { MessageKey } from "../i18n/translate";
+import { jobFilterLabels } from "./AngelicaJobs";
 
 type AngelicaProposalsProps = {
   proposals: ProposalRecord[];
@@ -36,20 +37,23 @@ export function AngelicaProposals({ proposals, busy, onApply, onReject, onReveal
   const shown = proposals.filter((proposal) => proposal.status === "pending" || proposal.status === "conflict" || proposal.status === "failed");
   if (shown.length === 0) return null;
   const pending = shown.filter((proposal) => proposal.status === "pending").map((proposal) => proposal.id);
+  // Jobs start one by one, never with the translations in bulk.
+  const bulk = shown.filter((proposal) => proposal.status === "pending" && !proposal.job).map((proposal) => proposal.id);
 
   return (
     <details className="angelica-proposals" open>
       <summary>
         <span>{t("angelica.proposals", { count: pending.length })}</span>
-        {pending.length > 1 ? (
+        {bulk.length > 1 ? (
           <span className="angelica-proposals-bulk">
-            <button className="button button-ghost" type="button" disabled={busy} onClick={(event) => { event.preventDefault(); onReject(pending); }}>{t("angelica.proposal.rejectAll")}</button>
-            <button className="button button-secondary" type="button" disabled={busy} onClick={(event) => { event.preventDefault(); onApply(pending); }}>{t("angelica.proposal.applyAll")}</button>
+            <button className="button button-ghost" type="button" disabled={busy} onClick={(event) => { event.preventDefault(); onReject(bulk); }}>{t("angelica.proposal.rejectAll")}</button>
+            <button className="button button-secondary" type="button" disabled={busy} onClick={(event) => { event.preventDefault(); onApply(bulk); }}>{t("angelica.proposal.applyAll")}</button>
           </span>
         ) : null}
       </summary>
       <ul>
         {shown.map((proposal) => {
+          if (proposal.job) return <JobProposalCard key={proposal.id} proposal={proposal} job={proposal.job} busy={busy} onApply={onApply} onReject={onReject} />;
           const binding = bindingOf(proposal);
           const location = binding ? `${binding.sheetName}:${binding.rowId}:${binding.subrowId}:${binding.columnIndex}` : null;
           return (
@@ -80,5 +84,33 @@ export function AngelicaProposals({ proposals, busy, onApply, onReject, onReveal
         })}
       </ul>
     </details>
+  );
+}
+
+function JobProposalCard({ proposal, job, busy, onApply, onReject }: { proposal: ProposalRecord; job: JobProposal; busy: boolean; onApply: (ids: string[]) => void; onReject: (ids: string[]) => void }) {
+  const { t } = useI18n();
+  const sheets = job.scope.sheets.length > 0 ? job.scope.sheets.join(", ") : t("angelica.job.allSheets");
+  return (
+    <li className={`angelica-proposal angelica-job-proposal ${proposal.status}`}>
+      <div className="angelica-proposal-head">
+        <UiIcon icon="sparkles" size="xs" />
+        <strong>{t("angelica.job.proposal")}</strong>
+        {proposal.status !== "pending" ? <span className="angelica-chip">{t(statusLabels[proposal.status])}</span> : null}
+      </div>
+      <dl className="angelica-job-facts">
+        <dt>{t("angelica.job.sheets")}</dt><dd>{sheets}</dd>
+        <dt>{t("angelica.job.strings")}</dt><dd>{t(jobFilterLabels[job.scope.filter])}: {job.estimate.units}</dd>
+        <dt>{t("angelica.job.estimate")}</dt><dd>{t("angelica.job.estimateValue", { chunks: job.estimate.chunks, tokens: job.estimate.estimatedTokens, limit: job.tokenLimit })}</dd>
+        {job.instructions ? <><dt>{t("angelica.job.instructions")}</dt><dd>{job.instructions}</dd></> : null}
+      </dl>
+      <p className="field-hint">{t("angelica.job.proposalHint")}</p>
+      {proposal.message ? <p className="ai-test-result failed"><UiIcon icon="circleAlert" size="xs" />{proposal.message}</p> : null}
+      {proposal.status === "pending" ? (
+        <div className="angelica-proposal-actions">
+          <button className="button button-ghost" type="button" disabled={busy} onClick={() => onReject([proposal.id])}>{t("angelica.proposal.reject")}</button>
+          <button className="button button-primary" type="button" disabled={busy} onClick={() => onApply([proposal.id])}><UiIcon icon="play" size="sm" />{t("angelica.job.start")}</button>
+        </div>
+      ) : null}
+    </li>
   );
 }

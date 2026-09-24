@@ -24,8 +24,8 @@ use aeria_ai::prompt::{AgentMode, EditorContext, system_prompt};
 use aeria_ai::tools::{
     CellSnapshot, ContextCell, FileChange, ProjectFacts, ProjectReader, ProjectWriter, Proposal,
     ProposalOutcome, ReadTools, ReviewLabel, RowSnapshot, RowsPage, SheetSummary, ToolError,
-    ToolOutput, TranslatableUnit, UnitLocation, UnitState, read_tool_definitions,
-    write_tool_definitions,
+    ToolOutput, TranslatableUnit, UnitLocation, UnitState, job_tool_definitions,
+    read_tool_definitions, write_tool_definitions,
 };
 use aeria_core::ReviewState;
 use aeria_core::SourceBinding;
@@ -43,6 +43,7 @@ use crate::commands::{parse_translation_unit_id, run_blocking};
 use crate::dto::{ProjectSummaryDto, SourceBindingDto, TranslationOverlayDto};
 use crate::error::CommandError;
 use crate::git::{UnitChangeDto, UnitHistoryDto, open_repository};
+use crate::jobs::{DesktopJobs, start_proposed_job};
 use crate::state::DesktopState;
 
 type CommandResult<T> = Result<T, CommandError>;
@@ -122,7 +123,7 @@ pub struct ConversationSummaryDto {
     pub running: bool,
 }
 
-fn now_unix_ms() -> u64 {
+pub(crate) fn now_unix_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |duration| {
@@ -142,22 +143,21 @@ impl From<ConversationError> for CommandError {
     }
 }
 
-/// Returns the conversation store of the active project, keyed by a hash of
-/// its repository root so paths never appear in file names.
-fn conversation_store(app: &tauri::AppHandle) -> CommandResult<ConversationStore> {
-    let root = {
-        let state = app.state::<DesktopState>();
-        let project = state.lock_project()?;
-        let project = project.as_ref().ok_or_else(CommandError::no_project)?;
-        project.repository_root().to_string_lossy().into_owned()
-    };
-    let digest = Sha256::digest(root.as_bytes());
-    let key = digest[..16]
+/// A key for per-project application data: a hash of the repository root,
+/// so paths never appear in file names.
+pub(crate) fn project_key(root: &std::path::Path) -> String {
+    let digest = Sha256::digest(root.to_string_lossy().as_bytes());
+    digest[..16]
         .iter()
         .fold(String::with_capacity(32), |mut key, byte| {
             let _ = write!(key, "{byte:02x}");
             key
-        });
+        })
+}
+
+/// Returns the conversation store of the active project.
+pub(crate) fn conversation_store(app: &tauri::AppHandle) -> CommandResult<ConversationStore> {
+    let key = project_key(&repository_root(app)?);
     let data = app.path().app_data_dir().map_err(|error| {
         CommandError::new(
             "angelicaConversationStorage",
@@ -181,12 +181,12 @@ fn conversation_dto(conversation: Conversation, running: bool) -> ConversationDt
 }
 
 /// Reads the active project for Angelica's tools.
-struct DesktopReader {
-    app: tauri::AppHandle,
+pub(crate) struct DesktopReader {
+    pub(crate) app: tauri::AppHandle,
 }
 
 impl DesktopReader {
-    fn with_session<T>(
+    pub(crate) fn with_session<T>(
         &self,
         read: impl FnOnce(&ProjectSession) -> Result<T, ToolError>,
     ) -> Result<T, ToolError> {
@@ -201,7 +201,7 @@ impl DesktopReader {
     }
 }
 
-fn review_label(state: ReviewState) -> ReviewLabel {
+pub(crate) fn review_label(state: ReviewState) -> ReviewLabel {
     match state {
         ReviewState::Draft => ReviewLabel::Draft,
         ReviewState::NeedsReview => ReviewLabel::NeedsReview,
@@ -252,7 +252,7 @@ fn row_snapshot(row: TranslationRowView) -> RowSnapshot {
     }
 }
 
-fn known_sheet(session: &ProjectSession, sheet: &str) -> Result<(), ToolError> {
+pub(crate) fn known_sheet(session: &ProjectSession, sheet: &str) -> Result<(), ToolError> {
     if session
         .source_package()
         .guidance_index()
@@ -266,7 +266,7 @@ fn known_sheet(session: &ProjectSession, sheet: &str) -> Result<(), ToolError> {
     Ok(())
 }
 
-fn session_facts(session: &ProjectSession) -> ProjectFacts {
+pub(crate) fn session_facts(session: &ProjectSession) -> ProjectFacts {
     let summary = ProjectSummaryDto::from_session(session);
     let progress = session.translation_progress();
     let sum = |field: fn(&aeria_workspace::SheetTranslationProgress) -> usize| {
@@ -335,7 +335,7 @@ fn session_rows(
     })
 }
 
-fn session_row(
+pub(crate) fn session_row(
     session: &ProjectSession,
     sheet: &str,
     row: u32,
@@ -417,7 +417,7 @@ impl ProjectReader for DesktopReader {
     }
 }
 
-fn repository_root(app: &tauri::AppHandle) -> CommandResult<std::path::PathBuf> {
+pub(crate) fn repository_root(app: &tauri::AppHandle) -> CommandResult<std::path::PathBuf> {
     let state = app.state::<DesktopState>();
     let project = state.lock_project()?;
     let session = project.as_ref().ok_or_else(CommandError::no_project)?;
@@ -508,7 +508,7 @@ fn expectation(state: &UnitState) -> AssistedExpectation {
     }
 }
 
-fn binding_of(location: &UnitLocation) -> Result<SourceBinding, ToolError> {
+pub(crate) fn binding_of(location: &UnitLocation) -> Result<SourceBinding, ToolError> {
     let column = location
         .column
         .ok_or_else(|| ToolError::new("a column is required"))?;
@@ -522,7 +522,7 @@ fn binding_of(location: &UnitLocation) -> Result<SourceBinding, ToolError> {
 
 /// Writes one assisted target and tells the editor. Returns the overlay of
 /// the written unit.
-fn write_assisted(
+pub(crate) fn write_assisted(
     app: &tauri::AppHandle,
     session: &mut ProjectSession,
     location: &UnitLocation,
@@ -550,6 +550,16 @@ fn write_assisted(
         );
     }
     Ok(())
+}
+
+/// Tells the renderer that a conversation's proposals changed.
+pub(crate) fn announce_proposals(app: &tauri::AppHandle, conversation_id: &str) {
+    let _ = app.emit(
+        PROPOSALS_EVENT,
+        ProposalsChangedDto {
+            conversation_id: conversation_id.to_owned(),
+        },
+    );
 }
 
 /// Applies or records Angelica's proposals according to the conversation's
@@ -619,6 +629,7 @@ impl ProjectWriter for DesktopWriter {
                     pending.push(ProposalRecord {
                         id,
                         file: None,
+                        job: None,
                         location: Some(proposal.location),
                         source: proposal.source,
                         target: proposal.target,
@@ -663,12 +674,7 @@ impl ProjectWriter for DesktopWriter {
             self.store
                 .save_proposals(&self.conversation_id, &records)
                 .map_err(|error| ToolError::new(error.to_string()))?;
-            let _ = self.app.emit(
-                PROPOSALS_EVENT,
-                ProposalsChangedDto {
-                    conversation_id: self.conversation_id.clone(),
-                },
-            );
+            announce_proposals(&self.app, &self.conversation_id);
         }
         Ok(outcomes)
     }
@@ -686,6 +692,7 @@ impl ProjectWriter for DesktopWriter {
         records.push(ProposalRecord {
             id: id.clone(),
             file: Some(change.file),
+            job: None,
             location: None,
             source: String::new(),
             target: change.after,
@@ -700,12 +707,7 @@ impl ProjectWriter for DesktopWriter {
         self.store
             .save_proposals(&self.conversation_id, &records)
             .map_err(|error| ToolError::new(error.to_string()))?;
-        let _ = self.app.emit(
-            PROPOSALS_EVENT,
-            ProposalsChangedDto {
-                conversation_id: self.conversation_id.clone(),
-            },
-        );
+        announce_proposals(&self.app, &self.conversation_id);
         Ok(ProposalOutcome::Pending { proposal_id: id })
     }
 }
@@ -734,12 +736,21 @@ impl ToolExecutor for DesktopTools {
             mode: self.mode,
             editor: self.editor.clone(),
         });
+        let jobs = DesktopJobs {
+            app: self.app.clone(),
+            store: self.store.clone(),
+            conversation_id: self.conversation_id.clone(),
+        };
         let name = call.name.clone();
         let arguments = call.arguments.clone();
         Box::pin(async move {
             tauri::async_runtime::spawn_blocking(move || match &writer {
-                Some(writer) => ReadTools::with_writer(&reader, writer).execute(&name, &arguments),
-                None => ReadTools::new(&reader).execute(&name, &arguments),
+                Some(writer) => ReadTools::with_writer(&reader, writer)
+                    .with_jobs(&jobs)
+                    .execute(&name, &arguments),
+                None => ReadTools::new(&reader)
+                    .with_jobs(&jobs)
+                    .execute(&name, &arguments),
             })
             .await
             .unwrap_or_else(|error| ToolOutput {
@@ -865,16 +876,22 @@ struct PreparedTurn {
     editor: EditorContext,
 }
 
+struct TurnRequest<'a> {
+    conversation_id: Option<&'a str>,
+    text: &'a str,
+    /// An update from Aeria rather than from the user.
+    automatic: bool,
+}
+
 fn prepare_turn(
     app: &tauri::AppHandle,
-    conversation_id: Option<&str>,
-    text: &str,
+    request: &TurnRequest<'_>,
     selection: ModelSelection,
     editor: &EditorContext,
     mode: AgentMode,
     endpoint: aeria_ai::ProviderEndpoint,
 ) -> CommandResult<PreparedTurn> {
-    if let Some(id) = conversation_id
+    if let Some(id) = request.conversation_id
         && app.state::<DesktopState>().angelica_turn_running(id)
     {
         return Err(busy());
@@ -891,13 +908,18 @@ fn prepare_turn(
 
     let store = conversation_store(app)?;
     let now = now_unix_ms();
-    let mut conversation = match conversation_id {
+    let mut conversation = match request.conversation_id {
         Some(id) => store.load(id)?,
         None => Conversation::new(now),
     };
-    conversation.push_user(text, now);
+    if request.automatic {
+        conversation.push_automatic(request.text, now);
+    } else {
+        conversation.push_user(request.text, now);
+    }
     let effort = selection.effort;
     conversation.model = Some(selection);
+    conversation.mode = mode;
     store.save(&conversation)?;
     Ok(PreparedTurn {
         store,
@@ -945,6 +967,7 @@ async fn run_prepared_turn(
     if mode != AgentMode::Chat {
         tools.extend(write_tool_definitions());
     }
+    tools.extend(job_tool_definitions(mode != AgentMode::Chat));
     let config = TurnConfig {
         model: &model.id,
         effort,
@@ -952,6 +975,7 @@ async fn run_prepared_turn(
         tools: &tools,
         context_tokens: model.context_window,
         session: &id,
+        max_rounds: aeria_ai::agent::MAX_ROUNDS_PER_TURN,
     };
     let executor = DesktopTools {
         app: app.clone(),
@@ -1033,8 +1057,11 @@ pub async fn angelica_send(
     let prepared = run_blocking(move || {
         prepare_turn(
             &prepare_app,
-            conversation_id.as_deref(),
-            &text,
+            &TurnRequest {
+                conversation_id: conversation_id.as_deref(),
+                text: &text,
+                automatic: false,
+            },
             model,
             &editor.unwrap_or_default(),
             mode.unwrap_or_default(),
@@ -1052,6 +1079,69 @@ pub async fn angelica_send(
         return Err(busy());
     }
     Ok(response)
+}
+
+/// Starts an automatic turn telling Angelica about a job update, with the
+/// conversation's last model and mode. Nothing starts while a turn runs in
+/// the conversation; the update stays in the job's events either way.
+pub(crate) async fn wake_angelica(
+    app: &tauri::AppHandle,
+    conversation_id: &str,
+    job_id: &str,
+    update: &str,
+) {
+    if app
+        .state::<DesktopState>()
+        .angelica_turn_running(conversation_id)
+    {
+        return;
+    }
+    let load_app = app.clone();
+    let id = conversation_id.to_owned();
+    let Ok(conversation) =
+        run_blocking(move || Ok(conversation_store(&load_app)?.load(&id)?)).await
+    else {
+        return;
+    };
+    let Some(selection) = conversation.model.clone() else {
+        return;
+    };
+    let Ok(endpoint) = resolve_endpoint(app, selection.provider_id.clone()).await else {
+        return;
+    };
+    let text = format!(
+        "[Aeria] Job {job_id} {update}. Check job_status and job_events, then tell the user what happened and what you suggest."
+    );
+    let prepare_app = app.clone();
+    let id = conversation_id.to_owned();
+    let mode = conversation.mode;
+    let Ok(prepared) = run_blocking(move || {
+        prepare_turn(
+            &prepare_app,
+            &TurnRequest {
+                conversation_id: Some(&id),
+                text: &text,
+                automatic: true,
+            },
+            selection,
+            &EditorContext::default(),
+            mode,
+            endpoint,
+        )
+    })
+    .await
+    else {
+        return;
+    };
+    let Ok(client) = app.state::<DesktopState>().ai_client() else {
+        return;
+    };
+    let turn = run_prepared_turn(app.clone(), client, prepared);
+    let _ = app
+        .state::<DesktopState>()
+        .start_angelica_turn(conversation_id.to_owned(), || {
+            tauri::async_runtime::spawn(turn)
+        });
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -1093,7 +1183,18 @@ fn settle_proposal(
             "this proposal was already applied or dismissed",
         ));
     }
-    if let (true, Some(file)) = (apply, record.file) {
+    if let (true, Some(job)) = (apply, record.job.clone()) {
+        match start_proposed_job(app, conversation_id, &job) {
+            Ok(job_id) => {
+                record.status = ProposalStatus::Applied;
+                record.message = Some(job_id);
+            }
+            Err(error) => {
+                record.status = ProposalStatus::Failed;
+                record.message = Some(error.message);
+            }
+        }
+    } else if let (true, Some(file)) = (apply, record.file) {
         let root = {
             let project = state.lock_project()?;
             project

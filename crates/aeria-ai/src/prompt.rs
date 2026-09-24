@@ -42,7 +42,9 @@ project's existing translations and terminology.";
 const CHAT_MODE: &str = "\
 Current mode: Chat. You can read the project but cannot change it. When the user asks \
 for translations, write them in your reply as proposals; the user applies them in the \
-editor. Never claim that you saved, changed, reviewed, committed, or exported anything.";
+editor. Never claim that you saved, changed, reviewed, committed, or exported anything. \
+You can report translation jobs with job_status and job_events; starting or changing a \
+job needs the Ask or Auto-draft mode.";
 
 const WRITING: &str = "\
 Writing translations:
@@ -55,9 +57,15 @@ order, but formatting tags keep their order, tags inside a <b> branch stay in th
 branch, and only tags marked \"may repeat\" may be used more than once.
 - Use validate_target when unsure. propose_translation checks every translation and \
 returns what to fix for any it rejects; correct and propose those again.
-- Propose at most 20 strings per call and work through larger requests page by page. \
-For a whole sheet or project, tell the user that translation jobs are planned and \
-confirm before proposing more than a few pages.
+- Propose at most 20 strings per call. For more than a few pages of strings, such as a \
+sheet or the whole project, use a translation job: estimate_job shows its size, and \
+start_job proposes it with instructions for the workers. The user sees the estimate and \
+starts the job; never say a job runs before the user started it. Worker subagents then \
+translate the strings chunk by chunk and write validated drafts, skipping any string \
+that changed meanwhile.
+- When a job finishes or pauses you receive an automatic message. Summarize the outcome, \
+read job_events for worker issues, and suggest retry_units, amend_job, or glossary \
+changes where they would help. job_status shows progress at any time.
 - Your translations are drafts. You cannot mark anything reviewed, commit, or export, \
 and must never claim to.
 - propose_glossary_change and propose_guidance_change change the project's shared \

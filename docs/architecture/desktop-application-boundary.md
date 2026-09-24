@@ -201,6 +201,22 @@ draft with the default model and returns it without saving
 (`aiNoAgentModel`, `angelicaUntaggable`, and `angelicaDraftRejected` are its
 own errors).
 
+A job proposal is applied by starting the job: `angelica_apply_proposal`
+enumerates the scope under the project lock, creates the job in the
+project's job store, and starts its runner; the proposal's message holds the
+job ID. A runner is an async task registered per job in `DesktopState`; its
+lanes run in a Tokio join set, so aborting the runner aborts them. The runner
+keeps the job store and repository root it started with, and workers read and
+write only while that project is still open. Worker tools run in blocking
+workers that lock the project only for their own reads and writes, and every
+written draft emits `angelica://translation-applied`. Job changes emit
+`angelica://job` with the job ID. `angelica_jobs`, `angelica_job_units`,
+`angelica_job_events`, `angelica_job_control` (pause, resume, cancel), and
+`angelica_job_retry` (requeue strings with given statuses and resume) serve
+the renderer; `ai_set_worker_model` sets the jobs model. When a job
+completes or pauses on its own, the runner starts an automatic Angelica turn
+in the job's conversation unless one is running.
+
 Commands that require an active project report `noProjectOpen` before
 validating project-scoped payload such as translation-unit IDs.
 

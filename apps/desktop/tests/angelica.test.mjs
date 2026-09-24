@@ -5,9 +5,12 @@ import {
   applyAgentEvent,
   contextFill,
   isToolError,
+  jobProblems,
+  jobProgress,
   parseReply,
   parseSpans,
   resolveModel,
+  sortJobs,
   toolSubject,
   transcriptFromMessages,
 } from "../src/angelica.ts";
@@ -83,4 +86,25 @@ test("replies render a small Markdown subset without HTML", () => {
   assert.deepEqual(blocks[1].items[0][0], { kind: "code", text: "<if(PlayerParameter(4))>" });
   assert.equal(blocks[2].text, "<num(lnum1)>");
   assert.deepEqual(parseSpans("<color(1)>"), [{ kind: "text", text: "<color(1)>" }]);
+});
+
+test("automatic messages from Aeria are shown as notices", () => {
+  const items = transcriptFromMessages([
+    { role: "user", content: "Переведи Action" },
+    { role: "user", content: "[Aeria] Job j1 finished", automatic: true },
+  ]);
+  assert.deepEqual(items.map((item) => item.kind), ["user", "notice"]);
+});
+
+test("job progress counts final outcomes and problems", () => {
+  const counts = { total: 10, pending: 4, running: 2, drafted: 2, rejected: 1, failed: 0, conflict: 1 };
+  assert.equal(jobProgress(counts), 0.4);
+  assert.equal(jobProblems(counts), 2);
+  assert.equal(jobProgress({ ...counts, total: 0 }), 1);
+});
+
+test("jobs needing attention come first, newest first within a status", () => {
+  const job = (id, status, createdAtUnixMs) => ({ id, status, createdAtUnixMs });
+  const sorted = sortJobs([job("a", "completed", 5), job("b", "paused", 1), job("c", "running", 2), job("d", "paused", 3)]);
+  assert.deepEqual(sorted.map((entry) => entry.id), ["c", "d", "b", "a"]);
 });

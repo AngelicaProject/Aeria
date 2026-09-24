@@ -10,6 +10,9 @@ use serde_json::{Value, json};
 
 use crate::chat::ToolDefinition;
 use crate::guidance::{Glossary, GlossaryEntry, ProjectFile, ProjectGuide, change_glossary};
+use crate::jobs::{
+    JobEstimate, JobEvent, JobFilter, JobScope, JobStatus, JobSummary, JobUnit, UnitStatus,
+};
 
 /// Longest source, target, or note text returned for one cell.
 pub const MAX_CELL_TEXT_CHARS: usize = 2000;
@@ -275,6 +278,314 @@ pub trait ProjectWriter: Send + Sync {
     fn propose_file_change(&self, change: FileChange) -> Result<ProposalOutcome, ToolError>;
 }
 
+/// A control action on a job.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum JobAction {
+    Pause,
+    Resume,
+    Cancel,
+}
+
+/// Translation-job access for Angelica, implemented by the desktop.
+pub trait JobControl: Send + Sync {
+    /// Counts the strings a job over `scope` would cover.
+    ///
+    /// # Errors
+    /// Returns an error for an unknown sheet or a read failure.
+    fn estimate(&self, scope: &JobScope) -> Result<JobEstimate, ToolError>;
+
+    /// Records a job for the user to start.
+    ///
+    /// # Errors
+    /// Returns an error when the proposal cannot be recorded.
+    fn propose(
+        &self,
+        scope: JobScope,
+        instructions: String,
+        concurrency: u8,
+    ) -> Result<ProposalOutcome, ToolError>;
+
+    /// Lists the project's jobs, newest first.
+    ///
+    /// # Errors
+    /// Returns an error when jobs cannot be read.
+    fn jobs(&self) -> Result<Vec<JobSummary>, ToolError>;
+
+    /// Events after `after`.
+    ///
+    /// # Errors
+    /// Returns an error for an unknown job.
+    fn events(&self, job_id: &str, after: u64) -> Result<Vec<JobEvent>, ToolError>;
+
+    /// Strings with the given statuses.
+    ///
+    /// # Errors
+    /// Returns an error for an unknown job.
+    fn units(&self, job_id: &str, statuses: &[UnitStatus]) -> Result<Vec<JobUnit>, ToolError>;
+
+    /// Adds instructions for chunks that start afterwards.
+    ///
+    /// # Errors
+    /// Returns an error for an unknown job.
+    fn amend(&self, job_id: &str, instructions: &str) -> Result<(), ToolError>;
+
+    /// Requeues strings with the given final statuses; returns how many.
+    ///
+    /// # Errors
+    /// Returns an error for an unknown job.
+    fn retry(&self, job_id: &str, statuses: &[UnitStatus]) -> Result<u64, ToolError>;
+
+    /// Pauses, resumes, or cancels a job and returns its status.
+    ///
+    /// # Errors
+    /// Returns an error for an unknown job or an impossible transition.
+    fn control(&self, job_id: &str, action: JobAction) -> Result<JobStatus, ToolError>;
+}
+
+/// Most strings `job_status` lists per status.
+const MAX_JOB_UNITS_LISTED: usize = 50;
+
+/// Definitions of the job tools. Reading tools are offered in every mode;
+/// the others only where Angelica may change the project.
+#[must_use]
+pub fn job_tool_definitions(write: bool) -> Vec<ToolDefinition> {
+    let scope = json!({
+        "sheets": { "type": "array", "items": { "type": "string" }, "description": "Exact sheet names; empty for every sheet of the project." },
+        "filter": { "type": "string", "enum": ["untranslated", "needsReview", "untranslatedAndDrafts"], "description": "Which strings: untranslated ones (default), ones needing review, or untranslated ones and existing drafts. Reviewed translations are never included." },
+    });
+    let job_id = json!({ "type": "object", "properties": { "job_id": { "type": "string" } }, "required": ["job_id"], "additionalProperties": false });
+    let mut tools = vec![
+        ToolDefinition {
+            name: "estimate_job",
+            description: "Counts the strings, chunks, and approximate tokens a translation job over a scope would use. Changes nothing.",
+            parameters: json!({ "type": "object", "properties": scope.clone(), "additionalProperties": false }),
+        },
+        ToolDefinition {
+            name: "job_status",
+            description: "Status, progress, and token use of the project's translation jobs, or of one job with the strings that were rejected, failed, or skipped.",
+            parameters: json!({ "type": "object", "properties": { "job_id": { "type": "string" } }, "additionalProperties": false }),
+        },
+        ToolDefinition {
+            name: "job_events",
+            description: "Issues workers reported and other events of a job, after an event number.",
+            parameters: json!({
+                "type": "object",
+                "properties": { "job_id": { "type": "string" }, "after": { "type": "integer", "minimum": 0 } },
+                "required": ["job_id"],
+                "additionalProperties": false,
+            }),
+        },
+    ];
+    if write {
+        let mut start_properties = scope.as_object().cloned().unwrap_or_default();
+        start_properties.insert("instructions".to_owned(), json!({ "type": "string", "description": "Instructions for every worker: style, terminology, anything the user asked for." }));
+        start_properties.insert("concurrency".to_owned(), json!({ "type": "integer", "minimum": 1, "maximum": 8, "description": "Chunks translated at once. Defaults to 3." }));
+        tools.extend([
+            ToolDefinition {
+                name: "start_job",
+                description: "Proposes a translation job: worker subagents translate the scope's strings chunk by chunk and write validated drafts. The user sees the estimate and starts it; nothing runs before that.",
+                parameters: json!({ "type": "object", "properties": start_properties, "additionalProperties": false }),
+            },
+            ToolDefinition {
+                name: "amend_job",
+                description: "Adds instructions for the chunks of a job that have not started yet.",
+                parameters: json!({
+                    "type": "object",
+                    "properties": { "job_id": { "type": "string" }, "instructions": { "type": "string" } },
+                    "required": ["job_id", "instructions"],
+                    "additionalProperties": false,
+                }),
+            },
+            ToolDefinition {
+                name: "retry_units",
+                description: "Requeues a job's rejected, failed, or skipped strings, optionally with instructions for the retry, and resumes the job.",
+                parameters: json!({
+                    "type": "object",
+                    "properties": {
+                        "job_id": { "type": "string" },
+                        "statuses": { "type": "array", "items": { "type": "string", "enum": ["rejected", "failed", "conflict"] }, "description": "Defaults to rejected and failed." },
+                        "instructions": { "type": "string" },
+                    },
+                    "required": ["job_id"],
+                    "additionalProperties": false,
+                }),
+            },
+            ToolDefinition { name: "pause_job", description: "Pauses a running job after its current chunks.", parameters: job_id.clone() },
+            ToolDefinition { name: "resume_job", description: "Resumes a paused job.", parameters: job_id.clone() },
+            ToolDefinition { name: "cancel_job", description: "Cancels a job. Drafts already written stay.", parameters: job_id },
+        ]);
+    }
+    tools
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ScopeArgs {
+    #[serde(default)]
+    sheets: Vec<String>,
+    filter: Option<JobFilter>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StartJobArgs {
+    #[serde(default)]
+    sheets: Vec<String>,
+    filter: Option<JobFilter>,
+    #[serde(default)]
+    instructions: String,
+    concurrency: Option<u8>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct JobIdArgs {
+    job_id: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct JobStatusArgs {
+    job_id: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct JobEventsArgs {
+    job_id: String,
+    #[serde(default)]
+    after: u64,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AmendArgs {
+    job_id: String,
+    instructions: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RetryArgs {
+    job_id: String,
+    statuses: Option<Vec<UnitStatus>>,
+    instructions: Option<String>,
+}
+
+fn start_job(jobs: &dyn JobControl, args: StartJobArgs) -> Result<Value, ToolError> {
+    let scope = JobScope {
+        sheets: args.sheets,
+        filter: args.filter.unwrap_or(JobFilter::Untranslated),
+    };
+    let outcome = jobs.propose(
+        scope,
+        args.instructions.trim().to_owned(),
+        args.concurrency.unwrap_or(3).clamp(1, 8),
+    )?;
+    Ok(match outcome {
+        ProposalOutcome::Pending { proposal_id } => json!({
+            "status": "awaitingApproval",
+            "proposalId": proposal_id,
+            "note": "The user sees the estimate and starts the job. You will get an automatic message when it finishes or pauses.",
+        }),
+        ProposalOutcome::Applied => json!({ "status": "started" }),
+        ProposalOutcome::Conflict { message } | ProposalOutcome::Failed { message } => {
+            json!({ "status": "failed", "errors": [message] })
+        }
+    })
+}
+
+fn retry_units(jobs: &dyn JobControl, args: RetryArgs) -> Result<Value, ToolError> {
+    if let Some(instructions) = args.instructions.filter(|text| !text.trim().is_empty()) {
+        jobs.amend(&args.job_id, &instructions)?;
+    }
+    let statuses = args
+        .statuses
+        .unwrap_or_else(|| vec![UnitStatus::Rejected, UnitStatus::Failed]);
+    let requeued = jobs.retry(&args.job_id, &statuses)?;
+    let status = if requeued > 0 {
+        Some(jobs.control(&args.job_id, JobAction::Resume)?)
+    } else {
+        None
+    };
+    Ok(json!({ "requeued": requeued, "status": status }))
+}
+
+fn run_job_tool(
+    jobs: &dyn JobControl,
+    write: bool,
+    name: &str,
+    arguments: &str,
+) -> Result<Value, ToolError> {
+    let needs_write = !matches!(name, "estimate_job" | "job_status" | "job_events");
+    if needs_write && !write {
+        return Err(ToolError::new(
+            "changing jobs is not available in Chat mode",
+        ));
+    }
+    match name {
+        "estimate_job" => {
+            let args: ScopeArgs = parse(arguments)?;
+            let scope = JobScope {
+                sheets: args.sheets,
+                filter: args.filter.unwrap_or(JobFilter::Untranslated),
+            };
+            to_value(&jobs.estimate(&scope)?)
+        }
+        "start_job" => start_job(jobs, parse(arguments)?),
+        "job_status" => {
+            let args: JobStatusArgs = parse(arguments)?;
+            let all = jobs.jobs()?;
+            match args.job_id {
+                None => to_value(&all.into_iter().take(20).collect::<Vec<_>>()),
+                Some(id) => {
+                    let job = all
+                        .into_iter()
+                        .find(|job| job.id == id)
+                        .ok_or_else(|| ToolError::new(format!("job {id:?} was not found")))?;
+                    let problems = jobs.units(
+                        &id,
+                        &[
+                            UnitStatus::Rejected,
+                            UnitStatus::Failed,
+                            UnitStatus::Conflict,
+                        ],
+                    )?;
+                    Ok(json!({
+                        "job": job,
+                        "problemUnits": problems.iter().take(MAX_JOB_UNITS_LISTED).collect::<Vec<_>>(),
+                        "problemUnitsTotal": problems.len(),
+                    }))
+                }
+            }
+        }
+        "job_events" => {
+            let args: JobEventsArgs = parse(arguments)?;
+            to_value(&jobs.events(&args.job_id, args.after)?)
+        }
+        "amend_job" => {
+            let args: AmendArgs = parse(arguments)?;
+            if args.instructions.trim().is_empty() {
+                return Err(ToolError::new("the instructions are empty"));
+            }
+            jobs.amend(&args.job_id, &args.instructions)?;
+            Ok(json!({ "amended": true }))
+        }
+        "retry_units" => retry_units(jobs, parse(arguments)?),
+        "pause_job" | "resume_job" | "cancel_job" => {
+            let args: JobIdArgs = parse(arguments)?;
+            let action = match name {
+                "pause_job" => JobAction::Pause,
+                "resume_job" => JobAction::Resume,
+                _ => JobAction::Cancel,
+            };
+            Ok(json!({ "status": jobs.control(&args.job_id, action)? }))
+        }
+        other => Err(ToolError::new(format!("unknown tool {other:?}"))),
+    }
+}
+
 /// Definitions of the tools that propose changes, offered in Ask and
 /// Auto-draft modes.
 #[must_use]
@@ -517,6 +828,7 @@ pub struct ToolOutput {
 pub struct ReadTools<'a> {
     reader: &'a dyn ProjectReader,
     writer: Option<&'a dyn ProjectWriter>,
+    jobs: Option<&'a dyn JobControl>,
 }
 
 #[derive(Deserialize)]
@@ -573,7 +885,15 @@ impl<'a> ReadTools<'a> {
         Self {
             reader,
             writer: None,
+            jobs: None,
         }
+    }
+
+    /// Adds the job tools; changing jobs also needs a writer.
+    #[must_use]
+    pub fn with_jobs(mut self, jobs: &'a dyn JobControl) -> Self {
+        self.jobs = Some(jobs);
+        self
     }
 
     /// Adds the tools that propose changes.
@@ -582,6 +902,7 @@ impl<'a> ReadTools<'a> {
         Self {
             reader,
             writer: Some(writer),
+            jobs: None,
         }
     }
 
@@ -639,6 +960,13 @@ impl<'a> ReadTools<'a> {
                 Ok(json!({ "opened": location }))
             }
             "get_guidance" => Ok(self.get_guidance(&parse(arguments)?)),
+            "estimate_job" | "start_job" | "job_status" | "job_events" | "amend_job"
+            | "retry_units" | "pause_job" | "resume_job" | "cancel_job" => {
+                let Some(jobs) = self.jobs else {
+                    return Err(ToolError::new("translation jobs are not available here"));
+                };
+                run_job_tool(jobs, self.writer.is_some(), name, arguments)
+            }
             "validate_target"
             | "propose_translation"
             | "propose_glossary_change"
@@ -1446,6 +1774,118 @@ mod tests {
         );
         assert_eq!(files[1].before.as_deref(), Some("Use informal address."));
         assert_eq!(files[1].after, "Use formal address.\n");
+    }
+
+    struct FakeJobs {
+        calls: Mutex<Vec<String>>,
+    }
+
+    impl JobControl for FakeJobs {
+        fn estimate(&self, scope: &JobScope) -> Result<JobEstimate, ToolError> {
+            self.calls
+                .lock()
+                .expect("lock")
+                .push(format!("estimate {:?}", scope.filter));
+            Ok(JobEstimate {
+                units: 30,
+                chunks: 2,
+                estimated_tokens: 12_000,
+            })
+        }
+        fn propose(
+            &self,
+            scope: JobScope,
+            instructions: String,
+            concurrency: u8,
+        ) -> Result<ProposalOutcome, ToolError> {
+            self.calls.lock().expect("lock").push(format!(
+                "propose {:?} {instructions} {concurrency}",
+                scope.sheets
+            ));
+            Ok(ProposalOutcome::Pending {
+                proposal_id: "job-proposal".to_owned(),
+            })
+        }
+        fn jobs(&self) -> Result<Vec<JobSummary>, ToolError> {
+            Ok(Vec::new())
+        }
+        fn events(&self, _: &str, _: u64) -> Result<Vec<JobEvent>, ToolError> {
+            Ok(Vec::new())
+        }
+        fn units(&self, _: &str, _: &[UnitStatus]) -> Result<Vec<JobUnit>, ToolError> {
+            Ok(Vec::new())
+        }
+        fn amend(&self, _: &str, instructions: &str) -> Result<(), ToolError> {
+            self.calls
+                .lock()
+                .expect("lock")
+                .push(format!("amend {instructions}"));
+            Ok(())
+        }
+        fn retry(&self, _: &str, statuses: &[UnitStatus]) -> Result<u64, ToolError> {
+            self.calls
+                .lock()
+                .expect("lock")
+                .push(format!("retry {statuses:?}"));
+            Ok(4)
+        }
+        fn control(&self, _: &str, action: JobAction) -> Result<JobStatus, ToolError> {
+            self.calls
+                .lock()
+                .expect("lock")
+                .push(format!("control {action:?}"));
+            Ok(JobStatus::Running)
+        }
+    }
+
+    #[test]
+    fn job_tools_estimate_propose_and_retry_only_where_allowed() {
+        let reader = reader();
+        let jobs = FakeJobs {
+            calls: Mutex::new(Vec::new()),
+        };
+        let chat = ReadTools::new(&reader).with_jobs(&jobs);
+        let estimate = chat.execute("estimate_job", r#"{"sheets":["Item"]}"#);
+        assert!(!estimate.is_error, "{}", estimate.content);
+        assert!(estimate.content.contains("12000"));
+        let refused = chat.execute("start_job", r#"{"sheets":["Item"]}"#);
+        assert!(refused.is_error);
+        assert!(refused.content.contains("Chat mode"));
+
+        let writer = FakeWriter {
+            submitted: Mutex::new(Vec::new()),
+            files: Mutex::new(Vec::new()),
+        };
+        let tools = ReadTools::with_writer(&reader, &writer).with_jobs(&jobs);
+        let started = tools.execute(
+            "start_job",
+            r#"{"sheets":["Item"],"instructions":" Formal. ","concurrency":20}"#,
+        );
+        assert!(
+            started.content.contains("awaitingApproval"),
+            "{}",
+            started.content
+        );
+        let retried = tools.execute(
+            "retry_units",
+            r#"{"job_id":"j1","instructions":"Keep names in Latin."}"#,
+        );
+        assert!(
+            retried.content.contains("\"requeued\":4"),
+            "{}",
+            retried.content
+        );
+        assert_eq!(
+            jobs.calls.lock().expect("lock").as_slice(),
+            [
+                "estimate Untranslated",
+                "propose [\"Item\"] Formal. 8",
+                "amend Keep names in Latin.",
+                "retry [Rejected, Failed]",
+                "control Resume",
+            ]
+        );
+        assert!(ReadTools::new(&reader).execute("job_status", "{}").is_error);
     }
 
     #[test]
