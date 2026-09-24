@@ -73,8 +73,8 @@ Source facts change only through a source update, described in
 Manual target edits use `aeria-se` intrinsic validation. Understood syntax and
 opaque-but-preservable syntax are valid targets; malformed or unsafe syntax is
 rejected. Manual translation does not require source and target protected
-structures to match. Strict structure compatibility remains a safety mechanism
-for future assisted or AI translation.
+structures to match. Assisted translation must also satisfy the assisted
+structure policy in [`strings.md`](./strings.md#assisted-structure-policy).
 
 ## Project scope
 

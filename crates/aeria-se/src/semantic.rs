@@ -855,7 +855,7 @@ fn is_game_reference_argument(macro_name: KnownMacro, argument_index: usize) -> 
     }
 }
 
-fn is_user_facing_argument(macro_name: KnownMacro, argument_index: usize) -> bool {
+pub(crate) fn is_user_facing_argument(macro_name: KnownMacro, argument_index: usize) -> bool {
     if macro_name.semantic_family() == SemanticFamily::OpaqueProtected {
         return false;
     }
