@@ -50,6 +50,26 @@ Target changes reset review state to `Draft` through
 `Workspace::update_target`. Setting the identical target is a successful
 no-op and does not rewrite the canonical shard.
 
+## Assisted targets
+
+`ProjectSession::set_assisted_target(binding, target, expected,
+replace_reviewed)` writes a target produced by assisted translation. In
+addition to every `set_target` check, it:
+
+- reads the verified source macro of the binding (`source_macro`) and
+  requires the target to satisfy the assisted structure policy in
+  [`strings.md`](./strings.md#assisted-structure-policy);
+- compares the unit's current target and review state with `expected`, the
+  state captured when the translation was produced (`assisted_state`
+  returns it; `None` fields mean untranslated), and refuses with `Conflict`
+  when they differ, so a translation never replaces work saved after it was
+  produced;
+- refuses to replace a `reviewed` unit unless `replace_reviewed` records the
+  user's explicit approval.
+
+The written target is a draft, as for any target change. A refused write
+changes nothing in memory or on disk.
+
 ## Notes and review state
 
 `set_note` and `set_review_state` operate only on existing units. Notes may be

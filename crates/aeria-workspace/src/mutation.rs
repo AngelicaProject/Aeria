@@ -43,6 +43,127 @@ pub enum TranslationMutationError {
     },
 }
 
+/// The state an assisted write expects its unit to be in, captured when the
+/// translation was produced. `None` fields describe an untranslated string.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AssistedExpectation {
+    pub target: Option<String>,
+    pub review_state: Option<ReviewState>,
+}
+
+/// Errors from an assisted write. Nothing is written when one is returned.
+#[derive(Debug, Error)]
+pub enum AssistedWriteError {
+    /// The ordinary target checks or persistence failed.
+    #[error(transparent)]
+    Mutation(#[from] TranslationMutationError),
+
+    /// The translation breaks the assisted structure policy.
+    #[error("the translation breaks the source structure: {}", .messages.join("; "))]
+    Structure { messages: Vec<String> },
+
+    /// The unit changed after the translation was produced.
+    #[error("the string changed after the translation was produced")]
+    Conflict { current: AssistedExpectation },
+
+    /// The unit is reviewed and the write was not approved to replace it.
+    #[error("the string is reviewed; replacing it needs explicit approval")]
+    Reviewed,
+}
+
+impl ProjectSession {
+    /// Returns the verified source macro text of one translatable occurrence.
+    ///
+    /// # Errors
+    ///
+    /// Returns `SourceNotTranslatable` for an occurrence that HSG does not
+    /// grant or that has no String cell.
+    pub fn source_macro(
+        &self,
+        source_binding: &SourceBinding,
+    ) -> Result<String, TranslationMutationError> {
+        let not_translatable = || TranslationMutationError::SourceNotTranslatable {
+            source_binding: source_binding.clone(),
+        };
+        if !self.source_package.guidance_index().is_translatable(
+            source_binding.sheet_name(),
+            source_binding.row_id(),
+            source_binding.subrow_id(),
+            source_binding.column_index(),
+        ) {
+            return Err(not_translatable());
+        }
+        self.source_package
+            .source()
+            .string_cell(
+                source_binding.sheet_name(),
+                source_binding.row_id(),
+                source_binding.subrow_id(),
+                source_binding.column_index(),
+            )
+            .map_err(|error| TranslationMutationError::Workspace(WorkspaceError::Hxs(error)))?
+            .map(|cell| cell.macro_text)
+            .ok_or_else(not_translatable)
+    }
+
+    /// Returns the current target and review state of a bound unit, or the
+    /// untranslated state.
+    #[must_use]
+    pub fn assisted_state(&self, source_binding: &SourceBinding) -> AssistedExpectation {
+        self.workspace
+            .unit_by_source_binding(source_binding)
+            .map_or(
+                AssistedExpectation {
+                    target: None,
+                    review_state: None,
+                },
+                |unit| AssistedExpectation {
+                    target: Some(unit.target_macro().to_owned()),
+                    review_state: Some(unit.review_state()),
+                },
+            )
+    }
+
+    /// Writes a target produced by assisted translation.
+    ///
+    /// Besides the ordinary [`Self::set_target`] checks, the target must
+    /// satisfy the assisted structure policy against the verified source, and
+    /// the unit must still be in the `expected` state (compare-and-set), so a
+    /// translation never replaces work saved after it was produced. A
+    /// reviewed unit is replaced only when `replace_reviewed` records the
+    /// user's explicit approval. The written target is a draft.
+    ///
+    /// # Errors
+    ///
+    /// Returns a structure, conflict, reviewed, or ordinary mutation error;
+    /// nothing is written in that case.
+    pub fn set_assisted_target(
+        &mut self,
+        source_binding: &SourceBinding,
+        target_macro: &str,
+        expected: &AssistedExpectation,
+        replace_reviewed: bool,
+    ) -> Result<TranslationUnitId, AssistedWriteError> {
+        if target_macro.trim().is_empty() {
+            return Err(TranslationMutationError::EmptyTarget.into());
+        }
+        let source = self.source_macro(source_binding)?;
+        aeria_se::check_assisted_structure(&source, target_macro).map_err(|errors| {
+            AssistedWriteError::Structure {
+                messages: errors.into_iter().map(|error| error.message).collect(),
+            }
+        })?;
+        let current = self.assisted_state(source_binding);
+        if &current != expected {
+            return Err(AssistedWriteError::Conflict { current });
+        }
+        if current.review_state == Some(ReviewState::Reviewed) && !replace_reviewed {
+            return Err(AssistedWriteError::Reviewed);
+        }
+        Ok(self.set_target(source_binding, target_macro)?)
+    }
+}
+
 impl ProjectSession {
     /// Creates or updates the translation unit at one verified source binding.
     ///
