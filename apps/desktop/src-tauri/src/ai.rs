@@ -5,14 +5,15 @@
 //! secret-store access run in blocking workers; provider requests are async
 //! and hold no desktop lock.
 
+use aeria_ai::chatgpt::{AccessToken, DevicePoll, LOGIN_TIMEOUT, VERIFICATION_URL};
 use aeria_ai::settings::SETTINGS_FILE_NAME;
 use aeria_ai::{
     AiSettings, AiSettingsStore, ApiKey, BaseUrl, HeaderConfig, KeyringSecretStore, ModelConfig,
-    ModelSelection, ProviderConfig, ProviderEndpoint, ProviderKind, ReasoningEffort, SecretStore,
-    presets,
+    ModelSelection, Protocol, ProviderConfig, ProviderEndpoint, ProviderError, ProviderKind,
+    ReasoningEffort, SecretStore, presets,
 };
 use serde::{Deserialize, Serialize};
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 
 use crate::commands::run_blocking;
 use crate::error::CommandError;
@@ -204,8 +205,15 @@ fn set_api_key(
     api_key: &str,
 ) -> CommandResult<AiSettingsDto> {
     let settings = store.load()?;
-    if settings.provider(provider_id).is_none() {
-        return Err(provider_not_found(provider_id));
+    match settings.provider(provider_id) {
+        None => return Err(provider_not_found(provider_id)),
+        Some(provider) if provider.kind == ProviderKind::ChatGpt => {
+            return Err(CommandError::new(
+                "aiInvalidSettings",
+                "a ChatGPT provider signs in with a ChatGPT account instead of an API key",
+            ));
+        }
+        Some(_) => {}
     }
     secrets.set(provider_id, &ApiKey::new(api_key)?)?;
     Ok(settings_dto(&settings, secrets))
@@ -236,41 +244,117 @@ fn set_agent_model(
     Ok(settings_dto(&settings, secrets))
 }
 
-pub(crate) fn provider_endpoint(
+/// Reads a provider and its stored secret: an API key, or the ChatGPT
+/// refresh token for a ChatGPT provider.
+pub(crate) fn provider_credentials(
     store: &AiSettingsStore,
     secrets: &dyn SecretStore,
     provider_id: &str,
-) -> CommandResult<ProviderEndpoint> {
+) -> CommandResult<(ProviderConfig, ApiKey)> {
     let settings = store.load()?;
     let provider = settings
         .provider(provider_id)
-        .ok_or_else(|| provider_not_found(provider_id))?;
+        .ok_or_else(|| provider_not_found(provider_id))?
+        .clone();
+    let secret = secrets
+        .get(provider_id)?
+        .ok_or_else(|| match provider.kind {
+            ProviderKind::ChatGpt => sign_in_required(&provider.name),
+            _ => CommandError::new(
+                "aiApiKeyMissing",
+                format!("no API key is stored for {:?}", provider.name),
+            ),
+        })?;
+    Ok((provider, secret))
+}
+
+fn sign_in_required(name: &str) -> CommandError {
+    CommandError::new(
+        "aiChatGptSignInRequired",
+        format!("sign in to ChatGPT again to use {name:?}"),
+    )
+}
+
+fn endpoint_for_provider(
+    provider: &ProviderConfig,
+    credential: ApiKey,
+    identity: Vec<(String, String)>,
+) -> CommandResult<ProviderEndpoint> {
     let base_url = BaseUrl::parse(&provider.base_url)
         .map_err(|message| CommandError::new("aiInvalidSettings", message))?;
-    let api_key = secrets.get(provider_id)?.ok_or_else(|| {
-        CommandError::new(
-            "aiApiKeyMissing",
-            format!("no API key is stored for {:?}", provider.name),
-        )
-    })?;
+    let mut headers: Vec<(String, String)> = provider
+        .headers
+        .iter()
+        .map(|header| (header.name.clone(), header.value.clone()))
+        .collect();
+    // The ChatGPT identity headers always win over configured ones.
+    headers.retain(|(name, _)| !identity.iter().any(|(required, _)| required == name));
+    headers.extend(identity);
     Ok(ProviderEndpoint {
         base_url,
-        api_key,
+        api_key: credential,
         session_header: provider.session_header.clone(),
-        headers: provider
-            .headers
-            .iter()
-            .map(|header| (header.name.clone(), header.value.clone()))
-            .collect(),
+        headers,
+        protocol: provider.kind.protocol(),
     })
+}
+
+/// Resolves how to reach a provider now. For ChatGPT this refreshes the
+/// short-lived access token when needed.
+pub(crate) async fn resolve_endpoint(
+    app: &tauri::AppHandle,
+    provider_id: String,
+) -> CommandResult<ProviderEndpoint> {
+    let store = settings_store(app)?;
+    let (provider, secret) =
+        run_blocking(move || provider_credentials(&store, &KeyringSecretStore, &provider_id))
+            .await?;
+    match provider.kind.protocol() {
+        Protocol::ChatCompletions => endpoint_for_provider(&provider, secret, Vec::new()),
+        Protocol::CodexResponses => {
+            let access = chatgpt_access(app, &provider, secret).await?;
+            let identity = access.headers();
+            endpoint_for_provider(&provider, access.token, identity)
+        }
+    }
+}
+
+/// Returns a fresh ChatGPT access token, refreshing it under the token lock
+/// so concurrent requests never replay a rotated refresh token.
+async fn chatgpt_access(
+    app: &tauri::AppHandle,
+    provider: &ProviderConfig,
+    refresh_token: ApiKey,
+) -> CommandResult<AccessToken> {
+    let state = app.state::<DesktopState>();
+    let mut tokens = state.chatgpt_tokens().lock().await;
+    if let Some((_, access)) = tokens.iter().find(|(id, _)| *id == provider.id)
+        && access.is_fresh()
+    {
+        return Ok(access.clone());
+    }
+    let refreshed = state
+        .ai_client()?
+        .chatgpt_refresh(&refresh_token)
+        .await
+        .map_err(|error| match error {
+            ProviderError::Unauthorized { .. } => sign_in_required(&provider.name),
+            other => other.into(),
+        })?;
+    if let Some(rotated) = refreshed.refresh_token {
+        let id = provider.id.clone();
+        run_blocking(move || Ok(KeyringSecretStore.set(&id, &rotated)?)).await?;
+    }
+    tokens.retain(|(id, _)| *id != provider.id);
+    tokens.push((provider.id.clone(), refreshed.access.clone()));
+    Ok(refreshed.access)
 }
 
 async fn endpoint_for(
     app: &tauri::AppHandle,
     provider_id: String,
 ) -> CommandResult<ProviderEndpoint> {
-    let store = settings_store(app)?;
-    run_blocking(move || provider_endpoint(&store, &KeyringSecretStore, &provider_id)).await
+    resolve_endpoint(app, provider_id).await
 }
 
 async fn with_settings<F>(app: &tauri::AppHandle, operation: F) -> CommandResult<AiSettingsDto>
@@ -320,10 +404,20 @@ pub async fn ai_remove_provider(
     app: tauri::AppHandle,
     provider_id: String,
 ) -> CommandResult<AiSettingsDto> {
+    forget_chatgpt_access(&app, &provider_id).await;
+    let id = provider_id.clone();
     with_settings(&app, move |store, secrets| {
-        remove_provider(store, secrets, &provider_id)
+        remove_provider(store, secrets, &id)
     })
     .await
+}
+
+async fn forget_chatgpt_access(app: &tauri::AppHandle, provider_id: &str) {
+    app.state::<DesktopState>()
+        .chatgpt_tokens()
+        .lock()
+        .await
+        .retain(|(id, _)| id != provider_id);
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -354,10 +448,163 @@ pub async fn ai_clear_api_key(
     app: tauri::AppHandle,
     provider_id: String,
 ) -> CommandResult<AiSettingsDto> {
+    forget_chatgpt_access(&app, &provider_id).await;
+    let id = provider_id.clone();
     with_settings(&app, move |store, secrets| {
-        clear_api_key(store, secrets, &provider_id)
+        clear_api_key(store, secrets, &id)
     })
     .await
+}
+
+/// A started ChatGPT sign-in.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChatGptLoginDto {
+    pub login_id: String,
+    pub user_code: String,
+    pub verification_url: String,
+    /// Whether the sign-in page was opened in the default browser.
+    pub browser_opened: bool,
+}
+
+/// The end of a ChatGPT sign-in, sent as `ai://chatgpt-login`.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChatGptLoginEventDto {
+    pub login_id: String,
+    pub provider_id: String,
+    pub succeeded: bool,
+    pub code: Option<String>,
+    pub message: Option<String>,
+}
+
+/// Renderer event for the end of a ChatGPT sign-in.
+pub const CHATGPT_LOGIN_EVENT: &str = "ai://chatgpt-login";
+
+async fn finish_chatgpt_login(
+    app: &tauri::AppHandle,
+    provider: &ProviderConfig,
+    login: &aeria_ai::chatgpt::DeviceLogin,
+) -> CommandResult<()> {
+    let client = app.state::<DesktopState>().ai_client()?;
+    let deadline = std::time::Instant::now() + LOGIN_TIMEOUT;
+    let (authorization_code, code_verifier) = loop {
+        if std::time::Instant::now() >= deadline {
+            return Err(CommandError::new(
+                "aiChatGptLoginExpired",
+                "the sign-in code expired; start again",
+            ));
+        }
+        tokio::time::sleep(login.interval).await;
+        match client.chatgpt_poll_login(login).await? {
+            DevicePoll::Pending => {}
+            DevicePoll::Authorized {
+                authorization_code,
+                code_verifier,
+            } => break (authorization_code, code_verifier),
+        }
+    };
+    let tokens = client
+        .chatgpt_exchange(&authorization_code, &code_verifier)
+        .await?;
+    let refresh_token = tokens.refresh_token.ok_or_else(|| {
+        CommandError::new(
+            "aiInvalidResponse",
+            "ChatGPT did not return a refresh token",
+        )
+    })?;
+    let id = provider.id.clone();
+    run_blocking(move || Ok(KeyringSecretStore.set(&id, &refresh_token)?)).await?;
+    let state = app.state::<DesktopState>();
+    let mut cached = state.chatgpt_tokens().lock().await;
+    cached.retain(|(id, _)| *id != provider.id);
+    cached.push((provider.id.clone(), tokens.access));
+    Ok(())
+}
+
+#[tauri::command(rename_all = "camelCase")]
+/// Starts a ChatGPT device sign-in for a ChatGPT provider and opens the
+/// sign-in page. The result arrives as an `ai://chatgpt-login` event; a new
+/// sign-in replaces one still waiting.
+///
+/// # Errors
+///
+/// Returns `aiProviderNotFound`, `aiInvalidSettings` for another provider
+/// kind, or a classified provider error.
+pub async fn ai_chatgpt_login_start(
+    app: tauri::AppHandle,
+    provider_id: String,
+) -> CommandResult<ChatGptLoginDto> {
+    use tauri_plugin_opener::OpenerExt;
+
+    let store = settings_store(&app)?;
+    let id = provider_id.clone();
+    let provider = run_blocking(move || {
+        store
+            .load()?
+            .provider(&id)
+            .cloned()
+            .ok_or_else(|| provider_not_found(&id))
+    })
+    .await?;
+    if provider.kind != ProviderKind::ChatGpt {
+        return Err(CommandError::new(
+            "aiInvalidSettings",
+            "only a ChatGPT provider signs in with a ChatGPT account",
+        ));
+    }
+    let login = app
+        .state::<DesktopState>()
+        .ai_client()?
+        .chatgpt_start_login()
+        .await?;
+    let login_id = ProviderConfig::new_id();
+    let browser_opened = app
+        .opener()
+        .open_url(VERIFICATION_URL, None::<&str>)
+        .is_ok();
+    let response = ChatGptLoginDto {
+        login_id: login_id.clone(),
+        user_code: login.user_code.clone(),
+        verification_url: VERIFICATION_URL.to_owned(),
+        browser_opened,
+    };
+    let task_app = app.clone();
+    let task_login_id = login_id.clone();
+    let task = async move {
+        let result = finish_chatgpt_login(&task_app, &provider, &login).await;
+        let (code, message) = match result {
+            Ok(()) => (None, None),
+            Err(error) => (Some(error.code), Some(error.message)),
+        };
+        task_app
+            .state::<DesktopState>()
+            .finish_chatgpt_login(&task_login_id);
+        let _ = task_app.emit(
+            CHATGPT_LOGIN_EVENT,
+            ChatGptLoginEventDto {
+                login_id: task_login_id,
+                provider_id: provider.id,
+                succeeded: code.is_none(),
+                code,
+                message,
+            },
+        );
+    };
+    app.state::<DesktopState>()
+        .start_chatgpt_login(login_id, || tauri::async_runtime::spawn(task));
+    Ok(response)
+}
+
+#[tauri::command(rename_all = "camelCase")]
+/// Stops waiting for a ChatGPT sign-in.
+///
+/// # Errors
+///
+/// Never fails; cancelling a finished sign-in does nothing.
+pub async fn ai_chatgpt_login_cancel(app: tauri::AppHandle, login_id: String) -> CommandResult<()> {
+    app.state::<DesktopState>().cancel_chatgpt_login(&login_id);
+    Ok(())
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -386,7 +633,7 @@ pub async fn ai_set_agent_model(
 pub async fn ai_list_remote_models(
     app: tauri::AppHandle,
     provider_id: String,
-) -> CommandResult<Vec<String>> {
+) -> CommandResult<Vec<ModelConfig>> {
     let endpoint = endpoint_for(&app, provider_id).await?;
     let client = app.state::<DesktopState>().ai_client()?;
     Ok(client.list_models(&endpoint).await?)
@@ -493,7 +740,8 @@ mod tests {
         assert_eq!(settings.providers[0].api_key, ApiKeyStateDto::Stored);
         let json = serde_json::to_string(&settings).expect("dto json");
         assert!(!json.contains("sk-secret"));
-        let endpoint = provider_endpoint(&store, &secrets, &id).expect("endpoint");
+        let (provider, secret) = provider_credentials(&store, &secrets, &id).expect("credentials");
+        let endpoint = endpoint_for_provider(&provider, secret, Vec::new()).expect("endpoint");
         assert_eq!(endpoint.api_key.expose(), "sk-secret");
         assert_eq!(
             endpoint.session_header.as_deref(),
@@ -515,6 +763,53 @@ mod tests {
     }
 
     #[test]
+    fn chatgpt_identity_headers_replace_configured_ones_and_keys_are_refused() {
+        let (_directory, store) = store();
+        let secrets = MemorySecretStore::default();
+        let settings = save_provider(
+            &store,
+            &secrets,
+            AiProviderInputDto {
+                id: None,
+                kind: ProviderKind::ChatGpt,
+                name: "ChatGPT".to_owned(),
+                base_url: aeria_ai::CHATGPT_CODEX_BASE_URL.to_owned(),
+                models: Vec::new(),
+                session_header: None,
+                headers: vec![HeaderConfig {
+                    name: "originator".to_owned(),
+                    value: "spoofed".to_owned(),
+                }],
+            },
+        )
+        .expect("save");
+        let provider = store.load().expect("load").providers.remove(0);
+        assert_eq!(
+            set_api_key(&store, &secrets, &settings.providers[0].id, "sk")
+                .expect_err("keys are refused")
+                .code,
+            "aiInvalidSettings"
+        );
+        assert_eq!(
+            provider_credentials(&store, &secrets, &provider.id)
+                .expect_err("not signed in")
+                .code,
+            "aiChatGptSignInRequired"
+        );
+        let endpoint = endpoint_for_provider(
+            &provider,
+            ApiKey::new("access").expect("token"),
+            vec![("originator".to_owned(), "aeria".to_owned())],
+        )
+        .expect("endpoint");
+        assert_eq!(endpoint.protocol, Protocol::CodexResponses);
+        assert_eq!(
+            endpoint.headers,
+            vec![("originator".to_owned(), "aeria".to_owned())]
+        );
+    }
+
+    #[test]
     fn endpoint_requires_a_stored_key() {
         let (_directory, store) = store();
         let secrets = MemorySecretStore::default();
@@ -524,7 +819,7 @@ mod tests {
             .id
             .clone();
         assert_eq!(
-            provider_endpoint(&store, &secrets, &id)
+            provider_credentials(&store, &secrets, &id)
                 .expect_err("no key")
                 .code,
             "aiApiKeyMissing"

@@ -31,7 +31,12 @@ Likely UI-level dependencies such as Tailwind, Radix primitives, CodeMirror, doc
 - `reqwest` (MIT OR Apache-2.0) with only `http2`, `json`, `system-proxy`, and `rustls-no-provider`: the provider HTTP client. It is already in the desktop dependency graph through Tauri.
 - `rustls` (Apache-2.0 OR ISC OR MIT) with the `ring` crypto provider, installed once by the client, so builds need neither OpenSSL nor the `aws-lc` toolchain. Certificates are checked with the platform verifier.
 - `keyring` (MIT OR Apache-2.0) with its default platform stores: Windows Credential Manager, the Secret Service on Linux, and the macOS Keychain.
+- `base64` (MIT OR Apache-2.0): reads the claims of ChatGPT access tokens.
 - `fs2`, `uuid`, `serde_json`, and `thiserror`, matching `aeria-projects`.
+
+The desktop adds `tauri-plugin-opener` (Apache-2.0 OR MIT) to open the ChatGPT
+sign-in page from Rust, and `tokio` with only `time`, already part of the Tauri
+runtime, to pace sign-in polling.
 
 ## Renderer UI dependencies
 

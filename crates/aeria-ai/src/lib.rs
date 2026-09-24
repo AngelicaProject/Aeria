@@ -9,18 +9,20 @@
 
 pub mod agent;
 pub mod chat;
+pub mod chatgpt;
 pub mod client;
 pub mod conversation;
 pub mod prompt;
 pub mod provider;
+pub mod responses;
 pub mod secrets;
 pub mod settings;
 pub mod tools;
 
 pub use client::{ModelCheck, OpenAiCompatibleClient, ProviderEndpoint, ProviderError};
 pub use provider::{
-    BaseUrl, HeaderConfig, ModelConfig, ProviderConfig, ProviderKind, ProviderPreset,
-    ReasoningEffort, presets,
+    BaseUrl, CHATGPT_CODEX_BASE_URL, HeaderConfig, ModelConfig, Protocol, ProviderConfig,
+    ProviderKind, ProviderPreset, ReasoningEffort, presets,
 };
 pub use secrets::{ApiKey, KeyringSecretStore, MemorySecretStore, SecretStore, SecretStoreError};
 pub use settings::{AiSettings, AiSettingsError, AiSettingsStore, ModelSelection};

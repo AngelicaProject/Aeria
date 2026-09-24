@@ -15,10 +15,16 @@ Project-shared AI inputs may include translation guidance and glossary data. Use
 
 ### Transport
 
-`aeria-ai` has one transport: the OpenAI-compatible Chat Completions API
-(`POST {baseUrl}/chat/completions`, bearer authentication) plus the optional
-model listing `GET {baseUrl}/models`. A model's reasoning effort is sent as the
-`reasoning_effort` request field only when an effort is selected. TLS uses
+`aeria-ai` has two transports, chosen by the provider kind:
+
+- **Chat Completions** for every API-key provider: `POST {baseUrl}/chat/completions`
+  with bearer authentication and the optional model listing `GET {baseUrl}/models`.
+  A model's reasoning effort is sent as the `reasoning_effort` request field only
+  when an effort is selected.
+- **Codex Responses** for a ChatGPT subscription (see
+  [ChatGPT subscription](#chatgpt-subscription)).
+
+Reasoning efforts are `minimal`, `low`, `medium`, `high`, and `xhigh`. TLS uses
 rustls with the platform certificate verifier. Transport failures are
 classified (network, timeout, unauthorized, not found, rate limited, rejected
 request, provider failure, invalid response); provider error text is bounded
@@ -50,6 +56,7 @@ Presets supply defaults for a new provider and do not change the transport:
 | Preset | Base URL | Session header |
 | --- | --- | --- |
 | OpenCode Go | `https://opencode.ai/zen/go/v1` | `x-opencode-session`, which OpenCode Go uses for routing and prompt caching |
+| ChatGPT (subscription) | `https://chatgpt.com/backend-api/codex`, fixed | `session_id`, fixed |
 | OpenRouter | `https://openrouter.ai/api/v1` | None |
 | OpenAI-compatible | Supplied by the user | None |
 
@@ -83,6 +90,43 @@ temporary file published atomically, and recovery of the previous file only
 when the final file is missing. Malformed or newer documents are typed errors
 and are never replaced with defaults.
 
+### ChatGPT subscription
+
+A ChatGPT provider uses the user's ChatGPT plan instead of an API key.
+OpenAI offers no official way for third-party applications to do this.
+Aeria follows the approach of other open-source agents such as Hermes Agent:
+the sign-in of the public Codex client and the Codex backend. The settings
+card states that the method is unofficial, may stop working at any time, and
+counts against the plan's Codex limits.
+
+- **Sign-in** uses the device-code flow. Aeria requests a code from
+  `auth.openai.com`, opens `https://auth.openai.com/codex/device` in the
+  default browser, and shows the code. It then polls until the user confirms,
+  for at most 15 minutes, and exchanges the result for tokens. One sign-in
+  waits at a time; starting another replaces it, and it can be cancelled.
+- **Credentials**: only the refresh token is stored in the OS credential
+  store, under the provider's entry. The short-lived access token is kept in
+  memory and refreshed before it expires. Refreshes are serialized, and a
+  refresh token that OpenAI rotates replaces the stored one before the new
+  access token is used. A refused refresh reports `aiChatGptSignInRequired`.
+  Signing out deletes the stored token and the cached access token.
+- **Requests** go to `POST {base}/responses` with `stream: true`,
+  `store: false`, Angelica's system message as `instructions`, and the
+  conversation as typed input items (`message`, `function_call`, and
+  `function_call_output`). Reasoning is requested with a summary and never
+  replayed between requests. Requests carry the access token, the account and
+  data-residency headers taken from the token's claims, `session_id` set to
+  the conversation ID, and `originator: aeria`. Aeria identifies itself and
+  does not present itself as Codex. A response that fails for a plan limit is
+  reported as rate limiting.
+- **Models** come from the Codex catalog, `GET {base}/models?client_version=…`,
+  which also states each model's context window and reasoning levels. Hidden
+  models are skipped.
+
+A ChatGPT provider cannot hold an API key or a session header, and its base
+URL cannot change. Extra headers are allowed; the identity headers above
+always replace configured ones with the same name.
+
 ### Credentials
 
 API keys are stored only in the OS credential store (Windows Credential
@@ -90,7 +134,8 @@ Manager, the Secret Service on Linux, or the macOS Keychain) under the service
 `Aeria` and the account `ai-provider/<provider id>`. They are never written to
 settings, logs, errors, or IPC responses; the renderer sees only whether a key
 is stored, missing, or unreadable. Removing a provider deletes its key first,
-so a provider is never forgotten while its key remains.
+so a provider is never forgotten while its key remains. For a ChatGPT
+provider the stored secret is the refresh token described above.
 
 ## Angelica
 

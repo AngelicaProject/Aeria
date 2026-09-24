@@ -11,8 +11,9 @@ use tauri::Manager;
 
 pub use ai::{
     AiConnectionCheckDto, AiProviderDto, AiProviderInputDto, AiProviderPresetDto, AiSettingsDto,
-    ApiKeyStateDto, ai_clear_api_key, ai_list_remote_models, ai_remove_provider, ai_save_provider,
-    ai_set_agent_model, ai_set_api_key, ai_settings, ai_test_connection,
+    ApiKeyStateDto, ChatGptLoginDto, ChatGptLoginEventDto, ai_chatgpt_login_cancel,
+    ai_chatgpt_login_start, ai_clear_api_key, ai_list_remote_models, ai_remove_provider,
+    ai_save_provider, ai_set_agent_model, ai_set_api_key, ai_settings, ai_test_connection,
 };
 pub use angelica::{
     AngelicaEventDto, ConversationDto, ConversationSummaryDto, angelica_cancel,
@@ -65,6 +66,7 @@ fn app_info() -> AppInfo {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_opener::init())
         .manage(DesktopState::new())
         .setup(|app| {
             app.state::<DesktopState>()
@@ -117,6 +119,8 @@ pub fn run() {
             ai_set_agent_model,
             ai_list_remote_models,
             ai_test_connection,
+            ai_chatgpt_login_start,
+            ai_chatgpt_login_cancel,
             angelica_conversations,
             angelica_conversation,
             angelica_delete_conversation,

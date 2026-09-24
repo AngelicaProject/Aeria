@@ -1,5 +1,8 @@
 import { useEffect, useId, useState } from "react";
+import { listen } from "@tauri-apps/api/event";
 import {
+  aiChatGptLoginCancel,
+  aiChatGptLoginStart,
   aiClearApiKey,
   aiListRemoteModels,
   aiRemoveProvider,
@@ -23,6 +26,7 @@ import {
   syncModels,
   toggleEffort,
 } from "../aiSettings";
+import type { ChatGptLoginDto, ChatGptLoginEventDto } from "../types";
 import type { AiHeaderConfig, AiModelConfig, AiProviderDto, AiProviderPresetDto, AiSettingsDto, CommandError, ReasoningEffort } from "../types";
 import { ErrorBanner } from "./ErrorBanner";
 import { UiIcon } from "../ui/primitives/UiIcon";
@@ -38,6 +42,7 @@ const effortLabels: Readonly<Record<ReasoningEffort, MessageKey>> = {
   low: "ai.effort.low",
   medium: "ai.effort.medium",
   high: "ai.effort.high",
+  xhigh: "ai.effort.xhigh",
 };
 
 /** Local AI provider settings: presets, keys, models, and connection checks. */
@@ -160,9 +165,9 @@ function ProviderCard({ provider, disabled, apply, run }: { provider: AiProvider
   };
 
   const syncFromProvider = async () => {
-    const ids = await run(() => aiListRemoteModels(provider.id));
-    if (!ids) return;
-    const result = syncModels(provider.models, ids);
+    const remote = await run(() => aiListRemoteModels(provider.id));
+    if (!remote) return;
+    const result = syncModels(provider.models, remote);
     if (await saveModels(result.models)) setSyncResult({ added: result.added, removed: result.removed });
   };
 
@@ -180,7 +185,10 @@ function ProviderCard({ provider, disabled, apply, run }: { provider: AiProvider
     }
   };
 
-  const keyLabel: Record<AiProviderDto["apiKey"], MessageKey> = { stored: "ai.settings.keyStored", missing: "ai.settings.keyMissing", unavailable: "ai.settings.keyUnavailable" };
+  const chatGpt = provider.kind === "chatGpt";
+  const keyLabel: Record<AiProviderDto["apiKey"], MessageKey> = chatGpt
+    ? { stored: "ai.chatGpt.signedIn", missing: "ai.chatGpt.signedOut", unavailable: "ai.settings.keyUnavailable" }
+    : { stored: "ai.settings.keyStored", missing: "ai.settings.keyMissing", unavailable: "ai.settings.keyUnavailable" };
 
   return (
     <section className="ai-provider" aria-label={provider.name}>
@@ -197,6 +205,7 @@ function ProviderCard({ provider, disabled, apply, run }: { provider: AiProvider
         )}
       </header>
 
+      {chatGpt ? <ChatGptSignIn provider={provider} disabled={disabled} apply={apply} onSignedIn={() => { if (provider.models.length === 0) void syncFromProvider(); }} /> : <>
       <label className="field">
         <span className="field-label">{t("ai.settings.baseUrl")}</span>
         <input className="input" value={baseUrl} disabled={disabled} spellCheck={false} onChange={(event) => setBaseUrl(event.target.value)} onBlur={() => saveField({ baseUrl })} onKeyDown={(event) => { if (event.key === "Enter") event.currentTarget.blur(); }} />
@@ -221,6 +230,7 @@ function ProviderCard({ provider, disabled, apply, run }: { provider: AiProvider
       <p className="field-hint">{t("ai.settings.keyHint")}</p>
 
       <HeaderSettings provider={provider} disabled={disabled} apply={apply} />
+      </>}
 
       <div className="ai-models-head">
         <strong>{t("ai.settings.models")}</strong>
@@ -298,6 +308,65 @@ function ModelRow({ model, disabled, test, canTest, onToggleEffort, onContextWin
   );
 }
 
+function ChatGptSignIn({ provider, disabled, apply, onSignedIn }: { provider: AiProviderDto; disabled: boolean; apply: (operation: () => Promise<AiSettingsDto>) => Promise<boolean>; onSignedIn: () => void }) {
+  const { t } = useI18n();
+  const [login, setLogin] = useState<ChatGptLoginDto | null>(null);
+  const [failure, setFailure] = useState<string | null>(null);
+  const [starting, setStarting] = useState(false);
+
+  useEffect(() => {
+    if (!login) return;
+    const subscription = listen<ChatGptLoginEventDto>("ai://chatgpt-login", ({ payload }) => {
+      if (payload.loginId !== login.loginId) return;
+      setLogin(null);
+      if (payload.succeeded) {
+        void apply(() => aiSettings()).then(onSignedIn);
+      } else {
+        setFailure(payload.message ?? payload.code ?? "");
+      }
+    });
+    return () => { void subscription.then((unlisten) => unlisten()); };
+  }, [apply, login, onSignedIn]);
+
+  const start = async () => {
+    setFailure(null);
+    setStarting(true);
+    try {
+      setLogin(await aiChatGptLoginStart(provider.id));
+    } catch (reason) {
+      setFailure((reason as CommandError).message);
+    } finally {
+      setStarting(false);
+    }
+  };
+
+  return (
+    <div className="ai-chatgpt">
+      <p className="ai-chatgpt-warning"><UiIcon icon="triangleAlert" size="sm" />{t("ai.chatGpt.warning")}</p>
+      {login ? (
+        <div className="ai-chatgpt-code">
+          <p>{t(login.browserOpened ? "ai.chatGpt.enterCode" : "ai.chatGpt.openAndEnterCode", { url: login.verificationUrl })}</p>
+          <code className="ai-chatgpt-user-code">{login.userCode}</code>
+          <div className="ai-chatgpt-actions">
+            <button className="button button-ghost" type="button" onClick={() => void navigator.clipboard?.writeText(login.userCode)}><UiIcon icon="copy" size="sm" />{t("ai.chatGpt.copyCode")}</button>
+            <button className="button button-ghost" type="button" onClick={() => { void aiChatGptLoginCancel(login.loginId); setLogin(null); }}>{t("common.cancel")}</button>
+          </div>
+          <p className="field-hint">{t("ai.chatGpt.waiting")}</p>
+        </div>
+      ) : (
+        <div className="ai-chatgpt-actions">
+          {provider.apiKey === "stored" ? (
+            <button className="button button-ghost" type="button" disabled={disabled} onClick={() => void apply(() => aiClearApiKey(provider.id))}>{t("ai.chatGpt.signOut")}</button>
+          ) : (
+            <button className="button button-primary" type="button" disabled={disabled || starting} onClick={() => void start()}>{t("ai.chatGpt.signIn")}</button>
+          )}
+        </div>
+      )}
+      {failure ? <p className="ai-test-result failed"><UiIcon icon="circleAlert" size="xs" />{failure}</p> : null}
+    </div>
+  );
+}
+
 function HeaderSettings({ provider, disabled, apply }: { provider: AiProviderDto; disabled: boolean; apply: (operation: () => Promise<AiSettingsDto>) => Promise<boolean> }) {
   const { t } = useI18n();
   const sessionId = useId();
@@ -356,7 +425,7 @@ function AddProvider({ presets, disabled, apply }: { presets: AiProviderPresetDt
             if (preset.baseUrl === null) { setCustom(preset); return; }
             void apply(() => aiSaveProvider(providerFromPreset(preset)));
           }}>
-            <UiIcon icon="plus" size="sm" />{preset.name}
+            <UiIcon icon="plus" size="sm" />{preset.kind === "chatGpt" ? t("ai.chatGpt.preset") : preset.name}
           </button>
         ))}
       </div>

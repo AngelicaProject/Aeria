@@ -381,8 +381,8 @@ export type GitFinishDto = {
   deletedBranch: string | null;
 };
 
-export type AiProviderKind = "openCodeGo" | "openRouter" | "custom";
-export type ReasoningEffort = "minimal" | "low" | "medium" | "high";
+export type AiProviderKind = "openCodeGo" | "openRouter" | "custom" | "chatGpt";
+export type ReasoningEffort = "minimal" | "low" | "medium" | "high" | "xhigh";
 export type ApiKeyState = "stored" | "missing" | "unavailable";
 
 export type AiModelConfig = {
@@ -432,6 +432,10 @@ export type AiProviderInput = {
   sessionHeader: string | null;
   headers: AiHeaderConfig[];
 };
+
+export type ChatGptLoginDto = { loginId: string; userCode: string; verificationUrl: string; browserOpened: boolean };
+
+export type ChatGptLoginEventDto = { loginId: string; providerId: string; succeeded: boolean; code: string | null; message: string | null };
 
 export type AiConnectionCheckDto = {
   latencyMs: number;

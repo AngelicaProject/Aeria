@@ -41,8 +41,8 @@ test("a stored provider becomes a replacement input without its key state", () =
 });
 
 test("syncing models follows the provider list and keeps known settings", () => {
-  const result = syncModels([model("glm-5.3", ["high"]), model("retired")], ["kimi-k3", "glm-5.3", "kimi-k3", " "]);
-  assert.deepEqual(result.models, [model("kimi-k3"), model("glm-5.3", ["high"])]);
+  const result = syncModels([model("glm-5.3", ["high"]), model("retired")], [model("kimi-k3", ["low"]), { id: "glm-5.3", contextWindow: 200000, reasoningEfforts: ["low"] }, model("kimi-k3"), model(" ")]);
+  assert.deepEqual(result.models, [model("kimi-k3", ["low"]), { id: "glm-5.3", contextWindow: 200000, reasoningEfforts: ["high"] }]);
   assert.equal(result.added, 1);
   assert.equal(result.removed, 1);
 });
@@ -62,6 +62,9 @@ test("efforts toggle in canonical order", () => {
   models = toggleEffort(models, "glm-5.3", "high");
   models = toggleEffort(models, "glm-5.3", "minimal");
   assert.deepEqual(models[0].reasoningEfforts, ["minimal", "high"]);
+  models = toggleEffort(models, "glm-5.3", "xhigh");
+  assert.deepEqual(models[0].reasoningEfforts, ["minimal", "high", "xhigh"]);
+  models = toggleEffort(models, "glm-5.3", "xhigh");
   models = toggleEffort(models, "glm-5.3", "high");
   assert.deepEqual(models[0].reasoningEfforts, ["minimal"]);
 });

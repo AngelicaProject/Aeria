@@ -8,8 +8,12 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use thiserror::Error;
 
-use crate::chat::{AssistantResponse, ChatRequest, StreamAccumulator, StreamDelta, StreamError};
-use crate::provider::{BaseUrl, ReasoningEffort};
+use crate::chat::{
+    AssistantResponse, ChatMessage, ChatRequest, StreamAccumulator, StreamDelta, StreamError,
+};
+use crate::chatgpt::parse_model_catalog;
+use crate::provider::{BaseUrl, ModelConfig, Protocol, ReasoningEffort};
+use crate::responses::{self, ResponsesAccumulator};
 use crate::secrets::ApiKey;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
@@ -32,6 +36,7 @@ pub struct ProviderEndpoint {
     pub session_header: Option<String>,
     /// Validated extra static headers.
     pub headers: Vec<(String, String)>,
+    pub protocol: Protocol,
 }
 
 impl ProviderEndpoint {
@@ -45,7 +50,11 @@ impl ProviderEndpoint {
         for (name, value) in &self.headers {
             request = request.header(name, value);
         }
-        if let (Some(name), Some(session)) = (&self.session_header, session) {
+        let session_header = match self.protocol {
+            Protocol::CodexResponses => Some("session_id"),
+            Protocol::ChatCompletions => self.session_header.as_deref(),
+        };
+        if let (Some(name), Some(session)) = (session_header, session) {
             request = request.header(name, session);
         }
         request
@@ -118,11 +127,18 @@ impl OpenAiCompatibleClient {
         Ok(Self { http })
     }
 
-    /// Lists the model IDs the provider reports at `GET /models`, sorted and
-    /// without duplicates.
+    /// The shared HTTP client.
+    pub(crate) fn http(&self) -> &reqwest::Client {
+        &self.http
+    }
+
+    /// Lists the models the provider reports, sorted by ID and without
+    /// duplicates.
     ///
-    /// Some providers list models that are not served through Chat
-    /// Completions; a listed model still has to pass [`Self::check_model`].
+    /// Chat Completions providers list IDs at `GET /models`; some list models
+    /// they serve only through other APIs, so a listed model still has to
+    /// pass [`Self::check_model`]. The Codex backend's catalog also states
+    /// context windows and reasoning levels.
     ///
     /// # Errors
     ///
@@ -130,7 +146,7 @@ impl OpenAiCompatibleClient {
     pub async fn list_models(
         &self,
         endpoint: &ProviderEndpoint,
-    ) -> Result<Vec<String>, ProviderError> {
+    ) -> Result<Vec<ModelConfig>, ProviderError> {
         #[derive(Deserialize)]
         struct ModelList {
             data: Vec<ModelEntry>,
@@ -140,33 +156,58 @@ impl OpenAiCompatibleClient {
             id: String,
         }
 
-        let request = endpoint
-            .authorize(self.http.get(endpoint.base_url.endpoint("models")), None)
-            .timeout(MODELS_TIMEOUT);
-        let body = send(request, &endpoint.api_key).await?;
-        let list: ModelList =
-            serde_json::from_value(body).map_err(|error| ProviderError::InvalidResponse {
-                message: format!("model list: {error}"),
-            })?;
-        if list.data.len() > MAX_REMOTE_MODELS {
+        let mut models = match endpoint.protocol {
+            Protocol::ChatCompletions => {
+                let request = endpoint
+                    .authorize(self.http.get(endpoint.base_url.endpoint("models")), None)
+                    .timeout(MODELS_TIMEOUT);
+                let body = send(request, &endpoint.api_key).await?;
+                let list: ModelList = serde_json::from_value(body).map_err(|error| {
+                    ProviderError::InvalidResponse {
+                        message: format!("model list: {error}"),
+                    }
+                })?;
+                list.data
+                    .into_iter()
+                    .map(|entry| entry.id.trim().to_owned())
+                    .filter(|id| !id.is_empty())
+                    .map(ModelConfig::new)
+                    .collect::<Vec<_>>()
+            }
+            Protocol::CodexResponses => {
+                // The catalog hides models newer than the stated client
+                // version; an empty answer is retried without the gate.
+                let mut models = Vec::new();
+                for version in ["99.0.0", "0.0.0"] {
+                    let request = endpoint
+                        .authorize(
+                            self.http
+                                .get(endpoint.base_url.endpoint("models"))
+                                .query(&[("client_version", version)]),
+                            None,
+                        )
+                        .timeout(MODELS_TIMEOUT);
+                    models = parse_model_catalog(&send(request, &endpoint.api_key).await?);
+                    if !models.is_empty() {
+                        break;
+                    }
+                }
+                models
+            }
+        };
+        if models.len() > MAX_REMOTE_MODELS {
             return Err(ProviderError::InvalidResponse {
                 message: format!("model list has more than {MAX_REMOTE_MODELS} entries"),
             });
         }
-        let mut ids: Vec<String> = list
-            .data
-            .into_iter()
-            .map(|entry| entry.id)
-            .filter(|id| !id.trim().is_empty())
-            .collect();
-        ids.sort();
-        ids.dedup();
-        Ok(ids)
+        models.sort_by(|left, right| left.id.cmp(&right.id));
+        models.dedup_by(|left, right| left.id == right.id);
+        Ok(models)
     }
 
-    /// Sends one minimal Chat Completions request to confirm that the key,
-    /// endpoint, model, effort, and headers are accepted. The check uses its
-    /// own one-off session ID.
+    /// Sends one minimal request to confirm that the credentials, endpoint,
+    /// model, effort, and headers are accepted. The check uses its own
+    /// one-off session ID.
     ///
     /// # Errors
     ///
@@ -177,6 +218,28 @@ impl OpenAiCompatibleClient {
         model: &str,
         effort: Option<ReasoningEffort>,
     ) -> Result<ModelCheck, ProviderError> {
+        let session = uuid::Uuid::new_v4().to_string();
+        let started = Instant::now();
+        if endpoint.protocol == Protocol::CodexResponses {
+            let messages = [ChatMessage::User {
+                content: "Reply with the single word OK.".to_owned(),
+            }];
+            let request = ChatRequest {
+                model,
+                effort,
+                system: "Answer briefly.",
+                messages: &messages,
+                tools: &[],
+                turn_start: 0,
+            };
+            let (_, answered_by) = self
+                .stream_codex(endpoint, &session, &request, &mut |_| {})
+                .await?;
+            return Ok(ModelCheck {
+                model: answered_by,
+                latency: started.elapsed(),
+            });
+        }
         let mut body = json!({
             "model": model,
             "messages": [{ "role": "user", "content": "Reply with the single word OK." }],
@@ -186,7 +249,6 @@ impl OpenAiCompatibleClient {
         if let Some(effort) = effort {
             body["reasoning_effort"] = Value::from(effort.as_str());
         }
-        let session = uuid::Uuid::new_v4().to_string();
         let request = endpoint
             .authorize(
                 self.http
@@ -195,8 +257,6 @@ impl OpenAiCompatibleClient {
             )
             .timeout(CHECK_TIMEOUT)
             .json(&body);
-
-        let started = Instant::now();
         let response = send(request, &endpoint.api_key).await?;
         let latency = started.elapsed();
         if response
@@ -217,9 +277,8 @@ impl OpenAiCompatibleClient {
         })
     }
 
-    /// Streams one Chat Completions response, passing text and reasoning
-    /// deltas to `on_delta` as they arrive, and returns the assembled
-    /// response.
+    /// Streams one response, passing text and reasoning deltas to
+    /// `on_delta` as they arrive, and returns the assembled response.
     ///
     /// Dropping the returned future cancels the request.
     ///
@@ -234,27 +293,15 @@ impl OpenAiCompatibleClient {
         request: &ChatRequest<'_>,
         on_delta: &mut (dyn FnMut(StreamDelta) + Send),
     ) -> Result<AssistantResponse, ProviderError> {
-        let mut response = endpoint
-            .authorize(
-                self.http
-                    .post(endpoint.base_url.endpoint("chat/completions")),
-                Some(session),
-            )
-            .json(&request.body())
-            .send()
-            .await
-            .map_err(|error| transport_error(&error, &endpoint.api_key))?;
-        let status = response.status();
-        if !status.is_success() {
-            let text = response
-                .text()
+        if endpoint.protocol == Protocol::CodexResponses {
+            return self
+                .stream_codex(endpoint, session, request, on_delta)
                 .await
-                .map_err(|error| transport_error(&error, &endpoint.api_key))?;
-            return Err(status_error(
-                status,
-                &provider_message(&text, &endpoint.api_key),
-            ));
+                .map(|(response, _)| response);
         }
+        let mut response = self
+            .open_stream(endpoint, "chat/completions", session, &request.body())
+            .await?;
         let invalid = |error: StreamError| ProviderError::InvalidResponse {
             message: redact(&error.0, &endpoint.api_key),
         };
@@ -270,6 +317,79 @@ impl OpenAiCompatibleClient {
             }
         }
         accumulator.finish(on_delta).map_err(invalid)
+    }
+
+    async fn stream_codex(
+        &self,
+        endpoint: &ProviderEndpoint,
+        session: &str,
+        request: &ChatRequest<'_>,
+        on_delta: &mut (dyn FnMut(StreamDelta) + Send),
+    ) -> Result<(AssistantResponse, Option<String>), ProviderError> {
+        let body = responses::request_body(request, session);
+        let mut response = self
+            .open_stream(endpoint, "responses", session, &body)
+            .await?;
+        let invalid =
+            |error: StreamError| classify_stream_failure(&redact(&error.0, &endpoint.api_key));
+        let mut accumulator = ResponsesAccumulator::default();
+        while let Some(chunk) = response
+            .chunk()
+            .await
+            .map_err(|error| transport_error(&error, &endpoint.api_key))?
+        {
+            accumulator.push(&chunk, on_delta).map_err(invalid)?;
+            if accumulator.is_done() {
+                break;
+            }
+        }
+        accumulator.finish(on_delta).map_err(invalid)
+    }
+
+    async fn open_stream(
+        &self,
+        endpoint: &ProviderEndpoint,
+        path: &str,
+        session: &str,
+        body: &Value,
+    ) -> Result<reqwest::Response, ProviderError> {
+        let response = endpoint
+            .authorize(
+                self.http.post(endpoint.base_url.endpoint(path)),
+                Some(session),
+            )
+            .header("accept", "text/event-stream")
+            .json(body)
+            .send()
+            .await
+            .map_err(|error| transport_error(&error, &endpoint.api_key))?;
+        let status = response.status();
+        if status.is_success() {
+            return Ok(response);
+        }
+        let text = response
+            .text()
+            .await
+            .map_err(|error| transport_error(&error, &endpoint.api_key))?;
+        Err(status_error(
+            status,
+            &provider_message(&text, &endpoint.api_key),
+        ))
+    }
+}
+
+/// A failed Codex response reports plan limits in its message; they are
+/// shown as rate limiting so the user knows to wait rather than reconfigure.
+fn classify_stream_failure(message: &str) -> ProviderError {
+    let lower = message.to_lowercase();
+    if lower.contains("usage limit") || lower.contains("rate limit") {
+        ProviderError::RateLimited {
+            message: message.to_owned(),
+        }
+    } else {
+        ProviderError::InvalidResponse {
+            message: message.to_owned(),
+        }
     }
 }
 
@@ -307,6 +427,10 @@ fn transport_error(error: &reqwest::Error, key: &ApiKey) -> ProviderError {
     ProviderError::Network {
         message: redact(&error.to_string(), key),
     }
+}
+
+pub(crate) fn status_error_for(status: StatusCode, message: &str) -> ProviderError {
+    status_error(status, message)
 }
 
 fn status_error(status: StatusCode, message: &str) -> ProviderError {
@@ -414,6 +538,7 @@ mod tests {
             api_key: ApiKey::new(KEY).expect("key"),
             session_header: None,
             headers: Vec::new(),
+            protocol: Protocol::ChatCompletions,
         }
     }
 
@@ -485,6 +610,63 @@ mod tests {
     }
 
     #[test]
+    fn codex_requests_use_responses_with_session_and_identity_headers() {
+        let events = [
+            r#"{"type":"response.output_text.delta","delta":"OK"}"#,
+            r#"{"type":"response.completed","response":{"status":"completed","model":"gpt-5.5","usage":{"input_tokens":3,"output_tokens":1}}}"#,
+        ];
+        let body = format!(
+            "data: {}
+
+data: {}
+
+",
+            events[0], events[1]
+        );
+        let (url, server) = serve_once("200 OK", &body);
+        let mut endpoint = endpoint(&url);
+        endpoint.protocol = Protocol::CodexResponses;
+        endpoint.headers = vec![
+            ("originator".to_owned(), "aeria".to_owned()),
+            ("chatgpt-account-id".to_owned(), "acct-1".to_owned()),
+        ];
+        let client = OpenAiCompatibleClient::new().expect("client");
+        let check = runtime()
+            .block_on(client.check_model(&endpoint, "gpt-5.5", Some(ReasoningEffort::High)))
+            .expect("check succeeds");
+        assert_eq!(check.model.as_deref(), Some("gpt-5.5"));
+
+        let request = server.join().expect("server");
+        assert!(request.starts_with("POST /v1/responses "), "{request}");
+        let lower = request.to_ascii_lowercase();
+        assert!(lower.contains("originator: aeria"));
+        assert!(lower.contains("chatgpt-account-id: acct-1"));
+        assert!(lower.contains("session_id: "));
+        let sent: Value =
+            serde_json::from_str(request.split("\r\n\r\n").nth(1).expect("body")).expect("json");
+        assert_eq!(sent["store"], false);
+        assert_eq!(sent["reasoning"]["effort"], "high");
+        assert_eq!(sent["input"][0]["content"][0]["type"], "input_text");
+    }
+
+    #[test]
+    fn codex_limit_failures_are_reported_as_rate_limits() {
+        let body = "data: {\"type\":\"response.failed\",\"response\":{\"error\":{\"message\":\"You've hit your usage limit\"}}}\n\n";
+        let (url, server) = serve_once("200 OK", body);
+        let mut endpoint = endpoint(&url);
+        endpoint.protocol = Protocol::CodexResponses;
+        let client = OpenAiCompatibleClient::new().expect("client");
+        let error = runtime()
+            .block_on(client.check_model(&endpoint, "gpt-5.5", None))
+            .expect_err("limit reached");
+        server.join().expect("server");
+        assert!(
+            matches!(error, ProviderError::RateLimited { .. }),
+            "{error:?}"
+        );
+    }
+
+    #[test]
     fn check_model_omits_effort_when_none_is_selected() {
         let (url, server) = serve_once("200 OK", r#"{"choices":[{}]}"#);
         let client = OpenAiCompatibleClient::new().expect("client");
@@ -549,7 +731,13 @@ mod tests {
             .expect("models");
         let request = server.join().expect("server");
         assert!(request.starts_with("GET /v1/models "), "{request}");
-        assert_eq!(models, vec!["glm-5.3".to_owned(), "kimi-k3".to_owned()]);
+        assert_eq!(
+            models
+                .iter()
+                .map(|model| model.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["glm-5.3", "kimi-k3"]
+        );
     }
 
     #[test]

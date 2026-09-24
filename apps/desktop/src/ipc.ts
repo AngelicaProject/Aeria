@@ -1,6 +1,8 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
   AiConnectionCheckDto,
+  AiModelConfig,
+  ChatGptLoginDto,
   ConversationDto,
   ConversationSummaryDto,
   EditorContextDto,
@@ -289,8 +291,16 @@ export function aiSetAgentModel(selection: AiModelSelection | null): Promise<AiS
   return call<AiSettingsDto>("ai_set_agent_model", { selection });
 }
 
-export function aiListRemoteModels(providerId: string): Promise<string[]> {
-  return call<string[]>("ai_list_remote_models", { providerId });
+export function aiListRemoteModels(providerId: string): Promise<AiModelConfig[]> {
+  return call<AiModelConfig[]>("ai_list_remote_models", { providerId });
+}
+
+export function aiChatGptLoginStart(providerId: string): Promise<ChatGptLoginDto> {
+  return call<ChatGptLoginDto>("ai_chatgpt_login_start", { providerId });
+}
+
+export function aiChatGptLoginCancel(loginId: string): Promise<void> {
+  return call<void>("ai_chatgpt_login_cancel", { loginId });
 }
 
 export function aiTestConnection(providerId: string, modelId: string, effort: ReasoningEffort | null): Promise<AiConnectionCheckDto> {

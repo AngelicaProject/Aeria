@@ -161,6 +161,15 @@ saved or an effort enabled. Failures map to stable `ai*` codes such as
 `aiApiKeyMissing`, `aiUnauthorized`, `aiEndpointNotFound`, `aiRateLimited`,
 `aiInvalidSettings`, and `aiSecretStoreUnavailable`.
 
+`ai_chatgpt_login_start` starts the ChatGPT device sign-in for a ChatGPT
+provider, opens the sign-in page in the default browser through the opener
+plugin, and returns the code to show. Polling and the token exchange run in a
+registered async task; the result arrives as an `ai://chatgpt-login` event
+with the provider ID and either success or a typed error.
+`ai_chatgpt_login_cancel` stops a waiting sign-in. Provider commands resolve a
+ChatGPT provider's endpoint through the in-memory access-token cache in
+`DesktopState`, whose async lock also serializes token refreshes.
+
 Angelica commands (`angelica_conversations`, `angelica_conversation`,
 `angelica_send`, `angelica_cancel`, and `angelica_delete_conversation`) work on
 the active project's conversations described in [`ai.md`](./ai.md#angelica).

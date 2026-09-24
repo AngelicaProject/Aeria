@@ -12,6 +12,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use aeria_ai::ModelSelection;
 use aeria_ai::agent::{AgentEvent, ToolExecutor, TurnConfig, TurnOutcome, run_turn};
 use aeria_ai::chat::{ChatMessage, ToolCall, Usage};
 use aeria_ai::conversation::{
@@ -22,7 +23,6 @@ use aeria_ai::tools::{
     CellSnapshot, ContextCell, ProjectFacts, ProjectReader, ReadTools, ReviewLabel, RowSnapshot,
     RowsPage, SheetSummary, ToolError, ToolOutput, UnitLocation, read_tool_definitions,
 };
-use aeria_ai::{KeyringSecretStore, ModelSelection};
 use aeria_core::ReviewState;
 use aeria_workspace::{ProjectSession, TranslationRowCursor, TranslationRowView};
 use serde::Serialize;
@@ -30,7 +30,7 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use tauri::{Emitter, Manager};
 
-use crate::ai::{provider_endpoint, settings_store};
+use crate::ai::{resolve_endpoint, settings_store};
 use crate::commands::{parse_translation_unit_id, run_blocking};
 use crate::dto::{ProjectSummaryDto, SourceBindingDto};
 use crate::error::CommandError;
@@ -558,6 +558,7 @@ fn prepare_turn(
     text: &str,
     selection: ModelSelection,
     editor: &EditorContext,
+    endpoint: aeria_ai::ProviderEndpoint,
 ) -> CommandResult<PreparedTurn> {
     if let Some(id) = conversation_id
         && app.state::<DesktopState>().angelica_turn_running(id)
@@ -570,7 +571,6 @@ fn prepare_turn(
         .selected_model(&selection)
         .map_err(|message| CommandError::new("aiInvalidSettings", message))?
         .clone();
-    let endpoint = provider_endpoint(&settings_store, &KeyringSecretStore, &selection.provider_id)?;
     let facts = DesktopReader { app: app.clone() }.facts().ok();
     let system = system_prompt(facts.as_ref(), editor);
 
@@ -699,6 +699,7 @@ pub async fn angelica_send(
             format!("a message must have 1 to {MAX_MESSAGE_CHARS} characters"),
         ));
     }
+    let endpoint = resolve_endpoint(&app, model.provider_id.clone()).await?;
     let prepare_app = app.clone();
     let prepared = run_blocking(move || {
         prepare_turn(
@@ -707,6 +708,7 @@ pub async fn angelica_send(
             &text,
             model,
             &editor.unwrap_or_default(),
+            endpoint,
         )
     })
     .await?;

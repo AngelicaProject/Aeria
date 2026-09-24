@@ -265,6 +265,12 @@ session header and extra headers and warns that header values are not secret
 storage. New providers come from preset buttons; the OpenAI-compatible preset
 first asks for a base URL. Removing a provider asks for confirmation inline.
 
+A ChatGPT (subscription) card has no base URL, key, or header fields. It
+shows the unofficial-use warning, **Sign in with ChatGPT**, and, while a
+sign-in waits, the code to enter with a copy action and **Cancel**. A
+successful sign-in loads the plan's models; **Sign out** removes the stored
+token.
+
 On supported Windows versions, the launcher, workbench, and tool windows use the
 system Acrylic backdrop and follow the selected light or dark theme. The
 backdrop is visible through the titlebar, activity rails, launcher sidebar, and

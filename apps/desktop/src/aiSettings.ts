@@ -1,7 +1,7 @@
 import type { AiHeaderConfig, AiModelConfig, AiModelSelection, AiProviderDto, AiProviderInput, AiProviderPresetDto, ReasoningEffort } from "./types";
 
 /** Effort values in the order the settings UI offers them. */
-export const reasoningEfforts: readonly ReasoningEffort[] = ["minimal", "low", "medium", "high"];
+export const reasoningEfforts: readonly ReasoningEffort[] = ["minimal", "low", "medium", "high", "xhigh"];
 
 /** Builds the input for creating a provider from a preset. Models come from the provider later. */
 export function providerFromPreset(preset: AiProviderPresetDto, baseUrl = preset.baseUrl ?? ""): AiProviderInput {
@@ -24,16 +24,28 @@ export function providerInput(provider: AiProviderDto, changes: Partial<Omit<AiP
 
 /**
  * Replaces the model list with the provider's own listing. Models the
- * provider still reports keep their configured efforts and context window.
+ * provider still reports keep the efforts and context window the user set;
+ * what the user left unknown is taken from the listing.
  */
-export function syncModels(models: readonly AiModelConfig[], remoteIds: readonly string[]): { models: AiModelConfig[]; added: number; removed: number } {
+export function syncModels(models: readonly AiModelConfig[], remote: readonly AiModelConfig[]): { models: AiModelConfig[]; added: number; removed: number } {
   const configured = new Map(models.map((model) => [model.id, model]));
-  const next = addModels([], remoteIds).map((model) => configured.get(model.id) ?? model);
-  const remote = new Set(next.map((model) => model.id));
+  const listed = new Map<string, AiModelConfig>();
+  for (const model of remote) if (!listed.has(model.id.trim())) listed.set(model.id.trim(), model);
+  const next = addModels([], remote.map((model) => model.id)).map((model) => {
+    const reported = listed.get(model.id) ?? model;
+    const own = configured.get(model.id);
+    if (!own) return { id: model.id, contextWindow: reported.contextWindow, reasoningEfforts: [...reported.reasoningEfforts] };
+    return {
+      id: own.id,
+      contextWindow: own.contextWindow ?? reported.contextWindow,
+      reasoningEfforts: own.reasoningEfforts.length > 0 ? own.reasoningEfforts : [...reported.reasoningEfforts],
+    };
+  });
+  const kept = new Set(next.map((model) => model.id));
   return {
     models: next,
     added: next.filter((model) => !configured.has(model.id)).length,
-    removed: models.filter((model) => !remote.has(model.id)).length,
+    removed: models.filter((model) => !kept.has(model.id)).length,
   };
 }
 

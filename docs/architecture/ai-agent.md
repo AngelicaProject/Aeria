@@ -85,6 +85,7 @@ one transport, not separate code paths:
 | Preset | Notes |
 | --- | --- |
 | OpenCode Go | First ready-made preset, with the `x-opencode-session` session header. |
+| ChatGPT (subscription) | Unofficial sign-in with a ChatGPT plan through the Codex backend; see [`ai.md`](./ai.md#chatgpt-subscription). |
 | OpenRouter | Common community choice. |
 | Custom OpenAI-compatible | User-supplied base URL, for example a local server. |
 

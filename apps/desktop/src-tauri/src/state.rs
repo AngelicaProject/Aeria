@@ -3,6 +3,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
 use aeria_ai::OpenAiCompatibleClient;
+use aeria_ai::chatgpt::AccessToken;
 use aeria_atlas::{CancellationHandle, CancellationToken};
 use aeria_git::{GitExecutable, UnitAttribution};
 use aeria_workspace::ProjectSession;
@@ -19,6 +20,10 @@ pub struct DesktopState {
     attribution: Mutex<Option<AttributionCache>>,
     ai_client: OnceLock<OpenAiCompatibleClient>,
     angelica_turns: Mutex<Vec<(String, tauri::async_runtime::JoinHandle<()>)>>,
+    /// Cached ChatGPT access tokens by provider ID. The async lock also
+    /// serializes token refreshes.
+    chatgpt_tokens: tauri::async_runtime::Mutex<Vec<(String, AccessToken)>>,
+    chatgpt_login: Mutex<Option<(String, tauri::async_runtime::JoinHandle<()>)>>,
 }
 
 /// Committed unit attribution for one repository commit. It is derived from
@@ -53,6 +58,8 @@ impl DesktopState {
             attribution: Mutex::new(None),
             ai_client: OnceLock::new(),
             angelica_turns: Mutex::new(Vec::new()),
+            chatgpt_tokens: tauri::async_runtime::Mutex::const_new(Vec::new()),
+            chatgpt_login: Mutex::new(None),
         }
     }
 
@@ -77,6 +84,43 @@ impl DesktopState {
         }
         let client = OpenAiCompatibleClient::new()?;
         Ok(self.ai_client.get_or_init(|| client).clone())
+    }
+
+    pub(crate) const fn chatgpt_tokens(
+        &self,
+    ) -> &tauri::async_runtime::Mutex<Vec<(String, AccessToken)>> {
+        &self.chatgpt_tokens
+    }
+
+    /// Registers the one waiting ChatGPT sign-in, replacing an earlier one.
+    pub(crate) fn start_chatgpt_login(
+        &self,
+        login_id: String,
+        spawn: impl FnOnce() -> tauri::async_runtime::JoinHandle<()>,
+    ) {
+        if let Ok(mut login) = self.chatgpt_login.lock() {
+            if let Some((_, previous)) = login.take() {
+                previous.abort();
+            }
+            *login = Some((login_id, spawn()));
+        }
+    }
+
+    pub(crate) fn finish_chatgpt_login(&self, login_id: &str) {
+        if let Ok(mut login) = self.chatgpt_login.lock()
+            && login.as_ref().is_some_and(|(id, _)| id == login_id)
+        {
+            *login = None;
+        }
+    }
+
+    pub(crate) fn cancel_chatgpt_login(&self, login_id: &str) {
+        if let Ok(mut login) = self.chatgpt_login.lock()
+            && login.as_ref().is_some_and(|(id, _)| id == login_id)
+            && let Some((_, handle)) = login.take()
+        {
+            handle.abort();
+        }
     }
 
     /// Registers a conversation's running turn. The task is spawned while

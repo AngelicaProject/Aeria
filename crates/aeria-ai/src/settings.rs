@@ -15,8 +15,8 @@ use serde_json::Value;
 use thiserror::Error;
 
 use crate::provider::{
-    BaseUrl, MAX_EXTRA_HEADERS, MAX_NAME_CHARS, ModelConfig, ProviderConfig, ReasoningEffort,
-    validate_header_name, validate_header_value,
+    BaseUrl, CHATGPT_CODEX_BASE_URL, MAX_EXTRA_HEADERS, MAX_NAME_CHARS, ModelConfig,
+    ProviderConfig, ProviderKind, ReasoningEffort, validate_header_name, validate_header_value,
 };
 
 pub const FORMAT_VERSION: u32 = 1;
@@ -183,6 +183,13 @@ pub fn validate_provider(provider: &ProviderConfig) -> Result<(), String> {
     validate_name("provider id", &provider.id)?;
     validate_name("provider name", &provider.name)?;
     BaseUrl::parse(&provider.base_url)?;
+    if provider.kind == ProviderKind::ChatGpt
+        && (provider.base_url != CHATGPT_CODEX_BASE_URL || provider.session_header.is_some())
+    {
+        return Err(format!(
+            "a ChatGPT provider uses {CHATGPT_CODEX_BASE_URL} and its own session header"
+        ));
+    }
     if provider.base_url != provider.base_url.trim() || provider.base_url.ends_with('/') {
         return Err("base URL must be stored in normalized form".to_owned());
     }
@@ -537,7 +544,6 @@ fn publish(partial: &Path, final_path: &Path, previous: &Path) -> Result<(), AiS
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::provider::ProviderKind;
 
     fn provider(id: &str) -> ProviderConfig {
         ProviderConfig {
@@ -654,6 +660,13 @@ mod tests {
                 value: "fixed".to_owned(),
             });
         assert!(validate_provider(&duplicate_header).is_err());
+
+        let mut moved_chatgpt = provider("p1");
+        moved_chatgpt.kind = ProviderKind::ChatGpt;
+        moved_chatgpt.session_header = None;
+        assert!(validate_provider(&moved_chatgpt).is_err());
+        moved_chatgpt.base_url = CHATGPT_CODEX_BASE_URL.to_owned();
+        assert!(validate_provider(&moved_chatgpt).is_ok());
 
         let mut empty_name = provider("p1");
         empty_name.name = "  ".to_owned();

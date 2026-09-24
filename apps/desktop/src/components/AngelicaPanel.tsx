@@ -29,6 +29,7 @@ const effortLabels: Readonly<Record<ReasoningEffort, MessageKey>> = {
   low: "ai.effort.low",
   medium: "ai.effort.medium",
   high: "ai.effort.high",
+  xhigh: "ai.effort.xhigh",
 };
 
 const suggestionKeys: readonly MessageKey[] = ["angelica.suggestion.overview", "angelica.suggestion.selection", "angelica.suggestion.macros"];

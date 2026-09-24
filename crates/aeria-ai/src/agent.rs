@@ -438,6 +438,7 @@ mod tests {
             api_key: ApiKey::new("sk").expect("key"),
             session_header: Some("x-opencode-session".to_owned()),
             headers: Vec::new(),
+            protocol: crate::provider::Protocol::ChatCompletions,
         };
         let client = OpenAiCompatibleClient::new().expect("client");
         let config = TurnConfig {

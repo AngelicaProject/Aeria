@@ -12,15 +12,41 @@ pub const MAX_BASE_URL_CHARS: usize = 2048;
 
 /// The ready-made configuration a provider was created from.
 ///
-/// Every kind uses the same OpenAI-compatible transport; the kind only
-/// records which preset supplied the defaults.
+/// Every kind except [`ProviderKind::ChatGpt`] uses the OpenAI-compatible
+/// Chat Completions transport with an API key.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ProviderKind {
     OpenCodeGo,
     OpenRouter,
     Custom,
+    /// A ChatGPT subscription through the Codex backend, signed in with the
+    /// user's ChatGPT account. Unofficial for third-party applications.
+    ChatGpt,
 }
+
+impl ProviderKind {
+    /// The wire protocol this kind uses.
+    #[must_use]
+    pub const fn protocol(self) -> Protocol {
+        match self {
+            Self::ChatGpt => Protocol::CodexResponses,
+            Self::OpenCodeGo | Self::OpenRouter | Self::Custom => Protocol::ChatCompletions,
+        }
+    }
+}
+
+/// How requests are sent to a provider.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Protocol {
+    /// `POST /chat/completions` with an API key.
+    ChatCompletions,
+    /// The ChatGPT Codex backend's Responses API with a ChatGPT sign-in.
+    CodexResponses,
+}
+
+/// Base URL of the ChatGPT Codex backend.
+pub const CHATGPT_CODEX_BASE_URL: &str = "https://chatgpt.com/backend-api/codex";
 
 /// A reasoning-effort value sent as the `reasoning_effort` request field.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
@@ -30,6 +56,8 @@ pub enum ReasoningEffort {
     Low,
     Medium,
     High,
+    #[serde(rename = "xhigh")]
+    XHigh,
 }
 
 impl ReasoningEffort {
@@ -41,6 +69,7 @@ impl ReasoningEffort {
             Self::Low => "low",
             Self::Medium => "medium",
             Self::High => "high",
+            Self::XHigh => "xhigh",
         }
     }
 }
@@ -200,6 +229,12 @@ pub fn presets() -> Vec<ProviderPreset> {
             name: "OpenCode Go",
             base_url: Some("https://opencode.ai/zen/go/v1"),
             session_header: Some("x-opencode-session"),
+        },
+        ProviderPreset {
+            kind: ProviderKind::ChatGpt,
+            name: "ChatGPT",
+            base_url: Some(CHATGPT_CODEX_BASE_URL),
+            session_header: None,
         },
         ProviderPreset {
             kind: ProviderKind::OpenRouter,
