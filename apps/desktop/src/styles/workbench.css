@@ -547,3 +547,4 @@ button.angelica-chip:hover { background: var(--hover); color: var(--fg); }
 .angelica-proposal-actions { display: flex; justify-content: flex-end; gap: 6px; }
 .angelica-proposal-actions .button { height: 24px; padding: 0 10px; font-size: var(--text-xs); }
 .angelica-proposal-diff.file { max-height: 220px; overflow-y: auto; font-family: var(--font-mono); font-size: var(--text-xs); }
+.angelica-web-link { overflow-wrap: anywhere; font-family: var(--font-mono); font-size: var(--text-2xs); color: var(--fg-muted); }

@@ -276,3 +276,5 @@
 .guide-problems { margin-right: auto; color: var(--bad); font-size: var(--text-xs); }
 .guide-body .dialog-actions .muted { margin-right: auto; font-size: var(--text-xs); }
 .guide-guidance { flex: 1; min-height: 0; padding: 8px 10px; font-family: var(--font-mono); font-size: var(--text-sm); line-height: 1.5; resize: none; }
+.ai-web-domains textarea { font-family: var(--font-mono); font-size: var(--text-sm); resize: vertical; }
+.ai-web-domains-actions { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }

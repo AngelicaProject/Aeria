@@ -116,6 +116,9 @@ pub struct ProposalRecord {
     /// one-line summary.
     #[serde(default)]
     pub job: Option<JobProposal>,
+    /// A domain Angelica asked to read; `target` holds the requested link.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub web: Option<String>,
     /// The string of a translation; `None` for a file change.
     #[serde(default)]
     pub location: Option<UnitLocation>,
@@ -419,6 +422,7 @@ mod tests {
             id: "p1".to_owned(),
             file: None,
             job: None,
+            web: None,
             location: Some(UnitLocation {
                 sheet: "Item".to_owned(),
                 row: 1,

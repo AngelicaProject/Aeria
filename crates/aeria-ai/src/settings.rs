@@ -51,6 +51,10 @@ pub struct AiSettings {
     /// The model for translation-job workers; Angelica's model when unset.
     #[serde(default)]
     pub worker_model: Option<ModelSelection>,
+    /// Domains whose pages Angelica may read without asking, in normalized
+    /// form (see [`crate::web::normalize_domain`]).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub web_domains: Vec<String>,
 }
 
 impl Default for AiSettings {
@@ -60,6 +64,7 @@ impl Default for AiSettings {
             providers: Vec::new(),
             agent_model: None,
             worker_model: None,
+            web_domains: Vec::new(),
         }
     }
 }
@@ -185,6 +190,21 @@ impl AiSettings {
             && let Some(message) = self.selection_error(selection)
         {
             return Err(format!("workerModel is invalid: {message}"));
+        }
+        if self.web_domains.len() > crate::web::MAX_ALLOWED_DOMAINS {
+            return Err(format!(
+                "at most {} web domains are allowed",
+                crate::web::MAX_ALLOWED_DOMAINS
+            ));
+        }
+        let mut domains = HashSet::with_capacity(self.web_domains.len());
+        for domain in &self.web_domains {
+            if crate::web::normalize_domain(domain).as_deref() != Ok(domain.as_str()) {
+                return Err(format!("web domain {domain:?} is not normalized"));
+            }
+            if !domains.insert(domain.as_str()) {
+                return Err(format!("duplicate web domain {domain:?}"));
+            }
         }
         Ok(())
     }

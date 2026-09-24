@@ -33,6 +33,7 @@ Likely UI-level dependencies such as Tailwind, Radix primitives, CodeMirror, doc
 - `keyring` (MIT OR Apache-2.0) with its default platform stores: Windows Credential Manager, the Secret Service on Linux, and the macOS Keychain.
 - `base64` (MIT OR Apache-2.0): reads the claims of ChatGPT access tokens.
 - `csv` (Unlicense OR MIT): reads and writes the project glossary.
+- `html2text` (MIT): renders web pages Angelica reads as plain text.
 - `rusqlite` (MIT) with `bundled`: the local translation-job store. The bundled SQLite needs only a C compiler, which the Windows and Linux toolchains already provide.
 - `fs2`, `uuid`, `serde_json`, and `thiserror`, matching `aeria-projects`.
 

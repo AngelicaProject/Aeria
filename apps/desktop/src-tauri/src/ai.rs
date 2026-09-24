@@ -29,6 +29,8 @@ pub struct AiSettingsDto {
     pub agent_model: Option<ModelSelection>,
     /// The model for translation-job workers; Angelica's model when unset.
     pub worker_model: Option<ModelSelection>,
+    /// Domains whose pages Angelica reads without asking.
+    pub web_domains: Vec<String>,
     pub presets: Vec<AiProviderPresetDto>,
 }
 
@@ -127,6 +129,7 @@ fn settings_dto(settings: &AiSettings, secrets: &dyn SecretStore) -> AiSettingsD
             .collect(),
         agent_model: settings.agent_model.clone(),
         worker_model: settings.worker_model.clone(),
+        web_domains: settings.web_domains.clone(),
         presets: presets()
             .into_iter()
             .map(|preset| AiProviderPresetDto {
@@ -254,6 +257,27 @@ fn set_worker_model(
 ) -> CommandResult<AiSettingsDto> {
     let ((), settings) = store.update(|settings| {
         settings.worker_model = selection;
+        Ok(())
+    })?;
+    Ok(settings_dto(&settings, secrets))
+}
+
+fn set_web_domains(
+    store: &AiSettingsStore,
+    secrets: &dyn SecretStore,
+    domains: &[String],
+) -> CommandResult<AiSettingsDto> {
+    let mut normalized = Vec::with_capacity(domains.len());
+    for domain in domains.iter().filter(|domain| !domain.trim().is_empty()) {
+        let domain = aeria_ai::web::normalize_domain(domain)
+            .map_err(|message| CommandError::new("aiInvalidSettings", message))?;
+        if !normalized.contains(&domain) {
+            normalized.push(domain);
+        }
+    }
+    normalized.sort();
+    let ((), settings) = store.update(|settings| {
+        settings.web_domains = normalized;
         Ok(())
     })?;
     Ok(settings_dto(&settings, secrets))
@@ -657,6 +681,23 @@ pub async fn ai_set_worker_model(
 }
 
 #[tauri::command(rename_all = "camelCase")]
+/// Replaces the domains whose pages Angelica reads without asking. Entries
+/// may be domains or links; blank entries and repeats are dropped.
+///
+/// # Errors
+///
+/// Returns `aiInvalidSettings` for an invalid domain or too many domains.
+pub async fn ai_set_web_domains(
+    app: tauri::AppHandle,
+    domains: Vec<String>,
+) -> CommandResult<AiSettingsDto> {
+    with_settings(&app, move |store, secrets| {
+        set_web_domains(store, secrets, &domains)
+    })
+    .await
+}
+
+#[tauri::command(rename_all = "camelCase")]
 /// Lists the model IDs a provider reports.
 ///
 /// # Errors
@@ -900,6 +941,33 @@ mod tests {
         .expect("valid selection");
         assert!(settings.agent_model.is_some());
         assert!(settings.worker_model.is_none());
+    }
+
+    #[test]
+    fn web_domains_are_normalized_sorted_and_checked() {
+        let (_directory, store) = store();
+        let secrets = MemorySecretStore::default();
+        let settings = set_web_domains(
+            &store,
+            &secrets,
+            &[
+                "https://FFXIV.gamerescape.com/wiki".to_owned(),
+                "  ".to_owned(),
+                "consolegameswiki.com".to_owned(),
+                "ffxiv.gamerescape.com".to_owned(),
+            ],
+        )
+        .expect("valid");
+        assert_eq!(
+            settings.web_domains,
+            ["consolegameswiki.com", "ffxiv.gamerescape.com"]
+        );
+        assert_eq!(
+            set_web_domains(&store, &secrets, &["bad domain".to_owned()])
+                .expect_err("invalid")
+                .code,
+            "aiInvalidSettings"
+        );
     }
 
     #[test]

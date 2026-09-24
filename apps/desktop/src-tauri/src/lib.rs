@@ -8,6 +8,7 @@ mod guide;
 mod jobs;
 mod search;
 mod state;
+mod web;
 
 use serde::Serialize;
 use tauri::Manager;
@@ -16,8 +17,8 @@ pub use ai::{
     AiConnectionCheckDto, AiProviderDto, AiProviderInputDto, AiProviderPresetDto, AiSettingsDto,
     ApiKeyStateDto, ChatGptLoginDto, ChatGptLoginEventDto, ai_chatgpt_login_cancel,
     ai_chatgpt_login_start, ai_clear_api_key, ai_list_remote_models, ai_remove_provider,
-    ai_save_provider, ai_set_agent_model, ai_set_api_key, ai_set_worker_model, ai_settings,
-    ai_test_connection,
+    ai_save_provider, ai_set_agent_model, ai_set_api_key, ai_set_web_domains, ai_set_worker_model,
+    ai_settings, ai_test_connection,
 };
 pub use angelica::{
     AngelicaDraftDto, AngelicaEventDto, ConversationDto, ConversationSummaryDto,
@@ -132,6 +133,7 @@ pub fn run() {
             ai_clear_api_key,
             ai_set_agent_model,
             ai_set_worker_model,
+            ai_set_web_domains,
             ai_list_remote_models,
             ai_test_connection,
             ai_chatgpt_login_start,

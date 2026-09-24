@@ -304,6 +304,10 @@ export function aiSetWorkerModel(selection: AiModelSelection | null): Promise<Ai
   return call<AiSettingsDto>("ai_set_worker_model", { selection });
 }
 
+export function aiSetWebDomains(domains: string[]): Promise<AiSettingsDto> {
+  return call<AiSettingsDto>("ai_set_web_domains", { domains });
+}
+
 export function aiListRemoteModels(providerId: string): Promise<AiModelConfig[]> {
   return call<AiModelConfig[]>("ai_list_remote_models", { providerId });
 }

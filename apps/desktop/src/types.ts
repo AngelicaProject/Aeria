@@ -422,6 +422,8 @@ export type AiSettingsDto = {
   agentModel: AiModelSelection | null;
   /** The model for translation-job workers; Angelica's model when null. */
   workerModel: AiModelSelection | null;
+  /** Domains whose pages Angelica reads without asking. */
+  webDomains: string[];
   presets: AiProviderPresetDto[];
 };
 
@@ -489,6 +491,8 @@ export type ProposalRecord = {
   file: "guidance" | "glossary" | null;
   /** A job to start; `target` then holds its one-line summary. */
   job?: JobProposal | null;
+  /** A domain Angelica asked to read; `target` then holds the link. */
+  web?: string | null;
   location: UnitLocationDto | null;
   source: string;
   target: string;

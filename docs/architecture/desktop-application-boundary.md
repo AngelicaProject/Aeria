@@ -229,6 +229,13 @@ goes through the same compare-and-rename write as an approved file proposal,
 so a file changed since it was loaded is reported as `projectGuideConflict`
 and not overwritten; an invalid glossary entry is `projectGuideInvalid`.
 
+`fetch_url` runs in the turn's async task rather than a blocking worker,
+with a separate HTTP client (no automatic redirects) kept in `DesktopState`.
+Applying a web-access proposal updates the AI settings under their file lock
+and then wakes Angelica. `ai_set_web_domains` replaces the allowed domains;
+entries may be domains or links and are normalized, sorted, and
+deduplicated.
+
 Commands that require an active project report `noProjectOpen` before
 validating project-scoped payload such as translation-unit IDs.
 

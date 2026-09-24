@@ -44,6 +44,7 @@ const toolLabels: Readonly<Record<string, MessageKey>> = {
   pending_changes: "angelica.tool.pendingChanges",
   unit_history: "angelica.tool.unitHistory",
   navigate_to: "angelica.tool.navigateTo",
+  fetch_url: "angelica.tool.fetchUrl",
   search_source: "angelica.tool.searchSource",
   search_translations: "angelica.tool.searchTranslations",
   similar_translations: "angelica.tool.similarTranslations",

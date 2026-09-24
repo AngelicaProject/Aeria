@@ -91,6 +91,7 @@ export function toolSubject(name: string, argumentsText: string): string {
     return parts.join(":");
   }
   if (typeof args.query === "string") return `“${args.query}”`;
+  if (name === "fetch_url" && typeof args.url === "string") return args.url.replace(/^https?:\/\//, "").slice(0, 60);
   if (name === "similar_translations" && typeof args.text === "string") return `“${args.text}”`;
   if (typeof args.unit_id === "string") return args.unit_id.slice(0, 12);
   return "";

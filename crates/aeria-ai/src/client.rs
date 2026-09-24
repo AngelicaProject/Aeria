@@ -394,7 +394,7 @@ fn classify_stream_failure(message: &str) -> ProviderError {
     }
 }
 
-fn install_crypto_provider() {
+pub(crate) fn install_crypto_provider() {
     static INSTALL: Once = Once::new();
     INSTALL.call_once(|| {
         // Another component may already have installed a provider; either is

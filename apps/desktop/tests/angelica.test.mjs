@@ -91,6 +91,7 @@ test("replies render a small Markdown subset without HTML", () => {
 test("search tools show their query", () => {
   assert.equal(toolSubject("search_source", JSON.stringify({ query: "crystal" })), "“crystal”");
   assert.equal(toolSubject("similar_translations", JSON.stringify({ text: "Fire" })), "“Fire”");
+  assert.equal(toolSubject("fetch_url", JSON.stringify({ url: "https://ffxiv.consolegameswiki.com/wiki/Aether" })), "ffxiv.consolegameswiki.com/wiki/Aether");
   assert.equal(toolSubject("similar_translations", JSON.stringify({ sheet: "Item", row: 1, column: 0 })), "Item:1:0:0");
 });
 

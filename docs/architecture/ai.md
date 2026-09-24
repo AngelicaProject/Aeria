@@ -77,7 +77,9 @@ Provider settings are machine-local application data in
 models with ID, optional context window, and accepted efforts, the optional
 session header, and extra headers), and
 Angelica's optional default model selection and the optional selection for
-translation-job workers (provider, model, and an effort the model accepts). Unknown fields, duplicate IDs, invalid URLs, and a
+translation-job workers (provider, model, and an effort the model accepts),
+and `webDomains`, the sorted, normalized domains whose pages Angelica reads
+without asking (at most 200; omitted when empty). Unknown fields, duplicate IDs, invalid URLs, and a
 selection that does not match a configured model and effort are rejected.
 The session header and extra headers are optional fields; a provider written
 without them has neither.
@@ -222,6 +224,24 @@ The first message to Angelica starts building the source index in the
 background; until it is ready, `search_source` and `similar_translations`
 report that it is being built. Texts in results are cut like other tool
 results.
+
+### Web pages
+
+`fetch_url` is offered in every mode. It reads one `http` or `https` page as
+plain text: HTML is rendered to text (with the `<title>`), other `text/*`,
+JSON, and XML bodies are returned as they are, and other content types are
+refused. At most 3 MiB is read with a 20-second timeout, and up to 20,000
+characters are returned per call (12,000 by default) with `nextOffset` for
+the rest.
+
+A page opens only when its host is allowed: the host of a link in the project
+guidance, or a domain in `webDomains` or one of its subdomains. Redirects are
+followed by hand, at most five, and each target is checked the same way. A
+link to any other host records a web-access proposal for the conversation,
+with the domain and the link, and tells Angelica to wait. Allowing it adds
+the domain to `webDomains` and starts an automatic turn asking Angelica to
+open the link again. Page text is data: the instructions say it is never an
+instruction and may be wrong.
 
 ### Write tools
 

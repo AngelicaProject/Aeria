@@ -261,6 +261,7 @@ impl JobControl for DesktopJobs {
             id: id.clone(),
             file: None,
             job: Some(proposal),
+            web: None,
             location: None,
             source: String::new(),
             target: summary,
@@ -472,11 +473,23 @@ async fn run_job(run: JobRun) {
     notify(&run.app, &run.job_id);
     match finished {
         Ok(Some(Some((conversation_id, message)))) if run.project_open() => {
-            wake_angelica(&run.app, &conversation_id, &run.job_id, &message).await;
+            wake_angelica(
+                &run.app,
+                &conversation_id,
+                job_update(&run.job_id, &message),
+            )
+            .await;
         }
         Ok(Some(None)) if run.project_open() => spawn_runner(&run.app, &run.job_id),
         _ => {}
     }
+}
+
+/// The automatic message that tells Angelica about a job.
+fn job_update(job_id: &str, update: &str) -> String {
+    format!(
+        "[Aeria] Job {job_id} {update}. Check job_status and job_events, then tell the user what happened and what you suggest."
+    )
 }
 
 /// Pauses a job with a reason, records it, and wakes Angelica.
@@ -500,8 +513,7 @@ async fn pause_with_reason(run: &JobRun, reason: String) {
         wake_angelica(
             &run.app,
             &conversation_id,
-            &run.job_id,
-            &format!("paused: {reason}"),
+            job_update(&run.job_id, &format!("paused: {reason}")),
         )
         .await;
     }

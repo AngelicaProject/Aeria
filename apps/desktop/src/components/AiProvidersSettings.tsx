@@ -8,6 +8,7 @@ import {
   aiRemoveProvider,
   aiSaveProvider,
   aiSetAgentModel,
+  aiSetWebDomains,
   aiSetWorkerModel,
   aiSetApiKey,
   aiSettings,
@@ -86,6 +87,7 @@ export function AiProvidersSettings() {
       ) : (
         <>
           <ModelPicker settings={settings} selection={settings.agentModel} disabled={busy} apply={apply} set={aiSetAgentModel} label="ai.settings.agentModel" empty="ai.settings.noAgentModel" hint="ai.settings.agentModelHint" />
+          <WebDomains settings={settings} disabled={busy} apply={apply} />
           <ModelPicker settings={settings} selection={settings.workerModel} disabled={busy} apply={apply} set={aiSetWorkerModel} label="ai.settings.workerModel" empty="ai.settings.noWorkerModel" hint="ai.settings.workerModelHint" />
           {settings.providers.map((provider) => (
             <ProviderCard key={provider.id} provider={provider} disabled={busy} apply={apply} run={run} />
@@ -94,6 +96,27 @@ export function AiProvidersSettings() {
           <AddProvider presets={settings.presets} disabled={busy} apply={apply} />
         </>
       )}
+    </div>
+  );
+}
+
+/** Domains whose pages Angelica reads without asking, one per line. */
+function WebDomains({ settings, disabled, apply }: { settings: AiSettingsDto; disabled: boolean; apply: (operation: () => Promise<AiSettingsDto>) => Promise<boolean> }) {
+  const { t } = useI18n();
+  const id = useId();
+  const saved = settings.webDomains.join("\n");
+  const [text, setText] = useState(saved);
+  useEffect(() => setText(saved), [saved]);
+  const domains = text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  const changed = domains.join("\n") !== saved;
+  return (
+    <div className="ai-web-domains field">
+      <label className="field-label" htmlFor={id}>{t("ai.settings.webDomains")}</label>
+      <textarea id={id} className="input" rows={3} value={text} disabled={disabled} placeholder="ffxiv.consolegameswiki.com" spellCheck={false} onChange={(event) => setText(event.target.value)} />
+      <div className="ai-web-domains-actions">
+        <p className="field-hint">{t("ai.settings.webDomainsHint")}</p>
+        <button className="button button-secondary" type="button" disabled={disabled || !changed} onClick={() => void apply(() => aiSetWebDomains(domains))}>{t("ai.settings.saveDomains")}</button>
+      </div>
     </div>
   );
 }

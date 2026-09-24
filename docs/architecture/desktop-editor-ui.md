@@ -241,6 +241,9 @@ applied or rejected together. A proposal to change `aeria-guidance.md` or
 applied proposal, patches its cell like an ordinary save, so other unsaved
 drafts and the selection are kept.
 
+A web-access proposal shows the domain and the link Angelica asked for, with
+**Allow domain** and **Reject**; it is never applied with the others.
+
 A job proposal shows its sheets, filter and string count, the estimate and
 token limit, and the instructions, with **Start job** and **Reject**; job
 proposals are never applied with the others. Above the proposals, a
@@ -297,7 +300,8 @@ derive surfaces, lines, and state colors from each theme's palette.
 The AI section manages the providers described in
 [`ai.md`](./ai.md#provider-boundary). It picks Angelica's default model and,
 when the model accepts efforts, its effort, and the same for translation jobs,
-which use Angelica's model when none is chosen. Each provider card edits the name
+which use Angelica's model when none is chosen. **Websites Angelica may read**
+lists allowed domains, one per line, saved with its own button. Each provider card edits the name
 and base URL (saved on blur), stores or removes the API key through a password
 field that is cleared after saving and never refilled, and lists models with
 toggles for accepted efforts, an optional context window, and a **Test**

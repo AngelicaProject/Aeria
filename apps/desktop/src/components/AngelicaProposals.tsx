@@ -38,7 +38,7 @@ export function AngelicaProposals({ proposals, busy, onApply, onReject, onReveal
   if (shown.length === 0) return null;
   const pending = shown.filter((proposal) => proposal.status === "pending").map((proposal) => proposal.id);
   // Jobs start one by one, never with the translations in bulk.
-  const bulk = shown.filter((proposal) => proposal.status === "pending" && !proposal.job).map((proposal) => proposal.id);
+  const bulk = shown.filter((proposal) => proposal.status === "pending" && !proposal.job && !proposal.web).map((proposal) => proposal.id);
 
   return (
     <details className="angelica-proposals" open>
@@ -53,6 +53,7 @@ export function AngelicaProposals({ proposals, busy, onApply, onReject, onReveal
       </summary>
       <ul>
         {shown.map((proposal) => {
+          if (proposal.web) return <WebProposalCard key={proposal.id} proposal={proposal} domain={proposal.web} busy={busy} onApply={onApply} onReject={onReject} />;
           if (proposal.job) return <JobProposalCard key={proposal.id} proposal={proposal} job={proposal.job} busy={busy} onApply={onApply} onReject={onReject} />;
           const binding = bindingOf(proposal);
           const location = binding ? `${binding.sheetName}:${binding.rowId}:${binding.subrowId}:${binding.columnIndex}` : null;
@@ -109,6 +110,28 @@ function JobProposalCard({ proposal, job, busy, onApply, onReject }: { proposal:
         <div className="angelica-proposal-actions">
           <button className="button button-ghost" type="button" disabled={busy} onClick={() => onReject([proposal.id])}>{t("angelica.proposal.reject")}</button>
           <button className="button button-primary" type="button" disabled={busy} onClick={() => onApply([proposal.id])}><UiIcon icon="play" size="sm" />{t("angelica.job.start")}</button>
+        </div>
+      ) : null}
+    </li>
+  );
+}
+
+function WebProposalCard({ proposal, domain, busy, onApply, onReject }: { proposal: ProposalRecord; domain: string; busy: boolean; onApply: (ids: string[]) => void; onReject: (ids: string[]) => void }) {
+  const { t } = useI18n();
+  return (
+    <li className={`angelica-proposal angelica-web-proposal ${proposal.status}`}>
+      <div className="angelica-proposal-head">
+        <UiIcon icon="externalLink" size="xs" />
+        <strong>{t("angelica.web.request", { domain })}</strong>
+        {proposal.status !== "pending" ? <span className="angelica-chip">{t(statusLabels[proposal.status])}</span> : null}
+      </div>
+      <code className="angelica-web-link">{proposal.target}</code>
+      <p className="field-hint">{t("angelica.web.hint")}</p>
+      {proposal.message ? <p className="ai-test-result failed"><UiIcon icon="circleAlert" size="xs" />{proposal.message}</p> : null}
+      {proposal.status === "pending" ? (
+        <div className="angelica-proposal-actions">
+          <button className="button button-ghost" type="button" disabled={busy} onClick={() => onReject([proposal.id])}>{t("angelica.proposal.reject")}</button>
+          <button className="button button-primary" type="button" disabled={busy} onClick={() => onApply([proposal.id])}>{t("angelica.web.allow")}</button>
         </div>
       ) : null}
     </li>

@@ -28,6 +28,7 @@ use aeria_ai::tools::{
     ToolOutput, TranslatableUnit, UnitLocation, UnitState, job_tool_definitions,
     read_tool_definitions, write_tool_definitions,
 };
+use aeria_ai::web::web_tool_definitions;
 use aeria_core::ReviewState;
 use aeria_core::SourceBinding;
 use aeria_workspace::{
@@ -47,6 +48,7 @@ use crate::git::{UnitChangeDto, UnitHistoryDto, open_repository};
 use crate::jobs::{DesktopJobs, start_proposed_job};
 use crate::search::{DesktopSearch, prepare_source_index};
 use crate::state::DesktopState;
+use crate::web::{allow_domain, fetch_tool};
 
 type CommandResult<T> = Result<T, CommandError>;
 
@@ -632,6 +634,7 @@ impl ProjectWriter for DesktopWriter {
                         id,
                         file: None,
                         job: None,
+                        web: None,
                         location: Some(proposal.location),
                         source: proposal.source,
                         target: proposal.target,
@@ -695,6 +698,7 @@ impl ProjectWriter for DesktopWriter {
             id: id.clone(),
             file: Some(change.file),
             job: None,
+            web: None,
             location: None,
             source: String::new(),
             target: change.after,
@@ -728,6 +732,14 @@ impl ToolExecutor for DesktopTools {
         &'a self,
         call: &'a ToolCall,
     ) -> Pin<Box<dyn Future<Output = ToolOutput> + Send + 'a>> {
+        if call.name == "fetch_url" {
+            return Box::pin(fetch_tool(
+                &self.app,
+                &self.store,
+                &self.conversation_id,
+                &call.arguments,
+            ));
+        }
         let reader = DesktopReader {
             app: self.app.clone(),
         };
@@ -977,6 +989,7 @@ async fn run_prepared_turn(
         tools.extend(write_tool_definitions());
     }
     tools.extend(search_tool_definitions());
+    tools.extend(web_tool_definitions());
     tools.extend(job_tool_definitions(mode != AgentMode::Chat));
     let config = TurnConfig {
         model: &model.id,
@@ -1091,15 +1104,10 @@ pub async fn angelica_send(
     Ok(response)
 }
 
-/// Starts an automatic turn telling Angelica about a job update, with the
-/// conversation's last model and mode. Nothing starts while a turn runs in
-/// the conversation; the update stays in the job's events either way.
-pub(crate) async fn wake_angelica(
-    app: &tauri::AppHandle,
-    conversation_id: &str,
-    job_id: &str,
-    update: &str,
-) {
+/// Starts an automatic turn with an update from Aeria, such as a job report,
+/// with the conversation's last model and mode. Nothing starts while a turn
+/// runs in the conversation.
+pub(crate) async fn wake_angelica(app: &tauri::AppHandle, conversation_id: &str, text: String) {
     if app
         .state::<DesktopState>()
         .angelica_turn_running(conversation_id)
@@ -1119,9 +1127,6 @@ pub(crate) async fn wake_angelica(
     let Ok(endpoint) = resolve_endpoint(app, selection.provider_id.clone()).await else {
         return;
     };
-    let text = format!(
-        "[Aeria] Job {job_id} {update}. Check job_status and job_events, then tell the user what happened and what you suggest."
-    );
     let prepare_app = app.clone();
     let id = conversation_id.to_owned();
     let mode = conversation.mode;
@@ -1193,7 +1198,15 @@ fn settle_proposal(
             "this proposal was already applied or dismissed",
         ));
     }
-    if let (true, Some(job)) = (apply, record.job.clone()) {
+    if let (true, Some(domain)) = (apply, record.web.clone()) {
+        match allow_domain(app, &domain) {
+            Ok(()) => record.status = ProposalStatus::Applied,
+            Err(error) => {
+                record.status = ProposalStatus::Failed;
+                record.message = Some(error.message);
+            }
+        }
+    } else if let (true, Some(job)) = (apply, record.job.clone()) {
         match start_proposed_job(app, conversation_id, &job) {
             Ok(job_id) => {
                 record.status = ProposalStatus::Applied;
@@ -1274,7 +1287,28 @@ pub async fn angelica_apply_proposal(
     conversation_id: String,
     proposal_id: String,
 ) -> CommandResult<Vec<ProposalRecord>> {
-    run_blocking(move || settle_proposal(&app, &conversation_id, &proposal_id, true)).await
+    let settle_app = app.clone();
+    let settle_conversation = conversation_id.clone();
+    let settle_id = proposal_id.clone();
+    let records =
+        run_blocking(move || settle_proposal(&settle_app, &settle_conversation, &settle_id, true))
+            .await?;
+    // Allowing a domain lets Angelica continue with the link she asked for.
+    if let Some(record) = records
+        .iter()
+        .find(|record| record.id == proposal_id && record.status == ProposalStatus::Applied)
+        && let Some(domain) = &record.web
+    {
+        let text = format!(
+            "[Aeria] The user allowed reading {domain}. Open {} again and continue.",
+            record.target
+        );
+        let wake_app = app.clone();
+        tauri::async_runtime::spawn(async move {
+            wake_angelica(&wake_app, &conversation_id, text).await;
+        });
+    }
+    Ok(records)
 }
 
 #[tauri::command(rename_all = "camelCase")]

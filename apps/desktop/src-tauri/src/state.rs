@@ -20,6 +20,7 @@ pub struct DesktopState {
     git: OnceLock<GitExecutable>,
     attribution: Mutex<Option<AttributionCache>>,
     ai_client: OnceLock<OpenAiCompatibleClient>,
+    web_client: OnceLock<aeria_ai::web::WebClient>,
     angelica_turns: Mutex<Vec<(String, tauri::async_runtime::JoinHandle<()>)>>,
     /// Cached ChatGPT access tokens by provider ID. The async lock also
     /// serializes token refreshes.
@@ -66,6 +67,7 @@ impl DesktopState {
             git: OnceLock::new(),
             attribution: Mutex::new(None),
             ai_client: OnceLock::new(),
+            web_client: OnceLock::new(),
             angelica_turns: Mutex::new(Vec::new()),
             chatgpt_tokens: tauri::async_runtime::Mutex::const_new(Vec::new()),
             chatgpt_login: Mutex::new(None),
@@ -97,6 +99,16 @@ impl DesktopState {
         }
         let client = OpenAiCompatibleClient::new()?;
         Ok(self.ai_client.get_or_init(|| client).clone())
+    }
+
+    /// Returns the web page client, creating it on first use.
+    pub(crate) fn web_client(&self) -> Result<aeria_ai::web::WebClient, CommandError> {
+        if let Some(client) = self.web_client.get() {
+            return Ok(client.clone());
+        }
+        let client = aeria_ai::web::WebClient::new()
+            .map_err(|error| CommandError::new("aiClient", error.to_string()))?;
+        Ok(self.web_client.get_or_init(|| client).clone())
     }
 
     pub(crate) const fn chatgpt_tokens(

@@ -1360,7 +1360,8 @@ pub(crate) fn to_value<T: Serialize>(value: &T) -> Result<Value, ToolError> {
 
 /// Serializes a result, cutting it at [`MAX_RESULT_CHARS`] with a notice so
 /// one call cannot flood the context.
-fn bounded_json(value: &Value) -> String {
+#[must_use]
+pub fn bounded_json(value: &Value) -> String {
     let text = value.to_string();
     if text.chars().count() <= MAX_RESULT_CHARS {
         return text;

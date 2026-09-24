@@ -22,6 +22,7 @@ pub mod search;
 pub mod secrets;
 pub mod settings;
 pub mod tools;
+pub mod web;
 pub mod worker;
 
 pub use client::{ModelCheck, OpenAiCompatibleClient, ProviderEndpoint, ProviderError};

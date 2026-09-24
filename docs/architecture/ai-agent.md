@@ -491,8 +491,9 @@ Each milestone is a separate change with its own documentation update.
 6. **Search tools**: `aeria-search` source index, source and translation
    search, and translation memory for Angelica and job workers.
 
-Later candidates: read-only web lookup with per-request approval (results are
-untrusted data), and an AI QA pass that can only flag `needs_review`.
+Reading web pages from allowed domains is implemented (see
+[`ai.md`](./ai.md#web-pages)). Later candidates: web search through a search
+provider, and an AI QA pass that can only flag `needs_review`.
 
 ## Open questions
 
