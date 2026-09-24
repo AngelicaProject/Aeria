@@ -380,3 +380,54 @@ export type GitFinishDto = {
   integration: GitIntegration;
   deletedBranch: string | null;
 };
+
+export type AiProviderKind = "openCodeGo" | "openRouter" | "custom";
+export type ReasoningEffort = "minimal" | "low" | "medium" | "high";
+export type ApiKeyState = "stored" | "missing" | "unavailable";
+
+export type AiModelConfig = {
+  id: string;
+  contextWindow: number | null;
+  reasoningEfforts: ReasoningEffort[];
+};
+
+export type AiProviderDto = {
+  id: string;
+  kind: AiProviderKind;
+  name: string;
+  baseUrl: string;
+  models: AiModelConfig[];
+  apiKey: ApiKeyState;
+};
+
+export type AiProviderPresetDto = {
+  kind: AiProviderKind;
+  name: string;
+  baseUrl: string | null;
+  models: AiModelConfig[];
+};
+
+export type AiModelSelection = {
+  providerId: string;
+  modelId: string;
+  effort: ReasoningEffort | null;
+};
+
+export type AiSettingsDto = {
+  providers: AiProviderDto[];
+  agentModel: AiModelSelection | null;
+  presets: AiProviderPresetDto[];
+};
+
+export type AiProviderInput = {
+  id: string | null;
+  kind: AiProviderKind;
+  name: string;
+  baseUrl: string;
+  models: AiModelConfig[];
+};
+
+export type AiConnectionCheckDto = {
+  latencyMs: number;
+  model: string | null;
+};

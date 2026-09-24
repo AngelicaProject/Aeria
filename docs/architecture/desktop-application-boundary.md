@@ -147,6 +147,20 @@ again. Project-wide attribution is cached in memory per repository root and
 `git*` error codes such as `gitUnavailable`, `gitIdentityMissing`,
 `gitMergeConflict`, `gitIncomingRejected`, and `gitInvalidSettings`.
 
+AI provider commands (`ai_settings`, `ai_save_provider`, `ai_remove_provider`,
+`ai_set_api_key`, `ai_clear_api_key`, `ai_set_agent_model`,
+`ai_list_remote_models`, and `ai_test_connection`) manage the local provider
+settings and OS-stored keys described in [`ai.md`](./ai.md#provider-boundary).
+They do not require an open project. Settings and secret-store access run in
+blocking workers; provider requests are async, use one shared HTTP client in
+`DesktopState`, and hold no desktop lock. A key is accepted from the renderer
+but never returned: provider DTOs report only `apiKey` as `stored`, `missing`,
+or `unavailable`. `ai_test_connection` sends one minimal Chat Completions
+request for any model ID and effort, so a model can be probed before it is
+saved or an effort enabled. Failures map to stable `ai*` codes such as
+`aiApiKeyMissing`, `aiUnauthorized`, `aiEndpointNotFound`, `aiRateLimited`,
+`aiInvalidSettings`, and `aiSecretStoreUnavailable`.
+
 Commands that require an active project report `noProjectOpen` before
 validating project-scoped payload such as translation-unit IDs.
 

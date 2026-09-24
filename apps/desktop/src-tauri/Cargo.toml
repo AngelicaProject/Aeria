@@ -18,6 +18,7 @@ path = "src/main.rs"
 tauri-build = { version = "2.6.3", features = [] }
 
 [dependencies]
+aeria-ai = { path = "../../../crates/aeria-ai" }
 aeria-atlas = { path = "../../../crates/aeria-atlas" }
 aeria-core = { path = "../../../crates/aeria-core" }
 aeria-git = { path = "../../../crates/aeria-git" }

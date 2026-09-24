@@ -1,6 +1,11 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
+  AiConnectionCheckDto,
+  AiModelSelection,
+  AiProviderInput,
+  AiSettingsDto,
   CommandError,
+  ReasoningEffort,
   CollaborationDto,
   DetachedUnitDto,
   CollaborationPolicy,
@@ -255,4 +260,36 @@ export function gitFinishContribution(): Promise<GitFinishDto> {
 
 export function gitCloneRepository(url: string, destination: string): Promise<string> {
   return call<string>("git_clone_repository", { url, destination });
+}
+
+export function aiSettings(): Promise<AiSettingsDto> {
+  return call<AiSettingsDto>("ai_settings");
+}
+
+export function aiSaveProvider(provider: AiProviderInput): Promise<AiSettingsDto> {
+  return call<AiSettingsDto>("ai_save_provider", { provider });
+}
+
+export function aiRemoveProvider(providerId: string): Promise<AiSettingsDto> {
+  return call<AiSettingsDto>("ai_remove_provider", { providerId });
+}
+
+export function aiSetApiKey(providerId: string, apiKey: string): Promise<AiSettingsDto> {
+  return call<AiSettingsDto>("ai_set_api_key", { providerId, apiKey });
+}
+
+export function aiClearApiKey(providerId: string): Promise<AiSettingsDto> {
+  return call<AiSettingsDto>("ai_clear_api_key", { providerId });
+}
+
+export function aiSetAgentModel(selection: AiModelSelection | null): Promise<AiSettingsDto> {
+  return call<AiSettingsDto>("ai_set_agent_model", { selection });
+}
+
+export function aiListRemoteModels(providerId: string): Promise<string[]> {
+  return call<string[]>("ai_list_remote_models", { providerId });
+}
+
+export function aiTestConnection(providerId: string, modelId: string, effort: ReasoningEffort | null): Promise<AiConnectionCheckDto> {
+  return call<AiConnectionCheckDto>("ai_test_connection", { providerId, modelId, effort });
 }

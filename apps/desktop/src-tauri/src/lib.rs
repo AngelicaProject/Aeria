@@ -1,3 +1,4 @@
+mod ai;
 mod commands;
 mod dto;
 mod error;
@@ -7,6 +8,11 @@ mod state;
 use serde::Serialize;
 use tauri::Manager;
 
+pub use ai::{
+    AiConnectionCheckDto, AiProviderDto, AiProviderInputDto, AiProviderPresetDto, AiSettingsDto,
+    ApiKeyStateDto, ai_clear_api_key, ai_list_remote_models, ai_remove_provider, ai_save_provider,
+    ai_set_agent_model, ai_set_api_key, ai_settings, ai_test_connection,
+};
 pub use commands::{
     cancel_source_package, close_project, current_project, forget_recent_project,
     initialize_project, initialize_project_from_game, list_detached_units, list_recent_projects,
@@ -97,7 +103,15 @@ pub fn run() {
             git_create_branch,
             git_switch_branch,
             git_set_collaboration,
-            git_finish_contribution
+            git_finish_contribution,
+            ai_settings,
+            ai_save_provider,
+            ai_remove_provider,
+            ai_set_api_key,
+            ai_clear_api_key,
+            ai_set_agent_model,
+            ai_list_remote_models,
+            ai_test_connection
         ])
         .run(tauri::generate_context!())
         .expect("failed to run Aeria desktop application");

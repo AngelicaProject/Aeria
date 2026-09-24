@@ -2,6 +2,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
+use aeria_ai::OpenAiCompatibleClient;
 use aeria_atlas::{CancellationHandle, CancellationToken};
 use aeria_git::{GitExecutable, UnitAttribution};
 use aeria_workspace::ProjectSession;
@@ -16,6 +17,7 @@ pub struct DesktopState {
     next_atlas_job_id: AtomicU64,
     git: OnceLock<GitExecutable>,
     attribution: Mutex<Option<AttributionCache>>,
+    ai_client: OnceLock<OpenAiCompatibleClient>,
 }
 
 /// Committed unit attribution for one repository commit. It is derived from
@@ -48,6 +50,7 @@ impl DesktopState {
             next_atlas_job_id: AtomicU64::new(1),
             git: OnceLock::new(),
             attribution: Mutex::new(None),
+            ai_client: OnceLock::new(),
         }
     }
 
@@ -62,6 +65,16 @@ impl DesktopState {
             .get()
             .cloned()
             .unwrap_or_else(GitExecutable::system)
+    }
+
+    /// Returns the shared AI provider HTTP client, creating it on first use.
+    /// The client is cheap to clone and holds no project state.
+    pub(crate) fn ai_client(&self) -> Result<OpenAiCompatibleClient, CommandError> {
+        if let Some(client) = self.ai_client.get() {
+            return Ok(client.clone());
+        }
+        let client = OpenAiCompatibleClient::new()?;
+        Ok(self.ai_client.get_or_init(|| client).clone())
     }
 
     pub(crate) fn cached_attribution(

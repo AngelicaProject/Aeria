@@ -1,6 +1,7 @@
 import { useEffect, useState, type CSSProperties, type ReactNode } from "react";
 import { Dialog } from "radix-ui";
 import { appInfo } from "../ipc";
+import { AiProvidersSettings } from "./AiProvidersSettings";
 import { keyboardShortcuts, shortcutGroupLabels } from "../shortcuts";
 import { Segmented } from "../ui/primitives/Segmented";
 import { UiIcon, type UiIconName } from "../ui/primitives/UiIcon";
@@ -20,12 +21,13 @@ export const accentPresets: readonly { value: string; label: MessageKey }[] = [
   { value: "#98c379", label: "settings.accent.green" },
 ];
 
-export type SettingsSection = "appearance" | "editor" | "workflow" | "keyboard" | "about";
+export type SettingsSection = "appearance" | "editor" | "workflow" | "ai" | "keyboard" | "about";
 
 const sections: ReadonlyArray<{ id: SettingsSection; label: MessageKey; icon: UiIconName }> = [
   { id: "appearance", label: "settings.section.appearance", icon: "palette" },
   { id: "editor", label: "settings.section.editor", icon: "languages" },
   { id: "workflow", label: "settings.section.workflow", icon: "arrowRight" },
+  { id: "ai", label: "settings.section.ai", icon: "sparkles" },
   { id: "keyboard", label: "settings.section.keyboard", icon: "listFilter" },
   { id: "about", label: "settings.section.about", icon: "info" },
 ];
@@ -170,6 +172,10 @@ export function SettingsDialog({ open, onOpenChange, initialSection = "appearanc
     {
       id: "focus-next", section: "workflow", title: t("settings.focusNext.title"), description: t("settings.focusNext.description"), keywords: t("settings.focusNext.keywords"),
       control: <input type="checkbox" className="switch" aria-label={t("settings.focusNext.title")} checked={preferences.focusTargetOnNext} onChange={(event) => setPreference("focusTargetOnNext", event.target.checked)} />,
+    },
+    {
+      id: "ai-providers", section: "ai", title: t("settings.ai.title"), description: t("settings.ai.description"), keywords: t("settings.ai.keywords"), wide: true,
+      control: <AiProvidersSettings />,
     },
     {
       id: "shortcuts", section: "keyboard", title: t("settings.shortcuts.title"), keywords: keyboardShortcuts.map((shortcut) => `${shortcut.keys} ${t(shortcut.action)}`).join(" "), wide: true,

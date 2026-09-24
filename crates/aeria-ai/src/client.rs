@@ -1,0 +1,445 @@
+//! OpenAI-compatible Chat Completions transport.
+
+use std::sync::Once;
+use std::time::{Duration, Instant};
+
+use reqwest::StatusCode;
+use serde::Deserialize;
+use serde_json::{Value, json};
+use thiserror::Error;
+
+use crate::provider::{BaseUrl, ReasoningEffort};
+use crate::secrets::ApiKey;
+
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
+const CHECK_TIMEOUT: Duration = Duration::from_secs(90);
+const MODELS_TIMEOUT: Duration = Duration::from_secs(30);
+/// Longest provider error text kept in an error message.
+const MAX_PROVIDER_MESSAGE_CHARS: usize = 400;
+/// Largest model list accepted from a provider.
+pub const MAX_REMOTE_MODELS: usize = 5000;
+
+/// Where and how to reach one provider.
+#[derive(Clone, Debug)]
+pub struct ProviderEndpoint {
+    pub base_url: BaseUrl,
+    pub api_key: ApiKey,
+}
+
+/// Transport failures, classified for the user. Messages never contain the
+/// API key.
+#[derive(Debug, Error)]
+pub enum ProviderError {
+    #[error("could not reach the provider: {message}")]
+    Network { message: String },
+
+    #[error("the provider did not respond in time")]
+    Timeout,
+
+    #[error("the provider rejected the API key ({status}): {message}")]
+    Unauthorized { status: u16, message: String },
+
+    #[error("the provider does not offer this endpoint or model ({status}): {message}")]
+    NotFound { status: u16, message: String },
+
+    #[error("the provider is rate limiting requests: {message}")]
+    RateLimited { message: String },
+
+    #[error("the provider rejected the request ({status}): {message}")]
+    Rejected { status: u16, message: String },
+
+    #[error("the provider failed ({status}): {message}")]
+    Unavailable { status: u16, message: String },
+
+    #[error("the provider returned an unexpected response: {message}")]
+    InvalidResponse { message: String },
+
+    #[error("could not start the HTTP client: {message}")]
+    Client { message: String },
+}
+
+/// The outcome of a successful one-request model check.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ModelCheck {
+    /// The model name the provider reported, which may differ from the ID
+    /// requested when the provider routes aliases.
+    pub model: Option<String>,
+    pub latency: Duration,
+}
+
+/// A reusable client for OpenAI-compatible providers.
+#[derive(Clone, Debug)]
+pub struct OpenAiCompatibleClient {
+    http: reqwest::Client,
+}
+
+impl OpenAiCompatibleClient {
+    /// Builds a client that verifies TLS with the platform's trust store.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProviderError::Client`] when the HTTP stack cannot start.
+    pub fn new() -> Result<Self, ProviderError> {
+        install_crypto_provider();
+        let http = reqwest::Client::builder()
+            .connect_timeout(CONNECT_TIMEOUT)
+            .user_agent(concat!("Aeria/", env!("CARGO_PKG_VERSION")))
+            .build()
+            .map_err(|error| ProviderError::Client {
+                message: error.to_string(),
+            })?;
+        Ok(Self { http })
+    }
+
+    /// Lists the model IDs the provider reports at `GET /models`, sorted and
+    /// without duplicates.
+    ///
+    /// Some providers list models that are not served through Chat
+    /// Completions; a listed model still has to pass [`Self::check_model`].
+    ///
+    /// # Errors
+    ///
+    /// Returns a classified [`ProviderError`].
+    pub async fn list_models(
+        &self,
+        endpoint: &ProviderEndpoint,
+    ) -> Result<Vec<String>, ProviderError> {
+        #[derive(Deserialize)]
+        struct ModelList {
+            data: Vec<ModelEntry>,
+        }
+        #[derive(Deserialize)]
+        struct ModelEntry {
+            id: String,
+        }
+
+        let request = self
+            .http
+            .get(endpoint.base_url.endpoint("models"))
+            .bearer_auth(endpoint.api_key.expose())
+            .timeout(MODELS_TIMEOUT);
+        let body = send(request, &endpoint.api_key).await?;
+        let list: ModelList =
+            serde_json::from_value(body).map_err(|error| ProviderError::InvalidResponse {
+                message: format!("model list: {error}"),
+            })?;
+        if list.data.len() > MAX_REMOTE_MODELS {
+            return Err(ProviderError::InvalidResponse {
+                message: format!("model list has more than {MAX_REMOTE_MODELS} entries"),
+            });
+        }
+        let mut ids: Vec<String> = list
+            .data
+            .into_iter()
+            .map(|entry| entry.id)
+            .filter(|id| !id.trim().is_empty())
+            .collect();
+        ids.sort();
+        ids.dedup();
+        Ok(ids)
+    }
+
+    /// Sends one minimal Chat Completions request to confirm that the key,
+    /// endpoint, model, and effort are accepted.
+    ///
+    /// # Errors
+    ///
+    /// Returns a classified [`ProviderError`].
+    pub async fn check_model(
+        &self,
+        endpoint: &ProviderEndpoint,
+        model: &str,
+        effort: Option<ReasoningEffort>,
+    ) -> Result<ModelCheck, ProviderError> {
+        let mut body = json!({
+            "model": model,
+            "messages": [{ "role": "user", "content": "Reply with the single word OK." }],
+            "max_tokens": 32,
+            "stream": false,
+        });
+        if let Some(effort) = effort {
+            body["reasoning_effort"] = Value::from(effort.as_str());
+        }
+        let request = self
+            .http
+            .post(endpoint.base_url.endpoint("chat/completions"))
+            .bearer_auth(endpoint.api_key.expose())
+            .timeout(CHECK_TIMEOUT)
+            .json(&body);
+
+        let started = Instant::now();
+        let response = send(request, &endpoint.api_key).await?;
+        let latency = started.elapsed();
+        if response
+            .get("choices")
+            .and_then(Value::as_array)
+            .is_none_or(Vec::is_empty)
+        {
+            return Err(ProviderError::InvalidResponse {
+                message: "the completion has no choices".to_owned(),
+            });
+        }
+        Ok(ModelCheck {
+            model: response
+                .get("model")
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+            latency,
+        })
+    }
+}
+
+fn install_crypto_provider() {
+    static INSTALL: Once = Once::new();
+    INSTALL.call_once(|| {
+        // Another component may already have installed a provider; either is
+        // acceptable for verifying provider certificates.
+        let _ = rustls::crypto::ring::default_provider().install_default();
+    });
+}
+
+async fn send(request: reqwest::RequestBuilder, key: &ApiKey) -> Result<Value, ProviderError> {
+    let response = request
+        .send()
+        .await
+        .map_err(|error| transport_error(&error, key))?;
+    let status = response.status();
+    let text = response
+        .text()
+        .await
+        .map_err(|error| transport_error(&error, key))?;
+    if !status.is_success() {
+        return Err(status_error(status, &provider_message(&text, key)));
+    }
+    serde_json::from_str(&text).map_err(|error| ProviderError::InvalidResponse {
+        message: format!("response is not JSON: {error}"),
+    })
+}
+
+fn transport_error(error: &reqwest::Error, key: &ApiKey) -> ProviderError {
+    if error.is_timeout() {
+        return ProviderError::Timeout;
+    }
+    ProviderError::Network {
+        message: redact(&error.to_string(), key),
+    }
+}
+
+fn status_error(status: StatusCode, message: &str) -> ProviderError {
+    let code = status.as_u16();
+    let message = message.to_owned();
+    match status {
+        StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => ProviderError::Unauthorized {
+            status: code,
+            message,
+        },
+        StatusCode::NOT_FOUND => ProviderError::NotFound {
+            status: code,
+            message,
+        },
+        StatusCode::TOO_MANY_REQUESTS => ProviderError::RateLimited { message },
+        status if status.is_server_error() => ProviderError::Unavailable {
+            status: code,
+            message,
+        },
+        _ => ProviderError::Rejected {
+            status: code,
+            message,
+        },
+    }
+}
+
+/// Extracts the provider's error text from `{"error":{"message":…}}` or the
+/// raw body, bounded and with the key removed.
+fn provider_message(body: &str, key: &ApiKey) -> String {
+    let parsed = serde_json::from_str::<Value>(body).ok();
+    let message = parsed
+        .as_ref()
+        .and_then(|value| {
+            value
+                .pointer("/error/message")
+                .or_else(|| value.get("error"))
+                .or_else(|| value.get("message"))
+        })
+        .and_then(Value::as_str)
+        .unwrap_or(body)
+        .trim();
+    let message = redact(message, key);
+    if message.is_empty() {
+        return "no details".to_owned();
+    }
+    let mut bounded: String = message.chars().take(MAX_PROVIDER_MESSAGE_CHARS).collect();
+    if bounded.len() < message.len() {
+        bounded.push('…');
+    }
+    bounded
+}
+
+fn redact(text: &str, key: &ApiKey) -> String {
+    text.replace(key.expose(), "<redacted>")
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::{BufRead, BufReader, Read, Write};
+    use std::net::TcpListener;
+    use std::thread::{self, JoinHandle};
+
+    use super::*;
+
+    const KEY: &str = "sk-test-secret";
+
+    /// Serves one canned HTTP response and returns the raw request.
+    fn serve_once(status: &str, body: &str) -> (String, JoinHandle<String>) {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let address = listener.local_addr().expect("address");
+        let response = format!(
+            "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        );
+        let handle = thread::spawn(move || {
+            let (stream, _) = listener.accept().expect("accept");
+            let mut reader = BufReader::new(stream);
+            let mut head = String::new();
+            let mut length = 0;
+            loop {
+                let mut line = String::new();
+                reader.read_line(&mut line).expect("header line");
+                if let Some(value) = line.to_ascii_lowercase().strip_prefix("content-length:") {
+                    length = value.trim().parse().expect("content length");
+                }
+                head.push_str(&line);
+                if line == "\r\n" {
+                    break;
+                }
+            }
+            let mut body = vec![0; length];
+            reader.read_exact(&mut body).expect("body");
+            reader
+                .get_mut()
+                .write_all(response.as_bytes())
+                .expect("response");
+            head + &String::from_utf8(body).expect("utf-8 body")
+        });
+        (format!("http://127.0.0.1:{}/v1", address.port()), handle)
+    }
+
+    fn endpoint(base_url: &str) -> ProviderEndpoint {
+        ProviderEndpoint {
+            base_url: BaseUrl::parse(base_url).expect("base URL"),
+            api_key: ApiKey::new(KEY).expect("key"),
+        }
+    }
+
+    fn runtime() -> tokio::runtime::Runtime {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime")
+    }
+
+    #[test]
+    fn check_model_sends_bearer_key_model_and_effort() {
+        let (url, server) = serve_once(
+            "200 OK",
+            r#"{"model":"glm-5.3-2026","choices":[{"message":{"content":"OK"}}]}"#,
+        );
+        let client = OpenAiCompatibleClient::new().expect("client");
+        let check = runtime()
+            .block_on(client.check_model(&endpoint(&url), "glm-5.3", Some(ReasoningEffort::Low)))
+            .expect("check succeeds");
+        assert_eq!(check.model.as_deref(), Some("glm-5.3-2026"));
+
+        let request = server.join().expect("server");
+        assert!(
+            request.starts_with("POST /v1/chat/completions "),
+            "{request}"
+        );
+        assert!(
+            request
+                .to_ascii_lowercase()
+                .contains(&format!("authorization: bearer {KEY}"))
+        );
+        let body: Value =
+            serde_json::from_str(request.split("\r\n\r\n").nth(1).expect("body")).expect("json");
+        assert_eq!(body["model"], "glm-5.3");
+        assert_eq!(body["reasoning_effort"], "low");
+        assert_eq!(body["stream"], false);
+    }
+
+    #[test]
+    fn check_model_omits_effort_when_none_is_selected() {
+        let (url, server) = serve_once("200 OK", r#"{"choices":[{}]}"#);
+        let client = OpenAiCompatibleClient::new().expect("client");
+        runtime()
+            .block_on(client.check_model(&endpoint(&url), "kimi-k3", None))
+            .expect("check succeeds");
+        let request = server.join().expect("server");
+        assert!(!request.contains("reasoning_effort"));
+    }
+
+    #[test]
+    fn provider_errors_are_classified_and_never_echo_the_key() {
+        let cases = [
+            ("401 Unauthorized", "unauthorized"),
+            ("404 Not Found", "not found"),
+            ("429 Too Many Requests", "rate limited"),
+            ("400 Bad Request", "rejected"),
+            ("503 Service Unavailable", "unavailable"),
+        ];
+        for (status, expected) in cases {
+            let body = format!(r#"{{"error":{{"message":"bad key {KEY}"}}}}"#);
+            let (url, server) = serve_once(status, &body);
+            let client = OpenAiCompatibleClient::new().expect("client");
+            let error = runtime()
+                .block_on(client.check_model(&endpoint(&url), "glm-5.3", None))
+                .expect_err("request fails");
+            server.join().expect("server");
+            let matched = match expected {
+                "unauthorized" => matches!(error, ProviderError::Unauthorized { status: 401, .. }),
+                "not found" => matches!(error, ProviderError::NotFound { .. }),
+                "rate limited" => matches!(error, ProviderError::RateLimited { .. }),
+                "rejected" => matches!(error, ProviderError::Rejected { status: 400, .. }),
+                _ => matches!(error, ProviderError::Unavailable { status: 503, .. }),
+            };
+            assert!(matched, "{status}: {error:?}");
+            let text = error.to_string();
+            assert!(!text.contains(KEY), "{text}");
+            assert!(text.contains("bad key <redacted>"), "{text}");
+        }
+    }
+
+    #[test]
+    fn completion_without_choices_is_an_invalid_response() {
+        let (url, server) = serve_once("200 OK", r#"{"choices":[]}"#);
+        let client = OpenAiCompatibleClient::new().expect("client");
+        let error = runtime()
+            .block_on(client.check_model(&endpoint(&url), "glm-5.3", None))
+            .expect_err("empty choices");
+        server.join().expect("server");
+        assert!(matches!(error, ProviderError::InvalidResponse { .. }));
+    }
+
+    #[test]
+    fn list_models_returns_sorted_unique_ids() {
+        let (url, server) = serve_once(
+            "200 OK",
+            r#"{"object":"list","data":[{"id":"kimi-k3"},{"id":"glm-5.3"},{"id":"kimi-k3"},{"id":" "}]}"#,
+        );
+        let client = OpenAiCompatibleClient::new().expect("client");
+        let models = runtime()
+            .block_on(client.list_models(&endpoint(&url)))
+            .expect("models");
+        let request = server.join().expect("server");
+        assert!(request.starts_with("GET /v1/models "), "{request}");
+        assert_eq!(models, vec!["glm-5.3".to_owned(), "kimi-k3".to_owned()]);
+    }
+
+    #[test]
+    fn long_provider_messages_are_bounded() {
+        let key = ApiKey::new(KEY).expect("key");
+        let message = provider_message(&"x".repeat(2000), &key);
+        assert_eq!(message.chars().count(), MAX_PROVIDER_MESSAGE_CHARS + 1);
+        assert_eq!(provider_message("", &key), "no details");
+    }
+}

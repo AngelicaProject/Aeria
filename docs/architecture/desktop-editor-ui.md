@@ -220,13 +220,24 @@ Monokai Pro, Night Owl, Rosé Pine, Ayu, Solarized, Palenight, Kanagawa, and
 Everforest) mapped onto Aeria's layered tokens; Catppuccin, Aeria's own themes,
 and High Contrast Dark are also available.
 
-Settings open as a dialog with Appearance, Editor, Workflow, Keyboard
+Settings open as a dialog with Appearance, Editor, Workflow, AI, Keyboard
 shortcuts, and About sections and a search across all settings. Theme, accent,
 Reduce transparency, interface zoom (webview zoom), editor text size, macro
 highlighting, control-character display, strings list density, and focusing the
 next target after Save & next are per-machine renderer preferences kept in local
 storage; they are never project data. Components consume semantic tokens from `ui/theme/tokens.css`, which
 derive surfaces, lines, and state colors from each theme's palette.
+
+The AI section manages the providers described in
+[`ai.md`](./ai.md#provider-boundary). It picks Angelica's default model and,
+when the model accepts efforts, its effort. Each provider card edits the name
+and base URL (saved on blur), stores or removes the API key through a password
+field that is cleared after saving and never refilled, and lists models with
+toggles for accepted efforts, an optional context window, and a **Test**
+action that reports latency and the answering model or the provider's error.
+Models are added by ID, with suggestions from **Fetch list**. New providers
+come from preset buttons; the OpenAI-compatible preset first asks for a base
+URL. Removing a provider asks for confirmation inline.
 
 On supported Windows versions, the launcher, workbench, and tool windows use the
 system Acrylic backdrop and follow the selected light or dark theme. The

@@ -24,6 +24,15 @@ A dependency should have a concrete current use, a maintenance story, and compat
 
 Likely UI-level dependencies such as Tailwind, Radix primitives, CodeMirror, docking/layout libraries, and Git/SQLite Rust crates should be added when the first feature that needs them is implemented, after checking their current stable versions and licenses.
 
+## AI provider dependencies
+
+`aeria-ai` uses:
+
+- `reqwest` (MIT OR Apache-2.0) with only `http2`, `json`, `system-proxy`, and `rustls-no-provider`: the provider HTTP client. It is already in the desktop dependency graph through Tauri.
+- `rustls` (Apache-2.0 OR ISC OR MIT) with the `ring` crypto provider, installed once by the client, so builds need neither OpenSSL nor the `aws-lc` toolchain. Certificates are checked with the platform verifier.
+- `keyring` (MIT OR Apache-2.0) with its default platform stores: Windows Credential Manager, the Secret Service on Linux, and the macOS Keychain.
+- `fs2`, `uuid`, `serde_json`, and `thiserror`, matching `aeria-projects`.
+
 ## Renderer UI dependencies
 
 - `radix-ui`: accessible menus, dialogs, tooltips, and selects.
