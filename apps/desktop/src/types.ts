@@ -67,6 +67,8 @@ export type ProjectSummaryDto = {
   gameVersion: string;
   scope: string;
   sheets: ProjectSheetDto[];
+  /** Translations preserved without a current source occurrence. */
+  detachedUnitCount: number;
 };
 
 /** Workspace coverage for one sheet; sheets without translations are omitted. */
@@ -80,6 +82,54 @@ export type SheetProgressDto = {
 export type ProjectOpenResultDto = {
   project: ProjectSummaryDto;
   warning: CommandError | null;
+  /** Present when opening applied a source update. */
+  sourceUpdate: SourceUpdateReportDto | null;
+};
+
+/** Why a translation is preserved without a current source occurrence. */
+export type DetachReason =
+  | "sheetRemoved"
+  | "sheetUnavailable"
+  | "rowRemoved"
+  | "cellRemoved"
+  | "columnUnresolved"
+  | "notTranslatable"
+  | "bindingConflict";
+
+export type SheetSchemaUpdateDto = {
+  sheetName: string;
+  removed: boolean;
+  /** The sheet still exists in the game but the source could not read it. */
+  unavailable: boolean;
+  mappedColumns: number;
+  unresolvedColumns: number;
+};
+
+/** Counts of a previewed or applied deterministic source update. */
+export type SourceUpdateReportDto = {
+  previousContentId: string;
+  contentId: string;
+  gameVersion: string;
+  previousFormatVersion: number;
+  unchanged: number;
+  encodingChanged: number;
+  sourceChanged: number;
+  detached: number;
+  newlyDetached: number;
+  reattached: number;
+  columnMapped: number;
+  rowMoved: number;
+  changedUnits: number;
+  sheetSchemaUpdates: SheetSchemaUpdateDto[];
+};
+
+export type DetachedUnitDto = {
+  translationUnitId: string;
+  lastSourceBinding: SourceBinding;
+  reason: DetachReason;
+  targetMacro: string;
+  reviewState: ReviewState;
+  translatorNote: string | null;
 };
 
 export type RecentProjectAvailability =
@@ -121,6 +171,8 @@ export type TranslationContextCellDto = {
 export type TranslationCellDto = {
   sourceBinding: SourceBinding;
   sourceMacro: string;
+  /** The source has no letters outside macros: punctuation, digits, or number formatting. */
+  formattingOnly: boolean;
   translation: TranslationOverlayDto | null;
 };
 

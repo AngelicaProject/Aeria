@@ -1,8 +1,12 @@
-//! Production Workspace Format v1 filesystem persistence.
+//! Production Workspace Format filesystem persistence.
 //!
-//! The DTOs in this module are deliberately private. They describe the
-//! frozen file contract without making the domain types in `aeria-core`
-//! serialization types.
+//! The writer produces Workspace Format v2 only. The reader also accepts
+//! Workspace Format v1 so that a source update can migrate it; a v1
+//! workspace is never activated for ordinary editing.
+//!
+//! The DTOs in this module are deliberately private. They describe the file
+//! contract without making the domain types in `aeria-core` serialization
+//! types.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File, Metadata};
@@ -15,8 +19,8 @@ use std::sync::{Arc, Mutex};
 use std::time::{Instant, SystemTime};
 
 use aeria_core::{
-    ReviewState, Sha256Hash, SourceBinding, SourceFingerprint, TranslationUnit, TranslationUnitId,
-    WorkspaceMetadata,
+    DetachReason, ReviewState, Sha256Hash, SourceBinding, SourceFingerprint, SourceLayout,
+    SourceStatus, TranslationUnit, TranslationUnitId, WorkspaceMetadata,
 };
 use aeria_se::{SemanticValidity, parse};
 use serde::{Deserialize, Serialize};
@@ -27,7 +31,10 @@ use thiserror::Error;
 
 use super::{Workspace, WorkspaceError};
 
-const FORMAT_VERSION: u8 = 1;
+/// The Workspace Format version written by this implementation.
+pub(crate) const FORMAT_VERSION: u8 = 2;
+/// The previous Workspace Format version, readable only for migration.
+const LEGACY_FORMAT_VERSION: u8 = 1;
 const AERIA_DIRECTORY: &str = ".aeria";
 const MANIFEST_FILE: &str = "manifest.json";
 const UNITS_DIRECTORY: &str = "units";
@@ -51,7 +58,7 @@ pub(crate) fn persistence_test_lock() -> std::sync::MutexGuard<'static, ()> {
 }
 
 /// Errors raised while opening, validating, or persisting a Workspace Format
-/// v1 repository.
+/// repository.
 #[derive(Debug, Error)]
 pub enum WorkspaceStoreError {
     /// The repository root could not be inspected or is not a directory.
@@ -67,11 +74,11 @@ pub enum WorkspaceStoreError {
     MissingPath { path: PathBuf },
 
     /// An existing project cannot be initialized over.
-    #[error("Workspace Format v1 project already exists at {path}")]
+    #[error("Aeria workspace already exists at {path}")]
     AlreadyInitialized { path: PathBuf },
 
-    /// A JSON or semantic value violates the frozen reader contract.
-    #[error("invalid Workspace Format v1 data at {path}{line}: {message}")]
+    /// A JSON or semantic value violates the reader contract.
+    #[error("invalid Workspace Format data at {path}{line}: {message}")]
     InvalidData {
         path: PathBuf,
         line: String,
@@ -81,6 +88,11 @@ pub enum WorkspaceStoreError {
     /// A format version newer than the implementation is not silently opened.
     #[error("unsupported Workspace Format version {version} in {path}")]
     UnsupportedFormatVersion { path: PathBuf, version: u64 },
+
+    /// A readable older format must be migrated by a source update before
+    /// it can be edited.
+    #[error("Workspace Format version {version} in {path} must be migrated by a source update")]
+    MigrationRequired { path: PathBuf, version: u8 },
 
     /// JSON serialization failed before publication.
     #[error("failed to serialize canonical workspace data for {path}: {source}")]
@@ -130,6 +142,25 @@ impl PartialEq for WorkspaceStore {
 
 impl Eq for WorkspaceStore {}
 
+/// Complete validated persisted state, before it is activated for editing.
+///
+/// Bound units are unique by binding within one source-layout generation,
+/// which admits the intermediate state left by an interrupted source update.
+/// Activation additionally requires the current format and unique bound
+/// bindings.
+#[derive(Clone, Debug)]
+pub(crate) struct StoredWorkspace {
+    pub(crate) format_version: u8,
+    pub(crate) metadata: WorkspaceMetadata,
+    pub(crate) units: BTreeMap<TranslationUnitId, TranslationUnit>,
+    /// Bound units whose binding another bound unit already claims. Every
+    /// ordinary mutation keeps bindings unique, but a Git merge of branches
+    /// that bound different units to one occurrence can produce them. They
+    /// are resolved by a source update, never by the reader.
+    pub(crate) duplicate_bound_bindings: usize,
+    layout: ExistingLayout,
+}
+
 #[derive(Clone, Debug)]
 struct PersistenceCache {
     layout: ExistingLayout,
@@ -164,7 +195,8 @@ impl WorkspaceStore {
         &self.repository_root
     }
 
-    /// Loads and validates the complete canonical workspace state.
+    /// Loads and validates the complete canonical workspace state for
+    /// editing.
     ///
     /// The repository root is only a project container. Only `.aeria/` and
     /// its defined managed entries are inspected.
@@ -172,39 +204,94 @@ impl WorkspaceStore {
     /// # Errors
     ///
     /// Returns an error when the managed namespace is missing, unsafe,
-    /// malformed, or contains invalid unit data.
+    /// malformed, contains invalid unit data, or uses Workspace Format v1,
+    /// which must first be migrated by a source update.
     pub fn load(&self) -> Result<Workspace, WorkspaceStoreError> {
+        let stored = self.read_stored()?;
+        self.activate(stored)
+    }
+
+    /// Reads and validates only the manifest, in either supported format.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the managed namespace or manifest is missing,
+    /// unsafe, malformed, or uses an unsupported format version.
+    pub fn read_metadata(&self) -> Result<WorkspaceMetadata, WorkspaceStoreError> {
+        let layout = self.inspect_existing_layout()?;
+        read_manifest(&layout.manifest_path).map(|(_, metadata)| metadata)
+    }
+
+    /// Reads and validates every managed file in either supported format.
+    pub(crate) fn read_stored(&self) -> Result<StoredWorkspace, WorkspaceStoreError> {
         let trace = PerfTrace::new();
         let layout = self.inspect_existing_layout()?;
         trace.mark("workspace.layout");
-        let metadata = read_manifest(&layout.manifest_path)?;
+        let (format_version, metadata) = read_manifest(&layout.manifest_path)?;
+        let shape = if format_version == FORMAT_VERSION {
+            RecordShape::Current
+        } else {
+            RecordShape::Legacy
+        };
 
         let mut units = BTreeMap::new();
-        let mut bindings = BTreeSet::new();
+        let mut bound_bindings = BTreeSet::new();
+        let mut duplicate_bound_bindings = 0;
         for shard in &layout.shards {
-            for unit in read_shard(&shard.path, shard.shard, &shard.name)? {
+            for unit in read_shard(&shard.path, shard.shard, &shard.name, shape)? {
                 let id = unit.id();
-                if units.insert(id, unit.clone()).is_some() {
+                if unit.is_bound() && !bound_bindings.insert(unit.source_binding().clone()) {
+                    duplicate_bound_bindings += 1;
+                }
+                if units.insert(id, unit).is_some() {
                     return Err(invalid(
                         &shard.path,
                         None,
                         format!("duplicate TranslationUnitId {id}"),
                     ));
                 }
-                let binding = unit.source_binding().clone();
-                if !bindings.insert(binding.clone()) {
-                    return Err(WorkspaceStoreError::InvalidData {
-                        path: shard.path.clone(),
-                        line: String::new(),
-                        message: format!("duplicate current SourceBinding {binding:?}"),
-                    });
-                }
             }
         }
+        trace.mark("workspace.store-read");
+        Ok(StoredWorkspace {
+            format_version,
+            metadata,
+            units,
+            duplicate_bound_bindings,
+            layout,
+        })
+    }
 
+    /// Activates validated current-format state for editing and primes the
+    /// session cache used by ordinary one-unit persistence.
+    pub(crate) fn activate(
+        &self,
+        stored: StoredWorkspace,
+    ) -> Result<Workspace, WorkspaceStoreError> {
+        if stored.format_version != FORMAT_VERSION {
+            return Err(WorkspaceStoreError::MigrationRequired {
+                path: stored.layout.manifest_path,
+                version: stored.format_version,
+            });
+        }
+        if stored.duplicate_bound_bindings > 0 {
+            return Err(invalid(
+                &stored.layout.manifest_path,
+                None,
+                format!(
+                    "duplicate current SourceBinding claimed by {} units; a source update must resolve it",
+                    stored.duplicate_bound_bindings
+                ),
+            ));
+        }
+        let StoredWorkspace {
+            metadata,
+            units,
+            layout,
+            ..
+        } = stored;
         let workspace = Workspace::from_loaded(metadata.clone(), units.clone())
             .map_err(WorkspaceStoreError::from)?;
-        trace.mark("workspace.store-load");
         if let Ok(managed_paths) = capture_managed_paths(&layout) {
             self.replace_session_cache(PersistenceCache {
                 layout,
@@ -214,6 +301,67 @@ impl WorkspaceStore {
             });
         }
         Ok(workspace)
+    }
+
+    /// Publishes the result of a source update: every shard in `shards` is
+    /// rewritten from `workspace`, then the manifest is written last.
+    ///
+    /// Each file is replaced atomically. An interruption leaves the previous
+    /// manifest content ID in place, so the next open plans the same update
+    /// again; the plan is idempotent over already rewritten shards. The
+    /// published state is reloaded and must equal `workspace`.
+    pub(crate) fn publish_source_update(
+        &self,
+        workspace: &Workspace,
+        shards: &BTreeSet<u8>,
+    ) -> Result<Workspace, WorkspaceStoreError> {
+        self.invalidate_session_cache();
+        let layout = self.inspect_existing_layout()?;
+        let aeria_path = self.repository_root.join(AERIA_DIRECTORY);
+        let manifest_bytes = canonical_manifest_bytes(workspace, &layout.manifest_path)?;
+        let mut staged = Vec::with_capacity(shards.len());
+        for shard in shards {
+            let path = aeria_path.join(UNITS_DIRECTORY).join(shard_name(*shard));
+            let bytes = canonical_shard_bytes(workspace, *shard, &path)?;
+            if bytes.is_empty() {
+                return Err(invalid(
+                    &path,
+                    None,
+                    "a source update cannot publish an empty unit shard",
+                ));
+            }
+            staged.push((path, bytes));
+        }
+
+        if !staged.is_empty() {
+            let units_path = aeria_path.join(UNITS_DIRECTORY);
+            if layout.units_path.is_none() {
+                fs::create_dir(&units_path).map_err(|source| {
+                    io_error("create workspace units directory", &units_path, source)
+                })?;
+            }
+            ensure_directory(&units_path)?;
+        }
+        for (path, bytes) in &staged {
+            ensure_optional_regular_file(path)?;
+            atomic_publish(&self.repository_root, path, bytes)?;
+        }
+        atomic_publish(
+            &self.repository_root,
+            &layout.manifest_path,
+            &manifest_bytes,
+        )?;
+
+        let reloaded = self.load()?;
+        if reloaded != *workspace {
+            self.invalidate_session_cache();
+            return Err(invalid(
+                &layout.manifest_path,
+                None,
+                "published source update does not reload as the planned workspace",
+            ));
+        }
+        Ok(reloaded)
     }
 
     /// Initializes a new `.aeria/` directory from an in-memory workspace.
@@ -350,7 +498,13 @@ impl WorkspaceStore {
                 (cache.layout, cache.metadata, cache.units, true)
             } else {
                 let layout = self.inspect_existing_layout()?;
-                let persisted_metadata = read_manifest(&layout.manifest_path)?;
+                let (format_version, persisted_metadata) = read_manifest(&layout.manifest_path)?;
+                if format_version != FORMAT_VERSION {
+                    return Err(WorkspaceStoreError::MigrationRequired {
+                        path: layout.manifest_path,
+                        version: format_version,
+                    });
+                }
                 (layout, persisted_metadata, BTreeMap::new(), false)
             };
         trace.mark(if using_cache {
@@ -375,7 +529,12 @@ impl WorkspaceStore {
         if !using_cache
             && let Some(shard_file) = layout.shards.iter().find(|file| file.shard == shard)
         {
-            for unit in read_shard(&shard_file.path, shard, &shard_file.name)? {
+            for unit in read_shard(
+                &shard_file.path,
+                shard,
+                &shard_file.name,
+                RecordShape::Current,
+            )? {
                 persisted_units.insert(unit.id(), unit);
             }
         }
@@ -743,11 +902,31 @@ struct ShardFile {
     path: PathBuf,
 }
 
+/// Reads only the manifest version so the matching strict DTO can be used.
+#[derive(Deserialize)]
+struct ManifestVersionProbe {
+    #[serde(rename = "formatVersion")]
+    format_version: u64,
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ManifestDto {
     #[serde(rename = "formatVersion")]
-    format_version: u64,
+    _format_version: u64,
+    #[serde(rename = "sourceLanguage")]
+    source_language: String,
+    #[serde(rename = "targetLanguage")]
+    target_language: String,
+    #[serde(rename = "contentId")]
+    content_id: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LegacyManifestDto {
+    #[serde(rename = "formatVersion")]
+    _format_version: u64,
     #[serde(rename = "sourceLanguage")]
     source_language: String,
     #[serde(rename = "targetLanguage")]
@@ -758,9 +937,42 @@ struct ManifestDto {
     snapshot_id: String,
 }
 
+/// Which unit record shape a reader accepts.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RecordShape {
+    /// Workspace Format v2 records only.
+    Current,
+    /// Workspace Format v1 records only.
+    Legacy,
+    /// Either shape, for Git history and merge inputs that may predate v2.
+    Either,
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct UnitDto {
+    id: String,
+    #[serde(rename = "sourceStatus")]
+    source_status: String,
+    #[serde(rename = "sourceBinding")]
+    source_binding: SourceBindingDto,
+    #[serde(rename = "sourceFingerprint")]
+    source_fingerprint: SourceFingerprintDto,
+    #[serde(rename = "sourceLayout")]
+    source_layout: Value,
+    #[serde(rename = "sourceRowKey")]
+    source_row_key: Value,
+    #[serde(rename = "targetMacro")]
+    target_macro: String,
+    #[serde(rename = "reviewState")]
+    review_state: String,
+    #[serde(rename = "translatorNote")]
+    translator_note: Value,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LegacyUnitDto {
     id: String,
     #[serde(rename = "sourceBinding")]
     source_binding: SourceBindingDto,
@@ -772,6 +984,15 @@ struct UnitDto {
     review_state: String,
     #[serde(rename = "translatorNote")]
     translator_note: Value,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SourceLayoutDto {
+    #[serde(rename = "sheetSchemaHash")]
+    sheet_schema_hash: String,
+    #[serde(rename = "columnOffset")]
+    column_offset: u32,
 }
 
 #[derive(Deserialize)]
@@ -809,17 +1030,21 @@ struct CanonicalManifestDto<'a> {
     target_language: &'a str,
     #[serde(rename = "contentId")]
     content_id: &'a str,
-    #[serde(rename = "snapshotId")]
-    snapshot_id: &'a str,
 }
 
 #[derive(Serialize)]
 struct CanonicalUnitDto {
     id: String,
+    #[serde(rename = "sourceStatus")]
+    source_status: &'static str,
     #[serde(rename = "sourceBinding")]
     source_binding: CanonicalSourceBindingDto,
     #[serde(rename = "sourceFingerprint")]
     source_fingerprint: CanonicalSourceFingerprintDto,
+    #[serde(rename = "sourceLayout")]
+    source_layout: Option<CanonicalSourceLayoutDto>,
+    #[serde(rename = "sourceRowKey")]
+    source_row_key: Option<String>,
     #[serde(rename = "targetMacro")]
     target_macro: String,
     #[serde(rename = "reviewState")]
@@ -851,45 +1076,68 @@ struct CanonicalSourceFingerprintDto {
     row_technical_hash: String,
 }
 
-fn read_manifest(path: &Path) -> Result<WorkspaceMetadata, WorkspaceStoreError> {
+#[derive(Serialize)]
+struct CanonicalSourceLayoutDto {
+    #[serde(rename = "sheetSchemaHash")]
+    sheet_schema_hash: String,
+    #[serde(rename = "columnOffset")]
+    column_offset: u32,
+}
+
+fn read_manifest(path: &Path) -> Result<(u8, WorkspaceMetadata), WorkspaceStoreError> {
     let bytes = read_file(path, "read manifest")?;
     let text = decode_json_text(&bytes, path, None, true)?;
-    let manifest: ManifestDto = serde_json::from_str(text).map_err(|source| {
+    let json_error = |source: serde_json::Error| {
         invalid(
             path,
             Some(source.line()),
             format!("manifest JSON is invalid: {source}"),
         )
-    })?;
-    if manifest.format_version != u64::from(FORMAT_VERSION) {
-        return Err(WorkspaceStoreError::UnsupportedFormatVersion {
-            path: path.to_owned(),
-            version: manifest.format_version,
-        });
-    }
-    validate_hxs_id(&manifest.content_id, "contentId", path, None)?;
-    validate_hxs_id(&manifest.snapshot_id, "snapshotId", path, None)?;
-    WorkspaceMetadata::new(
-        manifest.source_language,
-        manifest.target_language,
-        manifest.content_id,
-        manifest.snapshot_id,
-    )
-    .map_err(|source| invalid(path, None, format!("invalid manifest metadata: {source}")))
+    };
+    let probe: ManifestVersionProbe = serde_json::from_str(text).map_err(json_error)?;
+    let (format_version, source_language, target_language, content_id) =
+        if probe.format_version == u64::from(FORMAT_VERSION) {
+            let manifest: ManifestDto = serde_json::from_str(text).map_err(json_error)?;
+            (
+                FORMAT_VERSION,
+                manifest.source_language,
+                manifest.target_language,
+                manifest.content_id,
+            )
+        } else if probe.format_version == u64::from(LEGACY_FORMAT_VERSION) {
+            let manifest: LegacyManifestDto = serde_json::from_str(text).map_err(json_error)?;
+            validate_hxs_id(&manifest.snapshot_id, "snapshotId", path, None)?;
+            (
+                LEGACY_FORMAT_VERSION,
+                manifest.source_language,
+                manifest.target_language,
+                manifest.content_id,
+            )
+        } else {
+            return Err(WorkspaceStoreError::UnsupportedFormatVersion {
+                path: path.to_owned(),
+                version: probe.format_version,
+            });
+        };
+    validate_hxs_id(&content_id, "contentId", path, None)?;
+    let metadata = WorkspaceMetadata::new(source_language, target_language, content_id)
+        .map_err(|source| invalid(path, None, format!("invalid manifest metadata: {source}")))?;
+    Ok((format_version, metadata))
 }
 
 fn read_shard(
     path: &Path,
     shard: u8,
     shard_name: &str,
+    shape: RecordShape,
 ) -> Result<Vec<TranslationUnit>, WorkspaceStoreError> {
     #[cfg(test)]
     READ_SHARD_COUNT.fetch_add(1, Ordering::SeqCst);
     let file = File::open(path).map_err(|source| io_error("open unit shard", path, source))?;
-    decode_shard(BufReader::new(file), path, shard, shard_name)
+    decode_shard(BufReader::new(file), path, shard, shard_name, shape)
 }
 
-/// Returns the repository-relative Workspace Format v1 shard path that stores
+/// Returns the repository-relative Workspace Format shard path that stores
 /// `id` with `/` separators, for example `.aeria/units/7a.jsonl`.
 #[must_use]
 pub fn unit_shard_path(id: TranslationUnitId) -> String {
@@ -899,12 +1147,15 @@ pub fn unit_shard_path(id: TranslationUnitId) -> String {
     )
 }
 
-/// Decodes one complete Workspace Format v1 unit shard held in memory, such
-/// as a historical revision read from Git.
+/// Decodes one complete unit shard held in memory, such as a historical
+/// revision read from Git.
 ///
 /// `path` names the shard (its file name selects the expected shard) and is
 /// used in errors. The full reader contract applies: the shard must be
-/// non-empty, strictly ordered, and every record must be valid.
+/// non-empty, strictly ordered, and every record must be valid. Because Git
+/// history may predate Workspace Format v2, each record may use either the v2
+/// or the v1 record shape; a v1 record decodes as a bound unit without
+/// source layout facts.
 ///
 /// # Errors
 ///
@@ -915,14 +1166,15 @@ pub fn decode_unit_shard(
     path: &Path,
 ) -> Result<Vec<TranslationUnit>, WorkspaceStoreError> {
     let (shard, name) = shard_from_path(path)?;
-    decode_shard(bytes, path, shard, &name)
+    decode_shard(bytes, path, shard, &name, RecordShape::Either)
 }
 
-/// Decodes one Workspace Format v1 unit record line, such as a line taken
-/// from a historical Git diff of `path`.
+/// Decodes one unit record line, such as a line taken from a historical Git
+/// diff of `path`.
 ///
 /// The record is validated exactly as a shard reader would validate it,
-/// including shard placement and intrinsic target validation.
+/// including shard placement and intrinsic target validation. As with
+/// [`decode_unit_shard`], either the v2 or the v1 record shape is accepted.
 ///
 /// # Errors
 ///
@@ -932,14 +1184,13 @@ pub fn decode_unit_record(line: &str, path: &Path) -> Result<TranslationUnit, Wo
     let (shard, name) = shard_from_path(path)?;
     let line = line.strip_suffix('\n').unwrap_or(line);
     let line = line.strip_suffix('\r').unwrap_or(line);
-    let dto: UnitDto = serde_json::from_str(line)
-        .map_err(|source| invalid(path, None, format!("unit JSON is invalid: {source}")))?;
-    unit_from_dto(dto, path, 0, shard, &name)
+    parse_unit_record(line, path, None, shard, &name, RecordShape::Either)
 }
 
-/// Encodes the canonical Workspace Format v1 bytes of one unit shard, for
+/// Encodes the canonical Workspace Format v2 bytes of one unit shard, for
 /// example the result of a semantic merge. Units are written in ascending ID
-/// order. An empty result means the shard must be absent.
+/// order. An empty result means the shard must be absent. A unit without
+/// source layout facts cannot be encoded.
 ///
 /// # Errors
 ///
@@ -984,6 +1235,7 @@ fn decode_shard(
     path: &Path,
     shard: u8,
     shard_name: &str,
+    shape: RecordShape,
 ) -> Result<Vec<TranslationUnit>, WorkspaceStoreError> {
     let mut records = Vec::new();
     let mut previous_id = None;
@@ -1019,14 +1271,7 @@ fn decode_shard(
             ));
         }
         let line = decode_json_text(&line, path, Some(line_number), line_number == 1)?;
-        let dto: UnitDto = serde_json::from_str(line).map_err(|source| {
-            invalid(
-                path,
-                Some(line_number),
-                format!("unit JSON is invalid: {source}"),
-            )
-        })?;
-        let unit = unit_from_dto(dto, path, line_number, shard, shard_name)?;
+        let unit = parse_unit_record(line, path, Some(line_number), shard, shard_name, shape)?;
         if let Some(previous_id) = previous_id {
             if unit.id() == previous_id {
                 return Err(invalid(
@@ -1052,24 +1297,128 @@ fn decode_shard(
     Ok(records)
 }
 
+fn parse_unit_record(
+    line_text: &str,
+    path: &Path,
+    line: Option<usize>,
+    shard: u8,
+    shard_name: &str,
+    shape: RecordShape,
+) -> Result<TranslationUnit, WorkspaceStoreError> {
+    let json_error =
+        |source: serde_json::Error| invalid(path, line, format!("unit JSON is invalid: {source}"));
+    match shape {
+        RecordShape::Current => {
+            let dto: UnitDto = serde_json::from_str(line_text).map_err(json_error)?;
+            unit_from_dto(dto, path, line, shard, shard_name)
+        }
+        RecordShape::Legacy => {
+            let dto: LegacyUnitDto = serde_json::from_str(line_text).map_err(json_error)?;
+            legacy_unit_from_dto(dto, path, line, shard, shard_name)
+        }
+        RecordShape::Either => match serde_json::from_str::<UnitDto>(line_text) {
+            Ok(dto) => unit_from_dto(dto, path, line, shard, shard_name),
+            Err(current_error) => match serde_json::from_str::<LegacyUnitDto>(line_text) {
+                Ok(dto) => legacy_unit_from_dto(dto, path, line, shard, shard_name),
+                Err(_) => Err(json_error(current_error)),
+            },
+        },
+    }
+}
+
 fn unit_from_dto(
     dto: UnitDto,
     path: &Path,
-    line: usize,
+    line: Option<usize>,
+    shard: u8,
+    shard_name: &str,
+) -> Result<TranslationUnit, WorkspaceStoreError> {
+    let source_status = parse_source_status(&dto.source_status, path, line)?;
+    let layout = match dto.source_layout {
+        Value::Null if source_status.is_bound() => {
+            return Err(invalid(
+                path,
+                line,
+                "sourceLayout must not be null for a bound unit",
+            ));
+        }
+        Value::Null => None,
+        value @ Value::Object(_) => {
+            let layout: SourceLayoutDto = serde_json::from_value(value).map_err(|source| {
+                invalid(path, line, format!("sourceLayout is invalid: {source}"))
+            })?;
+            let sheet_schema_hash = parse_hash(
+                &layout.sheet_schema_hash,
+                "sourceLayout.sheetSchemaHash",
+                path,
+                line,
+            )?;
+            Some(SourceLayout::new(
+                Sha256Hash::from_bytes(sheet_schema_hash),
+                layout.column_offset,
+            ))
+        }
+        _ => {
+            return Err(invalid(
+                path,
+                line,
+                "sourceLayout must be an object or null",
+            ));
+        }
+    };
+    let unit = legacy_unit_from_dto(
+        LegacyUnitDto {
+            id: dto.id,
+            source_binding: dto.source_binding,
+            source_fingerprint: dto.source_fingerprint,
+            target_macro: dto.target_macro,
+            review_state: dto.review_state,
+            translator_note: dto.translator_note,
+        },
+        path,
+        line,
+        shard,
+        shard_name,
+    )?;
+    let source_row_key = match dto.source_row_key {
+        Value::Null => None,
+        Value::String(value) => Some(Sha256Hash::from_bytes(parse_hash(
+            &value,
+            "sourceRowKey",
+            path,
+            line,
+        )?)),
+        _ => {
+            return Err(invalid(path, line, "sourceRowKey must be a string or null"));
+        }
+    };
+    let unit = unit
+        .with_source_status(source_status)
+        .with_source_row_key(source_row_key);
+    Ok(match layout {
+        Some(layout) => unit.with_source_layout(layout),
+        None => unit,
+    })
+}
+
+fn legacy_unit_from_dto(
+    dto: LegacyUnitDto,
+    path: &Path,
+    line: Option<usize>,
     shard: u8,
     shard_name: &str,
 ) -> Result<TranslationUnit, WorkspaceStoreError> {
     let id = TranslationUnitId::from_str(&dto.id).map_err(|source| {
         invalid(
             path,
-            Some(line),
+            line,
             format!("invalid canonical TranslationUnitId {:?}: {source}", dto.id),
         )
     })?;
     if id.as_bytes()[0] != shard {
         return Err(invalid(
             path,
-            Some(line),
+            line,
             format!("TranslationUnitId is in the wrong shard; expected {shard_name}"),
         ));
     }
@@ -1078,7 +1427,7 @@ fn unit_from_dto(
         &dto.source_fingerprint.macro_text_hash,
         "sourceFingerprint.macroTextHash",
         path,
-        Some(line),
+        line,
     )?;
     let raw_value_hash = match dto.source_fingerprint.raw_value_hash {
         Value::Null => None,
@@ -1086,12 +1435,12 @@ fn unit_from_dto(
             &value,
             "sourceFingerprint.rawValueHash",
             path,
-            Some(line),
+            line,
         )?),
         _ => {
             return Err(invalid(
                 path,
-                Some(line),
+                line,
                 "sourceFingerprint.rawValueHash must be a string or null",
             ));
         }
@@ -1100,7 +1449,7 @@ fn unit_from_dto(
         &dto.source_fingerprint.row_technical_hash,
         "sourceFingerprint.rowTechnicalHash",
         path,
-        Some(line),
+        line,
     )?;
 
     let review_state = match dto.review_state.as_str() {
@@ -1110,7 +1459,7 @@ fn unit_from_dto(
         _ => {
             return Err(invalid(
                 path,
-                Some(line),
+                line,
                 "reviewState must be one of draft, reviewed, needs-review",
             ));
         }
@@ -1123,7 +1472,7 @@ fn unit_from_dto(
     ) {
         return Err(invalid(
             path,
-            Some(line),
+            line,
             format!(
                 "targetMacro is malformed or unsafe: {:?}",
                 validation.diagnostics()
@@ -1153,13 +1502,50 @@ fn unit_from_dto(
         _ => {
             return Err(invalid(
                 path,
-                Some(line),
+                line,
                 "translatorNote must be a string or null",
             ));
         }
     };
     unit.set_translator_note(translator_note);
     Ok(unit)
+}
+
+fn parse_source_status(
+    value: &str,
+    path: &Path,
+    line: Option<usize>,
+) -> Result<SourceStatus, WorkspaceStoreError> {
+    Ok(match value {
+        "bound" => SourceStatus::Bound,
+        "sheet-removed" => SourceStatus::Detached(DetachReason::SheetRemoved),
+        "sheet-unavailable" => SourceStatus::Detached(DetachReason::SheetUnavailable),
+        "row-removed" => SourceStatus::Detached(DetachReason::RowRemoved),
+        "cell-removed" => SourceStatus::Detached(DetachReason::CellRemoved),
+        "column-unresolved" => SourceStatus::Detached(DetachReason::ColumnUnresolved),
+        "not-translatable" => SourceStatus::Detached(DetachReason::NotTranslatable),
+        "binding-conflict" => SourceStatus::Detached(DetachReason::BindingConflict),
+        _ => {
+            return Err(invalid(
+                path,
+                line,
+                "sourceStatus must be bound or a defined detach reason",
+            ));
+        }
+    })
+}
+
+const fn source_status_name(status: SourceStatus) -> &'static str {
+    match status {
+        SourceStatus::Bound => "bound",
+        SourceStatus::Detached(DetachReason::SheetRemoved) => "sheet-removed",
+        SourceStatus::Detached(DetachReason::SheetUnavailable) => "sheet-unavailable",
+        SourceStatus::Detached(DetachReason::RowRemoved) => "row-removed",
+        SourceStatus::Detached(DetachReason::CellRemoved) => "cell-removed",
+        SourceStatus::Detached(DetachReason::ColumnUnresolved) => "column-unresolved",
+        SourceStatus::Detached(DetachReason::NotTranslatable) => "not-translatable",
+        SourceStatus::Detached(DetachReason::BindingConflict) => "binding-conflict",
+    }
 }
 
 fn validate_workspace_metadata(
@@ -1180,8 +1566,7 @@ fn validate_workspace_metadata(
             "targetLanguage must not be empty or whitespace-only",
         ));
     }
-    validate_hxs_id(metadata.source_content_id(), "contentId", path, None)?;
-    validate_hxs_id(metadata.source_snapshot_id(), "snapshotId", path, None)
+    validate_hxs_id(metadata.source_content_id(), "contentId", path, None)
 }
 
 fn require_metadata_match(
@@ -1204,7 +1589,7 @@ fn validate_unique_shard_bindings(
     path: &Path,
 ) -> Result<(), WorkspaceStoreError> {
     let mut bindings = BTreeSet::new();
-    for unit in units.values() {
+    for unit in units.values().filter(|unit| unit.is_bound()) {
         if !bindings.insert(unit.source_binding().clone()) {
             return Err(invalid(
                 path,
@@ -1234,12 +1619,16 @@ fn require_persisted_identity(
             ),
         ));
     }
-    if persisted.source_fingerprint() != replacement.source_fingerprint() {
+    if persisted.source_fingerprint() != replacement.source_fingerprint()
+        || persisted.source_layout() != replacement.source_layout()
+        || persisted.source_row_key() != replacement.source_row_key()
+        || persisted.source_status() != replacement.source_status()
+    {
         return Err(invalid(
             path,
             None,
             format!(
-                "persist_unit cannot change SourceFingerprint for existing TranslationUnitId {}",
+                "persist_unit cannot change source facts for existing TranslationUnitId {}",
                 replacement.id()
             ),
         ));
@@ -1254,8 +1643,11 @@ fn require_new_binding_is_unowned(
     replacement: &TranslationUnit,
     path: &Path,
 ) -> Result<(), WorkspaceStoreError> {
+    if !replacement.is_bound() {
+        return Err(invalid(path, None, "a new unit must be bound"));
+    }
     let mut bindings = BTreeSet::new();
-    for unit in target_units.values() {
+    for unit in target_units.values().filter(|unit| unit.is_bound()) {
         bindings.insert(unit.source_binding().clone());
     }
 
@@ -1263,7 +1655,10 @@ fn require_new_binding_is_unowned(
         if shard.shard == target_shard {
             continue;
         }
-        for unit in read_shard(&shard.path, shard.shard, &shard.name)? {
+        for unit in read_shard(&shard.path, shard.shard, &shard.name, RecordShape::Current)? {
+            if !unit.is_bound() {
+                continue;
+            }
             if !bindings.insert(unit.source_binding().clone()) {
                 return Err(invalid(
                     &shard.path,
@@ -1295,9 +1690,12 @@ fn require_new_binding_is_unowned_cached(
     replacement: &TranslationUnit,
     path: &Path,
 ) -> Result<(), WorkspaceStoreError> {
+    if !replacement.is_bound() {
+        return Err(invalid(path, None, "a new unit must be bound"));
+    }
     if persisted_units
         .values()
-        .any(|unit| unit.source_binding() == replacement.source_binding())
+        .any(|unit| unit.is_bound() && unit.source_binding() == replacement.source_binding())
     {
         return Err(invalid(
             path,
@@ -1321,7 +1719,6 @@ fn canonical_manifest_bytes(
         source_language: workspace.metadata().source_language(),
         target_language: workspace.metadata().target_language(),
         content_id: workspace.metadata().source_content_id(),
-        snapshot_id: workspace.metadata().source_snapshot_id(),
     };
     let mut bytes =
         serde_json::to_vec_pretty(&dto).map_err(|source| WorkspaceStoreError::Serialization {
@@ -1376,8 +1773,19 @@ fn canonical_unit_dto(
             ),
         ));
     }
+    if unit.is_bound() && unit.source_layout().is_none() {
+        return Err(invalid(
+            path,
+            None,
+            format!(
+                "bound TranslationUnitId {} has no source layout and cannot be written",
+                unit.id()
+            ),
+        ));
+    }
     Ok(CanonicalUnitDto {
         id: unit.id().to_string(),
+        source_status: source_status_name(unit.source_status()),
         source_binding: CanonicalSourceBindingDto {
             sheet_name: unit.source_binding().sheet_name().to_owned(),
             row_id: unit.source_binding().row_id(),
@@ -1392,6 +1800,11 @@ fn canonical_unit_dto(
                 .map(Sha256Hash::to_hex),
             row_technical_hash: unit.source_fingerprint().row_technical_hash().to_hex(),
         },
+        source_layout: unit.source_layout().map(|layout| CanonicalSourceLayoutDto {
+            sheet_schema_hash: layout.sheet_schema_hash().to_hex(),
+            column_offset: layout.column_offset(),
+        }),
+        source_row_key: unit.source_row_key().map(Sha256Hash::to_hex),
         target_macro: unit.target_macro().to_owned(),
         review_state: review_state_name(unit.review_state()),
         translator_note: unit.translator_note().map(str::to_owned),
@@ -1672,7 +2085,7 @@ mod tests {
             aeria_path.join(MANIFEST_FILE),
             include_bytes!(concat!(
                 env!("CARGO_MANIFEST_DIR"),
-                "/tests/fixtures/workspace-v1/manifest.json"
+                "/tests/fixtures/workspace-v2/manifest.json"
             )),
         )
         .expect("manifest");
@@ -1680,7 +2093,7 @@ mod tests {
             units_path.join("00.jsonl"),
             include_bytes!(concat!(
                 env!("CARGO_MANIFEST_DIR"),
-                "/tests/fixtures/workspace-v1/units/00.jsonl"
+                "/tests/fixtures/workspace-v2/units/00.jsonl"
             )),
         )
         .expect("shard");
@@ -1737,7 +2150,7 @@ mod tests {
             aeria_path.join(MANIFEST_FILE),
             include_bytes!(concat!(
                 env!("CARGO_MANIFEST_DIR"),
-                "/tests/fixtures/workspace-v1/manifest.json"
+                "/tests/fixtures/workspace-v2/manifest.json"
             )),
         )
         .expect("manifest");
@@ -1745,7 +2158,7 @@ mod tests {
             units_path.join("00.jsonl"),
             include_bytes!(concat!(
                 env!("CARGO_MANIFEST_DIR"),
-                "/tests/fixtures/workspace-v1/units/00.jsonl"
+                "/tests/fixtures/workspace-v2/units/00.jsonl"
             )),
         )
         .expect("00 shard");
@@ -1753,7 +2166,7 @@ mod tests {
             units_path.join("ff.jsonl"),
             include_bytes!(concat!(
                 env!("CARGO_MANIFEST_DIR"),
-                "/tests/fixtures/workspace-v1/units/ff.jsonl"
+                "/tests/fixtures/workspace-v2/units/ff.jsonl"
             )),
         )
         .expect("ff shard");
@@ -1805,7 +2218,7 @@ mod tests {
             aeria_path.join(MANIFEST_FILE),
             include_bytes!(concat!(
                 env!("CARGO_MANIFEST_DIR"),
-                "/tests/fixtures/workspace-v1/manifest.json"
+                "/tests/fixtures/workspace-v2/manifest.json"
             )),
         )
         .expect("manifest");
@@ -1814,7 +2227,7 @@ mod tests {
             &shard_path,
             include_bytes!(concat!(
                 env!("CARGO_MANIFEST_DIR"),
-                "/tests/fixtures/workspace-v1/units/00.jsonl"
+                "/tests/fixtures/workspace-v2/units/00.jsonl"
             )),
         )
         .expect("00 shard");
@@ -1832,7 +2245,7 @@ mod tests {
 
         let mut externally_changed = fs::read(&shard_path).expect("cached shard");
         externally_changed.extend_from_slice(
-            br#"{"id":"tu1:0000000000000000000000000000000000000000000000000000000000000002","sourceBinding":{"sheetName":"External","rowId":7,"subrowId":0,"columnIndex":1},"sourceFingerprint":{"macroTextHash":"1212121212121212121212121212121212121212121212121212121212121212","rawValueHash":null,"rowTechnicalHash":"3434343434343434343434343434343434343434343434343434343434343434"},"targetMacro":"external","reviewState":"draft","translatorNote":null}"#,
+            br#"{"id":"tu1:0000000000000000000000000000000000000000000000000000000000000002","sourceStatus":"bound","sourceBinding":{"sheetName":"External","rowId":7,"subrowId":0,"columnIndex":1},"sourceFingerprint":{"macroTextHash":"1212121212121212121212121212121212121212121212121212121212121212","rawValueHash":null,"rowTechnicalHash":"3434343434343434343434343434343434343434343434343434343434343434"},"sourceLayout":{"sheetSchemaHash":"5656565656565656565656565656565656565656565656565656565656565656","columnOffset":4},"sourceRowKey":null,"targetMacro":"external","reviewState":"draft","translatorNote":null}"#,
         );
         externally_changed.push(b'\n');
         fs::write(&shard_path, externally_changed).expect("external unit update");

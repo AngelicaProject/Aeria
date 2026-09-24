@@ -9,25 +9,50 @@ use crate::hashing::{
     hash_row, hash_row_strings, hash_row_technical, hash_schema, hash_sheet_content, ordinal_cmp,
 };
 use crate::types::{
-    ColumnMetadata, ColumnType, HxsHash, ProducerMetadata, RowHashes, SheetHashes, SheetMetadata,
-    SheetVariant, SnapshotCounts, SnapshotMetadata, StringCell, StringCellHashes,
+    ColumnMetadata, ColumnType, ExcludedSheet, HxsHash, ProducerMetadata, RowHashes,
+    SheetExclusionReason, SheetHashes, SheetMetadata, SheetVariant, SnapshotCounts,
+    SnapshotMetadata, StringCell, StringCellHashes,
 };
 
 pub(crate) const APPLICATION_ID: u32 = 0x4841_544c;
-pub(crate) const FORMAT_VERSION: i64 = 1;
+/// The newest HXS format version this reader accepts.
+pub(crate) const LATEST_FORMAT_VERSION: i64 = 2;
 
-const REQUIRED_TABLES: [&str; 5] = ["hxs_meta", "sheets", "columns", "rows", "string_cells"];
+/// HXS format versions this reader accepts. Version 2 adds sheet exclusions.
+pub(crate) fn is_supported_format_version(version: i64) -> bool {
+    matches!(version, 1 | 2)
+}
+
+fn has_exclusions(version: i64) -> bool {
+    version >= 2
+}
+
+fn required_tables(version: i64) -> &'static [&'static str] {
+    if has_exclusions(version) {
+        &[
+            "hxs_meta",
+            "sheets",
+            "excluded_sheets",
+            "columns",
+            "rows",
+            "string_cells",
+        ]
+    } else {
+        &["hxs_meta", "sheets", "columns", "rows", "string_cells"]
+    }
+}
 
 pub(crate) struct VerifiedSnapshot {
     pub metadata: SnapshotMetadata,
     pub sheets: Vec<(i64, SheetMetadata)>,
+    pub excluded_sheets: Vec<ExcludedSheet>,
 }
 
 /// Reads the metadata and sheet catalog after an immutable byte-level proof
 /// has been established by the package owner. The caller must compare the
 /// complete HXS bytes with a snapshot that already passed `validate_and_read`.
 pub(crate) fn read_cached_snapshot(connection: &Connection) -> Result<VerifiedSnapshot, HxsError> {
-    let metadata = read_metadata(connection)?;
+    let (metadata, _) = read_metadata(connection)?;
     let mut sheets = Vec::new();
     let mut names = HashSet::new();
     let mut statement = connection
@@ -78,14 +103,20 @@ pub(crate) fn read_cached_snapshot(connection: &Connection) -> Result<VerifiedSn
             },
         ));
     }
-    Ok(VerifiedSnapshot { metadata, sheets })
+    let excluded_sheets = read_excluded_sheets(connection, metadata.format_version)?;
+    Ok(VerifiedSnapshot {
+        metadata,
+        sheets,
+        excluded_sheets,
+    })
 }
 
 #[allow(clippy::too_many_lines)]
 pub(crate) fn validate_and_read(connection: &Connection) -> Result<VerifiedSnapshot, HxsError> {
-    validate_schema(connection)?;
+    let version = read_format_version(connection)?;
+    validate_schema(connection, version)?;
     validate_integrity(connection)?;
-    let metadata = read_metadata(connection)?;
+    let (metadata, excluded_sheet_count) = read_metadata(connection)?;
 
     let mut sheets = Vec::new();
     let mut names = HashSet::new();
@@ -192,6 +223,24 @@ pub(crate) fn validate_and_read(connection: &Connection) -> Result<VerifiedSnaps
         ));
     }
 
+    let excluded_sheets = read_excluded_sheets(connection, metadata.format_version)?;
+    if u64::try_from(excluded_sheets.len()).expect("a Vec length fits in u64")
+        != excluded_sheet_count
+    {
+        return Err(HxsError::data(
+            "HXS excluded sheet count does not match the stored exclusions",
+        ));
+    }
+    if let Some(sheet) = excluded_sheets
+        .iter()
+        .find(|excluded| names.contains(&excluded.name))
+    {
+        return Err(HxsError::data(format!(
+            "sheet '{}' is both stored and excluded",
+            sheet.name
+        )));
+    }
+
     let mut content_sheets: Vec<_> = sheets
         .iter()
         .map(|(_, sheet)| {
@@ -204,7 +253,11 @@ pub(crate) fn validate_and_read(connection: &Connection) -> Result<VerifiedSnaps
         })
         .collect();
     content_sheets.sort_unstable_by(|left, right| ordinal_cmp(left.0, right.0));
-    let content_id = compute_content_id(&metadata.source_language, &content_sheets)?;
+    let content_id = compute_content_id(
+        &metadata.source_language,
+        &content_sheets,
+        has_exclusions(i64::from(metadata.format_version)).then_some(excluded_sheets.as_slice()),
+    )?;
     if metadata.content_id != content_id {
         return Err(HxsError::data(
             "HXS content_id does not match the stored source content",
@@ -221,7 +274,49 @@ pub(crate) fn validate_and_read(connection: &Connection) -> Result<VerifiedSnaps
         ));
     }
 
-    Ok(VerifiedSnapshot { metadata, sheets })
+    Ok(VerifiedSnapshot {
+        metadata,
+        sheets,
+        excluded_sheets,
+    })
+}
+
+fn read_format_version(connection: &Connection) -> Result<i64, HxsError> {
+    let version = connection
+        .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
+        .map_err(HxsError::storage)?;
+    if !is_supported_format_version(version) {
+        return Err(HxsError::UnsupportedFormatVersion {
+            expected: LATEST_FORMAT_VERSION,
+            found: version,
+        });
+    }
+    Ok(version)
+}
+
+/// Reads the excluded sheet list ordered by ordinal name. HXS v1 has none.
+fn read_excluded_sheets(
+    connection: &Connection,
+    format_version: u32,
+) -> Result<Vec<ExcludedSheet>, HxsError> {
+    if !has_exclusions(i64::from(format_version)) {
+        return Ok(Vec::new());
+    }
+    let mut statement = connection
+        .prepare("SELECT name, reason FROM excluded_sheets ORDER BY name")
+        .map_err(HxsError::storage)?;
+    let mut rows = statement.query([]).map_err(HxsError::storage)?;
+    let mut excluded = Vec::new();
+    while let Some(row) = rows.next().map_err(HxsError::storage)? {
+        let name = read_text(row, 0, "excluded_sheets.name")?;
+        let code = read_i64(row, 1, "excluded_sheets.reason")?;
+        let reason = SheetExclusionReason::from_code(code).ok_or_else(|| {
+            HxsError::data(format!("unsupported HXS sheet exclusion reason {code}"))
+        })?;
+        excluded.push(ExcludedSheet { name, reason });
+    }
+    excluded.sort_unstable_by(|left, right| ordinal_cmp(&left.name, &right.name));
+    Ok(excluded)
 }
 
 fn validate_integrity(connection: &Connection) -> Result<(), HxsError> {
@@ -250,8 +345,11 @@ fn validate_integrity(connection: &Connection) -> Result<(), HxsError> {
     Ok(())
 }
 
-fn validate_schema(connection: &Connection) -> Result<(), HxsError> {
-    let expected: HashSet<String> = REQUIRED_TABLES.into_iter().map(str::to_owned).collect();
+fn validate_schema(connection: &Connection, version: i64) -> Result<(), HxsError> {
+    let expected: HashSet<String> = required_tables(version)
+        .iter()
+        .map(|table| (*table).to_owned())
+        .collect();
     let mut actual = HashSet::new();
     let mut statement = connection
         .prepare(
@@ -279,16 +377,20 @@ fn validate_schema(connection: &Connection) -> Result<(), HxsError> {
         )));
     }
 
-    for table in REQUIRED_TABLES {
-        validate_table_columns(connection, table)?;
-        validate_primary_key(connection, table)?;
+    for table in required_tables(version) {
+        validate_table_columns(connection, table, version)?;
+        validate_primary_key(connection, table, version)?;
     }
     validate_foreign_keys(connection)?;
     Ok(())
 }
 
-fn validate_table_columns(connection: &Connection, table: &str) -> Result<(), HxsError> {
-    let expected: HashSet<String> = expected_columns(table)
+fn validate_table_columns(
+    connection: &Connection,
+    table: &str,
+    version: i64,
+) -> Result<(), HxsError> {
+    let expected: HashSet<String> = expected_columns(table, version)
         .into_iter()
         .map(str::to_owned)
         .collect();
@@ -329,6 +431,8 @@ fn expected_column_type(column: &str) -> Option<&'static str> {
         "row_count",
         "sheet_count",
         "string_cell_count",
+        "excluded_sheet_count",
+        "reason",
         "sheet_id",
         "column_index",
         "offset",
@@ -370,8 +474,12 @@ fn expected_column_type(column: &str) -> Option<&'static str> {
     }
 }
 
-fn validate_primary_key(connection: &Connection, table: &str) -> Result<(), HxsError> {
-    let expected = expected_primary_key(table);
+fn validate_primary_key(
+    connection: &Connection,
+    table: &str,
+    version: i64,
+) -> Result<(), HxsError> {
+    let expected = expected_primary_key(table, version);
     let mut actual = HashMap::new();
     let mut statement = connection
         .prepare(&format!("PRAGMA table_info(\"{table}\")"))
@@ -417,8 +525,24 @@ fn validate_foreign_keys(connection: &Connection) -> Result<(), HxsError> {
     Ok(())
 }
 
-fn expected_columns(table: &str) -> Vec<&'static str> {
+fn expected_columns(table: &str, version: i64) -> Vec<&'static str> {
     match table {
+        "hxs_meta" if has_exclusions(version) => vec![
+            "id",
+            "format_version",
+            "game_version",
+            "language",
+            "scope",
+            "content_id",
+            "snapshot_id",
+            "extractor_version",
+            "lumina_version",
+            "sheet_count",
+            "row_count",
+            "string_cell_count",
+            "excluded_sheet_count",
+        ],
+        "excluded_sheets" => vec!["name", "reason"],
         "hxs_meta" => vec![
             "id",
             "format_version",
@@ -469,9 +593,10 @@ fn expected_columns(table: &str) -> Vec<&'static str> {
     }
 }
 
-fn expected_primary_key(table: &str) -> HashMap<String, i64> {
-    let columns = expected_columns(table);
+fn expected_primary_key(table: &str, version: i64) -> HashMap<String, i64> {
+    let columns = expected_columns(table, version);
     let key_columns: &[&str] = match table {
+        "excluded_sheets" => &["name"],
         "hxs_meta" | "sheets" => &["id"],
         "columns" => &["sheet_id", "column_index"],
         "rows" => &["sheet_id", "row_id", "subrow_id"],
@@ -504,13 +629,20 @@ fn expected_foreign_keys(table: &str) -> Vec<(String, String, String)> {
     }
 }
 
-fn read_metadata(connection: &Connection) -> Result<SnapshotMetadata, HxsError> {
+/// Reads `hxs_meta` and the stored excluded sheet count (zero for HXS v1).
+fn read_metadata(connection: &Connection) -> Result<(SnapshotMetadata, u64), HxsError> {
+    let version = read_format_version(connection)?;
+    let excluded_column = if has_exclusions(version) {
+        "excluded_sheet_count"
+    } else {
+        "0"
+    };
     let mut statement = connection
-        .prepare(
+        .prepare(&format!(
             "SELECT id, format_version, game_version, language, scope, content_id, snapshot_id, \
-             extractor_version, lumina_version, sheet_count, row_count, string_cell_count \
-             FROM hxs_meta",
-        )
+             extractor_version, lumina_version, sheet_count, row_count, string_cell_count, \
+             {excluded_column} FROM hxs_meta"
+        ))
         .map_err(HxsError::storage)?;
     let mut rows = statement.query([]).map_err(HxsError::storage)?;
     let mut result = None;
@@ -522,11 +654,10 @@ fn read_metadata(connection: &Connection) -> Result<SnapshotMetadata, HxsError> 
             return Err(HxsError::data("hxs_meta must contain row id 1"));
         }
         let format_version = read_i64(row, 1, "hxs_meta.format_version")?;
-        if format_version != FORMAT_VERSION {
-            return Err(HxsError::UnsupportedFormatVersion {
-                expected: FORMAT_VERSION,
-                found: format_version,
-            });
+        if format_version != version {
+            return Err(HxsError::data(
+                "hxs_meta.format_version does not match the SQLite user_version",
+            ));
         }
         let game_version = read_text(row, 2, "hxs_meta.game_version")?;
         let source_language = read_text(row, 3, "hxs_meta.language")?;
@@ -547,23 +678,27 @@ fn read_metadata(connection: &Connection) -> Result<SnapshotMetadata, HxsError> 
         }
         validate_id("content_id", &content_id)?;
         validate_id("snapshot_id", &snapshot_id)?;
-        result = Some(SnapshotMetadata {
-            format_version: u32::try_from(format_version).expect("format version is validated"),
-            game_version,
-            source_language,
-            scope,
-            content_id,
-            snapshot_id,
-            producer: ProducerMetadata {
-                extractor_version,
-                lumina_version,
+        let excluded_sheet_count = read_non_negative_u64(row, 12, "hxs_meta.excluded_sheet_count")?;
+        result = Some((
+            SnapshotMetadata {
+                format_version: u32::try_from(format_version).expect("format version is validated"),
+                game_version,
+                source_language,
+                scope,
+                content_id,
+                snapshot_id,
+                producer: ProducerMetadata {
+                    extractor_version,
+                    lumina_version,
+                },
+                counts: SnapshotCounts {
+                    sheets: read_non_negative_u64(row, 9, "hxs_meta.sheet_count")?,
+                    rows: read_non_negative_u64(row, 10, "hxs_meta.row_count")?,
+                    string_cells: read_non_negative_u64(row, 11, "hxs_meta.string_cell_count")?,
+                },
             },
-            counts: SnapshotCounts {
-                sheets: read_non_negative_u64(row, 9, "hxs_meta.sheet_count")?,
-                rows: read_non_negative_u64(row, 10, "hxs_meta.row_count")?,
-                string_cells: read_non_negative_u64(row, 11, "hxs_meta.string_cell_count")?,
-            },
-        });
+            excluded_sheet_count,
+        ));
     }
     result.ok_or_else(|| HxsError::data("hxs_meta must contain exactly one row"))
 }

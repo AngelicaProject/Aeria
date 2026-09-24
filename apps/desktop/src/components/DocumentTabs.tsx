@@ -1,4 +1,5 @@
 import { UiIcon } from "../ui/primitives/UiIcon";
+import { useI18n } from "../ui/i18n";
 
 export type DocumentTab = {
   id: string;
@@ -19,8 +20,9 @@ type DocumentTabsProps = {
 };
 
 export function DocumentTabs({ documents, activeDocumentId, onSelect, onClose, onPin, onReorder }: DocumentTabsProps) {
+  const { t } = useI18n();
   return (
-    <div className="doc-tabs" role="tablist" aria-label="Open sheets">
+    <div className="doc-tabs" role="tablist" aria-label={t("tabs.label")}>
       {documents.map((document) => {
         const active = document.id === activeDocumentId;
         const className = ["doc-tab", active ? "active" : "", document.preview ? "preview" : "", document.dirty ? "dirty" : ""].filter(Boolean).join(" ");
@@ -39,7 +41,7 @@ export function DocumentTabs({ documents, activeDocumentId, onSelect, onClose, o
               role="tab"
               className="doc-tab-main"
               aria-selected={active}
-              title={document.preview ? `${document.label} (preview; double-click to keep open)` : document.label}
+              title={document.preview ? t("tabs.preview", { label: document.label }) : document.label}
               onClick={() => onSelect(document.id)}
               onDoubleClick={() => onPin?.(document.id)}
               onAuxClick={(event) => { if (event.button === 1) { event.preventDefault(); onClose(document.id); } }}
@@ -48,7 +50,7 @@ export function DocumentTabs({ documents, activeDocumentId, onSelect, onClose, o
               <span className="doc-tab-label">{document.label}</span>
             </button>
             {document.closable ? (
-              <button className="doc-tab-close" type="button" aria-label={document.dirty ? `Close ${document.label} (unsaved changes)` : `Close ${document.label}`} onClick={() => onClose(document.id)}>
+              <button className="doc-tab-close" type="button" aria-label={t(document.dirty ? "tabs.closeUnsaved" : "tabs.close", { label: document.label })} onClick={() => onClose(document.id)}>
                 <span className="doc-tab-dirty" aria-hidden="true" />
                 <UiIcon icon="x" size="xs" className="doc-tab-x" />
               </button>
@@ -56,7 +58,7 @@ export function DocumentTabs({ documents, activeDocumentId, onSelect, onClose, o
           </div>
         );
       })}
-      {documents.length === 0 ? <span className="doc-tabs-empty">No open sheets</span> : null}
+      {documents.length === 0 ? <span className="doc-tabs-empty">{t("tabs.empty")}</span> : null}
     </div>
   );
 }

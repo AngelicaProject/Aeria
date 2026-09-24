@@ -47,20 +47,24 @@ test("filters loaded occurrences by review state and text", async () => {
       subrowId: 0,
       context: [],
       cells: [
-        { sourceBinding: binding(0), sourceMacro: "Hello <num(1)>", translation: { translationUnitId: "tu1", targetMacro: "Bonjour", reviewState: "needsReview", translatorNote: null } },
-        { sourceBinding: binding(3), sourceMacro: "World", translation: null },
+        { sourceBinding: binding(0), sourceMacro: "Hello <num(1)>", formattingOnly: false, translation: { translationUnitId: "tu1", targetMacro: "Bonjour", reviewState: "needsReview", translatorNote: null } },
+        { sourceBinding: binding(3), sourceMacro: "World", formattingOnly: false, translation: null },
+        { sourceBinding: binding(4), sourceMacro: "...", formattingOnly: true, translation: null },
       ],
     },
   ]);
 
-  assert.deepEqual(filterOccurrences(occurrences, { status: "untranslated", query: "" }).map((item) => item.sourceMacro), ["World"]);
-  assert.deepEqual(filterOccurrences(occurrences, { status: "needsReview", query: "" }).map((item) => item.sourceMacro), ["Hello <num(1)>"]);
-  assert.deepEqual(filterOccurrences(occurrences, { status: "all", query: "bonj" }).map((item) => item.sourceMacro), ["Hello <num(1)>"]);
-  assert.equal(filterOccurrences(occurrences, { status: "reviewed", query: "" }).length, 0);
+  assert.deepEqual(filterOccurrences(occurrences, { status: "untranslated", kind: "all", query: "" }).map((item) => item.sourceMacro), ["World", "..."]);
+  assert.deepEqual(filterOccurrences(occurrences, { status: "all", kind: "formatting", query: "" }).map((item) => item.sourceMacro), ["..."]);
+  assert.deepEqual(filterOccurrences(occurrences, { status: "untranslated", kind: "text", query: "" }).map((item) => item.sourceMacro), ["World"]);
+  assert.deepEqual(filterOccurrences(occurrences, { status: "needsReview", kind: "all", query: "" }).map((item) => item.sourceMacro), ["Hello <num(1)>"]);
+  assert.deepEqual(filterOccurrences(occurrences, { status: "all", kind: "all", query: "bonj" }).map((item) => item.sourceMacro), ["Hello <num(1)>"]);
+  assert.equal(filterOccurrences(occurrences, { status: "reviewed", kind: "all", query: "" }).length, 0);
 
   assert.equal(adjacentOccurrence(occurrences, binding(0), 1)?.sourceMacro, "World");
-  assert.equal(adjacentOccurrence(occurrences, binding(3), 1), null);
-  assert.equal(adjacentOccurrence(occurrences, null, -1)?.sourceMacro, "World");
+  assert.equal(adjacentOccurrence(occurrences, binding(3), 1)?.sourceMacro, "...");
+  assert.equal(adjacentOccurrence(occurrences, binding(4), 1), null);
+  assert.equal(adjacentOccurrence(occurrences, null, -1)?.sourceMacro, "...");
 });
 
 test("cursorBefore starts a page at the requested row", async () => {

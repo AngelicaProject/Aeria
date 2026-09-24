@@ -23,6 +23,16 @@ Styles live in `src/styles/` by surface (`base`, `primitives`, `chrome`, `launch
 
 Renderer preferences go through `usePreferences` (`src/ui/preferences.tsx`, parsed by `preferencesModel.ts`); appearance goes through `useTheme`. Both validate stored values and fall back to defaults.
 
+## Interface localization
+
+The renderer interface ships in English and Russian. Only Aeria's own chrome is localized: menus, dialogs, labels, tooltips, accessible names, and messages the renderer composes itself. Game text, project data, sheet and theme names, Git data, and diagnostics returned by Rust commands (`CommandError.message`) are shown unchanged.
+
+- Messages live in `src/i18n/`. `en.ts` is the source of message keys; every other catalog is typed as `Catalog` and must provide the same keys with the same `{placeholders}`. `tests/i18n.test.mjs` enforces key, placeholder, and plural-category parity.
+- Components read `t` from `useI18n()` (`src/ui/i18n.tsx`). Do not put user-visible literals in components; add a key to every catalog instead. Non-React modules return `MessageKey`s or accept a `Translate` function.
+- Plural messages are objects keyed by `Intl.PluralRules` categories and are selected by a numeric `count` param. Russian needs `one`, `few`, `many`, and `other`.
+- Numeric params are formatted for the locale with digit grouping, so pass identifiers such as row ids, subrow ids, and column indexes as strings. Relative times, dates, and percentages use the interface locale, not the OS locale.
+- The interface language is the `language` preference (`system`, `en`, or `ru`). `system` picks the first supported OS language and otherwise falls back to English. Resetting editor settings keeps the language. The resolved locale is written to `<html lang>`.
+
 Window APIs used by the renderer must be granted in `src-tauri/capabilities/default.json`. In particular, `onCloseRequested` destroys the window after its handler runs, so closing requires `core:window:allow-destroy`, and read-only window getters come from `core:window:default`.
 
 Menus, dialogs, tooltips, and selects use Radix primitives (`radix-ui`) styled with the shared `menu-*`, `dialog*`, and `tooltip` classes. Icon-only buttons use `IconButton`, which requires an accessible label and shows it as a tooltip. Source and target text use `MacroEditor` (CodeMirror 6); long lists use `@tanstack/react-virtual` or the existing fixed-height virtual tree.

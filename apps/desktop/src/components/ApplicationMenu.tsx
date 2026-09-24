@@ -1,5 +1,6 @@
 import { Menubar } from "radix-ui";
 import { UiIcon } from "../ui/primitives/UiIcon";
+import { useI18n } from "../ui/i18n";
 
 export type ApplicationMenuCommandItem = {
   kind: "command";
@@ -99,8 +100,9 @@ function MenuItems({ items }: { items: readonly ApplicationMenuItem[] }) {
 }
 
 export function ApplicationMenu({ menus }: { menus: readonly ApplicationMenuDefinition[] }) {
+  const { t } = useI18n();
   return (
-    <Menubar.Root className="app-menubar" aria-label="Application menu">
+    <Menubar.Root className="app-menubar" aria-label={t("menu.label")}>
       {menus.map((menu) => (
         <Menubar.Menu key={menu.id}>
           <Menubar.Trigger className="app-menubar-trigger">{menu.label}</Menubar.Trigger>

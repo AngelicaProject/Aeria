@@ -64,8 +64,8 @@ React, aeria-workspace, or aeria-hsp.
 - `aeria-hxs`: HXS reader and verifier.
 - `aeria-hsp`: HSP/HSG reader, relationship validator, source cache materializer, and guidance index.
 - `aeria-se`: structured FFXIV string parsing, syntax tree, validation, and rendering model.
-- `aeria-workspace`: versioned translation workspace model and deterministic serialization.
-- `aeria-rebase`: deterministic cross-snapshot migration planning.
+- `aeria-workspace`: versioned translation workspace model, deterministic serialization, and application of planned source updates.
+- `aeria-rebase`: deterministic source update planning.
 - `aeria-search`: local indexing, source search, translation memory, and query services.
 - `aeria-ai`: provider-neutral AI orchestration and validated batch jobs.
 - `aeria-git`: repository operations and semantic Git integration.

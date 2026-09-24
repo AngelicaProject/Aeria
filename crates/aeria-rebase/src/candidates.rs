@@ -2,8 +2,8 @@
 //!
 //! This module is review assistance only. It does not establish source
 //! identity, mutate a [`TranslationUnit`], update workspace state, or produce
-//! a [`RebaseOutcome`]. The rebase planner remains the only authority for
-//! source transition facts.
+//! a [`crate::UnitUpdateOutcome`]. The source update planner remains the
+//! only authority for source transition facts.
 
 #![forbid(unsafe_code)]
 
@@ -116,14 +116,71 @@ pub enum CandidateSuggestionError {
         found: Box<SourceSnapshotIdentity>,
     },
 
-    /// The old snapshot does not satisfy the planner's persisted baseline
-    /// fingerprint contract for the managed unit.
-    #[error("old source baseline verification failed: {0}")]
-    OldBaselineVerification(#[source] crate::RebaseError),
+    /// The old snapshot does not hold the managed unit's persisted source
+    /// facts, so its text cannot be used for ranking.
+    #[error(
+        "old source baseline for translation unit {unit_id} at {binding:?} does not match its persisted source facts"
+    )]
+    OldBaselineMismatch {
+        unit_id: TranslationUnitId,
+        binding: SourceBinding,
+    },
 
     /// Building the bounded source index failed.
     #[error("could not enumerate new HXS String occurrences: {0}")]
     IndexRead(#[source] HxsError),
+}
+
+/// Verifies that `old_snapshot` holds exactly the source facts persisted for
+/// `unit`, so ranking never combines a unit with unrelated old text.
+fn verify_old_baseline(
+    unit: &TranslationUnit,
+    old_snapshot: &HxsSnapshot,
+) -> Result<(), CandidateSuggestionError> {
+    let binding = unit.source_binding();
+    let read_error = |source| CandidateSuggestionError::OldSourceRead {
+        unit_id: unit.id(),
+        binding: binding.clone(),
+        source,
+    };
+    let missing = || CandidateSuggestionError::OldSourceMissing {
+        unit_id: unit.id(),
+        binding: binding.clone(),
+    };
+    let cell = old_snapshot
+        .string_cell(
+            binding.sheet_name(),
+            binding.row_id(),
+            binding.subrow_id(),
+            binding.column_index(),
+        )
+        .map_err(read_error)?
+        .ok_or_else(missing)?;
+    let row = old_snapshot
+        .row(binding.sheet_name(), binding.row_id(), binding.subrow_id())
+        .map_err(read_error)?
+        .ok_or_else(missing)?;
+    let found = SourceFingerprint::new(
+        Sha256Hash::from_bytes(*cell.hashes.macro_text.as_bytes()),
+        cell.hashes
+            .raw_value
+            .map(|hash| Sha256Hash::from_bytes(*hash.as_bytes())),
+        Sha256Hash::from_bytes(*row.hashes.technical.as_bytes()),
+    );
+    let layout_matches = unit.source_layout().is_none_or(|layout| {
+        old_snapshot
+            .sheet(binding.sheet_name())
+            .is_some_and(|sheet| {
+                layout.sheet_schema_hash().as_bytes() == sheet.hashes.schema.as_bytes()
+            })
+    });
+    if found != *unit.source_fingerprint() || !layout_matches {
+        return Err(CandidateSuggestionError::OldBaselineMismatch {
+            unit_id: unit.id(),
+            binding: binding.clone(),
+        });
+    }
+    Ok(())
 }
 
 /// A deterministic protected-structure comparison used as ranking evidence.
@@ -261,7 +318,7 @@ impl CandidateSuggester {
     ///
     /// A unit whose old binding survives in the prepared new snapshot receives
     /// no suggestions and never competes with other coordinates. The intended
-    /// caller invokes this for an `Ambiguous` planner entry. The method accepts
+    /// caller invokes this for a detached planner entry. The method accepts
     /// the unit directly so the candidate result cannot be mistaken for an
     /// authoritative planner transition.
     ///
@@ -301,8 +358,7 @@ impl CandidateSuggester {
             return Ok(Vec::new());
         }
 
-        crate::verify_old_baseline(unit, old_snapshot)
-            .map_err(CandidateSuggestionError::OldBaselineVerification)?;
+        verify_old_baseline(unit, old_snapshot)?;
 
         let old_cell = old_snapshot
             .string_cell(

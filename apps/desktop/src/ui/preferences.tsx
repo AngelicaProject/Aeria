@@ -50,9 +50,13 @@ export function PreferencesProvider({ children }: PropsWithChildren) {
     });
   }, [store]);
 
+  // The interface language is not an editor setting, so a reset keeps it.
   const resetPreferences = useCallback(() => {
-    store(defaultPreferences);
-    setPreferences(defaultPreferences);
+    setPreferences((current) => {
+      const next = { ...defaultPreferences, language: current.language };
+      store(next);
+      return next;
+    });
   }, [store]);
 
   useLayoutEffect(() => {

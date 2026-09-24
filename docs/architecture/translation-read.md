@@ -35,11 +35,18 @@ uses binary search for exact occurrence lookup. It contains no source text or
 text classifier.
 
 Context cells are returned separately from editable cells. Rows with no
-guidance-allowed cells are omitted from the visible result. A guidance-allowed
-empty source macro is still an editable cell. A blocked non-empty String is
-returned as read-only context, while a blocked empty String may be omitted.
-Existing blocked Workspace units are rejected during ProjectSession opening;
-the read path never repairs or hides them.
+guidance-allowed cells are omitted from the visible result. HSG never grants an
+empty source text. A blocked non-empty String is returned as read-only
+context, while a blocked empty String may be omitted.
+
+Each editable cell carries `formatting_only`, derived from its source macro by
+`aeria_se::MacroString::is_formatting_only`: the source has no letters outside
+protected structure, for example `...`, `0`, or a number-formatting macro. It
+is a presentation hint only; it never changes permission, identity, or
+validation (see [`source.md`](./source.md)).
+A bound Workspace unit that guidance no longer permits requires a source
+update before the session opens, which detaches it as `NotTranslatable` (see
+[`rebase.md`](./rebase.md)); the read path never repairs or hides bound units.
 
 This is not the future semantic-schema system. EXDSchema integration is
 deferred; labels remain `Column N`. Later schema metadata may refine roles and
@@ -49,7 +56,7 @@ display labels without changing String-cell identity or TranslationUnit IDs.
 
 `aeria-hxs::HxsSnapshot::page_string_rows` is an additional source-browsing
 API. The existing `page_string_occurrences` and
-`page_string_occurrence_records` APIs remain available for rebase and scanning
+`page_string_occurrence_records` APIs remain available for source updates and scanning
 contracts.
 
 The row reader uses one bounded SQL query per page. A CTE first selects at most
@@ -76,10 +83,12 @@ The application cursor is an owned `TranslationRowCursor` containing only
 
 For each translatable cell, Rust constructs the existing cell-level
 `SourceBinding`, reconstructs the verified `SourceFingerprint` from macro hash,
-optional raw hash, and row technical hash, then looks up the exact sparse
-Workspace binding. A present overlay is returned even when `target_macro` is
-empty; a missing overlay means untranslated. A stale fingerprint is an
-integrity error. Reads never repair or mutate Workspace state.
+optional raw hash, and row technical hash, derives the `SourceLayout` from the
+sheet schema hash and column offset, then looks up the bound unit at that
+binding. Detached units are never overlaid. A present overlay is returned even
+when `target_macro` is empty; a missing overlay means untranslated. A stale
+fingerprint or layout is an integrity error. Reads never repair or mutate
+Workspace state.
 
 The desktop maps this page to owned row DTOs and keeps page-size bounds and
 integrity failures intact. Mutation commands remain cell-level:
@@ -90,12 +99,12 @@ integrity failures intact. Mutation commands remain cell-level:
 
 `ProjectSession::translation_progress` summarizes in-memory Workspace units per
 sheet: `translated` counts units (including explicitly empty targets), and
-`reviewed` and `needs_review` are subsets of it. Only units whose binding the
-HSG index permits are counted, so every count is bounded by the sheet's
-translatable cell count. Sheets without units are omitted, and results are
-ordered by sheet name.
+`reviewed` and `needs_review` are subsets of it. Only bound units whose
+binding the HSG index permits are counted, so every count is bounded by the
+sheet's translatable cell count; detached units are not counted. Sheets
+without units are omitted, and results are ordered by sheet name.
 
 The summary reads no HXS rows and does not re-verify fingerprints; a stale unit
 still surfaces as an integrity error when its row is paged. It is presentation
-data for progress indicators, never an input to identity, rebase, merge, or
-export decisions.
+data for progress indicators, never an input to identity, source update,
+merge, or export decisions.

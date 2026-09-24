@@ -28,6 +28,7 @@ import type {
   UnitConflictDto,
   GitCommitChangesDto,
   GitCommitDto,
+  GitFileKind,
   GitOverviewDto,
   RecordVersionDto,
   UnitChangeDto,
@@ -38,6 +39,8 @@ import { formatRelativeTime } from "../timeDisplay";
 import { IconButton } from "../ui/primitives/IconButton";
 import { UiIcon, type UiIconName } from "../ui/primitives/UiIcon";
 import type { GitPresentationMode } from "./WorkbenchToolDock";
+import { useI18n, type Translate } from "../ui/i18n";
+import type { MessageKey } from "../i18n/translate";
 
 const HISTORY_LIMIT = 50;
 
@@ -63,10 +66,10 @@ function changeBinding(change: UnitChangeDto): SourceBinding | null {
 }
 
 /** Groups changes by sheet, ordered by sheet name then row coordinate. */
-function groupChanges(changes: readonly UnitChangeDto[]): ChangeGroup[] {
+function groupChanges(changes: readonly UnitChangeDto[], unknownSheet: string): ChangeGroup[] {
   const groups = new Map<string, UnitChangeDto[]>();
   for (const change of changes) {
-    const sheetName = changeBinding(change)?.sheetName ?? "Unknown";
+    const sheetName = changeBinding(change)?.sheetName ?? unknownSheet;
     groups.set(sheetName, [...(groups.get(sheetName) ?? []), change]);
   }
   const order = (change: UnitChangeDto) => {
@@ -83,6 +86,17 @@ function groupChanges(changes: readonly UnitChangeDto[]): ChangeGroup[] {
 }
 
 const kindLetter: Record<UnitChangeDto["kind"], string> = { added: "A", modified: "M", removed: "D" };
+const kindLabel: Record<UnitChangeDto["kind"], MessageKey> = { added: "git.kind.added", modified: "git.kind.modified", removed: "git.kind.removed" };
+const fileKindLabel: Record<GitFileKind, MessageKey> = {
+  added: "git.file.added",
+  modified: "git.file.modified",
+  deleted: "git.file.deleted",
+  renamed: "git.file.renamed",
+  copied: "git.file.copied",
+  typeChanged: "git.file.typeChanged",
+  untracked: "git.file.untracked",
+  conflicted: "git.file.conflicted",
+};
 
 type ChangeRowProps = {
   change: UnitChangeDto;
@@ -91,42 +105,41 @@ type ChangeRowProps = {
 };
 
 function ChangeRow({ change, selected, onOpen }: ChangeRowProps) {
+  const { t } = useI18n();
   const binding = changeBinding(change);
   const text = change.after?.targetMacro ?? change.before?.targetMacro ?? "";
   const content = <>
-    <span className={`git-kind git-kind-${change.kind}`} aria-label={change.kind}>{kindLetter[change.kind]}</span>
-    <span className="git-change-coord mono">{binding ? `${binding.rowId}:${binding.subrowId}` : "?"}{binding ? <small> col {binding.columnIndex}</small> : null}</span>
-    <span className={change.kind === "removed" ? "git-change-text removed" : "git-change-text"}>{text || <em>empty</em>}</span>
-    <span className="git-change-meta">{changeLabel(change)}</span>
+    <span className={`git-kind git-kind-${change.kind}`} aria-label={t(kindLabel[change.kind])}>{kindLetter[change.kind]}</span>
+    <span className="git-change-coord mono">{binding ? `${binding.rowId}:${binding.subrowId}` : "?"}{binding ? <small> {t("common.column", { column: String(binding.columnIndex) })}</small> : null}</span>
+    <span className={change.kind === "removed" ? "git-change-text removed" : "git-change-text"}>{text || <em>{t("git.emptyText")}</em>}</span>
+    <span className="git-change-meta">{changeLabel(change, t)}</span>
   </>;
   return onOpen
-    ? <li><button type="button" className={selected ? "git-change selected" : "git-change"} onClick={onOpen} title={`Open ${binding ? unitLabel(change.after ?? change.before) : "string"}`}>{content}</button></li>
+    ? <li><button type="button" className={selected ? "git-change selected" : "git-change"} onClick={onOpen} title={binding ? t("git.openUnit", { unit: unitLabel(change.after ?? change.before, t) }) : t("git.openString")}>{content}</button></li>
     : <li><div className={selected ? "git-change selected" : "git-change"}>{content}</div></li>;
 }
 
-function formatTime(seconds: number): string {
-  return new Date(seconds * 1000).toLocaleString();
-}
-
-function relativeTime(seconds: number): string {
-  return formatRelativeTime(seconds * 1000, Date.now());
-}
-
-function unitLabel(unit: UnitVersionDto | null): string {
-  if (!unit) return "unknown";
+function unitLabel(unit: UnitVersionDto | null, t: Translate): string {
+  if (!unit) return t("git.unknownUnit");
   const binding = unit.sourceBinding;
-  return `${binding.sheetName} ${binding.rowId}:${binding.subrowId} · col ${binding.columnIndex}`;
+  return t("common.cellLocation", { sheet: binding.sheetName, row: String(binding.rowId), subrow: String(binding.subrowId), column: String(binding.columnIndex) });
 }
 
-function changeLabel(change: UnitChangeDto): string {
-  if (change.kind === "added") return "new";
-  if (change.kind === "removed") return "removed";
+function changeLabel(change: UnitChangeDto, t: Translate): string {
+  if (change.kind === "added") return t("git.change.added");
+  if (change.kind === "removed") return t("git.change.removed");
   const parts = [];
-  if (change.targetChanged) parts.push("text");
-  if (change.reviewChanged) parts.push("review");
-  if (change.noteChanged) parts.push("note");
-  return parts.join(", ") || "changed";
+  if (change.targetChanged) parts.push(t("git.change.text"));
+  if (change.reviewChanged) parts.push(t("git.change.review"));
+  if (change.noteChanged) parts.push(t("git.change.note"));
+  return parts.join(", ") || t("git.change.changed");
 }
+
+const syncLabels: Record<GitSyncDto["integration"], { plain: MessageKey; pushed: MessageKey }> = {
+  upToDate: { plain: "git.sync.upToDate", pushed: "git.sync.upToDatePushed" },
+  fastForward: { plain: "git.sync.fastForward", pushed: "git.sync.fastForwardPushed" },
+  merged: { plain: "git.sync.merged", pushed: "git.sync.mergedPushed" },
+};
 
 function versionTarget(version: RecordVersionDto): string | null {
   return version.state === "valid" ? version.unit.targetMacro : null;
@@ -148,6 +161,9 @@ function Section({ title, icon, meta, action, children }: { title: string; icon:
 }
 
 export function GitPanel({ mode, selectedUnitId, workspaceRevision, onWorkspaceChanged, onRestoreTarget, pending: externalPending, onRevealBinding }: GitPanelProps) {
+  const { t, locale } = useI18n();
+  const formatTime = (seconds: number) => new Date(seconds * 1000).toLocaleString(locale);
+  const relativeTime = (seconds: number) => formatRelativeTime(seconds * 1000, Date.now(), locale, t("time.justNow"));
   const [overview, setOverview] = useState<GitOverviewDto | null>(null);
   const [ownPending, setOwnPending] = useState<UnitChangeDto[]>([]);
   const [collapsedSheets, setCollapsedSheets] = useState<ReadonlySet<string>>(() => new Set());
@@ -230,12 +246,12 @@ export function GitPanel({ mode, selectedUnitId, workspaceRevision, onWorkspaceC
     if (result.conflicts.length > 0) {
       setConflicts(result.conflicts);
       setChoices({});
-      return `${result.conflicts.length} strings were changed differently here and on the server. Choose which version to keep.`;
+      return t("git.conflicts", { count: result.conflicts.length });
     }
     setConflicts([]);
     if (result.workspaceChanged) onWorkspaceChanged?.();
-    const integration = result.integration === "upToDate" ? "Up to date" : result.integration === "fastForward" ? "Received changes" : "Merged changes";
-    return `${integration}${result.pushed ? ", sent your checkpoints" : ""}.`;
+    const labels = syncLabels[result.integration];
+    return t(result.pushed ? labels.pushed : labels.plain);
   };
 
   const feedback = <>
@@ -244,7 +260,7 @@ export function GitPanel({ mode, selectedUnitId, workspaceRevision, onWorkspaceC
   </>;
 
   if (!overview) {
-    return <div className="git-panel">{error ? feedback : <div className="panel-state"><span className="spinner" />Loading Git status…</div>}</div>;
+    return <div className="git-panel">{error ? feedback : <div className="panel-state"><span className="spinner" />{t("git.loading")}</div>}</div>;
   }
 
   if (!overview.repository) {
@@ -252,10 +268,10 @@ export function GitPanel({ mode, selectedUnitId, workspaceRevision, onWorkspaceC
       <div className="git-panel">
         <div className="empty-state git-empty">
           <UiIcon icon="gitBranch" size="xl" />
-          <strong>No Git repository</strong>
-          <p>Keep translation history, attribute changes to translators, and sync with a remote.</p>
-          {overview.runtime.version ? null : <p className="git-feedback error">Git is not available. Reinstall Aeria, or install Git from your package manager on Linux.</p>}
-          <button className="button button-primary" type="button" disabled={busy !== null} onClick={() => void run("init", async () => { await gitInitialize(); return "Repository initialized."; })}>Initialize repository</button>
+          <strong>{t("git.noRepository")}</strong>
+          <p>{t("git.noRepositoryHint")}</p>
+          {overview.runtime.version ? null : <p className="git-feedback error">{t("git.unavailable")}</p>}
+          <button className="button button-primary" type="button" disabled={busy !== null} onClick={() => void run("init", async () => { await gitInitialize(); return t("git.initialized"); })}>{t("git.initialize")}</button>
           {feedback}
         </div>
       </div>
@@ -265,8 +281,8 @@ export function GitPanel({ mode, selectedUnitId, workspaceRevision, onWorkspaceC
   const status = overview.repository;
   const hasRemote = overview.remotes.length > 0;
   const syncState = status.upstream
-    ? status.ahead === 0 && status.behind === 0 ? "In sync" : [status.ahead > 0 ? `${status.ahead} to send` : null, status.behind > 0 ? `${status.behind} to receive` : null].filter(Boolean).join(" · ")
-    : hasRemote ? "Not published yet" : "No remote";
+    ? status.ahead === 0 && status.behind === 0 ? t("git.inSync") : [status.ahead > 0 ? t("git.toSend", { count: status.ahead }) : null, status.behind > 0 ? t("git.toReceive", { count: status.behind }) : null].filter(Boolean).join(" · ")
+    : t(hasRemote ? "git.notPublished" : "git.noRemote");
 
   return (
     <div className="git-panel">
@@ -274,22 +290,22 @@ export function GitPanel({ mode, selectedUnitId, workspaceRevision, onWorkspaceC
         <div className="git-summary-branch">
           <span className="git-summary-icon"><UiIcon icon="gitBranch" size="md" /></span>
           <div>
-            <strong>{status.branch ?? "detached HEAD"}</strong>
+            <strong>{status.branch ?? t("git.detachedHead")}</strong>
             <span className="muted">{syncState}{status.upstream ? <> · <span className="mono">{status.upstream}</span></> : null}</span>
           </div>
         </div>
         <div className="git-summary-actions">
           {hasRemote ? (
-            <button className="button button-secondary" type="button" disabled={busy !== null || status.hasTranslationChanges} title={status.hasTranslationChanges ? "Create a checkpoint before syncing" : "Receive and send checkpoints"} onClick={() => void run("sync", async () => describeSync(await gitSync()))}>
-              <UiIcon icon="refreshCw" size="sm" className={busy === "sync" ? "spin" : undefined} />{busy === "sync" ? "Syncing…" : "Sync"}
+            <button className="button button-secondary" type="button" disabled={busy !== null || status.hasTranslationChanges} title={t(status.hasTranslationChanges ? "git.syncBlocked" : "git.syncTitle")} onClick={() => void run("sync", async () => describeSync(await gitSync()))}>
+              <UiIcon icon="refreshCw" size="sm" className={busy === "sync" ? "spin" : undefined} />{t(busy === "sync" ? "git.syncing" : "git.sync")}
             </button>
           ) : null}
-          <IconButton icon="refreshCw" label="Refresh status" disabled={busy !== null} onClick={() => void run("refresh", async () => null)} />
+          <IconButton icon="refreshCw" label={t("git.refresh")} disabled={busy !== null} onClick={() => void run("refresh", async () => null)} />
         </div>
         {!hasRemote ? (
-          <form className="git-inline-form" onSubmit={(event) => { event.preventDefault(); const url = remoteUrl; void run("remote", async () => { await gitSetRemote("origin", url); setRemoteUrl(""); return "Remote added."; }); }}>
-            <input className="input" aria-label="Remote URL" placeholder="Remote URL (origin)" value={remoteUrl} onChange={(event) => setRemoteUrl(event.target.value)} spellCheck={false} />
-            <button className="button button-secondary" type="submit" disabled={busy !== null || remoteUrl.trim() === ""}>Add remote</button>
+          <form className="git-inline-form" onSubmit={(event) => { event.preventDefault(); const url = remoteUrl; void run("remote", async () => { await gitSetRemote("origin", url); setRemoteUrl(""); return t("git.remoteAdded"); }); }}>
+            <input className="input" aria-label={t("git.remoteUrl")} placeholder={t("git.remotePlaceholder")} value={remoteUrl} onChange={(event) => setRemoteUrl(event.target.value)} spellCheck={false} />
+            <button className="button button-secondary" type="submit" disabled={busy !== null || remoteUrl.trim() === ""}>{t("git.addRemote")}</button>
           </form>
         ) : null}
       </div>
@@ -297,20 +313,20 @@ export function GitPanel({ mode, selectedUnitId, workspaceRevision, onWorkspaceC
       {feedback}
 
       {conflicts.length > 0 ? (
-        <Section title="Choose versions" icon="gitMerge" meta={conflicts.length}>
+        <Section title={t("git.chooseVersions")} icon="gitMerge" meta={conflicts.length}>
           <ul className="git-list">
             {conflicts.map((conflict) => (
               <li className="git-item" key={conflict.translationUnitId}>
-                <span className="git-item-title mono">{unitLabel(conflict.ours ?? conflict.theirs)}</span>
-                <div className="git-choice" role="radiogroup" aria-label={`Version for ${unitLabel(conflict.ours ?? conflict.theirs)}`}>
+                <span className="git-item-title mono">{unitLabel(conflict.ours ?? conflict.theirs, t)}</span>
+                <div className="git-choice" role="radiogroup" aria-label={t("git.versionFor", { unit: unitLabel(conflict.ours ?? conflict.theirs, t) })}>
                   {(["ours", "theirs"] as const).map((side) => {
                     const version = side === "ours" ? conflict.ours : conflict.theirs;
                     const checked = choices[conflict.translationUnitId] === side;
                     return (
                       <label className={checked ? "git-choice-option checked" : "git-choice-option"} key={side}>
                         <input type="radio" name={conflict.translationUnitId} checked={checked} onChange={() => setChoices({ ...choices, [conflict.translationUnitId]: side })} />
-                        <span className="git-choice-side">{side === "ours" ? "Mine" : "Server"}</span>
-                        <span className="git-choice-text">{version ? version.targetMacro || "(empty)" : <em>deleted</em>}</span>
+                        <span className="git-choice-side">{t(side === "ours" ? "git.mine" : "git.server")}</span>
+                        <span className="git-choice-text">{version ? version.targetMacro || t("common.empty") : <em>{t("git.deleted")}</em>}</span>
                       </label>
                     );
                   })}
@@ -318,23 +334,23 @@ export function GitPanel({ mode, selectedUnitId, workspaceRevision, onWorkspaceC
               </li>
             ))}
           </ul>
-          <button className="button button-primary button-block" type="button" disabled={busy !== null || conflicts.some((conflict) => !choices[conflict.translationUnitId])} onClick={() => void run("sync", async () => describeSync(await gitSync(conflicts.map((conflict) => ({ translationUnitId: conflict.translationUnitId, resolution: choices[conflict.translationUnitId] ?? "ours" })))))}>Sync with these choices</button>
+          <button className="button button-primary button-block" type="button" disabled={busy !== null || conflicts.some((conflict) => !choices[conflict.translationUnitId])} onClick={() => void run("sync", async () => describeSync(await gitSync(conflicts.map((conflict) => ({ translationUnitId: conflict.translationUnitId, resolution: choices[conflict.translationUnitId] ?? "ours" })))))}>{t("git.syncWithChoices")}</button>
         </Section>
       ) : null}
 
       {overview.contribution ? (
-        <Section title="Contribution" icon="gitPullRequest" meta={`into ${overview.contribution.mainBranch}`}>
-          {overview.contribution.branch === null ? <p className="muted">Your next checkpoint starts a contribution for review.</p> : <>
-            <p className="muted"><span className="mono">{overview.contribution.branch}</span> · {overview.contribution.published ? "sent" : "not sent yet"} · {overview.contribution.unmergedCommits === 0 ? "accepted" : `${overview.contribution.unmergedCommits} checkpoints waiting for review`}</p>
-            {overview.contribution.unmergedCommits === 0 && overview.contribution.published ? <button className="button button-secondary" type="button" disabled={busy !== null || status.hasTranslationChanges} onClick={() => void run("finish", async () => { const result = await gitFinishContribution(); onWorkspaceChanged?.(); return result.deletedBranch ? "Contribution finished." : "Back on the main branch; the contribution branch was kept."; })}>Finish contribution</button> : null}
+        <Section title={t("git.contribution")} icon="gitPullRequest" meta={t("git.contributionInto", { branch: overview.contribution.mainBranch })}>
+          {overview.contribution.branch === null ? <p className="muted">{t("git.contributionNext")}</p> : <>
+            <p className="muted"><span className="mono">{overview.contribution.branch}</span> · {t(overview.contribution.published ? "git.contributionSent" : "git.contributionNotSent")} · {overview.contribution.unmergedCommits === 0 ? t("git.contributionAccepted") : t("git.contributionWaiting", { count: overview.contribution.unmergedCommits })}</p>
+            {overview.contribution.unmergedCommits === 0 && overview.contribution.published ? <button className="button button-secondary" type="button" disabled={busy !== null || status.hasTranslationChanges} onClick={() => void run("finish", async () => { const result = await gitFinishContribution(); onWorkspaceChanged?.(); return t(result.deletedBranch ? "git.contributionFinished" : "git.contributionKept"); })}>{t("git.finishContribution")}</button> : null}
           </>}
         </Section>
       ) : null}
 
-      <Section title="Changes" icon="fileDiff" meta={pending.length}>
-        {pending.length === 0 ? <p className="muted">No uncommitted translation changes.</p> : (
+      <Section title={t("git.changes")} icon="fileDiff" meta={pending.length}>
+        {pending.length === 0 ? <p className="muted">{t("git.noChanges")}</p> : (
           <div className="git-change-groups">
-            {groupChanges(pending).map((group) => {
+            {groupChanges(pending, t("git.unknownSheet")).map((group) => {
               const collapsed = collapsedSheets.has(group.sheetName);
               return (
                 <div className="git-change-group" key={group.sheetName}>
@@ -362,46 +378,46 @@ export function GitPanel({ mode, selectedUnitId, workspaceRevision, onWorkspaceC
             })}
           </div>
         )}
-        <form className="git-composer" onSubmit={(event) => { event.preventDefault(); const text = message.trim(); void run("checkpoint", async () => { const result = await gitCheckpoint(text === "" ? null : text); setMessage(""); return `Checkpoint ${result.commit.id.slice(0, 8)}: ${result.commit.subject}`; }); }}>
-          <textarea className="input" aria-label="Checkpoint message" rows={2} placeholder="Message (optional, generated from changes)" value={message} onChange={(event) => setMessage(event.target.value)} />
+        <form className="git-composer" onSubmit={(event) => { event.preventDefault(); const text = message.trim(); void run("checkpoint", async () => { const result = await gitCheckpoint(text === "" ? null : text); setMessage(""); return t("git.checkpointCreated", { id: result.commit.id.slice(0, 8), subject: result.commit.subject }); }); }}>
+          <textarea className="input" aria-label={t("git.checkpointMessage")} rows={2} placeholder={t("git.checkpointPlaceholder")} value={message} onChange={(event) => setMessage(event.target.value)} />
           <div className="git-composer-foot">
             {identityDraft ? null : identityComplete ? (
-              <button className="git-identity" type="button" title="Change translator identity" onClick={() => setIdentityDraft({ name: identity?.name ?? "", email: identity?.email ?? "", global: identity?.nameScope === "global" })}>
+              <button className="git-identity" type="button" title={t("git.changeIdentity")} onClick={() => setIdentityDraft({ name: identity?.name ?? "", email: identity?.email ?? "", global: identity?.nameScope === "global" })}>
                 <UiIcon icon="user" size="xs" />{identity?.name}
               </button>
             ) : (
               <button className="git-identity warn" type="button" onClick={() => setIdentityDraft({ name: identity?.name ?? "", email: identity?.email ?? "", global: identity?.nameScope === "global" })}>
-                <UiIcon icon="user" size="xs" />Set your name
+                <UiIcon icon="user" size="xs" />{t("git.setName")}
               </button>
             )}
             <span className="spacer" />
-            <button className="button button-primary" type="submit" disabled={busy !== null || !status.hasTranslationChanges || !identityComplete} title={!identityComplete ? "Set your translator name first" : !status.hasTranslationChanges ? "There are no translation changes to save" : "Save these changes as a checkpoint"}>
-              <UiIcon icon="gitCommit" size="sm" />{busy === "checkpoint" ? "Saving…" : "Checkpoint"}
+            <button className="button button-primary" type="submit" disabled={busy !== null || !status.hasTranslationChanges || !identityComplete} title={t(!identityComplete ? "git.setNameFirst" : !status.hasTranslationChanges ? "git.nothingToSave" : "git.saveCheckpoint")}>
+              <UiIcon icon="gitCommit" size="sm" />{t(busy === "checkpoint" ? "common.saving" : "git.checkpoint")}
             </button>
           </div>
-          {!identityComplete ? <p className="git-hint">Set your translator name to create checkpoints. The email is optional.</p> : null}
+          {!identityComplete ? <p className="git-hint">{t("git.identityHint")}</p> : null}
         </form>
         {identityDraft ? (
           <form className="git-identity-form" onSubmit={(event) => { event.preventDefault(); const draft = identityDraft; void run("identity", async () => { await gitSetIdentity(draft.name, draft.email.trim() === "" ? null : draft.email, draft.global); setIdentityDraft(null); return null; }); }}>
-            <strong>Translator identity</strong>
-            <input className="input" aria-label="Translator name" placeholder="Name" value={identityDraft.name} onChange={(event) => setIdentityDraft({ ...identityDraft, name: event.target.value })} />
-            <input className="input" aria-label="Translator email" placeholder="Email" value={identityDraft.email} onChange={(event) => setIdentityDraft({ ...identityDraft, email: event.target.value })} />
-            <label className="checkbox"><input type="checkbox" checked={identityDraft.global} onChange={(event) => setIdentityDraft({ ...identityDraft, global: event.target.checked })} />Use for all repositories</label>
-            <div className="git-form-actions"><button className="button button-ghost" type="button" onClick={() => setIdentityDraft(null)}>Cancel</button><button className="button button-primary" type="submit" disabled={busy !== null}>Save</button></div>
+            <strong>{t("git.identity")}</strong>
+            <input className="input" aria-label={t("git.identityName")} placeholder={t("git.name")} value={identityDraft.name} onChange={(event) => setIdentityDraft({ ...identityDraft, name: event.target.value })} />
+            <input className="input" aria-label={t("git.identityEmail")} placeholder={t("git.email")} value={identityDraft.email} onChange={(event) => setIdentityDraft({ ...identityDraft, email: event.target.value })} />
+            <label className="checkbox"><input type="checkbox" checked={identityDraft.global} onChange={(event) => setIdentityDraft({ ...identityDraft, global: event.target.checked })} />{t("git.identityGlobal")}</label>
+            <div className="git-form-actions"><button className="button button-ghost" type="button" onClick={() => setIdentityDraft(null)}>{t("common.cancel")}</button><button className="button button-primary" type="submit" disabled={busy !== null}>{t("common.save")}</button></div>
           </form>
         ) : null}
       </Section>
 
-      <Section title="String history" icon="history">
+      <Section title={t("git.stringHistory")} icon="history">
         {unitHistory && (unitHistory.translatedBy || unitHistory.reviewedBy) ? (
           <p className="git-attribution">
-            {unitHistory.translatedBy ? <span><UiIcon icon="user" size="xs" />Translated by <strong>{unitHistory.translatedBy.authorName}</strong></span> : null}
-            {unitHistory.reviewedBy ? <span><UiIcon icon="circleCheck" size="xs" />Reviewed by <strong>{unitHistory.reviewedBy.authorName}</strong></span> : null}
+            {unitHistory.translatedBy ? <span><UiIcon icon="user" size="xs" />{t("git.translatedBy")} <strong>{unitHistory.translatedBy.authorName}</strong></span> : null}
+            {unitHistory.reviewedBy ? <span><UiIcon icon="circleCheck" size="xs" />{t("git.reviewedBy")} <strong>{unitHistory.reviewedBy.authorName}</strong></span> : null}
           </p>
         ) : null}
-        {!selectedUnitId ? <p className="muted">Select a translated string to see who changed it.</p> : !unitHistory ? <p className="muted">Loading…</p> : (
+        {!selectedUnitId ? <p className="muted">{t("git.selectString")}</p> : !unitHistory ? <p className="muted">{t("common.loading")}</p> : (
           <ol className="git-timeline">
-            {unitHistory.pending ? <li className="git-timeline-item pending"><div className="git-item-head"><strong>Uncommitted</strong><span className="chip">{changeLabel(unitHistory.pending)}</span></div></li> : null}
+            {unitHistory.pending ? <li className="git-timeline-item pending"><div className="git-item-head"><strong>{t("git.uncommitted")}</strong><span className="chip">{changeLabel(unitHistory.pending, t)}</span></div></li> : null}
             {unitHistory.revisions.map((revision) => {
               const target = versionTarget(revision.after);
               return (
@@ -410,23 +426,23 @@ export function GitPanel({ mode, selectedUnitId, workspaceRevision, onWorkspaceC
                     <strong>{revision.commit.authorName}</strong>
                     <span className="muted" title={formatTime(revision.commit.authoredAt)}>{relativeTime(revision.commit.authoredAt)}</span>
                     <span className="spacer" />
-                    <span className="chip">{revision.kind}</span>
+                    <span className="chip">{t(kindLabel[revision.kind])}</span>
                   </div>
                   <span className="git-item-subject">{revision.commit.subject}</span>
-                  {revision.after.state === "invalid" ? <span className="git-feedback error">Invalid record: {revision.after.message}</span> : null}
-                  {target !== null ? <div className="git-diff"><ins>{target || "(empty)"}</ins></div> : null}
-                  {target !== null && onRestoreTarget ? <button className="link-button" type="button" onClick={() => onRestoreTarget(target)}><UiIcon icon="undo" size="xs" />Restore this text</button> : null}
+                  {revision.after.state === "invalid" ? <span className="git-feedback error">{t("git.invalidRecord", { message: revision.after.message })}</span> : null}
+                  {target !== null ? <div className="git-diff"><ins>{target || t("common.empty")}</ins></div> : null}
+                  {target !== null && onRestoreTarget ? <button className="link-button" type="button" onClick={() => onRestoreTarget(target)}><UiIcon icon="undo" size="xs" />{t("git.restore")}</button> : null}
                 </li>
               );
             })}
-            {unitHistory.revisions.length === 0 && !unitHistory.pending ? <li className="muted">No committed history yet.</li> : null}
-            {unitHistory.truncated ? <li className="muted">Older revisions not shown.</li> : null}
+            {unitHistory.revisions.length === 0 && !unitHistory.pending ? <li className="muted">{t("git.noHistory")}</li> : null}
+            {unitHistory.truncated ? <li className="muted">{t("git.historyTruncated")}</li> : null}
           </ol>
         )}
       </Section>
 
       {mode === "advanced" ? <>
-        <Section title="History" icon="gitCommit" meta={log.length}>
+        <Section title={t("git.history")} icon="gitCommit" meta={log.length}>
           <ul className="git-list">
             {log.map((commit) => {
               const expanded = openCommit?.commit.id === commit.id;
@@ -439,7 +455,7 @@ export function GitPanel({ mode, selectedUnitId, workspaceRevision, onWorkspaceC
                   <span className="git-item-meta"><span className="mono">{commit.id.slice(0, 8)}</span> · {commit.authorName} · <span title={formatTime(commit.authoredAt)}>{relativeTime(commit.authoredAt)}</span></span>
                   {expanded ? (
                     <ul className="git-list nested">
-                      {openCommit.changes.length === 0 ? <li className="muted">No translation changes.</li> : openCommit.changes.map((change) => {
+                      {openCommit.changes.length === 0 ? <li className="muted">{t("git.noTranslationChanges")}</li> : openCommit.changes.map((change) => {
                         const binding = changeBinding(change);
                         return <ChangeRow key={change.translationUnitId} change={change} selected={change.translationUnitId === selectedUnitId} onOpen={binding && onRevealBinding && change.kind !== "removed" ? () => onRevealBinding(binding) : undefined} />;
                       })}
@@ -448,48 +464,48 @@ export function GitPanel({ mode, selectedUnitId, workspaceRevision, onWorkspaceC
                 </li>
               );
             })}
-            {log.length === 0 ? <li className="muted">No commits yet.</li> : null}
+            {log.length === 0 ? <li className="muted">{t("git.noCommits")}</li> : null}
           </ul>
         </Section>
 
-        <Section title="Branches" icon="gitBranch" meta={overview.runtime.version ?? "Git unavailable"}>
+        <Section title={t("git.branches")} icon="gitBranch" meta={overview.runtime.version ?? t("git.runtimeUnavailable")}>
           <ul className="git-list">
             {branches.filter((branch) => !branch.remote).map((branch) => (
               <li className="git-item git-branch" key={branch.name}>
-                {branch.current ? <span className="git-item-title"><UiIcon icon="check" size="xs" />{branch.name}</span> : <button className="link-button git-item-title" type="button" disabled={busy !== null || status.hasTranslationChanges} onClick={() => void run("switch", async () => { await gitSwitchBranch(branch.name); onWorkspaceChanged?.(); return `Switched to ${branch.name}.`; })}>{branch.name}</button>}
+                {branch.current ? <span className="git-item-title"><UiIcon icon="check" size="xs" />{branch.name}</span> : <button className="link-button git-item-title" type="button" disabled={busy !== null || status.hasTranslationChanges} onClick={() => void run("switch", async () => { await gitSwitchBranch(branch.name); onWorkspaceChanged?.(); return t("git.switched", { name: branch.name }); })}>{branch.name}</button>}
                 {branch.upstream ? <span className="git-item-meta mono">{branch.upstream}</span> : null}
               </li>
             ))}
           </ul>
-          <form className="git-inline-form" onSubmit={(event) => { event.preventDefault(); const name = newBranch.trim(); void run("branch", async () => { await gitCreateBranch(name); setNewBranch(""); return `Created ${name}.`; }); }}>
-            <input className="input" aria-label="New branch name" placeholder="New branch" value={newBranch} onChange={(event) => setNewBranch(event.target.value)} spellCheck={false} />
-            <button className="button button-secondary" type="submit" disabled={busy !== null || newBranch.trim() === ""}>Create</button>
+          <form className="git-inline-form" onSubmit={(event) => { event.preventDefault(); const name = newBranch.trim(); void run("branch", async () => { await gitCreateBranch(name); setNewBranch(""); return t("git.branchCreated", { name }); }); }}>
+            <input className="input" aria-label={t("git.newBranchName")} placeholder={t("git.newBranch")} value={newBranch} onChange={(event) => setNewBranch(event.target.value)} spellCheck={false} />
+            <button className="button button-secondary" type="submit" disabled={busy !== null || newBranch.trim() === ""}>{t("common.create")}</button>
           </form>
           <label className="checkbox">
-            <input type="checkbox" checked={overview.collaboration?.policy === "pullRequest"} disabled={busy !== null || !identityComplete} onChange={(event) => { const pullRequest = event.target.checked; void run("policy", async () => { await gitSetCollaboration(pullRequest ? "pullRequest" : "direct", pullRequest ? (status.branch ?? "main") : null); return pullRequest ? `Contributions now go through review into ${status.branch ?? "main"}.` : "Translators now sync directly."; }); }} />
-            Review contributions before they reach {overview.collaboration?.mainBranch ?? status.branch ?? "main"}
+            <input type="checkbox" checked={overview.collaboration?.policy === "pullRequest"} disabled={busy !== null || !identityComplete} onChange={(event) => { const pullRequest = event.target.checked; void run("policy", async () => { await gitSetCollaboration(pullRequest ? "pullRequest" : "direct", pullRequest ? (status.branch ?? "main") : null); return pullRequest ? t("git.reviewPolicyOn", { branch: status.branch ?? "main" }) : t("git.reviewPolicyOff"); }); }} />
+            {t("git.reviewPolicy", { branch: overview.collaboration?.mainBranch ?? status.branch ?? "main" })}
           </label>
-          <p className="muted small">Git runtime: {overview.runtime.origin}</p>
+          <p className="muted small">{t("git.runtime", { origin: overview.runtime.origin })}</p>
         </Section>
 
-        <Section title="Contributors" icon="users" action={<button className="link-button" type="button" disabled={busy !== null} onClick={() => void run("contributors", async () => { setContributors(await gitContributors()); return null; })}>{contributors ? "Recount" : "Count"}</button>}>
+        <Section title={t("git.contributors")} icon="users" action={<button className="link-button" type="button" disabled={busy !== null} onClick={() => void run("contributors", async () => { setContributors(await gitContributors()); return null; })}>{t(contributors ? "git.recount" : "git.count")}</button>}>
           {contributors ? (
             <ul className="git-list">
               {contributors.map((contributor) => (
                 <li className="git-item" key={`${contributor.name}<${contributor.email}>`}>
                   <div className="git-item-head"><strong>{contributor.name}</strong><span className="spacer" /><span className="muted" title={formatTime(contributor.lastAuthoredAt)}>{relativeTime(contributor.lastAuthoredAt)}</span></div>
-                  <span className="git-item-meta">{contributor.translated.toLocaleString()} translated · {contributor.reviewed.toLocaleString()} reviewed</span>
+                  <span className="git-item-meta">{t("git.contributorStats", { translated: contributor.translated, reviewed: contributor.reviewed })}</span>
                 </li>
               ))}
-              {contributors.length === 0 ? <li className="muted">No committed translations yet.</li> : null}
+              {contributors.length === 0 ? <li className="muted">{t("git.noContributors")}</li> : null}
             </ul>
-          ) : <p className="muted">Counts current strings by who translated and who reviewed them.</p>}
+          ) : <p className="muted">{t("git.contributorsHint")}</p>}
         </Section>
 
-        <Section title="Working tree" icon="folder" meta={status.files.length}>
+        <Section title={t("git.workingTree")} icon="folder" meta={status.files.length}>
           <ul className="git-list">
-            {status.files.map((file) => <li className="git-item-head" key={file.path}><code className="git-file">{file.path}</code><span className="chip">{file.kind}{file.staged ? " · staged" : ""}</span></li>)}
-            {status.files.length === 0 ? <li className="muted">Working tree clean.</li> : null}
+            {status.files.map((file) => <li className="git-item-head" key={file.path}><code className="git-file">{file.path}</code><span className="chip">{file.staged ? t("git.file.staged", { kind: t(fileKindLabel[file.kind]) }) : t(fileKindLabel[file.kind])}</span></li>)}
+            {status.files.length === 0 ? <li className="muted">{t("git.workingTreeClean")}</li> : null}
           </ul>
         </Section>
       </> : null}

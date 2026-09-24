@@ -1,5 +1,6 @@
 import { IconButton } from "../ui/primitives/IconButton";
 import type { UiIconName } from "../ui/primitives/UiIcon";
+import { useI18n } from "../ui/i18n";
 
 export type ActivityRailItem = { id: string; label: string; icon: UiIconName; shortcut?: string; active?: boolean; onSelect?: () => void };
 
@@ -10,6 +11,7 @@ type ActivityRailProps = {
 };
 
 export function ActivityRail({ side, items, footer = [] }: ActivityRailProps) {
+  const { t } = useI18n();
   const render = (item: ActivityRailItem) => (
     <IconButton
       key={item.id}
@@ -23,7 +25,7 @@ export function ActivityRail({ side, items, footer = [] }: ActivityRailProps) {
     />
   );
   return (
-    <nav className={`rail rail-${side}`} aria-label={side === "left" ? "Primary tools" : "Secondary tools"}>
+    <nav className={`rail rail-${side}`} aria-label={t(side === "left" ? "workbench.primaryTools" : "workbench.secondaryTools")}>
       {items.map(render)}
       {footer.length > 0 ? <><span className="spacer" />{footer.map(render)}</> : null}
     </nav>

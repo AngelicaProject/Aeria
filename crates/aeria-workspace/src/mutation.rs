@@ -1,8 +1,10 @@
 //! Transactional application-level translation mutations.
 
 use aeria_core::{
-    ReviewState, SourceBinding, SourceFingerprint, TranslationUnit, TranslationUnitId,
+    ReviewState, Sha256Hash, SourceBinding, SourceFingerprint, SourceLayout, TranslationUnit,
+    TranslationUnitId,
 };
+use aeria_rebase::{RowKeys, SourceUpdateError};
 use thiserror::Error;
 
 use crate::{ProjectSession, WorkspaceError, WorkspaceStoreError};
@@ -31,13 +33,13 @@ pub enum TranslationMutationError {
     /// An existing unit no longer describes the verified source occurrence
     /// owned by this session.
     #[error(
-        "translation unit {translation_unit_id} at {source_binding:?} has a stale source fingerprint: persisted {persisted:?}, verified {verified:?}"
+        "translation unit {translation_unit_id} at {source_binding:?} has stale source facts: persisted {persisted:?}, verified {verified:?}"
     )]
     SourceIntegrity {
         translation_unit_id: TranslationUnitId,
         source_binding: Box<SourceBinding>,
-        persisted: Box<SourceFingerprint>,
-        verified: Box<SourceFingerprint>,
+        persisted: Box<(SourceFingerprint, Option<SourceLayout>)>,
+        verified: Box<(SourceFingerprint, SourceLayout)>,
     },
 }
 
@@ -77,13 +79,12 @@ impl ProjectSession {
             .map(TranslationUnit::id);
 
         let Some(id) = existing_id else {
-            let id = self.workspace.create_unit_from_hxs(
+            let row_key = self.row_key_for(source_binding)?;
+            let id = self.workspace.create_unit_from_verified_source(
                 self.source_package.source(),
-                source_binding.sheet_name(),
-                source_binding.row_id(),
-                source_binding.subrow_id(),
-                source_binding.column_index(),
+                source_binding.clone(),
                 target_macro,
+                row_key,
             )?;
             if let Err(error) = self.store.persist_unit(&self.workspace, id) {
                 debug_assert!(self.workspace.remove_unit(id).is_some());
@@ -182,6 +183,33 @@ impl ProjectSession {
         Ok(())
     }
 
+    /// Returns the row key of the binding's row when its sheet is keyed.
+    fn row_key_for(
+        &mut self,
+        source_binding: &SourceBinding,
+    ) -> Result<Option<Sha256Hash>, TranslationMutationError> {
+        let sheet_name = source_binding.sheet_name();
+        if !self.row_keys.contains_key(sheet_name) {
+            let guidance = self.source_package.guidance_index();
+            let keys = RowKeys::read(self.source_package.source(), sheet_name, |binding| {
+                guidance.is_translatable(
+                    binding.sheet_name(),
+                    binding.row_id(),
+                    binding.subrow_id(),
+                    binding.column_index(),
+                )
+            })
+            .map_err(|error| match error {
+                SourceUpdateError::SourceRead(source) => WorkspaceError::Hxs(source),
+                other => unreachable!("row key detection only reads the source: {other}"),
+            })?;
+            self.row_keys.insert(sheet_name.to_owned(), keys);
+        }
+        Ok(self.row_keys[sheet_name]
+            .as_ref()
+            .and_then(|keys| keys.key_of(source_binding.row_id(), source_binding.subrow_id())))
+    }
+
     fn verify_current_source(
         &self,
         translation_unit_id: TranslationUnitId,
@@ -192,14 +220,21 @@ impl ProjectSession {
                 .ok_or(WorkspaceError::UnitNotFound {
                     id: translation_unit_id,
                 })?;
+        if !unit.is_bound() {
+            return Err(WorkspaceError::DetachedUnit {
+                id: translation_unit_id,
+            }
+            .into());
+        }
         let source_binding = unit.source_binding().clone();
-        let verified = crate::verified_fingerprint(self.source_package.source(), &source_binding)?;
-        if unit.source_fingerprint() != &verified {
+        let (fingerprint, layout) =
+            crate::verified_source(self.source_package.source(), &source_binding)?;
+        if unit.source_fingerprint() != &fingerprint || unit.source_layout() != Some(layout) {
             return Err(TranslationMutationError::SourceIntegrity {
                 translation_unit_id,
                 source_binding: Box::new(source_binding),
-                persisted: Box::new(*unit.source_fingerprint()),
-                verified: Box::new(verified),
+                persisted: Box::new((*unit.source_fingerprint(), unit.source_layout())),
+                verified: Box::new((fingerprint, layout)),
             });
         }
         Ok(())

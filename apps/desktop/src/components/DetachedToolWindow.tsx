@@ -1,7 +1,9 @@
 import { useEffect, useState } from "react";
 import { currentProject, normalizeCommandError } from "../ipc";
 import type { CommandError, ProjectSummaryDto } from "../types";
-import { BottomPanel, type BottomPanelTab } from "./BottomPanel";
+import type { MessageKey } from "../i18n/translate";
+import { useI18n } from "../ui/i18n";
+import { BottomPanel, bottomPanelTabs, type BottomPanelTab } from "./BottomPanel";
 import { ErrorBanner } from "./ErrorBanner";
 import { WindowChrome } from "./WindowChrome";
 import { WorkbenchToolDock, toolTitle, type GitPresentationMode, type WorkbenchTool } from "./WorkbenchToolDock";
@@ -13,12 +15,13 @@ export function isDetachedPanel(value: string | null): value is DetachedPanel {
   return value === "search" || value === "ai" || value === "git" || value === "tasks" || value === "gitChanges" || value === "diagnostics";
 }
 
-export function detachedPanelTitle(panel: DetachedPanel): string {
+export function detachedPanelTitle(panel: DetachedPanel): MessageKey {
   if (panel === "search" || panel === "ai" || panel === "git") return toolTitle(panel);
-  return panel === "gitChanges" ? "Git changes" : panel === "diagnostics" ? "Diagnostics" : "Tasks";
+  return bottomPanelTabs.find((tab) => tab.id === panel)!.label;
 }
 
 export function DetachedToolWindow({ panel }: { panel: DetachedPanel }) {
+  const { t } = useI18n();
   const [project, setProject] = useState<ProjectSummaryDto | null>(null);
   const [error, setError] = useState<CommandError | null>(null);
   const [gitMode, setGitMode] = useState<GitPresentationMode>("collaboration");
@@ -32,8 +35,8 @@ export function DetachedToolWindow({ panel }: { panel: DetachedPanel }) {
 
   return (
     <main className="detached-shell">
-        <WindowChrome mode="detached" title={detachedPanelTitle(panel)} subtitle={project ? displayPathName(project.repositoryRoot) : null} />
-        {error ? <div className="notices"><ErrorBanner title="Tool window unavailable" error={error} onDismiss={() => setError(null)} /></div> : null}
+        <WindowChrome mode="detached" title={t(detachedPanelTitle(panel))} subtitle={project ? displayPathName(project.repositoryRoot) : null} />
+        {error ? <div className="notices"><ErrorBanner title={t("detached.unavailable")} error={error} onDismiss={() => setError(null)} /></div> : null}
         <div className="detached-body">
           {tool ? (
             <section className="panel">

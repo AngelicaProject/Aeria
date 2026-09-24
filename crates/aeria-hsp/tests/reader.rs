@@ -4,9 +4,11 @@ use std::io::{Read, Write};
 use std::path::Path;
 
 use aeria_hsp::{
-    GuidanceOccurrence, GuidanceSheetStatus, HspManifest, SourceGuidance, SourcePackage,
-    compute_guidance_bundle_id, compute_package_id, compute_source_evidence_id,
+    GuidanceIncompatibilityReason, GuidanceOccurrence, GuidanceSheetStatus, HspManifest,
+    SourceGuidance, SourcePackage, compute_guidance_bundle_id, compute_package_id,
+    compute_source_evidence_id,
 };
+use aeria_hxs::{ExcludedSheet, SheetExclusionReason};
 use sha2::{Digest, Sha256};
 use tempfile::tempdir;
 use zip::write::SimpleFileOptions;
@@ -14,6 +16,12 @@ use zip::{ZipArchive, ZipWriter};
 
 fn fixture_path() -> std::path::PathBuf {
     std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/synthetic.hsp")
+}
+
+/// Atlas-generated package whose HXS v2 source excludes `Broken` (unreadable)
+/// and `Legacy` (unsupported column type); `ja` evidence can read `Broken`.
+fn v2_fixture_path() -> std::path::PathBuf {
+    std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/synthetic-v2.hsp")
 }
 
 #[test]
@@ -52,6 +60,78 @@ fn atlas_fixture_opens_and_materializes_verified_source() {
             .len()
             > 0
     );
+}
+
+#[test]
+fn atlas_v2_fixture_exposes_exclusions_and_unreadable_guidance() {
+    let cache = tempdir().expect("cache directory");
+    let package =
+        SourcePackage::open(v2_fixture_path(), cache.path()).expect("valid HSP with HXS v2");
+
+    assert_eq!(package.source().metadata().format_version, 2);
+    assert_eq!(
+        package.source().excluded_sheets(),
+        [
+            ExcludedSheet {
+                name: "Broken".into(),
+                reason: SheetExclusionReason::UnreadableData,
+            },
+            ExcludedSheet {
+                name: "Legacy".into(),
+                reason: SheetExclusionReason::UnsupportedColumnType,
+            },
+        ]
+    );
+    let broken = package
+        .guidance()
+        .sheets
+        .iter()
+        .find(|sheet| sheet.name == "Broken")
+        .expect("Broken guidance sheet");
+    assert_eq!(broken.status, GuidanceSheetStatus::Incompatible);
+    assert_eq!(
+        broken.incompatibility_reasons,
+        [GuidanceIncompatibilityReason::UnreadableInInput]
+    );
+    assert!(
+        package
+            .guidance()
+            .sheets
+            .iter()
+            .all(|sheet| sheet.name != "Legacy")
+    );
+    let index = package.guidance_index();
+    assert!(index.is_translatable("Synthetic", 1, 0, 0));
+    assert!(!index.is_translatable("Synthetic", 2, 0, 0));
+    // An empty source text is never translatable.
+    assert!(!index.is_translatable("Synthetic", 3, 0, 0));
+}
+
+#[test]
+fn source_component_version_must_match_the_embedded_hxs() {
+    let directory = tempdir().expect("test directory");
+    let (entries, _) = load_fixture();
+    for (version, file) in [(2, "declared-v2.hsp"), (3, "declared-v3.hsp")] {
+        let mut manifest = load_manifest();
+        manifest
+            .components
+            .iter_mut()
+            .find(|component| component.kind == "sourceHxs")
+            .expect("source component")
+            .format_version = version;
+        manifest.package_id = compute_package_id(&manifest).expect("package hash");
+        let path = directory.path().join(file);
+        write_manifest_archive(&path, entries.clone(), &manifest);
+        let result = SourcePackage::open(&path, directory.path());
+        if version == 2 {
+            assert!(matches!(
+                result,
+                Err(aeria_hsp::HspError::Relationship { .. })
+            ));
+        } else {
+            assert!(matches!(result, Err(aeria_hsp::HspError::Manifest { .. })));
+        }
+    }
 }
 
 #[test]

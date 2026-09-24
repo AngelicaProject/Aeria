@@ -8,8 +8,8 @@ sparse `Workspace`, and `WorkspaceStore`.
 An HSP is Aeria's source handoff artifact. Its embedded HXS remains immutable
 source data; its embedded HSG is the sole translation-permission authority.
 The HXS is materialized into a disposable caller-provided local cache. HSP
-and cache paths are runtime configuration only and are not persisted in
-Workspace Format v1. React does not own authoritative project state.
+and cache paths are runtime configuration only and are not persisted in the
+workspace. React does not own authoritative project state.
 
 ## Opening an existing project
 
@@ -18,23 +18,36 @@ Workspace Format v1. React does not own authoritative project state.
 ```text
 validate HSP archive, HSG, embedded HXS, and their relationships
 → materialize and verify HXS in the managed cache
-→ load Workspace Format v1
-→ verify workspace/source compatibility
-→ reject existing units blocked by HSG
-→ create session
+→ read and validate the stored workspace (v2, or v1 for migration)
+→ require the same source language
+→ require that no source update is needed
+→ activate the workspace and create the session
 ```
 
 `ProjectSession::open` validates the HSP once and delegates the already
 validated package to `ProjectSession::open_from_source_package(repository_root,
-source_package)`. The latter owns workspace loading, workspace/source
-compatibility, blocked-unit guidance validation, and session construction. It
-uses `source_package.package_path()` for the runtime HSP path and never adds
-that path to Workspace Format v1.
+source_package)`. The latter owns workspace loading, compatibility, and
+session construction. It uses `source_package.package_path()` for the runtime
+HSP path and never adds that path to the workspace.
 
-The compatibility check reuses the workspace source-binding contract for
-source language, HXS content ID, and HXS snapshot ID. An incompatible source
-is an open failure. Opening does not update workspace metadata, invoke source
-update/rebase, or migrate project state.
+A different source language is a `Compatibility` failure. A workspace that is
+not current for the package fails with `SourceUpdateRequired` and one
+requirement: a Workspace Format v1 migration, a different `contentId`, or
+bound units no longer permitted by the package guidance. A package whose
+`contentId` equals the workspace's opens directly even when its game version
+or `snapshotId` differs. Opening never writes.
+
+## Opening with a source update
+
+`ProjectSession::preview_source_update(repository_root, &source_package)`
+plans the update against the package without writing and returns a
+`SourceUpdateReport` with the plan and the stored format version.
+
+`ProjectSession::open_with_source_update(repository_root, source_package)`
+opens a current workspace directly, or else plans the update, publishes the
+changed shards and then the manifest, reloads the published state, and
+returns the session with the applied report. The workflow and its guarantees
+are described in [`rebase.md`](./rebase.md).
 
 ## Initializing a project
 
@@ -44,7 +57,7 @@ target_language)` performs these steps:
 ```text
 validate HSP and verify its embedded HXS/HSG
 → create workspace metadata from the verified HXS
-→ atomically initialize Workspace Format v1
+→ atomically initialize the workspace (Workspace Format v2)
 → create session
 ```
 
@@ -56,17 +69,25 @@ Atlas-created projects use
 target_language)`. The desktop creation workflow opens the published HSP once,
 checks its package identity against Atlas's completed event, and transfers that
 validated `SourcePackage` into the session. The constructor does not reopen the
-archive, so source evidence validation is not repeated before Workspace Format
-v1 initialization.
+archive, so source evidence validation is not repeated before workspace
+initialization.
 
 ## Reloading after repository changes
 
-`ProjectSession::reload_workspace()` reloads Workspace Format v1 from disk
-after the repository changed outside the ordinary mutation path, such as a
-Git merge. The reloaded workspace passes the same validation, source
-compatibility, and source-guidance checks as opening. On failure the session
+`ProjectSession::reload_workspace()` reloads the workspace from disk after
+the repository changed outside the ordinary mutation path, such as a Git
+merge. The reloaded workspace passes the same validation and compatibility
+checks as opening; a reload that would require a source update fails. On failure the session
 keeps its previous state; the Git integration that triggered the reload is
 then rolled back.
+
+`ProjectSession::reload_and_reconcile_workspace()` is the reload used after
+Git operations. When the reloaded state records the session's source content
+but some bound units do not describe it (a source facts mismatch or a guidance
+permission change), it applies the deterministic source update and returns
+its report. State that records other source content, or an older format, is
+never reconciled here and fails with `SourceUpdateRequired`, because it needs
+that source's package.
 
 ## Ownership and scope
 
@@ -81,8 +102,9 @@ ProjectSession
 ```
 
 The session does not enumerate or materialize the full HXS source corpus.
-Search, indexes, and caches are disposable future layers. Source
-update/rebase is a separate explicit workflow. Ordinary one-unit mutation and
+Search, indexes, and caches are disposable future layers. A source update is
+a separate explicit workflow that runs only through
+`open_with_source_update`. Ordinary one-unit mutation and
 persistence orchestration belongs to the focused session mutation layer; callers
 still do not receive unrestricted mutable access to the workspace or store.
 

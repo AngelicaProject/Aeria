@@ -94,7 +94,7 @@
 }
 .git-composer textarea { border: 0; background: transparent; padding: 2px 4px; resize: none; }
 .git-composer textarea:focus-visible { box-shadow: none; }
-.git-composer:focus-within { border-color: var(--line-focus); box-shadow: 0 0 0 3px var(--accent-soft); }
+.git-composer:focus-within { border-color: var(--line-focus); }
 .git-composer-foot { display: flex; align-items: center; gap: 6px; }
 .git-identity {
   display: inline-flex;

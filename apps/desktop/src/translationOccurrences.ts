@@ -11,6 +11,7 @@ export type TranslationOccurrenceView = {
   rowKey: string;
   binding: SourceBinding;
   sourceMacro: string;
+  formattingOnly: boolean;
   targetMacro: string | null;
   reviewState: ReviewState | null;
   fieldIndexInRow: number;
@@ -26,6 +27,7 @@ export function flattenTranslationRows(rows: readonly TranslationRowDto[]): Tran
       rowKey: rowKey(row),
       binding: cell.sourceBinding,
       sourceMacro: cell.sourceMacro,
+      formattingOnly: cell.formattingOnly,
       targetMacro: cell.translation?.targetMacro ?? null,
       reviewState: cell.translation?.reviewState ?? null,
       fieldIndexInRow,
@@ -42,12 +44,20 @@ export function occurrenceKey(occurrence: Pick<TranslationOccurrenceView, "bindi
 
 export type OccurrenceStatusFilter = "all" | "untranslated" | "draft" | "needsReview" | "reviewed";
 
+/** Prose strings, or formatting-only strings (punctuation, digits, number formatting). */
+export type OccurrenceKindFilter = "all" | "text" | "formatting";
+
 export type OccurrenceFilter = {
   status: OccurrenceStatusFilter;
+  kind: OccurrenceKindFilter;
   query: string;
 };
 
-export const emptyOccurrenceFilter: OccurrenceFilter = { status: "all", query: "" };
+export const emptyOccurrenceFilter: OccurrenceFilter = { status: "all", kind: "all", query: "" };
+
+export function isOccurrenceFilterActive(filter: OccurrenceFilter): boolean {
+  return filter.status !== "all" || filter.kind !== "all" || filter.query.trim().length > 0;
+}
 
 /** Filters already-loaded occurrences only; it never implies sheet-wide results. */
 export function filterOccurrences(
@@ -59,6 +69,7 @@ export function filterOccurrences(
     if (filter.status === "untranslated" ? occurrence.reviewState !== null : filter.status !== "all" && occurrence.reviewState !== filter.status) {
       return false;
     }
+    if (filter.kind !== "all" && occurrence.formattingOnly !== (filter.kind === "formatting")) return false;
     if (!query) return true;
     return occurrence.sourceMacro.toLocaleLowerCase().includes(query)
       || (occurrence.targetMacro?.toLocaleLowerCase().includes(query) ?? false)

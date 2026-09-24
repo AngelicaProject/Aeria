@@ -1,5 +1,6 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { UiIcon } from "../ui/primitives/UiIcon";
+import { useI18n } from "../ui/i18n";
 import type { ProjectSheetDto, SheetProgressDto } from "../types";
 import {
   buildSheetTree,
@@ -86,6 +87,7 @@ export const SheetSidebar = memo(function SheetSidebar({
   onSelect,
   progress,
 }: SheetSidebarProps) {
+  const { t } = useI18n();
   const [expandedFolders, setExpandedFolders] = useState<Set<string>>(() => new Set());
   const [query, setQuery] = useState("");
   const selectedRef = useRef<HTMLButtonElement>(null);
@@ -229,7 +231,7 @@ export const SheetSidebar = memo(function SheetSidebar({
   }, [collapseAll, collapseSignal]);
 
   return (
-    <section className={`sheet-sidebar-body${filterOpen ? " has-sheet-filter" : ""}`} aria-label="Sheet Explorer">
+    <section className={`sheet-sidebar-body${filterOpen ? " has-sheet-filter" : ""}`} aria-label={t("sheets.label")}>
       {filterOpen ? (
         <div className="sheet-filter">
           <UiIcon icon="search" size="sm" />
@@ -237,13 +239,13 @@ export const SheetSidebar = memo(function SheetSidebar({
             ref={filterRef}
             value={query}
             onChange={(event) => setQuery(event.target.value)}
-            placeholder="Filter sheets by name"
-            aria-label="Filter sheets by name"
+            placeholder={t("sheets.filterPlaceholder")}
+            aria-label={t("sheets.filterPlaceholder")}
           />
           <button
             className="icon-button icon-button-ghost"
             type="button"
-            aria-label="Close sheet filter"
+            aria-label={t("sheets.closeFilter")}
             onClick={() => {
               setQuery("");
               onFilterOpenChange(false);
@@ -256,13 +258,13 @@ export const SheetSidebar = memo(function SheetSidebar({
         ref={treeViewportRef}
         className="sheet-tree"
         role="tree"
-        aria-label="Project sheets"
+        aria-label={t("sheets.treeLabel")}
         onScroll={(event) => setScrollTop(event.currentTarget.scrollTop)}
       >
         {visibleEntries.length === 0 ? (
           <div className="sheet-empty-state">
-            <strong>{query.trim() ? "No matching sheets" : hideEmpty ? "No sheets with translatable strings" : "No sheets"}</strong>
-            <p>{query.trim() ? "Try another name or clear the filter." : hideEmpty ? "Turn off Hide empty to browse the full source." : "This source does not contain any browsable sheets."}</p>
+            <strong>{t(query.trim() ? "sheets.noMatch" : hideEmpty ? "sheets.noTranslatable" : "sheets.none")}</strong>
+            <p>{t(query.trim() ? "sheets.noMatchHint" : hideEmpty ? "sheets.noTranslatableHint" : "sheets.noneHint")}</p>
           </div>
         ) : (
           <div className="sheet-tree-spacer" style={{ height: visibleEntries.length * SHEET_ROW_HEIGHT }}>
@@ -320,7 +322,7 @@ export const SheetSidebar = memo(function SheetSidebar({
                     key={entry.sheet.name}
                     onClick={() => onSelect(entry.sheet.name)}
                     onDoubleClick={() => onSelect(entry.sheet.name, true)}
-                    title={`${entry.sheet.name}\n${entry.sheet.rowCount.toLocaleString()} source rows${sheetProgress ? `\n${sheetProgress.translated.toLocaleString()} of ${count.toLocaleString()} strings translated` : ""}`}
+                    title={[entry.sheet.name, t("sheets.sourceRows", { count: entry.sheet.rowCount }), ...(sheetProgress ? [t("sheets.translatedOf", { translated: sheetProgress.translated, total: count })] : [])].join("\n")}
                   >
                     <span className="sheet-tree-icon sheet-tree-sheet-icon" aria-hidden="true"><UiIcon icon="table2" size="sm" /></span>
                     <span className="sheet-tree-name">{entry.name}</span>

@@ -3,7 +3,7 @@
 `ProjectSession` owns the application-level mutation API for ordinary editor
 changes. The session keeps the verified HXS snapshot, sparse `Workspace`, and
 `WorkspaceStore` together so a successful mutation commits the same state to
-memory and to Workspace Format v1.
+memory and to the workspace files.
 
 ```text
 ProjectSession mutation
@@ -28,16 +28,23 @@ present in the compatible HSG allowlist. A blocked binding returns the typed
 translation unit or write a shard.
 
 When no unit owns the supplied binding, the session verifies that the current
-HXS coordinate is a String occurrence, derives its source fingerprint and
-stable `TranslationUnitId` through the existing workspace/domain rules, and
-creates the sparse unit. When a unit already exists, its durable ID, binding,
+HXS coordinate is a String occurrence, derives its source fingerprint, layout,
+and stable `TranslationUnitId` through the existing workspace/domain rules,
+records the row key when the sheet is keyed, and creates the sparse unit. When a unit already exists, its durable ID, binding,
 and source fingerprint are preserved while the existing workspace target
 semantics apply.
 
 `set_target` rejects empty or whitespace-only targets before changing the
-in-memory workspace or writing a shard. Existing Workspace Format v1 records
-with an empty target remain readable under the frozen persisted contract, but
-ordinary target edits cannot create or update a unit to an empty value.
+in-memory workspace or writing a shard. Existing records with an empty target
+remain readable under the persisted contract, but ordinary target edits cannot
+create or update a unit to an empty value.
+
+Only bound units own a binding. A detached unit keeps its last binding but is
+not found by `set_target`, and `set_note` and `set_review_state` reject it
+with `DetachedUnit`; detached units change only through a source update. If a
+new unit's derived ID equals a detached unit's ID (the same source text at the
+same coordinate), creation fails with `DuplicateUnitId`; the next source
+update attaches the detached unit again when its occurrence is established.
 
 Target changes reset review state to `Draft` through
 `Workspace::update_target`. Setting the identical target is a successful
@@ -54,10 +61,10 @@ requests are successful no-ops and do not rewrite canonical files.
 
 Before an ordinary mutation of an existing unit, the session resolves the
 unit's current `SourceBinding` against its verified HXS snapshot and compares
-the resulting `SourceFingerprint` with the persisted unit fingerprint. A
-mismatch is a typed source-integrity error containing the unit ID, binding,
-persisted fingerprint, and verified fingerprint. The mutation does not repair,
-rebase, update source facts, change review state, or write files.
+the resulting `SourceFingerprint` and `SourceLayout` with the persisted unit
+facts. A mismatch is a typed source-integrity error containing the unit ID,
+binding, persisted facts, and verified facts. The mutation does not repair,
+update source facts, change review state, or write files.
 
 First-unit creation performs the same verified source lookup through the
 existing `Workspace::create_unit_from_hxs` domain seam. Callers do not supply
@@ -89,7 +96,7 @@ derivation, source-binding contract, and target validation rules are
 unchanged. HSG adds only the permission gate for target mutations.
 
 Deletion/reset-to-untranslated, bulk or multi-shard transactions, source
-update/rebase, export, Git, AI, Tauri commands, and UI state are outside this
+updates, export, Git, AI, Tauri commands, and UI state are outside this
 layer's scope.
 
 The desktop application boundary delegates ordinary target, note, and review

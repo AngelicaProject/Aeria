@@ -1,218 +1,277 @@
-# Rebase safety contract
+# Source update rules
 
-Status: **required before any rebase apply or workspace mutation**.
+This document specifies how `aeria-rebase::plan_source_update` decides the
+outcome of every managed translation unit. The workflow around it is
+described in [`rebase.md`](./rebase.md).
 
-`aeria-rebase` produces a pure diagnostic plan. A managed String cell is one
-translation unit. The planner reads verified old and new HXS snapshots and
-never mutates the workspace, source files, or persisted translation text.
+## Inputs
 
-## Authority boundary
+For each unit the planner reads only persisted workspace facts:
 
-The previous `SourceBinding` is the authoritative continuity key when that
-binding exists in the new verified snapshot. This rule is intentionally
-independent of candidate uniqueness and complete-fingerprint equality:
+| Fact | Source |
+| --- | --- |
+| `SourceStatus` | `bound`, or `detached` with a reason. |
+| `SourceBinding` | Sheet, row, subrow, and column index the unit was last bound to. |
+| `SourceFingerprint` | Macro-text hash, optional raw-value hash, and row technical hash at that binding. |
+| `SourceLayout` | Sheet schema hash and String column offset at that binding; absent only for units read from Workspace Format v1. |
+| Row key | Macro-text hash of the row key at that binding, when the sheet was keyed. |
 
-```text
-old binding exists in new snapshot
-    -> same binding is authoritative
-old binding is missing
-    -> no automatic cross-binding identity
-```
+From the new source it reads the verified sheet catalog (schema hash and
+column definitions) and the hash-only String occurrences of every sheet that
+contains managed units, and detects each such sheet's row key column. The
+permission predicate comes from the new HSG. The previous snapshot is never
+read.
 
-For a surviving binding, the planner compares the String-cell content facts:
+Detached units are planned exactly like bound units, from the facts they were
+last bound with, so a unit whose occurrence returns is attached again.
 
-- equal `macroTextHash` and `rawValueHash` produce `Unchanged`;
-- either content fact changing produces `SourceChanged`;
-- a changed `rowTechnicalHash` is reported separately as
-  `SourceContextStatus::Changed` and does not change identity.
+## Why column indexes need a layout
 
-For a missing binding, the outcome is `Ambiguous`. Candidate diagnostics may
-show exact or partial matches, but they never establish a proposed binding.
-Candidate discovery is restricted to missing-binding units. Surviving units do
-not receive broad candidate diagnostics, even if the same source content is
-duplicated elsewhere. Candidate indexes are built lazily only when at least
-one previous binding is missing; surviving-binding-only rebases do not build
-them.
+An HXS column index is a physical position in one sheet schema. When a patch
+adds, removes, or reorders columns, the same index can name a different
+column, and the same logical column can move to another index. A binding is
+therefore meaningful only together with the schema it was resolved in. The
+sheet schema hash identifies that schema generation; the column offset
+records the physical position of the String column within it.
 
-The separate on-demand `CandidateSuggester` may return bounded deterministic
-review candidates for an ambiguous unit. Its exact evidence, protected
-structure comparison, visible-text similarity, and coordinate hints remain
-non-authoritative ranking assistance; they never populate these proposed
-fields.
+Row and subrow IDs are kept as they are, except in keyed sheets; see
+[Row keys](#row-keys).
 
-The plan never recomputes `TranslationUnitId`. `automatic_evidence` is
-`AutomaticEvidence::SameBinding` only for surviving bindings. Proposed binding
-and fingerprint are populated for both `Unchanged` and `SourceChanged`; they
-are absent for `Ambiguous`. An ambiguous entry may retain only compact
-`CandidateEvidenceSummary` values containing evidence type and candidate count;
-candidate `SourceBinding` values are never materialized in the authoritative
-plan. A future review suggester may resolve candidate bindings on demand.
+## Row keys
 
-## HXS v1 hash contract
+A String column is a sheet's *row key column* when, in the snapshot:
 
-The planner consumes verified HXS v1 data and does not redefine the persisted
-workspace format. The persisted `SourceFingerprint` remains the unchanged
-three-field tuple:
+1. the sheet has at least two rows;
+2. every row has a non-empty macro text in the column;
+3. the values are unique across rows; and
+4. the HSG permits none of the column's occurrences, which means the text is
+   identical in every official evidence language.
 
-```text
-(macroTextHash, rawValueHash, rowTechnicalHash)
-```
+When several columns qualify, the lowest column index is used. Keys are
+compared by macro-text hash. Condition 4 excludes translatable text: a
+translated name that is merely unique must never act as an identity key,
+because editing it would look like removing the row.
 
-The planner uses explicit concepts for the two comparisons:
+Keyed resolution applies to a sheet when the new sheet has a row key column
+and at least one unit's persisted key is found in it. Then:
 
-| Concept | Facts | Use |
-| --- | --- | --- |
-| `SourceContent` | `macroTextHash`, optional `rawValueHash` | Classifies a surviving binding as `Unchanged` or `SourceChanged`. |
-| `SourceContextStatus` | equality of `rowTechnicalHash` | Reports technical context change without changing identity. |
-| complete `SourceFingerprint` | all three persisted fields | Compatibility and candidate evidence; never a cross-binding identity key. |
+- a unit whose key is found resolves to the row that holds the key, which may
+  differ from its previous row (row continuity `RowKey`);
+- a unit whose key is not found is `Detached(RowRemoved)`, even when its
+  previous row ID still exists and holds another line;
+- a unit without a persisted key keeps its row ID.
 
-Relevant HXS inputs are:
+When no persisted key is found at all, for example because the key column
+changed, every unit keeps its row ID. A bound outcome always proposes the key
+of its new row when the new sheet is keyed, so the next update can use it.
+Only the row is resolved by key; the column is resolved as described below.
 
-| HXS fact | Includes | Rebase consequence |
-| --- | --- | --- |
-| `string_cells.macro_hash` | Complete macro text, including structured macro spelling | Cell content comparison and candidate evidence. |
-| `string_cells.raw_hash` | Presence and hash of raw source value | `Some`/`None` and value changes are `SourceChanged` at a surviving binding. |
-| `rows.technical_hash` | Sheet name, row ID, subrow ID, and canonical non-String technical payload | Context-only status; coordinate-sensitive changes do not break surviving identity. |
-| `rows.string_hash` | Row coordinates, String columns, macro hashes, and raw hashes | Verified aggregate; not a persisted identity key. |
-| `rows.row_hash` | Row coordinates, technical hash, and String hash | Verified aggregate; not a persisted identity key. |
-| sheet/schema/content/snapshot IDs | Canonical source and metadata identity | Snapshot validation; never a rebind decision. |
+## Schema generations
 
-Because row technical hashes include coordinates, a row shift can change the
-complete fingerprint even when the String cell's content is identical. That
-must be reported as context change, not mistaken for loss of identity.
+The planner groups each sheet's units by the schema hash in their layout.
 
-## Planner truth matrix
+- **Removed sheet.** The sheet is not in the new source. Every unit is
+  `Detached(SheetRemoved)`.
+- **Unavailable sheet.** The sheet is not stored but the new source lists it
+  as excluded (HXS v2): the game still has it but it could not be read or
+  represented. Every unit is `Detached(SheetUnavailable)` and its schema
+  update is marked unavailable. Like every detached unit, it is re-evaluated
+  by the next source update and reattaches once the sheet is readable.
+- **Same generation.** The unit's schema hash equals the current schema hash.
+  Its column index is interpreted directly (column continuity `SameColumn`).
+- **Same content, no layout.** A bound Workspace Format v1 unit without a
+  layout is treated as the same generation when the workspace content ID
+  equals the new content ID, because identical content implies an identical
+  schema.
+- **Other generation.** Every other group of units, including v1 units after
+  a content change and detached units last bound in an older schema, is
+  resolved through a column mapping.
 
-“Binding present” means the exact previous `SourceBinding` exists in the new
-snapshot. Candidate evidence is shown only for a missing binding.
+## Column mapping
 
-| Binding present | String content | Technical context | Candidate result | Planner result |
-| --- | --- | --- | --- | --- |
-| yes | same | same | none | `Unchanged`, same binding, `SameBinding` evidence, context unchanged |
-| yes | same | changed | none | `Unchanged`, same binding, context changed |
-| yes | changed | same | none | `SourceChanged`, same binding, context unchanged |
-| yes | changed | changed | none | `SourceChanged`, same binding, context changed |
-| no | same or changed | same or changed | zero, unique, or duplicate | `Ambiguous`, no proposed binding; candidates remain non-authoritative |
+A mapping is computed per sheet and per previous schema generation, from the
+units of that generation only:
 
-The number of equal complete fingerprints elsewhere is irrelevant to every
-surviving binding. A duplicate elsewhere cannot turn a surviving binding into
-`Ambiguous`.
+1. **Votes.** For each unit, find the String columns of its resolved row in
+   the new sheet whose macro-text hash equals the unit's persisted
+   macro-text hash. If exactly one column matches, the unit votes for it.
+   Several matches or none cast no vote, and a unit whose row key was
+   removed casts no vote.
+2. **Content evidence.** A previous column maps to the column that received
+   a strict majority of the votes cast by its units
+   (`ExactContent { supporting, cast }`).
+3. **Unchanged position.** A previous column whose units cast no vote at all
+   maps to itself only when the new schema has a String column at the same
+   index and the same offset as the units' layout (`UnchangedPosition`).
+4. **Unresolved.** Split votes without a strict majority, missing layout
+   evidence, or no matching column leave the previous column unresolved.
+5. **Injectivity.** If two previous columns map to one current column, both
+   become unresolved.
 
-## Required transition coverage
+Every unit of an unresolved column is `Detached(ColumnUnresolved)`. A mapping
+never changes the sheet, row, or subrow; it only reinterprets the column.
 
-The deterministic planner and tests cover these transition classes:
+Exact-hash votes are deterministic source facts, not similarity. A single
+coincidental match cannot override a majority, and ties, splits, and
+collisions are never broken by order or proximity.
 
-### Snapshot and sheet transitions
+## Occurrence resolution
 
-- identical old/new snapshots;
-- game-version changes with compatible source language and scope;
-- source-language, scope, old-content, old-snapshot, malformed, and
-  unverified-input failures;
-- empty source corpora and empty managed workspaces;
-- added, removed, renamed, and variant-changed sheets;
-- unchanged and changed schemas, including String and technical column edits;
-- all cross-sheet relationships remain non-authoritative.
+After the row and column are known, the unit resolves at
+`(sheet, row, subrow, column)`:
 
-### Binding and coordinate transitions
+| Condition | Outcome |
+| --- | --- |
+| The column is not a String column in the new schema. | `Detached(CellRemoved)` |
+| The row/subrow has no occurrence in that column. | `Detached(RowRemoved)` |
+| The macro-text hash differs. | `SourceChanged` |
+| The macro text is equal, but the raw-value hash or its presence differs. | `EncodingChanged` |
+| Macro-text and raw-value hashes are equal. | `Unchanged` |
 
-- row/subrow/column shifts, insertions, deletions, and global offsets;
-- row and column movement together, block movement, permutations, swaps, and
-  cycles;
-- coordinate reuse where an unrelated value occupies the old coordinate;
-- the same binding surviving while its content changes;
-- duplicate values at the surviving binding and elsewhere;
-- no binding-presence check is replaced by ordering or nearest-coordinate logic.
+The translation is written and exported as macro text, and HXS macro text
+represents the complete structured string, so a raw-only difference is an
+encoding change, not a content change.
 
-### Content and context transitions
+The row technical hash is compared separately and reported as
+`SourceContextStatus`; it never changes the outcome. A bound outcome proposes
+the new binding, fingerprint, layout, and row key.
 
-- macro-only, raw-only, and macro-plus-raw changes;
-- raw `Some -> None` and `None -> Some` changes;
-- technical-only changes;
-- a neighboring String cell changing without affecting another cell's unit;
-- technical changes in the same row reported as context changes;
-- empty, opaque, macro-bearing, and long valid macro text;
-- duplicate macro, macro-plus-raw, and complete-fingerprint candidates.
+## Permission
 
-### Candidate transitions
+A bound outcome whose binding is not permitted by the new HSG becomes
+`Detached(NotTranslatable)`. This happens when the game makes a string
+identical in every evidence language, for example by blanking removed
+content.
 
-Only a missing old binding enters candidate discovery. Exact complete,
-macro-plus-raw, macro-plus-row, and exact-macro evidence is bounded,
-deterministic, and non-authoritative. Unique evidence is still a suggestion;
-duplicates remain ambiguous. Candidate discovery is not run for surviving
-bindings, which keeps ordinary rebase transitions proportional to the managed
-units that actually lost their binding.
+## Binding conflicts
+
+At most one unit may own a binding. When several bound outcomes propose the
+same binding, the planner keeps one, preferring in order:
+
+1. a unit that is bound and keeps its exact binding and layout;
+2. a unit with unchanged content;
+3. a unit that was bound rather than detached;
+4. the smallest `TranslationUnitId`.
+
+Every other claimant is `Detached(BindingConflict)`.
+
+## Truth matrix
+
+| Sheet | Schema generation | Column | Row | Content | Permission | Outcome |
+| --- | --- | --- | --- | --- | --- | --- |
+| removed | any | any | any | any | any | `Detached(SheetRemoved)` |
+| excluded as unreadable | any | any | any | any | any | `Detached(SheetUnavailable)` |
+| present | any | any | keyed, key removed | any | any | `Detached(RowRemoved)` |
+| present | same | not a String column | any | any | any | `Detached(CellRemoved)` |
+| present | same | String | missing | any | any | `Detached(RowRemoved)` |
+| present | same | String | present | equal | permitted | `Unchanged` |
+| present | same | String | present | raw bytes only | permitted | `EncodingChanged` |
+| present | same | String | present | macro text changed | permitted | `SourceChanged` |
+| present | other, mapped | mapped column | present | as above | permitted | as above |
+| present | other, unresolved | any | any | any | any | `Detached(ColumnUnresolved)` |
+| present | any | resolved | present | any | blocked | `Detached(NotTranslatable)` |
+
+A binding conflict can then detach any bound outcome with `BindingConflict`.
+
+## Applying outcomes
+
+- `Unchanged` and `EncodingChanged`: keep ID, target, note, and review
+  state; set status `bound` and replace binding, fingerprint, layout, and row
+  key with the proposed facts. A context-only change, a new layout, or a new
+  row key is still written.
+- `SourceChanged`: as above, and set review state `needs-review`.
+- `Detached(reason)`: set the status to the reason; keep binding,
+  fingerprint, layout, row key, target, note, and review state.
+
+No outcome removes a unit or recomputes its `TranslationUnitId`.
 
 ## Coordinate reuse and row shifts
 
-For:
+For
 
 ```text
-old: A at X
-new: A at Y, unrelated B at X
+previous: A at X
+new:      A at Y, unrelated B at X      (same schema)
 ```
 
-the old unit at X follows X if X survives, even when X now contains B. It is
-`Unchanged` or `SourceChanged` according to B's content at X, with the
-surviving binding X proposed. A unit whose old binding is absent at Y is
-`Ambiguous`; A at Y may be a candidate but is never automatically proposed.
-
-For a row shift:
+the unit at X stays at X and is `SourceChanged` with B's content. It is never
+moved to Y. For a row shift
 
 ```text
-old: Alpha@100, Beta@101, Gamma@102
-new: Alpha@101, Beta@102, Gamma@103
+previous: Alpha@100, Beta@101
+new:      Inserted@100, Alpha@101, Beta@102
 ```
 
-old Alpha@100 is missing and ambiguous. Old Beta@101 and Gamma@102 retain
-their bindings and are `SourceChanged` because the surviving cells contain the
-shifted neighbor's content. Neither is rebound to its descendant row. The
-same rule handles insertions, deletions, coordinate reuse, duplicate values,
-and swaps.
+in a sheet without a row key column the unit at 100 is `SourceChanged` with
+"Inserted", the unit at 101 is `SourceChanged` with "Alpha", and neither is
+rebound. Both are visible review work, never a silent move.
 
-## Model-based safety proof
+In a keyed sheet
 
-The integration suite runs a deterministic bounded reference model in CI; it
-is not ignored. The model enumerates 73 injective placements of three logical
-old occurrences into four slots, all eight source-mutation masks, and both
-inserted/non-inserted corpus states: `73 * 8 * 2 = 1,168` verified HXS
-transitions.
+```text
+previous: K1 Alpha@100, K2 Beta@101
+new:      K0 Inserted@100, K1 Alpha@101, K2 Beta@102
+```
 
-For every generated state, the oracle checks:
+the units follow K1 to 101 and K2 to 102 and stay `Unchanged`. If K2 had been
+removed and row 101 reused for a new line K3, the unit last bound at 101
+would be `Detached(RowRemoved)` instead of being attached to K3's text.
 
-1. any authoritative proposed binding equals the previous binding;
-2. every surviving binding is never ambiguous and is `Unchanged` or
-   `SourceChanged` according to macro/raw content only;
-3. every missing binding is `Ambiguous` with no proposed binding or
-   fingerprint;
-4. content classification ignores row technical context;
-5. output is deterministic for equivalent physical insertion order; and
-6. the `TranslationUnitId` remains stable.
+For a column insertion
 
-The model never passes logical-origin labels to production. Its exhaustive
-state count, automatic continuity count, source-changed count, unresolved
-count, and wrong-mapping count are printed by the test for auditability.
+```text
+previous columns: 0 name, 2 description
+new columns:      2 name, 4 description
+```
 
-## Future apply semantics
+the units of column 0 vote for column 2 and the units of column 2 vote for
+column 4. Both columns map, and every translation follows its logical column.
+Without the mapping, description translations would have landed on the name
+column.
 
-Apply is intentionally not implemented by this planner. Once the safety
-contract is merged and CI is green, a future apply operation may:
+## Required coverage
 
-- For `Unchanged`, preserve the `TranslationUnitId`, `SourceBinding`, target
-  text, and review state, then replace the current `SourceFingerprint` with
-  the proposed fingerprint. This includes a context-only
-  `rowTechnicalHash` change; retaining the old fingerprint would leave the
-  workspace stale against the new baseline.
-- For `SourceChanged`, preserve the `TranslationUnitId`, `SourceBinding`, and
-  target text, replace the current fingerprint, and mark the target
-  `NeedsReview`.
-- For `Ambiguous`, apply no source transition until explicit human
-  reconciliation.
-- Preserve the existing `TranslationUnitId` in every case.
+The `aeria-rebase` integration tests cover:
 
-Apply must update workspace source facts and review state atomically. It must
-not silently discard translated text or infer cross-binding identity from a
-unique candidate.
+- identical sources, pure and order-independent planning;
+- macro-text, raw-only (`EncodingChanged`), and context-only changes at a
+  surviving binding;
+- removed rows and sheets, with last facts preserved;
+- row shifts that stay at their binding and require review in unkeyed
+  sheets;
+- keyed rows that follow their line after an insertion, removed keyed lines
+  whose row ID is reused, and units without keys that keep their rows and
+  receive keys;
+- column insertion mapped by content evidence, including a changed cell in a
+  mapped column;
+- schema changes without evidence, mapped only by unchanged position;
+- split and colliding evidence that stays unresolved;
+- permission loss and later reattachment;
+- binding conflicts and their deterministic winner;
+- Workspace Format v1 units with and without a content change;
+- language mismatch and repeated IDs as errors;
+- equivalent physical storage order producing the same plan.
 
-Fuzzy matching, ranking, and structural shift detection are out of scope for
-identity authority. They may provide bounded review assistance, but cannot
-create an automatic source mapping.
+`aeria-rebase` unit tests cover row key column detection. `aeria-workspace`
+integration tests cover applying updates, permission-driven detachment,
+hotfix content reuse, Workspace Format v1 migration, repeating an update
+interrupted before the manifest was written, and a keyed dialogue sheet whose
+translations follow their lines through a session.
+
+## Model-based check
+
+A bounded model runs in CI. It places three logical rows into four row slots
+in every injective way (73 placements), applies all eight content-mutation
+masks, and optionally inserts an unrelated duplicate: `73 * 8 * 2 = 1,168`
+verified HXS transitions in one schema. For every transition it checks that
+
+1. a unit whose binding survives stays at that binding with same-row,
+   same-column continuity;
+2. its outcome is `Unchanged`, `EncodingChanged`, or `SourceChanged` by
+   macro/raw content only;
+3. its context status follows the row technical hash;
+4. a unit whose binding is missing is detached with no proposed facts;
+5. every unit appears exactly once with its ID unchanged.
+
+The model prints its state count and the number of bound, source-changed,
+detached, and wrong mappings; wrong mappings must be zero.

@@ -100,7 +100,6 @@ textarea.input,
 .note-input:focus-visible {
   outline: none;
   border-color: var(--line-focus);
-  box-shadow: 0 0 0 3px var(--accent-soft);
 }
 .input:disabled,
 .note-input:disabled { opacity: 0.55; }
@@ -117,7 +116,7 @@ textarea.input,
   color: var(--fg-subtle);
   transition: border-color var(--duration-fast), box-shadow var(--duration-fast);
 }
-.search-field:focus-within { border-color: var(--line-focus); box-shadow: 0 0 0 3px var(--accent-soft); color: var(--fg-muted); }
+.search-field:focus-within { border-color: var(--line-focus); color: var(--fg-muted); }
 .search-field input {
   flex: 1;
   min-width: 0;
@@ -439,4 +438,11 @@ kbd {
 
 
 .confirm-dialog { width: min(400px, calc(100vw - 32px)); }
+.source-update-dialog { width: min(560px, calc(100vw - 32px)); }
+.source-update-facts { display: grid; gap: 4px; margin: var(--space-4) 0 0; padding-left: 18px; font-size: var(--text-md); }
+.source-update-facts .attention { color: var(--warn); font-weight: 600; }
+.source-update-section { display: grid; gap: 6px; margin-top: var(--space-4); font-size: var(--text-sm); }
+.source-update-list { display: grid; gap: 6px; max-height: 240px; margin: 0; padding: 0; overflow: auto; list-style: none; }
+.source-update-list li { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; padding: 4px 0; border-bottom: 1px solid var(--line); }
+.source-update-target { flex: 1 1 100%; color: var(--fg); overflow-wrap: anywhere; }
 .field > .segmented { justify-self: start; }

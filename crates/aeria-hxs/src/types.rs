@@ -61,6 +61,44 @@ impl SheetVariant {
     }
 }
 
+/// Reason why a producer listed a catalog sheet as excluded (HXS v2).
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+pub enum SheetExclusionReason {
+    /// The sheet variant cannot be represented by HXS.
+    UnsupportedVariant,
+    /// A column type cannot be represented by HXS.
+    UnsupportedColumnType,
+    /// The sheet header, a page, or a row could not be read.
+    UnreadableData,
+}
+
+impl SheetExclusionReason {
+    pub(crate) fn from_code(code: i64) -> Option<Self> {
+        match code {
+            1 => Some(Self::UnsupportedVariant),
+            2 => Some(Self::UnsupportedColumnType),
+            3 => Some(Self::UnreadableData),
+            _ => None,
+        }
+    }
+
+    pub(crate) const fn code(self) -> u32 {
+        match self {
+            Self::UnsupportedVariant => 1,
+            Self::UnsupportedColumnType => 2,
+            Self::UnreadableData => 3,
+        }
+    }
+}
+
+/// A catalog sheet that the producer could not store (HXS v2). It has no
+/// schema, rows, or String cells in the snapshot.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ExcludedSheet {
+    pub name: String,
+    pub reason: SheetExclusionReason,
+}
+
 /// HXS-owned column type codes.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ColumnType {

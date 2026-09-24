@@ -5,6 +5,7 @@ import {
   initialRecentProjectsState,
   reduceRecentProjectsState,
 } from "../src/recentProjectsState.ts";
+import { createTranslator } from "../src/i18n/translate.ts";
 import {
   launcherErrorTitle,
   sourcePackageListenerError,
@@ -46,12 +47,13 @@ test("successful recent-project removal updates the loaded list locally", () => 
 });
 
 test("recent-project open errors use a recent-project-specific title", () => {
-  assert.equal(launcherErrorTitle("recentOpen"), "Could not reopen recent project");
-  assert.equal(launcherErrorTitle("create"), "Could not create project");
+  const t = createTranslator("en");
+  assert.equal(t(launcherErrorTitle("recentOpen")), "Could not reopen recent project");
+  assert.equal(t(launcherErrorTitle("create")), "Could not create project");
 });
 
 test("source-package listener failures use a typed user-facing error", () => {
-  const error = sourcePackageListenerError();
+  const error = sourcePackageListenerError(createTranslator("en"));
 
   assert.equal(error.code, "sourcePackageListener");
   assert.match(error.message, /progress updates/i);

@@ -2,13 +2,22 @@ use std::fs;
 use std::path::Path;
 use std::str::FromStr;
 
-use aeria_core::{ReviewState, TranslationUnitId, WorkspaceMetadata};
-use aeria_workspace::{Workspace, WorkspaceError, WorkspaceStore, WorkspaceStoreError};
+use aeria_core::{
+    DetachReason, ReviewState, Sha256Hash, SourceBinding, SourceFingerprint, SourceLayout,
+    SourceStatus, TranslationUnit, TranslationUnitId, WorkspaceMetadata,
+};
+use aeria_workspace::{
+    Workspace, WorkspaceError, WorkspaceStore, WorkspaceStoreError, decode_unit_record,
+    decode_unit_shard, encode_unit_shard,
+};
 use tempfile::{TempDir, tempdir};
 
-const FIXTURE_MANIFEST: &[u8] = include_bytes!("fixtures/workspace-v1/manifest.json");
-const FIXTURE_00: &[u8] = include_bytes!("fixtures/workspace-v1/units/00.jsonl");
-const FIXTURE_FF: &[u8] = include_bytes!("fixtures/workspace-v1/units/ff.jsonl");
+const FIXTURE_MANIFEST: &[u8] = include_bytes!("fixtures/workspace-v2/manifest.json");
+const FIXTURE_00: &[u8] = include_bytes!("fixtures/workspace-v2/units/00.jsonl");
+const FIXTURE_FF: &[u8] = include_bytes!("fixtures/workspace-v2/units/ff.jsonl");
+const LEGACY_MANIFEST: &[u8] = include_bytes!("fixtures/workspace-v1/manifest.json");
+const LEGACY_00: &[u8] = include_bytes!("fixtures/workspace-v1/units/00.jsonl");
+const FIRST_LAYOUT: &str = r#""sourceLayout":{"sheetSchemaHash":"1212121212121212121212121212121212121212121212121212121212121212","columnOffset":0}"#;
 const ID_00: &str = "tu1:0000000000000000000000000000000000000000000000000000000000000000";
 const ID_FF: &str = "tu1:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
 const FIRST_BINDING: &str =
@@ -57,6 +66,15 @@ fn golden_fixture_loads_and_writer_bytes_are_canonical() {
     );
     assert_eq!(first.review_state(), ReviewState::Draft);
     assert_eq!(first.translator_note(), None);
+    assert!(first.is_bound());
+    assert_eq!(
+        first.source_row_key(),
+        Some(Sha256Hash::from_bytes([0x56; 32]))
+    );
+    assert_eq!(
+        first.source_layout(),
+        Some(SourceLayout::new(Sha256Hash::from_bytes([0x12; 32]), 0))
+    );
 
     let reviewed = workspace
         .unit(
@@ -68,12 +86,31 @@ fn golden_fixture_loads_and_writer_bytes_are_canonical() {
         .expect("reviewed unit");
     assert_eq!(reviewed.review_state(), ReviewState::Reviewed);
     assert_eq!(reviewed.translator_note(), Some("note \"quoted\""));
+    assert_eq!(
+        reviewed.source_status(),
+        SourceStatus::Detached(DetachReason::RowRemoved)
+    );
+    assert_eq!(
+        reviewed.source_layout(),
+        Some(SourceLayout::new(Sha256Hash::from_bytes([0x34; 32]), 8))
+    );
 
     let needs_review = workspace
         .unit(TranslationUnitId::from_str(ID_FF).expect("ID"))
         .expect("needs-review unit");
     assert_eq!(needs_review.review_state(), ReviewState::NeedsReview);
     assert_eq!(needs_review.target_macro(), "");
+    assert_eq!(
+        needs_review.source_status(),
+        SourceStatus::Detached(DetachReason::SheetRemoved)
+    );
+    assert_eq!(needs_review.source_layout(), None);
+    assert_eq!(workspace.detached_units().count(), 2);
+    assert!(
+        workspace
+            .unit_by_source_binding(reviewed.source_binding())
+            .is_none()
+    );
 
     let output = tempdir().expect("output repository");
     WorkspaceStore::new(output.path())
@@ -231,7 +268,7 @@ fn persist_unit_rejects_source_fingerprint_transition_without_modifying_the_shar
     let error = store
         .persist_unit(&partial_workspace, id)
         .expect_err("source fingerprint transition must fail");
-    assert!(error.to_string().contains("SourceFingerprint"));
+    assert!(error.to_string().contains("source facts"));
     assert_eq!(
         fs::read(repository.path().join(".aeria/units/00.jsonl")).expect("00 shard"),
         before
@@ -245,8 +282,7 @@ fn persist_unit_rejects_new_id_with_binding_owned_in_another_shard() {
     let before_00 = fs::read(repository.path().join(".aeria/units/00.jsonl")).expect("00 shard");
     let before_ff = fs::read(repository.path().join(".aeria/units/ff.jsonl")).expect("ff shard");
     let new_id_text = format!("tu1:fe{}", "00".repeat(31));
-    let replacement = std::str::from_utf8(FIXTURE_FF)
-        .expect("fixture UTF-8")
+    let replacement = bound_ff_record()
         .replace(ID_FF, &new_id_text)
         .replace(OTHER_BINDING, FIRST_BINDING);
     let partial_workspace = load_partial_workspace("fe.jsonl", &replacement);
@@ -284,7 +320,7 @@ fn initialization_refuses_existing_state() {
 fn initialization_validation_failure_does_not_publish_partial_state() {
     let repository = tempdir().expect("temporary repository");
     let workspace = Workspace::new(
-        WorkspaceMetadata::new("en", "fr", "not-an-hxs-id", "not-an-hxs-id")
+        WorkspaceMetadata::new("en", "fr", "not-an-hxs-id")
             .expect("domain metadata permits the persistence-invalid value"),
     );
 
@@ -339,6 +375,40 @@ fn manifest_validation_rejects_missing_unknown_duplicate_unsupported_and_noncano
     let one = "sha256:1111111111111111111111111111111111111111111111111111111111111111";
     let cases = vec![
         (
+            r#"{"formatVersion":2,"sourceLanguage":"en","targetLanguage":"fr"}"#.to_owned(),
+            "missing field",
+        ),
+        (
+            format!(
+                r#"{{"formatVersion":2,"sourceLanguage":"en","targetLanguage":"fr","contentId":"{zero}","extra":true}}"#
+            ),
+            "unknown field",
+        ),
+        (
+            format!(
+                r#"{{"formatVersion":2,"sourceLanguage":"en","targetLanguage":"fr","contentId":"{zero}","snapshotId":"{one}"}}"#
+            ),
+            "unknown field",
+        ),
+        (
+            format!(
+                r#"{{"formatVersion":2,"formatVersion":2,"sourceLanguage":"en","targetLanguage":"fr","contentId":"{zero}"}}"#
+            ),
+            "duplicate field",
+        ),
+        (
+            format!(
+                r#"{{"formatVersion":3,"sourceLanguage":"en","targetLanguage":"fr","contentId":"{zero}"}}"#
+            ),
+            "unsupported Workspace Format version",
+        ),
+        (
+            format!(
+                r#"{{"formatVersion":2,"sourceLanguage":"en","targetLanguage":"fr","contentId":"SHA256:{zero}"}}"#
+            ),
+            "canonical sha256",
+        ),
+        (
             format!(
                 r#"{{"formatVersion":1,"sourceLanguage":"en","targetLanguage":"fr","contentId":"{zero}"}}"#
             ),
@@ -346,25 +416,7 @@ fn manifest_validation_rejects_missing_unknown_duplicate_unsupported_and_noncano
         ),
         (
             format!(
-                r#"{{"formatVersion":1,"sourceLanguage":"en","targetLanguage":"fr","contentId":"{zero}","snapshotId":"{one}","extra":true}}"#
-            ),
-            "unknown field",
-        ),
-        (
-            format!(
-                r#"{{"formatVersion":1,"formatVersion":1,"sourceLanguage":"en","targetLanguage":"fr","contentId":"{zero}","snapshotId":"{one}"}}"#
-            ),
-            "duplicate field",
-        ),
-        (
-            format!(
-                r#"{{"formatVersion":2,"sourceLanguage":"en","targetLanguage":"fr","contentId":"{zero}","snapshotId":"{one}"}}"#
-            ),
-            "unsupported Workspace Format version",
-        ),
-        (
-            format!(
-                r#"{{"formatVersion":1,"sourceLanguage":"en","targetLanguage":"fr","contentId":"SHA256:{zero}","snapshotId":"{one}"}}"#
+                r#"{{"formatVersion":1,"sourceLanguage":"en","targetLanguage":"fr","contentId":"{zero}","snapshotId":"SHA256:{one}"}}"#
             ),
             "canonical sha256",
         ),
@@ -418,6 +470,31 @@ fn unit_reader_rejects_wrong_shard_unsorted_duplicate_binding_bad_hash_review_an
             first_line.replace("control\\u0000", "<if(1,2>"),
             "targetMacro",
         ),
+        (
+            "00.jsonl",
+            first_line.replace("\"sourceStatus\":\"bound\"", "\"sourceStatus\":\"lost\""),
+            "sourceStatus",
+        ),
+        (
+            "00.jsonl",
+            first_line.replace(FIRST_LAYOUT, "\"sourceLayout\":null"),
+            "sourceLayout must not be null",
+        ),
+        (
+            "00.jsonl",
+            first_line.replace(FIRST_LAYOUT, "\"sourceLayout\":7"),
+            "sourceLayout must be an object or null",
+        ),
+        (
+            "00.jsonl",
+            first_line.replace(&format!(",{FIRST_LAYOUT}"), ""),
+            "missing field",
+        ),
+        (
+            "00.jsonl",
+            first_line.replace("\"sourceRowKey\":\"5656", "\"sourceRowKey\":\"XX56"),
+            "sourceRowKey",
+        ),
     ];
     for (filename, line, expected) in cases {
         let repository = minimal_repository_with_shard(filename, &(line + "\n"));
@@ -432,10 +509,9 @@ fn unit_reader_rejects_wrong_shard_unsorted_duplicate_binding_bad_hash_review_an
 fn duplicate_source_bindings_across_shards_and_missing_nullable_fields_are_rejected() {
     let repository = fixture_repository();
     let ff_path = repository.path().join(".aeria/units/ff.jsonl");
-    let ff = String::from_utf8(fs::read(&ff_path).expect("ff shard")).expect("UTF-8");
     fs::write(
         &ff_path,
-        ff.replace(
+        bound_ff_record().replace(
             r#"{"sheetName":"Other","rowId":4294967295,"subrowId":65535,"columnIndex":0}"#,
             r#"{"sheetName":"翻訳表","rowId":0,"subrowId":2,"columnIndex":4294967295}"#,
         ),
@@ -448,6 +524,27 @@ fn duplicate_source_bindings_across_shards_and_missing_nullable_fields_are_rejec
         error
             .to_string()
             .contains("duplicate current SourceBinding")
+    );
+
+    let repository = fixture_repository();
+    let ff_path = repository.path().join(".aeria/units/ff.jsonl");
+    let ff = String::from_utf8(fs::read(&ff_path).expect("ff shard")).expect("UTF-8");
+    fs::write(
+        &ff_path,
+        ff.replace(
+            r#"{"sheetName":"Other","rowId":4294967295,"subrowId":65535,"columnIndex":0}"#,
+            r#"{"sheetName":"翻訳表","rowId":0,"subrowId":2,"columnIndex":4294967295}"#,
+        ),
+    )
+    .expect("detached unit at a bound binding");
+    let workspace = WorkspaceStore::new(repository.path())
+        .load()
+        .expect("a detached unit does not own its last binding");
+    assert_eq!(
+        workspace
+            .unit_by_source_binding(&SourceBinding::new("翻訳表", 0, 2, 4_294_967_295))
+            .map(TranslationUnit::id),
+        Some(TranslationUnitId::from_str(ID_00).expect("ID"))
     );
 
     for missing in ["rawValueHash", "translatorNote"] {
@@ -545,12 +642,115 @@ fn managed_manifest_symlinks_are_rejected_when_the_platform_supports_them() {
     assert!(error.to_string().contains("symlinks are not allowed"));
 }
 
+#[test]
+fn workspace_format_v1_is_read_only_for_migration() {
+    let repository =
+        minimal_repository_with_manifest(std::str::from_utf8(LEGACY_MANIFEST).expect("UTF-8"));
+    fs::write(repository.path().join(".aeria/units/00.jsonl"), LEGACY_00).expect("v1 shard");
+    let store = WorkspaceStore::new(repository.path());
+
+    let error = store.load().expect_err("v1 must not be activated");
+    assert!(matches!(
+        error,
+        WorkspaceStoreError::MigrationRequired { version: 1, .. }
+    ));
+    assert_eq!(
+        store.read_metadata().expect("v1 metadata"),
+        metadata(),
+        "the v1 snapshotId is validated and discarded"
+    );
+
+    let current_record = first_fixture_record();
+    let current_in_v1 =
+        minimal_repository_with_manifest(std::str::from_utf8(LEGACY_MANIFEST).expect("UTF-8"));
+    fs::write(
+        current_in_v1.path().join(".aeria/units/00.jsonl"),
+        &current_record,
+    )
+    .expect("v2 record in a v1 workspace");
+    let error = WorkspaceStore::new(current_in_v1.path())
+        .load()
+        .expect_err("record shape must match the manifest version");
+    assert!(error.to_string().contains("unknown field"), "{error}");
+
+    let legacy_record = std::str::from_utf8(LEGACY_00)
+        .expect("UTF-8")
+        .lines()
+        .next()
+        .expect("line")
+        .to_owned();
+    let legacy_in_v2 = minimal_repository_with_shard("00.jsonl", &(legacy_record + "\n"));
+    let error = WorkspaceStore::new(legacy_in_v2.path())
+        .load()
+        .expect_err("v1 record in a v2 workspace");
+    assert!(error.to_string().contains("missing field"), "{error}");
+}
+
+#[test]
+fn history_decoding_accepts_both_record_shapes_but_encoding_requires_layout() {
+    let shard = Path::new(".aeria/units/00.jsonl");
+    let legacy = decode_unit_shard(LEGACY_00, shard).expect("v1 history shard");
+    assert!(legacy.iter().all(TranslationUnit::is_bound));
+    assert!(legacy.iter().all(|unit| unit.source_layout().is_none()));
+    let current = decode_unit_shard(FIXTURE_00, shard).expect("v2 shard");
+    assert_eq!(
+        decode_unit_record(&first_fixture_record(), shard).expect("v2 record"),
+        current[0]
+    );
+    assert_eq!(
+        current[0].source_fingerprint(),
+        legacy[0].source_fingerprint()
+    );
+
+    assert_eq!(
+        encode_unit_shard(&current, shard).expect("canonical v2 bytes"),
+        FIXTURE_00
+    );
+    let error = encode_unit_shard(&legacy[..1], shard).expect_err("bound unit without layout");
+    assert!(error.to_string().contains("no source layout"), "{error}");
+
+    let mut detached = TranslationUnit::new(
+        TranslationUnitId::from_bytes([0; 32]),
+        SourceBinding::new("Gone", 1, 0, 0),
+        SourceFingerprint::new(
+            Sha256Hash::from_bytes([1; 32]),
+            None,
+            Sha256Hash::from_bytes([2; 32]),
+        ),
+        "kept",
+    );
+    detached.detach(DetachReason::SheetRemoved);
+    let bytes = encode_unit_shard(std::slice::from_ref(&detached), shard)
+        .expect("detached v1-migrated unit without layout");
+    assert!(
+        std::str::from_utf8(&bytes)
+            .expect("UTF-8")
+            .contains(r#""sourceStatus":"sheet-removed""#)
+    );
+    assert_eq!(
+        decode_unit_shard(&bytes, shard).expect("round trip"),
+        vec![detached.clone()]
+    );
+
+    detached.detach(DetachReason::SheetUnavailable);
+    let bytes = encode_unit_shard(std::slice::from_ref(&detached), shard)
+        .expect("unit detached from an unreadable sheet");
+    assert!(
+        std::str::from_utf8(&bytes)
+            .expect("UTF-8")
+            .contains(r#""sourceStatus":"sheet-unavailable""#)
+    );
+    assert_eq!(
+        decode_unit_shard(&bytes, shard).expect("round trip"),
+        vec![detached]
+    );
+}
+
 fn metadata() -> WorkspaceMetadata {
     WorkspaceMetadata::new(
         "en",
         "fr",
         "sha256:0000000000000000000000000000000000000000000000000000000000000000",
-        "sha256:1111111111111111111111111111111111111111111111111111111111111111",
     )
     .expect("canonical metadata")
 }
@@ -558,16 +758,27 @@ fn metadata() -> WorkspaceMetadata {
 fn fixture_repository() -> TempDir {
     let repository = minimal_repository();
     fs::copy(
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/workspace-v1/units/00.jsonl"),
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/workspace-v2/units/00.jsonl"),
         repository.path().join(".aeria/units/00.jsonl"),
     )
     .expect("00 fixture");
     fs::copy(
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/workspace-v1/units/ff.jsonl"),
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/workspace-v2/units/ff.jsonl"),
         repository.path().join(".aeria/units/ff.jsonl"),
     )
     .expect("ff fixture");
     repository
+}
+
+/// The `ff` fixture record turned into a bound unit with a valid layout.
+fn bound_ff_record() -> String {
+    std::str::from_utf8(FIXTURE_FF)
+        .expect("fixture UTF-8")
+        .replace(
+            r#""sourceStatus":"sheet-removed""#,
+            r#""sourceStatus":"bound""#,
+        )
+        .replace(r#""sourceLayout":null"#, FIRST_LAYOUT)
 }
 
 fn minimal_repository() -> TempDir {

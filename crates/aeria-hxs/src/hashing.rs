@@ -3,7 +3,7 @@ use std::cmp::Ordering;
 use sha2::{Digest, Sha256};
 
 use crate::error::HxsError;
-use crate::types::{ColumnType, HxsHash, SheetVariant, StringCell};
+use crate::types::{ColumnType, ExcludedSheet, HxsHash, SheetVariant, StringCell};
 
 pub(crate) struct TechnicalCell {
     pub column_index: u32,
@@ -284,20 +284,40 @@ pub(crate) fn hash_sheet_content(
     Ok(hasher.finish())
 }
 
+/// Computes `contentId`. `sheets` and `excluded` must be ordered by ordinal
+/// name. HXS v1 has no exclusions and `excluded` must be `None` for it.
 pub(crate) fn compute_content_id(
     language: &str,
     sheets: &[(&str, &str, &HxsHash, &HxsHash)],
+    excluded: Option<&[ExcludedSheet]>,
 ) -> Result<String, HxsError> {
     let mut hasher = CanonicalHasher::new();
-    domain(&mut hasher, "HARMONIA-HXS-CONTENT-v1");
+    match excluded {
+        None => domain(&mut hasher, "HARMONIA-HXS-CONTENT-v1"),
+        Some(_) => domain(&mut hasher, "HARMONIA-HXS-CONTENT-v2"),
+    }
     hasher.utf8(language)?;
+    if excluded.is_some() {
+        hasher.u32(count_u32(sheets.len())?);
+    }
     for (name, effective_language, schema_hash, content_hash) in sheets {
         hasher.utf8(name)?;
         hasher.utf8(effective_language)?;
         hasher.hash(schema_hash);
         hasher.hash(content_hash);
     }
+    if let Some(excluded) = excluded {
+        hasher.u32(count_u32(excluded.len())?);
+        for sheet in excluded {
+            hasher.utf8(&sheet.name)?;
+            hasher.u32(sheet.reason.code());
+        }
+    }
     Ok(format!("sha256:{}", hasher.finish()))
+}
+
+fn count_u32(count: usize) -> Result<u32, HxsError> {
+    u32::try_from(count).map_err(|_| HxsError::data("sheet count exceeds HXS framing limits"))
 }
 
 pub(crate) fn compute_snapshot_id(

@@ -1,6 +1,7 @@
 import type { PropsWithChildren, ReactNode } from "react";
 import { DropdownMenu } from "radix-ui";
 import { UiIcon } from "../ui/primitives/UiIcon";
+import { useI18n } from "../ui/i18n";
 
 type DockPanelProps = PropsWithChildren<{
   title: string;
@@ -32,6 +33,7 @@ export function DockPanel({
   onDropPanel,
   children,
 }: DockPanelProps) {
+  const { t } = useI18n();
   const hasMenu = moveTargets.length > 0 || canFloat || Boolean(onHide);
   return (
     <section
@@ -49,23 +51,23 @@ export function DockPanel({
         <span className="panel-title">{title}</span>
         {meta ? <span className="panel-meta">{meta}</span> : null}
         <span className="spacer" />
-        {headerActions ? <div className="panel-actions" role="group" aria-label={`${title} actions`}>{headerActions}</div> : null}
+        {headerActions ? <div className="panel-actions" role="group" aria-label={t("dock.actions", { title })}>{headerActions}</div> : null}
         {hasMenu ? (
           <DropdownMenu.Root>
             <DropdownMenu.Trigger asChild>
-              <button className="icon-button icon-button-ghost" type="button" aria-label={`${title} options`}><UiIcon icon="ellipsis" size="md" /></button>
+              <button className="icon-button icon-button-ghost" type="button" aria-label={t("dock.options", { title })}><UiIcon icon="ellipsis" size="md" /></button>
             </DropdownMenu.Trigger>
             <DropdownMenu.Portal>
               <DropdownMenu.Content className="menu-content" align="end" sideOffset={4}>
                 {moveTargets.map((target) => (
                   <DropdownMenu.Item className="menu-item" key={target.id} onSelect={() => onMove?.(target.id)}>
-                    <span className="menu-item-label">Move to {target.label.toLowerCase()}</span>
+                    <span className="menu-item-label">{target.label}</span>
                   </DropdownMenu.Item>
                 ))}
-                {canFloat ? <DropdownMenu.Item className="menu-item" onSelect={() => onFloat?.()}><span className="menu-item-label">Open in new window</span></DropdownMenu.Item> : null}
+                {canFloat ? <DropdownMenu.Item className="menu-item" onSelect={() => onFloat?.()}><span className="menu-item-label">{t("common.openInNewWindow")}</span></DropdownMenu.Item> : null}
                 {onHide ? <>
                   {moveTargets.length > 0 || canFloat ? <DropdownMenu.Separator className="menu-separator" /> : null}
-                  <DropdownMenu.Item className="menu-item" onSelect={onHide}><span className="menu-item-label">Hide</span></DropdownMenu.Item>
+                  <DropdownMenu.Item className="menu-item" onSelect={onHide}><span className="menu-item-label">{t("common.hide")}</span></DropdownMenu.Item>
                 </> : null}
               </DropdownMenu.Content>
             </DropdownMenu.Portal>

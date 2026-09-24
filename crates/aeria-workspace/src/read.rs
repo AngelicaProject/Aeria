@@ -1,13 +1,14 @@
 //! Bounded, read-only application composition for source rows.
 
-use aeria_core::{ReviewState, SourceBinding, SourceFingerprint, TranslationUnitId};
-use aeria_hxs::{HxsError, StringRowCoordinate};
+use aeria_core::{ReviewState, SourceBinding, SourceFingerprint, SourceLayout, TranslationUnitId};
+use aeria_hxs::{ColumnType, HxsError, StringRowCoordinate};
+use aeria_se::parse;
 use std::cell::Cell;
 use std::collections::BTreeMap;
 use std::time::Instant;
 use thiserror::Error;
 
-use crate::{ProjectSession, source_fingerprint_from_hashes};
+use crate::{ProjectSession, source_fingerprint_from_hashes, source_layout_from_hashes};
 
 /// Conservative application-level maximum for one translation read page.
 ///
@@ -66,6 +67,10 @@ pub struct TranslationContextCellView {
 pub struct TranslationCellView {
     pub source_binding: SourceBinding,
     pub source_macro: String,
+    /// The source text has no letters outside protected structure, such as
+    /// punctuation, digits, or number formatting. Such a cell is still
+    /// translatable; it is marked so the editor can show it as formatting.
+    pub formatting_only: bool,
     pub translation: Option<TranslationOverlayView>,
 }
 
@@ -117,13 +122,13 @@ pub enum TranslationReadError {
 
     /// A sparse unit does not describe the exact verified source occurrence.
     #[error(
-        "translation unit {translation_unit_id} at {source_binding:?} has a stale source fingerprint: persisted {expected:?}, verified {verified:?}"
+        "translation unit {translation_unit_id} at {source_binding:?} has stale source facts: persisted {expected:?}, verified {verified:?}"
     )]
     WorkspaceSourceMismatch {
         translation_unit_id: TranslationUnitId,
         source_binding: SourceBinding,
-        expected: Box<SourceFingerprint>,
-        verified: Box<SourceFingerprint>,
+        expected: Box<(SourceFingerprint, Option<SourceLayout>)>,
+        verified: Box<(SourceFingerprint, Option<SourceLayout>)>,
     },
 }
 
@@ -175,6 +180,7 @@ impl ProjectSession {
             self.source()
                 .page_string_rows(sheet_name, after_coordinate.as_ref(), limit)?;
         trace.mark("workspace.page-rows.source");
+        let layouts = self.string_column_layouts(sheet_name);
 
         let mut rows = Vec::with_capacity(source_page.rows.len());
         for source_row in source_page.rows {
@@ -211,11 +217,16 @@ impl ProjectSession {
                     occurrence.fingerprint.raw_value_hash.as_ref(),
                     &occurrence.fingerprint.row_technical_hash,
                 );
-                let translation =
-                    self.overlay_for_binding(&source_binding, &verified_fingerprint)?;
+                let translation = self.overlay_for_binding(
+                    &source_binding,
+                    &verified_fingerprint,
+                    layouts.get(&column_index).copied(),
+                )?;
+                let formatting_only = parse(&source_macro).is_formatting_only();
                 cells.push(TranslationCellView {
                     source_binding,
                     source_macro,
+                    formatting_only,
                     translation,
                 });
             }
@@ -245,20 +256,43 @@ impl ProjectSession {
         })
     }
 
+    /// Returns the verified layout of every String column in one sheet.
+    fn string_column_layouts(&self, sheet_name: &str) -> BTreeMap<u32, SourceLayout> {
+        self.source()
+            .sheet(sheet_name)
+            .map(|sheet| {
+                sheet
+                    .columns
+                    .iter()
+                    .filter(|column| column.column_type == ColumnType::String)
+                    .map(|column| {
+                        (
+                            column.index,
+                            source_layout_from_hashes(&sheet.hashes.schema, column.offset),
+                        )
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
     fn overlay_for_binding(
         &self,
         source_binding: &SourceBinding,
         verified_fingerprint: &SourceFingerprint,
+        verified_layout: Option<SourceLayout>,
     ) -> Result<Option<TranslationOverlayView>, TranslationReadError> {
         self.workspace()
             .unit_by_source_binding(source_binding)
             .map(|unit| {
-                if unit.source_fingerprint() != verified_fingerprint {
+                if unit.source_fingerprint() != verified_fingerprint
+                    || unit.source_layout() != verified_layout
+                {
                     return Err(TranslationReadError::WorkspaceSourceMismatch {
                         translation_unit_id: unit.id(),
                         source_binding: source_binding.clone(),
-                        expected: Box::new(*unit.source_fingerprint()),
-                        verified: Box::new(*verified_fingerprint),
+                        expected: Box::new((*unit.source_fingerprint(), unit.source_layout())),
+                        verified: Box::new((*verified_fingerprint, verified_layout)),
                     });
                 }
                 Ok(TranslationOverlayView {
@@ -285,17 +319,18 @@ pub struct SheetTranslationProgress {
 }
 
 impl ProjectSession {
-    /// Summarizes Workspace units per sheet, ordered by sheet name.
+    /// Summarizes bound Workspace units per sheet, ordered by sheet name.
     ///
-    /// Only units whose binding is permitted by the HSG index are counted, so
-    /// every count is bounded by the sheet's translatable cell count. Sheets
-    /// without units are omitted. This reads in-memory Workspace state only; it
-    /// does not re-verify source fingerprints.
+    /// Only bound units whose binding is permitted by the HSG index are
+    /// counted, so every count is bounded by the sheet's translatable cell
+    /// count. Detached units are not counted. Sheets without units are
+    /// omitted. This reads in-memory Workspace state only; it does not
+    /// re-verify source fingerprints.
     #[must_use]
     pub fn translation_progress(&self) -> Vec<SheetTranslationProgress> {
         let guidance = self.source_package.guidance_index();
         let mut by_sheet: BTreeMap<&str, SheetTranslationProgress> = BTreeMap::new();
-        for unit in self.workspace().units() {
+        for unit in self.workspace().units().filter(|unit| unit.is_bound()) {
             let binding = unit.source_binding();
             if !guidance.is_translatable(
                 binding.sheet_name(),

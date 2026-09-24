@@ -296,3 +296,36 @@ fn malformed_documents_cannot_be_compared_safely() {
             .any(|difference| difference.kind == StructureDifferenceKind::UnsafeInput)
     );
 }
+
+#[test]
+fn formatting_only_documents_have_no_letters_in_user_facing_text() {
+    for source in [
+        "",
+        "...",
+        "…",
+        ": ",
+        "：",
+        "0",
+        "&",
+        "<nbsp>",
+        r"<kilo(lnum1,\,)>",
+        "<if([lnum1>=t_hour],<italic(1)>1,<italic(0)>2)>",
+    ] {
+        assert!(
+            aeria_se::parse(source).is_formatting_only(),
+            "{source:?} should be formatting only"
+        );
+    }
+    for source in [
+        "Hello",
+        "é",
+        "未使用",
+        "<if([lnum1>=t_hour],<italic(1)>yes,<italic(0)>no)>",
+        "<if(1,2,3",
+    ] {
+        assert!(
+            !aeria_se::parse(source).is_formatting_only(),
+            "{source:?} should not be formatting only"
+        );
+    }
+}

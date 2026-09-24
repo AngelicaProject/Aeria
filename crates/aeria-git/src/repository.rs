@@ -12,7 +12,7 @@ use crate::semantic::{UnitChange, summarize_changes};
 
 pub(crate) const AERIA_PATH: &str = ".aeria";
 const ATTRIBUTES_FILE: &str = ".gitattributes";
-/// Workspace Format v1 files are LF-only. This rule keeps Git from
+/// Workspace Format files are LF-only. This rule keeps Git from
 /// converting them on checkout (for example with `core.autocrlf=true`).
 const ATTRIBUTES_RULE: &str = "/.aeria/** text eol=lf";
 const LOG_FORMAT: &str = "--format=%H%x1f%P%x1f%an%x1f%ae%x1f%at%x1f%s";
@@ -527,19 +527,12 @@ impl GitRepository {
             _ => None,
         };
 
-        let mut add = vec!["add", "--all", "--"];
-        add.extend(&paths);
-        self.run(&add)?;
-
         let message = match message.map(str::trim).filter(|text| !text.is_empty()) {
             Some(message) => message.to_owned(),
             None if changes.is_empty() => "Update Aeria project settings".to_owned(),
             None => summarize_changes(&changes),
         };
-        let mut commit = identity_options;
-        commit.extend(["commit", "--quiet", "-m", &message, "--only", "--"]);
-        commit.extend(&paths);
-        self.run(&commit)?;
+        self.commit_managed_paths(identity_options, &paths, &message)?;
 
         let commit = self.commit("HEAD")?;
         Ok(CheckpointOutcome {
@@ -547,6 +540,35 @@ impl GitRepository {
             changes,
             branch_created,
         })
+    }
+
+    /// Stages and commits exactly the given Aeria-managed paths.
+    fn commit_managed_paths(
+        &self,
+        identity_options: Vec<&'static str>,
+        paths: &[&'static str],
+        message: &str,
+    ) -> Result<(), GitError> {
+        let mut add = vec!["add", "--all", "--"];
+        add.extend(paths);
+        self.run(&add)?;
+        let mut commit: Vec<&str> = identity_options;
+        commit.extend(["commit", "--quiet", "-m", message, "--only", "--"]);
+        commit.extend(paths);
+        self.run(&commit)?;
+        Ok(())
+    }
+
+    /// Commits Aeria-managed changes that an integration's acceptance step
+    /// wrote, such as reconciling merged units with the current source.
+    /// Returns whether a commit was created.
+    pub(crate) fn commit_integration_changes(&self, message: &str) -> Result<bool, GitError> {
+        let paths = self.managed_paths()?;
+        if !self.has_managed_changes(&paths)? {
+            return Ok(false);
+        }
+        self.commit_managed_paths(self.identity_options()?, &paths, message)?;
+        Ok(true)
     }
 
     /// Returns the Aeria-managed paths that exist or are tracked.
@@ -690,7 +712,7 @@ fn ensure_line_ending_rule(root: &Path) -> Result<(), GitError> {
     if !updated.is_empty() && !updated.ends_with('\n') {
         updated.push('\n');
     }
-    updated.push_str("# Aeria workspace data is LF-only (Workspace Format v1).\n");
+    updated.push_str("# Aeria workspace data is LF-only.\n");
     updated.push_str(ATTRIBUTES_RULE);
     updated.push('\n');
     fs::write(&path, updated).map_err(|source| GitError::Io {

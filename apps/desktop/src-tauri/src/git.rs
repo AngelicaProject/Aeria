@@ -349,7 +349,9 @@ impl From<&RecordVersion> for RecordVersionDto {
     fn from(version: &RecordVersion) -> Self {
         match version {
             RecordVersion::Absent => Self::Absent,
-            RecordVersion::Valid(unit) => Self::Valid { unit: unit.into() },
+            RecordVersion::Valid(unit) => Self::Valid {
+                unit: unit.as_ref().into(),
+            },
             RecordVersion::Invalid { message } => Self::Invalid {
                 message: message.clone(),
             },
@@ -612,8 +614,10 @@ pub(crate) fn resolve_git(app: &tauri::AppHandle) -> GitExecutable {
 }
 
 /// Runs a Git operation that can change the working tree while holding the
-/// project lock; `accept` reloads the session. The outer result reports
-/// state errors, the inner one the Git operation.
+/// project lock; `accept` reloads the session and reconciles merged units
+/// that do not describe the session source (for example translations made
+/// on a branch that had not applied the latest game update). The outer
+/// result reports state errors, the inner one the Git operation.
 fn with_session_reload<T>(
     state: &DesktopState,
     operation: impl FnOnce(
@@ -627,7 +631,8 @@ fn with_session_reload<T>(
     let repository = GitRepository::open(session.repository_root(), git)?;
     let mut accept = || {
         session
-            .reload_workspace()
+            .reload_and_reconcile_workspace()
+            .map(|_| ())
             .map_err(|error| error.to_string())
     };
     Ok(operation(&repository, &mut accept))

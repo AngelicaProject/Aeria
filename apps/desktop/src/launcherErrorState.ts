@@ -1,27 +1,26 @@
+import type { MessageKey, Translate } from "./i18n/translate";
 import type { CommandError } from "./types";
 
-export type LauncherErrorOperation = "open" | "create" | "recentOpen";
+export type LauncherErrorOperation = "open" | "create" | "update" | "recentOpen";
 
 export type LauncherError = {
   operation: LauncherErrorOperation;
   error: CommandError;
 };
 
-export function launcherErrorTitle(operation: LauncherErrorOperation): string {
+export function launcherErrorTitle(operation: LauncherErrorOperation): MessageKey {
   switch (operation) {
     case "open":
-      return "Could not open project";
+      return "launcher.error.open";
     case "create":
-      return "Could not create project";
+      return "launcher.error.create";
+    case "update":
+      return "launcher.error.update";
     case "recentOpen":
-      return "Could not reopen recent project";
+      return "launcher.error.recentOpen";
   }
 }
 
-export function sourcePackageListenerError(): CommandError {
-  return {
-    code: "sourcePackageListener",
-    message:
-      "Source-package progress updates could not be connected. Project creation is disabled until this connection is available.",
-  };
+export function sourcePackageListenerError(t: Translate): CommandError {
+  return { code: "sourcePackageListener", message: t("launcher.error.listener") };
 }

@@ -1,10 +1,15 @@
 /* Command center (titlebar) --------------------------------------------- */
 
+/* Centered on the window, like the palette that opens below it, so neither
+   the menu nor the action widths move it. */
 .command-center {
+  position: absolute;
+  top: 50%;
+  left: 50%;
   display: flex;
   align-items: center;
   gap: 8px;
-  width: min(460px, 100%);
+  width: max(200px, min(460px, calc(100% - 600px)));
   height: 26px;
   padding: 0 6px 0 10px;
   border: 1px solid var(--line);
@@ -12,6 +17,7 @@
   background: color-mix(in srgb, var(--color-text) 4%, transparent);
   color: var(--fg-subtle);
   font-size: var(--text-sm);
+  translate: -50% -50%;
   transition: background var(--duration-fast), border-color var(--duration-fast);
 }
 .command-center:hover { border-color: var(--line-strong); background: var(--hover); color: var(--fg-muted); }
@@ -35,7 +41,9 @@
   border-radius: var(--radius-lg);
   background: var(--popover);
   box-shadow: var(--shadow-pop);
-  transform: translateX(-50%);
+  /* `translate` composes with the pop-in `transform`; a transform here would
+     be replaced while the animation runs and the palette would jump. */
+  translate: -50% 0;
   animation: pop-in 120ms var(--ease-out);
 }
 :root[data-native-backdrop="true"] .palette { background: color-mix(in srgb, var(--popover) 94%, transparent); backdrop-filter: blur(28px) saturate(1.3); }
@@ -48,7 +56,6 @@
   border: 1px solid var(--line-focus);
   border-radius: var(--radius-sm);
   background: var(--field);
-  box-shadow: 0 0 0 3px var(--accent-soft);
   color: var(--fg-subtle);
 }
 .palette-input input { flex: 1; min-width: 0; height: 32px; border: 0; background: transparent; color: var(--fg); font-size: var(--text-md); }
@@ -161,7 +168,7 @@
   transition: border-color var(--duration-fast), background var(--duration-fast);
 }
 .theme-card:hover { background: var(--hover); }
-.theme-card.selected { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.theme-card.selected { border-color: var(--accent); }
 .theme-card-preview { display: flex; gap: 4px; height: 64px; padding: 5px; border-radius: var(--radius-md); background: var(--preview-crust); }
 .theme-card-rail { width: 8px; border-radius: 3px; background: var(--preview-base); opacity: 0.7; }
 .theme-card-panel { position: relative; display: grid; flex: 1; align-content: start; gap: 5px; padding: 7px; border-radius: 5px; background: var(--preview-base); }
@@ -191,7 +198,7 @@
 .accent-swatch > span { width: 20px; height: 20px; border-radius: 50%; box-shadow: 0 0 0 1px rgb(0 0 0 / 0.2) inset; }
 .accent-swatch.default { padding-right: 10px; }
 .accent-swatch:hover { background: var(--hover); }
-.accent-swatch.selected { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); color: var(--fg); }
+.accent-swatch.selected { border-color: var(--accent); color: var(--fg); }
 
 .shortcut-table { width: 100%; border-collapse: collapse; font-size: var(--text-sm); }
 .shortcut-table td { padding: 7px 4px; border-bottom: 1px solid var(--line); }

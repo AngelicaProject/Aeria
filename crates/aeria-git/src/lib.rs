@@ -1,8 +1,8 @@
 //! Git repository operations and semantic collaboration helpers.
 //!
 //! Aeria uses Git as its collaboration and history layer. This crate drives
-//! the system Git client for repository operations and interprets Workspace
-//! Format v1 shards so history and changes can be presented per translation
+//! the system Git client for repository operations and interprets workspace
+//! unit shards so history and changes can be presented per translation
 //! unit instead of per file. The Git author identity is the translator
 //! identity: every checkpoint is attributed to the configured
 //! `user.name`/`user.email`.
@@ -34,7 +34,7 @@ pub use semantic::{
     Attribution, ContributorSummary, RecordVersion, UnitAttribution, UnitChange, UnitChangeKind,
     UnitHistory, UnitRevision, summarize_changes, summarize_contributors,
 };
-pub use sync::IntegrateOutcome;
+pub use sync::{IntegrateOutcome, RECONCILE_MESSAGE};
 
 /// Errors raised by Git collaboration operations.
 #[derive(Debug, Error)]
@@ -116,7 +116,7 @@ pub enum GitError {
     )]
     IncomingRejected { reason: String },
 
-    /// A Workspace Format v1 file or historical revision is invalid.
+    /// A workspace file or historical revision is invalid.
     #[error(transparent)]
     Workspace(#[from] WorkspaceStoreError),
 

@@ -70,7 +70,7 @@
   transition: border-color var(--duration-fast), box-shadow var(--duration-fast);
 }
 .editor-target { background: var(--field); }
-.editor-target:focus-within { border-color: var(--line-focus); box-shadow: 0 0 0 3px var(--accent-soft); }
+.editor-target:focus-within { border-color: var(--line-focus); }
 .editor-pane-head {
   display: flex;
   flex: none;

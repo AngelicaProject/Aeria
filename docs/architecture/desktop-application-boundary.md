@@ -21,13 +21,13 @@ authoritative project state; React receives owned DTO snapshots only. There is
 one active project per desktop process for now. Opening or initializing a
 replacement constructs and verifies the new `ProjectSession` before acquiring
 the state lock, so failure preserves the previous active session. Closing is
-idempotent and drops the active session without changing Workspace Format v1.
+idempotent and drops the active session without changing the workspace.
 
 ## Local project registry
 
 The desktop keeps a bounded convenience registry at
-`<app-data>/projects-v1.json`. It is application-local state, not Workspace
-Format v1, and is never written to `.aeria/`, a translation repository, an
+`<app-data>/projects-v1.json`. It is application-local state, not workspace
+data, and is never written to `.aeria/`, a translation repository, an
 HSP, or the disposable HXS cache. The existing `<app-data>/source-packages/`
 and `<app-cache>/` locations retain their existing roles.
 
@@ -62,6 +62,7 @@ filesystem existence checks
 → SourcePackage::open on the remembered HSP path
 → exact sourcePackageId comparison
 → ProjectSession::open_from_source_package with that validated package
+   (or open_with_source_update when the caller accepted a source update)
 → active-project replacement
 → best-effort registry refresh
 ```
@@ -76,6 +77,30 @@ Successful open/create commands return `ProjectOpenResultDto`. A registry
 write failure is a non-fatal `projectRegistryWrite` warning after the active
 session is installed, so local convenience-state failure never rolls back a
 valid project. The desktop does not auto-open the last project at startup.
+
+## Source updates
+
+`open_project` and `open_recent_project` take an optional
+`acceptSourceUpdate` flag. Without it, a workspace that is not current for
+the package fails with the stable code `sourceUpdateRequired` and nothing is
+written. `preview_source_update(repositoryRoot, sourcePackagePath)` returns
+the `SourceUpdateReportDto` of the plan without writing or changing the
+active project, so the renderer can ask for confirmation. With the flag set,
+the command opens through `ProjectSession::open_with_source_update` and
+returns the applied report in `ProjectOpenResultDto.sourceUpdate`.
+
+`update_project_from_game(jobId, repositoryRoot, gamePath)` reads the source
+language from the existing workspace manifest, builds and publishes a source
+package with Harmonia Atlas exactly like project creation, and opens the
+project with the update applied. It is the path for an installed game after a
+patch and for a collaborator who has only a cloned repository.
+
+`ProjectSummaryDto.detachedUnitCount` reports detached units, and
+`list_detached_units` returns each one's last binding, reason, target,
+review state, and note. A plan that cannot be built maps to `sourceUpdate`.
+Planning and applying remain in `aeria-rebase` and `aeria-workspace`; the
+IPC layer only chooses whether to call the preview or the applying
+constructor.
 
 The HSP path remains local runtime state held by `ProjectSession`; its
 materialized HXS cache path is also local runtime state. Neither is added to
@@ -125,7 +150,7 @@ again. Project-wide attribution is cached in memory per repository root and
 Commands that require an active project report `noProjectOpen` before
 validating project-scoped payload such as translation-unit IDs.
 
-The IPC boundary contains no source update or rebase logic and no background
+The IPC boundary contains no source update planning and no background
 server. React has no direct filesystem or SQLite access. Translation-unit IDs
 cross IPC only in their canonical textual form, and review states use an
 explicit camelCase protocol enum.
@@ -136,7 +161,7 @@ job ID before the Atlas worker starts; the long-running initialization command
 uses that ID to claim the active cancellation token. Progress events report
 Atlas state only and are not the source of job identity, so cancellation is
 available even before the first external-process event arrives. The build
-stages the v0.2.0 sidecar with Tauri's target-triple
+stages the v0.3.0 sidecar with Tauri's target-triple
 filename convention, while packaged runtime lookup resolves
 `harmonia-atlas[.exe]` beside the Aeria executable. Rust first honors the
 explicit `AERIA_ATLAS_PATH` development/test override, then the packaged
@@ -148,9 +173,9 @@ the completed package has been validated.
 Desktop state permits one active package job. Cancellation signals that job,
 terminates and awaits Atlas, and remains authoritative through validation and
 workspace initialization: the final publication boundary serializes
-cancellation acceptance with Workspace Format v1 creation and active-project
-replacement, leaving no newly initialized project successful when cancellation
-has been accepted.
+cancellation acceptance with workspace creation or source update and
+active-project replacement, leaving no newly initialized or updated project
+successful when cancellation has been accepted.
 
 After that final Atlas publication boundary and after the Atlas job finishes,
 the desktop attempts the recent-project upsert using the final immutable HSP

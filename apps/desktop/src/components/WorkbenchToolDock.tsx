@@ -1,4 +1,6 @@
+import type { MessageKey } from "../i18n/translate";
 import type { SourceBinding, UnitChangeDto } from "../types";
+import { useI18n } from "../ui/i18n";
 import { Segmented } from "../ui/primitives/Segmented";
 import { UiIcon } from "../ui/primitives/UiIcon";
 import { GitPanel } from "./GitPanel";
@@ -19,43 +21,44 @@ type WorkbenchToolDockProps = {
   onRevealBinding?: (binding: SourceBinding) => void;
 };
 
-export function toolTitle(tool: WorkbenchTool): string {
-  return tool === "ai" ? "AI assist" : tool === "git" ? "Git" : "Search";
+export function toolTitle(tool: WorkbenchTool): MessageKey {
+  return tool === "ai" ? "workbench.tool.ai" : tool === "git" ? "workbench.tool.git" : "workbench.tool.search";
 }
 
 export function WorkbenchToolDock({ activeTool, gitMode, selectedBinding, onGitModeChange, selectedUnitId, workspaceRevision, onWorkspaceChanged, onRestoreTarget, pending, onRevealBinding }: WorkbenchToolDockProps) {
+  const { t } = useI18n();
   if (activeTool === "search") {
     return (
-      <section className="tool-content" aria-label="Project search">
+      <section className="tool-content" aria-label={t("tool.searchLabel")}>
         <div className="empty-state">
           <UiIcon icon="search" size="xl" />
-          <strong>Project search isn't available yet</strong>
-          <p>Search will use the project backend once it exists. To find a sheet by name, use the sheet filter (Ctrl+F).</p>
+          <strong>{t("tool.searchUnavailable")}</strong>
+          <p>{t("tool.searchHint")}</p>
         </div>
       </section>
     );
   }
   if (activeTool === "ai") {
     return (
-      <section className="tool-content" aria-label="AI assist">
+      <section className="tool-content" aria-label={t("workbench.tool.ai")}>
         <div className="empty-state">
           <UiIcon icon="sparkles" size="xl" />
-          <strong>AI assist isn't configured</strong>
-          <p>Translation suggestions will appear here once a provider is set up.</p>
-          {selectedBinding ? <code className="chip mono">{selectedBinding.sheetName} {selectedBinding.rowId}:{selectedBinding.subrowId} · col {selectedBinding.columnIndex}</code> : null}
+          <strong>{t("tool.aiUnavailable")}</strong>
+          <p>{t("tool.aiHint")}</p>
+          {selectedBinding ? <code className="chip mono">{t("common.cellLocation", { sheet: selectedBinding.sheetName, row: String(selectedBinding.rowId), subrow: String(selectedBinding.subrowId), column: String(selectedBinding.columnIndex) })}</code> : null}
         </div>
       </section>
     );
   }
 
   return (
-    <section className="tool-content git-tool" aria-label="Git">
+    <section className="tool-content git-tool" aria-label={t("workbench.tool.git")}>
       <div className="git-mode">
         <Segmented
-          label="Git view"
+          label={t("tool.gitView")}
           value={gitMode}
           onChange={onGitModeChange}
-          options={[{ value: "collaboration", label: "Collaboration" }, { value: "advanced", label: "Advanced" }]}
+          options={[{ value: "collaboration", label: t("tool.gitCollaboration") }, { value: "advanced", label: t("tool.gitAdvanced") }]}
         />
       </div>
       <GitPanel mode={gitMode} selectedUnitId={selectedUnitId ?? null} workspaceRevision={workspaceRevision ?? 0} onWorkspaceChanged={onWorkspaceChanged} onRestoreTarget={onRestoreTarget} pending={pending} onRevealBinding={onRevealBinding} />

@@ -161,6 +161,26 @@ impl MacroString {
         semantic::analyze(self)
     }
 
+    /// Returns whether the document is formatting only: it is well formed and
+    /// its user-facing text, including user-facing macro arguments, contains
+    /// no alphabetic character. Punctuation, digits, spacing, and macros such
+    /// as number formatting or icons are formatting; they usually differ
+    /// between game languages by localization convention rather than by
+    /// prose. An empty document is formatting only.
+    #[must_use]
+    pub fn is_formatting_only(&self) -> bool {
+        self.is_well_formed()
+            && !self.semantic_analysis().text_ranges().iter().any(|range| {
+                self.slice(range.span).is_some_and(|text| {
+                    let text = match range.kind {
+                        TextRangeKind::Text => text,
+                        TextRangeKind::Escape => text.get(1..).unwrap_or_default(),
+                    };
+                    text.chars().any(char::is_alphabetic)
+                })
+            })
+    }
+
     /// Validates this syntax document without executing its expressions.
     #[must_use]
     pub fn semantic_validation(&self) -> SemanticValidation {

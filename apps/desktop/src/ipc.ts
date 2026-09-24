@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import type {
   CommandError,
   CollaborationDto,
+  DetachedUnitDto,
   CollaborationPolicy,
   ContributorDto,
   GitBranchDto,
@@ -23,6 +24,7 @@ import type {
   SheetProgressDto,
   SourceBinding,
   SourcePackageJobDto,
+  SourceUpdateReportDto,
   TranslationRowCursorDto,
   TranslationRowPageDto,
   TranslationOverlayDto,
@@ -69,8 +71,30 @@ export function translationProgress(): Promise<SheetProgressDto[]> {
   return call<SheetProgressDto[]>("translation_progress");
 }
 
-export function openProject(repositoryRoot: string, sourcePackagePath: string): Promise<ProjectOpenResultDto> {
-  return call<ProjectOpenResultDto>("open_project", { repositoryRoot, sourcePackagePath });
+/**
+ * Opens a project. A workspace that is not current for the package fails with
+ * `sourceUpdateRequired` unless `acceptSourceUpdate` is set.
+ */
+export function openProject(
+  repositoryRoot: string,
+  sourcePackagePath: string,
+  acceptSourceUpdate = false,
+): Promise<ProjectOpenResultDto> {
+  return call<ProjectOpenResultDto>("open_project", { repositoryRoot, sourcePackagePath, acceptSourceUpdate });
+}
+
+/** Plans the source update opening would apply, without writing anything. */
+export function previewSourceUpdate(repositoryRoot: string, sourcePackagePath: string): Promise<SourceUpdateReportDto> {
+  return call<SourceUpdateReportDto>("preview_source_update", { repositoryRoot, sourcePackagePath });
+}
+
+/** Builds a source package from the installed game and updates the project to it. */
+export function updateProjectFromGame(jobId: string, repositoryRoot: string, gamePath: string): Promise<ProjectOpenResultDto> {
+  return call<ProjectOpenResultDto>("update_project_from_game", { jobId, repositoryRoot, gamePath });
+}
+
+export function listDetachedUnits(): Promise<DetachedUnitDto[]> {
+  return call<DetachedUnitDto[]>("list_detached_units");
 }
 
 export function initializeProject(
@@ -109,8 +133,8 @@ export function listRecentProjects(): Promise<RecentProjectDto[]> {
   return call<RecentProjectDto[]>("list_recent_projects");
 }
 
-export function openRecentProject(projectId: string): Promise<ProjectOpenResultDto> {
-  return call<ProjectOpenResultDto>("open_recent_project", { projectId });
+export function openRecentProject(projectId: string, acceptSourceUpdate = false): Promise<ProjectOpenResultDto> {
+  return call<ProjectOpenResultDto>("open_recent_project", { projectId, acceptSourceUpdate });
 }
 
 export function forgetRecentProject(projectId: string): Promise<void> {

@@ -20,8 +20,8 @@ Then load the canonical project documentation for the affected area:
 - Source snapshots / HXS: `docs/architecture/source.md`
 - Structured strings / SeString macros: `docs/architecture/strings.md`
 - Translation identity: `docs/architecture/identity.md`
-- Workspace persistence: `docs/architecture/workspace.md` and `docs/formats/workspace-v1.md`
-- Source update / rebase: `docs/architecture/rebase.md`
+- Workspace persistence: `docs/architecture/workspace.md` and `docs/formats/workspace-v2.md`
+- Source update / rebase: `docs/architecture/rebase.md` and `docs/architecture/rebase-safety.md`
 - Git collaboration inside Aeria: `docs/architecture/git.md` and `docs/formats/collaboration-v1.md`
 - Translation assistance: `docs/architecture/ai.md`
 - Runtime pack export: `docs/architecture/export.md` and `docs/formats/pack-v1.md`

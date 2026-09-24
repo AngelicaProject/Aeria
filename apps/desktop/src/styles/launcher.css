@@ -143,7 +143,7 @@
   background: transparent;
   text-align: left;
 }
-.recent-open:focus-visible { outline-offset: -2px; }
+.recent-open:focus-visible { outline-offset: -1px; }
 .recent-avatar {
   display: grid;
   flex: none;

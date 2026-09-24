@@ -1,22 +1,27 @@
-# Rebase candidate suggestions
+# Source update candidate suggestions
 
-Candidate suggestions are bounded review assistance for an `Ambiguous`
+Candidate suggestions are bounded review assistance for a detached
 translation unit whose previous source binding is missing. They are separate
-from the authoritative transition facts produced by
-[`RebasePlanner`](./rebase.md):
+from the authoritative outcomes produced by the
+[source update planner](./rebase.md):
 
 ```text
-RebasePlanner       authoritative same-binding transition facts
+plan_source_update  authoritative outcomes (bound or detached)
 CandidateSuggester  bounded review suggestions for missing bindings
 FuzzyRanker         deterministic ordering only
-Human reconciliation future explicit cross-binding decision
+Human reconciliation future explicit reattachment decision
 ```
+
+Unlike planning, suggestions need the previous snapshot: ranking compares the
+unit's old source text with candidate text, and the workspace stores only
+hashes. They are therefore optional assistance, available only while the
+previous snapshot is still in the local cache.
 
 The public `aeria-rebase::candidates` interface returns owned
 `SourceCandidate` values for one `CandidateQuery`. A candidate contains a
 source binding, verified source fingerprint, evidence, and a
 `CandidateScore`. Results never mutate a `TranslationUnit`, change its ID,
-update workspace state, or produce a `RebaseOutcome`. There is no automatic
+update workspace state, or produce a `UnitUpdateOutcome`. There is no automatic
 acceptance, rebinding, apply operation, or proposed authoritative binding.
 
 ## Candidate generation
@@ -33,9 +38,9 @@ neighborhood. Duplicate indexes are capped at `MAX_GENERATED_CANDIDATES`
 The suggester retains and compares verified source snapshot identity from
 construction: game version, source language, scope, content ID, and snapshot
 ID. Producer provenance is not part of this compatibility check. Before
-reading the old macro payload, it reuses the planner's old-baseline
-verification, including the persisted macro/raw/row-technical fingerprint
-checks. Ranking therefore cannot combine an index, new payload, or old payload
+reading the old macro payload, it verifies that the supplied old snapshot
+holds exactly the unit's persisted macro/raw/row-technical fingerprint and,
+when recorded, its sheet schema hash. Ranking therefore cannot combine an index, new payload, or old payload
 from an unverified source state.
 
 Full macro payloads are read only for that bounded pool. A unit whose binding
@@ -93,6 +98,6 @@ updates. Its source-pair abstraction can later be backed by real historical
 HXS pairs without changing the production interface.
 
 Suggestion lists, scores, normalized text, pool contents, and ranker versions
-are disposable snapshot-dependent state. Workspace Format v1 is unchanged;
+are disposable snapshot-dependent state. The workspace format is unchanged;
 none of those values are persisted. UI, AI ranking, reconciliation, and
 apply remain out of scope.

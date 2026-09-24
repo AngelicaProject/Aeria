@@ -1,12 +1,14 @@
+import type { MessageKey } from "./i18n/translate";
+
 export type PaletteMode = "sheets" | "commands" | "goto" | "strings" | "help";
 
 export type PaletteQuery = { mode: PaletteMode; term: string };
 
-export const palettePrefixes: ReadonlyArray<{ prefix: string; mode: PaletteMode; label: string }> = [
-  { prefix: ">", mode: "commands", label: "Run a command" },
-  { prefix: ":", mode: "goto", label: "Go to a row in the current sheet" },
-  { prefix: "#", mode: "strings", label: "Search strings in the project" },
-  { prefix: "?", mode: "help", label: "Show available prefixes" },
+export const palettePrefixes: ReadonlyArray<{ prefix: string; mode: PaletteMode; label: MessageKey }> = [
+  { prefix: ">", mode: "commands", label: "palette.prefix.commands" },
+  { prefix: ":", mode: "goto", label: "palette.prefix.goto" },
+  { prefix: "#", mode: "strings", label: "palette.prefix.strings" },
+  { prefix: "?", mode: "help", label: "palette.prefix.help" },
 ];
 
 /** Splits palette input into its mode prefix and search term. */
