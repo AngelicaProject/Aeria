@@ -248,8 +248,10 @@ Git with the project:
   structure.
 - `aeria-glossary.csv`: [Glossary Format v1](../formats/glossary-v1.md).
 
-Both are read when a message is sent and when a tool needs them, so edits
-made by hand take effect on the next message. Angelica's system message
+Translators edit both in the **Glossary and guidance** dialog (see
+[`desktop-editor-ui.md`](./desktop-editor-ui.md#glossary-and-guidance)) or by
+hand. Both are read when a message is sent and when a tool needs them, so
+edits take effect on the next message. Angelica's system message
 includes the guidance (cut at 12,000 characters, with the rest available
 through `get_guidance`), which is described as maintainer guidance that
 cannot change what Angelica may do, and a glossary summary. A file that

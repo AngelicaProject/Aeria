@@ -22,13 +22,14 @@ type WorkbenchToolDockProps = {
   onRevealBinding?: (binding: SourceBinding) => void;
   editorContext?: EditorContextDto | null;
   onOpenSettings?: () => void;
+  onOpenGuide?: (tab: "glossary" | "guidance") => void;
 };
 
 export function toolTitle(tool: WorkbenchTool): MessageKey {
   return tool === "ai" ? "workbench.tool.ai" : tool === "git" ? "workbench.tool.git" : "workbench.tool.search";
 }
 
-export function WorkbenchToolDock({ activeTool, gitMode, selectedBinding, onGitModeChange, selectedUnitId, workspaceRevision, onWorkspaceChanged, onRestoreTarget, pending, onRevealBinding, editorContext, onOpenSettings }: WorkbenchToolDockProps) {
+export function WorkbenchToolDock({ activeTool, gitMode, selectedBinding, onGitModeChange, selectedUnitId, workspaceRevision, onWorkspaceChanged, onRestoreTarget, pending, onRevealBinding, editorContext, onOpenSettings, onOpenGuide }: WorkbenchToolDockProps) {
   const { t } = useI18n();
   if (activeTool === "search") {
     return (
@@ -42,7 +43,7 @@ export function WorkbenchToolDock({ activeTool, gitMode, selectedBinding, onGitM
     );
   }
   if (activeTool === "ai") {
-    return <AngelicaPanel editorContext={editorContext ?? null} onOpenSettings={onOpenSettings} onReveal={onRevealBinding} />;
+    return <AngelicaPanel editorContext={editorContext ?? null} onOpenSettings={onOpenSettings} onOpenGuide={onOpenGuide} onReveal={onRevealBinding} />;
   }
 
   return (

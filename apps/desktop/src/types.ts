@@ -541,3 +541,18 @@ export type JobUnit = {
 export type JobEvent = { seq: number; createdAtUnixMs: number; kind: string; message: string; location: UnitLocationDto | null };
 
 export type JobAction = "pause" | "resume" | "cancel";
+
+export type GlossaryEntry = { term: string; translation: string; note?: string; forbidden?: string[] };
+
+export type GlossaryEntryInput = { term: string; translation: string; note: string | null; forbidden: string[] };
+
+export type ProjectGuideDto = {
+  /** The guidance text; null when the file does not exist. */
+  guidance: string | null;
+  /** The glossary file's exact content, sent back when saving. */
+  glossaryText: string | null;
+  entries: GlossaryEntry[];
+  diagnostics: { line: number; message: string }[];
+  guidanceError: string | null;
+  glossaryError: string | null;
+};

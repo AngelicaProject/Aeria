@@ -4,6 +4,7 @@ mod commands;
 mod dto;
 mod error;
 mod git;
+mod guide;
 mod jobs;
 mod search;
 mod state;
@@ -44,6 +45,10 @@ pub use git::{
     git_create_branch, git_finish_contribution, git_initialize, git_log, git_overview,
     git_pending_changes, git_set_collaboration, git_set_identity, git_set_remote,
     git_switch_branch, git_sync, git_unit_attribution, git_unit_history,
+};
+pub use guide::{
+    GlossaryEntryInput, ProjectGuideDto, project_guide, save_project_glossary,
+    save_project_guidance,
 };
 pub use jobs::{
     angelica_job_control, angelica_job_events, angelica_job_retry, angelica_job_units,
@@ -144,7 +149,10 @@ pub fn run() {
             angelica_job_units,
             angelica_job_events,
             angelica_job_control,
-            angelica_job_retry
+            angelica_job_retry,
+            project_guide,
+            save_project_guidance,
+            save_project_glossary
         ])
         .run(tauri::generate_context!())
         .expect("failed to run Aeria desktop application");

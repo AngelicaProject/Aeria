@@ -428,7 +428,7 @@ pub(crate) fn repository_root(app: &tauri::AppHandle) -> CommandResult<std::path
 
 /// Replaces a project-shared file if it still has the content the change was
 /// made against, through a temporary file and rename.
-fn apply_file_change(
+pub(crate) fn apply_file_change(
     root: &std::path::Path,
     file: ProjectFile,
     expected: Option<&str>,

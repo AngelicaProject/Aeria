@@ -255,6 +255,23 @@ conversation is open.
 The editor's source header has **Draft with Angelica**, which fills the target
 with a validated draft for the selected string without saving it.
 
+## Glossary and guidance
+
+**Glossary and guidance** opens from the Translation menu, the command
+palette, and the Angelica panel header. It edits the project-shared
+`aeria-glossary.csv` and `aeria-guidance.md` described in
+[`ai.md`](./ai.md#guidance-and-glossary).
+
+The Glossary tab is a table of term, translation, note, and forbidden
+variants (separated by `;`) with a filter, **Add term**, and a remove button
+per row; at most 300 filtered rows are shown at once. Rows with an empty term
+or translation, or a term repeated case-insensitively, are marked and block
+saving. Rows the file excludes are listed with their line numbers; saving
+removes them only after confirmation. The Guidance tab is a Markdown text
+area with its size against the 64 KiB limit. Each tab has **Revert** and
+**Save**; closing with unsaved changes asks first. A save fails, without
+writing, when the file changed since it was loaded.
+
 ## Keyboard
 
 Shortcuts are listed in `src/shortcuts.ts` and shown under Settings → Keyboard

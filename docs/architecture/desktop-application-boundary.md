@@ -223,6 +223,12 @@ background blocking task registered in `DesktopState` (building, ready, or
 failed per package ID), from its own verified HXS handle; see
 [`search.md`](./search.md#desktop-use).
 
+`project_guide`, `save_project_guidance`, and `save_project_glossary` read
+and write the repository's guidance and glossary for the editor dialog. A save
+goes through the same compare-and-rename write as an approved file proposal,
+so a file changed since it was loaded is reported as `projectGuideConflict`
+and not overwritten; an invalid glossary entry is `projectGuideInvalid`.
+
 Commands that require an active project report `noProjectOpen` before
 validating project-scoped payload such as translation-unit IDs.
 

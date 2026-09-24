@@ -15,6 +15,7 @@ import { ErrorBanner } from "./ErrorBanner";
 type AngelicaPanelProps = {
   editorContext: EditorContextDto | null;
   onOpenSettings?: (() => void) | undefined;
+  onOpenGuide?: ((tab: "glossary" | "guidance") => void) | undefined;
   onReveal?: ((binding: SourceBinding) => void) | undefined;
 };
 
@@ -132,7 +133,7 @@ function TranscriptEntry({ item }: { item: TranscriptItem }) {
 }
 
 /** Angelica's chat: conversations, live turns, and model and effort choice. */
-export function AngelicaPanel({ editorContext, onOpenSettings, onReveal }: AngelicaPanelProps) {
+export function AngelicaPanel({ editorContext, onOpenSettings, onOpenGuide, onReveal }: AngelicaPanelProps) {
   const { t } = useI18n();
   const [settings, setSettings] = useState<AiSettingsDto | null>(null);
   const [conversations, setConversations] = useState<ConversationSummaryDto[]>([]);
@@ -390,6 +391,7 @@ export function AngelicaPanel({ editorContext, onOpenSettings, onReveal }: Angel
           <option value="">{t("angelica.newConversation")}</option>
           {conversations.map((entry) => <option key={entry.id} value={entry.id}>{entry.title || t("angelica.untitled")}</option>)}
         </select>
+        {onOpenGuide ? <button className="icon-button icon-button-ghost" type="button" aria-label={t("angelica.openGuide")} title={t("angelica.openGuide")} onClick={() => onOpenGuide("glossary")}><UiIcon icon="languages" size="sm" /></button> : null}
         <button className="icon-button icon-button-ghost" type="button" disabled={running || conversation === null} aria-label={t("angelica.newConversation")} title={t("angelica.newConversation")} onClick={newConversation}><UiIcon icon="plus" size="sm" /></button>
         <button className="icon-button icon-button-ghost" type="button" disabled={running || conversation === null} aria-label={t("angelica.deleteConversation")} title={t("angelica.deleteConversation")} onClick={deleteConversation}><UiIcon icon="trash" size="sm" /></button>
       </header>

@@ -14,7 +14,7 @@ How Aeria uses it is described in
 ## Absence
 
 A missing file means the project has no glossary. Aeria creates the file only
-when the user approves a glossary change.
+when the user approves a glossary change or saves the glossary editor.
 
 ## Encoding
 
@@ -52,12 +52,16 @@ Excluded records do not make the file invalid; the remaining entries are used.
 
 ## Canonical form
 
-When Aeria writes the file after an approved change, it writes the header
+When Aeria writes the file after an approved change or from the glossary
+editor, it writes the header
 `term,translation,note,forbidden`, one record per entry in the existing order
 with new entries appended, LF line endings, quoting only where required, and
-forbidden variants joined with `; `. Aeria refuses to rewrite a file that has
-excluded records, because a rewrite would drop them; they must be fixed by
-hand first.
+forbidden variants joined with `; `. Aeria refuses to apply an Angelica
+change to a file that has excluded records, because a rewrite would drop
+them. The glossary editor shows excluded records and drops them only after
+the user confirms; it also replaces a file that cannot be read at all only
+after confirmation. The editor never writes an entry that would be
+excluded.
 
 Example:
 

@@ -1,6 +1,8 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
   AgentMode,
+  GlossaryEntryInput,
+  ProjectGuideDto,
   JobAction,
   JobEvent,
   JobSummary,
@@ -372,4 +374,16 @@ export function angelicaJobControl(jobId: string, action: JobAction): Promise<Jo
 
 export function angelicaJobRetry(jobId: string, statuses: JobUnitStatus[]): Promise<JobSummary> {
   return call<JobSummary>("angelica_job_retry", { jobId, statuses });
+}
+
+export function projectGuide(): Promise<ProjectGuideDto> {
+  return call<ProjectGuideDto>("project_guide");
+}
+
+export function saveProjectGuidance(expected: string | null, text: string): Promise<ProjectGuideDto> {
+  return call<ProjectGuideDto>("save_project_guidance", { expected, text });
+}
+
+export function saveProjectGlossary(expected: string | null, entries: GlossaryEntryInput[]): Promise<ProjectGuideDto> {
+  return call<ProjectGuideDto>("save_project_glossary", { expected, entries });
 }

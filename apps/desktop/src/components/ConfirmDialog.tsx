@@ -6,9 +6,12 @@ type ConfirmDialogProps = {
   message: string;
   onKeepEditing: () => void;
   onDiscard: () => void;
+  /** Labels for other confirmations than discarding edits. */
+  confirmLabel?: string;
+  cancelLabel?: string;
 };
 
-export function ConfirmDialog({ open, message, onKeepEditing, onDiscard }: ConfirmDialogProps) {
+export function ConfirmDialog({ open, message, onKeepEditing, onDiscard, confirmLabel, cancelLabel }: ConfirmDialogProps) {
   const { t } = useI18n();
   return (
     <AlertDialog.Root open={open} onOpenChange={(next) => { if (!next) onKeepEditing(); }}>
@@ -18,8 +21,8 @@ export function ConfirmDialog({ open, message, onKeepEditing, onDiscard }: Confi
           <AlertDialog.Title className="dialog-title">{t("confirm.title")}</AlertDialog.Title>
           <AlertDialog.Description className="dialog-description">{message}</AlertDialog.Description>
           <div className="dialog-actions">
-            <AlertDialog.Cancel className="button button-secondary">{t("confirm.keepEditing")}</AlertDialog.Cancel>
-            <AlertDialog.Action className="button button-danger" onClick={onDiscard}>{t("confirm.discard")}</AlertDialog.Action>
+            <AlertDialog.Cancel className="button button-secondary">{cancelLabel ?? t("confirm.keepEditing")}</AlertDialog.Cancel>
+            <AlertDialog.Action className="button button-danger" onClick={onDiscard}>{confirmLabel ?? t("confirm.discard")}</AlertDialog.Action>
           </div>
         </AlertDialog.Content>
       </AlertDialog.Portal>
