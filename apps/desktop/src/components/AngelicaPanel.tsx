@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from "react";
 import { listen } from "@tauri-apps/api/event";
-import { aiSettings, angelicaCancel, angelicaConversation, angelicaConversations, angelicaDeleteConversation, angelicaSend, normalizeCommandError } from "../ipc";
+import { aiSettings, angelicaApplyProposal, angelicaProposals, angelicaRejectProposal, angelicaCancel, angelicaConversation, angelicaConversations, angelicaDeleteConversation, angelicaSend, normalizeCommandError } from "../ipc";
 import { ANGELICA, applyAgentEvent, contextFill, parseReply, resolveModel, toolSubject, totalTokens, transcriptFromMessages, type ReplySpan, type TranscriptItem } from "../angelica";
 import { parseSelectionKey, selectableEfforts, selectionKey } from "../aiSettings";
+import type { AgentMode, ProposalRecord, SourceBinding } from "../types";
+import { AngelicaProposals } from "./AngelicaProposals";
 import type { AgentEvent, AiModelSelection, AiSettingsDto, AiUsage, AngelicaEventDto, CommandError, ConversationDto, ConversationSummaryDto, EditorContextDto, ReasoningEffort } from "../types";
 import type { MessageKey } from "../i18n/translate";
 import { useI18n } from "../ui/i18n";
@@ -12,6 +14,19 @@ import { ErrorBanner } from "./ErrorBanner";
 type AngelicaPanelProps = {
   editorContext: EditorContextDto | null;
   onOpenSettings?: (() => void) | undefined;
+  onReveal?: ((binding: SourceBinding) => void) | undefined;
+};
+
+const modeLabels: Readonly<Record<AgentMode, MessageKey>> = {
+  chat: "angelica.mode.chat",
+  ask: "angelica.mode.ask",
+  autoDraft: "angelica.mode.autoDraft",
+};
+
+const modeHints: Readonly<Record<AgentMode, MessageKey>> = {
+  chat: "angelica.mode.chatHint",
+  ask: "angelica.mode.askHint",
+  autoDraft: "angelica.mode.autoDraftHint",
 };
 
 const toolLabels: Readonly<Record<string, MessageKey>> = {
@@ -19,6 +34,8 @@ const toolLabels: Readonly<Record<string, MessageKey>> = {
   list_sheets: "angelica.tool.listSheets",
   read_rows: "angelica.tool.readRows",
   get_unit: "angelica.tool.getUnit",
+  propose_translation: "angelica.tool.proposeTranslation",
+  validate_target: "angelica.tool.validateTarget",
   pending_changes: "angelica.tool.pendingChanges",
   unit_history: "angelica.tool.unitHistory",
   navigate_to: "angelica.tool.navigateTo",
@@ -98,7 +115,7 @@ function TranscriptEntry({ item }: { item: TranscriptItem }) {
 }
 
 /** Angelica's chat: conversations, live turns, and model and effort choice. */
-export function AngelicaPanel({ editorContext, onOpenSettings }: AngelicaPanelProps) {
+export function AngelicaPanel({ editorContext, onOpenSettings, onReveal }: AngelicaPanelProps) {
   const { t } = useI18n();
   const [settings, setSettings] = useState<AiSettingsDto | null>(null);
   const [conversations, setConversations] = useState<ConversationSummaryDto[]>([]);
@@ -111,6 +128,9 @@ export function AngelicaPanel({ editorContext, onOpenSettings }: AngelicaPanelPr
   const [draft, setDraft] = useState("");
   const [queue, setQueue] = useState<string[]>([]);
   const [attachContext, setAttachContext] = useState(true);
+  const [mode, setMode] = useState<AgentMode>("ask");
+  const [proposals, setProposals] = useState<ProposalRecord[]>([]);
+  const [settling, setSettling] = useState(false);
   const [error, setError] = useState<CommandError | null>(null);
   const [notice, setNotice] = useState<MessageKey | null>(null);
   const conversationIdRef = useRef<string | null>(null);
@@ -126,7 +146,39 @@ export function AngelicaPanel({ editorContext, onOpenSettings }: AngelicaPanelPr
     void angelicaConversations().then(setConversations).catch((reason: unknown) => setError(normalizeCommandError(reason)));
   }, []);
 
+  const loadProposals = useCallback((id: string | null) => {
+    if (!id) { setProposals([]); return; }
+    void angelicaProposals(id)
+      .then((next) => { if (conversationIdRef.current === id) setProposals(next); })
+      .catch((reason: unknown) => setError(normalizeCommandError(reason)));
+  }, []);
+
   useEffect(() => { loadSettings(); loadConversations(); }, [loadConversations, loadSettings]);
+
+  useEffect(() => {
+    const subscription = listen<{ conversationId: string }>("angelica://proposals", ({ payload }) => {
+      if (payload.conversationId === conversationIdRef.current) loadProposals(payload.conversationId);
+    });
+    return () => { void subscription.then((unlisten) => unlisten()); };
+  }, [loadProposals]);
+
+  const settle = async (ids: string[], apply: boolean) => {
+    const id = conversationIdRef.current;
+    if (!id) return;
+    setSettling(true);
+    try {
+      let next = proposals;
+      for (const proposalId of ids) {
+        next = await (apply ? angelicaApplyProposal(id, proposalId) : angelicaRejectProposal(id, proposalId));
+      }
+      if (conversationIdRef.current === id) setProposals(next);
+    } catch (reason) {
+      setError(normalizeCommandError(reason));
+      loadProposals(id);
+    } finally {
+      setSettling(false);
+    }
+  };
 
   useEffect(() => {
     if (settings) setModel((current) => resolveModel(settings.providers, [current, conversation?.model, settings.agentModel]));
@@ -142,7 +194,8 @@ export function AngelicaPanel({ editorContext, onOpenSettings }: AngelicaPanelPr
     setNotice(null);
     setModel(null);
     stickToBottom.current = true;
-  }, []);
+    loadProposals(next?.id ?? null);
+  }, [loadProposals]);
 
   const reloadConversation = useCallback(async (id: string) => {
     try {
@@ -219,7 +272,7 @@ export function AngelicaPanel({ editorContext, onOpenSettings }: AngelicaPanelPr
     awaitingIdRef.current = isNew;
     setItems((current) => [...current, { kind: "user", key: `pending${current.length}`, text }]);
     try {
-      const next = await angelicaSend(conversationIdRef.current, text, model, context);
+      const next = await angelicaSend(conversationIdRef.current, text, model, context, mode);
       conversationIdRef.current = next.id;
       setConversation(next);
       const buffered = bufferedRef.current.get(next.id) ?? [];
@@ -235,7 +288,7 @@ export function AngelicaPanel({ editorContext, onOpenSettings }: AngelicaPanelPr
       setDraft((current) => current || text);
       setError(normalizeCommandError(reason));
     }
-  }, [attachContext, editorContext, handleEvent, loadConversations, model]);
+  }, [attachContext, editorContext, handleEvent, loadConversations, mode, model]);
 
   // Messages written while Angelica answers are sent after the turn ends.
   useEffect(() => {
@@ -331,11 +384,15 @@ export function AngelicaPanel({ editorContext, onOpenSettings }: AngelicaPanelPr
         {notice ? <p className="field-hint">{t(notice)}</p> : null}
       </div>
 
+      <AngelicaProposals proposals={proposals} busy={settling} onApply={(ids) => void settle(ids, true)} onReject={(ids) => void settle(ids, false)} onReveal={onReveal} />
+
       {error ? <div className="angelica-error"><ErrorBanner title={t("angelica.error")} error={error} onDismiss={() => setError(null)} /></div> : null}
 
       <div className="angelica-composer">
         <div className="angelica-chips">
-          <span className="angelica-chip angelica-mode" title={t("angelica.chatModeHint")}><UiIcon icon="eye" size="xs" />{t("angelica.chatMode")}</span>
+          <select className="input angelica-mode-select" value={mode} aria-label={t("angelica.mode.label")} title={t(modeHints[mode])} onChange={(event) => setMode(event.target.value as AgentMode)}>
+            {(Object.keys(modeLabels) as AgentMode[]).map((value) => <option key={value} value={value}>{t(modeLabels[value])}</option>)}
+          </select>
           {selection ? (
             <button type="button" className={attachContext ? "angelica-chip" : "angelica-chip off"} aria-pressed={attachContext} title={t(attachContext ? "angelica.contextOn" : "angelica.contextOff")} onClick={() => setAttachContext((value) => !value)}>
               <UiIcon icon={attachContext ? "locateFixed" : "eyeOff"} size="xs" />

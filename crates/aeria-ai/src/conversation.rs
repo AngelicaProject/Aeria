@@ -12,6 +12,7 @@ use thiserror::Error;
 
 use crate::chat::{ChatMessage, Usage};
 use crate::settings::ModelSelection;
+use crate::tools::{UnitLocation, UnitState};
 
 pub const FORMAT_VERSION: u32 = 1;
 /// Largest conversation file accepted.
@@ -71,6 +72,37 @@ impl Conversation {
         self.updated_at_unix_ms = now_unix_ms;
     }
 }
+
+/// Where a proposed translation stands.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ProposalStatus {
+    Pending,
+    Applied,
+    Rejected,
+    /// The string changed after the proposal was made.
+    Conflict,
+    Failed,
+}
+
+/// A translation Angelica proposed in a conversation.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProposalRecord {
+    pub id: String,
+    pub location: UnitLocation,
+    pub source: String,
+    /// The rebuilt target macro string.
+    pub target: String,
+    /// The state the translation was produced against.
+    pub expected: UnitState,
+    pub status: ProposalStatus,
+    pub message: Option<String>,
+    pub created_at_unix_ms: u64,
+}
+
+/// Most proposals kept per conversation; the oldest settled ones go first.
+pub const MAX_PROPOSALS: usize = 2000;
 
 /// A conversation in the history list.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -136,6 +168,9 @@ impl ConversationStore {
             .filter_map(|entry| {
                 let name = entry.file_name().into_string().ok()?;
                 let id = name.strip_suffix(".json")?;
+                if id.ends_with(".proposals") {
+                    return None;
+                }
                 let conversation = self.load(id).ok()?;
                 Some(ConversationSummary {
                     id: conversation.id,
@@ -220,18 +255,77 @@ impl ConversationStore {
             .map_err(|source| io_error("publish conversation", &path, source))
     }
 
+    fn proposals_path(&self, id: &str) -> Result<PathBuf, ConversationError> {
+        Ok(self.path(id)?.with_extension("proposals.json"))
+    }
+
+    /// Loads a conversation's proposals; none is the empty list.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an unreadable or invalid file.
+    pub fn load_proposals(&self, id: &str) -> Result<Vec<ProposalRecord>, ConversationError> {
+        let path = self.proposals_path(id)?;
+        let bytes = match fs::read(&path) {
+            Ok(bytes) => bytes,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(source) => return Err(io_error("read proposals", &path, source)),
+        };
+        serde_json::from_slice(&bytes).map_err(|error| invalid(&path, &error.to_string()))
+    }
+
+    /// Replaces a conversation's proposals, keeping at most
+    /// [`MAX_PROPOSALS`] with pending ones preferred.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the file cannot be written.
+    pub fn save_proposals(
+        &self,
+        id: &str,
+        proposals: &[ProposalRecord],
+    ) -> Result<(), ConversationError> {
+        let path = self.proposals_path(id)?;
+        let mut kept = proposals.to_vec();
+        while kept.len() > MAX_PROPOSALS {
+            let oldest_settled = kept
+                .iter()
+                .position(|proposal| proposal.status != ProposalStatus::Pending)
+                .unwrap_or(0);
+            kept.remove(oldest_settled);
+        }
+        let bytes =
+            serde_json::to_vec(&kept).map_err(|error| invalid(&path, &error.to_string()))?;
+        fs::create_dir_all(&self.directory)
+            .map_err(|source| io_error("create conversation directory", &self.directory, source))?;
+        let partial = path.with_extension("json.partial");
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(&partial)
+            .map_err(|source| io_error("create proposals temporary file", &partial, source))?;
+        file.write_all(&bytes)
+            .and_then(|()| file.sync_all())
+            .map_err(|source| io_error("write proposals temporary file", &partial, source))?;
+        drop(file);
+        fs::rename(&partial, &path).map_err(|source| io_error("publish proposals", &path, source))
+    }
+
     /// Deletes a conversation. Deleting a missing one succeeds.
     ///
     /// # Errors
     ///
     /// Returns an error when the file exists but cannot be removed.
     pub fn delete(&self, id: &str) -> Result<(), ConversationError> {
-        let path = self.path(id)?;
-        match fs::remove_file(&path) {
-            Ok(()) => Ok(()),
-            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
-            Err(source) => Err(io_error("delete conversation", &path, source)),
+        for path in [self.path(id)?, self.proposals_path(id)?] {
+            match fs::remove_file(&path) {
+                Ok(()) => {}
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                Err(source) => return Err(io_error("delete conversation", &path, source)),
+            }
         }
+        Ok(())
     }
 }
 
@@ -277,6 +371,53 @@ mod tests {
         store.delete(&newer.id).expect("delete");
         store.delete(&newer.id).expect("delete missing");
         assert_eq!(store.list().expect("list").len(), 1);
+    }
+
+    #[test]
+    fn proposals_are_stored_beside_the_conversation_and_deleted_with_it() {
+        let directory = tempfile::tempdir().expect("directory");
+        let store = ConversationStore::new(directory.path());
+        let conversation = Conversation::new(1);
+        store.save(&conversation).expect("save");
+        assert!(
+            store
+                .load_proposals(&conversation.id)
+                .expect("none")
+                .is_empty()
+        );
+        let proposal = ProposalRecord {
+            id: "p1".to_owned(),
+            location: UnitLocation {
+                sheet: "Item".to_owned(),
+                row: 1,
+                subrow: 0,
+                column: Some(0),
+            },
+            source: "Bye".to_owned(),
+            target: "Пока".to_owned(),
+            expected: UnitState {
+                target: None,
+                review_state: None,
+            },
+            status: ProposalStatus::Pending,
+            message: None,
+            created_at_unix_ms: 1,
+        };
+        store
+            .save_proposals(&conversation.id, std::slice::from_ref(&proposal))
+            .expect("save proposals");
+        assert_eq!(
+            store.load_proposals(&conversation.id).expect("load"),
+            vec![proposal]
+        );
+        assert_eq!(store.list().expect("list").len(), 1);
+        store.delete(&conversation.id).expect("delete");
+        assert!(
+            store
+                .load_proposals(&conversation.id)
+                .expect("gone")
+                .is_empty()
+        );
     }
 
     #[test]

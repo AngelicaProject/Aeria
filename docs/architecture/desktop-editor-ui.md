@@ -220,14 +220,27 @@ and a collapsible card for each tool call with its arguments, result, and
 running, done, or failed state. It follows new output while scrolled to the
 bottom.
 
-The composer shows a read-only mode chip and a chip for the selected
-occurrence, which the user can turn off so the selection is not sent. Enter
+The composer has a mode picker (Chat, Ask, Auto-draft; Ask by default) and
+a chip for the selected occurrence, which the user can turn off so the
+selection is not sent. Enter
 sends and Shift+Enter adds a line; messages written while Angelica answers are
 queued and sent after the turn. The toolbar picks the model and, when the model
 accepts efforts, the effort for the next message; the conversation's own
 choice, then the default model, is preselected. It also shows the share of the
 context window the last request used, when the window is known, the
 conversation's tokens, **Stop** while a turn runs, and **Send**.
+
+Above the composer, a collapsible list shows the conversation's pending
+proposals and those that could not be applied. Each card shows the string's
+location, which opens it in the editor, a word diff from the current
+translation to the proposal, a mark when it would replace a reviewed
+translation, and **Apply** and **Reject**; several pending proposals can be
+applied or rejected together. A written translation, from Auto-draft or an
+applied proposal, patches its cell like an ordinary save, so other unsaved
+drafts and the selection are kept.
+
+The editor's source header has **Draft with Angelica**, which fills the target
+with a validated draft for the selected string without saving it.
 
 ## Keyboard
 

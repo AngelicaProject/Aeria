@@ -103,7 +103,8 @@ Settings are stored in local application data. API keys are stored only in the
 OS secret store and are never logged, sent to the renderer, or included in
 error messages.
 
-Milestones 1 and 2 are implemented; their current behavior is described in
+Milestones 1 to 3, except the `gender` construct, are implemented; their
+current behavior is described in
 [`ai.md`](./ai.md#angelica).
 
 Milestone 1 implements context windows and efforts; tool-calling, output, and

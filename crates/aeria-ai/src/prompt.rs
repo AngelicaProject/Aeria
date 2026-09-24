@@ -2,7 +2,7 @@
 
 use std::fmt::Write as _;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::tools::{ProjectFacts, UnitLocation};
 
@@ -36,11 +36,51 @@ game client understands can be used.
 forms that depend on the last digits cannot be expressed. Prefer number-neutral phrasing \
 such as `Получено: <item> ×5`.
 - Translations must read naturally in the target language and stay consistent with the \
-project's existing translations and terminology.
+project's existing translations and terminology.";
 
+const CHAT_MODE: &str = "\
 Current mode: Chat. You can read the project but cannot change it. When the user asks \
 for translations, write them in your reply as proposals; the user applies them in the \
 editor. Never claim that you saved, changed, reviewed, committed, or exported anything.";
+
+const WRITING: &str = "\
+Writing translations:
+- Tools return a string's source and, when it contains macros, its `tagged` form with a \
+`tags` legend. Write every translation in tagged form: plain prose with each tag copied \
+exactly, `<x id=\"N\"/>` or `<g id=\"N\"><b>…</b></g>`, and &lt; &gt; &amp; for \
+literal characters. Never write raw macro syntax.
+- Keep every tag. Tags may move within their level to fit the target language's word \
+order, but formatting tags keep their order, tags inside a <b> branch stay in that \
+branch, and only tags marked \"may repeat\" may be used more than once.
+- Use validate_target when unsure. propose_translation checks every translation and \
+returns what to fix for any it rejects; correct and propose those again.
+- Propose at most 20 strings per call and work through larger requests page by page. \
+For a whole sheet or project, tell the user that translation jobs are planned and \
+confirm before proposing more than a few pages.
+- Your translations are drafts. You cannot mark anything reviewed, commit, or export, \
+and must never claim to.";
+
+const ASK_MODE: &str = "\
+Current mode: Ask. propose_translation shows each valid translation to the user, who \
+applies or rejects it; nothing is written until then. Tell the user what you proposed.";
+
+const AUTO_DRAFT_MODE: &str = "\
+Current mode: Auto-draft. propose_translation writes valid translations of untranslated \
+strings immediately as drafts. Translations that would replace an existing translation \
+wait for the user's approval. Tell the user what you wrote and what awaits approval.";
+
+/// How far Angelica may change the project in a conversation.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum AgentMode {
+    /// Read only.
+    #[default]
+    Chat,
+    /// Every change waits for the user's approval.
+    Ask,
+    /// New drafts are written at once; replacements wait for approval.
+    AutoDraft,
+}
 
 /// What the user is looking at, sent by the renderer with each message.
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq)]
@@ -55,8 +95,25 @@ pub struct EditorContext {
 
 /// Builds the system message for one request.
 #[must_use]
-pub fn system_prompt(facts: Option<&ProjectFacts>, editor: &EditorContext) -> String {
+pub fn system_prompt(
+    facts: Option<&ProjectFacts>,
+    editor: &EditorContext,
+    mode: AgentMode,
+) -> String {
     let mut prompt = String::from(INSTRUCTIONS);
+    prompt.push_str("\n\n");
+    match mode {
+        AgentMode::Chat => prompt.push_str(CHAT_MODE),
+        AgentMode::Ask | AgentMode::AutoDraft => {
+            prompt.push_str(WRITING);
+            prompt.push_str("\n\n");
+            prompt.push_str(if mode == AgentMode::Ask {
+                ASK_MODE
+            } else {
+                AUTO_DRAFT_MODE
+            });
+        }
+    }
     prompt.push_str("\n\nProject:\n");
     match facts {
         Some(facts) => {
@@ -130,12 +187,28 @@ mod tests {
 
     #[test]
     fn prompt_names_angelica_and_states_chat_mode_limits() {
-        let prompt = system_prompt(Some(&facts(Some("ru"))), &EditorContext::default());
+        let prompt = system_prompt(
+            Some(&facts(Some("ru"))),
+            &EditorContext::default(),
+            AgentMode::Chat,
+        );
         assert!(prompt.starts_with("You are Angelica"));
         assert!(prompt.contains("Current mode: Chat"));
         assert!(prompt.contains("target language: ru"));
         assert!(prompt.contains("1 translations are detached"));
         assert!(prompt.contains("no string is selected"));
+    }
+
+    #[test]
+    fn write_modes_explain_tags_and_approval() {
+        let editor = EditorContext::default();
+        let ask = system_prompt(None, &editor, AgentMode::Ask);
+        assert!(ask.contains("Current mode: Ask"));
+        assert!(ask.contains("tagged form"));
+        assert!(!ask.contains("Current mode: Chat"));
+        let auto = system_prompt(None, &editor, AgentMode::AutoDraft);
+        assert!(auto.contains("Current mode: Auto-draft"));
+        assert!(auto.contains("wait for the user's approval"));
     }
 
     #[test]
@@ -150,7 +223,7 @@ mod tests {
             }),
             unsaved_draft: true,
         };
-        let prompt = system_prompt(Some(&facts(None)), &editor);
+        let prompt = system_prompt(Some(&facts(None)), &editor, AgentMode::Chat);
         assert!(prompt.contains("selected Item:5:0:1"));
         assert!(prompt.contains("unsaved edits"));
         assert!(prompt.contains("not set yet"));

@@ -78,6 +78,8 @@ type TranslationEditorProps = {
   /** Returns true once when the target should take focus after navigation. */
   takeFocusRequest: () => boolean;
   checkpoint: CheckpointBaseline | null;
+  /** Drafts a translation with Angelica; resolves to `null` when it failed. */
+  onDraftWithAngelica?: ((cell: TranslationCellDto) => Promise<string | null>) | undefined;
 };
 
 const reviewOptions: readonly ReviewState[] = ["draft", "needsReview", "reviewed"];
@@ -131,6 +133,7 @@ const TranslationEditorImpl = forwardRef<TranslationEditorHandle, TranslationEdi
   onNavigate,
   takeFocusRequest,
   checkpoint,
+  onDraftWithAngelica,
 }, ref) {
   const { t } = useI18n();
   const [showDiff, setShowDiff] = useState(true);
@@ -214,6 +217,19 @@ const TranslationEditorImpl = forwardRef<TranslationEditorHandle, TranslationEdi
     if (selectedCell && !cellBusy) updateDraft(selectedCell, "target", selectedCell.sourceMacro);
   }, [cellBusy, selectedCell, updateDraft]);
 
+  const [drafting, setDrafting] = useState(false);
+  const draftWithAngelica = useCallback(async () => {
+    if (!selectedCell || cellBusy || !onDraftWithAngelica) return;
+    const cell = selectedCell;
+    setDrafting(true);
+    try {
+      const target = await onDraftWithAngelica(cell);
+      if (target !== null) updateDraft(cell, "target", target);
+    } finally {
+      setDrafting(false);
+    }
+  }, [cellBusy, onDraftWithAngelica, selectedCell, updateDraft]);
+
   useImperativeHandle(ref, () => ({ saveTarget, revert, copySource }), [copySource, revert, saveTarget]);
 
   useEffect(() => {
@@ -291,6 +307,7 @@ const TranslationEditorImpl = forwardRef<TranslationEditorHandle, TranslationEdi
             <span className="chip">{sourceLanguage.toUpperCase()}</span>
             {selectedCell.formattingOnly ? <span className="chip" title={t("list.formattingHint")}>{t("list.kind.formatting")}</span> : null}
             <span className="spacer" />
+            {onDraftWithAngelica ? <IconButton icon="sparkles" label={drafting ? t("editor.drafting") : t("editor.draftWithAngelica")} disabled={cellBusy || drafting} onClick={() => void draftWithAngelica()} /> : null}
             <IconButton icon="copyPlus" label={t("editor.copySource")} disabled={cellBusy} onClick={copySource} />
           </div>
           <MacroEditor className="editor-surface" value={selectedCell.sourceMacro} readOnly ariaLabel={t("editor.sourceText", { column: String(selectedCell.sourceBinding.columnIndex) })} placeholder={t("editor.emptySource")} onNavigate={onNavigate} />

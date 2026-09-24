@@ -42,7 +42,7 @@ export function WorkbenchToolDock({ activeTool, gitMode, selectedBinding, onGitM
     );
   }
   if (activeTool === "ai") {
-    return <AngelicaPanel editorContext={editorContext ?? null} onOpenSettings={onOpenSettings} />;
+    return <AngelicaPanel editorContext={editorContext ?? null} onOpenSettings={onOpenSettings} onReveal={onRevealBinding} />;
   }
 
   return (

@@ -4,6 +4,7 @@ import { Effect, getCurrentWindow } from "@tauri-apps/api/window";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { listen } from "@tauri-apps/api/event";
 import {
+  angelicaDraft,
   closeProject,
   gitPendingChanges,
   normalizeCommandError,
@@ -15,6 +16,7 @@ import {
 } from "../ipc";
 import { bindingKey, rowKey } from "../binding";
 import type {
+  TranslationAppliedDto,
   EditorContextDto,
   CommandError,
   ProjectSheetDto,
@@ -626,6 +628,14 @@ export function EditorShell({
     return () => { void subscription.then((unlisten) => unlisten()); };
   }, []);
 
+  // Translations Angelica writes patch their cell like an ordinary save.
+  const applyOverlayRef = useRef(applyOverlay);
+  applyOverlayRef.current = applyOverlay;
+  useEffect(() => {
+    const subscription = listen<TranslationAppliedDto>("angelica://translation-applied", ({ payload }) => applyOverlayRef.current(payload.sourceBinding, payload.overlay));
+    return () => { void subscription.then((unlisten) => unlisten()); };
+  }, []);
+
   const angelicaContext = useMemo<EditorContextDto>(() => ({
     sheet: selectedSheetName,
     selection: selectedBinding ? { sheet: selectedBinding.sheetName, row: selectedBinding.rowId, subrow: selectedBinding.subrowId, column: selectedBinding.columnIndex } : null,
@@ -1036,6 +1046,14 @@ export function EditorShell({
                 <ResizeHandle axis="y" label={t("workbench.resizeEditor")} onDelta={(delta) => dispatchLayout({ type: "resizeRegion", regionId: "editor", delta: -delta })} />
                 <TranslationEditor
                   ref={editorRef}
+                  onDraftWithAngelica={async (cell) => {
+                    try {
+                      return (await angelicaDraft(cell.sourceBinding)).target;
+                    } catch (reason) {
+                      showError(t("editor.draftFailed"), reason);
+                      return null;
+                    }
+                  }}
                   key={selectedRow ? rowKey(selectedRow) : "empty-editor"}
                   row={selectedRow}
                   selectedBinding={selectedBinding}

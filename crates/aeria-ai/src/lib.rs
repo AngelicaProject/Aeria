@@ -12,6 +12,7 @@ pub mod chat;
 pub mod chatgpt;
 pub mod client;
 pub mod conversation;
+pub mod draft;
 pub mod prompt;
 pub mod provider;
 pub mod responses;

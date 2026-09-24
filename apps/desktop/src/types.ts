@@ -478,3 +478,18 @@ export type AngelicaEventDto = { conversationId: string; event: AgentEvent };
 export type UnitLocationDto = { sheet: string; row: number; subrow: number; column: number | null };
 
 export type EditorContextDto = { sheet: string | null; selection: UnitLocationDto | null; unsavedDraft: boolean };
+
+export type AgentMode = "chat" | "ask" | "autoDraft";
+
+export type ProposalRecord = {
+  id: string;
+  location: UnitLocationDto;
+  source: string;
+  target: string;
+  expected: { target: string | null; reviewState: ReviewState | null };
+  status: "pending" | "applied" | "rejected" | "conflict" | "failed";
+  message: string | null;
+  createdAtUnixMs: number;
+};
+
+export type TranslationAppliedDto = { sourceBinding: SourceBinding; overlay: TranslationOverlayDto };

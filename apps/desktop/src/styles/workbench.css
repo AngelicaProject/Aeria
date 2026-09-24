@@ -497,7 +497,7 @@
 .angelica-chip code { font-family: var(--font-mono); }
 .angelica-chip.off { color: var(--fg-faint); text-decoration: line-through; }
 button.angelica-chip:hover { background: var(--hover); color: var(--fg); }
-.angelica-mode { color: var(--accent-text); }
+.angelica-mode-select { width: auto; height: 22px; padding: 0 6px; font-size: var(--text-2xs); }
 .angelica-input { min-height: 48px; max-height: 240px; resize: vertical; }
 .angelica-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .angelica-model { flex: 1 1 120px; width: auto; height: 26px; font-size: var(--text-xs); }
@@ -508,3 +508,17 @@ button.angelica-chip:hover { background: var(--hover); color: var(--fg); }
   .angelica-tool-running svg,
   .angelica-working { animation: none; }
 }
+.angelica-proposals { flex: none; max-height: 40%; overflow-y: auto; border-top: 1px solid var(--line); }
+.angelica-proposals > summary { display: flex; position: sticky; top: 0; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 10px; background: var(--panel); color: var(--fg-muted); font-size: var(--text-xs); font-weight: 600; cursor: pointer; }
+.angelica-proposals-bulk { display: flex; gap: 4px; }
+.angelica-proposals-bulk .button { height: 22px; padding: 0 8px; font-size: var(--text-2xs); }
+.angelica-proposals ul { display: grid; gap: 6px; margin: 0; padding: 0 10px 8px; list-style: none; }
+.angelica-proposal { display: grid; gap: 4px; padding: 6px 8px; border: 1px solid var(--line); border-radius: var(--radius-sm); }
+.angelica-proposal.conflict,
+.angelica-proposal.failed { border-color: color-mix(in srgb, var(--bad) 40%, transparent); }
+.angelica-proposal-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: var(--text-2xs); }
+.angelica-proposal-diff { font-size: var(--text-sm); line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
+.angelica-proposal-diff ins { border-radius: 2px; background: color-mix(in srgb, var(--ok) 22%, transparent); color: var(--fg); text-decoration: none; }
+.angelica-proposal-diff del { border-radius: 2px; background: color-mix(in srgb, var(--bad) 20%, transparent); color: var(--fg-subtle); text-decoration: line-through; }
+.angelica-proposal-actions { display: flex; justify-content: flex-end; gap: 6px; }
+.angelica-proposal-actions .button { height: 24px; padding: 0 10px; font-size: var(--text-xs); }

@@ -142,8 +142,16 @@ provider the stored secret is the refresh token described above.
 Angelica is the built-in translation agent. The complete intended design is in
 [`ai-agent.md`](./ai-agent.md); this section describes what is implemented.
 
-Angelica currently works in Chat mode only: she reads the project and answers,
-and cannot change it.
+Each message is sent in one of three modes, chosen in the panel:
+
+| Mode | Tools | Writes |
+| --- | --- | --- |
+| Chat | Read tools | None. |
+| Ask (default) | Read and write tools | Every valid translation waits as a proposal until the user applies it. |
+| Auto-draft | Read and write tools | A valid translation of an untranslated string is written at once as a draft; one that would replace a translation waits as a proposal. The string selected in the editor with unsaved edits is never written at once. |
+
+Angelica never marks anything reviewed, commits, pushes, syncs, applies a
+source update, or exports.
 
 ### Conversation loop
 
@@ -195,6 +203,44 @@ returned to the model as `{"error": …}` results instead of ending the turn.
 Each source, target, or note text is cut at 2,000 characters and each result
 at 24,000 characters, with a visible notice. Every tool call takes the project
 lock only for its own read.
+
+Cells returned by `read_rows` and `get_unit` include `tagged`, the source in
+tagged form (see [`strings.md`](./strings.md#tagged-text)), with a `tags`
+legend whenever it differs from the source; a malformed source is marked
+`untaggable`. Tagged sources are cut only above 8,000 characters.
+
+### Write tools
+
+| Tool | Result |
+| --- | --- |
+| `validate_target` | Rebuilds a tagged translation of one string without writing, and returns the target or the rule violations. |
+| `propose_translation` | Accepts 1 to 20 tagged translations. Each is rebuilt and checked; rejected ones return what to fix; valid ones are submitted and reported as `applied`, `awaitingApproval` (with a proposal ID), `conflict`, or `failed`. |
+
+A valid translation records the string's target and review state at the time
+it was produced. Every write, immediate or approved, goes through
+`ProjectSession::set_assisted_target` (see
+[`translation-mutations.md`](./translation-mutations.md#assisted-targets)),
+so the structure policy is enforced again and a string changed in the meantime
+is never overwritten: its proposal becomes a conflict. Applying a proposal is
+the user's explicit approval, including for a reviewed string.
+
+### Proposals
+
+Proposals are stored beside their conversation in
+`<id>.proposals.json`, with the location, source, rebuilt target, expected
+state, status (`pending`, `applied`, `rejected`, `conflict`, or `failed`),
+an optional message, and the creation time. At most 2,000 are kept, dropping
+the oldest settled ones first. Deleting a conversation deletes its proposals.
+
+### Draft with Angelica
+
+The editor's **Draft with Angelica** uses Angelica's default model for one
+string without tools. The request carries the source in tagged form with its
+legend, the row's context cells, the current translation and note, and the
+project languages. The reply is read between `<translation>` markers,
+rebuilt, and checked; a refused reply is sent back with the violations, for
+at most three requests in total. The result becomes an unsaved draft in the
+editor, which the user saves explicitly.
 
 ### Conversations
 

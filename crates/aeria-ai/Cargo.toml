@@ -8,6 +8,7 @@ repository.workspace = true
 description = "Provider-neutral AI translation orchestration and response validation."
 
 [dependencies]
+aeria-se = { path = "../aeria-se" }
 base64 = "0.23.1"
 fs2 = "0.4.3"
 keyring = "4.2.0"

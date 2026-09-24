@@ -24,6 +24,8 @@ pub struct DesktopState {
     /// serializes token refreshes.
     chatgpt_tokens: tauri::async_runtime::Mutex<Vec<(String, AccessToken)>>,
     chatgpt_login: Mutex<Option<(String, tauri::async_runtime::JoinHandle<()>)>>,
+    /// Serializes read-modify-write of conversation proposal files.
+    proposals: Mutex<()>,
 }
 
 /// Committed unit attribution for one repository commit. It is derived from
@@ -60,6 +62,7 @@ impl DesktopState {
             angelica_turns: Mutex::new(Vec::new()),
             chatgpt_tokens: tauri::async_runtime::Mutex::const_new(Vec::new()),
             chatgpt_login: Mutex::new(None),
+            proposals: Mutex::new(()),
         }
     }
 
@@ -191,6 +194,12 @@ impl DesktopState {
         self.project
             .lock()
             .map_err(|_| CommandError::internal_state("desktop project state lock is poisoned"))
+    }
+
+    pub(crate) fn lock_proposals(&self) -> Result<MutexGuard<'_, ()>, CommandError> {
+        self.proposals
+            .lock()
+            .map_err(|_| CommandError::internal_state("Angelica proposal lock is poisoned"))
     }
 
     pub(crate) fn lock_registry(&self) -> Result<MutexGuard<'_, ()>, CommandError> {

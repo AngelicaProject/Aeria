@@ -12,6 +12,11 @@ use crate::chat::ToolDefinition;
 
 /// Longest source, target, or note text returned for one cell.
 pub const MAX_CELL_TEXT_CHARS: usize = 2000;
+/// Longest tagged source returned for one cell. Tagged text is never cut
+/// below this, since a partial tagged text cannot be translated.
+pub const MAX_TAGGED_CHARS: usize = 8000;
+/// Most translations one `propose_translation` call accepts.
+pub const MAX_PROPOSALS_PER_CALL: usize = 20;
 /// Longest serialized tool result.
 pub const MAX_RESULT_CHARS: usize = 24_000;
 /// Most source row groups one `read_rows` call scans.
@@ -80,6 +85,16 @@ pub struct CellSnapshot {
     pub note: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub unit_id: Option<String>,
+    /// The source in tagged form, when it differs from `source`. Filled in
+    /// by the tools, not by the reader.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tagged: Option<String>,
+    /// Legend of the tags in `tagged`.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<String>,
+    /// The source is malformed and cannot be translated with assistance.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub untaggable: bool,
 }
 
 /// One source row with its translatable cells and read-only context.
@@ -163,6 +178,106 @@ pub trait ProjectReader: Send + Sync {
     /// # Errors
     /// Returns an error when the editor cannot be reached.
     fn navigate(&self, location: &UnitLocation) -> Result<(), ToolError>;
+}
+
+/// The current state of one string, as a translation's expectation.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UnitState {
+    pub target: Option<String>,
+    pub review_state: Option<ReviewLabel>,
+}
+
+/// A translatable string: its verified source and current state.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TranslatableUnit {
+    pub source: String,
+    pub state: UnitState,
+}
+
+/// A validated translation, ready to apply or to show for approval.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Proposal {
+    pub location: UnitLocation,
+    pub source: String,
+    /// The translation as the model wrote it.
+    pub tagged: String,
+    /// The rebuilt target macro string.
+    pub target: String,
+    /// The state the translation was produced against.
+    pub expected: UnitState,
+}
+
+/// What happened to a submitted proposal.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ProposalOutcome {
+    /// Written as a draft.
+    Applied,
+    /// Waiting for the user's approval.
+    Pending {
+        proposal_id: String,
+    },
+    /// The string changed; nothing was written.
+    Conflict {
+        message: String,
+    },
+    Failed {
+        message: String,
+    },
+}
+
+/// Write access for Angelica, implemented by the desktop. Whether a
+/// proposal is applied at once or waits for approval is the desktop's
+/// decision, following the conversation's mode.
+pub trait ProjectWriter: Send + Sync {
+    /// Reads the verified source and current state of one string.
+    ///
+    /// # Errors
+    /// Returns an error for a location that is not a translatable string.
+    fn translatable_unit(&self, location: &UnitLocation) -> Result<TranslatableUnit, ToolError>;
+
+    /// Applies or records validated proposals, one outcome per proposal.
+    ///
+    /// # Errors
+    /// Returns an error when nothing could be submitted.
+    fn submit(&self, proposals: Vec<Proposal>) -> Result<Vec<ProposalOutcome>, ToolError>;
+}
+
+/// Definitions of the tools that propose changes, offered in Ask and
+/// Auto-draft modes.
+#[must_use]
+pub fn write_tool_definitions() -> Vec<ToolDefinition> {
+    let translation = json!({
+        "type": "object",
+        "properties": {
+            "sheet": { "type": "string" },
+            "row": { "type": "integer", "minimum": 0 },
+            "subrow": { "type": "integer", "minimum": 0 },
+            "column": { "type": "integer", "minimum": 0 },
+            "target": { "type": "string", "description": "The translation in tagged form: every tag of the source's tagged text, &lt; &gt; &amp; for literal characters." },
+        },
+        "required": ["sheet", "row", "subrow", "column", "target"],
+        "additionalProperties": false,
+    });
+    vec![
+        ToolDefinition {
+            name: "validate_target",
+            description: "Checks a tagged translation of one string against its source without writing anything, and returns the rebuilt macro string or what to fix.",
+            parameters: translation.clone(),
+        },
+        ToolDefinition {
+            name: "propose_translation",
+            description: "Proposes translations for up to 20 strings. Each is validated; valid ones are written as drafts or shown to the user for approval, depending on the mode. Returns one result per translation.",
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "translations": { "type": "array", "minItems": 1, "maxItems": MAX_PROPOSALS_PER_CALL, "items": translation },
+                },
+                "required": ["translations"],
+                "additionalProperties": false,
+            }),
+        },
+    ]
 }
 
 /// Definitions of the read-only tools offered in Chat mode.
@@ -324,12 +439,41 @@ pub struct ToolOutput {
 /// Executes the read-only tools against a [`ProjectReader`].
 pub struct ReadTools<'a> {
     reader: &'a dyn ProjectReader,
+    writer: Option<&'a dyn ProjectWriter>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TranslationArgs {
+    sheet: String,
+    row: u32,
+    subrow: u16,
+    column: u32,
+    target: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ProposeArgs {
+    translations: Vec<TranslationArgs>,
 }
 
 impl<'a> ReadTools<'a> {
     #[must_use]
     pub fn new(reader: &'a dyn ProjectReader) -> Self {
-        Self { reader }
+        Self {
+            reader,
+            writer: None,
+        }
+    }
+
+    /// Adds the tools that propose changes.
+    #[must_use]
+    pub fn with_writer(reader: &'a dyn ProjectReader, writer: &'a dyn ProjectWriter) -> Self {
+        Self {
+            reader,
+            writer: Some(writer),
+        }
     }
 
     /// Runs one tool call. Unknown tools, invalid arguments, and reader
@@ -384,6 +528,18 @@ impl<'a> ReadTools<'a> {
                 };
                 self.reader.navigate(&location)?;
                 Ok(json!({ "opened": location }))
+            }
+            "validate_target" | "propose_translation" => {
+                let Some(writer) = self.writer else {
+                    return Err(ToolError::new(
+                        "changing the project is not available in Chat mode",
+                    ));
+                };
+                if name == "validate_target" {
+                    Ok(Self::validate_target(writer, parse(arguments)?))
+                } else {
+                    Self::propose(writer, parse::<ProposeArgs>(arguments)?.translations)
+                }
             }
             other => Err(ToolError::new(format!("unknown tool {other:?}"))),
         }
@@ -457,6 +613,105 @@ impl<'a> ReadTools<'a> {
     }
 }
 
+impl ReadTools<'_> {
+    fn prepare(
+        writer: &dyn ProjectWriter,
+        args: TranslationArgs,
+    ) -> Result<Proposal, (UnitLocation, Vec<String>)> {
+        let location = UnitLocation {
+            sheet: args.sheet,
+            row: args.row,
+            subrow: args.subrow,
+            column: Some(args.column),
+        };
+        let unit = match writer.translatable_unit(&location) {
+            Ok(unit) => unit,
+            Err(error) => return Err((location, vec![error.0])),
+        };
+        match aeria_se::rebuild(&unit.source, &args.target) {
+            Ok(target) => Ok(Proposal {
+                location,
+                source: unit.source,
+                tagged: args.target,
+                target,
+                expected: unit.state,
+            }),
+            Err(errors) => Err((
+                location,
+                errors.into_iter().map(|error| error.message).collect(),
+            )),
+        }
+    }
+
+    fn validate_target(writer: &dyn ProjectWriter, args: TranslationArgs) -> Value {
+        match Self::prepare(writer, args) {
+            Ok(proposal) => json!({ "valid": true, "target": proposal.target }),
+            Err((_, errors)) => json!({ "valid": false, "errors": errors }),
+        }
+    }
+
+    fn propose(
+        writer: &dyn ProjectWriter,
+        translations: Vec<TranslationArgs>,
+    ) -> Result<Value, ToolError> {
+        if translations.is_empty() || translations.len() > MAX_PROPOSALS_PER_CALL {
+            return Err(ToolError::new(format!(
+                "propose between 1 and {MAX_PROPOSALS_PER_CALL} translations per call"
+            )));
+        }
+        let mut results: Vec<Value> = Vec::with_capacity(translations.len());
+        let mut valid = Vec::new();
+        let mut slots = Vec::new();
+        for args in translations {
+            match Self::prepare(writer, args) {
+                Ok(proposal) => {
+                    slots.push(results.len());
+                    results.push(json!({ "location": proposal.location }));
+                    valid.push(proposal);
+                }
+                Err((location, errors)) => {
+                    results.push(
+                        json!({ "location": location, "status": "rejected", "errors": errors }),
+                    );
+                }
+            }
+        }
+        if !valid.is_empty() {
+            let outcomes = writer.submit(valid)?;
+            for (slot, outcome) in slots.into_iter().zip(outcomes) {
+                let entry = &mut results[slot];
+                match outcome {
+                    ProposalOutcome::Applied => entry["status"] = json!("applied"),
+                    ProposalOutcome::Pending { proposal_id } => {
+                        entry["status"] = json!("awaitingApproval");
+                        entry["proposalId"] = json!(proposal_id);
+                    }
+                    ProposalOutcome::Conflict { message } => {
+                        entry["status"] = json!("conflict");
+                        entry["errors"] = json!([message]);
+                    }
+                    ProposalOutcome::Failed { message } => {
+                        entry["status"] = json!("failed");
+                        entry["errors"] = json!([message]);
+                    }
+                }
+            }
+        }
+        let count = |status: &str| {
+            results
+                .iter()
+                .filter(|entry| entry["status"] == status)
+                .count()
+        };
+        Ok(json!({
+            "applied": count("applied"),
+            "awaitingApproval": count("awaitingApproval"),
+            "rejected": count("rejected"),
+            "results": results,
+        }))
+    }
+}
+
 fn matches_filter(cell: &CellSnapshot, filter: StateFilter) -> bool {
     match filter {
         StateFilter::All => true,
@@ -470,6 +725,15 @@ fn matches_filter(cell: &CellSnapshot, filter: StateFilter) -> bool {
 
 fn bound_row(mut row: RowSnapshot) -> RowSnapshot {
     for cell in &mut row.cells {
+        match aeria_se::project(&cell.source) {
+            Ok(tagged) => {
+                if tagged.text != cell.source && tagged.text.chars().count() <= MAX_TAGGED_CHARS {
+                    cell.tagged = Some(tagged.text);
+                    cell.tags = tagged.tags.iter().map(aeria_se::Tag::legend).collect();
+                }
+            }
+            Err(_) => cell.untaggable = true,
+        }
         bound_text(&mut cell.source);
         if let Some(target) = &mut cell.target {
             bound_text(target);
@@ -534,6 +798,9 @@ mod tests {
             review_state: state,
             note: None,
             unit_id: target.map(|_| format!("unit-{column}")),
+            tagged: None,
+            tags: Vec::new(),
+            untaggable: false,
         }
     }
 
@@ -738,6 +1005,135 @@ mod tests {
         assert!(!error);
         assert_eq!(value["opened"]["subrow"], 0);
         assert_eq!(reader.navigated.lock().expect("lock").len(), 1);
+    }
+
+    struct FakeWriter {
+        submitted: Mutex<Vec<Proposal>>,
+    }
+
+    impl ProjectWriter for FakeWriter {
+        fn translatable_unit(
+            &self,
+            location: &UnitLocation,
+        ) -> Result<TranslatableUnit, ToolError> {
+            match location.row {
+                1 => Ok(TranslatableUnit {
+                    source: "Hi <pcname(lnum1)>!".to_owned(),
+                    state: UnitState {
+                        target: None,
+                        review_state: None,
+                    },
+                }),
+                2 => Ok(TranslatableUnit {
+                    source: "Bye".to_owned(),
+                    state: UnitState {
+                        target: Some("Пока".to_owned()),
+                        review_state: Some(ReviewLabel::Draft),
+                    },
+                }),
+                _ => Err(ToolError::new("not a translatable string")),
+            }
+        }
+
+        fn submit(&self, proposals: Vec<Proposal>) -> Result<Vec<ProposalOutcome>, ToolError> {
+            let outcomes = proposals
+                .iter()
+                .map(|proposal| {
+                    if proposal.expected.target.is_none() {
+                        ProposalOutcome::Applied
+                    } else {
+                        ProposalOutcome::Pending {
+                            proposal_id: "p-1".to_owned(),
+                        }
+                    }
+                })
+                .collect();
+            self.submitted.lock().expect("lock").extend(proposals);
+            Ok(outcomes)
+        }
+    }
+
+    #[test]
+    fn proposals_are_validated_rebuilt_and_submitted() {
+        let reader = reader();
+        let writer = FakeWriter {
+            submitted: Mutex::new(Vec::new()),
+        };
+        let tools = ReadTools::with_writer(&reader, &writer);
+        let output = tools.execute(
+            "propose_translation",
+            r#"{"translations":[
+                {"sheet":"Item","row":1,"subrow":0,"column":0,"target":"Привет, <x id=\"1\"/>!"},
+                {"sheet":"Item","row":2,"subrow":0,"column":0,"target":"До встречи"},
+                {"sheet":"Item","row":1,"subrow":0,"column":0,"target":"Привет!"},
+                {"sheet":"Item","row":9,"subrow":0,"column":0,"target":"x"}
+            ]}"#,
+        );
+        assert!(!output.is_error, "{}", output.content);
+        let value: Value = serde_json::from_str(&output.content).expect("json");
+        assert_eq!(value["applied"], 1);
+        assert_eq!(value["awaitingApproval"], 1);
+        assert_eq!(value["rejected"], 2);
+        assert_eq!(value["results"][1]["proposalId"], "p-1");
+        assert!(
+            value["results"][2]["errors"][0]
+                .as_str()
+                .expect("error")
+                .contains("tag 1")
+        );
+        let submitted = writer.submitted.lock().expect("lock");
+        assert_eq!(submitted[0].target, "Привет, <pcname(lnum1)>!");
+        assert_eq!(submitted[1].expected.target.as_deref(), Some("Пока"));
+    }
+
+    #[test]
+    fn write_tools_need_a_writer_and_validation_writes_nothing() {
+        let reader = reader();
+        let output = ReadTools::new(&reader).execute(
+            "validate_target",
+            r#"{"sheet":"Item","row":1,"subrow":0,"column":0,"target":"x"}"#,
+        );
+        assert!(output.is_error);
+        assert!(output.content.contains("Chat mode"));
+
+        let writer = FakeWriter {
+            submitted: Mutex::new(Vec::new()),
+        };
+        let output = ReadTools::with_writer(&reader, &writer).execute(
+            "validate_target",
+            r#"{"sheet":"Item","row":1,"subrow":0,"column":0,"target":"Привет, <x id=\"1\"/>"}"#,
+        );
+        let value: Value = serde_json::from_str(&output.content).expect("json");
+        assert_eq!(value["valid"], true);
+        assert_eq!(value["target"], "Привет, <pcname(lnum1)>");
+        assert!(writer.submitted.lock().expect("lock").is_empty());
+    }
+
+    #[test]
+    fn reads_include_tagged_sources_with_a_legend() {
+        let row = bound_row(RowSnapshot {
+            row: 1,
+            subrow: 0,
+            cells: vec![
+                CellSnapshot {
+                    source: "Hi <pcname(lnum1)>".to_owned(),
+                    ..cell(0, None, None)
+                },
+                CellSnapshot {
+                    source: "Plain".to_owned(),
+                    ..cell(1, None, None)
+                },
+                CellSnapshot {
+                    source: "<if(".to_owned(),
+                    ..cell(2, None, None)
+                },
+            ],
+            context: Vec::new(),
+        });
+        assert_eq!(row.cells[0].tagged.as_deref(), Some(r#"Hi <x id="1"/>"#));
+        assert!(row.cells[0].tags[0].starts_with("1: <pcname(lnum1)>"));
+        assert!(row.cells[1].tagged.is_none());
+        assert!(row.cells[2].untaggable);
     }
 
     #[test]

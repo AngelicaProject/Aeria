@@ -18,13 +18,20 @@ use aeria_ai::chat::{ChatMessage, ToolCall, Usage};
 use aeria_ai::conversation::{
     Conversation, ConversationError, ConversationStore, ConversationSummary,
 };
-use aeria_ai::prompt::{EditorContext, system_prompt};
+use aeria_ai::conversation::{ProposalRecord, ProposalStatus};
+use aeria_ai::prompt::{AgentMode, EditorContext, system_prompt};
 use aeria_ai::tools::{
-    CellSnapshot, ContextCell, ProjectFacts, ProjectReader, ReadTools, ReviewLabel, RowSnapshot,
-    RowsPage, SheetSummary, ToolError, ToolOutput, UnitLocation, read_tool_definitions,
+    CellSnapshot, ContextCell, ProjectFacts, ProjectReader, ProjectWriter, Proposal,
+    ProposalOutcome, ReadTools, ReviewLabel, RowSnapshot, RowsPage, SheetSummary, ToolError,
+    ToolOutput, TranslatableUnit, UnitLocation, UnitState, read_tool_definitions,
+    write_tool_definitions,
 };
 use aeria_core::ReviewState;
-use aeria_workspace::{ProjectSession, TranslationRowCursor, TranslationRowView};
+use aeria_core::SourceBinding;
+use aeria_workspace::{
+    AssistedExpectation, AssistedWriteError, ProjectSession, TranslationRowCursor,
+    TranslationRowView,
+};
 use serde::Serialize;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -32,7 +39,7 @@ use tauri::{Emitter, Manager};
 
 use crate::ai::{resolve_endpoint, settings_store};
 use crate::commands::{parse_translation_unit_id, run_blocking};
-use crate::dto::{ProjectSummaryDto, SourceBindingDto};
+use crate::dto::{ProjectSummaryDto, SourceBindingDto, TranslationOverlayDto};
 use crate::error::CommandError;
 use crate::git::{UnitChangeDto, UnitHistoryDto, open_repository};
 use crate::state::DesktopState;
@@ -43,6 +50,24 @@ type CommandResult<T> = Result<T, CommandError>;
 pub const EVENT: &str = "angelica://event";
 /// Renderer event asking the editor to show an occurrence.
 pub const NAVIGATE_EVENT: &str = "angelica://navigate";
+/// Renderer event carrying a translation Angelica wrote.
+pub const APPLIED_EVENT: &str = "angelica://translation-applied";
+/// Renderer event saying a conversation's proposals changed.
+pub const PROPOSALS_EVENT: &str = "angelica://proposals";
+
+/// A translation written by Angelica, for patching one editor cell.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TranslationAppliedDto {
+    pub source_binding: SourceBindingDto,
+    pub overlay: TranslationOverlayDto,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ProposalsChangedDto {
+    conversation_id: String,
+}
 
 const CONVERSATIONS_DIRECTORY: &str = "conversations";
 /// Longest accepted user message.
@@ -208,6 +233,9 @@ fn row_snapshot(row: TranslationRowView) -> RowSnapshot {
                     review_state,
                     note,
                     unit_id,
+                    tagged: None,
+                    tags: Vec::new(),
+                    untaggable: false,
                 }
             })
             .collect(),
@@ -413,9 +441,193 @@ fn navigation_target(
     })
 }
 
-/// Runs Angelica's read-only tools in blocking workers.
+fn review_state(label: ReviewLabel) -> ReviewState {
+    match label {
+        ReviewLabel::Draft => ReviewState::Draft,
+        ReviewLabel::NeedsReview => ReviewState::NeedsReview,
+        ReviewLabel::Reviewed => ReviewState::Reviewed,
+    }
+}
+
+fn expectation(state: &UnitState) -> AssistedExpectation {
+    AssistedExpectation {
+        target: state.target.clone(),
+        review_state: state.review_state.map(review_state),
+    }
+}
+
+fn binding_of(location: &UnitLocation) -> Result<SourceBinding, ToolError> {
+    let column = location
+        .column
+        .ok_or_else(|| ToolError::new("a column is required"))?;
+    Ok(SourceBinding::new(
+        location.sheet.clone(),
+        location.row,
+        location.subrow,
+        column,
+    ))
+}
+
+/// Writes one assisted target and tells the editor. Returns the overlay of
+/// the written unit.
+fn write_assisted(
+    app: &tauri::AppHandle,
+    session: &mut ProjectSession,
+    location: &UnitLocation,
+    target: &str,
+    expected: &UnitState,
+    replace_reviewed: bool,
+) -> Result<(), AssistedWriteError> {
+    let binding = binding_of(location).map_err(|error| AssistedWriteError::Structure {
+        messages: vec![error.0],
+    })?;
+    let id =
+        session.set_assisted_target(&binding, target, &expectation(expected), replace_reviewed)?;
+    if let Some(unit) = session.workspace().unit(id) {
+        let _ = app.emit(
+            APPLIED_EVENT,
+            TranslationAppliedDto {
+                source_binding: SourceBindingDto::from(&binding),
+                overlay: TranslationOverlayDto {
+                    translation_unit_id: unit.id().to_string(),
+                    target_macro: unit.target_macro().to_owned(),
+                    review_state: unit.review_state().into(),
+                    translator_note: unit.translator_note().map(str::to_owned),
+                },
+            },
+        );
+    }
+    Ok(())
+}
+
+/// Applies or records Angelica's proposals according to the conversation's
+/// mode.
+struct DesktopWriter {
+    app: tauri::AppHandle,
+    store: ConversationStore,
+    conversation_id: String,
+    mode: AgentMode,
+    editor: EditorContext,
+}
+
+impl DesktopWriter {
+    /// Auto-draft writes only new translations, and never one the user is
+    /// editing right now.
+    fn writes_at_once(&self, proposal: &Proposal) -> bool {
+        self.mode == AgentMode::AutoDraft
+            && proposal.expected.target.is_none()
+            && !(self.editor.unsaved_draft
+                && self.editor.selection.as_ref().is_some_and(|selection| {
+                    selection.sheet == proposal.location.sheet
+                        && selection.row == proposal.location.row
+                        && selection.subrow == proposal.location.subrow
+                        && selection.column == proposal.location.column
+                }))
+    }
+}
+
+impl ProjectWriter for DesktopWriter {
+    fn translatable_unit(&self, location: &UnitLocation) -> Result<TranslatableUnit, ToolError> {
+        let binding = binding_of(location)?;
+        DesktopReader {
+            app: self.app.clone(),
+        }
+        .with_session(|session| {
+            let source = session
+                .source_macro(&binding)
+                .map_err(|error| ToolError::new(error.to_string()))?;
+            let state = session.assisted_state(&binding);
+            Ok(TranslatableUnit {
+                source,
+                state: UnitState {
+                    target: state.target,
+                    review_state: state.review_state.map(review_label),
+                },
+            })
+        })
+    }
+
+    fn submit(&self, proposals: Vec<Proposal>) -> Result<Vec<ProposalOutcome>, ToolError> {
+        let state = self.app.state::<DesktopState>();
+        let mut outcomes = Vec::with_capacity(proposals.len());
+        let mut pending = Vec::new();
+        {
+            let mut project = state
+                .lock_project()
+                .map_err(|error| ToolError::new(error.message))?;
+            let session = project
+                .as_mut()
+                .ok_or_else(|| ToolError::new("no project is open"))?;
+            for proposal in proposals {
+                if !self.writes_at_once(&proposal) {
+                    let id = aeria_ai::ProviderConfig::new_id();
+                    outcomes.push(ProposalOutcome::Pending {
+                        proposal_id: id.clone(),
+                    });
+                    pending.push(ProposalRecord {
+                        id,
+                        location: proposal.location,
+                        source: proposal.source,
+                        target: proposal.target,
+                        expected: proposal.expected,
+                        status: ProposalStatus::Pending,
+                        message: None,
+                        created_at_unix_ms: now_unix_ms(),
+                    });
+                    continue;
+                }
+                outcomes.push(
+                    match write_assisted(
+                        &self.app,
+                        session,
+                        &proposal.location,
+                        &proposal.target,
+                        &proposal.expected,
+                        false,
+                    ) {
+                        Ok(()) => ProposalOutcome::Applied,
+                        Err(error @ AssistedWriteError::Conflict { .. }) => {
+                            ProposalOutcome::Conflict {
+                                message: error.to_string(),
+                            }
+                        }
+                        Err(error) => ProposalOutcome::Failed {
+                            message: error.to_string(),
+                        },
+                    },
+                );
+            }
+        }
+        if !pending.is_empty() {
+            let _guard = state
+                .lock_proposals()
+                .map_err(|error| ToolError::new(error.message))?;
+            let mut records = self
+                .store
+                .load_proposals(&self.conversation_id)
+                .map_err(|error| ToolError::new(error.to_string()))?;
+            records.extend(pending);
+            self.store
+                .save_proposals(&self.conversation_id, &records)
+                .map_err(|error| ToolError::new(error.to_string()))?;
+            let _ = self.app.emit(
+                PROPOSALS_EVENT,
+                ProposalsChangedDto {
+                    conversation_id: self.conversation_id.clone(),
+                },
+            );
+        }
+        Ok(outcomes)
+    }
+}
+
+/// Runs Angelica's tools in blocking workers. Chat mode gets no writer.
 struct DesktopTools {
     app: tauri::AppHandle,
+    store: ConversationStore,
+    conversation_id: String,
+    mode: AgentMode,
+    editor: EditorContext,
 }
 
 impl ToolExecutor for DesktopTools {
@@ -423,12 +635,22 @@ impl ToolExecutor for DesktopTools {
         &'a self,
         call: &'a ToolCall,
     ) -> Pin<Box<dyn Future<Output = ToolOutput> + Send + 'a>> {
-        let app = self.app.clone();
+        let reader = DesktopReader {
+            app: self.app.clone(),
+        };
+        let writer = (self.mode != AgentMode::Chat).then(|| DesktopWriter {
+            app: self.app.clone(),
+            store: self.store.clone(),
+            conversation_id: self.conversation_id.clone(),
+            mode: self.mode,
+            editor: self.editor.clone(),
+        });
         let name = call.name.clone();
         let arguments = call.arguments.clone();
         Box::pin(async move {
-            tauri::async_runtime::spawn_blocking(move || {
-                ReadTools::new(&DesktopReader { app }).execute(&name, &arguments)
+            tauri::async_runtime::spawn_blocking(move || match &writer {
+                Some(writer) => ReadTools::with_writer(&reader, writer).execute(&name, &arguments),
+                None => ReadTools::new(&reader).execute(&name, &arguments),
             })
             .await
             .unwrap_or_else(|error| ToolOutput {
@@ -550,6 +772,8 @@ struct PreparedTurn {
     model: aeria_ai::ModelConfig,
     effort: Option<aeria_ai::ReasoningEffort>,
     system: String,
+    mode: AgentMode,
+    editor: EditorContext,
 }
 
 fn prepare_turn(
@@ -558,6 +782,7 @@ fn prepare_turn(
     text: &str,
     selection: ModelSelection,
     editor: &EditorContext,
+    mode: AgentMode,
     endpoint: aeria_ai::ProviderEndpoint,
 ) -> CommandResult<PreparedTurn> {
     if let Some(id) = conversation_id
@@ -572,7 +797,7 @@ fn prepare_turn(
         .map_err(|message| CommandError::new("aiInvalidSettings", message))?
         .clone();
     let facts = DesktopReader { app: app.clone() }.facts().ok();
-    let system = system_prompt(facts.as_ref(), editor);
+    let system = system_prompt(facts.as_ref(), editor, mode);
 
     let store = conversation_store(app)?;
     let now = now_unix_ms();
@@ -591,6 +816,8 @@ fn prepare_turn(
         model,
         effort,
         system,
+        mode,
+        editor: editor.clone(),
     })
 }
 
@@ -620,9 +847,14 @@ async fn run_prepared_turn(
         model,
         effort,
         system,
+        mode,
+        editor,
     } = prepared;
     let id = conversation.id.clone();
-    let tools = read_tool_definitions();
+    let mut tools = read_tool_definitions();
+    if mode != AgentMode::Chat {
+        tools.extend(write_tool_definitions());
+    }
     let config = TurnConfig {
         model: &model.id,
         effort,
@@ -631,7 +863,13 @@ async fn run_prepared_turn(
         context_tokens: model.context_window,
         session: &id,
     };
-    let executor = DesktopTools { app: app.clone() };
+    let executor = DesktopTools {
+        app: app.clone(),
+        store: store.clone(),
+        conversation_id: id.clone(),
+        mode,
+        editor,
+    };
     let mut messages = conversation.messages.clone();
     let mut on_event = |event: AgentEvent| emit(&app, &id, AngelicaEventKind::Agent(event));
     let mut persisted = conversation.clone();
@@ -691,6 +929,7 @@ pub async fn angelica_send(
     text: String,
     model: ModelSelection,
     editor: Option<EditorContext>,
+    mode: Option<AgentMode>,
 ) -> CommandResult<ConversationDto> {
     let text = text.trim().to_owned();
     if text.is_empty() || text.chars().count() > MAX_MESSAGE_CHARS {
@@ -708,6 +947,7 @@ pub async fn angelica_send(
             &text,
             model,
             &editor.unwrap_or_default(),
+            mode.unwrap_or_default(),
             endpoint,
         )
     })
@@ -722,6 +962,229 @@ pub async fn angelica_send(
         return Err(busy());
     }
     Ok(response)
+}
+
+#[tauri::command(rename_all = "camelCase")]
+/// Lists the translations Angelica proposed in a conversation.
+///
+/// # Errors
+///
+/// Returns `noProjectOpen` or a storage error.
+pub async fn angelica_proposals(
+    app: tauri::AppHandle,
+    conversation_id: String,
+) -> CommandResult<Vec<ProposalRecord>> {
+    run_blocking(move || Ok(conversation_store(&app)?.load_proposals(&conversation_id)?)).await
+}
+
+/// Settles one pending proposal and returns the updated list.
+fn settle_proposal(
+    app: &tauri::AppHandle,
+    conversation_id: &str,
+    proposal_id: &str,
+    apply: bool,
+) -> CommandResult<Vec<ProposalRecord>> {
+    let store = conversation_store(app)?;
+    let state = app.state::<DesktopState>();
+    let _guard = state.lock_proposals()?;
+    let mut records = store.load_proposals(conversation_id)?;
+    let record = records
+        .iter_mut()
+        .find(|record| record.id == proposal_id)
+        .ok_or_else(|| {
+            CommandError::new(
+                "angelicaProposalNotFound",
+                format!("proposal {proposal_id:?} was not found"),
+            )
+        })?;
+    if record.status != ProposalStatus::Pending {
+        return Err(CommandError::new(
+            "angelicaProposalSettled",
+            "this proposal was already applied or dismissed",
+        ));
+    }
+    if apply {
+        let mut project = state.lock_project()?;
+        let session = project.as_mut().ok_or_else(CommandError::no_project)?;
+        // Applying is the user's explicit approval, including for a
+        // reviewed string.
+        match write_assisted(
+            app,
+            session,
+            &record.location,
+            &record.target,
+            &record.expected,
+            true,
+        ) {
+            Ok(()) => record.status = ProposalStatus::Applied,
+            Err(error @ AssistedWriteError::Conflict { .. }) => {
+                record.status = ProposalStatus::Conflict;
+                record.message = Some(error.to_string());
+            }
+            Err(error) => {
+                record.status = ProposalStatus::Failed;
+                record.message = Some(error.to_string());
+            }
+        }
+    } else {
+        record.status = ProposalStatus::Rejected;
+    }
+    store.save_proposals(conversation_id, &records)?;
+    Ok(records)
+}
+
+#[tauri::command(rename_all = "camelCase")]
+/// Applies a pending proposal as a draft. A string that changed since the
+/// proposal was made is not overwritten; the proposal becomes a conflict.
+///
+/// # Errors
+///
+/// Returns `angelicaProposalNotFound`, `angelicaProposalSettled`, or a
+/// storage error.
+pub async fn angelica_apply_proposal(
+    app: tauri::AppHandle,
+    conversation_id: String,
+    proposal_id: String,
+) -> CommandResult<Vec<ProposalRecord>> {
+    run_blocking(move || settle_proposal(&app, &conversation_id, &proposal_id, true)).await
+}
+
+#[tauri::command(rename_all = "camelCase")]
+/// Dismisses a pending proposal without writing anything.
+///
+/// # Errors
+///
+/// Returns `angelicaProposalNotFound`, `angelicaProposalSettled`, or a
+/// storage error.
+pub async fn angelica_reject_proposal(
+    app: tauri::AppHandle,
+    conversation_id: String,
+    proposal_id: String,
+) -> CommandResult<Vec<ProposalRecord>> {
+    run_blocking(move || settle_proposal(&app, &conversation_id, &proposal_id, false)).await
+}
+
+/// A draft for one string from "Draft with Angelica".
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AngelicaDraftDto {
+    pub target: String,
+}
+
+struct DraftInput {
+    model: aeria_ai::ModelConfig,
+    effort: Option<aeria_ai::ReasoningEffort>,
+    facts: Option<ProjectFacts>,
+    source: String,
+    context: Vec<ContextCell>,
+    current_target: Option<String>,
+    note: Option<String>,
+}
+
+fn draft_input(
+    app: &tauri::AppHandle,
+    binding: &SourceBinding,
+    selection: &ModelSelection,
+) -> CommandResult<DraftInput> {
+    let settings = settings_store(app)?.load()?;
+    let model = settings
+        .selected_model(selection)
+        .map_err(|message| CommandError::new("aiInvalidSettings", message))?
+        .clone();
+    let state = app.state::<DesktopState>();
+    let project = state.lock_project()?;
+    let session = project.as_ref().ok_or_else(CommandError::no_project)?;
+    let source = session.source_macro(binding).map_err(CommandError::from)?;
+    let row = session_row(
+        session,
+        binding.sheet_name(),
+        binding.row_id(),
+        binding.subrow_id(),
+    )
+    .map_err(|error| CommandError::new("translationRead", error.0))?;
+    let cell = row.as_ref().and_then(|row| {
+        row.cells
+            .iter()
+            .find(|cell| cell.column == binding.column_index())
+    });
+    Ok(DraftInput {
+        model,
+        effort: selection.effort,
+        facts: Some(session_facts(session)),
+        source,
+        context: row
+            .as_ref()
+            .map(|row| row.context.clone())
+            .unwrap_or_default(),
+        current_target: cell.and_then(|cell| cell.target.clone()),
+        note: cell.and_then(|cell| cell.note.clone()),
+    })
+}
+
+#[tauri::command(rename_all = "camelCase")]
+/// Drafts a translation of one string with Angelica's default model. The
+/// draft is returned for the editor; nothing is saved.
+///
+/// # Errors
+///
+/// Returns `aiNoAgentModel` without a default model, `angelicaUntaggable`
+/// for a malformed source, `angelicaDraftRejected` when the model kept
+/// breaking the structure, or a settings, key, or provider error.
+pub async fn angelica_draft(
+    app: tauri::AppHandle,
+    source_binding: SourceBindingDto,
+) -> CommandResult<AngelicaDraftDto> {
+    let binding = SourceBinding::from(source_binding);
+    let store = settings_store(&app)?;
+    let selection = run_blocking(move || Ok(store.load()?.agent_model))
+        .await?
+        .ok_or_else(|| {
+            CommandError::new(
+                "aiNoAgentModel",
+                "choose Angelica's default model in Settings → AI",
+            )
+        })?;
+    let endpoint = resolve_endpoint(&app, selection.provider_id.clone()).await?;
+    let input_app = app.clone();
+    let input_binding = binding.clone();
+    let input = run_blocking(move || draft_input(&input_app, &input_binding, &selection)).await?;
+    let client = app.state::<DesktopState>().ai_client()?;
+    let location = format!(
+        "{}:{}:{}:{}",
+        binding.sheet_name(),
+        binding.row_id(),
+        binding.subrow_id(),
+        binding.column_index()
+    );
+    let session = aeria_ai::ProviderConfig::new_id();
+    let draft = aeria_ai::draft::draft_translation(
+        &client,
+        &endpoint,
+        &aeria_ai::draft::DraftRequest {
+            model: &input.model.id,
+            effort: input.effort,
+            session: &session,
+            facts: input.facts.as_ref(),
+            location: &location,
+            source: &input.source,
+            context: &input.context,
+            current_target: input.current_target.as_deref(),
+            note: input.note.as_deref(),
+        },
+    )
+    .await
+    .map_err(|error| match error {
+        aeria_ai::draft::DraftError::Provider(error) => CommandError::from(error),
+        aeria_ai::draft::DraftError::Untaggable => {
+            CommandError::new("angelicaUntaggable", error.to_string())
+        }
+        aeria_ai::draft::DraftError::Rejected(_) => {
+            CommandError::new("angelicaDraftRejected", error.to_string())
+        }
+    })?;
+    Ok(AngelicaDraftDto {
+        target: draft.target,
+    })
 }
 
 #[cfg(test)]

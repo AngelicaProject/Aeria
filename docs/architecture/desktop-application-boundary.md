@@ -187,6 +187,19 @@ The `navigate_to` tool resolves its location to one translatable occurrence
 and emits `angelica://navigate` with that `SourceBinding`, which the editor
 reveals.
 
+`angelica_send` takes the conversation's mode. In Ask and Auto-draft modes
+the write tools run in the same blocking workers; immediate writes hold the
+project lock, and new proposals are appended under a separate proposal lock
+and announced with `angelica://proposals`. `angelica_proposals`,
+`angelica_apply_proposal`, and `angelica_reject_proposal` list and settle a
+conversation's proposals; applying writes through
+`ProjectSession::set_assisted_target` with the user's approval to replace a
+reviewed string. Every write emits `angelica://translation-applied` with the
+binding and its new `TranslationOverlayDto`. `angelica_draft` produces one
+draft with the default model and returns it without saving
+(`aiNoAgentModel`, `angelicaUntaggable`, and `angelicaDraftRejected` are its
+own errors).
+
 Commands that require an active project report `noProjectOpen` before
 validating project-scoped payload such as translation-unit IDs.
 

@@ -1,5 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
+  AgentMode,
+  ProposalRecord,
   AiConnectionCheckDto,
   AiModelConfig,
   ChatGptLoginDto,
@@ -323,6 +325,22 @@ export function angelicaCancel(conversationId: string): Promise<void> {
   return call<void>("angelica_cancel", { conversationId });
 }
 
-export function angelicaSend(conversationId: string | null, text: string, model: AiModelSelection, editor: EditorContextDto | null): Promise<ConversationDto> {
-  return call<ConversationDto>("angelica_send", { conversationId, text, model, editor });
+export function angelicaSend(conversationId: string | null, text: string, model: AiModelSelection, editor: EditorContextDto | null, mode: AgentMode): Promise<ConversationDto> {
+  return call<ConversationDto>("angelica_send", { conversationId, text, model, editor, mode });
+}
+
+export function angelicaProposals(conversationId: string): Promise<ProposalRecord[]> {
+  return call<ProposalRecord[]>("angelica_proposals", { conversationId });
+}
+
+export function angelicaApplyProposal(conversationId: string, proposalId: string): Promise<ProposalRecord[]> {
+  return call<ProposalRecord[]>("angelica_apply_proposal", { conversationId, proposalId });
+}
+
+export function angelicaRejectProposal(conversationId: string, proposalId: string): Promise<ProposalRecord[]> {
+  return call<ProposalRecord[]>("angelica_reject_proposal", { conversationId, proposalId });
+}
+
+export function angelicaDraft(sourceBinding: SourceBinding): Promise<{ target: string }> {
+  return call<{ target: string }>("angelica_draft", { sourceBinding });
 }
