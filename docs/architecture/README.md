@@ -17,6 +17,7 @@ Start with [`overview.md`](./overview.md). It defines the major runtime boundari
 | Source updates after game patches | [`rebase.md`](./rebase.md), [`rebase-safety.md`](./rebase-safety.md), [`rebase-candidates.md`](./rebase-candidates.md) | `aeria-rebase`, `aeria-workspace` |
 | Git-backed collaboration | [`git.md`](./git.md) | `aeria-git` |
 | Translation assistance | [`ai.md`](./ai.md) | `aeria-ai` |
+| Angelica agent (proposal) | [`ai-agent.md`](./ai-agent.md) | `aeria-ai`, desktop AI dock |
 | Runtime translation pack export | [`export.md`](./export.md) | `aeria-export` |
 
 Architecture documents own boundaries and invariants, not low-level coding style. Implementation conventions belong under [`../development/`](../development/README.md), while serialized contracts belong under [`../formats/`](../formats/README.md).

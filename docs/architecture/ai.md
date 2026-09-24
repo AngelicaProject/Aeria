@@ -4,6 +4,9 @@ AI assists translation, but it is never a source of identity truth.
 
 Aeria remains usable without a configured AI provider.
 
+The proposed design of the Angelica agent, its tools, and batch jobs is in
+[`ai-agent.md`](./ai-agent.md).
+
 ## Provider boundary
 
 The core interface is provider-neutral. Initial transports should prioritize services the community is likely to use, especially OpenRouter and OpenAI-compatible APIs. Additional provider adapters are justified when they offer useful capabilities beyond the common protocol.
