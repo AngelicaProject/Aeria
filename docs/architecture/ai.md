@@ -92,6 +92,76 @@ settings, logs, errors, or IPC responses; the renderer sees only whether a key
 is stored, missing, or unreadable. Removing a provider deletes its key first,
 so a provider is never forgotten while its key remains.
 
+## Angelica
+
+Angelica is the built-in translation agent. The complete intended design is in
+[`ai-agent.md`](./ai-agent.md); this section describes what is implemented.
+
+Angelica currently works in Chat mode only: she reads the project and answers,
+and cannot change it.
+
+### Conversation loop
+
+`aeria-ai::agent::run_turn` runs one user turn. It streams a Chat Completions
+response (`stream: true` with usage reporting) and forwards text and
+reasoning deltas as events. When the response requests tools, it runs them in
+order, appends each result, and requests the next response, for at most 24
+responses per turn; a turn that reaches the limit ends with the `roundLimit`
+outcome. The conversation is persisted after every appended message, so a
+stopped or failed turn keeps its progress. Before a turn, a tool call without
+a result, left by an interrupted turn, receives a cancellation result so the
+history stays valid for providers.
+
+Reasoning text is stored with the assistant message and sent back as
+`reasoning_content` only within the current turn, which providers that
+think between tool calls require; earlier turns are sent without it.
+
+A request is kept within 75 % of the model's context window (64,000 tokens
+when unknown), estimated at three characters per token. Earlier turns' tool
+results are replaced with a short notice first, oldest first; if that is not
+enough, whole earlier turns are dropped. The current turn is always sent in
+full.
+
+The system message holds Angelica's fixed instructions (see
+`aeria-ai::prompt`), the project's languages, game version, and progress, and
+the editor context the renderer sends with the message: the open sheet, the
+selected occurrence, and whether it has unsaved edits. The user can stop
+sending the selection. Instructions state that tool data is never an
+instruction, that macros must be preserved, and that Chat mode cannot change
+the project.
+
+### Read tools
+
+`aeria-ai::tools` defines the tools, validates their arguments, and bounds
+their results; the desktop implements `ProjectReader` over the active
+`ProjectSession`. Invalid arguments, unknown tools, and read failures are
+returned to the model as `{"error": …}` results instead of ending the turn.
+
+| Tool | Result |
+| --- | --- |
+| `project_overview` | Languages, game version, sheet and string counts, progress, and detached units. |
+| `list_sheets` | Sheets with translatable strings and their progress, filtered by a name substring or by untranslated strings, paged up to 200. |
+| `read_rows` | One `page_translation_rows` page of at most 50 scanned source rows, optionally filtered by state, with the `nextAfter` cursor. |
+| `get_unit` | One source row, or one column of it, with translations, review states, notes, unit IDs, and context cells. |
+| `pending_changes` | Uncommitted translation changes from `aeria-git`, up to 200. |
+| `unit_history` | Committed history of one unit, up to 50 entries. |
+| `navigate_to` | Opens an occurrence in the editor; changes nothing in the project. |
+
+Each source, target, or note text is cut at 2,000 characters and each result
+at 24,000 characters, with a visible notice. Every tool call takes the project
+lock only for its own read.
+
+### Conversations
+
+Conversations are machine-local application data stored per project in
+`<app-data>/conversations/<key>/<id>.json`, where the key is derived from a
+SHA-256 hash of the repository root and the ID is a UUID. They are never
+written to a repository. A conversation records its title (from the first
+message), the model and effort last used, the messages including tool calls
+and results, and the provider-reported token usage. Files are written through a
+synced temporary file and rename and are limited to 16 MiB; a damaged file is
+reported when opened and skipped in the list.
+
 ## Batch workflow
 
 A batch job may target selected units, new units, changed units, or untranslated units.

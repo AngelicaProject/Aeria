@@ -15,7 +15,7 @@ use serde_json::Value;
 use thiserror::Error;
 
 use crate::provider::{
-    BaseUrl, MAX_EXTRA_HEADERS, MAX_NAME_CHARS, ProviderConfig, ReasoningEffort,
+    BaseUrl, MAX_EXTRA_HEADERS, MAX_NAME_CHARS, ModelConfig, ProviderConfig, ReasoningEffort,
     validate_header_name, validate_header_value,
 };
 
@@ -126,6 +126,21 @@ impl AiSettings {
             )),
             _ => None,
         }
+    }
+
+    /// Returns the configured model a selection names, when the selection
+    /// matches a configured provider, model, and accepted effort.
+    ///
+    /// # Errors
+    ///
+    /// Returns a description of the mismatch.
+    pub fn selected_model(&self, selection: &ModelSelection) -> Result<&ModelConfig, String> {
+        if let Some(message) = self.selection_error(selection) {
+            return Err(message);
+        }
+        self.provider(&selection.provider_id)
+            .and_then(|provider| provider.model(&selection.model_id))
+            .ok_or_else(|| "the selected model is not configured".to_owned())
     }
 
     /// Checks every settings invariant.
@@ -522,7 +537,7 @@ fn publish(partial: &Path, final_path: &Path, previous: &Path) -> Result<(), AiS
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::provider::{ModelConfig, ProviderKind};
+    use crate::provider::ProviderKind;
 
     fn provider(id: &str) -> ProviderConfig {
         ProviderConfig {

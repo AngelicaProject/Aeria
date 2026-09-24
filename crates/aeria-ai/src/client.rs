@@ -8,12 +8,15 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use thiserror::Error;
 
+use crate::chat::{AssistantResponse, ChatRequest, StreamAccumulator, StreamDelta, StreamError};
 use crate::provider::{BaseUrl, ReasoningEffort};
 use crate::secrets::ApiKey;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 const CHECK_TIMEOUT: Duration = Duration::from_secs(90);
 const MODELS_TIMEOUT: Duration = Duration::from_secs(30);
+/// Longest silence accepted between two reads of a response.
+const READ_TIMEOUT: Duration = Duration::from_secs(180);
 /// Longest provider error text kept in an error message.
 const MAX_PROVIDER_MESSAGE_CHARS: usize = 400;
 /// Largest model list accepted from a provider.
@@ -106,6 +109,7 @@ impl OpenAiCompatibleClient {
         install_crypto_provider();
         let http = reqwest::Client::builder()
             .connect_timeout(CONNECT_TIMEOUT)
+            .read_timeout(READ_TIMEOUT)
             .user_agent(concat!("Aeria/", env!("CARGO_PKG_VERSION")))
             .build()
             .map_err(|error| ProviderError::Client {
@@ -211,6 +215,61 @@ impl OpenAiCompatibleClient {
                 .map(str::to_owned),
             latency,
         })
+    }
+
+    /// Streams one Chat Completions response, passing text and reasoning
+    /// deltas to `on_delta` as they arrive, and returns the assembled
+    /// response.
+    ///
+    /// Dropping the returned future cancels the request.
+    ///
+    /// # Errors
+    ///
+    /// Returns a classified [`ProviderError`]; a malformed stream is
+    /// [`ProviderError::InvalidResponse`].
+    pub async fn stream_chat(
+        &self,
+        endpoint: &ProviderEndpoint,
+        session: &str,
+        request: &ChatRequest<'_>,
+        on_delta: &mut (dyn FnMut(StreamDelta) + Send),
+    ) -> Result<AssistantResponse, ProviderError> {
+        let mut response = endpoint
+            .authorize(
+                self.http
+                    .post(endpoint.base_url.endpoint("chat/completions")),
+                Some(session),
+            )
+            .json(&request.body())
+            .send()
+            .await
+            .map_err(|error| transport_error(&error, &endpoint.api_key))?;
+        let status = response.status();
+        if !status.is_success() {
+            let text = response
+                .text()
+                .await
+                .map_err(|error| transport_error(&error, &endpoint.api_key))?;
+            return Err(status_error(
+                status,
+                &provider_message(&text, &endpoint.api_key),
+            ));
+        }
+        let invalid = |error: StreamError| ProviderError::InvalidResponse {
+            message: redact(&error.0, &endpoint.api_key),
+        };
+        let mut accumulator = StreamAccumulator::default();
+        while let Some(chunk) = response
+            .chunk()
+            .await
+            .map_err(|error| transport_error(&error, &endpoint.api_key))?
+        {
+            accumulator.push(&chunk, on_delta).map_err(invalid)?;
+            if accumulator.is_done() {
+                break;
+            }
+        }
+        accumulator.finish(on_delta).map_err(invalid)
     }
 }
 

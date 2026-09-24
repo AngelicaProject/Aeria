@@ -437,3 +437,40 @@ export type AiConnectionCheckDto = {
   latencyMs: number;
   model: string | null;
 };
+
+export type ChatToolCall = { id: string; name: string; arguments: string };
+
+export type ChatMessage =
+  | { role: "user"; content: string }
+  | { role: "assistant"; content: string; reasoning?: string; toolCalls?: ChatToolCall[] }
+  | { role: "tool"; toolCallId: string; name: string; content: string };
+
+export type AiUsage = { promptTokens: number; completionTokens: number };
+
+export type ConversationDto = {
+  id: string;
+  title: string;
+  model: AiModelSelection | null;
+  messages: ChatMessage[];
+  usage: AiUsage;
+  running: boolean;
+};
+
+export type ConversationSummaryDto = { id: string; title: string; updatedAtUnixMs: number; running: boolean };
+
+export type AgentEvent =
+  | { type: "textDelta"; text: string }
+  | { type: "reasoningDelta"; text: string }
+  | { type: "responseFinished" }
+  | { type: "toolStarted"; id: string; name: string; arguments: string }
+  | { type: "toolFinished"; id: string; name: string; content: string; isError: boolean }
+  | ({ type: "usage" } & AiUsage)
+  | { type: "turnFinished"; outcome: "completed" | "roundLimit"; usage: AiUsage }
+  | { type: "turnFailed"; code: string; message: string }
+  | { type: "turnCancelled" };
+
+export type AngelicaEventDto = { conversationId: string; event: AgentEvent };
+
+export type UnitLocationDto = { sheet: string; row: number; subrow: number; column: number | null };
+
+export type EditorContextDto = { sheet: string | null; selection: UnitLocationDto | null; unsavedDraft: boolean };

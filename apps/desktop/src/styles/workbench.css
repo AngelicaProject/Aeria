@@ -457,3 +457,54 @@
 .lens-banner svg { color: var(--accent-text); }
 .lens-banner .link-button { margin-left: auto; }
 :root[data-list-density="compact"] .lens-text { font-size: var(--text-sm); }
+
+/* Angelica */
+.angelica { overflow: hidden; }
+.angelica-head { display: flex; flex: none; align-items: center; gap: 4px; padding: 8px 10px; border-bottom: 1px solid var(--line); }
+.angelica-history { flex: 1; height: 26px; font-size: var(--text-xs); }
+.angelica-transcript { display: flex; flex: 1; flex-direction: column; gap: 10px; min-height: 0; padding: 12px; overflow-y: auto; }
+.angelica-welcome { display: grid; justify-items: center; gap: 8px; margin: auto 0; padding: 16px 4px; color: var(--fg-muted); text-align: center; }
+.angelica-welcome strong { color: var(--fg); font-family: var(--font-display); font-size: var(--text-lg); }
+.angelica-welcome p { font-size: var(--text-sm); }
+.angelica-suggestions { display: grid; gap: 4px; width: 100%; }
+.angelica-suggestions .button { justify-content: flex-start; height: auto; min-height: 28px; padding: 5px 10px; border: 1px solid var(--line); text-align: left; white-space: normal; }
+.angelica-user { align-self: flex-end; max-width: 88%; padding: 7px 10px; border-radius: var(--radius-md); background: var(--selected); font-size: var(--text-sm); white-space: pre-wrap; overflow-wrap: anywhere; }
+.angelica-assistant { display: grid; gap: 6px; font-size: var(--text-sm); }
+.angelica-reply { display: grid; gap: 6px; line-height: 1.55; overflow-wrap: anywhere; }
+.angelica-reply p { white-space: pre-wrap; }
+.angelica-reply ul { display: grid; gap: 2px; margin: 0; padding-left: 18px; }
+.angelica-reply code,
+.angelica-tool-subject { padding: 0 3px; border-radius: var(--radius-xs); background: var(--hover); font-family: var(--font-mono); font-size: 0.92em; }
+.angelica-reply pre,
+.angelica-tool-body pre { margin: 0; padding: 8px; border-radius: var(--radius-sm); background: var(--panel-raised); font-family: var(--font-mono); font-size: var(--text-xs); white-space: pre-wrap; overflow-wrap: anywhere; }
+.angelica-reply pre code { padding: 0; background: none; }
+.angelica-reasoning summary,
+.angelica-tool summary { display: flex; align-items: center; gap: 6px; color: var(--fg-subtle); font-size: var(--text-xs); cursor: pointer; list-style: none; }
+.angelica-reasoning summary::-webkit-details-marker,
+.angelica-tool summary::-webkit-details-marker { display: none; }
+.angelica-reasoning p { margin-top: 4px; padding-left: 8px; border-left: 2px solid var(--line); color: var(--fg-subtle); font-size: var(--text-xs); white-space: pre-wrap; }
+.angelica-tool { padding: 4px 8px; border: 1px solid var(--line); border-radius: var(--radius-sm); }
+.angelica-tool-name { color: var(--fg-muted); }
+.angelica-tool-running svg { color: var(--accent-text); animation: angelica-pulse 1.2s ease-in-out infinite; }
+.angelica-tool-done svg { color: var(--ok); }
+.angelica-tool-failed svg { color: var(--bad); }
+.angelica-tool-body { display: grid; gap: 4px; padding: 6px 0 2px; }
+.angelica-working { color: var(--fg-subtle); font-size: var(--text-xs); animation: angelica-pulse 1.2s ease-in-out infinite; }
+.angelica-error { flex: none; padding: 0 10px; }
+.angelica-composer { display: grid; flex: none; gap: 6px; padding: 8px 10px 10px; border-top: 1px solid var(--line); }
+.angelica-chips { display: flex; flex-wrap: wrap; gap: 4px; }
+.angelica-chip { display: inline-flex; align-items: center; gap: 4px; height: 20px; padding: 0 7px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: transparent; color: var(--fg-muted); font-size: var(--text-2xs); }
+.angelica-chip code { font-family: var(--font-mono); }
+.angelica-chip.off { color: var(--fg-faint); text-decoration: line-through; }
+button.angelica-chip:hover { background: var(--hover); color: var(--fg); }
+.angelica-mode { color: var(--accent-text); }
+.angelica-input { min-height: 48px; max-height: 240px; resize: vertical; }
+.angelica-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.angelica-model { flex: 1 1 120px; width: auto; height: 26px; font-size: var(--text-xs); }
+.angelica-effort { flex: 0 1 110px; width: auto; height: 26px; font-size: var(--text-xs); }
+.angelica-usage { display: inline-flex; gap: 6px; margin-left: auto; color: var(--fg-subtle); font-size: var(--text-2xs); white-space: nowrap; }
+@keyframes angelica-pulse { 50% { opacity: 0.45; } }
+@media (prefers-reduced-motion: reduce) {
+  .angelica-tool-running svg,
+  .angelica-working { animation: none; }
+}

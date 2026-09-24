@@ -56,11 +56,11 @@ application level. The launcher never automatically reopens the last project.
 
 ```text
 titlebar: menus · project / sheet · layout toggles · window controls
-left rail | Sheets or Search | sheet tabs             | Git or AI | right rail
-          |                  | strings list           |           |
-          |                  | (resizable split)      |           |
-          |                  | translation editor     |           |
-          |                  | optional bottom panel  |           |
+left rail | Sheets or Search | sheet tabs             | Git or Angelica | right rail
+          |                  | strings list           |                 |
+          |                  | (resizable split)      |                 |
+          |                  | translation editor     |                 |
+          |                  | optional bottom panel  |                 |
 status bar
 ```
 
@@ -205,6 +205,29 @@ project history with per-commit unit changes that open the same way, branches (s
 review policy toggle, the Git runtime, contributor counts, and the raw
 working-tree file list. A sync, branch switch, or finished contribution that
 changed the workspace reloads the current sheet and progress.
+
+## Angelica panel
+
+The right dock's Angelica tool (named Angelica in every interface language)
+is the chat with the agent described in [`ai.md`](./ai.md#angelica). Without
+a configured model it shows how to open Settings → AI.
+
+The header switches between the project's conversations, starts a new one,
+and deletes the current one. The transcript shows user messages, Angelica's
+replies with a small Markdown subset (paragraphs, lists, code, inline code,
+bold) rendered as text, so game macros stay visible, collapsible reasoning,
+and a collapsible card for each tool call with its arguments, result, and
+running, done, or failed state. It follows new output while scrolled to the
+bottom.
+
+The composer shows a read-only mode chip and a chip for the selected
+occurrence, which the user can turn off so the selection is not sent. Enter
+sends and Shift+Enter adds a line; messages written while Angelica answers are
+queued and sent after the turn. The toolbar picks the model and, when the model
+accepts efforts, the effort for the next message; the conversation's own
+choice, then the default model, is preselected. It also shows the share of the
+context window the last request used, when the window is known, the
+conversation's tokens, **Stop** while a turn runs, and **Send**.
 
 ## Keyboard
 

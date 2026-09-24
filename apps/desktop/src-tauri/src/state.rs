@@ -18,6 +18,7 @@ pub struct DesktopState {
     git: OnceLock<GitExecutable>,
     attribution: Mutex<Option<AttributionCache>>,
     ai_client: OnceLock<OpenAiCompatibleClient>,
+    angelica_turns: Mutex<Vec<(String, tauri::async_runtime::JoinHandle<()>)>>,
 }
 
 /// Committed unit attribution for one repository commit. It is derived from
@@ -51,6 +52,7 @@ impl DesktopState {
             git: OnceLock::new(),
             attribution: Mutex::new(None),
             ai_client: OnceLock::new(),
+            angelica_turns: Mutex::new(Vec::new()),
         }
     }
 
@@ -75,6 +77,50 @@ impl DesktopState {
         }
         let client = OpenAiCompatibleClient::new()?;
         Ok(self.ai_client.get_or_init(|| client).clone())
+    }
+
+    /// Registers a conversation's running turn. The task is spawned while
+    /// the registry is locked, so it cannot finish before it is registered.
+    /// Returns `false`, without spawning, when the conversation is busy.
+    pub(crate) fn start_angelica_turn(
+        &self,
+        conversation_id: String,
+        spawn: impl FnOnce() -> tauri::async_runtime::JoinHandle<()>,
+    ) -> bool {
+        let Ok(mut turns) = self.angelica_turns.lock() else {
+            return false;
+        };
+        if turns.iter().any(|(id, _)| *id == conversation_id) {
+            return false;
+        }
+        turns.push((conversation_id, spawn()));
+        true
+    }
+
+    pub(crate) fn angelica_turn_running(&self, conversation_id: &str) -> bool {
+        self.angelica_turns
+            .lock()
+            .is_ok_and(|turns| turns.iter().any(|(id, _)| id == conversation_id))
+    }
+
+    /// Forgets a turn that ended on its own.
+    pub(crate) fn finish_angelica_turn(&self, conversation_id: &str) {
+        if let Ok(mut turns) = self.angelica_turns.lock() {
+            turns.retain(|(id, _)| id != conversation_id);
+        }
+    }
+
+    /// Stops a running turn. Returns whether one was running.
+    pub(crate) fn cancel_angelica_turn(&self, conversation_id: &str) -> bool {
+        let Ok(mut turns) = self.angelica_turns.lock() else {
+            return false;
+        };
+        let Some(position) = turns.iter().position(|(id, _)| id == conversation_id) else {
+            return false;
+        };
+        let (_, handle) = turns.remove(position);
+        handle.abort();
+        true
     }
 
     pub(crate) fn cached_attribution(

@@ -1,4 +1,5 @@
 mod ai;
+mod angelica;
 mod commands;
 mod dto;
 mod error;
@@ -12,6 +13,10 @@ pub use ai::{
     AiConnectionCheckDto, AiProviderDto, AiProviderInputDto, AiProviderPresetDto, AiSettingsDto,
     ApiKeyStateDto, ai_clear_api_key, ai_list_remote_models, ai_remove_provider, ai_save_provider,
     ai_set_agent_model, ai_set_api_key, ai_settings, ai_test_connection,
+};
+pub use angelica::{
+    AngelicaEventDto, ConversationDto, ConversationSummaryDto, angelica_cancel,
+    angelica_conversation, angelica_conversations, angelica_delete_conversation, angelica_send,
 };
 pub use commands::{
     cancel_source_package, close_project, current_project, forget_recent_project,
@@ -111,7 +116,12 @@ pub fn run() {
             ai_clear_api_key,
             ai_set_agent_model,
             ai_list_remote_models,
-            ai_test_connection
+            ai_test_connection,
+            angelica_conversations,
+            angelica_conversation,
+            angelica_delete_conversation,
+            angelica_cancel,
+            angelica_send
         ])
         .run(tauri::generate_context!())
         .expect("failed to run Aeria desktop application");

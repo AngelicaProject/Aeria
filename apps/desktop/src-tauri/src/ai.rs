@@ -83,7 +83,7 @@ pub struct AiConnectionCheckDto {
     pub model: Option<String>,
 }
 
-fn settings_store(app: &tauri::AppHandle) -> CommandResult<AiSettingsStore> {
+pub(crate) fn settings_store(app: &tauri::AppHandle) -> CommandResult<AiSettingsStore> {
     app.path()
         .app_data_dir()
         .map(|path| AiSettingsStore::new(path.join(SETTINGS_FILE_NAME)))
@@ -236,7 +236,7 @@ fn set_agent_model(
     Ok(settings_dto(&settings, secrets))
 }
 
-fn provider_endpoint(
+pub(crate) fn provider_endpoint(
     store: &AiSettingsStore,
     secrets: &dyn SecretStore,
     provider_id: &str,

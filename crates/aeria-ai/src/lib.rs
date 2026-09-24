@@ -1,15 +1,21 @@
 //! Provider-neutral AI translation orchestration and response validation.
 //!
-//! This crate does not depend on Tauri. It currently owns provider
-//! configuration, local provider settings, API-key storage, and the
-//! OpenAI-compatible transport; see `docs/architecture/ai.md`.
+//! This crate does not depend on Tauri. It owns provider configuration,
+//! local provider settings, API-key storage, the OpenAI-compatible
+//! transport, and Angelica's conversation loop, tools, and conversation
+//! storage; see `docs/architecture/ai.md`.
 
 #![forbid(unsafe_code)]
 
+pub mod agent;
+pub mod chat;
 pub mod client;
+pub mod conversation;
+pub mod prompt;
 pub mod provider;
 pub mod secrets;
 pub mod settings;
+pub mod tools;
 
 pub use client::{ModelCheck, OpenAiCompatibleClient, ProviderEndpoint, ProviderError};
 pub use provider::{

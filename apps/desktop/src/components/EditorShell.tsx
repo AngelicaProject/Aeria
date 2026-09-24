@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useReducer, useRef, useState, type CSS
 import { flushSync } from "react-dom";
 import { Effect, getCurrentWindow } from "@tauri-apps/api/window";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
+import { listen } from "@tauri-apps/api/event";
 import {
   closeProject,
   gitPendingChanges,
@@ -14,6 +15,7 @@ import {
 } from "../ipc";
 import { bindingKey, rowKey } from "../binding";
 import type {
+  EditorContextDto,
   CommandError,
   ProjectSheetDto,
   ProjectSummaryDto,
@@ -616,6 +618,20 @@ export function EditorShell({
     void revealString(binding.sheetName, { rowId: binding.rowId, subrowId: binding.subrowId, columnIndex: binding.columnIndex });
   }, [revealString]);
 
+  // Angelica's navigate_to tool asks the editor to show one occurrence.
+  const revealBindingRef = useRef(revealBinding);
+  revealBindingRef.current = revealBinding;
+  useEffect(() => {
+    const subscription = listen<SourceBinding>("angelica://navigate", ({ payload }) => revealBindingRef.current(payload));
+    return () => { void subscription.then((unlisten) => unlisten()); };
+  }, []);
+
+  const angelicaContext = useMemo<EditorContextDto>(() => ({
+    sheet: selectedSheetName,
+    selection: selectedBinding ? { sheet: selectedBinding.sheetName, row: selectedBinding.rowId, subrow: selectedBinding.subrowId, column: selectedBinding.columnIndex } : null,
+    unsavedDraft: dirty,
+  }), [dirty, selectedBinding, selectedSheetName]);
+
   const openPalette = useCallback((input: string) => {
     setPalette((current) => ({ open: true, input, key: current.key + 1 }));
   }, []);
@@ -792,7 +808,7 @@ export function EditorShell({
       return <SheetSidebar sheets={project.sheets} selectedSheetName={selectedSheetName} disabled={closing} active={active} hideEmpty={hideEmptySheets} onHideEmptyChange={setHideEmptySheets} filterOpen={sheetFilterOpen} onFilterOpenChange={setSheetFilterOpen} onOpenFilter={focusSheetFilter} quickFindSignal={quickFindSignal} revealSignal={revealSheetSignal} collapseSignal={collapseSheetsSignal} onSelect={handleSheetSelect} progress={progressBySheet} />;
     }
     const tool: WorkbenchTool = panelId === "git" ? "git" : panelId === "search" ? "search" : "ai";
-    return <WorkbenchToolDock activeTool={tool} gitMode={gitMode} selectedBinding={selectedBinding} onGitModeChange={setGitMode} selectedUnitId={selectedUnitId} workspaceRevision={workspaceRevision} onWorkspaceChanged={handleWorkspaceChanged} onRestoreTarget={(target) => void handleRestoreTarget(target)} pending={{ changes: pendingChanges, refresh: refreshPendingChanges }} onRevealBinding={revealBinding} />;
+    return <WorkbenchToolDock activeTool={tool} gitMode={gitMode} selectedBinding={selectedBinding} onGitModeChange={setGitMode} selectedUnitId={selectedUnitId} workspaceRevision={workspaceRevision} onWorkspaceChanged={handleWorkspaceChanged} onRestoreTarget={(target) => void handleRestoreTarget(target)} pending={{ changes: pendingChanges, refresh: refreshPendingChanges }} onRevealBinding={revealBinding} editorContext={angelicaContext} onOpenSettings={() => openSettings("ai")} />;
   };
 
   const renderDock = (region: "left" | "right", panelId: string | null, open: boolean) => {

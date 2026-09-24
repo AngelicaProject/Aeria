@@ -583,7 +583,7 @@ fn project_root(state: &DesktopState) -> CommandResult<PathBuf> {
     Ok(project.repository_root().to_owned())
 }
 
-fn open_repository(state: &DesktopState) -> CommandResult<GitRepository> {
+pub(crate) fn open_repository(state: &DesktopState) -> CommandResult<GitRepository> {
     Ok(GitRepository::open(project_root(state)?, state.git())?)
 }
 

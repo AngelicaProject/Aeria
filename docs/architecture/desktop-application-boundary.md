@@ -161,6 +161,23 @@ saved or an effort enabled. Failures map to stable `ai*` codes such as
 `aiApiKeyMissing`, `aiUnauthorized`, `aiEndpointNotFound`, `aiRateLimited`,
 `aiInvalidSettings`, and `aiSecretStoreUnavailable`.
 
+Angelica commands (`angelica_conversations`, `angelica_conversation`,
+`angelica_send`, `angelica_cancel`, and `angelica_delete_conversation`) work on
+the active project's conversations described in [`ai.md`](./ai.md#angelica).
+`angelica_send` validates the model selection against the AI settings,
+appends the user message, stores the conversation, and returns it before the
+turn runs; at most one turn runs per conversation (`angelicaBusy`). The turn
+is an async task registered in `DesktopState` before it can start, so it can
+always be found and stopped. It holds no desktop lock; each tool runs in a
+blocking worker that locks the project only for its own read. Progress
+reaches the renderer as `angelica://event` events carrying the conversation
+ID and one of `textDelta`, `reasoningDelta`, `responseFinished`,
+`toolStarted`, `toolFinished`, `usage`, `turnFinished`, `turnFailed`, or
+`turnCancelled`. `angelica_cancel` aborts the task and emits `turnCancelled`.
+The `navigate_to` tool resolves its location to one translatable occurrence
+and emits `angelica://navigate` with that `SourceBinding`, which the editor
+reveals.
+
 Commands that require an active project report `noProjectOpen` before
 validating project-scoped payload such as translation-unit IDs.
 

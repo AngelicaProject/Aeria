@@ -1,6 +1,9 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
   AiConnectionCheckDto,
+  ConversationDto,
+  ConversationSummaryDto,
+  EditorContextDto,
   AiModelSelection,
   AiProviderInput,
   AiSettingsDto,
@@ -292,4 +295,24 @@ export function aiListRemoteModels(providerId: string): Promise<string[]> {
 
 export function aiTestConnection(providerId: string, modelId: string, effort: ReasoningEffort | null): Promise<AiConnectionCheckDto> {
   return call<AiConnectionCheckDto>("ai_test_connection", { providerId, modelId, effort });
+}
+
+export function angelicaConversations(): Promise<ConversationSummaryDto[]> {
+  return call<ConversationSummaryDto[]>("angelica_conversations");
+}
+
+export function angelicaConversation(conversationId: string): Promise<ConversationDto> {
+  return call<ConversationDto>("angelica_conversation", { conversationId });
+}
+
+export function angelicaDeleteConversation(conversationId: string): Promise<void> {
+  return call<void>("angelica_delete_conversation", { conversationId });
+}
+
+export function angelicaCancel(conversationId: string): Promise<void> {
+  return call<void>("angelica_cancel", { conversationId });
+}
+
+export function angelicaSend(conversationId: string | null, text: string, model: AiModelSelection, editor: EditorContextDto | null): Promise<ConversationDto> {
+  return call<ConversationDto>("angelica_send", { conversationId, text, model, editor });
 }
