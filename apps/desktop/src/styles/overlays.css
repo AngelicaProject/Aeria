@@ -228,16 +228,20 @@
 .ai-test-effort { display: flex; align-items: center; gap: 8px; color: var(--fg-muted); font-size: var(--text-xs); }
 .ai-test-effort .input { width: auto; }
 .ai-models { display: grid; gap: 4px; margin: 0; padding: 0; list-style: none; }
-.ai-model { display: grid; grid-template-columns: minmax(0, 1fr) auto 92px auto auto; align-items: center; gap: 8px; padding: 4px 0; border-top: 1px solid var(--line); }
+.ai-model { display: grid; gap: 6px; padding: 8px 0; border-top: 1px solid var(--line); }
+.ai-model-main { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.ai-model-efforts { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
+.ai-model-caption { min-width: 64px; color: var(--fg-subtle); font-size: var(--text-2xs); }
+.ai-context-field { display: flex; flex: none; align-items: center; gap: 6px; color: var(--fg-subtle); font-size: var(--text-2xs); }
 .ai-model:first-child { border-top: 0; }
-.ai-model-id { overflow: hidden; font-family: var(--font-mono); font-size: var(--text-xs); text-overflow: ellipsis; white-space: nowrap; }
-.ai-efforts { display: flex; gap: 2px; }
+.ai-model-id { flex: 1; min-width: 0; overflow: hidden; font-family: var(--font-mono); font-size: var(--text-sm); font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.ai-efforts { display: flex; flex-wrap: wrap; gap: 4px; }
 .ai-effort-chip { height: 22px; padding: 0 7px; border: 1px solid var(--line); border-radius: var(--radius-xs); background: transparent; color: var(--fg-subtle); font-size: var(--text-2xs); }
 .ai-effort-chip:not(:disabled):hover { background: var(--hover); color: var(--fg); }
 .ai-effort-chip.enabled { border-color: color-mix(in srgb, var(--accent) 60%, transparent); background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--fg); }
-.ai-context { height: 24px; font-size: var(--text-xs); }
+.ai-context { width: 88px; height: 24px; font-size: var(--text-xs); }
 .ai-context.invalid { border-color: var(--bad); }
-.ai-test-result { display: flex; grid-column: 1 / -1; align-items: center; gap: 6px; font-size: var(--text-xs); overflow-wrap: anywhere; }
+.ai-test-result { display: flex; align-items: center; gap: 6px; font-size: var(--text-xs); overflow-wrap: anywhere; }
 .ai-test-result.ok { color: var(--ok); }
 .ai-test-result.failed { color: var(--bad); }
 .ai-add-provider { display: grid; gap: 8px; }

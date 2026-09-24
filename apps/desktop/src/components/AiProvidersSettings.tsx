@@ -285,20 +285,28 @@ function ModelRow({ model, disabled, test, canTest, onToggleEffort, onContextWin
 
   return (
     <li className="ai-model">
-      <code className="ai-model-id">{model.id}</code>
-      <div className="ai-efforts" role="group" aria-label={t("ai.settings.efforts")}>
-        {reasoningEfforts.map((effort) => {
-          const enabled = model.reasoningEfforts.includes(effort);
-          return <button key={effort} type="button" className={enabled ? "ai-effort-chip enabled" : "ai-effort-chip"} aria-pressed={enabled} disabled={disabled} onClick={() => onToggleEffort(effort)}>{t(effortLabels[effort])}</button>;
-        })}
+      <div className="ai-model-main">
+        <code className="ai-model-id" title={model.id}>{model.id}</code>
+        <label className="ai-context-field" title={t("ai.settings.contextWindow")}>
+          <span>{t("ai.settings.contextShort")}</span>
+          <input className={parsed === undefined ? "input ai-context invalid" : "input ai-context"} inputMode="numeric" value={contextWindow} disabled={disabled} placeholder={t("ai.settings.contextPlaceholder")} aria-label={t("ai.settings.contextWindow")}
+            onChange={(event) => setContextWindow(event.target.value)}
+            onBlur={() => { if (parsed !== undefined && parsed !== model.contextWindow) onContextWindow(parsed); }} />
+        </label>
+        <button className="button button-ghost" type="button" disabled={!canTest || test?.state === "running"} title={canTest ? undefined : t("ai.settings.testNeedsKey")} onClick={onTest}>
+          {test?.state === "running" ? t("ai.settings.testing") : t("ai.settings.test")}
+        </button>
+        <button className="icon-button icon-button-ghost" type="button" disabled={disabled} aria-label={t("ai.settings.removeModel")} title={t("ai.settings.removeModel")} onClick={onRemove}><UiIcon icon="x" size="sm" /></button>
       </div>
-      <input className={parsed === undefined ? "input ai-context invalid" : "input ai-context"} inputMode="numeric" value={contextWindow} disabled={disabled} placeholder={t("ai.settings.contextPlaceholder")} aria-label={t("ai.settings.contextWindow")} title={t("ai.settings.contextWindow")}
-        onChange={(event) => setContextWindow(event.target.value)}
-        onBlur={() => { if (parsed !== undefined && parsed !== model.contextWindow) onContextWindow(parsed); }} />
-      <button className="button button-ghost" type="button" disabled={!canTest || test?.state === "running"} title={canTest ? undefined : t("ai.settings.testNeedsKey")} onClick={onTest}>
-        {test?.state === "running" ? t("ai.settings.testing") : t("ai.settings.test")}
-      </button>
-      <button className="icon-button icon-button-ghost" type="button" disabled={disabled} aria-label={t("ai.settings.removeModel")} title={t("ai.settings.removeModel")} onClick={onRemove}><UiIcon icon="x" size="sm" /></button>
+      <div className="ai-model-efforts">
+        <span className="ai-model-caption" title={t("ai.settings.efforts")}>{t("ai.settings.effortsShort")}</span>
+        <div className="ai-efforts" role="group" aria-label={t("ai.settings.efforts")}>
+          {reasoningEfforts.map((effort) => {
+            const enabled = model.reasoningEfforts.includes(effort);
+            return <button key={effort} type="button" className={enabled ? "ai-effort-chip enabled" : "ai-effort-chip"} aria-pressed={enabled} disabled={disabled} onClick={() => onToggleEffort(effort)}>{t(effortLabels[effort])}</button>;
+          })}
+        </div>
+      </div>
       {test && test.state !== "running" ? (
         <p className={test.state === "ok" ? "ai-test-result ok" : "ai-test-result failed"}>
           <UiIcon icon={test.state === "ok" ? "circleCheck" : "circleAlert"} size="xs" />{test.text}
