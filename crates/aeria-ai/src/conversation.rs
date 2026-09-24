@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::chat::{ChatMessage, Usage};
+use crate::guidance::ProjectFile;
 use crate::settings::ModelSelection;
 use crate::tools::{UnitLocation, UnitState};
 
@@ -85,16 +86,24 @@ pub enum ProposalStatus {
     Failed,
 }
 
-/// A translation Angelica proposed in a conversation.
+/// A change Angelica proposed in a conversation: a translation, or a new
+/// version of a project-shared file.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ProposalRecord {
     pub id: String,
-    pub location: UnitLocation,
+    /// The changed file; `None` for a translation.
+    #[serde(default)]
+    pub file: Option<ProjectFile>,
+    /// The string of a translation; `None` for a file change.
+    #[serde(default)]
+    pub location: Option<UnitLocation>,
+    #[serde(default)]
     pub source: String,
-    /// The rebuilt target macro string.
+    /// The rebuilt target macro string, or the new file content.
     pub target: String,
-    /// The state the translation was produced against.
+    /// The state the change was made against. For a file change,
+    /// `expected.target` is the file's content, `None` when it was absent.
     pub expected: UnitState,
     pub status: ProposalStatus,
     pub message: Option<String>,
@@ -387,12 +396,13 @@ mod tests {
         );
         let proposal = ProposalRecord {
             id: "p1".to_owned(),
-            location: UnitLocation {
+            file: None,
+            location: Some(UnitLocation {
                 sheet: "Item".to_owned(),
                 row: 1,
                 subrow: 0,
                 column: Some(0),
-            },
+            }),
             source: "Bye".to_owned(),
             target: "Пока".to_owned(),
             expected: UnitState {

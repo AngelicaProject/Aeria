@@ -235,7 +235,8 @@ proposals and those that could not be applied. Each card shows the string's
 location, which opens it in the editor, a word diff from the current
 translation to the proposal, a mark when it would replace a reviewed
 translation, and **Apply** and **Reject**; several pending proposals can be
-applied or rejected together. A written translation, from Auto-draft or an
+applied or rejected together. A proposal to change `aeria-guidance.md` or
+`aeria-glossary.csv` shows the file name and a diff of its text. A written translation, from Auto-draft or an
 applied proposal, patches its cell like an ordinary save, so other unsaved
 drafts and the selection are kept.
 

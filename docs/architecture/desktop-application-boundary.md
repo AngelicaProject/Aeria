@@ -195,7 +195,8 @@ and announced with `angelica://proposals`. `angelica_proposals`,
 conversation's proposals; applying writes through
 `ProjectSession::set_assisted_target` with the user's approval to replace a
 reviewed string. Every write emits `angelica://translation-applied` with the
-binding and its new `TranslationOverlayDto`. `angelica_draft` produces one
+binding and its new `TranslationOverlayDto`. Guidance and glossary proposals
+are applied to the repository root by the same command. `angelica_draft` produces one
 draft with the default model and returns it without saving
 (`aiNoAgentModel`, `angelicaUntaggable`, and `angelicaDraftRejected` are its
 own errors).

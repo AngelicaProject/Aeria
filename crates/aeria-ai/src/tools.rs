@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::chat::ToolDefinition;
+use crate::guidance::{Glossary, GlossaryEntry, ProjectFile, ProjectGuide, change_glossary};
 
 /// Longest source, target, or note text returned for one cell.
 pub const MAX_CELL_TEXT_CHARS: usize = 2000;
@@ -95,6 +96,9 @@ pub struct CellSnapshot {
     /// The source is malformed and cannot be translated with assistance.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub untaggable: bool,
+    /// Glossary entries whose terms occur in the source.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub glossary: Vec<GlossaryEntry>,
 }
 
 /// One source row with its translatable cells and read-only context.
@@ -178,6 +182,28 @@ pub trait ProjectReader: Send + Sync {
     /// # Errors
     /// Returns an error when the editor cannot be reached.
     fn navigate(&self, location: &UnitLocation) -> Result<(), ToolError>;
+
+    /// Reads a project-shared file as text; `None` when it does not exist.
+    ///
+    /// # Errors
+    /// Returns an error when the file exists but cannot be read.
+    fn project_file(&self, file: ProjectFile) -> Result<Option<String>, ToolError>;
+}
+
+/// Most glossary entries attached to one string.
+pub const MAX_GLOSSARY_PER_CELL: usize = 20;
+/// Most glossary entries one `get_guidance` call returns.
+pub const MAX_GLOSSARY_LOOKUP: usize = 200;
+/// Most glossary additions or removals in one proposal.
+pub const MAX_GLOSSARY_CHANGES: usize = 100;
+
+/// A proposed replacement of a project-shared file.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FileChange {
+    pub file: ProjectFile,
+    /// The file as read when the change was made; `None` when absent.
+    pub before: Option<String>,
+    pub after: String,
 }
 
 /// The current state of one string, as a translation's expectation.
@@ -241,6 +267,12 @@ pub trait ProjectWriter: Send + Sync {
     /// # Errors
     /// Returns an error when nothing could be submitted.
     fn submit(&self, proposals: Vec<Proposal>) -> Result<Vec<ProposalOutcome>, ToolError>;
+
+    /// Records a change to a project-shared file for the user's approval.
+    ///
+    /// # Errors
+    /// Returns an error when the proposal cannot be recorded.
+    fn propose_file_change(&self, change: FileChange) -> Result<ProposalOutcome, ToolError>;
 }
 
 /// Definitions of the tools that propose changes, offered in Ask and
@@ -274,6 +306,42 @@ pub fn write_tool_definitions() -> Vec<ToolDefinition> {
                     "translations": { "type": "array", "minItems": 1, "maxItems": MAX_PROPOSALS_PER_CALL, "items": translation },
                 },
                 "required": ["translations"],
+                "additionalProperties": false,
+            }),
+        },
+        ToolDefinition {
+            name: "propose_glossary_change",
+            description: "Proposes adding, replacing, or removing glossary entries. The user always approves glossary changes. Use it when the user asks or a term clearly needs a fixed translation.",
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "add": {
+                        "type": "array",
+                        "maxItems": MAX_GLOSSARY_CHANGES,
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "term": { "type": "string", "description": "The source-language term." },
+                                "translation": { "type": "string" },
+                                "note": { "type": "string" },
+                                "forbidden": { "type": "array", "items": { "type": "string" }, "description": "Translations that must not be used." },
+                            },
+                            "required": ["term", "translation"],
+                            "additionalProperties": false,
+                        },
+                    },
+                    "remove": { "type": "array", "maxItems": MAX_GLOSSARY_CHANGES, "items": { "type": "string" }, "description": "Terms to remove." },
+                },
+                "additionalProperties": false,
+            }),
+        },
+        ToolDefinition {
+            name: "propose_guidance_change",
+            description: "Proposes a new full text for the project's translation guidance. The user always approves guidance changes. Read the current guidance with get_guidance first.",
+            parameters: json!({
+                "type": "object",
+                "properties": { "text": { "type": "string", "description": "The complete new guidance in Markdown." } },
+                "required": ["text"],
                 "additionalProperties": false,
             }),
         },
@@ -340,6 +408,15 @@ pub fn read_tool_definitions() -> Vec<ToolDefinition> {
             name: "get_unit",
             description: "One source row with every translatable string, its translation, review state, note, and read-only context cells.",
             parameters: location("Only this column; omit for all cells of the row."),
+        },
+        ToolDefinition {
+            name: "get_guidance",
+            description: "The project's translation guidance and glossary: entries matching the given terms, or the start of the glossary, with any problems in those files.",
+            parameters: json!({
+                "type": "object",
+                "properties": { "terms": { "type": "array", "maxItems": 50, "items": { "type": "string" }, "description": "Terms or parts of terms to look up." } },
+                "additionalProperties": false,
+            }),
         },
         ToolDefinition {
             name: "pending_changes",
@@ -458,6 +535,38 @@ struct ProposeArgs {
     translations: Vec<TranslationArgs>,
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct GuidanceArgs {
+    #[serde(default)]
+    terms: Vec<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct GlossaryEntryArgs {
+    term: String,
+    translation: String,
+    note: Option<String>,
+    #[serde(default)]
+    forbidden: Vec<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct GlossaryChangeArgs {
+    #[serde(default)]
+    add: Vec<GlossaryEntryArgs>,
+    #[serde(default)]
+    remove: Vec<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct GuidanceChangeArgs {
+    text: String,
+}
+
 impl<'a> ReadTools<'a> {
     #[must_use]
     pub fn new(reader: &'a dyn ProjectReader) -> Self {
@@ -529,16 +638,30 @@ impl<'a> ReadTools<'a> {
                 self.reader.navigate(&location)?;
                 Ok(json!({ "opened": location }))
             }
-            "validate_target" | "propose_translation" => {
+            "get_guidance" => Ok(self.get_guidance(&parse(arguments)?)),
+            "validate_target"
+            | "propose_translation"
+            | "propose_glossary_change"
+            | "propose_guidance_change" => {
                 let Some(writer) = self.writer else {
                     return Err(ToolError::new(
                         "changing the project is not available in Chat mode",
                     ));
                 };
-                if name == "validate_target" {
-                    Ok(Self::validate_target(writer, parse(arguments)?))
-                } else {
-                    Self::propose(writer, parse::<ProposeArgs>(arguments)?.translations)
+                match name {
+                    "validate_target" => Ok(Self::validate_target(writer, parse(arguments)?)),
+                    "propose_translation" => {
+                        let guide = self.guide();
+                        Self::propose(
+                            writer,
+                            parse::<ProposeArgs>(arguments)?.translations,
+                            guide.glossary.as_ref(),
+                        )
+                    }
+                    "propose_glossary_change" => {
+                        self.propose_glossary_change(writer, parse(arguments)?)
+                    }
+                    _ => self.propose_guidance_change(writer, &parse(arguments)?),
                 }
             }
             other => Err(ToolError::new(format!("unknown tool {other:?}"))),
@@ -566,6 +689,110 @@ impl<'a> ReadTools<'a> {
         Ok(json!({ "total": total, "sheets": page, "nextOffset": next_offset }))
     }
 
+    /// Reads the project's guidance and glossary; read failures become
+    /// problems rather than errors, so reads never fail because of them.
+    fn guide(&self) -> ProjectGuide {
+        let read = |file| {
+            self.reader
+                .project_file(file)
+                .map_err(|error| format!("{}: {}", ProjectFile::file_name(file), error.0))
+        };
+        ProjectGuide::from_files(read(ProjectFile::Guidance), read(ProjectFile::Glossary))
+    }
+
+    fn get_guidance(&self, args: &GuidanceArgs) -> Value {
+        let guide = self.guide();
+        let glossary = guide.glossary.as_ref();
+        let entries: Vec<&GlossaryEntry> = match glossary {
+            Some(glossary) if args.terms.is_empty() => glossary.entries.iter().collect(),
+            Some(glossary) => glossary.lookup(&args.terms),
+            None => Vec::new(),
+        };
+        json!({
+            "guidance": guide.guidance,
+            "glossary": {
+                "total": glossary.map_or(0, |glossary| glossary.entries.len()),
+                "entries": entries.iter().take(MAX_GLOSSARY_LOOKUP).collect::<Vec<_>>(),
+                "invalidRows": glossary.map(|glossary| glossary.diagnostics.iter().take(50).collect::<Vec<_>>()),
+            },
+            "problems": guide.problems,
+        })
+    }
+
+    fn propose_glossary_change(
+        &self,
+        writer: &dyn ProjectWriter,
+        args: GlossaryChangeArgs,
+    ) -> Result<Value, ToolError> {
+        if args.add.len() > MAX_GLOSSARY_CHANGES || args.remove.len() > MAX_GLOSSARY_CHANGES {
+            return Err(ToolError::new(format!(
+                "change at most {MAX_GLOSSARY_CHANGES} entries at a time"
+            )));
+        }
+        let before = self.reader.project_file(ProjectFile::Glossary)?;
+        let add = args
+            .add
+            .into_iter()
+            .map(|entry| GlossaryEntry {
+                term: entry.term,
+                translation: entry.translation,
+                note: entry.note.filter(|note| !note.trim().is_empty()),
+                forbidden: entry.forbidden,
+            })
+            .collect();
+        let after =
+            change_glossary(before.as_deref(), add, &args.remove).map_err(ToolError::new)?;
+        Self::submit_file_change(writer, ProjectFile::Glossary, before, after)
+    }
+
+    fn propose_guidance_change(
+        &self,
+        writer: &dyn ProjectWriter,
+        args: &GuidanceChangeArgs,
+    ) -> Result<Value, ToolError> {
+        let text = args.text.trim();
+        if text.is_empty() {
+            return Err(ToolError::new("the guidance must not be empty"));
+        }
+        let after = format!("{text}\n");
+        if after.len() as u64 > ProjectFile::Guidance.max_bytes() {
+            return Err(ToolError::new("the guidance is too long"));
+        }
+        let before = self.reader.project_file(ProjectFile::Guidance)?;
+        Self::submit_file_change(writer, ProjectFile::Guidance, before, after)
+    }
+
+    fn submit_file_change(
+        writer: &dyn ProjectWriter,
+        file: ProjectFile,
+        before: Option<String>,
+        after: String,
+    ) -> Result<Value, ToolError> {
+        if before.as_deref() == Some(after.as_str()) {
+            return Err(ToolError::new(format!(
+                "{} would not change",
+                file.file_name()
+            )));
+        }
+        Ok(
+            match writer.propose_file_change(FileChange {
+                file,
+                before,
+                after,
+            })? {
+                ProposalOutcome::Pending { proposal_id } => {
+                    json!({ "status": "awaitingApproval", "proposalId": proposal_id, "file": file.file_name() })
+                }
+                ProposalOutcome::Applied => {
+                    json!({ "status": "applied", "file": file.file_name() })
+                }
+                ProposalOutcome::Conflict { message } | ProposalOutcome::Failed { message } => {
+                    json!({ "status": "failed", "errors": [message] })
+                }
+            },
+        )
+    }
+
     fn read_rows(&self, args: &ReadRowsArgs) -> Result<Value, ToolError> {
         let after = match (args.after_row, args.after_subrow) {
             (Some(row), subrow) => Some((row, subrow.unwrap_or(0))),
@@ -577,12 +804,13 @@ impl<'a> ReadTools<'a> {
         let limit = args.limit.unwrap_or(20).clamp(1, MAX_READ_ROWS);
         let filter = args.state.unwrap_or(StateFilter::All);
         let page = self.reader.rows(&args.sheet, after, limit)?;
+        let guide = self.guide();
         let rows: Vec<RowSnapshot> = page
             .rows
             .into_iter()
             .filter_map(|mut row| {
                 row.cells.retain(|cell| matches_filter(cell, filter));
-                (!row.cells.is_empty()).then(|| bound_row(row))
+                (!row.cells.is_empty()).then(|| bound_row(row, guide.glossary.as_ref()))
             })
             .collect();
         Ok(json!({
@@ -609,7 +837,8 @@ impl<'a> ReadTools<'a> {
                 )));
             }
         }
-        Ok(json!({ "sheet": args.sheet, "row": bound_row(row) }))
+        let guide = self.guide();
+        Ok(json!({ "sheet": args.sheet, "row": bound_row(row, guide.glossary.as_ref()) }))
     }
 }
 
@@ -653,6 +882,7 @@ impl ReadTools<'_> {
     fn propose(
         writer: &dyn ProjectWriter,
         translations: Vec<TranslationArgs>,
+        glossary: Option<&Glossary>,
     ) -> Result<Value, ToolError> {
         if translations.is_empty() || translations.len() > MAX_PROPOSALS_PER_CALL {
             return Err(ToolError::new(format!(
@@ -666,7 +896,14 @@ impl ReadTools<'_> {
             match Self::prepare(writer, args) {
                 Ok(proposal) => {
                     slots.push(results.len());
-                    results.push(json!({ "location": proposal.location }));
+                    let mut entry = json!({ "location": proposal.location });
+                    let warnings = glossary
+                        .map(|glossary| glossary.check(&proposal.source, &proposal.target))
+                        .unwrap_or_default();
+                    if !warnings.is_empty() {
+                        entry["glossaryWarnings"] = json!(warnings);
+                    }
+                    results.push(entry);
                     valid.push(proposal);
                 }
                 Err((location, errors)) => {
@@ -723,8 +960,16 @@ fn matches_filter(cell: &CellSnapshot, filter: StateFilter) -> bool {
     }
 }
 
-fn bound_row(mut row: RowSnapshot) -> RowSnapshot {
+fn bound_row(mut row: RowSnapshot, glossary: Option<&Glossary>) -> RowSnapshot {
     for cell in &mut row.cells {
+        if let Some(glossary) = glossary {
+            cell.glossary = glossary
+                .matches(&cell.source)
+                .into_iter()
+                .take(MAX_GLOSSARY_PER_CELL)
+                .cloned()
+                .collect();
+        }
         match aeria_se::project(&cell.source) {
             Ok(tagged) => {
                 if tagged.text != cell.source && tagged.text.chars().count() <= MAX_TAGGED_CHARS {
@@ -801,6 +1046,7 @@ mod tests {
             tagged: None,
             tags: Vec::new(),
             untaggable: false,
+            glossary: Vec::new(),
         }
     }
 
@@ -889,6 +1135,15 @@ mod tests {
         fn navigate(&self, location: &UnitLocation) -> Result<(), ToolError> {
             self.navigated.lock().expect("lock").push(location.clone());
             Ok(())
+        }
+
+        fn project_file(&self, file: ProjectFile) -> Result<Option<String>, ToolError> {
+            Ok(match file {
+                ProjectFile::Guidance => Some("Use informal address.".to_owned()),
+                ProjectFile::Glossary => {
+                    Some("term,translation,forbidden\nSource 0,Исходник,Сорс\n".to_owned())
+                }
+            })
         }
     }
 
@@ -1009,6 +1264,7 @@ mod tests {
 
     struct FakeWriter {
         submitted: Mutex<Vec<Proposal>>,
+        files: Mutex<Vec<FileChange>>,
     }
 
     impl ProjectWriter for FakeWriter {
@@ -1035,6 +1291,13 @@ mod tests {
             }
         }
 
+        fn propose_file_change(&self, change: FileChange) -> Result<ProposalOutcome, ToolError> {
+            self.files.lock().expect("lock").push(change);
+            Ok(ProposalOutcome::Pending {
+                proposal_id: "f-1".to_owned(),
+            })
+        }
+
         fn submit(&self, proposals: Vec<Proposal>) -> Result<Vec<ProposalOutcome>, ToolError> {
             let outcomes = proposals
                 .iter()
@@ -1058,6 +1321,7 @@ mod tests {
         let reader = reader();
         let writer = FakeWriter {
             submitted: Mutex::new(Vec::new()),
+            files: Mutex::new(Vec::new()),
         };
         let tools = ReadTools::with_writer(&reader, &writer);
         let output = tools.execute(
@@ -1098,6 +1362,7 @@ mod tests {
 
         let writer = FakeWriter {
             submitted: Mutex::new(Vec::new()),
+            files: Mutex::new(Vec::new()),
         };
         let output = ReadTools::with_writer(&reader, &writer).execute(
             "validate_target",
@@ -1111,29 +1376,76 @@ mod tests {
 
     #[test]
     fn reads_include_tagged_sources_with_a_legend() {
-        let row = bound_row(RowSnapshot {
-            row: 1,
-            subrow: 0,
-            cells: vec![
-                CellSnapshot {
-                    source: "Hi <pcname(lnum1)>".to_owned(),
-                    ..cell(0, None, None)
-                },
-                CellSnapshot {
-                    source: "Plain".to_owned(),
-                    ..cell(1, None, None)
-                },
-                CellSnapshot {
-                    source: "<if(".to_owned(),
-                    ..cell(2, None, None)
-                },
-            ],
-            context: Vec::new(),
-        });
+        let row = bound_row(
+            RowSnapshot {
+                row: 1,
+                subrow: 0,
+                cells: vec![
+                    CellSnapshot {
+                        source: "Hi <pcname(lnum1)>".to_owned(),
+                        ..cell(0, None, None)
+                    },
+                    CellSnapshot {
+                        source: "Plain".to_owned(),
+                        ..cell(1, None, None)
+                    },
+                    CellSnapshot {
+                        source: "<if(".to_owned(),
+                        ..cell(2, None, None)
+                    },
+                ],
+                context: Vec::new(),
+            },
+            None,
+        );
         assert_eq!(row.cells[0].tagged.as_deref(), Some(r#"Hi <x id="1"/>"#));
         assert!(row.cells[0].tags[0].starts_with("1: <pcname(lnum1)>"));
         assert!(row.cells[1].tagged.is_none());
         assert!(row.cells[2].untaggable);
+    }
+
+    #[test]
+    fn guidance_glossary_matches_and_file_proposals() {
+        let reader = reader();
+        let (value, _) = run(&reader, "get_guidance", r#"{"terms":["source"]}"#);
+        assert_eq!(value["guidance"], "Use informal address.");
+        assert_eq!(value["glossary"]["entries"][0]["translation"], "Исходник");
+
+        let (value, _) = run(
+            &reader,
+            "get_unit",
+            r#"{"sheet":"Item","row":5,"column":1}"#,
+        );
+        assert!(value["row"]["cells"][0]["glossary"].as_array().is_none());
+        let (value, _) = run(
+            &reader,
+            "get_unit",
+            r#"{"sheet":"Item","row":5,"column":0}"#,
+        );
+        assert_eq!(value["row"]["cells"][0]["glossary"][0]["term"], "Source 0");
+
+        let writer = FakeWriter {
+            submitted: Mutex::new(Vec::new()),
+            files: Mutex::new(Vec::new()),
+        };
+        let tools = ReadTools::with_writer(&reader, &writer);
+        let output = tools.execute(
+            "propose_glossary_change",
+            r#"{"add":[{"term":"Aether","translation":"Эфир"}],"remove":["source 0"]}"#,
+        );
+        assert!(!output.is_error, "{}", output.content);
+        let output = tools.execute(
+            "propose_guidance_change",
+            r#"{"text":"  Use formal address. "}"#,
+        );
+        assert!(!output.is_error, "{}", output.content);
+        let files = writer.files.lock().expect("lock");
+        assert_eq!(
+            files[0].after,
+            "term,translation,note,forbidden\nAether,Эфир,,\n"
+        );
+        assert_eq!(files[1].before.as_deref(), Some("Use informal address."));
+        assert_eq!(files[1].after, "Use formal address.\n");
     }
 
     #[test]

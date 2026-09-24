@@ -19,9 +19,10 @@ use aeria_ai::conversation::{
     Conversation, ConversationError, ConversationStore, ConversationSummary,
 };
 use aeria_ai::conversation::{ProposalRecord, ProposalStatus};
+use aeria_ai::guidance::{GlossaryEntry, ProjectFile, ProjectGuide, read_project_file};
 use aeria_ai::prompt::{AgentMode, EditorContext, system_prompt};
 use aeria_ai::tools::{
-    CellSnapshot, ContextCell, ProjectFacts, ProjectReader, ProjectWriter, Proposal,
+    CellSnapshot, ContextCell, FileChange, ProjectFacts, ProjectReader, ProjectWriter, Proposal,
     ProposalOutcome, ReadTools, ReviewLabel, RowSnapshot, RowsPage, SheetSummary, ToolError,
     ToolOutput, TranslatableUnit, UnitLocation, UnitState, read_tool_definitions,
     write_tool_definitions,
@@ -236,6 +237,7 @@ fn row_snapshot(row: TranslationRowView) -> RowSnapshot {
                     tagged: None,
                     tags: Vec::new(),
                     untaggable: false,
+                    glossary: Vec::new(),
                 }
             })
             .collect(),
@@ -408,6 +410,56 @@ impl ProjectReader for DesktopReader {
             .emit(NAVIGATE_EVENT, binding)
             .map_err(|error| ToolError::new(format!("the editor could not be reached: {error}")))
     }
+
+    fn project_file(&self, file: ProjectFile) -> Result<Option<String>, ToolError> {
+        let root = self.with_session(|session| Ok(session.repository_root().to_owned()))?;
+        read_project_file(&root, file).map_err(ToolError::new)
+    }
+}
+
+fn repository_root(app: &tauri::AppHandle) -> CommandResult<std::path::PathBuf> {
+    let state = app.state::<DesktopState>();
+    let project = state.lock_project()?;
+    let session = project.as_ref().ok_or_else(CommandError::no_project)?;
+    Ok(session.repository_root().to_owned())
+}
+
+/// Replaces a project-shared file if it still has the content the change was
+/// made against, through a temporary file and rename.
+fn apply_file_change(
+    root: &std::path::Path,
+    file: ProjectFile,
+    expected: Option<&str>,
+    content: &str,
+) -> Result<(), (ProposalStatus, String)> {
+    let current =
+        read_project_file(root, file).map_err(|message| (ProposalStatus::Failed, message))?;
+    if current.as_deref() != expected {
+        return Err((
+            ProposalStatus::Conflict,
+            format!("{} changed after the proposal was made", file.file_name()),
+        ));
+    }
+    if file == ProjectFile::Glossary {
+        aeria_ai::guidance::parse_glossary(content.as_bytes())
+            .map_err(|error| (ProposalStatus::Failed, error.to_string()))?;
+    }
+    let path = root.join(file.file_name());
+    let partial = root.join(format!(".{}.partial", file.file_name()));
+    let write = || -> std::io::Result<()> {
+        let mut handle = std::fs::File::create(&partial)?;
+        std::io::Write::write_all(&mut handle, content.as_bytes())?;
+        handle.sync_all()?;
+        drop(handle);
+        std::fs::rename(&partial, &path)
+    };
+    write().map_err(|error| {
+        let _ = std::fs::remove_file(&partial);
+        (
+            ProposalStatus::Failed,
+            format!("{}: {error}", file.file_name()),
+        )
+    })
 }
 
 /// Resolves a location to one translatable occurrence: the given column, or
@@ -566,7 +618,8 @@ impl ProjectWriter for DesktopWriter {
                     });
                     pending.push(ProposalRecord {
                         id,
-                        location: proposal.location,
+                        file: None,
+                        location: Some(proposal.location),
                         source: proposal.source,
                         target: proposal.target,
                         expected: proposal.expected,
@@ -618,6 +671,42 @@ impl ProjectWriter for DesktopWriter {
             );
         }
         Ok(outcomes)
+    }
+
+    fn propose_file_change(&self, change: FileChange) -> Result<ProposalOutcome, ToolError> {
+        let state = self.app.state::<DesktopState>();
+        let _guard = state
+            .lock_proposals()
+            .map_err(|error| ToolError::new(error.message))?;
+        let mut records = self
+            .store
+            .load_proposals(&self.conversation_id)
+            .map_err(|error| ToolError::new(error.to_string()))?;
+        let id = aeria_ai::ProviderConfig::new_id();
+        records.push(ProposalRecord {
+            id: id.clone(),
+            file: Some(change.file),
+            location: None,
+            source: String::new(),
+            target: change.after,
+            expected: UnitState {
+                target: change.before,
+                review_state: None,
+            },
+            status: ProposalStatus::Pending,
+            message: None,
+            created_at_unix_ms: now_unix_ms(),
+        });
+        self.store
+            .save_proposals(&self.conversation_id, &records)
+            .map_err(|error| ToolError::new(error.to_string()))?;
+        let _ = self.app.emit(
+            PROPOSALS_EVENT,
+            ProposalsChangedDto {
+                conversation_id: self.conversation_id.clone(),
+            },
+        );
+        Ok(ProposalOutcome::Pending { proposal_id: id })
     }
 }
 
@@ -797,7 +886,8 @@ fn prepare_turn(
         .map_err(|message| CommandError::new("aiInvalidSettings", message))?
         .clone();
     let facts = DesktopReader { app: app.clone() }.facts().ok();
-    let system = system_prompt(facts.as_ref(), editor, mode);
+    let guide = ProjectGuide::load(&repository_root(app)?);
+    let system = system_prompt(facts.as_ref(), editor, mode, &guide);
 
     let store = conversation_store(app)?;
     let now = now_unix_ms();
@@ -1003,7 +1093,34 @@ fn settle_proposal(
             "this proposal was already applied or dismissed",
         ));
     }
-    if apply {
+    if let (true, Some(file)) = (apply, record.file) {
+        let root = {
+            let project = state.lock_project()?;
+            project
+                .as_ref()
+                .ok_or_else(CommandError::no_project)?
+                .repository_root()
+                .to_owned()
+        };
+        match apply_file_change(
+            &root,
+            file,
+            record.expected.target.as_deref(),
+            &record.target,
+        ) {
+            Ok(()) => record.status = ProposalStatus::Applied,
+            Err((status, message)) => {
+                record.status = status;
+                record.message = Some(message);
+            }
+        }
+    } else if apply {
+        let Some(location) = record.location.clone() else {
+            return Err(CommandError::new(
+                "angelicaProposalNotFound",
+                "the proposal has no string to write",
+            ));
+        };
         let mut project = state.lock_project()?;
         let session = project.as_mut().ok_or_else(CommandError::no_project)?;
         // Applying is the user's explicit approval, including for a
@@ -1011,7 +1128,7 @@ fn settle_proposal(
         match write_assisted(
             app,
             session,
-            &record.location,
+            &location,
             &record.target,
             &record.expected,
             true,
@@ -1079,6 +1196,8 @@ struct DraftInput {
     context: Vec<ContextCell>,
     current_target: Option<String>,
     note: Option<String>,
+    guidance: Option<String>,
+    glossary: Vec<GlossaryEntry>,
 }
 
 fn draft_input(
@@ -1095,6 +1214,7 @@ fn draft_input(
     let project = state.lock_project()?;
     let session = project.as_ref().ok_or_else(CommandError::no_project)?;
     let source = session.source_macro(binding).map_err(CommandError::from)?;
+    let guide = ProjectGuide::load(session.repository_root());
     let row = session_row(
         session,
         binding.sheet_name(),
@@ -1107,6 +1227,18 @@ fn draft_input(
             .iter()
             .find(|cell| cell.column == binding.column_index())
     });
+    let glossary = guide
+        .glossary
+        .as_ref()
+        .map(|glossary| {
+            glossary
+                .matches(&source)
+                .into_iter()
+                .take(20)
+                .cloned()
+                .collect()
+        })
+        .unwrap_or_default();
     Ok(DraftInput {
         model,
         effort: selection.effort,
@@ -1118,6 +1250,8 @@ fn draft_input(
             .unwrap_or_default(),
         current_target: cell.and_then(|cell| cell.target.clone()),
         note: cell.and_then(|cell| cell.note.clone()),
+        guidance: guide.guidance_for_prompt(),
+        glossary,
     })
 }
 
@@ -1170,6 +1304,8 @@ pub async fn angelica_draft(
             context: &input.context,
             current_target: input.current_target.as_deref(),
             note: input.note.as_deref(),
+            guidance: input.guidance.as_deref(),
+            glossary: &input.glossary,
         },
     )
     .await
@@ -1264,6 +1400,34 @@ mod tests {
         assert_eq!(binding.column_index, row.cells[0].column);
         location.column = Some(u32::MAX);
         assert!(navigation_target(&session, &location).is_err());
+    }
+
+    #[test]
+    fn file_changes_apply_only_over_the_expected_content() {
+        let directory = tempfile::tempdir().expect("directory");
+        let root = directory.path();
+        apply_file_change(root, ProjectFile::Guidance, None, "Be brief.\n").expect("create");
+        assert_eq!(
+            read_project_file(root, ProjectFile::Guidance)
+                .expect("read")
+                .as_deref(),
+            Some("Be brief.\n")
+        );
+        let stale = apply_file_change(root, ProjectFile::Guidance, None, "Other.\n")
+            .expect_err("the file exists now");
+        assert_eq!(stale.0, ProposalStatus::Conflict);
+        apply_file_change(
+            root,
+            ProjectFile::Guidance,
+            Some("Be brief.\n"),
+            "Be kind.\n",
+        )
+        .expect("replace");
+        let invalid = apply_file_change(root, ProjectFile::Glossary, None, "term,meaning\n")
+            .expect_err("invalid glossary");
+        assert_eq!(invalid.0, ProposalStatus::Failed);
+        assert!(!root.join(ProjectFile::Glossary.file_name()).exists());
+        assert!(!root.join(".aeria-guidance.md.partial").exists());
     }
 
     #[test]

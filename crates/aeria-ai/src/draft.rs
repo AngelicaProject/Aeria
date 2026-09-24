@@ -8,6 +8,7 @@ use std::fmt::Write as _;
 
 use crate::chat::{ChatMessage, ChatRequest, Usage};
 use crate::client::{OpenAiCompatibleClient, ProviderEndpoint, ProviderError};
+use crate::guidance::GlossaryEntry;
 use crate::provider::ReasoningEffort;
 use crate::tools::{ContextCell, ProjectFacts};
 
@@ -27,6 +28,10 @@ pub struct DraftRequest<'a> {
     pub context: &'a [ContextCell],
     pub current_target: Option<&'a str>,
     pub note: Option<&'a str>,
+    /// The project's guidance, bounded for the request.
+    pub guidance: Option<&'a str>,
+    /// Glossary entries whose terms occur in the source.
+    pub glossary: &'a [GlossaryEntry],
 }
 
 /// A validated draft.
@@ -92,6 +97,25 @@ fn user_message(request: &DraftRequest<'_>, tagged: &str, legend: &[String]) -> 
     }
     if let Some(note) = request.note {
         let _ = writeln!(message, "Translator note: {note}");
+    }
+    if !request.glossary.is_empty() {
+        message.push_str("Glossary, to follow with inflection as needed:\n");
+        for entry in request.glossary {
+            let _ = write!(message, "- {} → {}", entry.term, entry.translation);
+            if !entry.forbidden.is_empty() {
+                let _ = write!(message, " (never: {})", entry.forbidden.join(", "));
+            }
+            if let Some(note) = &entry.note {
+                let _ = write!(message, " — {note}");
+            }
+            message.push('\n');
+        }
+    }
+    if let Some(guidance) = request.guidance {
+        let _ = writeln!(
+            message,
+            "Project guidance:\n<guidance>\n{guidance}\n</guidance>"
+        );
     }
     message
 }
@@ -196,6 +220,13 @@ mod tests {
             context: &context,
             current_target: Some("Привет"),
             note: Some("informal"),
+            guidance: Some("Be brief."),
+            glossary: &[GlossaryEntry {
+                term: "Hi".to_owned(),
+                translation: "Привет".to_owned(),
+                note: None,
+                forbidden: vec!["Хай".to_owned()],
+            }],
         };
         let tagged = aeria_se::project(request.source).expect("tags");
         let legend: Vec<String> = tagged.tags.iter().map(aeria_se::Tag::legend).collect();
@@ -205,5 +236,7 @@ mod tests {
         assert!(message.contains("column 1: Description"));
         assert!(message.contains("Current translation, to improve: Привет"));
         assert!(message.contains("Translator note: informal"));
+        assert!(message.contains("- Hi → Привет (never: Хай)"));
+        assert!(message.contains("<guidance>\nBe brief.\n</guidance>"));
     }
 }

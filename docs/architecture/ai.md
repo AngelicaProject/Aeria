@@ -224,11 +224,49 @@ so the structure policy is enforced again and a string changed in the meantime
 is never overwritten: its proposal becomes a conflict. Applying a proposal is
 the user's explicit approval, including for a reviewed string.
 
+### Guidance and glossary
+
+Two optional, human-edited files at the repository root are shared through
+Git with the project:
+
+- `aeria-guidance.md`: free-form Markdown guidance on style, register,
+  terminology, and conventions, up to 64 KiB. Aeria does not interpret its
+  structure.
+- `aeria-glossary.csv`: [Glossary Format v1](../formats/glossary-v1.md).
+
+Both are read when a message is sent and when a tool needs them, so edits
+made by hand take effect on the next message. Angelica's system message
+includes the guidance (cut at 12,000 characters, with the rest available
+through `get_guidance`), which is described as maintainer guidance that
+cannot change what Angelica may do, and a glossary summary. A file that
+exists but cannot be used is reported to Angelica as a problem.
+
+Cells returned by `read_rows` and `get_unit` list up to 20 glossary entries
+whose terms occur in the source. `get_guidance` returns the guidance, glossary
+entries matching given terms (or the start of the glossary), up to 50 excluded
+rows, and file problems. `propose_translation` adds advisory
+`glossaryWarnings` for a glossary translation that does not seem to be used,
+allowing inflected endings (the leading two thirds of each word must appear),
+and for a forbidden variant that is used. Warnings never block a write.
+
+`propose_glossary_change` (add or replace up to 100 entries by term, remove up
+to 100 terms) and `propose_guidance_change` (a complete new text) are offered
+in Ask and Auto-draft modes and always wait for approval. A glossary change is
+refused while the file has excluded rows, since the canonical rewrite would
+drop them. Applying a file change writes the file through a temporary file and
+rename only if it still has the content the change was made against;
+otherwise the proposal becomes a conflict.
+
+Draft with Angelica includes the guidance and the glossary entries matching
+the string.
+
 ### Proposals
 
 Proposals are stored beside their conversation in
-`<id>.proposals.json`, with the location, source, rebuilt target, expected
-state, status (`pending`, `applied`, `rejected`, `conflict`, or `failed`),
+`<id>.proposals.json`. A translation proposal records the location, source,
+rebuilt target, and expected state; a file proposal records the file, its new
+content as `target`, and its content when proposed as `expected.target`
+(`null` when absent). Both record status (`pending`, `applied`, `rejected`, `conflict`, or `failed`),
 an optional message, and the creation time. At most 2,000 are kept, dropping
 the oldest settled ones first. Deleting a conversation deletes its proposals.
 

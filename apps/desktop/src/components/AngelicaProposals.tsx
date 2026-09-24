@@ -20,9 +20,15 @@ const statusLabels: Readonly<Record<ProposalRecord["status"], MessageKey>> = {
   failed: "angelica.proposal.failed",
 };
 
-export function bindingOf(proposal: ProposalRecord): SourceBinding {
-  return { sheetName: proposal.location.sheet, rowId: proposal.location.row, subrowId: proposal.location.subrow, columnIndex: proposal.location.column ?? 0 };
+export function bindingOf(proposal: ProposalRecord): SourceBinding | null {
+  const location = proposal.location;
+  return location ? { sheetName: location.sheet, rowId: location.row, subrowId: location.subrow, columnIndex: location.column ?? 0 } : null;
 }
+
+const fileNames: Readonly<Record<NonNullable<ProposalRecord["file"]>, string>> = {
+  guidance: "aeria-guidance.md",
+  glossary: "aeria-glossary.csv",
+};
 
 /** Pending proposals and the ones that could not be applied. */
 export function AngelicaProposals({ proposals, busy, onApply, onReject, onReveal }: AngelicaProposalsProps) {
@@ -44,15 +50,18 @@ export function AngelicaProposals({ proposals, busy, onApply, onReject, onReveal
       </summary>
       <ul>
         {shown.map((proposal) => {
-          const location = `${proposal.location.sheet}:${proposal.location.row}:${proposal.location.subrow}:${proposal.location.column ?? 0}`;
+          const binding = bindingOf(proposal);
+          const location = binding ? `${binding.sheetName}:${binding.rowId}:${binding.subrowId}:${binding.columnIndex}` : null;
           return (
             <li key={proposal.id} className={`angelica-proposal ${proposal.status}`}>
               <div className="angelica-proposal-head">
-                <button className="link-button mono" type="button" onClick={() => onReveal?.(bindingOf(proposal))}>{location}</button>
+                {binding && location
+                  ? <button className="link-button mono" type="button" onClick={() => onReveal?.(binding)}>{location}</button>
+                  : <span className="mono">{proposal.file ? t("angelica.proposal.file", { file: fileNames[proposal.file] }) : ""}</span>}
                 {proposal.expected.reviewState === "reviewed" ? <span className="angelica-chip">{t("angelica.proposal.replacesReviewed")}</span> : null}
                 {proposal.status !== "pending" ? <span className="angelica-chip">{t(statusLabels[proposal.status])}</span> : null}
               </div>
-              <div className="angelica-proposal-diff">
+              <div className={proposal.file ? "angelica-proposal-diff file" : "angelica-proposal-diff"}>
                 {proposal.expected.target === null
                   ? <ins>{proposal.target}</ins>
                   : diffWords(proposal.expected.target, proposal.target).map((part, index) => part.kind === "same"

@@ -32,6 +32,7 @@ Likely UI-level dependencies such as Tailwind, Radix primitives, CodeMirror, doc
 - `rustls` (Apache-2.0 OR ISC OR MIT) with the `ring` crypto provider, installed once by the client, so builds need neither OpenSSL nor the `aws-lc` toolchain. Certificates are checked with the platform verifier.
 - `keyring` (MIT OR Apache-2.0) with its default platform stores: Windows Credential Manager, the Secret Service on Linux, and the macOS Keychain.
 - `base64` (MIT OR Apache-2.0): reads the claims of ChatGPT access tokens.
+- `csv` (Unlicense OR MIT): reads and writes the project glossary.
 - `fs2`, `uuid`, `serde_json`, and `thiserror`, matching `aeria-projects`.
 
 The desktop adds `tauri-plugin-opener` (Apache-2.0 OR MIT) to open the ChatGPT

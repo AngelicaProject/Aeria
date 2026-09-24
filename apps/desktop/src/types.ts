@@ -483,7 +483,9 @@ export type AgentMode = "chat" | "ask" | "autoDraft";
 
 export type ProposalRecord = {
   id: string;
-  location: UnitLocationDto;
+  /** The changed project file; null for a translation. */
+  file: "guidance" | "glossary" | null;
+  location: UnitLocationDto | null;
   source: string;
   target: string;
   expected: { target: string | null; reviewState: ReviewState | null };
