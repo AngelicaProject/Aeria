@@ -10,6 +10,8 @@ import {
   removeModel,
   selectableEfforts,
   selectionKey,
+  normalizeHeaders,
+  syncModels,
   toggleEffort,
 } from "../src/aiSettings.ts";
 
@@ -21,22 +23,32 @@ const provider = {
   name: "OpenCode Go",
   baseUrl: "https://opencode.ai/zen/go/v1",
   models: [model("glm-5.3", ["low", "high"])],
+  sessionHeader: "x-opencode-session",
+  headers: [],
   apiKey: "stored",
 };
 
-test("a preset becomes a new provider input with copied models", () => {
-  const preset = { kind: "openCodeGo", name: "OpenCode Go", baseUrl: "https://opencode.ai/zen/go/v1", models: [model("kimi-k3")] };
-  const input = providerFromPreset(preset);
-  assert.deepEqual(input, { id: null, kind: "openCodeGo", name: "OpenCode Go", baseUrl: "https://opencode.ai/zen/go/v1", models: [model("kimi-k3")] });
-  input.models[0].reasoningEfforts.push("low");
-  assert.deepEqual(preset.models[0].reasoningEfforts, []);
+test("a preset becomes a new provider input without models", () => {
+  const preset = { kind: "openCodeGo", name: "OpenCode Go", baseUrl: "https://opencode.ai/zen/go/v1", sessionHeader: "x-opencode-session" };
+  assert.deepEqual(providerFromPreset(preset), { id: null, kind: "openCodeGo", name: "OpenCode Go", baseUrl: "https://opencode.ai/zen/go/v1", models: [], sessionHeader: "x-opencode-session", headers: [] });
   assert.equal(providerFromPreset({ ...preset, baseUrl: null }, "http://localhost:11434/v1").baseUrl, "http://localhost:11434/v1");
 });
 
 test("a stored provider becomes a replacement input without its key state", () => {
   const input = providerInput(provider, { name: "Go" });
-  assert.deepEqual(input, { id: "p1", kind: "openCodeGo", name: "Go", baseUrl: provider.baseUrl, models: provider.models });
+  assert.deepEqual(input, { id: "p1", kind: "openCodeGo", name: "Go", baseUrl: provider.baseUrl, models: provider.models, sessionHeader: "x-opencode-session", headers: [] });
   assert.equal("apiKey" in input, false);
+});
+
+test("syncing models follows the provider list and keeps known settings", () => {
+  const result = syncModels([model("glm-5.3", ["high"]), model("retired")], ["kimi-k3", "glm-5.3", "kimi-k3", " "]);
+  assert.deepEqual(result.models, [model("kimi-k3"), model("glm-5.3", ["high"])]);
+  assert.equal(result.added, 1);
+  assert.equal(result.removed, 1);
+});
+
+test("header rows are trimmed, lowercased, and blank names dropped", () => {
+  assert.deepEqual(normalizeHeaders([{ name: " X-Client ", value: " aeria " }, { name: " ", value: "ignored" }]), [{ name: "x-client", value: "aeria" }]);
 });
 
 test("adding models trims, skips blanks, and keeps IDs unique", () => {

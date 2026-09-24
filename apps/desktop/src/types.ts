@@ -391,12 +391,16 @@ export type AiModelConfig = {
   reasoningEfforts: ReasoningEffort[];
 };
 
+export type AiHeaderConfig = { name: string; value: string };
+
 export type AiProviderDto = {
   id: string;
   kind: AiProviderKind;
   name: string;
   baseUrl: string;
   models: AiModelConfig[];
+  sessionHeader: string | null;
+  headers: AiHeaderConfig[];
   apiKey: ApiKeyState;
 };
 
@@ -404,7 +408,7 @@ export type AiProviderPresetDto = {
   kind: AiProviderKind;
   name: string;
   baseUrl: string | null;
-  models: AiModelConfig[];
+  sessionHeader: string | null;
 };
 
 export type AiModelSelection = {
@@ -425,6 +429,8 @@ export type AiProviderInput = {
   name: string;
   baseUrl: string;
   models: AiModelConfig[];
+  sessionHeader: string | null;
+  headers: AiHeaderConfig[];
 };
 
 export type AiConnectionCheckDto = {

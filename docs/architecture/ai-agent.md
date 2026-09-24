@@ -84,7 +84,7 @@ one transport, not separate code paths:
 
 | Preset | Notes |
 | --- | --- |
-| OpenCode Go | First ready-made preset. Base URL and model list must be verified against the provider's documentation during implementation. |
+| OpenCode Go | First ready-made preset, with the `x-opencode-session` session header. |
 | OpenRouter | Common community choice. |
 | Custom OpenAI-compatible | User-supplied base URL, for example a local server. |
 

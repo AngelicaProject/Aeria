@@ -13,7 +13,8 @@ pub mod settings;
 
 pub use client::{ModelCheck, OpenAiCompatibleClient, ProviderEndpoint, ProviderError};
 pub use provider::{
-    BaseUrl, ModelConfig, ProviderConfig, ProviderKind, ProviderPreset, ReasoningEffort, presets,
+    BaseUrl, HeaderConfig, ModelConfig, ProviderConfig, ProviderKind, ProviderPreset,
+    ReasoningEffort, presets,
 };
 pub use secrets::{ApiKey, KeyringSecretStore, MemorySecretStore, SecretStore, SecretStoreError};
 pub use settings::{AiSettings, AiSettingsError, AiSettingsStore, ModelSelection};

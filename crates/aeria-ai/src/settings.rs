@@ -14,7 +14,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use thiserror::Error;
 
-use crate::provider::{BaseUrl, MAX_NAME_CHARS, ProviderConfig, ReasoningEffort};
+use crate::provider::{
+    BaseUrl, MAX_EXTRA_HEADERS, MAX_NAME_CHARS, ProviderConfig, ReasoningEffort,
+    validate_header_name, validate_header_value,
+};
 
 pub const FORMAT_VERSION: u32 = 1;
 pub const MAX_SETTINGS_FILE_BYTES: u64 = 256 * 1024;
@@ -172,6 +175,24 @@ pub fn validate_provider(provider: &ProviderConfig) -> Result<(), String> {
         return Err(format!(
             "at most {MAX_MODELS_PER_PROVIDER} models are allowed per provider"
         ));
+    }
+    if let Some(header) = &provider.session_header {
+        validate_header_name(header)?;
+    }
+    if provider.headers.len() > MAX_EXTRA_HEADERS {
+        return Err(format!(
+            "at most {MAX_EXTRA_HEADERS} extra headers are allowed"
+        ));
+    }
+    let mut header_names = HashSet::with_capacity(provider.headers.len());
+    for header in &provider.headers {
+        validate_header_name(&header.name)?;
+        validate_header_value(&header.value)?;
+        if !header_names.insert(header.name.as_str())
+            || provider.session_header.as_deref() == Some(header.name.as_str())
+        {
+            return Err(format!("header {:?} is configured twice", header.name));
+        }
     }
     let mut model_ids = HashSet::with_capacity(provider.models.len());
     for model in &provider.models {
@@ -514,6 +535,8 @@ mod tests {
                 context_window: Some(200_000),
                 reasoning_efforts: vec![ReasoningEffort::Low, ReasoningEffort::High],
             }],
+            session_header: Some("x-opencode-session".to_owned()),
+            headers: Vec::new(),
         }
     }
 
@@ -608,6 +631,15 @@ mod tests {
         trailing_slash.base_url.push('/');
         assert!(validate_provider(&trailing_slash).is_err());
 
+        let mut duplicate_header = provider("p1");
+        duplicate_header
+            .headers
+            .push(crate::provider::HeaderConfig {
+                name: "x-opencode-session".to_owned(),
+                value: "fixed".to_owned(),
+            });
+        assert!(validate_provider(&duplicate_header).is_err());
+
         let mut empty_name = provider("p1");
         empty_name.name = "  ".to_owned();
         assert!(validate_provider(&empty_name).is_err());
@@ -648,6 +680,20 @@ mod tests {
             assert!(matched, "{contents}: {error}");
             assert_eq!(fs::read_to_string(store.path()).expect("kept"), contents);
         }
+    }
+
+    #[test]
+    fn documents_without_header_fields_still_load() {
+        let (_directory, store) = store();
+        fs::create_dir_all(store.path().parent().expect("parent")).expect("directory");
+        fs::write(
+            store.path(),
+            r#"{"formatVersion":1,"providers":[{"id":"p1","kind":"openCodeGo","name":"Go","baseUrl":"https://opencode.ai/zen/go/v1","models":[]}],"agentModel":null}"#,
+        )
+        .expect("write");
+        let loaded = store.load().expect("load");
+        assert_eq!(loaded.providers[0].session_header, None);
+        assert!(loaded.providers[0].headers.is_empty());
     }
 
     #[test]

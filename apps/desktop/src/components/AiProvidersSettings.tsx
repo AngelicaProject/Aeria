@@ -11,6 +11,7 @@ import {
 } from "../ipc";
 import {
   addModels,
+  normalizeHeaders,
   parseContextWindow,
   parseSelectionKey,
   providerFromPreset,
@@ -19,9 +20,10 @@ import {
   removeModel,
   selectableEfforts,
   selectionKey,
+  syncModels,
   toggleEffort,
 } from "../aiSettings";
-import type { AiModelConfig, AiProviderDto, AiProviderPresetDto, AiSettingsDto, CommandError, ReasoningEffort } from "../types";
+import type { AiHeaderConfig, AiModelConfig, AiProviderDto, AiProviderPresetDto, AiSettingsDto, CommandError, ReasoningEffort } from "../types";
 import { ErrorBanner } from "./ErrorBanner";
 import { UiIcon } from "../ui/primitives/UiIcon";
 import { useI18n } from "../ui/i18n";
@@ -142,11 +144,10 @@ function ProviderCard({ provider, disabled, apply, run }: { provider: AiProvider
   const [baseUrl, setBaseUrl] = useState(provider.baseUrl);
   const [apiKey, setApiKey] = useState("");
   const [newModel, setNewModel] = useState("");
-  const [remoteModels, setRemoteModels] = useState<string[] | null>(null);
+  const [syncResult, setSyncResult] = useState<{ added: number; removed: number } | null>(null);
   const [testEffort, setTestEffort] = useState<ReasoningEffort | "">("");
   const [tests, setTests] = useState<Record<string, TestResult>>({});
   const [confirmRemove, setConfirmRemove] = useState(false);
-  const listId = useId();
 
   useEffect(() => { setName(provider.name); setBaseUrl(provider.baseUrl); }, [provider.name, provider.baseUrl]);
 
@@ -156,6 +157,13 @@ function ProviderCard({ provider, disabled, apply, run }: { provider: AiProvider
     void apply(() => aiSaveProvider(providerInput(provider, changes))).then((saved) => {
       if (!saved) { setName(provider.name); setBaseUrl(provider.baseUrl); }
     });
+  };
+
+  const syncFromProvider = async () => {
+    const ids = await run(() => aiListRemoteModels(provider.id));
+    if (!ids) return;
+    const result = syncModels(provider.models, ids);
+    if (await saveModels(result.models)) setSyncResult({ added: result.added, removed: result.removed });
   };
 
   const testModel = async (modelId: string) => {
@@ -196,7 +204,12 @@ function ProviderCard({ provider, disabled, apply, run }: { provider: AiProvider
 
       <form className="ai-key-row" onSubmit={(event) => {
         event.preventDefault();
-        void apply(() => aiSetApiKey(provider.id, apiKey)).then((saved) => { if (saved) setApiKey(""); });
+        void apply(() => aiSetApiKey(provider.id, apiKey)).then((saved) => {
+          if (!saved) return;
+          setApiKey("");
+          // A new provider has no models yet: ask the provider right away.
+          if (provider.models.length === 0) void syncFromProvider();
+        });
       }}>
         <label className="field">
           <span className="field-label">{t("ai.settings.apiKey")}</span>
@@ -206,6 +219,8 @@ function ProviderCard({ provider, disabled, apply, run }: { provider: AiProvider
         {provider.apiKey === "stored" ? <button className="button button-ghost" type="button" disabled={disabled} onClick={() => void apply(() => aiClearApiKey(provider.id))}>{t("ai.settings.clearKey")}</button> : null}
       </form>
       <p className="field-hint">{t("ai.settings.keyHint")}</p>
+
+      <HeaderSettings provider={provider} disabled={disabled} apply={apply} />
 
       <div className="ai-models-head">
         <strong>{t("ai.settings.models")}</strong>
@@ -232,14 +247,13 @@ function ProviderCard({ provider, disabled, apply, run }: { provider: AiProvider
         event.preventDefault();
         void saveModels(addModels(provider.models, [newModel])).then((saved) => { if (saved) setNewModel(""); });
       }}>
-        <input className="input" value={newModel} list={listId} disabled={disabled} spellCheck={false} placeholder={t("ai.settings.modelPlaceholder")} aria-label={t("ai.settings.addModel")} onChange={(event) => setNewModel(event.target.value)} />
-        <datalist id={listId}>{(remoteModels ?? []).map((id) => <option key={id} value={id} />)}</datalist>
-        <button className="button button-secondary" type="submit" disabled={disabled || !newModel.trim()}>{t("ai.settings.addModel")}</button>
-        <button className="button button-ghost" type="button" disabled={disabled || provider.apiKey !== "stored"} title={t("ai.settings.fetchModelsHint")} onClick={() => void run(() => aiListRemoteModels(provider.id)).then((ids) => { if (ids) setRemoteModels(ids); })}>
-          <UiIcon icon="refreshCw" size="sm" />{t("ai.settings.fetchModels")}
+        <button className="button button-secondary" type="button" disabled={disabled || provider.apiKey !== "stored"} title={t("ai.settings.syncModelsHint")} onClick={() => void syncFromProvider()}>
+          <UiIcon icon="refreshCw" size="sm" />{t("ai.settings.syncModels")}
         </button>
+        <input className="input" value={newModel} disabled={disabled} spellCheck={false} placeholder={t("ai.settings.modelPlaceholder")} aria-label={t("ai.settings.addModel")} onChange={(event) => setNewModel(event.target.value)} />
+        <button className="button button-ghost" type="submit" disabled={disabled || !newModel.trim()}>{t("ai.settings.addModel")}</button>
       </form>
-      {remoteModels ? <p className="field-hint">{t("ai.settings.remoteModels", { count: remoteModels.length })}</p> : null}
+      {syncResult ? <p className="field-hint">{t("ai.settings.syncResult", { added: syncResult.added, removed: syncResult.removed, total: provider.models.length })}</p> : null}
     </section>
   );
 }
@@ -281,6 +295,50 @@ function ModelRow({ model, disabled, test, canTest, onToggleEffort, onContextWin
         </p>
       ) : null}
     </li>
+  );
+}
+
+function HeaderSettings({ provider, disabled, apply }: { provider: AiProviderDto; disabled: boolean; apply: (operation: () => Promise<AiSettingsDto>) => Promise<boolean> }) {
+  const { t } = useI18n();
+  const sessionId = useId();
+  const [sessionHeader, setSessionHeader] = useState(provider.sessionHeader ?? "");
+  const [headers, setHeaders] = useState<AiHeaderConfig[]>(provider.headers);
+  useEffect(() => { setSessionHeader(provider.sessionHeader ?? ""); setHeaders(provider.headers); }, [provider.sessionHeader, provider.headers]);
+
+  const normalizedSession = sessionHeader.trim().toLowerCase() || null;
+  const normalized = normalizeHeaders(headers);
+  const dirty = normalizedSession !== provider.sessionHeader || JSON.stringify(normalized) !== JSON.stringify(provider.headers) || normalized.length !== headers.length;
+  const update = (index: number, change: Partial<AiHeaderConfig>) => setHeaders((current) => current.map((header, position) => position === index ? { ...header, ...change } : header));
+
+  return (
+    <details className="ai-headers" open={provider.headers.length > 0 || undefined}>
+      <summary>{t("ai.settings.headers")}</summary>
+      <form className="ai-headers-body" onSubmit={(event) => {
+        event.preventDefault();
+        void apply(() => aiSaveProvider(providerInput(provider, { sessionHeader: normalizedSession, headers: normalized })));
+      }}>
+        <div className="field">
+          <label className="field-label" htmlFor={sessionId}>{t("ai.settings.sessionHeader")}</label>
+          <input id={sessionId} className="input" value={sessionHeader} disabled={disabled} spellCheck={false} placeholder="x-provider-session" onChange={(event) => setSessionHeader(event.target.value)} />
+          <p className="field-hint">{t("ai.settings.sessionHeaderHint")}</p>
+        </div>
+        <div className="field">
+          <span className="field-label">{t("ai.settings.extraHeaders")}</span>
+          {headers.map((header, index) => (
+            <div className="ai-header-row" key={index}>
+              <input className="input" value={header.name} disabled={disabled} spellCheck={false} placeholder={t("ai.settings.headerName")} aria-label={t("ai.settings.headerName")} onChange={(event) => update(index, { name: event.target.value })} />
+              <input className="input" value={header.value} disabled={disabled} spellCheck={false} placeholder={t("ai.settings.headerValue")} aria-label={t("ai.settings.headerValue")} onChange={(event) => update(index, { value: event.target.value })} />
+              <button className="icon-button icon-button-ghost" type="button" disabled={disabled} aria-label={t("ai.settings.removeHeader")} title={t("ai.settings.removeHeader")} onClick={() => setHeaders((current) => current.filter((_, position) => position !== index))}><UiIcon icon="x" size="sm" /></button>
+            </div>
+          ))}
+          <p className="field-hint">{t("ai.settings.extraHeadersHint")}</p>
+        </div>
+        <div className="ai-headers-actions">
+          <button className="button button-ghost" type="button" disabled={disabled} onClick={() => setHeaders((current) => [...current, { name: "", value: "" }])}><UiIcon icon="plus" size="sm" />{t("ai.settings.addHeader")}</button>
+          <button className="button button-secondary" type="submit" disabled={disabled || !dirty}>{t("ai.settings.saveHeaders")}</button>
+        </div>
+      </form>
+    </details>
   );
 }
 

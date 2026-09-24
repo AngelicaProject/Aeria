@@ -235,9 +235,12 @@ and base URL (saved on blur), stores or removes the API key through a password
 field that is cleared after saving and never refilled, and lists models with
 toggles for accepted efforts, an optional context window, and a **Test**
 action that reports latency and the answering model or the provider's error.
-Models are added by ID, with suggestions from **Fetch list**. New providers
-come from preset buttons; the OpenAI-compatible preset first asks for a base
-URL. Removing a provider asks for confirmation inline.
+Saving the first key loads the provider's models; **Update from provider**
+reloads them and reports how many were added and removed, and a model can
+also be added by ID. A collapsible **Request headers** section edits the
+session header and extra headers and warns that header values are not secret
+storage. New providers come from preset buttons; the OpenAI-compatible preset
+first asks for a base URL. Removing a provider asks for confirmation inline.
 
 On supported Windows versions, the launcher, workbench, and tool windows use the
 system Acrylic backdrop and follow the selected light or dark theme. The

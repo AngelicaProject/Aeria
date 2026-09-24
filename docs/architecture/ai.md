@@ -29,29 +29,51 @@ A base URL must use HTTPS, except plain HTTP to `localhost`, `127.0.0.1`, or
 rejected, so no secret can reach settings through it. Base URLs are stored
 without a trailing slash.
 
+### Request headers
+
+Every request carries the bearer key and the provider's extra static headers.
+Chat Completions requests also carry the provider's session header, when one
+is configured, set to a stable ID for the conversation; a connection check
+uses a one-off ID. Header names are lowercase HTTP tokens and cannot replace
+headers Aeria sets itself (`authorization`, `content-type`, `host`,
+`user-agent`, and hop-by-hop headers). Values are visible ASCII without line
+breaks. At most 16 extra headers are allowed. Extra header values are stored in
+plain settings, so they must not hold secrets.
+
+Extra headers exist so a provider's API change can be followed without an
+Aeria release.
+
 ### Presets
 
 Presets supply defaults for a new provider and do not change the transport:
 
-| Preset | Base URL | Default models |
+| Preset | Base URL | Session header |
 | --- | --- | --- |
-| OpenCode Go | `https://opencode.ai/zen/go/v1` | Models OpenCode Go serves through Chat Completions: `glm-5.3`, `glm-5.3-flash`, `kimi-k3`, `kimi-k2.7-code`, `deepseek-v4-pro`, `deepseek-v4-flash`, `mimo-v2.6-pro`, `mimo-v2.6-flash`. Its models served only through other endpoints are omitted. |
-| OpenRouter | `https://openrouter.ai/api/v1` | None; the list can be fetched. |
-| OpenAI-compatible | Supplied by the user | None. |
+| OpenCode Go | `https://opencode.ai/zen/go/v1` | `x-opencode-session`, which OpenCode Go uses for routing and prompt caching |
+| OpenRouter | `https://openrouter.ai/api/v1` | None |
+| OpenAI-compatible | Supplied by the user | None |
 
-Preset models have no known context window or effort values; the user enables
-the efforts a model accepts, which a connection check with that effort can
-confirm first.
+Presets carry no model list. Models come from the provider's own
+`GET /models` listing, loaded when the first key is saved and on request.
+Updating from the provider replaces the list and keeps the efforts and context
+window of models it still reports. A listing may include models that the
+provider serves only through other APIs; a connection check reveals them.
+Models can also be added by ID for providers without a listing. Listed models
+have no known context window or effort values; the user enables the efforts a
+model accepts, which a connection check with that effort can confirm first.
 
 ### Local settings
 
 Provider settings are machine-local application data in
 `<app-data>/ai-settings-v1.json`, never in a repository. The document holds
 `formatVersion` 1, the providers (opaque local ID, preset kind, name, base URL,
-and models with ID, optional context window, and accepted efforts), and
+models with ID, optional context window, and accepted efforts, the optional
+session header, and extra headers), and
 Angelica's optional default model selection (provider, model, and an effort
 the model accepts). Unknown fields, duplicate IDs, invalid URLs, and a
 selection that does not match a configured model and effort are rejected.
+The session header and extra headers are optional fields; a provider written
+without them has neither.
 Replacing or removing a provider clears a default selection it no longer
 supports.
 

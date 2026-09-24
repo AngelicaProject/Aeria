@@ -24,6 +24,29 @@ pub const MAX_REMOTE_MODELS: usize = 5000;
 pub struct ProviderEndpoint {
     pub base_url: BaseUrl,
     pub api_key: ApiKey,
+    /// Header that receives the conversation's session ID, when the
+    /// provider asks for one.
+    pub session_header: Option<String>,
+    /// Validated extra static headers.
+    pub headers: Vec<(String, String)>,
+}
+
+impl ProviderEndpoint {
+    /// Adds authentication, extra headers, and the session header.
+    fn authorize(
+        &self,
+        request: reqwest::RequestBuilder,
+        session: Option<&str>,
+    ) -> reqwest::RequestBuilder {
+        let mut request = request.bearer_auth(self.api_key.expose());
+        for (name, value) in &self.headers {
+            request = request.header(name, value);
+        }
+        if let (Some(name), Some(session)) = (&self.session_header, session) {
+            request = request.header(name, session);
+        }
+        request
+    }
 }
 
 /// Transport failures, classified for the user. Messages never contain the
@@ -113,10 +136,8 @@ impl OpenAiCompatibleClient {
             id: String,
         }
 
-        let request = self
-            .http
-            .get(endpoint.base_url.endpoint("models"))
-            .bearer_auth(endpoint.api_key.expose())
+        let request = endpoint
+            .authorize(self.http.get(endpoint.base_url.endpoint("models")), None)
             .timeout(MODELS_TIMEOUT);
         let body = send(request, &endpoint.api_key).await?;
         let list: ModelList =
@@ -140,7 +161,8 @@ impl OpenAiCompatibleClient {
     }
 
     /// Sends one minimal Chat Completions request to confirm that the key,
-    /// endpoint, model, and effort are accepted.
+    /// endpoint, model, effort, and headers are accepted. The check uses its
+    /// own one-off session ID.
     ///
     /// # Errors
     ///
@@ -160,10 +182,13 @@ impl OpenAiCompatibleClient {
         if let Some(effort) = effort {
             body["reasoning_effort"] = Value::from(effort.as_str());
         }
-        let request = self
-            .http
-            .post(endpoint.base_url.endpoint("chat/completions"))
-            .bearer_auth(endpoint.api_key.expose())
+        let session = uuid::Uuid::new_v4().to_string();
+        let request = endpoint
+            .authorize(
+                self.http
+                    .post(endpoint.base_url.endpoint("chat/completions")),
+                Some(&session),
+            )
             .timeout(CHECK_TIMEOUT)
             .json(&body);
 
@@ -328,6 +353,8 @@ mod tests {
         ProviderEndpoint {
             base_url: BaseUrl::parse(base_url).expect("base URL"),
             api_key: ApiKey::new(KEY).expect("key"),
+            session_header: None,
+            headers: Vec::new(),
         }
     }
 
@@ -365,6 +392,37 @@ mod tests {
         assert_eq!(body["model"], "glm-5.3");
         assert_eq!(body["reasoning_effort"], "low");
         assert_eq!(body["stream"], false);
+    }
+
+    #[test]
+    fn requests_carry_extra_headers_and_a_session_id_only_for_completions() {
+        let configured = |url: &str| {
+            let mut endpoint = endpoint(url);
+            endpoint.session_header = Some("x-opencode-session".to_owned());
+            endpoint.headers = vec![("x-client".to_owned(), "aeria".to_owned())];
+            endpoint
+        };
+        let client = OpenAiCompatibleClient::new().expect("client");
+
+        let (url, server) = serve_once("200 OK", r#"{"choices":[{}]}"#);
+        runtime()
+            .block_on(client.check_model(&configured(&url), "glm-5.3", None))
+            .expect("check succeeds");
+        let request = server.join().expect("server").to_ascii_lowercase();
+        assert!(request.contains("x-client: aeria"), "{request}");
+        let session = request
+            .lines()
+            .find_map(|line| line.strip_prefix("x-opencode-session: "))
+            .expect("session header");
+        assert_eq!(session.trim().len(), 36, "{session}");
+
+        let (url, server) = serve_once("200 OK", r#"{"data":[]}"#);
+        runtime()
+            .block_on(client.list_models(&configured(&url)))
+            .expect("models");
+        let request = server.join().expect("server").to_ascii_lowercase();
+        assert!(request.contains("x-client: aeria"));
+        assert!(!request.contains("x-opencode-session"));
     }
 
     #[test]

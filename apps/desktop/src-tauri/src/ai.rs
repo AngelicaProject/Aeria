@@ -7,8 +7,9 @@
 
 use aeria_ai::settings::SETTINGS_FILE_NAME;
 use aeria_ai::{
-    AiSettings, AiSettingsStore, ApiKey, BaseUrl, KeyringSecretStore, ModelConfig, ModelSelection,
-    ProviderConfig, ProviderEndpoint, ProviderKind, ReasoningEffort, SecretStore, presets,
+    AiSettings, AiSettingsStore, ApiKey, BaseUrl, HeaderConfig, KeyringSecretStore, ModelConfig,
+    ModelSelection, ProviderConfig, ProviderEndpoint, ProviderKind, ReasoningEffort, SecretStore,
+    presets,
 };
 use serde::{Deserialize, Serialize};
 use tauri::Manager;
@@ -37,6 +38,8 @@ pub struct AiProviderDto {
     pub name: String,
     pub base_url: String,
     pub models: Vec<ModelConfig>,
+    pub session_header: Option<String>,
+    pub headers: Vec<HeaderConfig>,
     pub api_key: ApiKeyStateDto,
 }
 
@@ -56,7 +59,7 @@ pub struct AiProviderPresetDto {
     pub kind: ProviderKind,
     pub name: String,
     pub base_url: Option<String>,
-    pub models: Vec<ModelConfig>,
+    pub session_header: Option<String>,
 }
 
 /// A provider to create (no `id`) or replace.
@@ -68,6 +71,8 @@ pub struct AiProviderInputDto {
     pub name: String,
     pub base_url: String,
     pub models: Vec<ModelConfig>,
+    pub session_header: Option<String>,
+    pub headers: Vec<HeaderConfig>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -108,6 +113,8 @@ fn settings_dto(settings: &AiSettings, secrets: &dyn SecretStore) -> AiSettingsD
                 name: provider.name.clone(),
                 base_url: provider.base_url.clone(),
                 models: provider.models.clone(),
+                session_header: provider.session_header.clone(),
+                headers: provider.headers.clone(),
                 api_key: match secrets.get(&provider.id) {
                     Ok(Some(_)) => ApiKeyStateDto::Stored,
                     Ok(None) => ApiKeyStateDto::Missing,
@@ -122,7 +129,7 @@ fn settings_dto(settings: &AiSettings, secrets: &dyn SecretStore) -> AiSettingsD
                 kind: preset.kind,
                 name: preset.name.to_owned(),
                 base_url: preset.base_url.map(str::to_owned),
-                models: preset.models,
+                session_header: preset.session_header.map(str::to_owned),
             })
             .collect(),
     }
@@ -151,6 +158,18 @@ fn save_provider(
             name: input.name.trim().to_owned(),
             base_url: base_url.as_str().to_owned(),
             models: input.models,
+            session_header: input
+                .session_header
+                .map(|name| name.trim().to_ascii_lowercase())
+                .filter(|name| !name.is_empty()),
+            headers: input
+                .headers
+                .into_iter()
+                .map(|header| HeaderConfig {
+                    name: header.name.trim().to_ascii_lowercase(),
+                    value: header.value.trim().to_owned(),
+                })
+                .collect(),
         };
         aeria_ai::settings::validate_provider(&provider)
             .map_err(|message| aeria_ai::AiSettingsError::Rejected { message })?;
@@ -234,7 +253,16 @@ fn provider_endpoint(
             format!("no API key is stored for {:?}", provider.name),
         )
     })?;
-    Ok(ProviderEndpoint { base_url, api_key })
+    Ok(ProviderEndpoint {
+        base_url,
+        api_key,
+        session_header: provider.session_header.clone(),
+        headers: provider
+            .headers
+            .iter()
+            .map(|header| (header.name.clone(), header.value.clone()))
+            .collect(),
+    })
 }
 
 async fn endpoint_for(
@@ -414,6 +442,11 @@ mod tests {
             name: " OpenCode Go ".to_owned(),
             base_url: "https://opencode.ai/zen/go/v1/".to_owned(),
             models: vec![ModelConfig::new("glm-5.3")],
+            session_header: Some(" X-OpenCode-Session ".to_owned()),
+            headers: vec![HeaderConfig {
+                name: "X-Client".to_owned(),
+                value: " aeria ".to_owned(),
+            }],
         }
     }
 
@@ -427,6 +460,12 @@ mod tests {
         assert_eq!(provider.name, "OpenCode Go");
         assert_eq!(provider.base_url, "https://opencode.ai/zen/go/v1");
         assert_eq!(provider.api_key, ApiKeyStateDto::Missing);
+        assert_eq!(
+            provider.session_header.as_deref(),
+            Some("x-opencode-session")
+        );
+        assert_eq!(provider.headers[0].name, "x-client");
+        assert_eq!(provider.headers[0].value, "aeria");
         assert_eq!(settings.presets[0].kind, ProviderKind::OpenCodeGo);
     }
 
@@ -456,6 +495,14 @@ mod tests {
         assert!(!json.contains("sk-secret"));
         let endpoint = provider_endpoint(&store, &secrets, &id).expect("endpoint");
         assert_eq!(endpoint.api_key.expose(), "sk-secret");
+        assert_eq!(
+            endpoint.session_header.as_deref(),
+            Some("x-opencode-session")
+        );
+        assert_eq!(
+            endpoint.headers,
+            vec![("x-client".to_owned(), "aeria".to_owned())]
+        );
 
         remove_provider(&store, &secrets, &id).expect("remove");
         assert_eq!(secrets.get(&id).expect("get"), None);

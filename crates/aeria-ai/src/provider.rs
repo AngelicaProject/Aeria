@@ -79,6 +79,89 @@ pub struct ProviderConfig {
     pub name: String,
     pub base_url: String,
     pub models: Vec<ModelConfig>,
+    /// A header that receives a stable ID for each conversation, for
+    /// providers that route or cache by session.
+    #[serde(default)]
+    pub session_header: Option<String>,
+    /// Extra static headers sent with every request. Values are stored in
+    /// plain settings and must not be secrets.
+    #[serde(default)]
+    pub headers: Vec<HeaderConfig>,
+}
+
+/// One extra request header.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct HeaderConfig {
+    pub name: String,
+    pub value: String,
+}
+
+/// Most extra headers one provider may define.
+pub const MAX_EXTRA_HEADERS: usize = 16;
+/// Longest accepted header value.
+pub const MAX_HEADER_VALUE_CHARS: usize = 1024;
+
+/// Headers Aeria sets itself; configuration cannot replace them.
+const RESERVED_HEADERS: &[&str] = &[
+    "authorization",
+    "connection",
+    "content-length",
+    "content-type",
+    "host",
+    "proxy-authorization",
+    "te",
+    "transfer-encoding",
+    "upgrade",
+    "user-agent",
+];
+
+/// Checks an extra or session header name.
+///
+/// Names are HTTP tokens stored in lowercase and must not replace a header
+/// Aeria sets itself.
+///
+/// # Errors
+///
+/// Returns a description of the violated rule.
+pub fn validate_header_name(name: &str) -> Result<(), String> {
+    if name.is_empty() || name.len() > 128 {
+        return Err("header name must have 1 to 128 characters".to_owned());
+    }
+    if !name.bytes().all(|byte| {
+        byte.is_ascii_lowercase() || byte.is_ascii_digit() || b"!#$%&'*+-.^_`|~".contains(&byte)
+    }) {
+        return Err(format!(
+            "header name {name:?} must be lowercase letters, digits, or HTTP token symbols"
+        ));
+    }
+    if RESERVED_HEADERS.contains(&name) {
+        return Err(format!(
+            "header {name:?} is set by Aeria and cannot be configured"
+        ));
+    }
+    Ok(())
+}
+
+/// Checks an extra header value: visible ASCII and spaces, no line breaks.
+///
+/// # Errors
+///
+/// Returns a description of the violated rule.
+pub fn validate_header_value(value: &str) -> Result<(), String> {
+    if value.chars().count() > MAX_HEADER_VALUE_CHARS {
+        return Err(format!(
+            "header value must be at most {MAX_HEADER_VALUE_CHARS} characters"
+        ));
+    }
+    if value != value.trim()
+        || !value
+            .bytes()
+            .all(|byte| byte == b' ' || byte.is_ascii_graphic())
+    {
+        return Err("header value must be visible ASCII without surrounding spaces".to_owned());
+    }
+    Ok(())
 }
 
 impl ProviderConfig {
@@ -102,23 +185,13 @@ pub struct ProviderPreset {
     pub name: &'static str,
     /// `None` for presets whose URL the user supplies.
     pub base_url: Option<&'static str>,
-    pub models: Vec<ModelConfig>,
+    pub session_header: Option<&'static str>,
 }
 
-/// Models that `OpenCode` Go serves through its Chat Completions endpoint.
-/// Models it serves only through other endpoints are deliberately absent.
-const OPENCODE_GO_MODELS: &[&str] = &[
-    "glm-5.3",
-    "glm-5.3-flash",
-    "kimi-k3",
-    "kimi-k2.7-code",
-    "deepseek-v4-pro",
-    "deepseek-v4-flash",
-    "mimo-v2.6-pro",
-    "mimo-v2.6-flash",
-];
-
 /// Returns the ready-made provider presets, first-choice preset first.
+///
+/// Presets carry no model list: models come from the provider's own
+/// `GET /models` listing, so they never go stale in Aeria's code.
 #[must_use]
 pub fn presets() -> Vec<ProviderPreset> {
     vec![
@@ -126,22 +199,19 @@ pub fn presets() -> Vec<ProviderPreset> {
             kind: ProviderKind::OpenCodeGo,
             name: "OpenCode Go",
             base_url: Some("https://opencode.ai/zen/go/v1"),
-            models: OPENCODE_GO_MODELS
-                .iter()
-                .map(|id| ModelConfig::new(*id))
-                .collect(),
+            session_header: Some("x-opencode-session"),
         },
         ProviderPreset {
             kind: ProviderKind::OpenRouter,
             name: "OpenRouter",
             base_url: Some("https://openrouter.ai/api/v1"),
-            models: Vec::new(),
+            session_header: None,
         },
         ProviderPreset {
             kind: ProviderKind::Custom,
             name: "OpenAI-compatible",
             base_url: None,
-            models: Vec::new(),
+            session_header: None,
         },
     ]
 }
@@ -271,11 +341,41 @@ mod tests {
                 BaseUrl::parse(url).expect("preset URL is valid");
             }
         }
-        assert!(
-            presets[0]
-                .models
-                .iter()
-                .all(|model| model.reasoning_efforts.is_empty())
-        );
+        assert_eq!(presets[0].session_header, Some("x-opencode-session"));
+        for preset in &presets {
+            if let Some(header) = preset.session_header {
+                validate_header_name(header).expect("preset session header is valid");
+            }
+        }
+    }
+
+    #[test]
+    fn header_names_are_lowercase_tokens_and_not_reserved() {
+        assert!(validate_header_name("x-opencode-session").is_ok());
+        for name in [
+            "",
+            "X-Upper",
+            "bad header",
+            "bad:colon",
+            "authorization",
+            "content-type",
+        ] {
+            assert!(
+                validate_header_name(name).is_err(),
+                "{name:?} must be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn header_values_reject_line_breaks_and_non_ascii() {
+        assert!(validate_header_value("client=aeria; v=1").is_ok());
+        assert!(validate_header_value("").is_ok());
+        for value in ["a\r\nx-injected: 1", " padded", "ünicode", "tab\there"] {
+            assert!(
+                validate_header_value(value).is_err(),
+                "{value:?} must be rejected"
+            );
+        }
     }
 }
