@@ -90,7 +90,8 @@ export function toolSubject(name: string, argumentsText: string): string {
     if (typeof args.column === "number") parts.push(String(args.column));
     return parts.join(":");
   }
-  if (name === "list_sheets" && typeof args.query === "string") return `“${args.query}”`;
+  if (typeof args.query === "string") return `“${args.query}”`;
+  if (name === "similar_translations" && typeof args.text === "string") return `“${args.text}”`;
   if (typeof args.unit_id === "string") return args.unit_id.slice(0, 12);
   return "";
 }

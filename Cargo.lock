@@ -58,6 +58,7 @@ dependencies = [
  "aeria-hxs",
  "aeria-projects",
  "aeria-rebase",
+ "aeria-search",
  "aeria-workspace",
  "rusqlite",
  "serde",
@@ -142,6 +143,14 @@ version = "0.1.0"
 [[package]]
 name = "aeria-search"
 version = "0.1.0"
+dependencies = [
+ "aeria-hsp",
+ "aeria-hxs",
+ "aeria-se",
+ "rusqlite",
+ "tempfile",
+ "thiserror 2.0.20",
+]
 
 [[package]]
 name = "aeria-workspace"

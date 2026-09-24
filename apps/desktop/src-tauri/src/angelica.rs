@@ -21,6 +21,7 @@ use aeria_ai::conversation::{
 use aeria_ai::conversation::{ProposalRecord, ProposalStatus};
 use aeria_ai::guidance::{GlossaryEntry, ProjectFile, ProjectGuide, read_project_file};
 use aeria_ai::prompt::{AgentMode, EditorContext, system_prompt};
+use aeria_ai::search::search_tool_definitions;
 use aeria_ai::tools::{
     CellSnapshot, ContextCell, FileChange, ProjectFacts, ProjectReader, ProjectWriter, Proposal,
     ProposalOutcome, ReadTools, ReviewLabel, RowSnapshot, RowsPage, SheetSummary, ToolError,
@@ -44,6 +45,7 @@ use crate::dto::{ProjectSummaryDto, SourceBindingDto, TranslationOverlayDto};
 use crate::error::CommandError;
 use crate::git::{UnitChangeDto, UnitHistoryDto, open_repository};
 use crate::jobs::{DesktopJobs, start_proposed_job};
+use crate::search::{DesktopSearch, prepare_source_index};
 use crate::state::DesktopState;
 
 type CommandResult<T> = Result<T, CommandError>;
@@ -736,6 +738,9 @@ impl ToolExecutor for DesktopTools {
             mode: self.mode,
             editor: self.editor.clone(),
         });
+        let search = DesktopSearch {
+            app: self.app.clone(),
+        };
         let jobs = DesktopJobs {
             app: self.app.clone(),
             store: self.store.clone(),
@@ -747,9 +752,11 @@ impl ToolExecutor for DesktopTools {
             tauri::async_runtime::spawn_blocking(move || match &writer {
                 Some(writer) => ReadTools::with_writer(&reader, writer)
                     .with_jobs(&jobs)
+                    .with_search(&search)
                     .execute(&name, &arguments),
                 None => ReadTools::new(&reader)
                     .with_jobs(&jobs)
+                    .with_search(&search)
                     .execute(&name, &arguments),
             })
             .await
@@ -904,6 +911,8 @@ fn prepare_turn(
         .clone();
     let facts = DesktopReader { app: app.clone() }.facts().ok();
     let guide = ProjectGuide::load(&repository_root(app)?);
+    // The first message starts building the search index in the background.
+    prepare_source_index(app);
     let system = system_prompt(facts.as_ref(), editor, mode, &guide);
 
     let store = conversation_store(app)?;
@@ -967,6 +976,7 @@ async fn run_prepared_turn(
     if mode != AgentMode::Chat {
         tools.extend(write_tool_definitions());
     }
+    tools.extend(search_tool_definitions());
     tools.extend(job_tool_definitions(mode != AgentMode::Chat));
     let config = TurnConfig {
         model: &model.id,

@@ -36,6 +36,9 @@ Likely UI-level dependencies such as Tailwind, Radix primitives, CodeMirror, doc
 - `rusqlite` (MIT) with `bundled`: the local translation-job store. The bundled SQLite needs only a C compiler, which the Windows and Linux toolchains already provide.
 - `fs2`, `uuid`, `serde_json`, and `thiserror`, matching `aeria-projects`.
 
+`aeria-search` uses `rusqlite` (MIT) with `bundled`, whose SQLite includes
+FTS5 with the `unicode61` and `trigram` tokenizers.
+
 The desktop adds `tauri-plugin-opener` (Apache-2.0 OR MIT) to open the ChatGPT
 sign-in page from Rust, and `tokio` with only `rt` and `time`, already part of
 the Tauri runtime, to pace sign-in polling and to run a translation job's

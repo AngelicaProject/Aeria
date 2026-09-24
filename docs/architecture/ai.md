@@ -208,6 +208,21 @@ tagged form (see [`strings.md`](./strings.md#tagged-text)), with a `tags`
 legend whenever it differs from the source; a malformed source is marked
 `untaggable`. Tagged sources are cut only above 8,000 characters.
 
+### Search tools
+
+Offered in every mode, backed by [`aeria-search`](./search.md):
+
+| Tool | Result |
+| --- | --- |
+| `search_source` | Translatable strings whose source text matches the query, best first, with their translations and review states; optionally one sheet; up to 50 per page with `more`. |
+| `search_translations` | Bound translations whose text contains the query, ignoring case and macros, with their sources, in source order. |
+| `similar_translations` | Translation memory for one string (by location) or a given text: up to 10 translated strings with a similar source, most similar first, with a similarity from 0.5 to 1. |
+
+The first message to Angelica starts building the source index in the
+background; until it is ready, `search_source` and `similar_translations`
+report that it is being built. Texts in results are cut like other tool
+results.
+
 ### Write tools
 
 | Tool | Result |
@@ -303,8 +318,8 @@ estimate is the number of strings and chunks and a rough token count.
 Each chunk is translated by a worker with a fresh context: fixed worker
 instructions, the project facts, guidance and matching glossary entries, the
 job's instructions as they are when the chunk starts, and its strings in
-tagged form with their legends, context cells, current translations, and
-notes. Its tools are `get_unit` and `read_rows` for context, `get_guidance`,
+tagged form with their legends, context cells, current translations,
+notes, and up to three translation-memory matches. Its tools are `get_unit` and `read_rows` for context, `get_guidance`,
 `validate_target`, `submit_translations` for the strings of its own chunk
 only, and `report_issue`, which records an event for Angelica. A worker has at
 most 8 responses. A submitted translation is rebuilt and written as a draft

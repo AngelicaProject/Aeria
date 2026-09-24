@@ -5,6 +5,7 @@ mod dto;
 mod error;
 mod git;
 mod jobs;
+mod search;
 mod state;
 
 use serde::Serialize;

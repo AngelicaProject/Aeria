@@ -37,7 +37,9 @@ game client understands can be used.
 forms that depend on the last digits cannot be expressed. Prefer number-neutral phrasing \
 such as `Получено: <item> ×5`.
 - Translations must read naturally in the target language and stay consistent with the \
-project's existing translations and terminology.";
+project's existing translations and terminology. search_source finds strings by their \
+source text, search_translations shows how a term was translated before, and \
+similar_translations is the translation memory for one string.";
 
 const CHAT_MODE: &str = "\
 Current mode: Chat. You can read the project but cannot change it. When the user asks \

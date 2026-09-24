@@ -13,6 +13,7 @@ use crate::guidance::{Glossary, GlossaryEntry, ProjectFile, ProjectGuide, change
 use crate::jobs::{
     JobEstimate, JobEvent, JobFilter, JobScope, JobStatus, JobSummary, JobUnit, UnitStatus,
 };
+use crate::search::{ProjectSearch, run_search_tool};
 
 /// Longest source, target, or note text returned for one cell.
 pub const MAX_CELL_TEXT_CHARS: usize = 2000;
@@ -829,6 +830,7 @@ pub struct ReadTools<'a> {
     reader: &'a dyn ProjectReader,
     writer: Option<&'a dyn ProjectWriter>,
     jobs: Option<&'a dyn JobControl>,
+    search: Option<&'a dyn ProjectSearch>,
 }
 
 #[derive(Deserialize)]
@@ -886,7 +888,15 @@ impl<'a> ReadTools<'a> {
             reader,
             writer: None,
             jobs: None,
+            search: None,
         }
+    }
+
+    /// Adds the search and translation-memory tools.
+    #[must_use]
+    pub fn with_search(mut self, search: &'a dyn ProjectSearch) -> Self {
+        self.search = Some(search);
+        self
     }
 
     /// Adds the job tools; changing jobs also needs a writer.
@@ -903,6 +913,7 @@ impl<'a> ReadTools<'a> {
             reader,
             writer: Some(writer),
             jobs: None,
+            search: None,
         }
     }
 
@@ -960,6 +971,12 @@ impl<'a> ReadTools<'a> {
                 Ok(json!({ "opened": location }))
             }
             "get_guidance" => Ok(self.get_guidance(&parse(arguments)?)),
+            "search_source" | "search_translations" | "similar_translations" => {
+                let Some(search) = self.search else {
+                    return Err(ToolError::new("search is not available here"));
+                };
+                run_search_tool(search, self.reader, name, arguments)
+            }
             "estimate_job" | "start_job" | "job_status" | "job_events" | "amend_job"
             | "retry_units" | "pause_job" | "resume_job" | "cancel_job" => {
                 let Some(jobs) = self.jobs else {
@@ -1321,13 +1338,13 @@ fn bound_row(mut row: RowSnapshot, glossary: Option<&Glossary>) -> RowSnapshot {
     row
 }
 
-fn bound_text(text: &mut String) {
+pub(crate) fn bound_text(text: &mut String) {
     if text.chars().count() > MAX_CELL_TEXT_CHARS {
         *text = text.chars().take(MAX_CELL_TEXT_CHARS).collect::<String>() + "…[truncated]";
     }
 }
 
-fn parse<T: for<'de> Deserialize<'de>>(arguments: &str) -> Result<T, ToolError> {
+pub(crate) fn parse<T: for<'de> Deserialize<'de>>(arguments: &str) -> Result<T, ToolError> {
     let arguments = if arguments.trim().is_empty() {
         "{}"
     } else {
@@ -1337,7 +1354,7 @@ fn parse<T: for<'de> Deserialize<'de>>(arguments: &str) -> Result<T, ToolError> 
         .map_err(|error| ToolError::new(format!("invalid arguments: {error}")))
 }
 
-fn to_value<T: Serialize>(value: &T) -> Result<Value, ToolError> {
+pub(crate) fn to_value<T: Serialize>(value: &T) -> Result<Value, ToolError> {
     serde_json::to_value(value).map_err(|error| ToolError::new(error.to_string()))
 }
 

@@ -9,6 +9,7 @@ use aeria_git::{GitExecutable, UnitAttribution};
 use aeria_workspace::ProjectSession;
 
 use crate::error::CommandError;
+use crate::search::IndexState;
 
 /// The one authoritative project session owned by the desktop process.
 pub struct DesktopState {
@@ -30,6 +31,8 @@ pub struct DesktopState {
     job_runners: Mutex<Vec<(String, tauri::async_runtime::JoinHandle<()>)>>,
     /// Job stores opened in this process; interrupted jobs are paused once.
     job_stores: Mutex<Vec<PathBuf>>,
+    /// Source search indexes by source package ID.
+    search_indexes: Mutex<Vec<(String, IndexState)>>,
 }
 
 /// Committed unit attribution for one repository commit. It is derived from
@@ -69,6 +72,7 @@ impl DesktopState {
             proposals: Mutex::new(()),
             job_runners: Mutex::new(Vec::new()),
             job_stores: Mutex::new(Vec::new()),
+            search_indexes: Mutex::new(Vec::new()),
         }
     }
 
@@ -220,6 +224,40 @@ impl DesktopState {
             let (_, handle) = runners.remove(position);
             handle.abort();
         }
+    }
+
+    pub(crate) fn search_index(&self, package_id: &str) -> Option<IndexState> {
+        let indexes = self.search_indexes.lock().ok()?;
+        indexes
+            .iter()
+            .find(|(id, _)| id == package_id)
+            .map(|(_, state)| state.clone())
+    }
+
+    pub(crate) fn set_search_index(&self, package_id: &str, state: IndexState) {
+        if let Ok(mut indexes) = self.search_indexes.lock() {
+            indexes.retain(|(id, _)| id != package_id);
+            indexes.push((package_id.to_owned(), state));
+        }
+    }
+
+    pub(crate) fn forget_search_index(&self, package_id: &str) {
+        if let Ok(mut indexes) = self.search_indexes.lock() {
+            indexes.retain(|(id, _)| id != package_id);
+        }
+    }
+
+    /// Marks a package's index as building. Returns `false` when it already
+    /// has a state, so only one build starts.
+    pub(crate) fn claim_search_build(&self, package_id: &str) -> bool {
+        let Ok(mut indexes) = self.search_indexes.lock() else {
+            return false;
+        };
+        if indexes.iter().any(|(id, _)| id == package_id) {
+            return false;
+        }
+        indexes.push((package_id.to_owned(), IndexState::Building));
+        true
     }
 
     pub(crate) fn cached_attribution(

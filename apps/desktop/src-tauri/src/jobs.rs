@@ -23,6 +23,7 @@ use aeria_ai::jobs::{
     JobError, JobEstimate, JobEvent, JobFilter, JobProposal, JobScope, JobSpec, JobStatus,
     JobStore, JobSummary, JobUnit, ScopedUnit, UnitStatus,
 };
+use aeria_ai::search::ProjectSearch;
 use aeria_ai::tools::{
     JobAction, JobControl, ProjectReader, ProposalOutcome, ToolError, ToolOutput, UnitLocation,
     UnitState,
@@ -40,6 +41,7 @@ use crate::angelica::{
 };
 use crate::commands::run_blocking;
 use crate::error::CommandError;
+use crate::search::DesktopSearch;
 use crate::state::DesktopState;
 
 type CommandResult<T> = Result<T, CommandError>;
@@ -52,6 +54,8 @@ const REJECTION_SAMPLE: u64 = 40;
 /// Provider failures in a row, per lane, before the job pauses.
 const MAX_PROVIDER_FAILURES: u32 = 3;
 const PROVIDER_BACKOFF: Duration = Duration::from_secs(20);
+/// Translation-memory matches given to a worker per string.
+const JOB_MEMORY_MATCHES: usize = 3;
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -597,7 +601,7 @@ impl DesktopJobHost {
 impl JobHost for DesktopJobHost {
     fn context(&self, location: &UnitLocation) -> Result<UnitContext, ToolError> {
         let binding = binding_of(location)?;
-        self.reader()?.with_session(|session| {
+        let mut context = self.reader()?.with_session(|session| {
             let source = session.source_macro(&binding).map_err(tool_error)?;
             let row = session_row(session, &location.sheet, location.row, location.subrow)?;
             let cell = row.as_ref().and_then(|row| {
@@ -613,8 +617,16 @@ impl JobHost for DesktopJobHost {
                     .unwrap_or_default(),
                 current_target: cell.and_then(|cell| cell.target.clone()),
                 note: cell.and_then(|cell| cell.note.clone()),
+                memory: Vec::new(),
             })
-        })
+        })?;
+        // Translation memory is a help; a missing index never stops a job.
+        context.memory = DesktopSearch {
+            app: self.run.app.clone(),
+        }
+        .similar_translations(&context.source, Some(location), JOB_MEMORY_MATCHES)
+        .unwrap_or_default();
+        Ok(context)
     }
 
     fn write(

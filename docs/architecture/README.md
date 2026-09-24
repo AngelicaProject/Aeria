@@ -16,6 +16,7 @@ Start with [`overview.md`](./overview.md). It defines the major runtime boundari
 | Workspace state and persistence | [`workspace.md`](./workspace.md) | `aeria-workspace` |
 | Source updates after game patches | [`rebase.md`](./rebase.md), [`rebase-safety.md`](./rebase-safety.md), [`rebase-candidates.md`](./rebase-candidates.md) | `aeria-rebase`, `aeria-workspace` |
 | Git-backed collaboration | [`git.md`](./git.md) | `aeria-git` |
+| Search and translation memory | [`search.md`](./search.md) | `aeria-search` |
 | Translation assistance | [`ai.md`](./ai.md) | `aeria-ai` |
 | Angelica agent (proposal) | [`ai-agent.md`](./ai-agent.md) | `aeria-ai`, desktop AI dock |
 | Runtime translation pack export | [`export.md`](./export.md) | `aeria-export` |

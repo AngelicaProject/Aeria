@@ -88,6 +88,12 @@ test("replies render a small Markdown subset without HTML", () => {
   assert.deepEqual(parseSpans("<color(1)>"), [{ kind: "text", text: "<color(1)>" }]);
 });
 
+test("search tools show their query", () => {
+  assert.equal(toolSubject("search_source", JSON.stringify({ query: "crystal" })), "“crystal”");
+  assert.equal(toolSubject("similar_translations", JSON.stringify({ text: "Fire" })), "“Fire”");
+  assert.equal(toolSubject("similar_translations", JSON.stringify({ sheet: "Item", row: 1, column: 0 })), "Item:1:0:0");
+});
+
 test("automatic messages from Aeria are shown as notices", () => {
   const items = transcriptFromMessages([
     { role: "user", content: "Переведи Action" },

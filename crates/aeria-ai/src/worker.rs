@@ -17,6 +17,7 @@ use serde_json::{Value, json};
 use crate::chat::ToolDefinition;
 use crate::guidance::ProjectGuide;
 use crate::jobs::{JobUnit, UnitStatus};
+use crate::search::MemoryMatch;
 use crate::tools::{
     ContextCell, ProjectFacts, ProjectReader, ReadTools, ToolError, ToolOutput, UnitLocation,
     UnitState, read_tool_definitions,
@@ -26,12 +27,14 @@ use crate::tools::{
 pub const WORKER_ROUNDS: usize = 8;
 
 /// What a worker needs to translate one string.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct UnitContext {
     pub source: String,
     pub context: Vec<ContextCell>,
     pub current_target: Option<String>,
     pub note: Option<String>,
+    /// Existing translations of similar sources, most similar first.
+    pub memory: Vec<MemoryMatch>,
 }
 
 /// Why a job write did not happen.
@@ -80,6 +83,8 @@ repeat\" may repeat. Never write raw macro syntax.
 - The game cannot compute number endings, so prefer number-neutral phrasing.
 - Follow the project guidance and glossary, inflecting glossary terms as the target \
 language needs and never using a forbidden variant.
+- Translation memory lists existing translations of similar sources; keep their wording \
+where the source is the same, and stay consistent with them otherwise.
 - Use get_unit, read_rows, or get_guidance only when a string needs more context.
 - Use report_issue for an ambiguity, missing context, or glossary gap Angelica should know \
 about; still submit your best translation.
@@ -241,6 +246,15 @@ impl ChunkWorker {
             }
             if let Some(note) = &context.note {
                 let _ = writeln!(message, "- translator note: {note}");
+            }
+            for memory in &context.memory {
+                let _ = writeln!(
+                    message,
+                    "- translation memory ({:.0} % similar): {} → {}",
+                    memory.similarity * 100.0,
+                    memory.source,
+                    memory.target
+                );
             }
             if let Some(glossary) = &self.guide.glossary {
                 for entry in glossary.matches(&context.source).into_iter().take(20) {
@@ -476,7 +490,7 @@ fn parse<T: for<'de> Deserialize<'de>>(arguments: &str) -> Result<T, ToolError> 
 mod tests {
     use super::*;
     use crate::guidance::ProjectFile;
-    use crate::tools::{ProjectFacts, RowSnapshot, RowsPage, SheetSummary};
+    use crate::tools::{ProjectFacts, ReviewLabel, RowSnapshot, RowsPage, SheetSummary};
 
     struct Host {
         written: Mutex<Vec<(u32, String)>>,
@@ -491,18 +505,32 @@ mod tests {
                     context: Vec::new(),
                     current_target: None,
                     note: Some("greeting".to_owned()),
+                    memory: vec![MemoryMatch {
+                        location: UnitLocation {
+                            sheet: "Item".to_owned(),
+                            row: 9,
+                            subrow: 0,
+                            column: Some(0),
+                        },
+                        source: "Hi <pcname(lnum1)>.".to_owned(),
+                        target: "Привет, <pcname(lnum1)>.".to_owned(),
+                        review_state: ReviewLabel::Reviewed,
+                        similarity: 0.9,
+                    }],
                 }),
                 2 => Ok(UnitContext {
                     source: "Bye".to_owned(),
                     context: Vec::new(),
                     current_target: Some("Пока".to_owned()),
                     note: None,
+                    memory: Vec::new(),
                 }),
                 3 => Ok(UnitContext {
                     source: "Aether".to_owned(),
                     context: Vec::new(),
                     current_target: None,
                     note: None,
+                    memory: Vec::new(),
                 }),
                 _ => Err(ToolError::new("gone")),
             }
@@ -604,6 +632,9 @@ mod tests {
         assert!(message.contains("Unit 1 — Item:1:0:0"));
         assert!(message.contains(r#"<source>Hi <x id="1"/>!</source>"#));
         assert!(message.contains("- translator note: greeting"));
+        assert!(message.contains(
+            "- translation memory (90 % similar): Hi <pcname(lnum1)>. → Привет, <pcname(lnum1)>."
+        ));
         assert!(message.contains("- current translation, to replace: Пока"));
         assert!(message.contains("- glossary: Aether → Эфир"));
         assert!(!message.contains("Unit 4"));

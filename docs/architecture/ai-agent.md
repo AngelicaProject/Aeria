@@ -62,7 +62,7 @@ aeria-ai
   ├── jobs          translation jobs, worker subagents, supervision events
   └── validation    structural checks before any write
         |
-ProjectSession (aeria-workspace) · aeria-se · aeria-git (read-only) · aeria-search (later)
+ProjectSession (aeria-workspace) · aeria-se · aeria-git (read-only) · aeria-search
 ```
 
 `aeria-ai` does not depend on Tauri. It defines an `AgentHost` trait with
@@ -103,7 +103,7 @@ Settings are stored in local application data. API keys are stored only in the
 OS secret store and are never logged, sent to the renderer, or included in
 error messages.
 
-Milestones 1 to 5, except the `gender` construct, are implemented; their
+Milestones 1 to 6, except the `gender` construct, are implemented; their
 current behavior is described in
 [`ai.md`](./ai.md#angelica). Milestone 5 differs from this plan: scopes are
 sheets or the project with an untranslated, needs-review, or
@@ -274,7 +274,7 @@ conversation.
 | `unit_history` | Git history of one unit's target (read-only `aeria-git`). |
 | `pending_changes` | Uncommitted translation changes, grouped by sheet. |
 | `get_guidance` | Project guidance text and glossary entries matching given terms. |
-| `search_source`, `search_translations`, `similar_translations` | Added when `aeria-search` provides a backend. Until then they are not offered to the model. |
+| `search_source`, `search_translations`, `similar_translations` | Source search, translation search, and translation memory from `aeria-search`. |
 
 ### Action tools
 
@@ -488,8 +488,8 @@ Each milestone is a separate change with its own documentation update.
    its format document, glossary tools, and advisory checks.
 5. **Translation jobs**: job orchestrator and store, worker subagents,
    supervision events, and job controls in the Angelica panel.
-6. **Search tools**: source search and translation memory once
-   `aeria-search` exists.
+6. **Search tools**: `aeria-search` source index, source and translation
+   search, and translation memory for Angelica and job workers.
 
 Later candidates: read-only web lookup with per-request approval (results are
 untrusted data), and an AI QA pass that can only flag `needs_review`.

@@ -92,7 +92,7 @@ its mode:
 | none | Go to a sheet by fuzzy name match; empty input lists recently opened sheets first |
 | `>` | Run a workbench command, including theme switching (Ctrl+Shift+P) |
 | `:` | Go to `row`, `row:subrow`, or `row:subrow:column` in the active sheet (Ctrl+G) |
-| `#` | Project string search; shown as unavailable until a search backend exists |
+| `#` | Project string search; shown as unavailable until the Search tool is implemented |
 | `?` | List the prefixes |
 
 Going to a row that is not loaded pages the sheet so it starts at that row. The
@@ -182,7 +182,8 @@ does not match, and the empty-sheet filter only when the active sheet itself
 has no translatable strings. Collapse all clears the name filter and closes
 every folder. The flattened visible tree is virtualized for large source
 catalogs. Project Search is a separate workbench tool and shows a truthful
-unavailable state until a domain search backend exists.
+unavailable state until it is implemented; the `aeria-search` backend
+currently serves Angelica's search tools only.
 
 ## Git dock
 

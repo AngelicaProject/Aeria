@@ -217,6 +217,12 @@ the renderer; `ai_set_worker_model` sets the jobs model. When a job
 completes or pauses on its own, the runner starts an automatic Angelica turn
 in the job's conversation unless one is running.
 
+Angelica's search tools and job workers' translation memory use
+`DesktopSearch`. The source index of the active package is built by a
+background blocking task registered in `DesktopState` (building, ready, or
+failed per package ID), from its own verified HXS handle; see
+[`search.md`](./search.md#desktop-use).
+
 Commands that require an active project report `noProjectOpen` before
 validating project-scoped payload such as translation-unit IDs.
 
