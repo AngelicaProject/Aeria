@@ -62,7 +62,10 @@ contracts.
 The row reader uses one bounded SQL query per page. A CTE first selects at most
 `limit + 1` distinct `(row_id, subrow_id)` coordinates containing String cells,
 using an exclusive keyset predicate and ordering by row/subrow. The query then
-joins those coordinates to `string_cells` and `rows`, returning
+joins those coordinates to `string_cells` and `rows` with the page groups
+pinned as the outer loop (`CROSS JOIN`), so each page reads only its own cells;
+a join driven from `string_cells` by sheet alone would rescan the whole sheet
+for every page. It returns
 `row_id`, `subrow_id`, `column_index`, macro text, macro hash, optional raw
 hash, and row technical hash. It does not select `raw_value` and does not call
 `page_rows` or `string_cell` repeatedly.

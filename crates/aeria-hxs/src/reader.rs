@@ -21,6 +21,49 @@ use crate::{
     MAX_STRING_ROW_PAGE_SIZE,
 };
 
+// String row pages select the next row groups first, then join their cells.
+// CROSS JOIN pins the page groups as the outer loop: with a plain JOIN SQLite
+// may drive the join from `string_cells` by sheet alone, which scans the whole
+// sheet on every page.
+const STRING_ROW_PAGE_FIRST_SQL: &str = r"WITH page_groups AS (
+    SELECT row_id, subrow_id
+    FROM string_cells
+    WHERE sheet_id = ?1
+    GROUP BY row_id, subrow_id
+    ORDER BY row_id, subrow_id
+    LIMIT ?2
+)
+SELECT c.row_id, c.subrow_id, c.column_index, c.macro_text,
+       c.macro_hash, c.raw_hash, r.technical_hash
+FROM page_groups AS g
+CROSS JOIN string_cells AS c ON c.sheet_id = ?1
+                            AND c.row_id = g.row_id
+                            AND c.subrow_id = g.subrow_id
+CROSS JOIN rows AS r ON r.sheet_id = c.sheet_id
+                    AND r.row_id = c.row_id
+                    AND r.subrow_id = c.subrow_id
+ORDER BY c.row_id, c.subrow_id, c.column_index";
+
+const STRING_ROW_PAGE_AFTER_SQL: &str = r"WITH page_groups AS (
+    SELECT row_id, subrow_id
+    FROM string_cells
+    WHERE sheet_id = ?1
+      AND (row_id, subrow_id) > (?2, ?3)
+    GROUP BY row_id, subrow_id
+    ORDER BY row_id, subrow_id
+    LIMIT ?4
+)
+SELECT c.row_id, c.subrow_id, c.column_index, c.macro_text,
+       c.macro_hash, c.raw_hash, r.technical_hash
+FROM page_groups AS g
+CROSS JOIN string_cells AS c ON c.sheet_id = ?1
+                            AND c.row_id = g.row_id
+                            AND c.subrow_id = g.subrow_id
+CROSS JOIN rows AS r ON r.sheet_id = c.sheet_id
+                    AND r.row_id = c.row_id
+                    AND r.subrow_id = c.subrow_id
+ORDER BY c.row_id, c.subrow_id, c.column_index";
+
 /// A verified, read-only handle to one immutable HXS source artifact.
 pub struct HxsSnapshot {
     connection: Connection,
@@ -489,25 +532,7 @@ impl HxsSnapshot {
         let limit_sql = i64::from(limit) + 1;
         let (sql, parameters) = if let Some(after) = after {
             (
-                r"WITH page_groups AS (
-                    SELECT row_id, subrow_id
-                    FROM string_cells
-                    WHERE sheet_id = ?1
-                      AND (row_id, subrow_id) > (?2, ?3)
-                    GROUP BY row_id, subrow_id
-                    ORDER BY row_id, subrow_id
-                    LIMIT ?4
-                )
-                SELECT c.row_id, c.subrow_id, c.column_index, c.macro_text,
-                       c.macro_hash, c.raw_hash, r.technical_hash
-                FROM page_groups AS g
-                JOIN string_cells AS c ON c.sheet_id = ?1
-                                      AND c.row_id = g.row_id
-                                      AND c.subrow_id = g.subrow_id
-                JOIN rows AS r ON r.sheet_id = c.sheet_id
-                              AND r.row_id = c.row_id
-                              AND r.subrow_id = c.subrow_id
-                ORDER BY c.row_id, c.subrow_id, c.column_index",
+                STRING_ROW_PAGE_AFTER_SQL,
                 Some((
                     sheet_id,
                     i64::from(after.row_id),
@@ -516,27 +541,7 @@ impl HxsSnapshot {
                 )),
             )
         } else {
-            (
-                r"WITH page_groups AS (
-                    SELECT row_id, subrow_id
-                    FROM string_cells
-                    WHERE sheet_id = ?1
-                    GROUP BY row_id, subrow_id
-                    ORDER BY row_id, subrow_id
-                    LIMIT ?2
-                )
-                SELECT c.row_id, c.subrow_id, c.column_index, c.macro_text,
-                       c.macro_hash, c.raw_hash, r.technical_hash
-                FROM page_groups AS g
-                JOIN string_cells AS c ON c.sheet_id = ?1
-                                      AND c.row_id = g.row_id
-                                      AND c.subrow_id = g.subrow_id
-                JOIN rows AS r ON r.sheet_id = c.sheet_id
-                              AND r.row_id = c.row_id
-                              AND r.subrow_id = c.subrow_id
-                ORDER BY c.row_id, c.subrow_id, c.column_index",
-                None,
-            )
+            (STRING_ROW_PAGE_FIRST_SQL, None)
         };
 
         let mut statement = self.connection.prepare(sql).map_err(HxsError::storage)?;
@@ -900,4 +905,67 @@ fn read_pragma_i64(connection: &Connection, pragma: &str) -> Result<i64, HxsErro
     connection
         .query_row(&format!("PRAGMA {pragma}"), [], |row| row.get::<_, i64>(0))
         .map_err(HxsError::storage)
+}
+
+#[cfg(test)]
+mod tests {
+    use rusqlite::Connection;
+
+    use super::{STRING_ROW_PAGE_AFTER_SQL, STRING_ROW_PAGE_FIRST_SQL};
+
+    /// Every cell and row lookup in a string row page must be keyed by the
+    /// page's row group; a lookup by sheet alone scans the whole sheet.
+    #[test]
+    fn string_row_pages_look_up_cells_by_row_group() {
+        let connection = Connection::open_in_memory().expect("in-memory database");
+        connection
+            .execute_batch(
+                r#"CREATE TABLE "rows" (
+                    sheet_id INTEGER NOT NULL,
+                    row_id INTEGER NOT NULL,
+                    subrow_id INTEGER NOT NULL,
+                    technical_payload BLOB NOT NULL,
+                    row_hash BLOB NOT NULL,
+                    technical_hash BLOB NOT NULL,
+                    string_hash BLOB NOT NULL,
+                    PRIMARY KEY (sheet_id, row_id, subrow_id)
+                );
+                CREATE TABLE string_cells (
+                    sheet_id INTEGER NOT NULL,
+                    row_id INTEGER NOT NULL,
+                    subrow_id INTEGER NOT NULL,
+                    column_index INTEGER NOT NULL,
+                    macro_text TEXT NOT NULL,
+                    raw_value BLOB,
+                    macro_hash BLOB NOT NULL,
+                    raw_hash BLOB,
+                    PRIMARY KEY (sheet_id, row_id, subrow_id, column_index)
+                );"#,
+            )
+            .expect("HXS tables");
+
+        for sql in [STRING_ROW_PAGE_FIRST_SQL, STRING_ROW_PAGE_AFTER_SQL] {
+            let mut statement = connection
+                .prepare(&format!("EXPLAIN QUERY PLAN {sql}"))
+                .expect("query plan");
+            let unbound = vec![rusqlite::types::Null; statement.parameter_count()];
+            let details = statement
+                .query_map(rusqlite::params_from_iter(unbound), |row| {
+                    row.get::<_, String>(3)
+                })
+                .expect("plan rows")
+                .collect::<Result<Vec<_>, _>>()
+                .expect("plan details");
+            for table in ["c", "r"] {
+                let lookup = details
+                    .iter()
+                    .find(|detail| detail.starts_with(&format!("SEARCH {table} ")))
+                    .unwrap_or_else(|| panic!("{table} lookup in {details:?}"));
+                assert!(
+                    lookup.contains("row_id=? AND subrow_id=?"),
+                    "{table} must be looked up by row group: {details:?}"
+                );
+            }
+        }
+    }
 }
