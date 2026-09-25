@@ -833,6 +833,21 @@ export function EditorShell({
 
   // Layout ---------------------------------------------------------------
 
+  const workbenchBodyRef = useRef<HTMLDivElement>(null);
+  /** Props for a handle that resizes `regionId` through the CSS `variable` on the workbench body. */
+  const resizeProps = (regionId: string, variable: string, direction: 1 | -1) => {
+    const region = layout.regions[regionId]!;
+    return {
+      size: region.size,
+      min: region.minSize,
+      max: region.maxSize,
+      direction,
+      target: workbenchBodyRef,
+      variable,
+      onResize: (delta: number) => dispatchLayout({ type: "resizeRegion", regionId, delta }),
+    };
+  };
+
   const setRegionVisible = useCallback((regionId: string, visible: boolean) => {
     dispatchLayout({ type: "setRegionVisibility", regionId, visible });
   }, []);
@@ -1164,6 +1179,7 @@ export function EditorShell({
         </div>
       ) : null}
       <div
+        ref={workbenchBodyRef}
         className="workbench-body"
         style={{
           "--left-dock-width": `${layout.regions.leftDock.size}px`,
@@ -1181,7 +1197,7 @@ export function EditorShell({
           footer={[{ id: "settings", label: t("common.settings"), icon: "settings", shortcut: "Ctrl+,", onSelect: () => openSettings() }]}
         />
         {renderDock("left", leftPanelId, leftDockOpen)}
-        {leftDockOpen && leftPanelId && detachedPanel !== leftPanelId ? <ResizeHandle axis="x" label={t("workbench.resizeLeft")} onDelta={(delta) => dispatchLayout({ type: "resizeRegion", regionId: "leftDock", delta })} /> : null}
+        {leftDockOpen && leftPanelId && detachedPanel !== leftPanelId ? <ResizeHandle axis="x" label={t("workbench.resizeLeft")} {...resizeProps("leftDock", "--left-dock-width", 1)} /> : null}
 
         <div className="workbench-center">
           <section className="panel document">
@@ -1223,7 +1239,7 @@ export function EditorShell({
                   onNavigate={navigateOccurrence}
                   changedKinds={changedKinds}
                 />
-                <ResizeHandle axis="y" label={t("workbench.resizeEditor")} onDelta={(delta) => dispatchLayout({ type: "resizeRegion", regionId: "editor", delta: -delta })} />
+                <ResizeHandle axis="y" label={t("workbench.resizeEditor")} {...resizeProps("editor", "--editor-height", -1)} />
                 <TranslationEditor
                   ref={editorRef}
                   onDraftWithAngelica={async (cell) => {
@@ -1253,7 +1269,7 @@ export function EditorShell({
             )}
           </section>
           {bottomOpen && bottomPanelId && detachedPanel !== bottomPanelId ? <>
-            <ResizeHandle axis="y" label={t("workbench.resizeBottom")} onDelta={(delta) => dispatchLayout({ type: "resizeRegion", regionId: "bottomPanel", delta: -delta })} />
+            <ResizeHandle axis="y" label={t("workbench.resizeBottom")} {...resizeProps("bottomPanel", "--bottom-panel-height", -1)} />
             {bottomIsTool ? (
               <DockPanel
                 panelId={bottomPanelId}
@@ -1279,7 +1295,7 @@ export function EditorShell({
           </> : null}
         </div>
 
-        {rightDockOpen && rightPanelId && detachedPanel !== rightPanelId ? <ResizeHandle axis="x" label={t("workbench.resizeRight")} onDelta={(delta) => dispatchLayout({ type: "resizeRegion", regionId: "rightDock", delta: -delta })} /> : null}
+        {rightDockOpen && rightPanelId && detachedPanel !== rightPanelId ? <ResizeHandle axis="x" label={t("workbench.resizeRight")} {...resizeProps("rightDock", "--right-dock-width", -1)} /> : null}
         {renderDock("right", rightPanelId, rightDockOpen)}
         <ActivityRail
           side="right"
