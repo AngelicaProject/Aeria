@@ -160,6 +160,13 @@ no dirty draft remains, then selects the next occurrence in the filtered list
 and, unless disabled in settings, focuses its target. When there is nothing to
 save it only moves on.
 
+**Approve & next** (Ctrl+Shift+Enter, also in the Translation menu and the
+command palette) is for quick review: it saves an edited target first, marks
+the string reviewed, and moves on like Save & next. A reviewed string without
+edits only moves on; an empty target does nothing. When the selected string
+has left the filtered list, for example a draft filter after approving it,
+the next and previous strings are found from its place in sheet order.
+
 Unsaved target or note drafts are marked and protected by a discard
 confirmation when changing rows, changing sheets, closing the project, or
 performing a mutation that would refresh away another dirty cell draft. The UI
@@ -240,6 +247,10 @@ applied or rejected together. A proposal to change `aeria-guidance.md` or
 `aeria-glossary.csv` shows the file name and a diff of its text. A written translation, from Auto-draft or an
 applied proposal, patches its cell like an ordinary save, so other unsaved
 drafts and the selection are kept.
+
+A review proposal shows Angelica's reason and how many translations she
+suggests approving, with the strings (location, source, and translation) on
+demand, **Approve N**, and **Reject**; it is never applied with the others.
 
 A web-access proposal shows the domain and the link Angelica asked for, with
 **Allow domain** and **Reject**; it is never applied with the others.

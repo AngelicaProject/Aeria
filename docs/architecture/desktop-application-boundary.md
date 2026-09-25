@@ -236,6 +236,10 @@ and then wakes Angelica. `ai_set_web_domains` replaces the allowed domains;
 entries may be domains or links and are normalized, sorted, and
 deduplicated.
 
+Applying a review proposal holds the project lock while it compares each
+recorded target with the workspace and calls `set_review_state`, emitting
+`angelica://translation-applied` for every approved string.
+
 Commands that require an active project report `noProjectOpen` before
 validating project-scoped payload such as translation-unit IDs.
 

@@ -17,6 +17,7 @@ export const keyboardShortcuts: ReadonlyArray<{ keys: string; action: MessageKey
   { keys: "Ctrl+,", action: "shortcut.openSettings", group: "general" },
   { keys: "Ctrl+S", action: "shortcut.saveTarget", group: "translation" },
   { keys: "Ctrl+Enter", action: "shortcut.saveAndNext", group: "translation" },
+  { keys: "Ctrl+Shift+Enter", action: "shortcut.approveAndNext", group: "translation" },
   { keys: "Alt+Down", action: "shortcut.nextString", group: "navigation" },
   { keys: "Alt+Up", action: "shortcut.previousString", group: "navigation" },
   { keys: "Up / Down", action: "shortcut.moveInList", group: "navigation" },

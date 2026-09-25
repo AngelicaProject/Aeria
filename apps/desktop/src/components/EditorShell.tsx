@@ -476,6 +476,28 @@ export function EditorShell({
     }
   }, [applyOverlay, confirmMutationDiscard, preferences.focusTargetOnNext, runMutation, selectedRow, t]);
 
+  const handleApprove = useCallback(async (cell: TranslationCellDto, draft: CellDraft, targetDirty: boolean, otherDirty: boolean, discardOtherDrafts: () => void) => {
+    if (!selectedRow || !(await confirmMutationDiscard(otherDirty, t("workbench.discard.review")))) return;
+    if (otherDirty) discardOtherDrafts();
+    const key = bindingKey(cell.sourceBinding);
+    const approved = await runMutation("review", key, t("workbench.error.review"), async () => {
+      let unitId = cell.translation?.translationUnitId ?? null;
+      if (targetDirty || unitId === null) {
+        const saved = await setTranslationTarget(cell.sourceBinding, draft.target);
+        applyOverlay(cell.sourceBinding, saved);
+        unitId = saved.translationUnitId;
+      }
+      const overlay = await setTranslationReviewState(unitId, "reviewed");
+      pendingAdvance.current = key;
+      focusTargetRequest.current = preferences.focusTargetOnNext;
+      applyOverlay(cell.sourceBinding, overlay);
+    });
+    if (!approved) {
+      pendingAdvance.current = null;
+      focusTargetRequest.current = false;
+    }
+  }, [applyOverlay, confirmMutationDiscard, preferences.focusTargetOnNext, runMutation, selectedRow, t]);
+
   const handleSaveNote = useCallback(async (cell: TranslationCellDto, draft: CellDraft, otherDirty: boolean, discardOtherDrafts: () => void) => {
     const translation = cell.translation;
     if (!translation || !selectedRow || !(await confirmMutationDiscard(otherDirty, t("workbench.discard.saveNote")))) return;
@@ -763,6 +785,11 @@ export function EditorShell({
         openPalette(">");
         return;
       }
+      if (event.ctrlKey && event.shiftKey && !event.altKey && key === "enter" && !editable) {
+        event.preventDefault();
+        editorRef.current?.approve();
+        return;
+      }
       if (event.ctrlKey && !event.altKey && !event.shiftKey) {
         if (key === "p") {
           event.preventDefault();
@@ -880,6 +907,7 @@ export function EditorShell({
       items: [
         { kind: "command", id: "save", label: t("menu.saveTarget"), shortcut: "Ctrl+S", ...(selectedRow ? { onSelect: () => editorRef.current?.saveTarget(false) } : {}) },
         { kind: "command", id: "save-next", label: t("menu.saveAndNext"), shortcut: "Ctrl+Enter", ...(selectedRow ? { onSelect: () => editorRef.current?.saveTarget(true) } : {}) },
+        { kind: "command", id: "approve-next", label: t("menu.approveAndNext"), shortcut: "Ctrl+Shift+Enter", ...(selectedRow ? { onSelect: () => editorRef.current?.approve() } : {}) },
         { kind: "command", id: "copy-source", label: t("menu.copySource"), ...(selectedRow ? { onSelect: () => editorRef.current?.copySource() } : {}) },
         { kind: "command", id: "revert", label: t("menu.revert"), ...(dirty ? { onSelect: () => editorRef.current?.revert() } : {}) },
         { kind: "separator", id: "translation-sep-1" },
@@ -938,6 +966,7 @@ export function EditorShell({
     { id: "go-next", category: category.go, title: t("menu.nextString"), shortcut: "Alt+Down", icon: "arrowDown", run: () => navigateOccurrence(1) },
     { id: "go-previous", category: category.go, title: t("menu.previousString"), shortcut: "Alt+Up", icon: "arrowUp", run: () => navigateOccurrence(-1) },
     { id: "save", category: category.translation, title: t("menu.saveTarget"), shortcut: "Ctrl+S", icon: "save", enabled: selectedRow !== null, run: () => editorRef.current?.saveTarget(false) },
+    { id: "approve-next", category: category.translation, title: t("menu.approveAndNext"), shortcut: "Ctrl+Shift+Enter", icon: "check", enabled: selectedRow !== null, run: () => editorRef.current?.approve() },
     { id: "save-next", category: category.translation, title: t("command.saveAndNext"), shortcut: "Ctrl+Enter", icon: "save", enabled: selectedRow !== null, run: () => editorRef.current?.saveTarget(true) },
     { id: "copy-source", category: category.translation, title: t("menu.copySource"), icon: "copyPlus", enabled: selectedRow !== null, run: () => editorRef.current?.copySource() },
     { id: "revert", category: category.translation, title: t("menu.revert"), icon: "undo", enabled: dirty, run: () => editorRef.current?.revert() },
@@ -1070,6 +1099,7 @@ export function EditorShell({
                   onDirtyChange={handleDirtyChange}
                   onSelectCell={handleFieldSelect}
                   onSaveTarget={(...args) => void handleSaveTarget(...args)}
+                  onApprove={(...args) => void handleApprove(...args)}
                   onSaveNote={(...args) => void handleSaveNote(...args)}
                   onReviewChange={(...args) => void handleReviewChange(...args)}
                   onNavigate={navigateFromEditor}

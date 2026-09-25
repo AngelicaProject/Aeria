@@ -56,6 +56,7 @@ fn request_domain(
         file: None,
         job: None,
         web: Some(domain.to_owned()),
+        review: None,
         location: None,
         source: String::new(),
         target: url.to_owned(),

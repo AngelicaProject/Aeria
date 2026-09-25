@@ -24,8 +24,8 @@ use aeria_ai::prompt::{AgentMode, EditorContext, system_prompt};
 use aeria_ai::search::search_tool_definitions;
 use aeria_ai::tools::{
     CellSnapshot, ContextCell, FileChange, ProjectFacts, ProjectReader, ProjectWriter, Proposal,
-    ProposalOutcome, ReadTools, ReviewLabel, RowSnapshot, RowsPage, SheetSummary, ToolError,
-    ToolOutput, TranslatableUnit, UnitLocation, UnitState, job_tool_definitions,
+    ProposalOutcome, ReadTools, ReviewBatch, ReviewLabel, RowSnapshot, RowsPage, SheetSummary,
+    ToolError, ToolOutput, TranslatableUnit, UnitLocation, UnitState, job_tool_definitions,
     read_tool_definitions, write_tool_definitions,
 };
 use aeria_ai::web::web_tool_definitions;
@@ -539,11 +539,22 @@ pub(crate) fn write_assisted(
     })?;
     let id =
         session.set_assisted_target(&binding, target, &expectation(expected), replace_reviewed)?;
+    announce_unit(app, session, &binding, id);
+    Ok(())
+}
+
+/// Sends a unit's new overlay to the editor.
+fn announce_unit(
+    app: &tauri::AppHandle,
+    session: &ProjectSession,
+    binding: &SourceBinding,
+    id: aeria_core::TranslationUnitId,
+) {
     if let Some(unit) = session.workspace().unit(id) {
         let _ = app.emit(
             APPLIED_EVENT,
             TranslationAppliedDto {
-                source_binding: SourceBindingDto::from(&binding),
+                source_binding: SourceBindingDto::from(binding),
                 overlay: TranslationOverlayDto {
                     translation_unit_id: unit.id().to_string(),
                     target_macro: unit.target_macro().to_owned(),
@@ -553,7 +564,38 @@ pub(crate) fn write_assisted(
             },
         );
     }
-    Ok(())
+}
+
+/// Marks the batch's strings reviewed where the translation is still the
+/// one Angelica suggested. Returns how many were approved and skipped.
+fn approve_batch(
+    session: &mut ProjectSession,
+    batch: &ReviewBatch,
+    mut approved_unit: impl FnMut(&ProjectSession, &SourceBinding, aeria_core::TranslationUnitId),
+) -> Result<(usize, usize), String> {
+    let mut approved = 0;
+    let mut skipped = 0;
+    for item in &batch.items {
+        let binding = binding_of(&item.location).map_err(|error| error.0)?;
+        let Some(unit) = session.workspace().unit_by_source_binding(&binding) else {
+            skipped += 1;
+            continue;
+        };
+        if unit.target_macro() != item.target {
+            skipped += 1;
+            continue;
+        }
+        if unit.review_state() == ReviewState::Reviewed {
+            continue;
+        }
+        let id = unit.id();
+        session
+            .set_review_state(id, ReviewState::Reviewed)
+            .map_err(|error| error.to_string())?;
+        approved_unit(session, &binding, id);
+        approved += 1;
+    }
+    Ok((approved, skipped))
 }
 
 /// Tells the renderer that a conversation's proposals changed.
@@ -635,6 +677,7 @@ impl ProjectWriter for DesktopWriter {
                         file: None,
                         job: None,
                         web: None,
+                        review: None,
                         location: Some(proposal.location),
                         source: proposal.source,
                         target: proposal.target,
@@ -684,6 +727,43 @@ impl ProjectWriter for DesktopWriter {
         Ok(outcomes)
     }
 
+    fn propose_review(&self, batch: ReviewBatch) -> Result<ProposalOutcome, ToolError> {
+        let state = self.app.state::<DesktopState>();
+        let _guard = state
+            .lock_proposals()
+            .map_err(|error| ToolError::new(error.message))?;
+        let mut records = self
+            .store
+            .load_proposals(&self.conversation_id)
+            .map_err(|error| ToolError::new(error.to_string()))?;
+        let id = aeria_ai::ProviderConfig::new_id();
+        records.push(ProposalRecord {
+            id: id.clone(),
+            file: None,
+            job: None,
+            web: None,
+            review: None,
+            location: None,
+            source: String::new(),
+            target: batch.reason.clone(),
+            expected: UnitState {
+                target: None,
+                review_state: None,
+            },
+            status: ProposalStatus::Pending,
+            message: None,
+            created_at_unix_ms: now_unix_ms(),
+        });
+        if let Some(record) = records.last_mut() {
+            record.review = Some(batch);
+        }
+        self.store
+            .save_proposals(&self.conversation_id, &records)
+            .map_err(|error| ToolError::new(error.to_string()))?;
+        announce_proposals(&self.app, &self.conversation_id);
+        Ok(ProposalOutcome::Pending { proposal_id: id })
+    }
+
     fn propose_file_change(&self, change: FileChange) -> Result<ProposalOutcome, ToolError> {
         let state = self.app.state::<DesktopState>();
         let _guard = state
@@ -699,6 +779,7 @@ impl ProjectWriter for DesktopWriter {
             file: Some(change.file),
             job: None,
             web: None,
+            review: None,
             location: None,
             source: String::new(),
             target: change.after,
@@ -1172,6 +1253,94 @@ pub async fn angelica_proposals(
     run_blocking(move || Ok(conversation_store(&app)?.load_proposals(&conversation_id)?)).await
 }
 
+/// The status and message of an outcome.
+fn settled<E: std::fmt::Display>(
+    result: Result<Option<String>, E>,
+) -> (ProposalStatus, Option<String>) {
+    match result {
+        Ok(message) => (ProposalStatus::Applied, message),
+        Err(error) => (ProposalStatus::Failed, Some(error.to_string())),
+    }
+}
+
+/// Applies one pending proposal with the user's approval.
+fn apply_record(
+    app: &tauri::AppHandle,
+    conversation_id: &str,
+    record: &ProposalRecord,
+) -> CommandResult<(ProposalStatus, Option<String>)> {
+    let state = app.state::<DesktopState>();
+    if let Some(batch) = &record.review {
+        let mut project = state.lock_project()?;
+        let session = project.as_mut().ok_or_else(CommandError::no_project)?;
+        // Applying is the user's approval of exactly these translations.
+        return Ok(settled(
+            approve_batch(session, batch, |session, binding, id| {
+                announce_unit(app, session, binding, id);
+            })
+            .map(|(approved, skipped)| {
+                Some(format!(
+                    "{approved} approved, {skipped} skipped because they changed"
+                ))
+            }),
+        ));
+    }
+    if let Some(domain) = &record.web {
+        return Ok(settled(
+            allow_domain(app, domain)
+                .map(|()| None)
+                .map_err(|error| error.message),
+        ));
+    }
+    if let Some(job) = &record.job {
+        return Ok(settled(
+            start_proposed_job(app, conversation_id, job)
+                .map(Some)
+                .map_err(|error| error.message),
+        ));
+    }
+    if let Some(file) = record.file {
+        let root = repository_root(app)?;
+        return Ok(
+            match apply_file_change(
+                &root,
+                file,
+                record.expected.target.as_deref(),
+                &record.target,
+            ) {
+                Ok(()) => (ProposalStatus::Applied, None),
+                Err((status, message)) => (status, Some(message)),
+            },
+        );
+    }
+    let Some(location) = record.location.clone() else {
+        return Err(CommandError::new(
+            "angelicaProposalNotFound",
+            "the proposal has no string to write",
+        ));
+    };
+    let mut project = state.lock_project()?;
+    let session = project.as_mut().ok_or_else(CommandError::no_project)?;
+    // Applying is the user's explicit approval, including for a reviewed
+    // string.
+    Ok(
+        match write_assisted(
+            app,
+            session,
+            &location,
+            &record.target,
+            &record.expected,
+            true,
+        ) {
+            Ok(()) => (ProposalStatus::Applied, None),
+            Err(error @ AssistedWriteError::Conflict { .. }) => {
+                (ProposalStatus::Conflict, Some(error.to_string()))
+            }
+            Err(error) => (ProposalStatus::Failed, Some(error.to_string())),
+        },
+    )
+}
+
 /// Settles one pending proposal and returns the updated list.
 fn settle_proposal(
     app: &tauri::AppHandle,
@@ -1198,78 +1367,13 @@ fn settle_proposal(
             "this proposal was already applied or dismissed",
         ));
     }
-    if let (true, Some(domain)) = (apply, record.web.clone()) {
-        match allow_domain(app, &domain) {
-            Ok(()) => record.status = ProposalStatus::Applied,
-            Err(error) => {
-                record.status = ProposalStatus::Failed;
-                record.message = Some(error.message);
-            }
-        }
-    } else if let (true, Some(job)) = (apply, record.job.clone()) {
-        match start_proposed_job(app, conversation_id, &job) {
-            Ok(job_id) => {
-                record.status = ProposalStatus::Applied;
-                record.message = Some(job_id);
-            }
-            Err(error) => {
-                record.status = ProposalStatus::Failed;
-                record.message = Some(error.message);
-            }
-        }
-    } else if let (true, Some(file)) = (apply, record.file) {
-        let root = {
-            let project = state.lock_project()?;
-            project
-                .as_ref()
-                .ok_or_else(CommandError::no_project)?
-                .repository_root()
-                .to_owned()
-        };
-        match apply_file_change(
-            &root,
-            file,
-            record.expected.target.as_deref(),
-            &record.target,
-        ) {
-            Ok(()) => record.status = ProposalStatus::Applied,
-            Err((status, message)) => {
-                record.status = status;
-                record.message = Some(message);
-            }
-        }
-    } else if apply {
-        let Some(location) = record.location.clone() else {
-            return Err(CommandError::new(
-                "angelicaProposalNotFound",
-                "the proposal has no string to write",
-            ));
-        };
-        let mut project = state.lock_project()?;
-        let session = project.as_mut().ok_or_else(CommandError::no_project)?;
-        // Applying is the user's explicit approval, including for a
-        // reviewed string.
-        match write_assisted(
-            app,
-            session,
-            &location,
-            &record.target,
-            &record.expected,
-            true,
-        ) {
-            Ok(()) => record.status = ProposalStatus::Applied,
-            Err(error @ AssistedWriteError::Conflict { .. }) => {
-                record.status = ProposalStatus::Conflict;
-                record.message = Some(error.to_string());
-            }
-            Err(error) => {
-                record.status = ProposalStatus::Failed;
-                record.message = Some(error.to_string());
-            }
-        }
+    let (status, message) = if apply {
+        apply_record(app, conversation_id, record)?
     } else {
-        record.status = ProposalStatus::Rejected;
-    }
+        (ProposalStatus::Rejected, None)
+    };
+    record.status = status;
+    record.message = message;
     store.save_proposals(conversation_id, &records)?;
     Ok(records)
 }
@@ -1472,6 +1576,8 @@ pub async fn angelica_draft(
 mod tests {
     use std::path::PathBuf;
 
+    use aeria_ai::tools::ReviewItem;
+
     use super::*;
 
     fn session() -> (tempfile::TempDir, ProjectSession) {
@@ -1573,6 +1679,52 @@ mod tests {
         assert_eq!(invalid.0, ProposalStatus::Failed);
         assert!(!root.join(ProjectFile::Glossary.file_name()).exists());
         assert!(!root.join(".aeria-guidance.md.partial").exists());
+    }
+
+    #[test]
+    fn approval_batches_skip_strings_that_changed() {
+        let (_directory, mut session) = session();
+        let sheet = session_sheets(&session)
+            .into_iter()
+            .find(|sheet| sheet.translatable > 0)
+            .expect("translatable sheet");
+        let row = session_rows(&session, &sheet.name, None, 256)
+            .expect("rows")
+            .rows
+            .remove(0);
+        let first = UnitLocation {
+            sheet: sheet.name.clone(),
+            row: row.row,
+            subrow: row.subrow,
+            column: Some(row.cells[0].column),
+        };
+        let binding = binding_of(&first).expect("binding");
+        let source = session.source_macro(&binding).expect("source");
+        session.set_target(&binding, &source).expect("target");
+        let batch = |target: &str| ReviewBatch {
+            reason: "checked".to_owned(),
+            items: vec![ReviewItem {
+                location: first.clone(),
+                source: source.clone(),
+                target: target.to_owned(),
+            }],
+        };
+
+        let mut announced = 0;
+        let changed = approve_batch(&mut session, &batch("something else"), |_, _, _| {
+            announced += 1;
+        })
+        .expect("batch");
+        assert_eq!(changed, (0, 1));
+        let approved =
+            approve_batch(&mut session, &batch(&source), |_, _, _| announced += 1).expect("batch");
+        assert_eq!(approved, (1, 0));
+        assert_eq!(announced, 1);
+        let unit = session
+            .workspace()
+            .unit_by_source_binding(&binding)
+            .expect("unit");
+        assert_eq!(unit.review_state(), ReviewState::Reviewed);
     }
 
     #[test]

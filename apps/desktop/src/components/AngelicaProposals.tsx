@@ -38,7 +38,7 @@ export function AngelicaProposals({ proposals, busy, onApply, onReject, onReveal
   if (shown.length === 0) return null;
   const pending = shown.filter((proposal) => proposal.status === "pending").map((proposal) => proposal.id);
   // Jobs start one by one, never with the translations in bulk.
-  const bulk = shown.filter((proposal) => proposal.status === "pending" && !proposal.job && !proposal.web).map((proposal) => proposal.id);
+  const bulk = shown.filter((proposal) => proposal.status === "pending" && !proposal.job && !proposal.web && !proposal.review).map((proposal) => proposal.id);
 
   return (
     <details className="angelica-proposals" open>
@@ -53,6 +53,7 @@ export function AngelicaProposals({ proposals, busy, onApply, onReject, onReveal
       </summary>
       <ul>
         {shown.map((proposal) => {
+          if (proposal.review) return <ReviewProposalCard key={proposal.id} proposal={proposal} review={proposal.review} busy={busy} onApply={onApply} onReject={onReject} onReveal={onReveal} />;
           if (proposal.web) return <WebProposalCard key={proposal.id} proposal={proposal} domain={proposal.web} busy={busy} onApply={onApply} onReject={onReject} />;
           if (proposal.job) return <JobProposalCard key={proposal.id} proposal={proposal} job={proposal.job} busy={busy} onApply={onApply} onReject={onReject} />;
           const binding = bindingOf(proposal);
@@ -132,6 +133,42 @@ function WebProposalCard({ proposal, domain, busy, onApply, onReject }: { propos
         <div className="angelica-proposal-actions">
           <button className="button button-ghost" type="button" disabled={busy} onClick={() => onReject([proposal.id])}>{t("angelica.proposal.reject")}</button>
           <button className="button button-primary" type="button" disabled={busy} onClick={() => onApply([proposal.id])}>{t("angelica.web.allow")}</button>
+        </div>
+      ) : null}
+    </li>
+  );
+}
+
+function ReviewProposalCard({ proposal, review, busy, onApply, onReject, onReveal }: { proposal: ProposalRecord; review: NonNullable<ProposalRecord["review"]>; busy: boolean; onApply: (ids: string[]) => void; onReject: (ids: string[]) => void; onReveal?: ((binding: SourceBinding) => void) | undefined }) {
+  const { t } = useI18n();
+  return (
+    <li className={`angelica-proposal angelica-review-proposal ${proposal.status}`}>
+      <div className="angelica-proposal-head">
+        <UiIcon icon="check" size="xs" />
+        <strong>{t("angelica.review.title", { count: review.items.length })}</strong>
+        {proposal.status !== "pending" ? <span className="angelica-chip">{t(statusLabels[proposal.status])}</span> : null}
+      </div>
+      <p className="angelica-review-reason">{review.reason}</p>
+      <details className="angelica-review-items">
+        <summary>{t("angelica.review.show")}</summary>
+        <ul>
+          {review.items.map((item) => {
+            const binding: SourceBinding = { sheetName: item.location.sheet, rowId: item.location.row, subrowId: item.location.subrow, columnIndex: item.location.column ?? 0 };
+            return (
+              <li key={`${binding.sheetName}:${binding.rowId}:${binding.subrowId}:${binding.columnIndex}`}>
+                <button className="link-button mono" type="button" onClick={() => onReveal?.(binding)}>{`${binding.sheetName}:${binding.rowId}:${binding.subrowId}:${binding.columnIndex}`}</button>
+                <span className="angelica-review-source">{item.source}</span>
+                <span className="angelica-review-target">{item.target}</span>
+              </li>
+            );
+          })}
+        </ul>
+      </details>
+      {proposal.message ? <p className={proposal.status === "applied" ? "field-hint" : "ai-test-result failed"}>{proposal.message}</p> : null}
+      {proposal.status === "pending" ? (
+        <div className="angelica-proposal-actions">
+          <button className="button button-ghost" type="button" disabled={busy} onClick={() => onReject([proposal.id])}>{t("angelica.proposal.reject")}</button>
+          <button className="button button-primary" type="button" disabled={busy} onClick={() => onApply([proposal.id])}><UiIcon icon="check" size="sm" />{t("angelica.review.approve", { count: review.items.length })}</button>
         </div>
       ) : null}
     </li>

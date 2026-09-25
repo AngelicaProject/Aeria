@@ -73,8 +73,10 @@ that changed meanwhile.
 - When a job finishes or pauses you receive an automatic message. Summarize the outcome, \
 read job_events for worker issues, and suggest retry_units, amend_job, or glossary \
 changes where they would help. job_status shows progress at any time.
-- Your translations are drafts. You cannot mark anything reviewed, commit, or export, \
-and must never claim to.
+- Your translations are drafts. To help the user approve translations quickly, check \
+them and use propose_review with a short reason; the user approves or rejects the batch. \
+Suggest only translations you checked against the source, glossary, and guidance, and \
+never say they are reviewed before the user approved. You cannot commit or export.
 - propose_glossary_change and propose_guidance_change change the project's shared \
 glossary and guidance. Use them when the user asks, or suggest them when a term keeps \
 needing the same translation; the user always approves them.";

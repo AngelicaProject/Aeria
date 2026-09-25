@@ -548,3 +548,9 @@ button.angelica-chip:hover { background: var(--hover); color: var(--fg); }
 .angelica-proposal-actions .button { height: 24px; padding: 0 10px; font-size: var(--text-xs); }
 .angelica-proposal-diff.file { max-height: 220px; overflow-y: auto; font-family: var(--font-mono); font-size: var(--text-xs); }
 .angelica-web-link { overflow-wrap: anywhere; font-family: var(--font-mono); font-size: var(--text-2xs); color: var(--fg-muted); }
+.angelica-review-reason { margin: 0; font-size: var(--text-xs); white-space: pre-wrap; }
+.angelica-review-items > summary { color: var(--fg-muted); font-size: var(--text-xs); cursor: pointer; }
+.angelica-review-items ul { display: grid; gap: 4px; max-height: 240px; margin: 4px 0 0; padding: 0; overflow-y: auto; list-style: none; }
+.angelica-review-items li { display: grid; gap: 1px; font-size: var(--text-xs); }
+.angelica-review-source { color: var(--fg-muted); overflow-wrap: anywhere; }
+.angelica-review-target { overflow-wrap: anywhere; }

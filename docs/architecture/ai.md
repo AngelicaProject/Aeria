@@ -151,8 +151,9 @@ Each message is sent in one of three modes, chosen in the panel:
 | Ask (default) | Read and write tools | Every valid translation waits as a proposal until the user applies it. |
 | Auto-draft | Read and write tools | A valid translation of an untranslated string is written at once as a draft; one that would replace a translation waits as a proposal. The string selected in the editor with unsaved edits is never written at once. |
 
-Angelica never marks anything reviewed, commits, pushes, syncs, applies a
-source update, or exports.
+Angelica never marks anything reviewed on her own, commits, pushes, syncs,
+applies a source update, or exports. She can suggest approvals, which the
+user confirms (see [Suggested approvals](#suggested-approvals)).
 
 ### Conversation loop
 
@@ -257,6 +258,18 @@ it was produced. Every write, immediate or approved, goes through
 so the structure policy is enforced again and a string changed in the meantime
 is never overwritten: its proposal becomes a conflict. Applying a proposal is
 the user's explicit approval, including for a reviewed string.
+
+### Suggested approvals
+
+`propose_review` is offered in Ask and Auto-draft modes. It takes up to 200
+strings and a reason. Strings without a translation, already reviewed, or
+not translatable are reported back as skipped; the rest are recorded as one
+review proposal with each string's location, source, and current target. In
+every mode the proposal waits for the user. Applying it is the user's
+approval of exactly those translations: each string whose target is still
+the recorded one is marked reviewed, and a changed or missing string is
+skipped. The proposal's message states how many were approved and skipped.
+Translation jobs never propose approvals.
 
 ### Guidance and glossary
 

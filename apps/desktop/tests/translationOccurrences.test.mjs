@@ -65,6 +65,10 @@ test("filters loaded occurrences by review state and text", async () => {
   assert.equal(adjacentOccurrence(occurrences, binding(3), 1)?.sourceMacro, "...");
   assert.equal(adjacentOccurrence(occurrences, binding(4), 1), null);
   assert.equal(adjacentOccurrence(occurrences, null, -1)?.sourceMacro, "...");
+  const withoutWorld = occurrences.filter((occurrence) => occurrence.sourceMacro !== "World");
+  assert.equal(adjacentOccurrence(withoutWorld, binding(3), 1)?.sourceMacro, "...");
+  assert.equal(adjacentOccurrence(withoutWorld, binding(3), -1)?.sourceMacro, "Hello <num(1)>");
+  assert.equal(adjacentOccurrence(withoutWorld.slice(0, 1), binding(3), 1), null);
 });
 
 test("cursorBefore starts a page at the requested row", async () => {

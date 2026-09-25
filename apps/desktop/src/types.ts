@@ -493,6 +493,8 @@ export type ProposalRecord = {
   job?: JobProposal | null;
   /** A domain Angelica asked to read; `target` then holds the link. */
   web?: string | null;
+  /** Translations Angelica suggests marking reviewed; `target` holds her reason. */
+  review?: { reason: string; items: { location: UnitLocationDto; source: string; target: string }[] } | null;
   location: UnitLocationDto | null;
   source: string;
   target: string;

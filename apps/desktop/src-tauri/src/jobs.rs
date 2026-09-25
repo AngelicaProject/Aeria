@@ -262,6 +262,7 @@ impl JobControl for DesktopJobs {
             file: None,
             job: Some(proposal),
             web: None,
+            review: None,
             location: None,
             source: String::new(),
             target: summary,

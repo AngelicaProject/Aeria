@@ -119,6 +119,9 @@ pub struct ProposalRecord {
     /// A domain Angelica asked to read; `target` holds the requested link.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub web: Option<String>,
+    /// Translations to mark reviewed; `target` holds Angelica's reason.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub review: Option<crate::tools::ReviewBatch>,
     /// The string of a translation; `None` for a file change.
     #[serde(default)]
     pub location: Option<UnitLocation>,
@@ -423,6 +426,7 @@ mod tests {
             file: None,
             job: None,
             web: None,
+            review: None,
             location: Some(UnitLocation {
                 sheet: "Item".to_owned(),
                 row: 1,

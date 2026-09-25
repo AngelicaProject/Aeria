@@ -256,6 +256,26 @@ pub enum ProposalOutcome {
     },
 }
 
+/// Most strings in one suggested approval.
+pub const MAX_REVIEW_ITEMS: usize = 200;
+
+/// A translation Angelica suggests approving, as it was when suggested.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ReviewItem {
+    pub location: UnitLocation,
+    pub source: String,
+    pub target: String,
+}
+
+/// Translations Angelica suggests marking reviewed, with her reason.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ReviewBatch {
+    pub reason: String,
+    pub items: Vec<ReviewItem>,
+}
+
 /// Write access for Angelica, implemented by the desktop. Whether a
 /// proposal is applied at once or waits for approval is the desktop's
 /// decision, following the conversation's mode.
@@ -277,6 +297,13 @@ pub trait ProjectWriter: Send + Sync {
     /// # Errors
     /// Returns an error when the proposal cannot be recorded.
     fn propose_file_change(&self, change: FileChange) -> Result<ProposalOutcome, ToolError>;
+
+    /// Records translations to mark reviewed. It always waits for the
+    /// user's approval, in every mode.
+    ///
+    /// # Errors
+    /// Returns an error when the suggestion cannot be recorded.
+    fn propose_review(&self, batch: ReviewBatch) -> Result<ProposalOutcome, ToolError>;
 }
 
 /// A control action on a job.
@@ -648,6 +675,34 @@ pub fn write_tool_definitions() -> Vec<ToolDefinition> {
             }),
         },
         ToolDefinition {
+            name: "propose_review",
+            description: "Suggests marking up to 200 translated strings as reviewed, with a short reason. The user sees the list and approves or rejects it; nothing is marked reviewed until then, and strings changed meanwhile are skipped. Check each translation before suggesting it.",
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "strings": {
+                        "type": "array",
+                        "minItems": 1,
+                        "maxItems": MAX_REVIEW_ITEMS,
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "sheet": { "type": "string" },
+                                "row": { "type": "integer", "minimum": 0 },
+                                "subrow": { "type": "integer", "minimum": 0 },
+                                "column": { "type": "integer", "minimum": 0 },
+                            },
+                            "required": ["sheet", "row", "column"],
+                            "additionalProperties": false,
+                        },
+                    },
+                    "reason": { "type": "string", "description": "What you checked, for the user." },
+                },
+                "required": ["strings", "reason"],
+                "additionalProperties": false,
+            }),
+        },
+        ToolDefinition {
             name: "propose_guidance_change",
             description: "Proposes a new full text for the project's translation guidance. The user always approves guidance changes. Read the current guidance with get_guidance first.",
             parameters: json!({
@@ -877,6 +932,22 @@ struct GlossaryChangeArgs {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
+struct ReviewStringArgs {
+    sheet: String,
+    row: u32,
+    subrow: Option<u16>,
+    column: u32,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ReviewArgs {
+    strings: Vec<ReviewStringArgs>,
+    reason: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct GuidanceChangeArgs {
     text: String,
 }
@@ -987,6 +1058,7 @@ impl<'a> ReadTools<'a> {
             "validate_target"
             | "propose_translation"
             | "propose_glossary_change"
+            | "propose_review"
             | "propose_guidance_change" => {
                 let Some(writer) = self.writer else {
                     return Err(ToolError::new(
@@ -1006,11 +1078,78 @@ impl<'a> ReadTools<'a> {
                     "propose_glossary_change" => {
                         self.propose_glossary_change(writer, parse(arguments)?)
                     }
+                    "propose_review" => Self::propose_review(writer, parse(arguments)?),
                     _ => self.propose_guidance_change(writer, &parse(arguments)?),
                 }
             }
             other => Err(ToolError::new(format!("unknown tool {other:?}"))),
         }
+    }
+
+    /// Checks each string has a translation that is not reviewed yet and
+    /// records the rest for the user's approval.
+    fn propose_review(writer: &dyn ProjectWriter, args: ReviewArgs) -> Result<Value, ToolError> {
+        let reason = args.reason.trim().to_owned();
+        if reason.is_empty() {
+            return Err(ToolError::new("give a reason the user can check"));
+        }
+        if args.strings.len() > MAX_REVIEW_ITEMS {
+            return Err(ToolError::new(format!(
+                "suggest at most {MAX_REVIEW_ITEMS} strings at once"
+            )));
+        }
+        let mut items: Vec<ReviewItem> = Vec::new();
+        let mut skipped = Vec::new();
+        for string in args.strings {
+            let location = UnitLocation {
+                sheet: string.sheet,
+                row: string.row,
+                subrow: string.subrow.unwrap_or(0),
+                column: Some(string.column),
+            };
+            if items.iter().any(|item| item.location == location) {
+                continue;
+            }
+            let problem = match writer.translatable_unit(&location) {
+                Ok(unit) => match (unit.state.target, unit.state.review_state) {
+                    (_, Some(ReviewLabel::Reviewed)) => Some("already reviewed".to_owned()),
+                    (Some(target), _) if !target.trim().is_empty() => {
+                        items.push(ReviewItem {
+                            location: location.clone(),
+                            source: unit.source,
+                            target,
+                        });
+                        None
+                    }
+                    _ => Some("not translated".to_owned()),
+                },
+                Err(error) => Some(error.0),
+            };
+            if let Some(problem) = problem {
+                skipped.push(json!({ "location": location, "problem": problem }));
+            }
+        }
+        if items.is_empty() {
+            return Ok(json!({ "status": "nothingToApprove", "skipped": skipped }));
+        }
+        let count = items.len();
+        let outcome = writer.propose_review(ReviewBatch { reason, items })?;
+        let mut result = match outcome {
+            ProposalOutcome::Pending { proposal_id } => json!({
+                "status": "awaitingApproval",
+                "proposalId": proposal_id,
+                "note": "The user approves or rejects the batch; strings changed meanwhile are skipped.",
+            }),
+            ProposalOutcome::Applied => json!({ "status": "applied" }),
+            ProposalOutcome::Conflict { message } | ProposalOutcome::Failed { message } => {
+                json!({ "status": "failed", "errors": [message] })
+            }
+        };
+        result["strings"] = json!(count);
+        if !skipped.is_empty() {
+            result["skipped"] = json!(skipped);
+        }
+        Ok(result)
     }
 
     fn list_sheets(&self, args: ListSheetsArgs) -> Result<Value, ToolError> {
@@ -1608,9 +1747,50 @@ mod tests {
         assert_eq!(reader.navigated.lock().expect("lock").len(), 1);
     }
 
+    #[derive(Default)]
     struct FakeWriter {
         submitted: Mutex<Vec<Proposal>>,
         files: Mutex<Vec<FileChange>>,
+        reviews: Mutex<Vec<ReviewBatch>>,
+    }
+
+    #[test]
+    fn review_suggestions_keep_translated_unreviewed_strings() {
+        let reader = reader();
+        let writer = FakeWriter::default();
+        let tools = ReadTools::with_writer(&reader, &writer);
+        let output = tools.execute(
+            "propose_review",
+            r#"{"reason":" Checked terms. ","strings":[{"sheet":"Item","row":2,"column":0},{"sheet":"Item","row":2,"column":0},{"sheet":"Item","row":1,"column":0},{"sheet":"Item","row":9,"column":0}]}"#,
+        );
+        assert!(!output.is_error, "{}", output.content);
+        assert!(output.content.contains("awaitingApproval"));
+        assert!(output.content.contains("\"strings\":1"));
+        assert!(output.content.contains("not translated"));
+        let reviews = writer.reviews.lock().expect("lock");
+        assert_eq!(reviews.len(), 1);
+        assert_eq!(reviews[0].reason, "Checked terms.");
+        assert_eq!(reviews[0].items[0].target, "Пока");
+        drop(reviews);
+
+        let nothing = tools.execute(
+            "propose_review",
+            r#"{"reason":"x","strings":[{"sheet":"Item","row":1,"column":0}]}"#,
+        );
+        assert!(nothing.content.contains("nothingToApprove"));
+        assert!(
+            tools
+                .execute(
+                    "propose_review",
+                    r#"{"reason":" ","strings":[{"sheet":"Item","row":2,"column":0}]}"#
+                )
+                .is_error
+        );
+        assert!(
+            ReadTools::new(&reader)
+                .execute("propose_review", r#"{"reason":"x","strings":[]}"#)
+                .is_error
+        );
     }
 
     impl ProjectWriter for FakeWriter {
@@ -1644,6 +1824,13 @@ mod tests {
             })
         }
 
+        fn propose_review(&self, batch: ReviewBatch) -> Result<ProposalOutcome, ToolError> {
+            self.reviews.lock().expect("lock").push(batch);
+            Ok(ProposalOutcome::Pending {
+                proposal_id: "r-1".to_owned(),
+            })
+        }
+
         fn submit(&self, proposals: Vec<Proposal>) -> Result<Vec<ProposalOutcome>, ToolError> {
             let outcomes = proposals
                 .iter()
@@ -1668,6 +1855,7 @@ mod tests {
         let writer = FakeWriter {
             submitted: Mutex::new(Vec::new()),
             files: Mutex::new(Vec::new()),
+            reviews: Mutex::new(Vec::new()),
         };
         let tools = ReadTools::with_writer(&reader, &writer);
         let output = tools.execute(
@@ -1709,6 +1897,7 @@ mod tests {
         let writer = FakeWriter {
             submitted: Mutex::new(Vec::new()),
             files: Mutex::new(Vec::new()),
+            reviews: Mutex::new(Vec::new()),
         };
         let output = ReadTools::with_writer(&reader, &writer).execute(
             "validate_target",
@@ -1773,6 +1962,7 @@ mod tests {
         let writer = FakeWriter {
             submitted: Mutex::new(Vec::new()),
             files: Mutex::new(Vec::new()),
+            reviews: Mutex::new(Vec::new()),
         };
         let tools = ReadTools::with_writer(&reader, &writer);
         let output = tools.execute(
@@ -1873,6 +2063,7 @@ mod tests {
         let writer = FakeWriter {
             submitted: Mutex::new(Vec::new()),
             files: Mutex::new(Vec::new()),
+            reviews: Mutex::new(Vec::new()),
         };
         let tools = ReadTools::with_writer(&reader, &writer).with_jobs(&jobs);
         let started = tools.execute(

@@ -86,8 +86,21 @@ export function adjacentOccurrence(
   if (occurrences.length === 0) return null;
   const currentKey = current ? bindingKey(current) : null;
   const index = currentKey === null ? -1 : occurrences.findIndex((occurrence) => bindingKey(occurrence.binding) === currentKey);
-  if (index < 0) return direction === 1 ? occurrences[0]! : occurrences.at(-1)!;
-  return occurrences[index + direction] ?? null;
+  if (index >= 0) return occurrences[index + direction] ?? null;
+  if (current === null) return direction === 1 ? occurrences[0]! : occurrences.at(-1)!;
+  // The current string left a filtered list, for example after approving
+  // it: continue from its place in sheet order.
+  const after = (occurrence: TranslationOccurrenceView) => compareBindings(occurrence.binding, current) > 0;
+  return direction === 1
+    ? occurrences.find(after) ?? null
+    : occurrences.filter((occurrence) => !after(occurrence)).at(-1) ?? null;
+}
+
+function compareBindings(left: SourceBinding, right: SourceBinding): number {
+  return left.sheetName.localeCompare(right.sheetName)
+    || left.rowId - right.rowId
+    || left.subrowId - right.subrowId
+    || left.columnIndex - right.columnIndex;
 }
 
 /**
