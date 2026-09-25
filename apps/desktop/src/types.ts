@@ -531,6 +531,8 @@ export type JobSummary = {
   spec: JobSpec;
   createdAtUnixMs: number;
   counts: JobCounts;
+  /** Chunks being translated right now, one per busy worker. */
+  activeWorkers: number;
   usage: AiUsage;
 };
 

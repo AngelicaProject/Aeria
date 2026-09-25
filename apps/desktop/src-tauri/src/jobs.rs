@@ -54,6 +54,9 @@ const REJECTION_SAMPLE: u64 = 40;
 /// Provider failures in a row, per lane, before the job pauses.
 const MAX_PROVIDER_FAILURES: u32 = 3;
 const PROVIDER_BACKOFF: Duration = Duration::from_secs(20);
+/// Job store failures in a row, per lane, before the job pauses.
+const MAX_STORE_FAILURES: u32 = 5;
+const STORE_BACKOFF: Duration = Duration::from_millis(500);
 /// Translation-memory matches given to a worker per string.
 const JOB_MEMORY_MATCHES: usize = 3;
 
@@ -383,7 +386,9 @@ pub(crate) fn start_proposed_job(
         instructions: proposal.instructions.clone(),
         model,
         token_limit: proposal.token_limit,
-        concurrency: proposal.concurrency.clamp(1, 8),
+        concurrency: proposal
+            .concurrency
+            .clamp(1, aeria_ai::jobs::MAX_CONCURRENCY),
     };
     let job = job_store(app)?.create(conversation_id, &spec, &units)?;
     spawn_runner(app, &job.id);
@@ -547,6 +552,7 @@ fn pause_reason(job: &JobSummary) -> Option<String> {
 
 async fn run_lane(run: JobRun) {
     let mut failures = 0_u32;
+    let mut store_failures = 0_u32;
     loop {
         if !run.project_open() {
             pause_with_reason(&run, "the project was closed".to_owned()).await;
@@ -571,11 +577,19 @@ async fn run_lane(run: JobRun) {
                 pause_with_reason(&run, reason).await;
                 return;
             }
+            // A busy job store is retried; only a lasting failure stops.
             Err(error) => {
-                pause_with_reason(&run, error.message).await;
-                return;
+                store_failures += 1;
+                if store_failures >= MAX_STORE_FAILURES {
+                    pause_with_reason(&run, error.message).await;
+                    return;
+                }
+                tokio::time::sleep(STORE_BACKOFF * store_failures).await;
+                continue;
             }
         };
+        store_failures = 0;
+        notify(&run.app, &run.job_id);
         match run_chunk(&run, &spec, units).await {
             ChunkEnd::Done => failures = 0,
             ChunkEnd::Retry(message) => {
@@ -795,18 +809,26 @@ fn prepare_chunk(
     })
 }
 
-/// Records a chunk's outcomes and usage.
+/// Records a chunk's outcomes and usage, retrying a busy job store so the
+/// chunk's strings never stay claimed.
 async fn record_chunk(
     run: &JobRun,
     outcomes: Vec<(u64, UnitStatus, Option<String>)>,
     usage: aeria_ai::chat::Usage,
 ) {
-    let _ = run
-        .with_store(move |store, id| {
-            store.finish_units(id, &outcomes)?;
-            store.add_usage(id, usage)
-        })
-        .await;
+    for attempt in 1..=MAX_STORE_FAILURES {
+        let outcomes = outcomes.clone();
+        let recorded = run
+            .with_store(move |store, id| {
+                store.finish_units(id, &outcomes)?;
+                store.add_usage(id, usage)
+            })
+            .await;
+        if recorded.is_ok() {
+            return;
+        }
+        tokio::time::sleep(STORE_BACKOFF * attempt).await;
+    }
 }
 
 /// How a chunk the provider interrupted ends, and what its unfinished
@@ -1106,6 +1128,7 @@ mod tests {
             },
             created_at_unix_ms: 0,
             counts: aeria_ai::jobs::JobCounts::default(),
+            active_workers: 0,
             usage: aeria_ai::chat::Usage::default(),
         };
         assert_eq!(pause_reason(&job), None);

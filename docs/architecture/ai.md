@@ -339,7 +339,7 @@ Angelica has `estimate_job` in every mode and `job_status` and `job_events`
 to report on jobs. In Ask and Auto-draft modes she also has `start_job`,
 `amend_job`, `retry_units`, `pause_job`, `resume_job`, and `cancel_job`.
 `start_job` never starts anything: it records a job proposal with the scope,
-instructions, concurrency (1 to 8), the estimate, and a token limit of twice
+instructions, concurrency (1 to 16, 8 by default), the estimate, and a token limit of twice
 the estimate (at least 200,000). The user starts the job from the proposal.
 
 A scope is a list of sheets, or every sheet with translatable strings, and a
@@ -347,7 +347,7 @@ filter: untranslated strings (the default), strings that need review, or
 untranslated strings and drafts. Reviewed translations are never included.
 The string list is fixed when the job starts, together with each string's
 current target and review state. Strings are grouped in order into chunks of
-at most 15 strings and 6,000 source characters, never across sheets. The
+at most 30 strings and 12,000 source characters, never across sheets. The
 estimate is the number of strings and chunks and a rough token count.
 
 Each chunk is translated by a worker with a fresh context: fixed worker
@@ -383,6 +383,13 @@ rejected key. Other provider errors fail the chunk's unfinished strings.
 Pausing or cancelling returns claimed strings to the queue; a job left
 running when Aeria closed is paused the next time its project's jobs are
 read. Rejected, failed, and skipped strings can be queued again.
+
+Lanes share the job store: a chunk is claimed, and an event numbered, in one
+write transaction, so parallel lanes never claim the same chunk or wait on a
+lock upgrade. A busy store is retried (up to five times with a growing
+delay) before the job pauses, and a chunk's outcomes are recorded with the
+same retries so its strings never stay claimed. A job's summary counts its
+active workers, the chunks being translated right now.
 
 When a job completes or pauses on its own, Aeria wakes Angelica: unless a
 turn is already running there, it adds an automatic `[Aeria]` message to the

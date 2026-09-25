@@ -312,6 +312,8 @@ export const ru: Catalog = {
   "angelica.job.unit.failed": "Не переведена",
   "angelica.job.unit.conflict": "Изменилась за это время",
   "angelica.job.allSheets": "Все листы",
+  "angelica.job.workers": "Исполнители: {active} из {total}",
+  "angelica.job.workersHint": "Сколько частей переводится прямо сейчас. Исполнители стартуют друг за другом и ждут между частями только провайдера.",
   "angelica.job.drafted": "Черновиков: {drafted} из {total}",
   "angelica.job.problems": { one: "{count} проблема", few: "{count} проблемы", many: "{count} проблем", other: "{count} проблемы" },
   "angelica.job.tokenLimit": "Задача встанет на паузу после {limit} токенов",

@@ -303,6 +303,8 @@ export const en = {
   "angelica.job.unit.failed": "Not translated",
   "angelica.job.unit.conflict": "Changed meanwhile",
   "angelica.job.allSheets": "All sheets",
+  "angelica.job.workers": "Workers: {active} of {total}",
+  "angelica.job.workersHint": "Chunks being translated right now. Workers start one after another and wait between chunks only for the provider.",
   "angelica.job.drafted": "{drafted} of {total} drafted",
   "angelica.job.problems": { one: "{count} problem", other: "{count} problems" },
   "angelica.job.tokenLimit": "The job pauses after {limit} tokens",

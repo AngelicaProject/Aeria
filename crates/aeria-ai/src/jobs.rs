@@ -8,7 +8,7 @@
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use serde::{Deserialize, Serialize};
 
 use crate::chat::Usage;
@@ -16,9 +16,13 @@ use crate::settings::ModelSelection;
 use crate::tools::{ReviewLabel, UnitLocation, UnitState};
 
 /// Most strings in one chunk.
-pub const CHUNK_UNITS: usize = 15;
+pub const CHUNK_UNITS: usize = 30;
 /// Most source characters in one chunk.
-pub const CHUNK_SOURCE_CHARS: usize = 6000;
+pub const CHUNK_SOURCE_CHARS: usize = 12_000;
+/// Most workers one job runs at once.
+pub const MAX_CONCURRENCY: u8 = 16;
+/// Workers a job runs when Angelica does not choose.
+pub const DEFAULT_CONCURRENCY: u8 = 8;
 /// Most strings one job may cover.
 pub const MAX_JOB_UNITS: usize = 1_000_000;
 
@@ -159,6 +163,8 @@ pub struct JobSummary {
     pub spec: JobSpec,
     pub created_at_unix_ms: u64,
     pub counts: JobCounts,
+    /// Chunks being translated right now, one per busy worker.
+    pub active_workers: u64,
     pub usage: Usage,
 }
 
@@ -399,7 +405,7 @@ impl JobStore {
         }
         let id = uuid::Uuid::new_v4().to_string();
         let mut connection = self.open()?;
-        let transaction = connection.transaction()?;
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
         transaction.execute(
             "INSERT INTO jobs (id, conversation_id, status, spec, created_ms) VALUES (?1, ?2, 'running', ?3, ?4)",
             params![
@@ -489,7 +495,13 @@ impl JobStore {
                 UnitStatus::Conflict => counts.conflict += count,
             }
         }
+        let active_workers: i64 = connection.query_row(
+            "SELECT COUNT(DISTINCT chunk) FROM job_units WHERE job_id = ?1 AND status = 'running'",
+            params![id],
+            |row| row.get(0),
+        )?;
         Ok(JobSummary {
+            active_workers: to_u64(active_workers),
             id: id.to_owned(),
             conversation_id: row.0,
             status: JobStatus::parse(&row.1),
@@ -512,7 +524,7 @@ impl JobStore {
     /// Returns a storage error.
     pub fn claim_chunk(&self, id: &str) -> Result<Option<Vec<JobUnit>>, JobError> {
         let mut connection = self.open()?;
-        let transaction = connection.transaction()?;
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let chunk: Option<i64> = transaction.query_row(
             "SELECT MIN(chunk) FROM job_units WHERE job_id = ?1 AND status = 'pending'",
             params![id],
@@ -610,7 +622,7 @@ impl JobStore {
         outcomes: &[(u64, UnitStatus, Option<String>)],
     ) -> Result<(), JobError> {
         let mut connection = self.open()?;
-        let transaction = connection.transaction()?;
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
         {
             let mut update = transaction.prepare(
                 "UPDATE job_units SET status = ?3, message = ?4 WHERE job_id = ?1 AND seq = ?2",
@@ -648,8 +660,9 @@ impl JobStore {
         status: JobStatus,
         reason: Option<&str>,
     ) -> Result<(), JobError> {
-        let connection = self.open()?;
-        let changed = connection.execute(
+        let mut connection = self.open()?;
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let changed = transaction.execute(
             "UPDATE jobs SET status = ?2, reason = ?3 WHERE id = ?1",
             params![id, status.as_str(), reason],
         )?;
@@ -657,11 +670,12 @@ impl JobStore {
             return Err(JobError::NotFound(id.to_owned()));
         }
         if status != JobStatus::Running {
-            connection.execute(
+            transaction.execute(
                 "UPDATE job_units SET status = 'pending' WHERE job_id = ?1 AND status = 'running'",
                 params![id],
             )?;
         }
+        transaction.commit()?;
         Ok(())
     }
 
@@ -727,17 +741,11 @@ impl JobStore {
         message: &str,
         location: Option<&UnitLocation>,
     ) -> Result<(), JobError> {
-        let connection = self.open()?;
-        let seq: i64 = connection.query_row(
-            "SELECT COALESCE(MAX(seq), 0) + 1 FROM job_events WHERE job_id = ?1",
-            params![id],
-            |row| row.get(0),
-        )?;
-        connection.execute(
-            "INSERT INTO job_events (job_id, seq, created_ms, kind, message, location) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        // One statement, so concurrent workers never take the same number.
+        self.open()?.execute(
+            "INSERT INTO job_events (job_id, seq, created_ms, kind, message, location)              SELECT ?1, COALESCE(MAX(seq), 0) + 1, ?2, ?3, ?4, ?5 FROM job_events WHERE job_id = ?1",
             params![
                 id,
-                seq,
                 to_i64(now_unix_ms()),
                 kind,
                 message,
@@ -840,13 +848,54 @@ mod tests {
     }
 
     #[test]
+    fn parallel_workers_claim_each_chunk_once() {
+        let (_directory, store) = store();
+        let units: Vec<_> = (0..400).map(|row| unit("Item", row, 10)).collect();
+        let chunks = assign_chunks(&units).into_iter().max().expect("chunks") + 1;
+        let job = store.create("c", &spec(), &units).expect("job");
+        let workers: Vec<_> = (0..8)
+            .map(|_| {
+                let store = store.clone();
+                let id = job.id.clone();
+                std::thread::spawn(move || {
+                    let mut claimed = Vec::new();
+                    while let Some(units) = store.claim_chunk(&id).expect("claim") {
+                        let chunk = units[0].chunk;
+                        let outcomes: Vec<_> = units
+                            .iter()
+                            .map(|unit| (unit.seq, UnitStatus::Drafted, None))
+                            .collect();
+                        store.finish_units(&id, &outcomes).expect("finish");
+                        store.add_event(&id, "issue", "note", None).expect("event");
+                        claimed.push(chunk);
+                    }
+                    claimed
+                })
+            })
+            .collect();
+        let mut claimed: Vec<u64> = workers
+            .into_iter()
+            .flat_map(|worker| worker.join().expect("worker"))
+            .collect();
+        claimed.sort_unstable();
+        assert_eq!(claimed, (0..chunks).collect::<Vec<_>>());
+        let summary = store.summary(&job.id).expect("summary");
+        assert_eq!(summary.counts.drafted, 400);
+        assert_eq!(
+            store.events(&job.id, 0).expect("events").len(),
+            claimed.len()
+        );
+    }
+
+    #[test]
     fn chunks_split_by_sheet_size_and_count() {
         let (_directory, store) = store();
-        let mut units: Vec<ScopedUnit> = (0..20).map(|row| unit("Item", row, 10)).collect();
+        let items = u32::try_from(CHUNK_UNITS).expect("chunk size") + 5;
+        let mut units: Vec<ScopedUnit> = (0..items).map(|row| unit("Item", row, 10)).collect();
         units.push(unit("Action", 1, 10));
         units.push(unit("Action", 2, CHUNK_SOURCE_CHARS));
         let job = store.create("c1", &spec(), &units).expect("job");
-        assert_eq!(job.counts.total, 22);
+        assert_eq!(job.counts.total, u64::from(items) + 2);
         assert_eq!(job.status, JobStatus::Running);
 
         let first = store.claim_chunk(&job.id).expect("claim").expect("chunk");
@@ -868,13 +917,14 @@ mod tests {
 
     #[test]
     fn estimates_count_units_chunks_and_tokens() {
-        let units: Vec<ScopedUnit> = (0..16).map(|row| unit("Item", row, 30)).collect();
+        let count = u32::try_from(CHUNK_UNITS).expect("chunk size") + 1;
+        let units: Vec<ScopedUnit> = (0..count).map(|row| unit("Item", row, 30)).collect();
         let estimate = JobEstimate::for_units(&units);
-        assert_eq!(estimate.units, 16);
+        assert_eq!(estimate.units, u64::from(count));
         assert_eq!(estimate.chunks, 2);
         assert_eq!(
             estimate.estimated_tokens,
-            2 * CHUNK_OVERHEAD_TOKENS + 16 * 30 * 2
+            2 * CHUNK_OVERHEAD_TOKENS + u64::from(count) * 30 * 2
         );
         assert_eq!(JobEstimate::for_units(&[]).chunks, 0);
     }

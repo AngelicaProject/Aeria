@@ -11,7 +11,8 @@ use serde_json::{Value, json};
 use crate::chat::ToolDefinition;
 use crate::guidance::{Glossary, GlossaryEntry, ProjectFile, ProjectGuide, change_glossary};
 use crate::jobs::{
-    JobEstimate, JobEvent, JobFilter, JobScope, JobStatus, JobSummary, JobUnit, UnitStatus,
+    DEFAULT_CONCURRENCY, JobEstimate, JobEvent, JobFilter, JobScope, JobStatus, JobSummary,
+    JobUnit, MAX_CONCURRENCY, UnitStatus,
 };
 use crate::search::{ProjectSearch, run_search_tool};
 
@@ -408,7 +409,7 @@ pub fn job_tool_definitions(write: bool) -> Vec<ToolDefinition> {
     if write {
         let mut start_properties = scope.as_object().cloned().unwrap_or_default();
         start_properties.insert("instructions".to_owned(), json!({ "type": "string", "description": "Instructions for every worker: style, terminology, anything the user asked for." }));
-        start_properties.insert("concurrency".to_owned(), json!({ "type": "integer", "minimum": 1, "maximum": 8, "description": "Chunks translated at once. Defaults to 3." }));
+        start_properties.insert("concurrency".to_owned(), json!({ "type": "integer", "minimum": 1, "maximum": MAX_CONCURRENCY, "description": "Workers translating chunks at once. Defaults to 8; use fewer only when the provider limits parallel requests." }));
         tools.extend([
             ToolDefinition {
                 name: "start_job",
@@ -509,7 +510,9 @@ fn start_job(jobs: &dyn JobControl, args: StartJobArgs) -> Result<Value, ToolErr
     let outcome = jobs.propose(
         scope,
         args.instructions.trim().to_owned(),
-        args.concurrency.unwrap_or(3).clamp(1, 8),
+        args.concurrency
+            .unwrap_or(DEFAULT_CONCURRENCY)
+            .clamp(1, MAX_CONCURRENCY),
     )?;
     Ok(match outcome {
         ProposalOutcome::Pending { proposal_id } => json!({
@@ -2088,7 +2091,7 @@ mod tests {
             jobs.calls.lock().expect("lock").as_slice(),
             [
                 "estimate Untranslated",
-                "propose [\"Item\"] Formal. 8",
+                "propose [\"Item\"] Formal. 16",
                 "amend Keep names in Latin.",
                 "retry [Rejected, Failed]",
                 "control Resume",

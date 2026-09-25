@@ -97,6 +97,7 @@ function JobCard({ job, busy, act, retry, onError, onReveal }: { job: JobSummary
       </div>
       <div className="angelica-job-stats">
         <span>{t("angelica.job.drafted", { drafted: job.counts.drafted, total: job.counts.total })}</span>
+        {job.status === "running" ? <span title={t("angelica.job.workersHint")}>{t("angelica.job.workers", { active: job.activeWorkers, total: job.spec.concurrency })}</span> : null}
         {problems > 0 ? <span className="angelica-job-problems">{t("angelica.job.problems", { count: problems })}</span> : null}
         <span title={t("angelica.job.tokenLimit", { limit: job.spec.tokenLimit })}>{t("angelica.tokens", { count: tokens })}</span>
         <span>{t(jobFilterLabels[job.spec.scope.filter])}</span>
