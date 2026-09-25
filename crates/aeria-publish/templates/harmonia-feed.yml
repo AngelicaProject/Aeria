@@ -5,6 +5,11 @@
 # assets of this repository's harmonia/<sequence> releases, which Aeria
 # publishes. The workflow needs no signing keys, and pack files are never
 # copied to Pages. Set Settings -> Pages -> Source to "GitHub Actions".
+#
+# The feed is built and deployed only from the default branch. A release
+# event runs with the release tag as its ref, which the github-pages
+# environment refuses, so it only starts a run of this workflow on the
+# default branch.
 name: Harmonia feed
 
 on:
@@ -12,18 +17,33 @@ on:
     types: [published, unpublished, edited, deleted]
   workflow_dispatch:
 
-permissions:
-  contents: read
-  pages: write
-  id-token: write
-
-concurrency:
-  group: harmonia-feed
-  cancel-in-progress: true
+permissions: {}
 
 jobs:
-  feed:
+  dispatch:
+    if: github.event_name == 'release'
     runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    steps:
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: gh workflow run harmonia-feed.yml --repo "$GITHUB_REPOSITORY" --ref "$DEFAULT_BRANCH"
+
+  feed:
+    if: >-
+      github.event_name == 'workflow_dispatch' &&
+      github.ref_name == github.event.repository.default_branch
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    # Every run reads all releases, so a newer run supersedes an older one.
+    concurrency:
+      group: harmonia-feed
+      cancel-in-progress: true
     environment:
       name: github-pages
       url: ${{ steps.deploy.outputs.page_url }}harmonia/feed-v1.json

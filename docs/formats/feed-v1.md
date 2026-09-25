@@ -26,7 +26,8 @@ repository:
 
 Aeria creates the release and uploads both assets. A GitHub Actions workflow,
 supplied by Aeria as a template for the translation repository
-(`.github/workflows/harmonia-feed.yml`), runs on `release` events, collects the
+(`.github/workflows/harmonia-feed.yml`), is started by `release` events, runs
+on the repository's default branch, collects the
 `feed-entry.json` assets of the published releases, takes `packId`, `title`,
 and `publisherKeyFingerprint` from the committed
 [`aeria-pack.json`](./pack-settings-v1.md), and deploys the feed to Pages. The

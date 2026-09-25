@@ -207,7 +207,12 @@ reach the feed; the Export dialog checks the main branch on GitHub (as of the
 last fetch) and warns until it has the current workflow. Releases published
 before that need one manual run of the workflow (Actions → Harmonia feed →
 Run workflow). The workflow runs on `release` events
-(`published`, `unpublished`, `edited`, `deleted`) and on demand. It reads
+(`published`, `unpublished`, `edited`, `deleted`) and on demand, and builds
+the feed only in a run on the default branch. A release event runs with the
+release tag as its ref, which the default `github-pages` environment refuses
+to deploy, so it only starts an on-demand run on the default branch; an
+on-demand run on another branch does nothing. A newer feed run cancels an
+older one still in progress. It reads
 `aeria-pack.json`, downloads the `feed-entry.json` asset of every published
 `harmonia/<n>` release, checks that each entry's `sequence` matches its tag
 and that no sequence repeats, keeps the ten newest releases per channel, and
