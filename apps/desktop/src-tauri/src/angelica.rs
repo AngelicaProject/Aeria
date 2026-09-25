@@ -1090,7 +1090,12 @@ async fn run_prepared_turn(
         editor,
     };
     let mut messages = conversation.messages.clone();
-    let mut on_event = |event: AgentEvent| emit(&app, &id, AngelicaEventKind::Agent(event));
+    let mut on_event = |event: AgentEvent| {
+        // Only job workers track tool-argument progress.
+        if !matches!(event, AgentEvent::ToolArgumentsDelta { .. }) {
+            emit(&app, &id, AngelicaEventKind::Agent(event));
+        }
+    };
     let mut persisted = conversation.clone();
     let persist_store = store.clone();
     let mut persist = move |messages: &[ChatMessage]| {

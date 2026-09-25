@@ -128,6 +128,34 @@ impl ResponsesAccumulator {
         self.completed
     }
 
+    /// Adds a finished `function_call` output item.
+    fn push_call(&mut self, item: &Value) -> Result<(), StreamError> {
+        if self.calls.len() >= MAX_TOOL_CALLS_PER_RESPONSE {
+            return Err(StreamError(format!(
+                "the model requested more than {MAX_TOOL_CALLS_PER_RESPONSE} tool calls"
+            )));
+        }
+        let field = |key: &str| {
+            item.get(key)
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_owned()
+        };
+        let arguments = field("arguments");
+        self.calls.push(ToolCall {
+            id: Some(field("call_id"))
+                .filter(|id| !id.is_empty())
+                .unwrap_or_else(|| format!("call_{}", self.calls.len())),
+            name: field("name"),
+            arguments: if arguments.trim().is_empty() {
+                "{}".to_owned()
+            } else {
+                arguments
+            },
+        });
+        Ok(())
+    }
+
     fn line(
         &mut self,
         line: &str,
@@ -158,6 +186,12 @@ impl ResponsesAccumulator {
                     on_delta(StreamDelta::Reasoning(delta.to_owned()));
                 }
             }
+            "response.function_call_arguments.delta" => {
+                let delta = text("delta");
+                if !delta.is_empty() {
+                    on_delta(StreamDelta::ToolArguments(delta.chars().count()));
+                }
+            }
             "response.reasoning_summary_part.done" => {
                 if !self.reasoning.is_empty() && !self.reasoning.ends_with("\n\n") {
                     self.reasoning.push_str("\n\n");
@@ -167,29 +201,7 @@ impl ResponsesAccumulator {
             "response.output_item.done" => {
                 let item = event.get("item").unwrap_or(&Value::Null);
                 if item.get("type").and_then(Value::as_str) == Some("function_call") {
-                    if self.calls.len() >= MAX_TOOL_CALLS_PER_RESPONSE {
-                        return Err(StreamError(format!(
-                            "the model requested more than {MAX_TOOL_CALLS_PER_RESPONSE} tool calls"
-                        )));
-                    }
-                    let field = |key: &str| {
-                        item.get(key)
-                            .and_then(Value::as_str)
-                            .unwrap_or_default()
-                            .to_owned()
-                    };
-                    let arguments = field("arguments");
-                    self.calls.push(ToolCall {
-                        id: Some(field("call_id"))
-                            .filter(|id| !id.is_empty())
-                            .unwrap_or_else(|| format!("call_{}", self.calls.len())),
-                        name: field("name"),
-                        arguments: if arguments.trim().is_empty() {
-                            "{}".to_owned()
-                        } else {
-                            arguments
-                        },
-                    });
+                    self.push_call(item)?;
                 }
             }
             "response.completed" | "response.incomplete" => {
@@ -351,6 +363,7 @@ mod tests {
             json!({ "type": "response.reasoning_summary_text.delta", "delta": "plan" }),
             json!({ "type": "response.reasoning_summary_part.done" }),
             json!({ "type": "response.output_text.delta", "delta": "Смотрю" }),
+            json!({ "type": "response.function_call_arguments.delta", "delta": "{}" }),
             json!({ "type": "response.output_item.done", "item": { "type": "function_call", "call_id": "c9", "name": "list_sheets", "arguments": "" } }),
             json!({ "type": "response.completed", "response": { "status": "completed", "model": "gpt-5.5", "usage": { "input_tokens": 40, "output_tokens": 7 } } }),
         ])
@@ -369,6 +382,7 @@ mod tests {
         );
         assert_eq!(model.as_deref(), Some("gpt-5.5"));
         assert_eq!(deltas[0], StreamDelta::Reasoning("plan".to_owned()));
+        assert!(deltas.contains(&StreamDelta::ToolArguments(2)));
     }
 
     #[test]
