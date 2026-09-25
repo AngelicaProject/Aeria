@@ -34,6 +34,38 @@ pub struct DesktopState {
     job_stores: Mutex<Vec<PathBuf>>,
     /// Source search indexes by source package ID.
     search_indexes: Mutex<Vec<(String, IndexState)>>,
+    /// Running synchronization and export operations, which an application
+    /// update must not interrupt.
+    activities: Mutex<Vec<(u64, Activity)>>,
+    next_activity_id: AtomicU64,
+}
+
+/// Work that an application update waits for instead of interrupting.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Activity {
+    /// Angelica turns and translation jobs.
+    Translation,
+    /// Git operations that fetch, push, commit, or change the working tree.
+    Sync,
+    /// Pack export and publication.
+    Export,
+    /// Building a source package from the game.
+    SourcePackage,
+}
+
+/// Marks an activity as running until dropped.
+pub(crate) struct ActivityGuard<'a> {
+    state: &'a DesktopState,
+    id: u64,
+}
+
+impl Drop for ActivityGuard<'_> {
+    fn drop(&mut self) {
+        self.state
+            .lock_activities()
+            .retain(|(id, _)| *id != self.id);
+    }
 }
 
 /// Committed unit attribution for one repository commit. It is derived from
@@ -75,7 +107,73 @@ impl DesktopState {
             job_runners: Mutex::new(Vec::new()),
             job_stores: Mutex::new(Vec::new()),
             search_indexes: Mutex::new(Vec::new()),
+            activities: Mutex::new(Vec::new()),
+            next_activity_id: AtomicU64::new(1),
         }
+    }
+
+    /// Records a synchronization or export operation until the guard drops.
+    pub(crate) fn begin_activity(&self, activity: Activity) -> ActivityGuard<'_> {
+        let id = self.next_activity_id.fetch_add(1, Ordering::Relaxed);
+        self.lock_activities().push((id, activity));
+        ActivityGuard { state: self, id }
+    }
+
+    /// Returns the running activities, each once, in a stable order.
+    pub(crate) fn running_activities(&self) -> Vec<Activity> {
+        let activities = self.lock_activities();
+        self.running_with(&activities)
+    }
+
+    /// Runs `operation` only when no activity runs. Synchronization and
+    /// export cannot start until it returns.
+    ///
+    /// # Errors
+    ///
+    /// Returns `updateBusy`, naming the running activities, without running
+    /// `operation`.
+    pub(crate) fn while_idle<T>(&self, operation: impl FnOnce() -> T) -> Result<T, CommandError> {
+        let activities = self.lock_activities();
+        let running = self.running_with(&activities);
+        if !running.is_empty() {
+            let names: Vec<_> = running
+                .iter()
+                .map(|activity| format!("{activity:?}"))
+                .collect();
+            return Err(CommandError::new(
+                "updateBusy",
+                format!("waiting for running work to finish: {}", names.join(", ")),
+            ));
+        }
+        Ok(operation())
+    }
+
+    fn lock_activities(&self) -> MutexGuard<'_, Vec<(u64, Activity)>> {
+        self.activities
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    fn running_with(&self, tracked: &[(u64, Activity)]) -> Vec<Activity> {
+        let tracks = |wanted: Activity| tracked.iter().any(|(_, activity)| *activity == wanted);
+        let translating = self
+            .angelica_turns
+            .lock()
+            .is_ok_and(|turns| !turns.is_empty())
+            || self
+                .job_runners
+                .lock()
+                .is_ok_and(|runners| !runners.is_empty());
+        let building = self.atlas_job.lock().is_ok_and(|job| job.is_some());
+        [
+            (Activity::Translation, translating),
+            (Activity::Sync, tracks(Activity::Sync)),
+            (Activity::Export, tracks(Activity::Export)),
+            (Activity::SourcePackage, building),
+        ]
+        .into_iter()
+        .filter_map(|(activity, running)| running.then_some(activity))
+        .collect()
     }
 
     /// Selects the Git executable once, at application setup.
@@ -410,6 +508,38 @@ impl Default for DesktopState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn activities_are_reported_while_their_guards_live() {
+        let state = DesktopState::new();
+        assert!(state.running_activities().is_empty());
+        let sync = state.begin_activity(Activity::Sync);
+        {
+            let _export = state.begin_activity(Activity::Export);
+            let _second_sync = state.begin_activity(Activity::Sync);
+            assert_eq!(
+                state.running_activities(),
+                [Activity::Sync, Activity::Export]
+            );
+        }
+        assert_eq!(state.running_activities(), [Activity::Sync]);
+        drop(sync);
+        assert!(state.running_activities().is_empty());
+        let job = state.start_atlas_job().expect("Atlas job");
+        assert_eq!(state.running_activities(), [Activity::SourcePackage]);
+        state.finish_atlas_job(&job.id).expect("finish Atlas job");
+        assert!(state.running_activities().is_empty());
+    }
+
+    #[test]
+    fn idle_work_is_refused_while_an_activity_runs() {
+        let state = DesktopState::new();
+        let export = state.begin_activity(Activity::Export);
+        let refused = state.while_idle(|| unreachable!("must not run while exporting"));
+        assert_eq!(refused.expect_err("busy").code, "updateBusy");
+        drop(export);
+        assert_eq!(state.while_idle(|| 7).expect("idle"), 7);
+    }
 
     #[test]
     fn desktop_state_allows_one_atlas_job_and_cancels_by_opaque_id() {
