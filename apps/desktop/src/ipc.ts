@@ -335,6 +335,11 @@ export function gitRemoveRemote(name: string): Promise<GitOverviewDto> {
 }
 
 /** Fetches every remote first, so it needs the network. */
+/** Checks the remote main branch in the background; true when it moved. */
+export function gitFetchMain(): Promise<boolean> {
+  return call<boolean>("git_fetch_main");
+}
+
 export function gitRemoteBranches(): Promise<string[]> {
   return call<string[]>("git_remote_branches");
 }

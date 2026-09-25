@@ -1012,6 +1012,10 @@ export const en = {
     one: "{count} checkpoint waiting for review",
     other: "{count} checkpoints waiting for review",
   },
+  "git.mainAhead": {
+    one: "{branch} has {count} new commit that this branch does not have yet. Sync to merge it in; until then the pull request may show conflicts. Do not use Update branch or Resolve conflicts on the hosting site: they merge translations as plain text.",
+    other: "{branch} has {count} new commits that this branch does not have yet. Sync to merge them in; until then the pull request may show conflicts. Do not use Update branch or Resolve conflicts on the hosting site: they merge translations as plain text.",
+  },
   "git.contributionFinished": "Contribution finished.",
   "git.contributionKept": "Back on the main branch; the contribution branch was kept.",
   "git.finishContribution": "Finish contribution",
