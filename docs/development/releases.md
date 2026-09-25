@@ -108,7 +108,10 @@ permissions and calls the `update_*` commands.
    fails if the commit is not on `main` or CI failed. A nightly starts only
    after a successful CI run of a push to `main`, and only when that commit
    is still the head of `main`; CI for an older merge that finishes late is
-   skipped, so a nightly is never replaced by an older build.
+   skipped, so a nightly is never replaced by an older build. A newer nightly
+   build cancels one still in progress, but a skipped run never cancels
+   anything, so a late run for an older merge cannot stop the build of the
+   current head.
 2. It checks or computes the version with `tools/release/version.mjs`; a
    nightly writes its version into the declarations and the lockfile before
    building.

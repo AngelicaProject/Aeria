@@ -16,12 +16,6 @@ permissions:
   contents: write
   actions: read
 
-concurrency:
-  # A newer nightly supersedes one that is still building; stable releases
-  # never cancel each other.
-  group: ${{ github.event_name == 'push' && format('release-{0}', github.ref_name) || 'release-nightly' }}
-  cancel-in-progress: ${{ github.event_name == 'workflow_run' }}
-
 jobs:
   # A nightly is built only for the current head of main. CI for an older
   # merge can finish after a newer one landed; building it would publish an
@@ -54,6 +48,13 @@ jobs:
   windows:
     needs: gate
     if: needs.gate.outputs.build == 'true'
+    # A newer nightly supersedes one that is still building; stable releases
+    # never cancel each other. The group is on this job, not the workflow, so
+    # only a run that passed the gate can cancel another: a late run for an
+    # outdated commit must not cancel the build of the current head.
+    concurrency:
+      group: ${{ github.event_name == 'push' && format('release-{0}', github.ref_name) || 'release-nightly' }}
+      cancel-in-progress: ${{ github.event_name == 'workflow_run' }}
     runs-on: windows-latest
     env:
       GH_TOKEN: ${{ github.token }}
