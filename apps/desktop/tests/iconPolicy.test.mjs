@@ -35,3 +35,10 @@ test("renderer UI icons use the shared icon layer", () => {
     }
   }
 });
+
+test("renderer dropdowns use the shared Select instead of native selects", () => {
+  for (const path of collectRendererSources(sourceRoot).filter((file) => file.endsWith(".tsx"))) {
+    const label = relative(sourceRoot, path).split(sep).join("/");
+    assert.doesNotMatch(readFileSync(path, "utf8"), /<select[\s>]/, `${label} must use ui/primitives/Select instead of <select>`);
+  }
+});

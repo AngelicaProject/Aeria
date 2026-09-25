@@ -243,8 +243,9 @@ popover with the configured models and, when the model accepts efforts, a
 stepped effort slider from faster to smarter (default first). A ring shows
 the share of the context window the last request used, with the
 conversation's tokens in its tooltip, followed by **Stop** while a turn runs
-and a round **Send** button. The right-hand group stays right-aligned when the
-bar wraps in a narrow panel. Enter sends and Shift+Enter adds a line; messages written while
+and a round **Send** button. The bar never wraps: as the panel narrows it hides
+the effort label, then the selection's text (keeping its icon), and finally
+shortens the mode and model names. Enter sends and Shift+Enter adds a line; messages written while
 Angelica answers are queued and sent after the turn. The conversation's own
 model choice, then the default model, is preselected.
 

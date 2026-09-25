@@ -461,7 +461,7 @@
 /* Angelica */
 .angelica { overflow: hidden; }
 .angelica-head { display: flex; flex: none; align-items: center; gap: 4px; padding: 8px 10px; border-bottom: 1px solid var(--line); }
-.angelica-history { flex: 1; height: 26px; font-size: var(--text-xs); }
+.angelica-history { flex: 1; color: var(--fg); font-size: var(--text-xs); }
 .angelica-transcript { display: flex; flex: 1; flex-direction: column; gap: 10px; min-height: 0; padding: 12px; overflow-y: auto; }
 .angelica-welcome { display: grid; justify-items: center; gap: 8px; margin: auto 0; padding: 16px 4px; color: var(--fg-muted); text-align: center; }
 .angelica-welcome strong { color: var(--fg); font-family: var(--font-display); font-size: var(--text-lg); }
@@ -502,23 +502,32 @@
 .angelica-error { flex: none; padding: 0 10px; }
 .angelica-composer { display: grid; flex: none; gap: 6px; padding: 8px 10px 10px; }
 .angelica-queue { justify-self: start; }
-.angelica-box { display: grid; gap: 4px; padding: 8px 8px 6px 10px; border: 1px solid var(--line-strong, var(--line)); border-radius: var(--radius-lg, 10px); background: var(--panel-raised); cursor: text; transition: border-color 0.15s ease; }
+.angelica-box { container-type: inline-size; display: grid; gap: 4px; padding: 8px 8px 6px 10px; border: 1px solid var(--line-strong, var(--line)); border-radius: var(--radius-lg, 10px); background: var(--panel-raised); cursor: text; transition: border-color 0.15s ease; }
 .angelica-box:focus-within { border-color: color-mix(in srgb, var(--accent) 60%, var(--line)); }
 .angelica-input { width: 100%; min-height: 22px; max-height: 200px; padding: 0; border: 0; outline: none; background: transparent; color: var(--fg); font: inherit; font-size: var(--text-sm); line-height: 1.5; resize: none; }
 .angelica-input::placeholder { color: var(--fg-faint); }
-.angelica-box-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; min-width: 0; cursor: default; }
+.angelica-box-bar { display: flex; flex-wrap: nowrap; align-items: center; gap: 2px; min-width: 0; cursor: default; }
 .angelica-box-spacer { flex: 1 0 0; }
-.angelica-box-end { display: flex; flex: 0 1 auto; align-items: center; gap: 4px; min-width: 0; margin-left: auto; }
-.angelica-control { display: inline-flex; flex: none; align-items: center; gap: 4px; min-width: 0; height: 24px; padding: 0 6px; border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--fg-muted); font: inherit; font-size: var(--text-xs); white-space: nowrap; cursor: pointer; }
+.angelica-box-end { display: flex; flex: 0 1 auto; align-items: center; gap: 4px; min-width: 0; margin-left: auto; padding-left: 4px; }
+.angelica-control { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 4px; min-width: 0; height: 24px; padding: 0 6px; border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--fg-muted); font: inherit; font-size: var(--text-xs); white-space: nowrap; cursor: pointer; }
 .angelica-control:hover,
 .angelica-control[data-state="open"] { background: var(--hover); color: var(--fg); }
 .angelica-control:focus-visible { outline: 2px solid var(--line-focus); outline-offset: -2px; }
 .angelica-control svg { flex: none; color: var(--fg-subtle); }
-.angelica-selection { flex: 0 1 auto; color: var(--fg-subtle); }
+/* Narrow boxes give up space in order: the effort label, the selection's text, then the model and mode names. */
+.angelica-selection { flex: 0 1000 auto; min-width: 26px; color: var(--fg-subtle); }
 .angelica-selection-text { overflow: hidden; font-family: var(--font-mono); font-size: var(--text-2xs); text-overflow: ellipsis; }
 .angelica-selection.off .angelica-selection-text { color: var(--fg-faint); text-decoration: line-through; }
-.angelica-model { flex: 0 1 auto; }
-.angelica-model-name { overflow: hidden; text-overflow: ellipsis; }
+.angelica-model { flex: 0 1 auto; min-width: 48px; }
+.angelica-model-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.angelica-mode { flex-shrink: 10; min-width: 44px; }
+.angelica-control-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+@container (max-width: 500px) {
+  .angelica-model-effort { display: none; }
+}
+@container (max-width: 400px) {
+  .angelica-selection-text { display: none; }
+}
 .angelica-model-effort { flex: none; padding: 0 5px; border-radius: var(--radius-xs); background: var(--hover); color: var(--fg-muted); font-size: var(--text-2xs); line-height: 16px; }
 .angelica-menu { min-width: 220px; max-width: min(320px, calc(100vw - 16px)); }
 .angelica-menu-label { padding-left: 8px; }

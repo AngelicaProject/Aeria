@@ -9,6 +9,7 @@ import { AngelicaProposals } from "./AngelicaProposals";
 import type { AgentEvent, AiModelSelection, AiSettingsDto, AiUsage, AngelicaEventDto, CommandError, ConversationDto, ConversationSummaryDto, EditorContextDto, ReasoningEffort } from "../types";
 import type { MessageKey } from "../i18n/translate";
 import { useI18n } from "../ui/i18n";
+import { Select } from "../ui/primitives/Select";
 import { UiIcon } from "../ui/primitives/UiIcon";
 import { ErrorBanner } from "./ErrorBanner";
 
@@ -448,10 +449,15 @@ export function AngelicaPanel({ editorContext, onOpenSettings, onOpenGuide, onRe
   return (
     <section className="tool-content angelica" aria-label={ANGELICA}>
       <header className="angelica-head">
-        <select className="input angelica-history" value={conversation?.id ?? ""} disabled={running} aria-label={t("angelica.history")} onChange={(event) => openConversation(event.target.value)}>
-          <option value="">{t("angelica.newConversation")}</option>
-          {conversations.map((entry) => <option key={entry.id} value={entry.id}>{entry.title || t("angelica.untitled")}</option>)}
-        </select>
+        <Select
+          className="angelica-history"
+          variant="quiet"
+          value={conversation?.id ?? ""}
+          disabled={running}
+          label={t("angelica.history")}
+          onChange={openConversation}
+          options={[{ value: "", label: t("angelica.newConversation") }, ...conversations.map((entry) => ({ value: entry.id, label: entry.title || t("angelica.untitled") }))]}
+        />
         {onOpenGuide ? <button className="icon-button icon-button-ghost" type="button" aria-label={t("angelica.openGuide")} title={t("angelica.openGuide")} onClick={() => onOpenGuide("glossary")}><UiIcon icon="languages" size="sm" /></button> : null}
         <button className="icon-button icon-button-ghost" type="button" disabled={running || conversation === null} aria-label={t("angelica.newConversation")} title={t("angelica.newConversation")} onClick={newConversation}><UiIcon icon="plus" size="sm" /></button>
         <button className="icon-button icon-button-ghost" type="button" disabled={running || conversation === null} aria-label={t("angelica.deleteConversation")} title={t("angelica.deleteConversation")} onClick={deleteConversation}><UiIcon icon="trash" size="sm" /></button>

@@ -33,8 +33,8 @@ export function ModeMenu({ mode, onChange }: { mode: AgentMode; onChange: (mode:
   return (
     <DropdownMenu.Root>
       <DropdownMenu.Trigger asChild>
-        <button className="angelica-control" type="button" title={`${t("angelica.mode.label")}: ${t(modeHints[mode])}`}>
-          {t(modeLabels[mode])}
+        <button className="angelica-control angelica-mode" type="button" title={`${t("angelica.mode.label")}: ${t(modeHints[mode])}`}>
+          <span className="angelica-control-text">{t(modeLabels[mode])}</span>
           <UiIcon icon="chevronDown" size="xs" />
         </button>
       </DropdownMenu.Trigger>

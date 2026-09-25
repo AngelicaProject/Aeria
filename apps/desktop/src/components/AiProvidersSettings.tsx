@@ -31,6 +31,7 @@ import {
 import type { ChatGptLoginDto, ChatGptLoginEventDto } from "../types";
 import type { AiHeaderConfig, AiModelConfig, AiModelSelection, AiProviderDto, AiProviderPresetDto, AiSettingsDto, CommandError, ReasoningEffort } from "../types";
 import { ErrorBanner } from "./ErrorBanner";
+import { Select } from "../ui/primitives/Select";
 import { UiIcon } from "../ui/primitives/UiIcon";
 import { useI18n } from "../ui/i18n";
 import type { MessageKey } from "../i18n/translate";
@@ -144,34 +145,36 @@ function ModelPicker({ settings, selection, disabled, apply, set, label, empty, 
     <div className="ai-agent-model">
       <div className="field">
         <label className="field-label" htmlFor={modelId}>{t(label)}</label>
-        <select
+        <Select
           id={modelId}
-          className="input"
           value={selection ? selectionKey(selection) : ""}
           disabled={disabled || !hasModels}
-          onChange={(event) => {
-            const next = parseSelectionKey(event.target.value);
+          onChange={(value) => {
+            const next = parseSelectionKey(value);
             void apply(() => set(next ? { ...next, effort: null } : null));
           }}
-        >
-          <option value="">{t(empty)}</option>
-          {settings.providers.filter((provider) => provider.models.length > 0).map((provider) => (
-            <optgroup key={provider.id} label={provider.name}>
-              {provider.models.map((model) => <option key={model.id} value={selectionKey({ providerId: provider.id, modelId: model.id })}>{model.id}</option>)}
-            </optgroup>
-          ))}
-        </select>
+          groups={[
+            { options: [{ value: "", label: t(empty) }] },
+            ...settings.providers.filter((provider) => provider.models.length > 0).map((provider) => ({
+              label: provider.name,
+              options: provider.models.map((model) => ({ value: selectionKey({ providerId: provider.id, modelId: model.id }), label: model.id })),
+            })),
+          ]}
+        />
       </div>
       {efforts.length > 0 && selection ? (
         <div className="field">
           <label className="field-label" htmlFor={effortId}>{t("ai.settings.effort")}</label>
-          <select id={effortId} className="input" value={selection.effort ?? ""} disabled={disabled} onChange={(event) => {
-            const effort = (event.target.value || null) as ReasoningEffort | null;
-            void apply(() => set({ ...selection, effort }));
-          }}>
-            <option value="">{t("ai.effort.default")}</option>
-            {efforts.map((effort) => <option key={effort} value={effort}>{t(effortLabels[effort])}</option>)}
-          </select>
+          <Select
+            id={effortId}
+            value={selection.effort ?? ""}
+            disabled={disabled}
+            onChange={(value) => {
+              const effort = (value || null) as ReasoningEffort | null;
+              void apply(() => set({ ...selection, effort }));
+            }}
+            options={[{ value: "", label: t("ai.effort.default") }, ...efforts.map((effort) => ({ value: effort, label: t(effortLabels[effort]) }))]}
+          />
         </div>
       ) : null}
       <p className="field-hint">{t(hint)}</p>
@@ -270,13 +273,16 @@ function ProviderCard({ provider, disabled, apply, run }: { provider: AiProvider
 
       <div className="ai-models-head">
         <strong>{t("ai.settings.models")}</strong>
-        <label className="ai-test-effort">
+        <div className="ai-test-effort">
           <span>{t("ai.settings.testEffort")}</span>
-          <select className="input" value={testEffort} onChange={(event) => setTestEffort(event.target.value as ReasoningEffort | "")}>
-            <option value="">{t("ai.effort.none")}</option>
-            {reasoningEfforts.map((effort) => <option key={effort} value={effort}>{t(effortLabels[effort])}</option>)}
-          </select>
-        </label>
+          <Select
+            variant="quiet"
+            label={t("ai.settings.testEffort")}
+            value={testEffort}
+            onChange={(value) => setTestEffort(value as ReasoningEffort | "")}
+            options={[{ value: "", label: t("ai.effort.none") }, ...reasoningEfforts.map((effort) => ({ value: effort, label: t(effortLabels[effort]) }))]}
+          />
+        </div>
       </div>
       {provider.models.length === 0 ? <p className="field-hint">{t("ai.settings.noModels")}</p> : (
         <ul className="ai-models">
