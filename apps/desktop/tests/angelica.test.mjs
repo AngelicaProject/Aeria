@@ -2,7 +2,12 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  activitySummary,
   applyAgentEvent,
+  formatElapsed,
+  formatTokens,
+  groupTranscript,
+  reasoningTitle,
   contextFill,
   isToolError,
   jobProblems,
@@ -114,4 +119,34 @@ test("jobs needing attention come first, newest first within a status", () => {
   const job = (id, status, createdAtUnixMs) => ({ id, status, createdAtUnixMs });
   const sorted = sortJobs([job("a", "completed", 5), job("b", "paused", 1), job("c", "running", 2), job("d", "paused", 3)]);
   assert.deepEqual(sorted.map((entry) => entry.id), ["c", "d", "b", "a"]);
+});
+
+test("reasoning and tool calls fold into activity between replies", () => {
+  const items = transcriptFromMessages([
+    { role: "user", content: "Переведи" },
+    { role: "assistant", content: "", reasoning: "**Reading rows**", toolCalls: [{ id: "c1", name: "read_rows", arguments: "{}" }, { id: "c2", name: "get_unit", arguments: "{}" }] },
+    { role: "tool", toolCallId: "c1", name: "read_rows", content: "{}" },
+    { role: "tool", toolCallId: "c2", name: "get_unit", content: "{\"error\":\"x\"}" },
+    { role: "assistant", content: "Готово", reasoning: "**Writing**" },
+    { role: "user", content: "Ещё" },
+    { role: "assistant", content: "", toolCalls: [{ id: "c3", name: "read_rows", arguments: "{}" }] },
+  ]);
+  const blocks = groupTranscript(items, true);
+  assert.deepEqual(blocks.map((block) => block.kind), ["user", "activity", "reply", "user", "activity"]);
+  assert.deepEqual(blocks[1].steps.map((step) => step.kind), ["reasoning", "tool", "tool", "reasoning"]);
+  assert.deepEqual(activitySummary(blocks[1].steps), { tools: 2, failed: 1, reasoning: true });
+  assert.equal(blocks[1].live, false);
+  assert.equal(blocks[4].live, true);
+  assert.equal(groupTranscript(items, false)[4].live, false);
+});
+
+test("status helpers format reasoning titles, time, and tokens", () => {
+  assert.equal(reasoningTitle(["**Checking terms**", "", "I look.", "", "**Reviewing titles**", "More"].join(String.fromCharCode(10))), "Reviewing titles");
+  assert.equal(reasoningTitle("plain"), null);
+  assert.equal(formatElapsed(12_400), "12s");
+  assert.equal(formatElapsed(277_000), "4m 37s");
+  assert.equal(formatTokens(950), "950");
+  assert.equal(formatTokens(5_230), "5.2k");
+  assert.equal(formatTokens(33_184), "33k");
+  assert.equal(formatTokens(1_250_000), "1.3M");
 });

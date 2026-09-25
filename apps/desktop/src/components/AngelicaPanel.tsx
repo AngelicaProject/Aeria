@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type KeyboardEvent } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { aiSettings, angelicaApplyProposal, angelicaProposals, angelicaRejectProposal, angelicaCancel, angelicaConversation, angelicaConversations, angelicaDeleteConversation, angelicaSend, normalizeCommandError } from "../ipc";
-import { ANGELICA, applyAgentEvent, contextFill, parseReply, resolveModel, toolSubject, totalTokens, transcriptFromMessages, type ReplySpan, type TranscriptItem } from "../angelica";
+import { ANGELICA, activitySummary, applyAgentEvent, contextFill, formatElapsed, formatTokens, groupTranscript, parseReply, reasoningTitle, resolveModel, toolSubject, totalTokens, transcriptFromMessages, type ActivityStep, type ReplySpan, type TranscriptBlock, type TranscriptItem } from "../angelica";
 import { parseSelectionKey, selectableEfforts, selectionKey } from "../aiSettings";
 import type { AgentMode, ProposalRecord, SourceBinding } from "../types";
 import { AngelicaJobs } from "./AngelicaJobs";
@@ -95,19 +95,19 @@ function preview(text: string): string {
   return pretty.length > TOOL_PREVIEW_CHARS ? `${pretty.slice(0, TOOL_PREVIEW_CHARS)}\n…` : pretty;
 }
 
-function ToolCard({ item }: { item: Extract<TranscriptItem, { kind: "tool" }> }) {
+function ToolStep({ item }: { item: Extract<TranscriptItem, { kind: "tool" }> }) {
   const { t } = useI18n();
   const label = toolLabels[item.name];
   const subject = toolSubject(item.name, item.arguments);
   const state = item.result === null ? "running" : item.isError ? "failed" : "done";
   return (
-    <details className={`angelica-tool angelica-tool-${state}`}>
+    <details className={`angelica-step angelica-step-${state}`}>
       <summary>
         <UiIcon icon={state === "running" ? "circleDot" : state === "failed" ? "circleAlert" : "check"} size="xs" />
-        <span className="angelica-tool-name">{label ? t(label) : item.name}</span>
-        {subject ? <code className="angelica-tool-subject">{subject}</code> : null}
+        <span className="angelica-step-name">{label ? t(label) : item.name}</span>
+        {subject ? <code className="angelica-step-subject">{subject}</code> : null}
       </summary>
-      <div className="angelica-tool-body">
+      <div className="angelica-step-body">
         <span className="field-label">{t("angelica.toolArguments")}</span>
         <pre>{preview(item.arguments)}</pre>
         {item.result !== null ? <><span className="field-label">{t("angelica.toolResult")}</span><pre>{preview(item.result)}</pre></> : null}
@@ -116,20 +116,70 @@ function ToolCard({ item }: { item: Extract<TranscriptItem, { kind: "tool" }> })
   );
 }
 
-function TranscriptEntry({ item }: { item: TranscriptItem }) {
+/** What an activity is doing now, for its folded line and the status line. */
+function currentStep(steps: readonly ActivityStep[], t: ReturnType<typeof useI18n>["t"]): string {
+  const last = steps.at(-1);
+  if (!last) return t("angelica.thinking");
+  if (last.kind === "reasoning") return reasoningTitle(last.text) ?? t("angelica.thinking");
+  const label = toolLabels[last.item.name];
+  const subject = toolSubject(last.item.name, last.item.arguments);
+  return `${label ? t(label) : last.item.name}${subject ? ` ${subject}` : ""}`;
+}
+
+/** Reasoning and tool calls between two replies, folded into one line. */
+function ActivityBlock({ block }: { block: Extract<TranscriptBlock, { kind: "activity" }> }) {
   const { t } = useI18n();
-  if (item.kind === "user") return <div className="angelica-user">{item.text}</div>;
-  if (item.kind === "notice") return <div className="angelica-notice"><UiIcon icon="info" size="xs" />{item.text.replace(/^\[Aeria\]\s*/, "")}</div>;
-  if (item.kind === "tool") return <ToolCard item={item} />;
+  const [open, setOpen] = useState(false);
+  const summary = activitySummary(block.steps);
+  const parts: string[] = [];
+  if (summary.tools > 0) parts.push(t("angelica.activity.tools", { count: summary.tools }));
+  if (summary.failed > 0) parts.push(t("angelica.activity.failed", { count: summary.failed }));
+  if (summary.reasoning) parts.push(t("angelica.activity.reasoning"));
   return (
-    <div className="angelica-assistant">
-      {item.reasoning ? (
-        <details className="angelica-reasoning">
-          <summary>{item.streaming && !item.text ? t("angelica.thinking") : t("angelica.reasoning")}</summary>
-          <p>{item.reasoning}</p>
-        </details>
+    <div className={block.live ? "angelica-activity live" : "angelica-activity"}>
+      <button className="angelica-activity-head" type="button" aria-expanded={open} onClick={() => setOpen((value) => !value)}>
+        <span className="angelica-activity-text">{block.live ? currentStep(block.steps, t) : parts.join(" · ")}</span>
+        <UiIcon icon={open ? "chevronDown" : "chevronRight"} size="xs" />
+      </button>
+      {open ? (
+        <div className="angelica-activity-body">
+          {block.steps.map((entry) => entry.kind === "reasoning"
+            ? <div key={entry.key} className="angelica-thought"><Reply text={entry.text} /></div>
+            : <ToolStep key={entry.item.key} item={entry.item} />)}
+        </div>
       ) : null}
-      {item.text ? <Reply text={item.text} /> : null}
+    </div>
+  );
+}
+
+function TranscriptEntry({ block }: { block: TranscriptBlock }) {
+  if (block.kind === "user") return <div className="angelica-user">{block.text}</div>;
+  if (block.kind === "notice") return <div className="angelica-notice"><UiIcon icon="info" size="xs" />{block.text.replace(/^\[Aeria\]\s*/, "")}</div>;
+  if (block.kind === "activity") return <ActivityBlock block={block} />;
+  return <div className="angelica-assistant"><Reply text={block.text} /></div>;
+}
+
+const STATUS_COUNT = 16;
+const STATUS_INTERVAL_MS = 6000;
+
+/** A playful status, elapsed time, tokens, and the current step while a turn runs. */
+function WorkingLine({ startedAt, tokens, detail }: { startedAt: number; tokens: number; detail: string }) {
+  const { t } = useI18n();
+  const [now, setNow] = useState(() => Date.now());
+  const [status, setStatus] = useState(() => Math.floor(Math.random() * STATUS_COUNT));
+  useEffect(() => {
+    const clock = window.setInterval(() => setNow(Date.now()), 1000);
+    const rotate = window.setInterval(() => setStatus((current) => (current + 1 + Math.floor(Math.random() * (STATUS_COUNT - 1))) % STATUS_COUNT), STATUS_INTERVAL_MS);
+    return () => { window.clearInterval(clock); window.clearInterval(rotate); };
+  }, []);
+  const parts = [formatElapsed(now - startedAt)];
+  if (tokens > 0) parts.push(t("angelica.statusTokens", { count: formatTokens(tokens) }));
+  if (detail) parts.push(detail);
+  return (
+    <div className="angelica-working" role="status">
+      <UiIcon icon="sparkles" size="xs" />
+      <span className="angelica-working-status">{t(`angelica.status.${status + 1}` as MessageKey)}…</span>
+      <span className="angelica-working-meta">{parts.join(" · ")}</span>
     </div>
   );
 }
@@ -142,6 +192,9 @@ export function AngelicaPanel({ editorContext, onOpenSettings, onOpenGuide, onRe
   const [conversation, setConversation] = useState<ConversationDto | null>(null);
   const [items, setItems] = useState<TranscriptItem[]>([]);
   const [running, setRunning] = useState(false);
+  const [turnStartedAt, setTurnStartedAt] = useState(() => Date.now());
+  const [turnTokens, setTurnTokens] = useState(0);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
   const [usage, setUsage] = useState<AiUsage>(EMPTY_USAGE);
   const [lastPromptTokens, setLastPromptTokens] = useState<number | null>(null);
   const [model, setModel] = useState<AiModelSelection | null>(null);
@@ -237,6 +290,7 @@ export function AngelicaPanel({ editorContext, onOpenSettings, onOpenGuide, onRe
     switch (event.type) {
       case "usage":
         setLastPromptTokens(event.promptTokens);
+        setTurnTokens((current) => current + event.completionTokens);
         return;
       case "turnFinished":
         setRunning(false);
@@ -285,6 +339,20 @@ export function AngelicaPanel({ editorContext, onOpenSettings, onOpenGuide, onRe
     });
     return () => { void subscription.then((unlisten) => unlisten()); };
   }, [handleEvent, loadConversations]);
+
+  useEffect(() => {
+    if (!running) return;
+    setTurnStartedAt(Date.now());
+    setTurnTokens(0);
+  }, [running]);
+
+  // The message box grows with its text up to a limit.
+  useLayoutEffect(() => {
+    const element = inputRef.current;
+    if (!element) return;
+    element.style.height = "auto";
+    element.style.height = `${Math.min(element.scrollHeight, 200)}px`;
+  }, [draft]);
 
   useLayoutEffect(() => {
     const element = transcriptRef.current;
@@ -371,6 +439,18 @@ export function AngelicaPanel({ editorContext, onOpenSettings, onOpenGuide, onRe
   const modelConfig = model ? providers.find((provider) => provider.id === model.providerId)?.models.find((entry) => entry.id === model.modelId) ?? null : null;
   const fill = contextFill(lastPromptTokens, modelConfig?.contextWindow ?? null);
   const selection = editorContext?.selection ?? null;
+  const blocks = groupTranscript(items, running);
+  const lastBlock = blocks.at(-1);
+  const lastItem = items.at(-1);
+  // The live activity line already names the current step.
+  const workingDetail = lastBlock?.kind !== "activity" && lastItem?.kind === "assistant" && lastItem.streaming && lastItem.text
+    ? t("angelica.writing")
+    : "";
+  const contextPercent = fill === null ? null : Math.round(fill * 100);
+  const usageTitle = [
+    contextPercent !== null ? t("angelica.contextFill", { percent: contextPercent }) : null,
+    t("angelica.usageHint", { prompt: usage.promptTokens, completion: usage.completionTokens }),
+  ].filter(Boolean).join(" · ");
 
   if (settings && !hasModels) {
     return (
@@ -411,8 +491,8 @@ export function AngelicaPanel({ editorContext, onOpenSettings, onOpenGuide, onRe
               {suggestionKeys.map((key) => <button key={key} className="button button-ghost" type="button" disabled={!model} onClick={() => void send(t(key))}>{t(key)}</button>)}
             </div>
           </div>
-        ) : items.map((item) => <TranscriptEntry key={item.key} item={item} />)}
-        {running && !(items[items.length - 1]?.kind === "assistant") ? <div className="angelica-working">{t("angelica.working")}</div> : null}
+        ) : blocks.map((block) => <TranscriptEntry key={block.key} block={block} />)}
+        {running ? <WorkingLine startedAt={turnStartedAt} tokens={turnTokens} detail={workingDetail} /> : null}
         {notice ? <p className="field-hint">{t(notice)}</p> : null}
       </div>
 
@@ -423,46 +503,46 @@ export function AngelicaPanel({ editorContext, onOpenSettings, onOpenGuide, onRe
       {error ? <div className="angelica-error"><ErrorBanner title={t("angelica.error")} error={error} onDismiss={() => setError(null)} /></div> : null}
 
       <div className="angelica-composer">
-        <div className="angelica-chips">
-          <select className="input angelica-mode-select" value={mode} aria-label={t("angelica.mode.label")} title={t(modeHints[mode])} onChange={(event) => setMode(event.target.value as AgentMode)}>
-            {(Object.keys(modeLabels) as AgentMode[]).map((value) => <option key={value} value={value}>{t(modeLabels[value])}</option>)}
-          </select>
-          {selection ? (
-            <button type="button" className={attachContext ? "angelica-chip" : "angelica-chip off"} aria-pressed={attachContext} title={t(attachContext ? "angelica.contextOn" : "angelica.contextOff")} onClick={() => setAttachContext((value) => !value)}>
-              <UiIcon icon={attachContext ? "locateFixed" : "eyeOff"} size="xs" />
-              <code>{`${selection.sheet}:${selection.row}:${selection.subrow}${selection.column === null ? "" : `:${selection.column}`}`}</code>
-            </button>
-          ) : null}
-          {queue.length > 0 ? <span className="angelica-chip">{t("angelica.queued", { count: queue.length })}</span> : null}
-        </div>
-        <textarea className="input angelica-input" rows={2} value={draft} placeholder={t("angelica.placeholder")} aria-label={t("angelica.placeholder")} onChange={(event) => setDraft(event.target.value)} onKeyDown={onComposerKey} />
-        <div className="angelica-toolbar">
-          <select className="input angelica-model" value={model ? selectionKey(model) : ""} aria-label={t("angelica.model")} title={t("angelica.model")} onFocus={loadSettings} onChange={(event) => {
-            const next = parseSelectionKey(event.target.value);
-            setModel(next ? resolveModel(providers, [{ ...next, effort: model?.effort ?? null }]) : null);
-          }}>
-            {providers.filter((provider) => provider.models.length > 0).map((provider) => (
-              <optgroup key={provider.id} label={provider.name}>
-                {provider.models.map((entry) => <option key={entry.id} value={selectionKey({ providerId: provider.id, modelId: entry.id })}>{entry.id}</option>)}
-              </optgroup>
-            ))}
-          </select>
-          {efforts.length > 0 && model ? (
-            <select className="input angelica-effort" value={model.effort ?? ""} aria-label={t("angelica.effort")} title={t("angelica.effort")} onChange={(event) => setModel({ ...model, effort: (event.target.value || null) as ReasoningEffort | null })}>
-              <option value="">{t("ai.effort.default")}</option>
-              {efforts.map((effort) => <option key={effort} value={effort}>{t(effortLabels[effort])}</option>)}
+        {queue.length > 0 ? <span className="angelica-chip angelica-queue">{t("angelica.queued", { count: queue.length })}</span> : null}
+        <div className="angelica-box" onClick={(event) => { if (event.target === event.currentTarget) inputRef.current?.focus(); }}>
+          <textarea ref={inputRef} className="angelica-input" rows={1} value={draft} placeholder={t("angelica.placeholder")} aria-label={t("angelica.placeholder")} onChange={(event) => setDraft(event.target.value)} onKeyDown={onComposerKey} />
+          <div className="angelica-box-bar">
+            <select className="angelica-ghost-select" value={mode} aria-label={t("angelica.mode.label")} title={t(modeHints[mode])} onChange={(event) => setMode(event.target.value as AgentMode)}>
+              {(Object.keys(modeLabels) as AgentMode[]).map((value) => <option key={value} value={value}>{t(modeLabels[value])}</option>)}
             </select>
-          ) : null}
-          <span className="angelica-usage" title={t("angelica.usageHint", { prompt: usage.promptTokens, completion: usage.completionTokens })}>
-            {fill !== null ? t("angelica.contextFill", { percent: Math.round(fill * 100) }) : null}
-            {totalTokens(usage) > 0 ? <span>{t("angelica.tokens", { count: totalTokens(usage) })}</span> : null}
-          </span>
-          {running ? (
-            <button className="button button-secondary" type="button" onClick={stop}><UiIcon icon="square" size="sm" />{t("angelica.stop")}</button>
-          ) : null}
-          <button className="button button-primary" type="button" disabled={!draft.trim() || !model} onClick={submit}>
-            <UiIcon icon="arrowUp" size="sm" />{running ? t("angelica.queue") : t("angelica.send")}
-          </button>
+            {selection ? (
+              <button type="button" className={attachContext ? "angelica-chip" : "angelica-chip off"} aria-pressed={attachContext} title={t(attachContext ? "angelica.contextOn" : "angelica.contextOff")} onClick={() => setAttachContext((value) => !value)}>
+                <UiIcon icon={attachContext ? "locateFixed" : "eyeOff"} size="xs" />
+                <code>{`${selection.sheet}:${selection.row}:${selection.subrow}${selection.column === null ? "" : `:${selection.column}`}`}</code>
+              </button>
+            ) : null}
+            <span className="angelica-box-spacer" />
+            <span className="angelica-box-end">
+            <select className="angelica-ghost-select angelica-model" value={model ? selectionKey(model) : ""} aria-label={t("angelica.model")} title={t("angelica.model")} onFocus={loadSettings} onChange={(event) => {
+              const next = parseSelectionKey(event.target.value);
+              setModel(next ? resolveModel(providers, [{ ...next, effort: model?.effort ?? null }]) : null);
+            }}>
+              {providers.filter((provider) => provider.models.length > 0).map((provider) => (
+                <optgroup key={provider.id} label={provider.name}>
+                  {provider.models.map((entry) => <option key={entry.id} value={selectionKey({ providerId: provider.id, modelId: entry.id })}>{entry.id}</option>)}
+                </optgroup>
+              ))}
+            </select>
+            {efforts.length > 0 && model ? (
+              <select className="angelica-ghost-select" value={model.effort ?? ""} aria-label={t("angelica.effort")} title={t("angelica.effort")} onChange={(event) => setModel({ ...model, effort: (event.target.value || null) as ReasoningEffort | null })}>
+                <option value="">{t("ai.effort.default")}</option>
+                {efforts.map((effort) => <option key={effort} value={effort}>{t(effortLabels[effort])}</option>)}
+              </select>
+            ) : null}
+            <span className="angelica-ring" role="img" aria-label={usageTitle} title={`${usageTitle} · ${t("angelica.tokens", { count: totalTokens(usage) })}`} style={{ "--fill": `${contextPercent ?? 0}%` } as CSSProperties} />
+            {running ? (
+              <button className="angelica-round angelica-stop" type="button" aria-label={t("angelica.stop")} title={t("angelica.stop")} onClick={stop}><UiIcon icon="square" size="xs" /></button>
+            ) : null}
+            <button className="angelica-round angelica-send" type="button" disabled={!draft.trim() || !model} aria-label={running ? t("angelica.queue") : t("angelica.send")} title={running ? t("angelica.queue") : t("angelica.send")} onClick={submit}>
+              <UiIcon icon="arrowUp" size="sm" />
+            </button>
+            </span>
+          </div>
         </div>
       </div>
     </section>

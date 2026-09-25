@@ -210,3 +210,83 @@ export function sortJobs(jobs: readonly JobSummary[]): JobSummary[] {
   const rank = (job: JobSummary) => job.status === "running" ? 0 : job.status === "paused" ? 1 : 2;
   return [...jobs].sort((left, right) => rank(left) - rank(right) || right.createdAtUnixMs - left.createdAtUnixMs);
 }
+
+/** One step inside an activity block. */
+export type ActivityStep =
+  | { kind: "reasoning"; key: string; text: string }
+  | { kind: "tool"; item: Extract<TranscriptItem, { kind: "tool" }> };
+
+/** What the conversation shows: messages, replies, and folded activity. */
+export type TranscriptBlock =
+  | { kind: "user" | "notice"; key: string; text: string }
+  | { kind: "reply"; key: string; text: string }
+  | { kind: "activity"; key: string; steps: ActivityStep[]; live: boolean };
+
+/**
+ * Folds reasoning and tool calls between two replies into one activity
+ * block, so the conversation reads as messages with compact work between
+ * them. The last block is live while a turn runs.
+ */
+export function groupTranscript(items: readonly TranscriptItem[], running: boolean): TranscriptBlock[] {
+  const blocks: TranscriptBlock[] = [];
+  let activity: Extract<TranscriptBlock, { kind: "activity" }> | null = null;
+  const step = (key: string, next: ActivityStep) => {
+    if (!activity) {
+      activity = { kind: "activity", key: `a-${key}`, steps: [], live: false };
+      blocks.push(activity);
+    }
+    activity.steps.push(next);
+  };
+  for (const item of items) {
+    if (item.kind === "user" || item.kind === "notice") {
+      activity = null;
+      blocks.push({ kind: item.kind, key: item.key, text: item.text });
+    } else if (item.kind === "tool") {
+      step(item.key, { kind: "tool", item });
+    } else {
+      if (item.reasoning.trim()) step(item.key, { kind: "reasoning", key: `r-${item.key}`, text: item.reasoning });
+      if (item.text) {
+        activity = null;
+        blocks.push({ kind: "reply", key: item.key, text: item.text });
+      }
+    }
+  }
+  const last = blocks.at(-1);
+  if (running && last?.kind === "activity") last.live = true;
+  return blocks;
+}
+
+/** Counts for an activity block's folded line. */
+export function activitySummary(steps: readonly ActivityStep[]): { tools: number; failed: number; reasoning: boolean } {
+  let tools = 0;
+  let failed = 0;
+  let reasoning = false;
+  for (const entry of steps) {
+    if (entry.kind === "reasoning") reasoning = true;
+    else {
+      tools += 1;
+      if (entry.item.isError) failed += 1;
+    }
+  }
+  return { tools, failed, reasoning };
+}
+
+/** The latest `**Title**` heading of reasoning text, as models summarize their steps. */
+export function reasoningTitle(text: string): string | null {
+  const titles = [...text.matchAll(/\*\*([^*\n]+)\*\*/g)];
+  return titles.at(-1)?.[1]?.trim() || null;
+}
+
+/** Elapsed time as `12s` or `3m 05s`. */
+export function formatElapsed(milliseconds: number): string {
+  const seconds = Math.max(0, Math.floor(milliseconds / 1000));
+  if (seconds < 60) return `${seconds}s`;
+  return `${Math.floor(seconds / 60)}m ${String(seconds % 60).padStart(2, "0")}s`;
+}
+
+/** A compact token count: `950`, `5.2k`, `1.3M`. */
+export function formatTokens(count: number): string {
+  if (count < 1000) return String(count);
+  if (count < 1_000_000) return `${(count / 1000).toFixed(count < 10_000 ? 1 : 0)}k`;
+  return `${(count / 1_000_000).toFixed(1)}M`;
+}

@@ -220,23 +220,30 @@ The right dock's Angelica tool (named Angelica in every interface language)
 is the chat with the agent described in [`ai.md`](./ai.md#angelica). Without
 a configured model it shows how to open Settings → AI.
 
-The header switches between the project's conversations, starts a new one,
-and deletes the current one. The transcript shows user messages, Angelica's
-replies with a small Markdown subset (paragraphs, lists, code, inline code,
-bold) rendered as text, so game macros stay visible, collapsible reasoning,
-and a collapsible card for each tool call with its arguments, result, and
-running, done, or failed state. It follows new output while scrolled to the
-bottom.
+The header switches between the project's conversations, opens the glossary
+and guidance, starts a new conversation, and deletes the current one. The
+transcript shows user messages, Aeria's notices, and Angelica's replies with a
+small Markdown subset (paragraphs, lists, code, inline code, bold) rendered as
+text, so game macros stay visible. Reasoning and tool calls between two
+replies fold into one line, such as "3 tools · 1 failed · reasoning", which
+expands to the reasoning, rendered like replies, and a compact row per tool
+call with its state; a row opens its arguments and result. While Angelica
+works, the last folded line names the current step (the reasoning's latest
+heading or the running tool), and a status line below shows a playful
+rotating status, the elapsed time, the tokens generated in the turn, and,
+while a reply streams, that she is writing. The transcript follows new output
+while scrolled to the bottom.
 
-The composer has a mode picker (Chat, Ask, Auto-draft; Ask by default) and
-a chip for the selected occurrence, which the user can turn off so the
-selection is not sent. Enter
-sends and Shift+Enter adds a line; messages written while Angelica answers are
-queued and sent after the turn. The toolbar picks the model and, when the model
-accepts efforts, the effort for the next message; the conversation's own
-choice, then the default model, is preselected. It also shows the share of the
-context window the last request used, when the window is known, the
-conversation's tokens, **Stop** while a turn runs, and **Send**.
+The composer is one box: a text area that grows with its text up to 200
+pixels, and a bar with the mode (Chat, Ask, Auto-draft; Ask by default), a
+chip for the selected occurrence, which the user can turn off so the
+selection is not sent, the model and, when the model accepts efforts, the
+effort for the next message, a ring showing the share of the context window
+the last request used (its tooltip also gives the conversation's tokens),
+**Stop** while a turn runs, and a round **Send** button. The bar wraps in a
+narrow panel. Enter sends and Shift+Enter adds a line; messages written while
+Angelica answers are queued and sent after the turn. The conversation's own
+model choice, then the default model, is preselected.
 
 Above the composer, a collapsible list shows the conversation's pending
 proposals and those that could not be applied. Each card shows the string's
