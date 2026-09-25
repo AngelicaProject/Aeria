@@ -391,6 +391,22 @@ delay) before the job pauses, and a chunk's outcomes are recorded with the
 same retries so its strings never stay claimed. A job's summary counts its
 active workers, the chunks being translated right now.
 
+A chunk's outcomes and token usage are recorded when the chunk ends. Usage is
+summed as each response finishes, so a chunk the provider interrupts still
+records the tokens it spent.
+
+While a runner runs, each lane also reports its live activity: the chunk and
+sheet it translates, its phase (claiming a chunk, loading context, waiting
+for the provider, reasoning, writing, running a tool, recording results,
+waiting to retry, or stopped), the response it is on, its strings finished
+and tokens used in the chunk, its chunks done, and when it last changed or
+received anything from the provider. Streaming reasoning, text, and tool-call
+arguments all count as activity. This state lives only in memory while the
+runner runs and is never stored. The job card polls it every second and
+marks a lane that has waited on the provider without data for 30 seconds as
+quiet and for 90 seconds as stalled; the client's read timeout ends the
+request after 180 seconds of silence, which requeues the chunk.
+
 When a job completes or pauses on its own, Aeria wakes Angelica: unless a
 turn is already running there, it adds an automatic `[Aeria]` message to the
 job's conversation and starts a turn with the conversation's last model and

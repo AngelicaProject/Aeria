@@ -15,7 +15,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use aeria_ai::ProviderError;
-use aeria_ai::agent::{ToolExecutor, TurnConfig, run_turn};
+use aeria_ai::agent::{AgentEvent, ToolExecutor, TurnConfig, run_turn};
 use aeria_ai::chat::{ChatMessage, ToolCall};
 use aeria_ai::conversation::{ConversationStore, ProposalRecord, ProposalStatus};
 use aeria_ai::guidance::ProjectGuide;
@@ -41,6 +41,7 @@ use crate::angelica::{
 };
 use crate::commands::run_blocking;
 use crate::error::CommandError;
+use crate::job_workers::{WorkerActivity, WorkerBoard, WorkerPhase};
 use crate::paths::AeriaPaths;
 use crate::search::DesktopSearch;
 use crate::state::DesktopState;
@@ -405,6 +406,7 @@ struct JobRun {
     job_id: String,
     store: JobStore,
     root: PathBuf,
+    workers: Arc<WorkerBoard>,
 }
 
 impl JobRun {
@@ -429,14 +431,16 @@ pub(crate) fn spawn_runner(app: &tauri::AppHandle, job_id: &str) {
     let (Ok(store), Ok(root)) = (job_store(app), repository_root(app)) else {
         return;
     };
+    let workers = Arc::new(WorkerBoard::default());
     let run = JobRun {
         app: app.clone(),
         job_id: job_id.to_owned(),
         store,
         root,
+        workers: Arc::clone(&workers),
     };
     app.state::<DesktopState>()
-        .start_job_runner(job_id.to_owned(), move || {
+        .start_job_runner(job_id.to_owned(), workers, move || {
             tauri::async_runtime::spawn(run_job(run))
         });
 }
@@ -448,9 +452,11 @@ async fn run_job(run: JobRun) {
         .with_store(|store, id| Ok(store.summary(id)?.spec.concurrency))
         .await
         .unwrap_or(1);
+    let concurrency = concurrency.max(1);
+    run.workers.reset(u32::from(concurrency));
     let mut lanes = JoinSet::new();
-    for _ in 0..concurrency.max(1) {
-        lanes.spawn(run_lane(run.clone()));
+    for lane in 0..concurrency {
+        lanes.spawn(run_lane(run.clone(), usize::from(lane)));
     }
     while lanes.join_next().await.is_some() {}
 
@@ -551,12 +557,19 @@ fn pause_reason(job: &JobSummary) -> Option<String> {
     })
 }
 
-async fn run_lane(run: JobRun) {
+/// Runs one lane (zero-based) until the job stops or has no chunk left.
+async fn run_lane(run: JobRun, lane: usize) {
+    lane_loop(&run, lane).await;
+    run.workers.set_phase(lane, WorkerPhase::Stopped);
+}
+
+async fn lane_loop(run: &JobRun, lane: usize) {
     let mut failures = 0_u32;
     let mut store_failures = 0_u32;
     loop {
+        run.workers.set_phase(lane, WorkerPhase::Idle);
         if !run.project_open() {
-            pause_with_reason(&run, "the project was closed".to_owned()).await;
+            pause_with_reason(run, "the project was closed".to_owned()).await;
             return;
         }
         let claimed = run
@@ -575,14 +588,14 @@ async fn run_lane(run: JobRun) {
             Ok(Ok(Some(claim))) => claim,
             Ok(Ok(None)) => return,
             Ok(Err(reason)) => {
-                pause_with_reason(&run, reason).await;
+                pause_with_reason(run, reason).await;
                 return;
             }
             // A busy job store is retried; only a lasting failure stops.
             Err(error) => {
                 store_failures += 1;
                 if store_failures >= MAX_STORE_FAILURES {
-                    pause_with_reason(&run, error.message).await;
+                    pause_with_reason(run, error.message).await;
                     return;
                 }
                 tokio::time::sleep(STORE_BACKOFF * store_failures).await;
@@ -591,18 +604,37 @@ async fn run_lane(run: JobRun) {
         };
         store_failures = 0;
         notify(&run.app, &run.job_id);
-        match run_chunk(&run, &spec, units).await {
-            ChunkEnd::Done => failures = 0,
+        if let Some(first) = units.first() {
+            let (chunk, sheet) = (first.chunk, first.location.sheet.clone());
+            let count = u32::try_from(units.len()).unwrap_or(u32::MAX);
+            let rounds = u32::try_from(WORKER_ROUNDS).unwrap_or(u32::MAX);
+            run.workers.update(lane, |activity, now| {
+                activity.start_chunk(chunk, &sheet, count, rounds, now);
+            });
+        }
+        match run_chunk(run, &spec, units, lane).await {
+            ChunkEnd::Done => {
+                failures = 0;
+                run.workers.update(lane, |activity, _| {
+                    activity.chunks_done += 1;
+                    activity.last_error = None;
+                });
+            }
             ChunkEnd::Retry(message) => {
                 failures += 1;
                 if failures >= MAX_PROVIDER_FAILURES {
-                    pause_with_reason(&run, format!("the provider keeps failing: {message}")).await;
+                    pause_with_reason(run, format!("the provider keeps failing: {message}")).await;
                     return;
                 }
-                tokio::time::sleep(PROVIDER_BACKOFF * failures).await;
+                let delay = PROVIDER_BACKOFF * failures;
+                run.workers.update(lane, |activity, now| {
+                    let retry_at = now + u64::try_from(delay.as_millis()).unwrap_or(u64::MAX);
+                    activity.set_backoff(retry_at, message, now);
+                });
+                tokio::time::sleep(delay).await;
             }
             ChunkEnd::Stop(reason) => {
-                pause_with_reason(&run, reason).await;
+                pause_with_reason(run, reason).await;
                 return;
             }
         }
@@ -856,7 +888,7 @@ fn interrupted(error: ProviderError) -> (ChunkEnd, (UnitStatus, Option<String>))
 }
 
 /// Runs one worker over one claimed chunk and records the outcomes.
-async fn run_chunk(run: &JobRun, spec: &JobSpec, units: Vec<JobUnit>) -> ChunkEnd {
+async fn run_chunk(run: &JobRun, spec: &JobSpec, units: Vec<JobUnit>, lane: usize) -> ChunkEnd {
     let chunk = units.first().map_or(0, |unit| unit.chunk);
     let released: Vec<_> = units
         .iter()
@@ -913,21 +945,39 @@ async fn run_chunk(run: &JobRun, spec: &JobSpec, units: Vec<JobUnit>) -> ChunkEn
     let executor = WorkerExecutor {
         worker: Arc::clone(&worker),
     };
+    run.workers.update(lane, WorkerActivity::first_request);
+    // Usage is counted as responses finish, so an interrupted chunk still
+    // records what it spent.
+    let mut spent = usage;
+    let mut on_event = |event: AgentEvent| {
+        if let AgentEvent::Usage { usage } = &event {
+            spent.add(*usage);
+        }
+        let finished = matches!(event, AgentEvent::ToolFinished { .. })
+            .then(|| u32::try_from(worker.finished()).unwrap_or(u32::MAX));
+        run.workers.update(lane, |activity, now| {
+            activity.apply(&event, now);
+            if let Some(finished) = finished {
+                activity.finished_units = finished;
+            }
+        });
+    };
     let result = run_turn(
         &client,
         &endpoint,
         &config,
         &mut messages,
         &executor,
-        &mut |_| {},
+        &mut on_event,
         &mut |_| {},
     )
     .await;
+    run.workers.set_phase(lane, WorkerPhase::Recording);
     let (end, usage, unfinished) = match result {
         Ok(summary) => (ChunkEnd::Done, summary.usage, None),
         Err(error) => {
             let (end, unfinished) = interrupted(error);
-            (end, usage, Some(unfinished))
+            (end, spent, Some(unfinished))
         }
     };
     // A chunk the provider interrupted keeps its finished strings; the rest
@@ -979,6 +1029,17 @@ pub async fn angelica_job_events(
     job_id: String,
 ) -> CommandResult<Vec<JobEvent>> {
     run_blocking(move || Ok(job_store(&app)?.events(&job_id, 0)?)).await
+}
+
+#[tauri::command(rename_all = "camelCase")]
+#[allow(clippy::needless_pass_by_value)]
+/// Shows what each worker of a running job is doing; empty when the job
+/// does not run in this process.
+pub async fn angelica_job_workers(app: tauri::AppHandle, job_id: String) -> Vec<WorkerActivity> {
+    app.state::<DesktopState>()
+        .job_workers(&job_id)
+        .map(|workers| workers.snapshot())
+        .unwrap_or_default()
 }
 
 #[tauri::command(rename_all = "camelCase")]

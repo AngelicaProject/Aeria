@@ -20,6 +20,7 @@ import {
   sortJobs,
   toolSubject,
   transcriptFromMessages,
+  workerHealth,
 } from "../src/angelica.ts";
 
 test("stored messages become a transcript with tool results joined to calls", () => {
@@ -115,6 +116,15 @@ test("job progress counts final outcomes and problems", () => {
   assert.equal(jobProgress(counts), 0.4);
   assert.equal(jobProblems(counts), 2);
   assert.equal(jobProgress({ ...counts, total: 0 }), 1);
+});
+
+test("a worker waiting for the provider turns quiet, then stalled", () => {
+  const worker = (phase, lastActivityUnixMs) => ({ phase, lastActivityUnixMs });
+  assert.equal(workerHealth(worker("reasoning", 1_000), 20_000), "active");
+  assert.equal(workerHealth(worker("waiting", 1_000), 31_000), "quiet");
+  assert.equal(workerHealth(worker("writing", 1_000), 91_000), "stalled");
+  assert.equal(workerHealth(worker("backoff", 1_000), 500_000), "active");
+  assert.equal(workerHealth(worker("idle", 1_000), 500_000), "active");
 });
 
 test("jobs needing attention come first, newest first within a status", () => {

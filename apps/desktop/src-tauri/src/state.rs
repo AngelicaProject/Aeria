@@ -9,6 +9,7 @@ use aeria_git::{GitExecutable, UnitAttribution};
 use aeria_workspace::ProjectSession;
 
 use crate::error::CommandError;
+use crate::job_workers::WorkerBoard;
 use crate::search::IndexState;
 
 /// The one authoritative project session owned by the desktop process.
@@ -28,8 +29,8 @@ pub struct DesktopState {
     chatgpt_login: Mutex<Option<(String, tauri::async_runtime::JoinHandle<()>)>>,
     /// Serializes read-modify-write of conversation proposal files.
     proposals: Mutex<()>,
-    /// Running translation jobs by job ID.
-    job_runners: Mutex<Vec<(String, tauri::async_runtime::JoinHandle<()>)>>,
+    /// Running translation jobs by job ID, with their workers' activity.
+    job_runners: Mutex<Vec<JobRunner>>,
     /// Job stores opened in this process; interrupted jobs are paused once.
     job_stores: Mutex<Vec<PathBuf>>,
     /// Source search indexes by source package ID.
@@ -74,6 +75,12 @@ pub(crate) struct AttributionCache {
     pub root: PathBuf,
     pub head: String,
     pub units: Arc<Vec<UnitAttribution>>,
+}
+
+struct JobRunner {
+    job_id: String,
+    handle: tauri::async_runtime::JoinHandle<()>,
+    workers: Arc<WorkerBoard>,
 }
 
 struct AtlasJob {
@@ -307,33 +314,46 @@ impl DesktopState {
     pub(crate) fn start_job_runner(
         &self,
         job_id: String,
+        workers: Arc<WorkerBoard>,
         spawn: impl FnOnce() -> tauri::async_runtime::JoinHandle<()>,
     ) -> bool {
         let Ok(mut runners) = self.job_runners.lock() else {
             return false;
         };
-        if runners.iter().any(|(id, _)| *id == job_id) {
+        if runners.iter().any(|runner| runner.job_id == job_id) {
             return false;
         }
-        runners.push((job_id, spawn()));
+        runners.push(JobRunner {
+            job_id,
+            handle: spawn(),
+            workers,
+        });
         true
     }
 
     /// Forgets a runner that ended on its own.
     pub(crate) fn finish_job_runner(&self, job_id: &str) {
         if let Ok(mut runners) = self.job_runners.lock() {
-            runners.retain(|(id, _)| id != job_id);
+            runners.retain(|runner| runner.job_id != job_id);
         }
     }
 
     /// Aborts a job's runner, if it runs.
     pub(crate) fn stop_job_runner(&self, job_id: &str) {
         if let Ok(mut runners) = self.job_runners.lock()
-            && let Some(position) = runners.iter().position(|(id, _)| id == job_id)
+            && let Some(position) = runners.iter().position(|runner| runner.job_id == job_id)
         {
-            let (_, handle) = runners.remove(position);
-            handle.abort();
+            runners.remove(position).handle.abort();
         }
+    }
+
+    /// The workers' activity of a running job.
+    pub(crate) fn job_workers(&self, job_id: &str) -> Option<Arc<WorkerBoard>> {
+        let runners = self.job_runners.lock().ok()?;
+        runners
+            .iter()
+            .find(|runner| runner.job_id == job_id)
+            .map(|runner| Arc::clone(&runner.workers))
     }
 
     pub(crate) fn search_index(&self, package_id: &str) -> Option<IndexState> {

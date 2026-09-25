@@ -183,6 +183,17 @@ impl ChunkWorker {
         self.contexts.iter().any(Option::is_some)
     }
 
+    /// Strings of the chunk with an outcome: written, skipped, or failed.
+    #[must_use]
+    pub fn finished(&self) -> usize {
+        self.progress.lock().map_or(0, |progress| {
+            progress
+                .values()
+                .filter(|entry| entry.outcome.is_some())
+                .count()
+        })
+    }
+
     /// The worker's system message.
     #[must_use]
     pub fn system_prompt(&self, facts: Option<&ProjectFacts>, instructions: &str) -> String {
@@ -690,6 +701,7 @@ mod tests {
         assert_eq!(value["results"][0]["status"], "written");
         assert_eq!(value["results"][1]["status"], "rejected");
         assert_eq!(value["remainingUnits"], 0);
+        assert_eq!(worker.finished(), 4);
         assert_eq!(worker.outcomes()[0].1, UnitStatus::Drafted);
         assert_eq!(
             host.written.lock().expect("lock")[1],

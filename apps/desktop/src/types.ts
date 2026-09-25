@@ -635,6 +635,27 @@ export type JobEvent = { seq: number; createdAtUnixMs: number; kind: string; mes
 
 export type JobAction = "pause" | "resume" | "cancel";
 
+export type WorkerPhase = "idle" | "preparing" | "waiting" | "reasoning" | "writing" | "tool" | "recording" | "backoff" | "stopped";
+
+/** What one lane of a running job is doing; live state, never stored. */
+export type WorkerActivity = {
+  lane: number;
+  phase: WorkerPhase;
+  chunk: number | null;
+  sheet: string | null;
+  units: number;
+  finishedUnits: number;
+  round: number;
+  maxRounds: number;
+  tool: string | null;
+  chunkTokens: number;
+  chunksDone: number;
+  phaseStartedUnixMs: number;
+  lastActivityUnixMs: number;
+  retryAtUnixMs: number | null;
+  lastError: string | null;
+};
+
 export type GlossaryEntry = { term: string; translation: string; note?: string; forbidden?: string[] };
 
 export type GlossaryEntryInput = { term: string; translation: string; note: string | null; forbidden: string[] };

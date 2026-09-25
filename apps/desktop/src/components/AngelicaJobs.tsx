@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
-import { angelicaJobControl, angelicaJobEvents, angelicaJobRetry, angelicaJobUnits, angelicaJobs, normalizeCommandError } from "../ipc";
-import { jobProblems, jobProgress, sortJobs, totalTokens } from "../angelica";
-import type { CommandError, JobAction, JobEvent, JobFilter, JobStatus, JobSummary, JobUnit, JobUnitStatus, SourceBinding } from "../types";
+import { angelicaJobControl, angelicaJobEvents, angelicaJobRetry, angelicaJobUnits, angelicaJobWorkers, angelicaJobs, normalizeCommandError } from "../ipc";
+import { formatElapsed, formatTokens, jobProblems, jobProgress, sortJobs, totalTokens, workerHealth } from "../angelica";
+import type { CommandError, JobAction, JobEvent, JobFilter, JobStatus, JobSummary, JobUnit, JobUnitStatus, SourceBinding, WorkerActivity, WorkerPhase } from "../types";
 import type { MessageKey } from "../i18n/translate";
 import { useI18n } from "../ui/i18n";
 import { UiIcon } from "../ui/primitives/UiIcon";
@@ -33,6 +33,29 @@ const unitLabels: Readonly<Record<JobUnitStatus, MessageKey>> = {
   failed: "angelica.job.unit.failed",
   conflict: "angelica.job.unit.conflict",
 };
+
+const phaseLabels: Readonly<Record<Exclude<WorkerPhase, "tool">, MessageKey>> = {
+  idle: "angelica.worker.idle",
+  preparing: "angelica.worker.preparing",
+  waiting: "angelica.worker.waiting",
+  reasoning: "angelica.worker.reasoning",
+  writing: "angelica.worker.writing",
+  recording: "angelica.worker.recording",
+  backoff: "angelica.worker.backoff",
+  stopped: "angelica.worker.stopped",
+};
+
+const toolLabels: Readonly<Partial<Record<string, MessageKey>>> = {
+  submit_translations: "angelica.worker.tool.submit",
+  validate_target: "angelica.worker.tool.validate",
+  get_unit: "angelica.worker.tool.context",
+  read_rows: "angelica.worker.tool.context",
+  get_guidance: "angelica.worker.tool.guidance",
+  report_issue: "angelica.worker.tool.report",
+};
+
+/** How often a running job's workers are polled. */
+const WORKER_POLL_MS = 1000;
 
 const PROBLEMS: JobUnitStatus[] = ["rejected", "failed", "conflict"];
 /** Finished jobs listed below the ones that still run or wait. */
@@ -80,6 +103,75 @@ function JobDetails({ job, onError, onReveal }: { job: JobSummary } & AngelicaJo
   );
 }
 
+function WorkerRow({ worker, now }: { worker: WorkerActivity; now: number }) {
+  const { t } = useI18n();
+  const health = workerHealth(worker, now);
+  const toolLabel = worker.tool ? toolLabels[worker.tool] : undefined;
+  const phase = worker.phase === "tool"
+    ? (toolLabel ? t(toolLabel) : t("angelica.worker.tool", { tool: worker.tool ?? "" }))
+    : worker.phase === "backoff" && worker.retryAtUnixMs !== null
+      ? t("angelica.worker.backoffUntil", { time: formatElapsed(worker.retryAtUnixMs - now) })
+      : t(phaseLabels[worker.phase]);
+  const timed = worker.phase !== "stopped" && worker.phase !== "backoff";
+  const inChunk = worker.chunk !== null && worker.phase !== "idle" && worker.phase !== "stopped" && worker.phase !== "backoff";
+  return (
+    <li className={`angelica-worker ${health}`} title={health === "active" ? undefined : t("angelica.worker.silentHint")}>
+      <span className="angelica-worker-dot" aria-hidden="true" />
+      <span className="angelica-worker-lane">{t("angelica.worker.lane", { lane: String(worker.lane) })}</span>
+      <span className="angelica-worker-phase">{timed ? `${phase} · ${formatElapsed(now - worker.phaseStartedUnixMs)}` : phase}</span>
+      {health === "active" ? null : <span className="angelica-worker-silence">{t("angelica.worker.silence", { time: formatElapsed(now - worker.lastActivityUnixMs) })}</span>}
+      <span className="angelica-worker-meta">
+        {inChunk ? (
+          <>
+            <span title={worker.sheet ?? undefined}>{t("angelica.worker.chunk", { chunk: String((worker.chunk ?? 0) + 1), sheet: worker.sheet ?? "" })}</span>
+            {worker.round > 0 ? <span>{t("angelica.worker.round", { round: worker.round, max: worker.maxRounds })}</span> : null}
+            <span>{t("angelica.worker.units", { finished: worker.finishedUnits, total: worker.units })}</span>
+            {worker.chunkTokens > 0 ? <span>{t("angelica.worker.tokens", { tokens: formatTokens(worker.chunkTokens) })}</span> : null}
+          </>
+        ) : null}
+        <span>{t("angelica.worker.chunksDone", { count: worker.chunksDone })}</span>
+        {worker.lastError ? <span className="angelica-job-problems" title={worker.lastError}>{t("angelica.worker.lastError")}</span> : null}
+      </span>
+    </li>
+  );
+}
+
+/** Live activity of a job's workers while its runner runs. */
+function JobWorkers({ job }: { job: JobSummary }) {
+  const { t } = useI18n();
+  const [workers, setWorkers] = useState<WorkerActivity[]>([]);
+  const [now, setNow] = useState(() => Date.now());
+  const live = job.status === "running" || job.status === "paused";
+
+  useEffect(() => {
+    if (!live) {
+      setWorkers([]);
+      return;
+    }
+    let current = true;
+    // Polling also ticks the elapsed times; a failed poll keeps the last view.
+    const poll = () => {
+      void angelicaJobWorkers(job.id)
+        .then((next) => { if (current) { setWorkers(next); setNow(Date.now()); } })
+        .catch(() => undefined);
+    };
+    poll();
+    const timer = window.setInterval(poll, WORKER_POLL_MS);
+    return () => { current = false; window.clearInterval(timer); };
+  }, [job.id, live]);
+
+  if (workers.length === 0) return null;
+  const working = workers.filter((worker) => worker.phase !== "stopped").length;
+  return (
+    <details className="angelica-job-more" open>
+      <summary title={t("angelica.job.workersHint")}>{t("angelica.worker.title", { active: working, total: workers.length })}</summary>
+      <ul className="angelica-workers">
+        {workers.map((worker) => <WorkerRow key={worker.lane} worker={worker} now={now} />)}
+      </ul>
+    </details>
+  );
+}
+
 function JobCard({ job, busy, act, retry, onError, onReveal }: { job: JobSummary; busy: boolean; act: (action: JobAction) => void; retry: () => void } & AngelicaJobsProps) {
   const { t } = useI18n();
   const progress = jobProgress(job.counts);
@@ -109,6 +201,7 @@ function JobCard({ job, busy, act, retry, onError, onReveal }: { job: JobSummary
         {problems > 0 && job.status !== "running" && job.status !== "cancelled" ? <button className="button button-ghost" type="button" disabled={busy} onClick={retry}><UiIcon icon="refreshCw" size="sm" />{t("angelica.job.retry")}</button> : null}
         {job.status === "running" || job.status === "paused" ? <button className="button button-ghost" type="button" disabled={busy} onClick={() => act("cancel")}><UiIcon icon="x" size="sm" />{t("angelica.job.cancel")}</button> : null}
       </div>
+      <JobWorkers job={job} />
       <details className="angelica-job-more">
         <summary>{t("angelica.job.details")}</summary>
         <JobDetails job={job} onError={onError} onReveal={onReveal} />

@@ -585,6 +585,17 @@ button.angelica-chip:hover { background: var(--hover); color: var(--fg); }
 .angelica-job-units, .angelica-job-events { display: grid; gap: 3px; margin: 0; padding: 0; list-style: none; }
 .angelica-job-units li, .angelica-job-events li { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .angelica-job-message { color: var(--fg-subtle); overflow-wrap: anywhere; }
+.angelica-workers { display: grid; gap: 4px; margin: 0; padding: 4px 0 0; list-style: none; }
+.angelica-worker { display: grid; grid-template-columns: auto auto minmax(0, 1fr); align-items: center; gap: 1px 6px; }
+.angelica-worker-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ok); }
+.angelica-worker.quiet .angelica-worker-dot { background: var(--warn); }
+.angelica-worker.stalled .angelica-worker-dot { background: var(--bad); }
+.angelica-worker-lane { color: var(--fg-muted); white-space: nowrap; }
+.angelica-worker-phase { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.angelica-worker-silence { grid-column: 2 / -1; color: var(--warn); }
+.angelica-worker.stalled .angelica-worker-silence { color: var(--bad); }
+.angelica-worker-meta { display: flex; flex-wrap: wrap; grid-column: 2 / -1; gap: 0 8px; color: var(--fg-subtle); }
+.angelica-worker-meta > span { overflow: hidden; max-width: 100%; text-overflow: ellipsis; white-space: nowrap; }
 .angelica-proposal { display: grid; gap: 4px; padding: 6px 8px; border: 1px solid var(--line); border-radius: var(--radius-sm); }
 .angelica-proposal.conflict,
 .angelica-proposal.failed { border-color: color-mix(in srgb, var(--bad) 40%, transparent); }

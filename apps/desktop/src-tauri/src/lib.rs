@@ -8,6 +8,7 @@ mod fonts;
 mod games;
 mod git;
 mod guide;
+mod job_workers;
 mod jobs;
 mod paths;
 mod project_changes;
@@ -75,7 +76,7 @@ pub use guide::{
 };
 pub use jobs::{
     angelica_job_control, angelica_job_events, angelica_job_retry, angelica_job_units,
-    angelica_jobs,
+    angelica_job_workers, angelica_jobs,
 };
 pub use source_store::{
     SourceAvailabilityDto, SourcePackageEntryDto, delete_source_package, list_source_packages,
@@ -208,6 +209,7 @@ pub fn run() {
             angelica_job_events,
             angelica_job_control,
             angelica_job_retry,
+            angelica_job_workers,
             project_guide,
             save_project_guidance,
             save_project_glossary,

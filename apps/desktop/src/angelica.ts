@@ -1,4 +1,4 @@
-import type { AgentEvent, AiModelSelection, AiProviderDto, AiUsage, ChatMessage, JobCounts, JobSummary } from "./types";
+import type { AgentEvent, AiModelSelection, AiProviderDto, AiUsage, ChatMessage, JobCounts, JobSummary, WorkerActivity } from "./types";
 
 /** Angelica's fixed name. It is never localized. */
 export const ANGELICA = "Angelica";
@@ -209,6 +209,22 @@ export function jobProblems(counts: JobCounts): number {
 export function sortJobs(jobs: readonly JobSummary[]): JobSummary[] {
   const rank = (job: JobSummary) => job.status === "running" ? 0 : job.status === "paused" ? 1 : 2;
   return [...jobs].sort((left, right) => rank(left) - rank(right) || right.createdAtUnixMs - left.createdAtUnixMs);
+}
+
+/** Silence after which a streaming worker looks quiet, and then stalled. The
+ * provider connection gives up after three minutes without data. */
+export const WORKER_QUIET_MS = 30_000;
+export const WORKER_STALLED_MS = 90_000;
+
+export type WorkerHealth = "active" | "quiet" | "stalled";
+
+/** Whether a worker that waits for the provider still hears from it. Lanes
+ * between chunks or in a deliberate backoff are never quiet. */
+export function workerHealth(worker: WorkerActivity, now: number): WorkerHealth {
+  if (!["waiting", "reasoning", "writing"].includes(worker.phase)) return "active";
+  const silence = now - worker.lastActivityUnixMs;
+  if (silence >= WORKER_STALLED_MS) return "stalled";
+  return silence >= WORKER_QUIET_MS ? "quiet" : "active";
 }
 
 /** One step inside an activity block. */
