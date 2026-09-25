@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type KeyboardEvent } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { aiSettings, angelicaApplyProposal, angelicaProposals, angelicaRejectProposal, angelicaCancel, angelicaConversation, angelicaConversations, angelicaDeleteConversation, angelicaSend, normalizeCommandError } from "../ipc";
-import { ANGELICA, activitySummary, applyAgentEvent, contextFill, formatElapsed, formatTokens, groupTranscript, parseReply, reasoningTitle, resolveModel, toolSubject, totalTokens, transcriptFromMessages, type ActivityStep, type ReplySpan, type TranscriptBlock, type TranscriptItem } from "../angelica";
+import { ANGELICA, activitySummary, applyAgentEvent, contextFill, formatElapsed, formatTokens, groupTranscript, isQuietWait, parseReply, reasoningTitle, resolveModel, toolSubject, totalTokens, transcriptFromMessages, workingPhase, type ActivityStep, type ReplySpan, type TranscriptBlock, type TranscriptItem, type WorkingPhase } from "../angelica";
 import type { AgentMode, ProposalRecord, SourceBinding } from "../types";
 import { ModeMenu, ModelMenu, SelectionToggle } from "./AngelicaComposerControls";
 import { AngelicaJobs } from "./AngelicaJobs";
@@ -141,25 +141,38 @@ function TranscriptEntry({ block }: { block: TranscriptBlock }) {
 }
 
 const STATUS_COUNT = 16;
-const STATUS_INTERVAL_MS = 6000;
 
-/** A playful status, elapsed time, tokens, and the current step while a turn runs. */
-function WorkingLine({ startedAt, tokens, detail }: { startedAt: number; tokens: number; detail: string }) {
+const phaseLabels: Readonly<Record<WorkingPhase, MessageKey>> = {
+  waiting: "angelica.phase.waiting",
+  thinking: "angelica.phase.thinking",
+  tools: "angelica.phase.tools",
+  writing: "angelica.phase.writing",
+};
+
+/**
+ * What Angelica is doing, the elapsed time, and the tokens of the turn. The
+ * status names the real phase; only when the model has been silent for a
+ * while does a playful status fill the wait, until the next event arrives.
+ */
+function WorkingLine({ startedAt, tokens, phase, lastActivityAt }: { startedAt: number; tokens: number; phase: WorkingPhase; lastActivityAt: number }) {
   const { t } = useI18n();
   const [now, setNow] = useState(() => Date.now());
-  const [status, setStatus] = useState(() => Math.floor(Math.random() * STATUS_COUNT));
+  const [playful, setPlayful] = useState(() => Math.floor(Math.random() * STATUS_COUNT));
+  const quiet = isQuietWait(now, lastActivityAt);
   useEffect(() => {
     const clock = window.setInterval(() => setNow(Date.now()), 1000);
-    const rotate = window.setInterval(() => setStatus((current) => (current + 1 + Math.floor(Math.random() * (STATUS_COUNT - 1))) % STATUS_COUNT), STATUS_INTERVAL_MS);
-    return () => { window.clearInterval(clock); window.clearInterval(rotate); };
+    return () => window.clearInterval(clock);
   }, []);
+  // A new quiet stretch gets a new playful status.
+  useEffect(() => {
+    if (quiet) setPlayful((current) => (current + 1 + Math.floor(Math.random() * (STATUS_COUNT - 1))) % STATUS_COUNT);
+  }, [quiet]);
   const parts = [formatElapsed(now - startedAt)];
   if (tokens > 0) parts.push(t("angelica.statusTokens", { count: formatTokens(tokens) }));
-  if (detail) parts.push(detail);
   return (
-    <div className="angelica-working" role="status">
+    <div className={quiet ? "angelica-working quiet" : "angelica-working"} role="status">
       <UiIcon icon="sparkles" size="xs" />
-      <span className="angelica-working-status">{t(`angelica.status.${status + 1}` as MessageKey)}…</span>
+      <span className="angelica-working-status">{t(quiet ? `angelica.status.${playful + 1}` as MessageKey : phaseLabels[phase])}…</span>
       <span className="angelica-working-meta">{parts.join(" · ")}</span>
     </div>
   );
@@ -175,6 +188,7 @@ export function AngelicaPanel({ editorContext, onOpenSettings, onOpenGuide, onRe
   const [running, setRunning] = useState(false);
   const [turnStartedAt, setTurnStartedAt] = useState(() => Date.now());
   const [turnTokens, setTurnTokens] = useState(0);
+  const [lastActivityAt, setLastActivityAt] = useState(() => Date.now());
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const [usage, setUsage] = useState<AiUsage>(EMPTY_USAGE);
   const [lastPromptTokens, setLastPromptTokens] = useState<number | null>(null);
@@ -268,6 +282,7 @@ export function AngelicaPanel({ editorContext, onOpenSettings, onOpenGuide, onRe
   }, []);
 
   const handleEvent = useCallback((event: AgentEvent, id: string) => {
+    setLastActivityAt(Date.now());
     switch (event.type) {
       case "usage":
         setLastPromptTokens(event.promptTokens);
@@ -324,6 +339,7 @@ export function AngelicaPanel({ editorContext, onOpenSettings, onOpenGuide, onRe
   useEffect(() => {
     if (!running) return;
     setTurnStartedAt(Date.now());
+    setLastActivityAt(Date.now());
     setTurnTokens(0);
   }, [running]);
 
@@ -420,12 +436,8 @@ export function AngelicaPanel({ editorContext, onOpenSettings, onOpenGuide, onRe
   const fill = contextFill(lastPromptTokens, modelConfig?.contextWindow ?? null);
   const selection = editorContext?.selection ?? null;
   const blocks = groupTranscript(items, running);
-  const lastBlock = blocks.at(-1);
-  const lastItem = items.at(-1);
   // The live activity line already names the current step.
-  const workingDetail = lastBlock?.kind !== "activity" && lastItem?.kind === "assistant" && lastItem.streaming && lastItem.text
-    ? t("angelica.writing")
-    : "";
+  const phase = workingPhase(items);
   const contextPercent = fill === null ? null : Math.round(fill * 100);
   const usageTitle = [
     contextPercent !== null ? t("angelica.contextFill", { percent: contextPercent }) : null,
@@ -477,7 +489,7 @@ export function AngelicaPanel({ editorContext, onOpenSettings, onOpenGuide, onRe
             </div>
           </div>
         ) : blocks.map((block) => <TranscriptEntry key={block.key} block={block} />)}
-        {running ? <WorkingLine startedAt={turnStartedAt} tokens={turnTokens} detail={workingDetail} /> : null}
+        {running ? <WorkingLine startedAt={turnStartedAt} tokens={turnTokens} phase={phase} lastActivityAt={lastActivityAt} /> : null}
         {notice ? <p className="field-hint">{t(notice)}</p> : null}
       </div>
 

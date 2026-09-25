@@ -290,3 +290,21 @@ export function formatTokens(count: number): string {
   if (count < 1_000_000) return `${(count / 1000).toFixed(count < 10_000 ? 1 : 0)}k`;
   return `${(count / 1_000_000).toFixed(1)}M`;
 }
+
+/** What a running turn is doing, from its latest transcript item. */
+export type WorkingPhase = "waiting" | "thinking" | "tools" | "writing";
+
+export function workingPhase(items: readonly TranscriptItem[]): WorkingPhase {
+  const last = items.at(-1);
+  if (last?.kind === "tool") return last.result === null ? "tools" : "waiting";
+  if (last?.kind === "assistant" && last.streaming) return last.text ? "writing" : "thinking";
+  return "waiting";
+}
+
+/** Silence after which a playful status fills the wait. */
+export const PLAYFUL_AFTER_MS = 8000;
+
+/** Whether the model has been silent long enough for a playful status. */
+export function isQuietWait(now: number, lastActivityAt: number): boolean {
+  return now - lastActivityAt >= PLAYFUL_AFTER_MS;
+}

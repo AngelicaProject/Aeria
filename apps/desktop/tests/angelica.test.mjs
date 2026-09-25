@@ -7,6 +7,8 @@ import {
   formatElapsed,
   formatTokens,
   groupTranscript,
+  isQuietWait,
+  workingPhase,
   reasoningTitle,
   contextFill,
   isToolError,
@@ -149,4 +151,21 @@ test("status helpers format reasoning titles, time, and tokens", () => {
   assert.equal(formatTokens(5_230), "5.2k");
   assert.equal(formatTokens(33_184), "33k");
   assert.equal(formatTokens(1_250_000), "1.3M");
+});
+
+test("the working phase follows the latest item", () => {
+  const tool = { kind: "tool", key: "t", id: "1", name: "read_rows", arguments: "{}", result: null, isError: false };
+  const assistant = (text, streaming) => ({ kind: "assistant", key: "a", text, reasoning: "x", streaming });
+  assert.equal(workingPhase([]), "waiting");
+  assert.equal(workingPhase([{ kind: "user", key: "u", text: "hi" }]), "waiting");
+  assert.equal(workingPhase([assistant("", true)]), "thinking");
+  assert.equal(workingPhase([assistant("Прив", true)]), "writing");
+  assert.equal(workingPhase([tool]), "tools");
+  assert.equal(workingPhase([{ ...tool, result: "{}" }]), "waiting");
+  assert.equal(workingPhase([assistant("done", false)]), "waiting");
+});
+
+test("playful statuses wait for a quiet stretch", () => {
+  assert.equal(isQuietWait(10_000, 5_000), false);
+  assert.equal(isQuietWait(13_000, 5_000), true);
 });
