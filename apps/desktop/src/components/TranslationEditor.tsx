@@ -7,6 +7,7 @@ import { Segmented } from "../ui/primitives/Segmented";
 import { UiIcon } from "../ui/primitives/UiIcon";
 import { MacroEditor, focusMacroEditor } from "./MacroEditor";
 import { ReviewDot, reviewLabel } from "./ReviewDot";
+import { StringHistory } from "./StringHistory";
 import { useI18n } from "../ui/i18n";
 import type { MessageKey } from "../i18n/translate";
 
@@ -85,6 +86,8 @@ type TranslationEditorProps = {
   checkpoint: CheckpointBaseline | null;
   /** Drafts a translation with Angelica; resolves to `null` when it failed. */
   onDraftWithAngelica?: ((cell: TranslationCellDto) => Promise<string | null>) | undefined;
+  /** Bumps when the string's history may have changed (save, checkpoint, sync). */
+  historyRevision?: number | undefined;
 };
 
 const reviewOptions: readonly ReviewState[] = ["draft", "needsReview", "reviewed"];
@@ -140,9 +143,11 @@ const TranslationEditorImpl = forwardRef<TranslationEditorHandle, TranslationEdi
   takeFocusRequest,
   checkpoint,
   onDraftWithAngelica,
+  historyRevision = 0,
 }, ref) {
   const { t } = useI18n();
   const [showDiff, setShowDiff] = useState(true);
+  const [sideTab, setSideTab] = useState<"note" | "history">("note");
   const [drafts, setDrafts] = useState<Record<string, CellDraft>>({});
   const draftsRef = useRef(drafts);
   const rowRef = useRef(row);
@@ -379,11 +384,28 @@ const TranslationEditorImpl = forwardRef<TranslationEditorHandle, TranslationEdi
 
         <aside className="editor-pane editor-note">
           <div className="editor-pane-head">
-            <label className="eyebrow" htmlFor={`translator-note-${domId}`}>{t("editor.note")}</label>
-            {noteDirty ? <span className="edited-label">{t("common.edited")}</span> : null}
+            <Segmented<"note" | "history">
+              label={t("editor.sidePane")}
+              value={sideTab}
+              onChange={setSideTab}
+              options={[
+                { value: "note", label: <>{t("editor.note")}{noteDirty ? <span className="dirty-mark" aria-label={t("common.edited")} /> : null}</> },
+                { value: "history", label: t("editor.history") },
+              ]}
+            />
           </div>
+          {sideTab === "history" ? (
+            <div className="editor-history">
+              <StringHistory
+                unitId={translation?.translationUnitId ?? null}
+                revision={historyRevision}
+                onUseText={(target) => updateDraft(selectedCell, "target", target)}
+              />
+            </div>
+          ) : <>
           <textarea
             id={`translator-note-${domId}`}
+            aria-label={t("editor.note")}
             className="note-input"
             value={draft.note}
             onChange={(event) => updateDraft(selectedCell, "note", event.target.value)}
@@ -395,6 +417,7 @@ const TranslationEditorImpl = forwardRef<TranslationEditorHandle, TranslationEdi
             <span className="editor-hint">{t(translation ? reviewLabel(translation.reviewState) : "editor.noTranslation")}</span>
             <button className="button button-secondary" type="button" onClick={saveNote} disabled={!noteCanSave}>{t(mutation === "note" ? "common.saving" : "editor.saveNote")}</button>
           </div>
+          </>}
         </aside>
       </div>
     </section>

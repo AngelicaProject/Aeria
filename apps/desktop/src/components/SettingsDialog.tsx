@@ -6,6 +6,7 @@ import { GameSettings, SourcePackages } from "./GameSettings";
 import { keyboardShortcuts, shortcutGroupLabels } from "../shortcuts";
 import { Segmented } from "../ui/primitives/Segmented";
 import { UiIcon, type UiIconName } from "../ui/primitives/UiIcon";
+import { BranchesSetting, IdentitySetting, MainBranchSetting, OtherFilesSetting, RemotesSetting, UpstreamSetting } from "./RepositorySettings";
 import { editorFontSizes, interfaceZoomOptions, usePreferences } from "../ui/preferences";
 import { useTheme } from "../ui/theme/theme";
 import { themeRegistry, type ThemeDefinition } from "../ui/theme/registry";
@@ -22,7 +23,7 @@ export const accentPresets: readonly { value: string; label: MessageKey }[] = [
   { value: "#98c379", label: "settings.accent.green" },
 ];
 
-export type SettingsSection = "appearance" | "editor" | "workflow" | "game" | "ai" | "keyboard" | "about";
+export type SettingsSection = "appearance" | "editor" | "workflow" | "game" | "ai" | "repository" | "keyboard" | "about";
 
 const sections: ReadonlyArray<{ id: SettingsSection; label: MessageKey; icon: UiIconName }> = [
   { id: "appearance", label: "settings.section.appearance", icon: "palette" },
@@ -30,6 +31,7 @@ const sections: ReadonlyArray<{ id: SettingsSection; label: MessageKey; icon: Ui
   { id: "workflow", label: "settings.section.workflow", icon: "arrowRight" },
   { id: "game", label: "settings.section.game", icon: "gamepad" },
   { id: "ai", label: "settings.section.ai", icon: "sparkles" },
+  { id: "repository", label: "settings.section.repository", icon: "gitBranch" },
   { id: "keyboard", label: "settings.section.keyboard", icon: "listFilter" },
   { id: "about", label: "settings.section.about", icon: "info" },
 ];
@@ -38,6 +40,8 @@ type SettingsDialogProps = {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   initialSection?: SettingsSection;
+  /** Repository settings need an open project. */
+  projectOpen?: boolean;
 };
 
 type SettingEntry = {
@@ -111,7 +115,7 @@ function ThemePicker() {
 }
 
 /** Memoized so the closed dialog does not re-render with the workbench. */
-export const SettingsDialog = memo(function SettingsDialog({ open, onOpenChange, initialSection = "appearance" }: SettingsDialogProps) {
+export const SettingsDialog = memo(function SettingsDialog({ open, onOpenChange, initialSection = "appearance", projectOpen = false }: SettingsDialogProps) {
   const { theme, accentOverride, setAccentOverride, reduceTransparency, setReduceTransparency } = useTheme();
   const { preferences, setPreference, resetPreferences } = usePreferences();
   const { t } = useI18n();
@@ -204,6 +208,16 @@ export const SettingsDialog = memo(function SettingsDialog({ open, onOpenChange,
       id: "about", section: "about", title: "Aeria", description: version ? t("launcher.version", { version }) : t("settings.about.description"), keywords: t("settings.about.keywords"),
       control: null,
     },
+    ...(projectOpen ? [
+      { id: "remotes", section: "repository" as const, title: t("repository.remotes"), description: t("repository.remotesHint"), keywords: t("repository.keywords"), wide: true, control: <RemotesSetting /> },
+      { id: "upstream", section: "repository" as const, title: t("repository.upstream"), description: t("repository.upstreamHint"), keywords: t("repository.keywords"), wide: true, control: <UpstreamSetting /> },
+      { id: "main-branch", section: "repository" as const, title: t("repository.mainBranch"), description: t("repository.mainBranchHint"), keywords: t("repository.keywords"), wide: true, control: <MainBranchSetting /> },
+      { id: "branches", section: "repository" as const, title: t("repository.branches"), description: t("repository.branchesHint"), keywords: t("repository.keywords"), wide: true, control: <BranchesSetting /> },
+      { id: "identity", section: "repository" as const, title: t("git.identity"), description: t("repository.identityHint"), keywords: t("repository.keywords"), wide: true, control: <IdentitySetting /> },
+      { id: "other-files", section: "repository" as const, title: t("repository.otherFiles"), description: t("repository.otherFilesHint"), keywords: t("repository.keywords"), wide: true, control: <OtherFilesSetting /> },
+    ] : [
+      { id: "repository-closed", section: "repository" as const, title: t("repository.noProject"), description: t("repository.noProjectHint"), control: null },
+    ]),
     {
       id: "storage", section: "about", title: t("settings.storage.title"), description: t("settings.storage.description"), keywords: t("settings.storage.keywords"),
       control: null,

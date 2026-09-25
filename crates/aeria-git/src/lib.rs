@@ -11,6 +11,7 @@
 
 mod branches;
 mod collaboration;
+mod credential;
 mod merge;
 mod process;
 mod repository;
@@ -23,18 +24,21 @@ use aeria_workspace::WorkspaceStoreError;
 use thiserror::Error;
 
 pub use branches::{BranchInfo, ContributionStatus, FinishOutcome};
-pub use collaboration::{COLLABORATION_FILE, CollaborationPolicy, CollaborationSettings};
+pub use collaboration::{COLLABORATION_FILE, CollaborationSettings};
+pub use credential::HostCredential;
 pub use merge::{ConflictResolution, UnitConflict};
 pub use process::{GitExecutable, GitOrigin};
 pub use repository::{
-    CheckpointOutcome, CommitSummary, ConfigScope, FileChangeKind, FileStatus, GitRepository,
-    RemoteInfo, RepositoryStatus, TranslatorIdentity, clone_folder_name,
+    ATTRIBUTES_FILE, CheckpointOutcome, CommitSummary, ConfigScope, FEED_WORKFLOW_FILE,
+    FONT_SETTINGS_FILE, FONTS_DIR, FileChangeKind, FileStatus, GLOSSARY_FILE, GUIDANCE_FILE,
+    GitRepository, PACK_SETTINGS_FILE, PROJECT_PATHS, RemoteInfo, RepositoryStatus,
+    TranslatorIdentity, clone_folder_name,
 };
 pub use semantic::{
     Attribution, ContributorSummary, RecordVersion, UnitAttribution, UnitChange, UnitChangeKind,
     UnitHistory, UnitRevision, summarize_changes, summarize_contributors,
 };
-pub use sync::{IntegrateOutcome, RECONCILE_MESSAGE};
+pub use sync::IntegrateOutcome;
 
 /// Errors raised by Git collaboration operations.
 #[derive(Debug, Error)]
@@ -104,6 +108,12 @@ pub enum GitError {
     /// remotely. The merge was aborted; retry with explicit resolutions.
     #[error("{} translated strings were changed differently here and on the remote", conflicts.len())]
     TranslationConflicts { conflicts: Vec<UnitConflict> },
+
+    /// The published main branch accepts changes only through pull requests.
+    #[error(
+        "{branch} has commits that are not on the remote; changes reach {branch} only through a pull request, so move them to a contribution branch"
+    )]
+    MainBranchProtected { branch: String },
 
     /// Collaboration settings are invalid or not applicable.
     #[error("invalid collaboration settings: {reason}")]

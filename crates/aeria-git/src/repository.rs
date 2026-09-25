@@ -6,16 +6,40 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::GitError;
-use crate::collaboration::{COLLABORATION_FILE, CollaborationPolicy, CollaborationSettings};
+use crate::collaboration::{COLLABORATION_FILE, CollaborationSettings};
 use crate::process::{GitExecutable, require_success};
 use crate::semantic::{UnitChange, summarize_changes};
 
 pub(crate) const AERIA_PATH: &str = ".aeria";
-const ATTRIBUTES_FILE: &str = ".gitattributes";
+pub const ATTRIBUTES_FILE: &str = ".gitattributes";
+/// The project-root file of Pack Settings v1, owned by `aeria-export`.
+pub const PACK_SETTINGS_FILE: &str = "aeria-pack.json";
+/// The project-root file of Font Settings v1, owned by `aeria-fonts`.
+pub const FONT_SETTINGS_FILE: &str = "aeria-fonts.json";
+/// The project directory of source fonts named by the font settings.
+pub const FONTS_DIR: &str = "fonts";
+/// The project glossary, owned by `aeria-ai`.
+pub const GLOSSARY_FILE: &str = "aeria-glossary.csv";
+/// The project translation guidance, owned by `aeria-ai`.
+pub const GUIDANCE_FILE: &str = "aeria-guidance.md";
+/// The feed workflow, owned by `aeria-publish`. It builds the update feed on
+/// GitHub from released packs, so it belongs to the project like its settings.
+pub const FEED_WORKFLOW_FILE: &str = ".github/workflows/harmonia-feed.yml";
+/// Every project path a checkpoint commits besides `.aeria/`.
+pub const PROJECT_PATHS: [&str; 8] = [
+    ATTRIBUTES_FILE,
+    COLLABORATION_FILE,
+    PACK_SETTINGS_FILE,
+    FONT_SETTINGS_FILE,
+    FONTS_DIR,
+    GLOSSARY_FILE,
+    GUIDANCE_FILE,
+    FEED_WORKFLOW_FILE,
+];
 /// Workspace Format files are LF-only. This rule keeps Git from
 /// converting them on checkout (for example with `core.autocrlf=true`).
 const ATTRIBUTES_RULE: &str = "/.aeria/** text eol=lf";
-const LOG_FORMAT: &str = "--format=%H%x1f%P%x1f%an%x1f%ae%x1f%at%x1f%s";
+const LOG_FORMAT: &str = "--format=%H%x1f%P%x1f%an%x1f%ae%x1f%at%x1f%D%x1f%s";
 
 /// A Git working tree that contains an Aeria project root.
 ///
@@ -130,6 +154,9 @@ pub struct CommitSummary {
     pub author_email: String,
     /// Author time in seconds since the Unix epoch.
     pub authored_at: i64,
+    /// Branch and tag names pointing at the commit, as `git log --decorate`
+    /// prints them: `HEAD -> main`, `origin/main`, `tag: harmonia/3`.
+    pub refs: Vec<String>,
     pub subject: String,
 }
 
@@ -310,6 +337,81 @@ impl GitRepository {
         args: &[S],
     ) -> Result<String, GitError> {
         self.git.run_text(&self.root, args)
+    }
+
+    /// A short fingerprint of the repository state visible to the project:
+    /// branch, `HEAD`, upstream, ahead/behind, and every changed or untracked
+    /// file. It changes whenever anything a Git view shows may have changed,
+    /// so a view can poll it cheaply and reload only then.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when Git fails.
+    pub fn state_stamp(&self) -> Result<String, GitError> {
+        use std::hash::{DefaultHasher, Hash, Hasher};
+        let output = self.run(&[
+            "status",
+            "--porcelain=v2",
+            "--branch",
+            "--untracked-files=all",
+            "--",
+            ".",
+        ])?;
+        let mut hasher = DefaultHasher::new();
+        output.hash(&mut hasher);
+        Ok(format!("{:016x}", hasher.finish()))
+    }
+
+    /// The content of a project-relative file in a remote-tracking branch
+    /// (`<remote>/<branch>`) as of the last fetch; `None` when the branch or
+    /// the file does not exist.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`GitError::InvalidInput`] for an invalid path, or an error
+    /// when Git fails.
+    pub fn remote_file(
+        &self,
+        remote_branch: &str,
+        path: &str,
+    ) -> Result<Option<Vec<u8>>, GitError> {
+        if remote_branch.starts_with('-') || remote_branch.contains("..") {
+            return Err(GitError::InvalidInput {
+                field: "remote branch",
+                reason: "is not a remote-tracking branch".to_owned(),
+            });
+        }
+        match self.verify_ref(&format!("refs/remotes/{remote_branch}"))? {
+            Some(commit) => self.file_at(&commit, path),
+            None => Ok(None),
+        }
+    }
+
+    /// The commit a local branch points at; `None` when it does not exist.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`GitError::InvalidInput`] for an invalid name, or an error
+    /// when Git fails.
+    pub fn branch_head(&self, branch: &str) -> Result<Option<String>, GitError> {
+        self.validate_branch_name(branch)?;
+        self.verify_ref(&format!("refs/heads/{branch}"))
+    }
+
+    /// Returns the names of local tags that start with `prefix`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when Git fails.
+    pub fn tags_with_prefix(&self, prefix: &str) -> Result<Vec<String>, GitError> {
+        let pattern = format!("{prefix}*");
+        Ok(self
+            .run_text(&["tag", "--list", "--", &pattern])?
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+            .map(str::to_owned)
+            .collect())
     }
 
     /// Returns the current commit, or `None` before the first commit.
@@ -506,6 +608,74 @@ impl GitRepository {
         Ok(())
     }
 
+    /// Removes a remote and its remote-tracking branches.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`GitError::InvalidInput`] for an invalid or unknown name, or
+    /// an error when Git fails.
+    pub fn remove_remote(&self, name: &str) -> Result<(), GitError> {
+        self.validate_remote_name(name)?;
+        if !self.remotes()?.iter().any(|remote| remote.name == name) {
+            return Err(GitError::InvalidInput {
+                field: "remote name",
+                reason: "no such remote".to_owned(),
+            });
+        }
+        self.run(&["remote", "remove", "--", name])?;
+        Ok(())
+    }
+
+    /// Remote-tracking branches known from the last fetch, as
+    /// `<remote>/<branch>`, sorted.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when Git fails.
+    pub fn remote_branches(&self) -> Result<Vec<String>, GitError> {
+        let text = self.run_text(&[
+            "for-each-ref",
+            "--format=%(refname:strip=2)",
+            "refs/remotes",
+        ])?;
+        let mut branches: Vec<String> = text
+            .lines()
+            .map(str::trim)
+            .filter(|name| !name.is_empty() && !name.ends_with("/HEAD") && name.contains('/'))
+            .map(str::to_owned)
+            .collect();
+        branches.sort();
+        Ok(branches)
+    }
+
+    /// Makes `remote_branch` (`<remote>/<branch>`, as listed by
+    /// [`Self::remote_branches`]) the upstream of the current branch, which
+    /// is where sync receives from and pushes to.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`GitError::InvalidInput`] for an unknown remote branch or a
+    /// detached `HEAD`, or an error when Git fails.
+    pub fn set_upstream(&self, remote_branch: &str) -> Result<(), GitError> {
+        let invalid = |reason: &str| GitError::InvalidInput {
+            field: "upstream",
+            reason: reason.to_owned(),
+        };
+        if !self
+            .remote_branches()?
+            .iter()
+            .any(|branch| branch == remote_branch)
+        {
+            return Err(invalid("is not a fetched remote branch"));
+        }
+        let Some(branch) = self.current_branch()? else {
+            return Err(invalid("HEAD is not on a branch"));
+        };
+        let upstream = format!("--set-upstream-to=refs/remotes/{remote_branch}");
+        self.run(&["branch", "--quiet", &upstream, "--", &branch])?;
+        Ok(())
+    }
+
     pub(crate) fn validate_remote_name(&self, name: &str) -> Result<(), GitError> {
         let invalid = |reason: &str| GitError::InvalidInput {
             field: "remote name",
@@ -549,11 +719,26 @@ impl GitRepository {
             return Err(GitError::NothingToCommit);
         }
 
-        let settings = self.collaboration()?;
-        let branch_created = match (settings.policy, &settings.main_branch) {
-            (CollaborationPolicy::PullRequest, Some(main))
-                if self.current_branch()?.as_deref() == Some(main.as_str()) =>
-            {
+        // Work never lands on the main branch directly: a checkpoint there
+        // moves the uncommitted work to a new contribution branch first. The
+        // main branch comes from the committed settings, so committing a
+        // settings change does not redirect its own checkpoint. Only the
+        // first commit of a repository is made on the current branch.
+        // The first commit of a repository creates the main branch. When the
+        // project names a main branch other than the unborn one `git init`
+        // chose (for example `main` against `init.defaultBranch=master`), the
+        // unborn branch is renamed first, so the history starts on it.
+        if self.head()?.is_none()
+            && let Some(configured) = self.collaboration()?.main_branch
+            && self.current_branch()?.as_deref() != Some(configured.as_str())
+        {
+            self.validate_branch_name(&configured)?;
+            let reference = format!("refs/heads/{configured}");
+            self.run(&["symbolic-ref", "HEAD", &reference])?;
+        }
+        let main = self.main_branch_from(&self.committed_collaboration()?)?;
+        let branch_created = match (self.head()?, self.current_branch()?, main) {
+            (Some(_), Some(current), Some(main)) if current == main => {
                 let name = self.new_contribution_branch_name()?;
                 self.run(&["switch", "--quiet", "-c", &name])?;
                 Some(name)
@@ -563,7 +748,7 @@ impl GitRepository {
 
         let message = match message.map(str::trim).filter(|text| !text.is_empty()) {
             Some(message) => message.to_owned(),
-            None if changes.is_empty() => "Update Aeria project settings".to_owned(),
+            None if changes.is_empty() => "Update project settings".to_owned(),
             None => summarize_changes(&changes),
         };
         self.commit_managed_paths(identity_options, &paths, &message)?;
@@ -593,22 +778,10 @@ impl GitRepository {
         Ok(())
     }
 
-    /// Commits Aeria-managed changes that an integration's acceptance step
-    /// wrote, such as reconciling merged units with the current source.
-    /// Returns whether a commit was created.
-    pub(crate) fn commit_integration_changes(&self, message: &str) -> Result<bool, GitError> {
-        let paths = self.managed_paths()?;
-        if !self.has_managed_changes(&paths)? {
-            return Ok(false);
-        }
-        self.commit_managed_paths(self.identity_options()?, &paths, message)?;
-        Ok(true)
-    }
-
     /// Returns the Aeria-managed paths that exist or are tracked.
     fn managed_paths(&self) -> Result<Vec<&'static str>, GitError> {
         let mut paths = vec![AERIA_PATH];
-        for path in [ATTRIBUTES_FILE, COLLABORATION_FILE] {
+        for path in PROJECT_PATHS {
             if self.root.join(path).exists() || self.is_tracked(path)? {
                 paths.push(path);
             }
@@ -622,14 +795,15 @@ impl GitRepository {
         Ok(!self.run(&args)?.is_empty())
     }
 
-    /// Writes project-shared collaboration settings and commits them alone.
+    /// Writes project-shared collaboration settings (the main branch).
+    /// Nothing is committed; the change is committed with the next
+    /// checkpoint.
     ///
     /// # Errors
     ///
-    /// Returns [`GitError::IdentityMissing`], [`GitError::InvalidInput`] for an
-    /// invalid main branch, or an error when writing or committing fails.
+    /// Returns [`GitError::InvalidInput`] for an invalid main branch, or an
+    /// error when writing fails.
     pub fn set_collaboration(&self, settings: &CollaborationSettings) -> Result<(), GitError> {
-        let identity_options = self.identity_options()?;
         if let Some(branch) = &settings.main_branch {
             self.validate_branch_name(branch)?;
         }
@@ -641,30 +815,102 @@ impl GitRepository {
             path,
             source,
         })?;
-        if !self.has_managed_changes(&[COLLABORATION_FILE])? {
-            return Ok(());
-        }
-        self.run(&["add", "--", COLLABORATION_FILE])?;
-        let policy = match settings.policy {
-            CollaborationPolicy::Direct => "direct".to_owned(),
-            CollaborationPolicy::PullRequest => format!(
-                "pull-request into {}",
-                settings.main_branch.as_deref().unwrap_or_default()
-            ),
-        };
-        let message = format!("Set collaboration policy: {policy}");
-        let mut commit = identity_options;
-        commit.extend([
-            "commit",
-            "--quiet",
-            "-m",
-            &message,
-            "--only",
-            "--",
-            COLLABORATION_FILE,
-        ]);
-        self.run(&commit)?;
         Ok(())
+    }
+
+    /// The main branch contributions are reviewed into: the configured one,
+    /// else the default branch of the sync remote (`<remote>/HEAD`), else a
+    /// local `main` or `master`, else the current branch of a repository
+    /// without commits. `None` when none of these exists.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for invalid settings or when Git fails.
+    pub fn main_branch(&self) -> Result<Option<String>, GitError> {
+        self.main_branch_from(&self.collaboration()?)
+    }
+
+    pub(crate) fn main_branch_from(
+        &self,
+        settings: &CollaborationSettings,
+    ) -> Result<Option<String>, GitError> {
+        if let Some(main) = &settings.main_branch {
+            return Ok(Some(main.clone()));
+        }
+        let remote = match self.current_branch()? {
+            Some(branch) => self.sync_remote(&branch).ok(),
+            None => None,
+        };
+        if let Some(remote) = remote {
+            let head = format!("refs/remotes/{remote}/HEAD");
+            let output = self
+                .git
+                .output(&self.root, &["symbolic-ref", "--quiet", "--short", &head])?;
+            if output.status.success() {
+                let target = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+                if let Some(branch) = target.strip_prefix(&format!("{remote}/")) {
+                    return Ok(Some(branch.to_owned()));
+                }
+            }
+        }
+        for candidate in ["main", "master"] {
+            if self
+                .verify_ref(&format!("refs/heads/{candidate}"))?
+                .is_some()
+                || self
+                    .remote_branches()?
+                    .iter()
+                    .any(|name| name.ends_with(&format!("/{candidate}")))
+            {
+                return Ok(Some(candidate.to_owned()));
+            }
+        }
+        if self.head()?.is_none() {
+            return self.current_branch();
+        }
+        Ok(None)
+    }
+
+    /// The collaboration settings committed in `HEAD`; the default when the
+    /// file is not committed.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when Git fails or the committed file is invalid.
+    pub fn committed_collaboration(&self) -> Result<CollaborationSettings, GitError> {
+        match self.file_at("HEAD", COLLABORATION_FILE)? {
+            None => Ok(CollaborationSettings::default()),
+            Some(bytes) => CollaborationSettings::parse(&String::from_utf8_lossy(&bytes)),
+        }
+    }
+
+    /// The content of a project-relative file in a commit; `None` when the
+    /// commit does not have it or there are no commits yet.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`GitError::InvalidInput`] for an invalid revision or path, or
+    /// an error when Git fails.
+    pub fn file_at(&self, revision: &str, path: &str) -> Result<Option<Vec<u8>>, GitError> {
+        validate_revision(revision)?;
+        if path.is_empty()
+            || path.starts_with('/')
+            || path.split('/').any(|part| part == ".." || part.is_empty())
+        {
+            return Err(GitError::InvalidInput {
+                field: "path",
+                reason: "must be a relative project path".to_owned(),
+            });
+        }
+        if self.head()?.is_none() {
+            return Ok(None);
+        }
+        let spec = format!("{revision}:{}", self.top_level_path(path));
+        let output = self.git.output(&self.root, &["cat-file", "-e", &spec])?;
+        if !output.status.success() {
+            return Ok(None);
+        }
+        self.run(&["cat-file", "blob", &spec]).map(Some)
     }
 
     pub(crate) fn is_tracked(&self, path: &str) -> Result<bool, GitError> {
@@ -685,7 +931,22 @@ impl GitRepository {
         }
         let skip = format!("--skip={skip}");
         let limit = format!("--max-count={limit}");
-        let text = self.run_text(&["log", "-z", LOG_FORMAT, &skip, &limit, "HEAD", "--", "."])?;
+        // A project at the repository top level shows the complete history,
+        // merges included; a subdirectory project shows its simplified
+        // history with rewritten parents, so the graph stays connected.
+        let mut args = vec![
+            "log",
+            "-z",
+            "--topo-order",
+            LOG_FORMAT,
+            &skip,
+            &limit,
+            "HEAD",
+        ];
+        if !self.prefix.is_empty() {
+            args.extend(["--parents", "--", "."]);
+        }
+        let text = self.run_text(&args)?;
         text.split('\0')
             .filter(|record| !record.is_empty())
             .map(parse_commit)
@@ -856,7 +1117,16 @@ pub(crate) fn validate_revision(revision: &str) -> Result<(), GitError> {
 
 pub(crate) fn parse_commit(record: &str) -> Result<CommitSummary, GitError> {
     let fields: Vec<&str> = record.trim_start_matches('\n').split('\x1f').collect();
-    let [id, parents, author_name, author_email, authored_at, subject] = fields.as_slice() else {
+    let [
+        id,
+        parents,
+        author_name,
+        author_email,
+        authored_at,
+        refs,
+        subject,
+    ] = fields.as_slice()
+    else {
         return Err(GitError::Parse {
             message: format!("unexpected commit record {record:?}"),
         });
@@ -870,6 +1140,12 @@ pub(crate) fn parse_commit(record: &str) -> Result<CommitSummary, GitError> {
         author_name: (*author_name).to_owned(),
         author_email: (*author_email).to_owned(),
         authored_at,
+        refs: refs
+            .split(", ")
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+            .map(str::to_owned)
+            .collect(),
         subject: (*subject).to_owned(),
     })
 }

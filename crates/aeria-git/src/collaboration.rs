@@ -14,28 +14,19 @@ use crate::GitError;
 pub const COLLABORATION_FILE: &str = "aeria-collaboration.json";
 const FORMAT_VERSION: u64 = 1;
 
-/// How translators integrate their work.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub enum CollaborationPolicy {
-    /// Work on the current branch and push directly.
-    #[default]
-    Direct,
-    /// Work on a contribution branch that is merged through review.
-    PullRequest,
-}
-
-/// Project-shared collaboration settings.
+/// Project-shared collaboration settings. Work always reaches the main
+/// branch through reviewed contribution branches (pull requests); the only
+/// setting is which branch is the main branch.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct CollaborationSettings {
-    pub policy: CollaborationPolicy,
-    /// The branch contributions are reviewed into. Required for
-    /// [`CollaborationPolicy::PullRequest`].
+    /// The branch contributions are reviewed into; `None` lets Aeria detect
+    /// it (see `GitRepository::main_branch`).
     pub main_branch: Option<String>,
 }
 
 impl CollaborationSettings {
-    /// Reads the settings from `project_root`. A missing file means the
-    /// default direct policy.
+    /// Reads the settings from `project_root`. A missing file means a
+    /// detected main branch.
     ///
     /// # Errors
     ///
@@ -86,15 +77,15 @@ impl CollaborationSettings {
             }
             None => return Err(invalid("formatVersion must be the integer 1".to_owned())),
         }
-        let policy = match object.get("policy").and_then(serde_json::Value::as_str) {
-            Some("direct") => CollaborationPolicy::Direct,
-            Some("pull-request") => CollaborationPolicy::PullRequest,
-            _ => {
+        match object.get("policy").and_then(serde_json::Value::as_str) {
+            Some("pull-request") => {}
+            Some("direct") => {
                 return Err(invalid(
-                    "policy must be \"direct\" or \"pull-request\"".to_owned(),
+                    "the direct policy is no longer supported: changes reach the main branch only through pull requests; set the policy to \"pull-request\"".to_owned(),
                 ));
             }
-        };
+            _ => return Err(invalid("policy must be \"pull-request\"".to_owned())),
+        }
         let main_branch = match object.get("mainBranch") {
             None | Some(serde_json::Value::Null) => None,
             Some(serde_json::Value::String(branch)) if !branch.trim().is_empty() => {
@@ -106,25 +97,14 @@ impl CollaborationSettings {
                 ));
             }
         };
-        if policy == CollaborationPolicy::PullRequest && main_branch.is_none() {
-            return Err(invalid(
-                "the pull-request policy requires mainBranch".to_owned(),
-            ));
-        }
-        Ok(Self {
-            policy,
-            main_branch,
-        })
+        Ok(Self { main_branch })
     }
 
     /// Returns the canonical file contents: two-space indented JSON with a
     /// final LF.
     #[must_use]
     pub fn to_canonical_json(&self) -> String {
-        let policy = match self.policy {
-            CollaborationPolicy::Direct => "direct",
-            CollaborationPolicy::PullRequest => "pull-request",
-        };
+        let policy = "pull-request";
         let main_branch = self.main_branch.as_ref().map_or_else(
             || "null".to_owned(),
             |branch| serde_json::Value::from(branch.as_str()).to_string(),
@@ -141,31 +121,33 @@ mod tests {
 
     #[test]
     fn settings_round_trip_canonically() {
-        let settings = CollaborationSettings {
-            policy: CollaborationPolicy::PullRequest,
-            main_branch: Some("main".to_owned()),
-        };
-        let text = settings.to_canonical_json();
-        assert_eq!(
-            text,
-            "{\n  \"formatVersion\": 1,\n  \"policy\": \"pull-request\",\n  \"mainBranch\": \"main\"\n}\n"
-        );
-        assert_eq!(
-            CollaborationSettings::parse(&text).expect("parse"),
-            settings
-        );
+        for main_branch in [Some("main".to_owned()), None] {
+            let settings = CollaborationSettings { main_branch };
+            let text = settings.to_canonical_json();
+            assert!(
+                text.starts_with("{\n  \"formatVersion\": 1,\n  \"policy\": \"pull-request\",\n")
+            );
+            assert_eq!(
+                CollaborationSettings::parse(&text).expect("parse"),
+                settings
+            );
+        }
     }
 
     #[test]
-    fn invalid_or_newer_settings_are_rejected() {
+    fn invalid_newer_or_direct_settings_are_rejected() {
         for text in [
-            "{\"formatVersion\":2,\"policy\":\"direct\"}",
+            "{\"formatVersion\":2,\"policy\":\"pull-request\"}",
             "{\"formatVersion\":1,\"policy\":\"review\"}",
-            "{\"formatVersion\":1,\"policy\":\"pull-request\"}",
-            "{\"formatVersion\":1,\"policy\":\"direct\",\"extra\":true}",
+            "{\"formatVersion\":1,\"policy\":\"direct\"}",
+            "{\"formatVersion\":1,\"policy\":\"pull-request\",\"extra\":true}",
+            "{\"formatVersion\":1,\"policy\":\"pull-request\",\"mainBranch\":\"\"}",
             "[]",
         ] {
             assert!(CollaborationSettings::parse(text).is_err(), "{text}");
         }
+        let error = CollaborationSettings::parse("{\"formatVersion\":1,\"policy\":\"direct\"}")
+            .expect_err("direct");
+        assert!(error.to_string().contains("pull requests"), "{error}");
     }
 }

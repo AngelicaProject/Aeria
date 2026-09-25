@@ -2,3 +2,6 @@
 /crates/aeria-workspace/tests/fixtures/workspace-v1/units/*.jsonl text eol=lf
 /crates/aeria-workspace/tests/fixtures/workspace-v2/manifest.json text eol=lf
 /crates/aeria-workspace/tests/fixtures/workspace-v2/units/*.jsonl text eol=lf
+*.hpk binary
+/crates/aeria-fonts/presets/*.ttf binary
+/crates/aeria-fonts/presets/*.txt text eol=lf

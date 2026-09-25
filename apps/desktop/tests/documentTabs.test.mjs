@@ -6,6 +6,7 @@ import {
   initialDocumentTabsState,
   openPreviewTab,
   pinPreviewTab,
+  documentIdForCommit,
   reduceDocumentTabs,
 } from "../src/documentTabs.ts";
 
@@ -35,4 +36,19 @@ test("document tabs reorder without duplicating a document", () => {
   state = reduceDocumentTabs(state, { type: "reorder", id: documentIdForSheet("C"), beforeId: documentIdForSheet("A") });
   assert.deepEqual(state.tabs.map((tab) => tab.sheetName), ["C", "A", "B"]);
   assert.equal(new Set(state.tabs.map((tab) => tab.id)).size, 3);
+});
+
+test("commit tabs reuse one preview, sit beside sheets, and never replace a sheet preview", () => {
+  let state = openPreviewTab(initialDocumentTabsState, "A");
+  state = reduceDocumentTabs(state, { type: "openCommit", commitId: "c1", label: "c1" });
+  state = reduceDocumentTabs(state, { type: "openCommit", commitId: "c2", label: "c2" });
+  assert.deepEqual(state.tabs.map((tab) => tab.id), [documentIdForSheet("A"), documentIdForCommit("c2")]);
+  assert.equal(state.activeId, documentIdForCommit("c2"));
+  state = pinPreviewTab(state, documentIdForCommit("c2"));
+  state = reduceDocumentTabs(state, { type: "openCommit", commitId: "c3", label: "c3" });
+  assert.equal(state.tabs.length, 3);
+  state = openPreviewTab(state, "B");
+  assert.deepEqual(state.tabs.map((tab) => tab.kind), ["sheet", "commit", "commit"]);
+  state = closeDocumentTab(state, documentIdForCommit("c3"));
+  assert.ok(state.activeId);
 });

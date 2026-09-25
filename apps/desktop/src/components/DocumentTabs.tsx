@@ -1,4 +1,4 @@
-import { UiIcon } from "../ui/primitives/UiIcon";
+import { UiIcon, type UiIconName } from "../ui/primitives/UiIcon";
 import { useI18n } from "../ui/i18n";
 
 export type DocumentTab = {
@@ -8,6 +8,7 @@ export type DocumentTab = {
   pinned?: boolean;
   preview?: boolean;
   dirty?: boolean;
+  icon?: UiIconName;
 };
 
 type DocumentTabsProps = {
@@ -46,7 +47,7 @@ export function DocumentTabs({ documents, activeDocumentId, onSelect, onClose, o
               onDoubleClick={() => onPin?.(document.id)}
               onAuxClick={(event) => { if (event.button === 1) { event.preventDefault(); onClose(document.id); } }}
             >
-              <UiIcon icon="table2" size="sm" className="doc-tab-icon" />
+              <UiIcon icon={document.icon ?? "table2"} size="sm" className="doc-tab-icon" />
               <span className="doc-tab-label">{document.label}</span>
             </button>
             {document.closable ? (

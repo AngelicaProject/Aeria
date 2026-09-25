@@ -11,12 +11,11 @@ use std::sync::Arc;
 
 use aeria_core::TranslationUnit;
 use aeria_git::{
-    Attribution, BranchInfo, CheckpointOutcome, CollaborationPolicy, CollaborationSettings,
-    CommitSummary, ConfigScope, ConflictResolution, ContributionStatus, ContributorSummary,
-    FileChangeKind, FileStatus, GitError, GitExecutable, GitOrigin, GitRepository,
-    IntegrateOutcome, RecordVersion, RemoteInfo, RepositoryStatus, TranslatorIdentity,
-    UnitAttribution, UnitChange, UnitChangeKind, UnitConflict, UnitHistory, UnitRevision,
-    summarize_contributors,
+    Attribution, BranchInfo, CheckpointOutcome, CollaborationSettings, CommitSummary, ConfigScope,
+    ConflictResolution, ContributionStatus, ContributorSummary, FileChangeKind, FileStatus,
+    GitError, GitExecutable, GitOrigin, GitRepository, IntegrateOutcome, RecordVersion, RemoteInfo,
+    RepositoryStatus, TranslatorIdentity, UnitAttribution, UnitChange, UnitChangeKind,
+    UnitConflict, UnitHistory, UnitRevision, summarize_changes, summarize_contributors,
 };
 use serde::{Deserialize, Serialize};
 use tauri::Manager;
@@ -24,6 +23,7 @@ use tauri::Manager;
 use crate::commands::{parse_translation_unit_id, run_blocking};
 use crate::dto::{ReviewStateDto, SourceBindingDto};
 use crate::error::CommandError;
+use crate::project_changes::{self, ProjectChangeDto};
 use crate::state::{AttributionCache, DesktopState};
 
 type CommandResult<T> = Result<T, CommandError>;
@@ -71,29 +71,31 @@ impl From<GitOrigin> for GitOriginDto {
     }
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub enum CollaborationPolicyDto {
-    Direct,
-    PullRequest,
-}
-
+/// Changes reach the main branch only through pull requests.
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CollaborationDto {
-    pub policy: CollaborationPolicyDto,
+    /// The main branch set in `aeria-collaboration.json`, if any.
+    pub configured_main_branch: Option<String>,
+    /// The main branch in effect: configured or detected.
     pub main_branch: Option<String>,
+    /// Why the settings file cannot be used, when it exists but is invalid.
+    pub error: Option<String>,
 }
 
-impl From<CollaborationSettings> for CollaborationDto {
-    fn from(settings: CollaborationSettings) -> Self {
-        Self {
-            policy: match settings.policy {
-                CollaborationPolicy::Direct => CollaborationPolicyDto::Direct,
-                CollaborationPolicy::PullRequest => CollaborationPolicyDto::PullRequest,
-            },
-            main_branch: settings.main_branch,
-        }
+fn collaboration_dto(repository: &GitRepository) -> Result<CollaborationDto, GitError> {
+    match repository.collaboration() {
+        Ok(settings) => Ok(CollaborationDto {
+            main_branch: repository.main_branch()?,
+            configured_main_branch: settings.main_branch,
+            error: None,
+        }),
+        Err(error @ GitError::InvalidSettings { .. }) => Ok(CollaborationDto {
+            configured_main_branch: None,
+            main_branch: None,
+            error: Some(error.to_string()),
+        }),
+        Err(error) => Err(error),
     }
 }
 
@@ -104,6 +106,9 @@ pub struct ContributionDto {
     pub branch: Option<String>,
     pub published: bool,
     pub unmerged_commits: u32,
+    /// No remote: the contribution is merged locally instead of through a
+    /// pull request.
+    pub local: bool,
 }
 
 impl From<ContributionStatus> for ContributionDto {
@@ -113,6 +118,7 @@ impl From<ContributionStatus> for ContributionDto {
             branch: status.branch,
             published: status.published,
             unmerged_commits: status.unmerged_commits,
+            local: status.local,
         }
     }
 }
@@ -257,6 +263,8 @@ pub struct GitCommitDto {
     pub author_email: String,
     /// Seconds since the Unix epoch.
     pub authored_at: i64,
+    /// Branch and tag names at this commit (`HEAD -> main`, `tag: …`).
+    pub refs: Vec<String>,
     pub subject: String,
 }
 
@@ -268,6 +276,7 @@ impl From<CommitSummary> for GitCommitDto {
             author_name: commit.author_name,
             author_email: commit.author_email,
             authored_at: commit.authored_at,
+            refs: commit.refs,
             subject: commit.subject,
         }
     }
@@ -448,6 +457,8 @@ impl From<&UnitAttribution> for UnitAttributionDto {
 pub struct GitCommitChangesDto {
     pub commit: GitCommitDto,
     pub changes: Vec<UnitChangeDto>,
+    /// Glossary, guidance, settings, and font file changes.
+    pub project_changes: Vec<ProjectChangeDto>,
     /// The contribution branch created by a checkpoint under the
     /// pull-request policy.
     pub branch_created: Option<String>,
@@ -458,6 +469,7 @@ impl From<CheckpointOutcome> for GitCommitChangesDto {
         Self {
             commit: outcome.commit.into(),
             changes: outcome.changes.iter().map(Into::into).collect(),
+            project_changes: Vec::new(),
             branch_created: outcome.branch_created,
         }
     }
@@ -548,6 +560,9 @@ pub struct GitSyncDto {
     /// Same-unit conflicts. When non-empty nothing was integrated or pushed;
     /// sync again with a resolution for every conflict.
     pub conflicts: Vec<UnitConflictDto>,
+    /// Integration left uncommitted changes: merged translations reconciled
+    /// with the current game source. They wait for a checkpoint.
+    pub reconciled: bool,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -557,6 +572,49 @@ pub struct GitBranchDto {
     pub remote: bool,
     pub current: bool,
     pub upstream: Option<String>,
+    /// Every commit of the local branch is in the main branch.
+    pub merged: bool,
+    /// Why the open project cannot switch to this branch, or `None`.
+    pub blocked: Option<BranchBlockDto>,
+}
+
+/// Why a branch holds a project the open session cannot load as is.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum BranchBlockDto {
+    /// The branch has no Aeria project.
+    NoProject,
+    /// The branch stores an older Workspace Format that must be migrated.
+    OlderFormat,
+    /// The branch is bound to another game source.
+    OtherSource,
+}
+
+/// Compares the workspace manifest a branch stores with the open session:
+/// same Workspace Format and same source content. Unreadable manifests are
+/// left to the switch itself, which validates everything.
+fn branch_block(
+    repository: &GitRepository,
+    branch: &str,
+    content_id: &str,
+) -> Option<BranchBlockDto> {
+    let revision = repository.branch_head(branch).ok().flatten()?;
+    let Ok(manifest) = repository.file_at(&revision, ".aeria/manifest.json") else {
+        return None;
+    };
+    let Some(manifest) = manifest else {
+        return Some(BranchBlockDto::NoProject);
+    };
+    let value: serde_json::Value = serde_json::from_slice(&manifest).ok()?;
+    if value
+        .get("formatVersion")
+        .and_then(serde_json::Value::as_u64)
+        != Some(u64::from(aeria_workspace::WORKSPACE_FORMAT_VERSION))
+    {
+        return Some(BranchBlockDto::OlderFormat);
+    }
+    (value.get("contentId").and_then(serde_json::Value::as_str) != Some(content_id))
+        .then_some(BranchBlockDto::OtherSource)
 }
 
 impl From<BranchInfo> for GitBranchDto {
@@ -566,6 +624,8 @@ impl From<BranchInfo> for GitBranchDto {
             remote: branch.remote,
             current: branch.current,
             upstream: branch.upstream,
+            merged: false,
+            blocked: None,
         }
     }
 }
@@ -660,8 +720,12 @@ pub(crate) fn git_overview_with_state(state: &DesktopState) -> CommandResult<Git
         repository: Some(repository.status()?.into()),
         identity: Some(repository.identity()?.into()),
         remotes: repository.remotes()?.into_iter().map(Into::into).collect(),
-        collaboration: Some(repository.collaboration()?.into()),
-        contribution: repository.contribution_status()?.map(Into::into),
+        collaboration: Some(collaboration_dto(&repository)?),
+        contribution: repository
+            .contribution_status()
+            .ok()
+            .flatten()
+            .map(Into::into),
     })
 }
 
@@ -673,7 +737,17 @@ pub(crate) fn git_checkpoint_with_state(
     let project = state.lock_project()?;
     let project = project.as_ref().ok_or_else(CommandError::no_project)?;
     let repository = GitRepository::open(project.repository_root(), git)?;
-    Ok(repository.checkpoint(message)?.into())
+    let project_files = project_changes::pending(&repository, project.repository_root())?;
+    let message = if let Some(message) = message.map(str::trim).filter(|text| !text.is_empty()) {
+        Some(message.to_owned())
+    } else {
+        let units = repository.pending_changes()?;
+        let translations = (!units.is_empty()).then(|| summarize_changes(&units));
+        project_changes::checkpoint_message(translations.as_deref(), &project_files)
+    };
+    let mut outcome: GitCommitChangesDto = repository.checkpoint(message.as_deref())?.into();
+    outcome.project_changes = project_files;
+    Ok(outcome)
 }
 
 pub(crate) fn git_sync_with_state(
@@ -705,16 +779,20 @@ pub(crate) fn git_sync_with_state(
                 pushed: false,
                 workspace_changed: false,
                 conflicts: conflicts.iter().map(Into::into).collect(),
+                reconciled: false,
             });
         }
         Err(error) => return Err(error.into()),
     };
     let pushed = repository.push()?;
+    let reconciled =
+        integration.changed_working_tree() && repository.status()?.has_translation_changes();
     Ok(GitSyncDto {
         integration: integration.into(),
         pushed,
         workspace_changed: integration.changed_working_tree(),
         conflicts: Vec::new(),
+        reconciled,
     })
 }
 
@@ -840,6 +918,93 @@ pub async fn git_checkpoint(
 }
 
 #[tauri::command(rename_all = "camelCase")]
+/// Returns the uncommitted glossary, guidance, settings, and font file
+/// changes, compared with `HEAD`.
+///
+/// # Errors
+///
+/// Returns a typed command error when no project is open or Git fails.
+pub async fn git_project_changes(app: tauri::AppHandle) -> CommandResult<Vec<ProjectChangeDto>> {
+    run_blocking(move || {
+        let state = app.state::<DesktopState>();
+        let repository = open_repository(&state)?;
+        let root = repository.root().to_owned();
+        Ok(project_changes::pending(&repository, &root)?)
+    })
+    .await
+}
+
+#[tauri::command(rename_all = "camelCase")]
+/// Returns a fingerprint of the repository state for cheap polling; `None`
+/// outside a repository.
+///
+/// # Errors
+///
+/// Returns a typed command error when no project is open or Git fails.
+pub async fn git_state_stamp(app: tauri::AppHandle) -> CommandResult<Option<String>> {
+    run_blocking(move || {
+        let state = app.state::<DesktopState>();
+        let root = project_root(&state)?;
+        match GitRepository::discover(root, state.git())? {
+            Some(repository) => Ok(Some(repository.state_stamp()?)),
+            None => Ok(None),
+        }
+    })
+    .await
+}
+
+#[tauri::command(rename_all = "camelCase")]
+/// Removes a remote.
+///
+/// # Errors
+///
+/// Returns a typed command error for an invalid or unknown remote.
+pub async fn git_remove_remote(
+    app: tauri::AppHandle,
+    name: String,
+) -> CommandResult<GitOverviewDto> {
+    run_blocking(move || {
+        let state = app.state::<DesktopState>();
+        open_repository(&state)?.remove_remote(&name)?;
+        git_overview_with_state(&state)
+    })
+    .await
+}
+
+#[tauri::command(rename_all = "camelCase")]
+/// Fetches every remote and lists their branches, for choosing the upstream.
+///
+/// # Errors
+///
+/// Returns a typed command error when Git fails.
+pub async fn git_remote_branches(app: tauri::AppHandle) -> CommandResult<Vec<String>> {
+    run_blocking(move || {
+        let repository = open_repository(&app.state::<DesktopState>())?;
+        repository.fetch_all()?;
+        Ok(repository.remote_branches()?)
+    })
+    .await
+}
+
+#[tauri::command(rename_all = "camelCase")]
+/// Sets the upstream (`<remote>/<branch>`) of the current branch.
+///
+/// # Errors
+///
+/// Returns a typed command error for an unknown remote branch.
+pub async fn git_set_upstream(
+    app: tauri::AppHandle,
+    remote_branch: String,
+) -> CommandResult<GitOverviewDto> {
+    run_blocking(move || {
+        let state = app.state::<DesktopState>();
+        open_repository(&state)?.set_upstream(&remote_branch)?;
+        git_overview_with_state(&state)
+    })
+    .await
+}
+
+#[tauri::command(rename_all = "camelCase")]
 /// Returns project history, newest first.
 ///
 /// # Errors
@@ -877,6 +1042,7 @@ pub async fn git_commit_changes(
         let repository = open_repository(&app.state::<DesktopState>())?;
         let (commit, changes) = repository.commit_changes(&commit_id)?;
         Ok(GitCommitChangesDto {
+            project_changes: project_changes::of_commit(&repository, &commit.id)?,
             commit: commit.into(),
             changes: changes.iter().map(Into::into).collect(),
             branch_created: None,
@@ -988,8 +1154,32 @@ pub async fn git_sync(
 /// Returns a typed command error when Git fails.
 pub async fn git_branches(app: tauri::AppHandle) -> CommandResult<Vec<GitBranchDto>> {
     run_blocking(move || {
-        let repository = open_repository(&app.state::<DesktopState>())?;
-        Ok(repository.branches()?.into_iter().map(Into::into).collect())
+        let state = app.state::<DesktopState>();
+        let repository = open_repository(&state)?;
+        let content_id = {
+            let project = state.lock_project()?;
+            let session = project.as_ref().ok_or_else(CommandError::no_project)?;
+            session.source().metadata().content_id
+        };
+        Ok(repository
+            .branches()?
+            .into_iter()
+            .map(|branch| {
+                let blocked = (!branch.remote && !branch.current)
+                    .then(|| branch_block(&repository, &branch.name, &content_id))
+                    .flatten();
+                let merged = !branch.remote
+                    && !branch.current
+                    && repository
+                        .is_merged_into_main(&branch.name)
+                        .unwrap_or(false);
+                GitBranchDto {
+                    merged,
+                    blocked,
+                    ..branch.into()
+                }
+            })
+            .collect())
     })
     .await
 }
@@ -1019,37 +1209,62 @@ pub async fn git_create_branch(app: tauri::AppHandle, name: String) -> CommandRe
 /// branch, or a Git failure.
 pub async fn git_switch_branch(app: tauri::AppHandle, name: String) -> CommandResult<()> {
     run_blocking(move || {
-        Ok(with_session_reload(
-            &app.state::<DesktopState>(),
-            |repository, accept| repository.switch_branch(&name, accept),
-        )??)
+        let state = app.state::<DesktopState>();
+        let result = with_session_reload(&state, |repository, accept| {
+            repository.switch_branch(&name, accept)
+        })?;
+        result.map_err(|error| match error {
+            // The branch holds a project this session cannot load; the switch
+            // was undone. Say so plainly and keep the details.
+            GitError::IncomingRejected { reason } => CommandError::new(
+                "gitSwitchIncompatible",
+                format!("{name} holds the project in a state this session cannot open, so Aeria stayed on the current branch: {reason}"),
+            ),
+            other => other.into(),
+        })
     })
     .await
 }
 
 #[tauri::command(rename_all = "camelCase")]
-/// Sets the project-shared collaboration policy and commits it.
+/// Deletes a local branch other than the current one; `force` is required
+/// for a branch with commits outside the main branch.
 ///
 /// # Errors
 ///
-/// Returns a typed command error for invalid settings, a missing translator
-/// name, or a Git failure.
-pub async fn git_set_collaboration(
+/// Returns a typed command error for the current, an unknown, or an unmerged
+/// branch without `force`.
+pub async fn git_delete_branch(
     app: tauri::AppHandle,
-    policy: CollaborationPolicyDto,
+    name: String,
+    force: bool,
+) -> CommandResult<()> {
+    run_blocking(move || {
+        open_repository(&app.state::<DesktopState>())?.delete_branch(&name, force)?;
+        Ok(())
+    })
+    .await
+}
+
+#[tauri::command(rename_all = "camelCase")]
+/// Sets the main branch contributions are reviewed into, or clears it so it
+/// is detected. Writes `aeria-collaboration.json`; nothing is committed.
+///
+/// # Errors
+///
+/// Returns a typed command error for an invalid branch name or a Git failure.
+pub async fn git_set_main_branch(
+    app: tauri::AppHandle,
     main_branch: Option<String>,
 ) -> CommandResult<CollaborationDto> {
     run_blocking(move || {
         let repository = open_repository(&app.state::<DesktopState>())?;
-        let settings = CollaborationSettings {
-            policy: match policy {
-                CollaborationPolicyDto::Direct => CollaborationPolicy::Direct,
-                CollaborationPolicyDto::PullRequest => CollaborationPolicy::PullRequest,
-            },
-            main_branch: main_branch.filter(|branch| !branch.trim().is_empty()),
-        };
-        repository.set_collaboration(&settings)?;
-        Ok(repository.collaboration()?.into())
+        repository.set_collaboration(&CollaborationSettings {
+            main_branch: main_branch
+                .map(|branch| branch.trim().to_owned())
+                .filter(|branch| !branch.is_empty()),
+        })?;
+        Ok(collaboration_dto(&repository)?)
     })
     .await
 }
@@ -1066,6 +1281,27 @@ pub async fn git_finish_contribution(app: tauri::AppHandle) -> CommandResult<Git
     run_blocking(move || {
         let outcome = with_session_reload(&app.state::<DesktopState>(), |repository, accept| {
             repository.finish_contribution(accept)
+        })??;
+        Ok(GitFinishDto {
+            integration: outcome.integration.into(),
+            deleted_branch: outcome.deleted_branch,
+        })
+    })
+    .await
+}
+
+#[tauri::command(rename_all = "camelCase")]
+/// Merges the current contribution branch into the main branch in a
+/// repository without remotes, reloading and validating the project.
+///
+/// # Errors
+///
+/// Returns a typed command error when the repository has a remote, the
+/// merge conflicts, or the merged project is not valid.
+pub async fn git_merge_contribution(app: tauri::AppHandle) -> CommandResult<GitFinishDto> {
+    run_blocking(move || {
+        let outcome = with_session_reload(&app.state::<DesktopState>(), |repository, accept| {
+            repository.merge_contribution_locally(accept)
         })??;
         Ok(GitFinishDto {
             integration: outcome.integration.into(),
@@ -1124,6 +1360,41 @@ mod tests {
         GitExecutable::at(program)
             .with_env("GIT_CONFIG_GLOBAL", global)
             .with_env("GIT_CONFIG_NOSYSTEM", "1")
+    }
+
+    #[test]
+    fn branches_holding_another_project_state_are_blocked() {
+        let sandbox = tempfile::tempdir().expect("sandbox");
+        let git = isolated_git(sandbox.path());
+        let root = sandbox.path().join("project");
+        fs::create_dir_all(root.join(".aeria")).expect("project");
+        let repository = GitRepository::init(&root, git).expect("init");
+        repository
+            .set_identity("Ada", None, false)
+            .expect("identity");
+        let commit = |manifest: &str, message: &str| {
+            fs::write(root.join(".aeria/manifest.json"), manifest).expect("manifest");
+            repository.checkpoint(Some(message)).expect("commit");
+        };
+        commit(r#"{"formatVersion":1,"contentId":"sha256:old"}"#, "old");
+        let old = repository.status().expect("status").branch.expect("branch");
+        let current = r#"{"formatVersion":2,"contentId":"sha256:new"}"#;
+        commit(current, "migrated");
+        let migrated = repository.status().expect("status").branch.expect("branch");
+        assert_ne!(
+            old, migrated,
+            "the second checkpoint started a contribution branch"
+        );
+
+        assert_eq!(
+            branch_block(&repository, &old, "sha256:new"),
+            Some(BranchBlockDto::OlderFormat)
+        );
+        assert_eq!(branch_block(&repository, &migrated, "sha256:new"), None);
+        assert_eq!(
+            branch_block(&repository, &migrated, "sha256:other"),
+            Some(BranchBlockDto::OtherSource)
+        );
     }
 
     fn binding() -> SourceBindingDto {
@@ -1200,8 +1471,21 @@ mod tests {
         .expect("open clone");
 
         set_translation_target_with_state(&ada, binding(), "Bonjour").expect("translate");
-        git_checkpoint_with_state(&ada, None).expect("checkpoint");
-        ada_repository.push().expect("push");
+        // The checkpoint on main starts a contribution branch; Ada publishes it.
+        let outcome = git_checkpoint_with_state(&ada, None).expect("checkpoint");
+        assert!(outcome.branch_created.is_some());
+        ada_repository.push().expect("push contribution");
+        // The hosting service merges the pull request into main.
+        let merged = std::process::Command::new(
+            std::env::var_os("AERIA_GIT_PATH")
+                .filter(|path| !path.is_empty())
+                .unwrap_or_else(|| "git".into()),
+        )
+        .current_dir(&ada_root)
+        .args(["push", "--quiet", "origin", "HEAD:refs/heads/main"])
+        .status()
+        .expect("merge pull request");
+        assert!(merged.success());
 
         let result = git_sync_with_state(&grace, &[]).expect("sync");
         assert!(result.workspace_changed);

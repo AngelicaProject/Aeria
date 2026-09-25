@@ -38,6 +38,19 @@ broken implementation before it is relied on.
 
 Tests must not depend on a user's installed game, credentials, network availability, or private repository data.
 
+## Harmonia pack interop
+
+`aeria-export` compares its output with the committed fixtures
+`crates/aeria-export/tests/fixtures/harmonia-interop.hpk` and
+`harmonia-interop-fonts.hpk` (with a `FONTS` section), and the Harmonia
+repository reads copies of the same files in its tests. Regenerate it with
+`AERIA_UPDATE_FIXTURES=1 cargo test -p aeria-export` only for an intended
+format change, and update Harmonia's copies in the same change.
+
+`aeria-fonts` tests render the bundled recommended fonts for every supported
+game font size; they need no game data because the native metrics are a table
+in the crate.
+
 `aeria-git` and desktop Git tests require a Git executable: `AERIA_GIT_PATH`
 when set (Windows CI points it at the staged MinGit), otherwise `git` on
 `PATH`. They isolate Git from user and system configuration

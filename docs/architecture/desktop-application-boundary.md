@@ -179,11 +179,14 @@ compact committed `TranslationOverlayDto` for the changed cell; the renderer
 patches that cell instead of reloading the current sheet.
 
 Git collaboration commands (`git_overview`, `git_initialize`,
-`git_set_identity`, `git_set_remote`, `git_pending_changes`,
-`git_checkpoint`, `git_log`, `git_commit_changes`, `git_unit_history`,
-`git_unit_attribution`, `git_contributors`, `git_sync`, `git_branches`,
-`git_create_branch`, `git_switch_branch`, `git_set_collaboration`,
-`git_finish_contribution`, and `git_clone_repository`) delegate to
+`git_set_identity`, `git_set_remote`, `git_remove_remote`,
+`git_remote_branches`, `git_set_upstream`, `git_pending_changes`,
+`git_project_changes`, `git_checkpoint`, `git_log`, `git_commit_changes`,
+`git_unit_history`, `git_unit_attribution`, `git_contributors`, `git_sync`,
+`git_branches`, `git_create_branch`, `git_switch_branch`,
+`git_set_main_branch`, `git_state_stamp`, `git_finish_contribution`,
+`git_merge_contribution`, `git_delete_branch`, and
+`git_clone_repository`) delegate to
 `aeria-git` for the active project's repository root; see
 [`git.md`](./git.md). The Git executable is selected once at application
 setup (override, bundled runtime, then `PATH`) and kept in `DesktopState`.
@@ -305,7 +308,7 @@ job ID before the Atlas worker starts; the long-running initialization command
 uses that ID to claim the active cancellation token. Progress events report
 Atlas state only and are not the source of job identity, so cancellation is
 available even before the first external-process event arrives. The build
-stages the v0.3.0 sidecar with Tauri's target-triple
+stages the v0.4.0 sidecar with Tauri's target-triple
 filename convention, while packaged runtime lookup resolves
 `harmonia-atlas[.exe]` beside the Aeria executable. Rust first honors the
 explicit `AERIA_ATLAS_PATH` development/test override, then the packaged

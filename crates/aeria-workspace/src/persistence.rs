@@ -32,7 +32,7 @@ use thiserror::Error;
 use super::{Workspace, WorkspaceError};
 
 /// The Workspace Format version written by this implementation.
-pub(crate) const FORMAT_VERSION: u8 = 2;
+pub const FORMAT_VERSION: u8 = 2;
 /// The previous Workspace Format version, readable only for migration.
 const LEGACY_FORMAT_VERSION: u8 = 1;
 const AERIA_DIRECTORY: &str = ".aeria";

@@ -22,7 +22,7 @@ cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
 cargo test --workspace --locked
 ```
 
-The Rust job stages the pinned Harmonia Atlas v0.3.0 Linux sidecar after
+The Rust job stages the pinned Harmonia Atlas v0.4.0 Linux sidecar after
 verifying the checksum recorded in tools/atlas/version.json, because Tauri
 validates configured external binaries during its build. It then runs the real
 staged binary's version/help/package-usage smoke test. The Windows Atlas job

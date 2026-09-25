@@ -9,7 +9,7 @@ was produced. Atlas process integration is a desktop workflow outside the
 package-consumption boundary.
 
 When creating a project from an installed game, Aeria launches the pinned
-Harmonia Atlas v0.3.0 sidecar with its `package --events jsonl` command. The
+Harmonia Atlas v0.4.0 sidecar with its `package --events jsonl` command. The
 JSONL stream is the process boundary: stdout is typed protocol data and stderr
 is bounded diagnostics. Cancellation terminates and awaits the child, then
 remains authoritative through package validation, workspace initialization, and

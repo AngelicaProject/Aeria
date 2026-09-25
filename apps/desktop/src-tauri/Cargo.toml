@@ -21,10 +21,13 @@ tauri-build = { version = "2.6.3", features = [] }
 aeria-ai = { path = "../../../crates/aeria-ai" }
 aeria-atlas = { path = "../../../crates/aeria-atlas" }
 aeria-core = { path = "../../../crates/aeria-core" }
+aeria-export = { path = "../../../crates/aeria-export" }
+aeria-fonts = { path = "../../../crates/aeria-fonts" }
 aeria-git = { path = "../../../crates/aeria-git" }
 aeria-hsp = { path = "../../../crates/aeria-hsp" }
 aeria-hxs = { path = "../../../crates/aeria-hxs" }
 aeria-projects = { path = "../../../crates/aeria-projects" }
+aeria-publish = { path = "../../../crates/aeria-publish" }
 aeria-rebase = { path = "../../../crates/aeria-rebase" }
 aeria-search = { path = "../../../crates/aeria-search" }
 aeria-workspace = { path = "../../../crates/aeria-workspace" }

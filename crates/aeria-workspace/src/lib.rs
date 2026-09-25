@@ -23,8 +23,8 @@ mod update;
 
 pub use mutation::{AssistedExpectation, AssistedWriteError, TranslationMutationError};
 pub use persistence::{
-    WorkspaceStore, WorkspaceStoreError, decode_unit_record, decode_unit_shard, encode_unit_shard,
-    unit_shard_path,
+    FORMAT_VERSION as WORKSPACE_FORMAT_VERSION, WorkspaceStore, WorkspaceStoreError,
+    decode_unit_record, decode_unit_shard, encode_unit_shard, unit_shard_path,
 };
 pub use read::{
     MAX_TRANSLATION_PAGE_SIZE, SheetTranslationProgress, TranslationCellView,

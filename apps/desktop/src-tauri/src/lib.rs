@@ -3,11 +3,14 @@ mod angelica;
 mod commands;
 mod dto;
 mod error;
+mod export;
+mod fonts;
 mod games;
 mod git;
 mod guide;
 mod jobs;
 mod paths;
+mod project_changes;
 mod search;
 mod source_store;
 mod state;
@@ -45,14 +48,25 @@ pub use dto::{
     TranslationRowCursorDto, TranslationRowDto, TranslationRowPageDto, TranslationUnitIdDto,
 };
 pub use error::CommandError;
+pub use export::{
+    ExportOverviewDto, LocalExportDto, PackSettingsDto, PublishedReleaseDto, ReleaseInputDto,
+    export_backup_key, export_generate_key, export_import_key, export_install_workflow,
+    export_overview, export_pack, export_publish, export_remove_key, export_save_settings,
+};
+pub use fonts::{
+    FontsOverviewDto, fonts_import_file, fonts_overview, fonts_preview, fonts_save,
+    fonts_use_recommended,
+};
 pub use games::{
     GameInstallationDto, GameOriginDto, GameSettingsDto, game_settings, set_game_path,
 };
 pub use git::{
     git_branches, git_checkpoint, git_clone_repository, git_commit_changes, git_contributors,
-    git_create_branch, git_finish_contribution, git_initialize, git_log, git_overview,
-    git_pending_changes, git_set_collaboration, git_set_identity, git_set_remote,
-    git_switch_branch, git_sync, git_unit_attribution, git_unit_history,
+    git_create_branch, git_delete_branch, git_finish_contribution, git_initialize, git_log,
+    git_merge_contribution, git_overview, git_pending_changes, git_project_changes,
+    git_remote_branches, git_remove_remote, git_set_identity, git_set_main_branch, git_set_remote,
+    git_set_upstream, git_state_stamp, git_switch_branch, git_sync, git_unit_attribution,
+    git_unit_history,
 };
 pub use guide::{
     GlossaryEntryInput, ProjectGuideDto, project_guide, save_project_glossary,
@@ -89,6 +103,7 @@ fn app_info() -> AppInfo {
 ///
 /// Panics if Tauri cannot initialize the application runtime or load its
 /// generated configuration.
+#[allow(clippy::too_many_lines)] // one registration list
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -144,7 +159,14 @@ pub fn run() {
             git_branches,
             git_create_branch,
             git_switch_branch,
-            git_set_collaboration,
+            git_set_main_branch,
+            git_state_stamp,
+            git_merge_contribution,
+            git_delete_branch,
+            git_project_changes,
+            git_remove_remote,
+            git_remote_branches,
+            git_set_upstream,
             git_finish_contribution,
             ai_settings,
             ai_save_provider,
@@ -174,7 +196,21 @@ pub fn run() {
             angelica_job_retry,
             project_guide,
             save_project_guidance,
-            save_project_glossary
+            save_project_glossary,
+            export_overview,
+            export_save_settings,
+            export_generate_key,
+            export_import_key,
+            export_backup_key,
+            export_remove_key,
+            export_install_workflow,
+            export_pack,
+            export_publish,
+            fonts_overview,
+            fonts_use_recommended,
+            fonts_save,
+            fonts_import_file,
+            fonts_preview
         ])
         .run(tauri::generate_context!())
         .expect("failed to run Aeria desktop application");

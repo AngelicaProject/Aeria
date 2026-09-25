@@ -6,15 +6,19 @@ import { Segmented } from "../ui/primitives/Segmented";
 import { UiIcon } from "../ui/primitives/UiIcon";
 import { AngelicaPanel } from "./AngelicaPanel";
 import { GitPanel } from "./GitPanel";
+import type { GitCommitDto } from "../types";
 
 export type WorkbenchTool = "search" | "ai" | "git";
-export type GitPresentationMode = "collaboration" | "advanced";
 
 type WorkbenchToolDockProps = {
   activeTool: WorkbenchTool;
-  gitMode: GitPresentationMode;
   selectedBinding: SourceBinding | null;
-  onGitModeChange: (mode: GitPresentationMode) => void;
+  /** Opens one commit in a document tab; absent in detached windows. */
+  onOpenCommit?: ((commit: GitCommitDto) => void) | undefined;
+  selectedCommitId?: string | null;
+  /** Opens Settings on the repository section. */
+  onOpenRepositorySettings?: (() => void) | undefined;
+  projectRevision?: number;
   selectedUnitId?: string | null;
   workspaceRevision?: number;
   onWorkspaceChanged?: () => void;
@@ -31,7 +35,7 @@ export function toolTitle(tool: WorkbenchTool): MessageKey {
 }
 
 /** Memoized: Angelica and Git transcripts are costly to re-render on unrelated workbench updates. */
-export const WorkbenchToolDock = memo(function WorkbenchToolDock({ activeTool, gitMode, selectedBinding, onGitModeChange, selectedUnitId, workspaceRevision, onWorkspaceChanged, onRestoreTarget, pending, onRevealBinding, editorContext, onOpenSettings, onOpenGuide }: WorkbenchToolDockProps) {
+export const WorkbenchToolDock = memo(function WorkbenchToolDock({ activeTool, selectedBinding, onOpenCommit, selectedCommitId, onOpenRepositorySettings, projectRevision, selectedUnitId, workspaceRevision, onWorkspaceChanged, onRestoreTarget, pending, onRevealBinding, editorContext, onOpenSettings, onOpenGuide }: WorkbenchToolDockProps) {
   const { t } = useI18n();
   if (activeTool === "search") {
     return (
@@ -50,15 +54,7 @@ export const WorkbenchToolDock = memo(function WorkbenchToolDock({ activeTool, g
 
   return (
     <section className="tool-content git-tool" aria-label={t("workbench.tool.git")}>
-      <div className="git-mode">
-        <Segmented
-          label={t("tool.gitView")}
-          value={gitMode}
-          onChange={onGitModeChange}
-          options={[{ value: "collaboration", label: t("tool.gitCollaboration") }, { value: "advanced", label: t("tool.gitAdvanced") }]}
-        />
-      </div>
-      <GitPanel mode={gitMode} selectedUnitId={selectedUnitId ?? null} workspaceRevision={workspaceRevision ?? 0} onWorkspaceChanged={onWorkspaceChanged} onRestoreTarget={onRestoreTarget} pending={pending} onRevealBinding={onRevealBinding} />
+      <GitPanel onOpenCommit={onOpenCommit} selectedCommitId={selectedCommitId} onOpenSettings={onOpenRepositorySettings} projectRevision={projectRevision} selectedUnitId={selectedUnitId ?? null} workspaceRevision={workspaceRevision ?? 0} onWorkspaceChanged={onWorkspaceChanged} pending={pending} onRevealBinding={onRevealBinding} />
     </section>
   );
 });
