@@ -371,7 +371,9 @@ concurrency), status (`running`, `paused` with a reason, `completed`,
 `cancelled`), token usage, events, and each string's chunk, status
 (`pending`, `running`, `drafted`, `rejected`, `failed`, `conflict`),
 attempts, and message. The worker model is the jobs model from the settings,
-or Angelica's default model.
+or Angelica's default model. Settings show an effort choice for jobs even
+while they use Angelica's model; choosing an effort there stores Angelica's
+current model with that effort as the jobs model.
 
 A running job has `concurrency` lanes. Each lane claims the next chunk,
 checks first that the job's project is still open, and pauses the job when

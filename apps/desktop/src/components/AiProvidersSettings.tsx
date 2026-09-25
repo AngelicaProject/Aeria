@@ -89,7 +89,7 @@ export function AiProvidersSettings() {
         <>
           <ModelPicker settings={settings} selection={settings.agentModel} disabled={busy} apply={apply} set={aiSetAgentModel} label="ai.settings.agentModel" empty="ai.settings.noAgentModel" hint="ai.settings.agentModelHint" />
           <WebDomains settings={settings} disabled={busy} apply={apply} />
-          <ModelPicker settings={settings} selection={settings.workerModel} disabled={busy} apply={apply} set={aiSetWorkerModel} label="ai.settings.workerModel" empty="ai.settings.noWorkerModel" hint="ai.settings.workerModelHint" />
+          <ModelPicker settings={settings} selection={settings.workerModel} inherited={settings.agentModel} disabled={busy} apply={apply} set={aiSetWorkerModel} label="ai.settings.workerModel" empty="ai.settings.noWorkerModel" hint="ai.settings.workerModelHint" />
           {settings.providers.map((provider) => (
             <ProviderCard key={provider.id} provider={provider} disabled={busy} apply={apply} run={run} />
           ))}
@@ -125,6 +125,8 @@ function WebDomains({ settings, disabled, apply }: { settings: AiSettingsDto; di
 type ModelPickerProps = {
   settings: AiSettingsDto;
   selection: AiModelSelection | null;
+  /** The selection used while `selection` is empty; its effort can be overridden. */
+  inherited?: AiModelSelection | null;
   disabled: boolean;
   apply: (operation: () => Promise<AiSettingsDto>) => Promise<boolean>;
   set: (selection: AiModelSelection | null) => Promise<AiSettingsDto>;
@@ -134,11 +136,13 @@ type ModelPickerProps = {
 };
 
 /** A default model and effort: Angelica's, or the job workers'. */
-function ModelPicker({ settings, selection, disabled, apply, set, label, empty, hint }: ModelPickerProps) {
+function ModelPicker({ settings, selection, inherited = null, disabled, apply, set, label, empty, hint }: ModelPickerProps) {
   const { t } = useI18n();
   const modelId = useId();
   const effortId = useId();
   const efforts = selectableEfforts(settings.providers, selection);
+  // Without an own model, an effort choice pins the inherited model with it.
+  const inheritedEfforts = selection === null ? selectableEfforts(settings.providers, inherited) : [];
   const hasModels = settings.providers.some((provider) => provider.models.length > 0);
 
   return (
@@ -174,6 +178,23 @@ function ModelPicker({ settings, selection, disabled, apply, set, label, empty, 
               void apply(() => set({ ...selection, effort }));
             }}
             options={[{ value: "", label: t("ai.effort.default") }, ...efforts.map((effort) => ({ value: effort, label: t(effortLabels[effort]) }))]}
+          />
+        </div>
+      ) : null}
+      {inherited && inheritedEfforts.length > 0 ? (
+        <div className="field">
+          <label className="field-label" htmlFor={effortId}>{t("ai.settings.effort")}</label>
+          <Select
+            id={effortId}
+            value=""
+            disabled={disabled}
+            onChange={(value) => {
+              if (value) void apply(() => set({ ...inherited, effort: value as ReasoningEffort }));
+            }}
+            options={[
+              { value: "", label: inherited.effort ? t("ai.settings.inheritedEffort", { effort: t(effortLabels[inherited.effort]) }) : t("ai.settings.inheritedDefaultEffort") },
+              ...inheritedEfforts.map((effort) => ({ value: effort, label: t(effortLabels[effort]) })),
+            ]}
           />
         </div>
       ) : null}
