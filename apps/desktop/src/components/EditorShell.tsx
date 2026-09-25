@@ -73,6 +73,7 @@ import { themeRegistry } from "../ui/theme/registry";
 import { usePreferences } from "../ui/preferences";
 import type { RowTarget } from "../commandPalette";
 import { UiIcon } from "../ui/primitives/UiIcon";
+import { reportUnsavedDraft } from "../ui/appUpdateStore";
 import { useI18n, type MessageKey, type Translate } from "../ui/i18n";
 
 /** The Rust page bound (`MAX_TRANSLATION_PAGE_SIZE`); a sheet streams in these pages. */
@@ -230,6 +231,11 @@ export function EditorShell({
   const [closing, setClosing] = useState(false);
   const [editorError, setEditorError] = useState<EditorError | null>(null);
   const [discardRequest, setDiscardRequest] = useState<DiscardRequest | null>(null);
+
+  // An application update waits for drafts and saves in flight.
+  const unsavedDraft = dirty || mutations.length > 0;
+  useEffect(() => reportUnsavedDraft(unsavedDraft), [unsavedDraft]);
+  useEffect(() => () => reportUnsavedDraft(false), []);
   const [layout, dispatchLayout] = useReducer(reduceWorkbenchLayout, initialWorkbenchLayout);
   const [documentTabs, setDocumentTabs] = useState<DocumentTabsState>(() => firstSheetName ? reduceDocumentTabs(initialDocumentTabsState, { type: "openSheet", sheetName: firstSheetName }) : initialDocumentTabsState);
   const [quickFindSignal, setQuickFindSignal] = useState(0);

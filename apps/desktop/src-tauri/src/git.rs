@@ -24,7 +24,7 @@ use crate::commands::{parse_translation_unit_id, run_blocking};
 use crate::dto::{ReviewStateDto, SourceBindingDto};
 use crate::error::CommandError;
 use crate::project_changes::{self, ProjectChangeDto};
-use crate::state::{AttributionCache, DesktopState};
+use crate::state::{Activity, AttributionCache, DesktopState};
 
 type CommandResult<T> = Result<T, CommandError>;
 
@@ -911,8 +911,8 @@ pub async fn git_checkpoint(
     app: tauri::AppHandle,
     message: Option<String>,
 ) -> CommandResult<GitCommitChangesDto> {
-    run_blocking(move || {
-        git_checkpoint_with_state(&app.state::<DesktopState>(), message.as_deref())
+    run_sync(app, move |state| {
+        git_checkpoint_with_state(state, message.as_deref())
     })
     .await
 }
@@ -1038,8 +1038,8 @@ pub async fn git_commit_changes(
     app: tauri::AppHandle,
     commit_id: String,
 ) -> CommandResult<GitCommitChangesDto> {
-    run_blocking(move || {
-        let repository = open_repository(&app.state::<DesktopState>())?;
+    run_sync(app, move |state| {
+        let repository = open_repository(state)?;
         let (commit, changes) = repository.commit_changes(&commit_id)?;
         Ok(GitCommitChangesDto {
             project_changes: project_changes::of_commit(&repository, &commit.id)?,
@@ -1137,11 +1137,8 @@ pub async fn git_sync(
     app: tauri::AppHandle,
     resolutions: Option<Vec<UnitResolutionDto>>,
 ) -> CommandResult<GitSyncDto> {
-    run_blocking(move || {
-        git_sync_with_state(
-            &app.state::<DesktopState>(),
-            resolutions.as_deref().unwrap_or_default(),
-        )
+    run_sync(app, move |state| {
+        git_sync_with_state(state, resolutions.as_deref().unwrap_or_default())
     })
     .await
 }
@@ -1208,9 +1205,8 @@ pub async fn git_create_branch(app: tauri::AppHandle, name: String) -> CommandRe
 /// Returns a typed command error for uncommitted translations, a rejected
 /// branch, or a Git failure.
 pub async fn git_switch_branch(app: tauri::AppHandle, name: String) -> CommandResult<()> {
-    run_blocking(move || {
-        let state = app.state::<DesktopState>();
-        let result = with_session_reload(&state, |repository, accept| {
+    run_sync(app, move |state| {
+        let result = with_session_reload(state, |repository, accept| {
             repository.switch_branch(&name, accept)
         })?;
         result.map_err(|error| match error {
@@ -1278,8 +1274,8 @@ pub async fn git_set_main_branch(
 /// Returns a typed command error outside the pull-request policy, for
 /// uncommitted translations, or for a Git failure.
 pub async fn git_finish_contribution(app: tauri::AppHandle) -> CommandResult<GitFinishDto> {
-    run_blocking(move || {
-        let outcome = with_session_reload(&app.state::<DesktopState>(), |repository, accept| {
+    run_sync(app, move |state| {
+        let outcome = with_session_reload(state, |repository, accept| {
             repository.finish_contribution(accept)
         })??;
         Ok(GitFinishDto {
@@ -1299,8 +1295,8 @@ pub async fn git_finish_contribution(app: tauri::AppHandle) -> CommandResult<Git
 /// Returns a typed command error when the repository has a remote, the
 /// merge conflicts, or the merged project is not valid.
 pub async fn git_merge_contribution(app: tauri::AppHandle) -> CommandResult<GitFinishDto> {
-    run_blocking(move || {
-        let outcome = with_session_reload(&app.state::<DesktopState>(), |repository, accept| {
+    run_sync(app, move |state| {
+        let outcome = with_session_reload(state, |repository, accept| {
             repository.merge_contribution_locally(accept)
         })??;
         Ok(GitFinishDto {
@@ -1330,10 +1326,24 @@ pub async fn git_clone_repository(
         Some(parent) => PathBuf::from(parent.trim()),
         None => crate::commands::default_projects_directory(&app)?,
     };
-    run_blocking(move || {
-        let git = app.state::<DesktopState>().git();
-        let repository = GitRepository::clone_into(url.trim(), parent, git)?;
+    run_sync(app, move |state| {
+        let repository = GitRepository::clone_into(url.trim(), parent, state.git())?;
         Ok(repository.root().to_string_lossy().into_owned())
+    })
+    .await
+}
+
+/// Runs a Git operation that fetches, pushes, commits, or changes the working
+/// tree, and that an application update therefore waits for.
+async fn run_sync<T, F>(app: tauri::AppHandle, operation: F) -> CommandResult<T>
+where
+    T: Send + 'static,
+    F: FnOnce(&DesktopState) -> CommandResult<T> + Send + 'static,
+{
+    run_blocking(move || {
+        let state = app.state::<DesktopState>();
+        let _sync = state.begin_activity(Activity::Sync);
+        operation(&state)
     })
     .await
 }

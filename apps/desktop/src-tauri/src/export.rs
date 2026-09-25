@@ -27,7 +27,7 @@ use tauri::Manager;
 use crate::commands::{resolve_atlas_executable, run_blocking};
 use crate::error::CommandError;
 use crate::paths::AeriaPaths;
-use crate::state::DesktopState;
+use crate::state::{Activity, DesktopState};
 
 type CommandResult<T> = Result<T, CommandError>;
 
@@ -778,7 +778,9 @@ pub async fn export_pack(
 ) -> CommandResult<LocalExportDto> {
     validate_release(&release)?;
     run_blocking(move || {
-        let settings = load_settings(&project_root(&app.state::<DesktopState>())?)?;
+        let state = app.state::<DesktopState>();
+        let _export = state.begin_activity(Activity::Export);
+        let settings = load_settings(&project_root(&state)?)?;
         let secret = if sign {
             Some(project_signer(&settings, &KeyringSigningKeyStore)?)
         } else {
@@ -877,6 +879,9 @@ pub async fn export_publish(
     release: ReleaseInputDto,
 ) -> CommandResult<PublishedReleaseDto> {
     validate_release(&release)?;
+    let export_app = app.clone();
+    let export_state = export_app.state::<DesktopState>();
+    let _export = export_state.begin_activity(Activity::Export);
     let session = app.clone();
     let (target, settings, secret) = run_blocking(move || {
         let state = session.state::<DesktopState>();

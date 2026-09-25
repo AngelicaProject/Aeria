@@ -1,0 +1,153 @@
+name: Release
+
+# Stable releases are published from version tags; the rolling nightly
+# pre-release is rebuilt after every green CI run of a push to main. The
+# release model is described in docs/development/releases.md.
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  contents: write
+  actions: read
+
+concurrency:
+  # A newer nightly supersedes one that is still building; stable releases
+  # never cancel each other.
+  group: ${{ github.event_name == 'push' && format('release-{0}', github.ref_name) || 'release-nightly' }}
+  cancel-in-progress: ${{ github.event_name == 'workflow_run' }}
+
+jobs:
+  windows:
+    if: >-
+      github.event_name == 'push' ||
+      (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push')
+    runs-on: windows-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      COMMIT: ${{ github.event.workflow_run.head_sha || github.sha }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.COMMIT }}
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 12.4.2
+          run_install: false
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.98.1
+
+      - name: Require a green main commit for stable releases
+        if: github.event_name == 'push'
+        run: |
+          git fetch --no-tags origin main
+          if ! git merge-base --is-ancestor "$COMMIT" origin/main; then
+            echo "::error::$GITHUB_REF_NAME does not point at a commit on main"
+            exit 1
+          fi
+          # CI for the merge may still be running when the tag is pushed.
+          for attempt in $(seq 1 120); do
+            runs=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$COMMIT&branch=main&event=push" \
+              --jq '[.workflow_runs[] | "\(.status):\(.conclusion)"] | join(" ")')
+            case " $runs " in
+              *" completed:success "*) echo "CI passed on main for $COMMIT"; exit 0 ;;
+            esac
+            case "$runs" in
+              *in_progress*|*queued*|*requested*|*waiting*|*pending*) sleep 30 ;;
+              *) echo "::error::CI has not passed on main for $COMMIT (runs: ${runs:-none})"; exit 1 ;;
+            esac
+          done
+          echo "::error::timed out waiting for CI on main for $COMMIT"
+          exit 1
+
+      - name: Determine the version
+        id: version
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = "push" ]; then
+            version=$(node tools/release/version.mjs check --tag "$GITHUB_REF_NAME")
+            echo "tag=$GITHUB_REF_NAME" >> "$GITHUB_OUTPUT"
+          else
+            version=$(node tools/release/version.mjs nightly "$GITHUB_RUN_NUMBER")
+            cargo update --workspace
+            echo "tag=nightly" >> "$GITHUB_OUTPUT"
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Building Aeria $version"
+
+      - name: Stage pinned Harmonia Atlas sidecar
+        run: pwsh -NoProfile -File tools/atlas/stage-sidecar.ps1 -Target win-x64
+      - name: Stage pinned MinGit runtime
+        run: pwsh -NoProfile -File tools/git/stage-mingit.ps1 -Target win-x64
+      - run: pnpm install --frozen-lockfile
+
+      - name: Build the application
+        working-directory: apps/desktop
+        run: pnpm tauri build --no-bundle -- --locked
+
+      # Packaged before the installer so the executable carries no installer
+      # bundle type: a portable copy announces updates but never installs them.
+      - name: Package the portable build
+        id: portable
+        run: |
+          name="Aeria_${{ steps.version.outputs.version }}_x64-portable"
+          mkdir -p "dist/$name"
+          cp target/release/aeria.exe target/release/harmonia-atlas.exe "dist/$name/"
+          cp -r target/release/git "dist/$name/git"
+          (cd dist && 7z a -tzip -mx=9 "$name.zip" "$name" > /dev/null)
+          echo "zip=dist/$name.zip" >> "$GITHUB_OUTPUT"
+
+      - name: Build the signed installer
+        working-directory: apps/desktop
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: pnpm tauri bundle --bundles nsis
+
+      - name: Collect release assets
+        run: |
+          version="${{ steps.version.outputs.version }}"
+          tag="${{ steps.version.outputs.tag }}"
+          installer="Aeria_${version}_x64-setup.exe"
+          cp "target/release/bundle/nsis/$installer" "target/release/bundle/nsis/$installer.sig" dist/
+          node tools/release/version.mjs feed \
+            --version "$version" \
+            --url "https://github.com/$GITHUB_REPOSITORY/releases/download/$tag/$installer" \
+            --signature "dist/$installer.sig" \
+            --notes "https://github.com/$GITHUB_REPOSITORY/releases/tag/$tag" > dist/latest.json
+          (cd dist && sha256sum "$installer" "$(basename "${{ steps.portable.outputs.zip }}")" > SHA256SUMS.txt)
+          ls -la dist
+
+      - name: Publish the stable release
+        if: github.event_name == 'push'
+        run: |
+          version="${{ steps.version.outputs.version }}"
+          gh release create "$GITHUB_REF_NAME" \
+            --verify-tag --latest \
+            --title "Aeria $version" \
+            --generate-notes \
+            dist/Aeria_*_x64-setup.exe dist/Aeria_*_x64-setup.exe.sig dist/Aeria_*_x64-portable.zip dist/latest.json dist/SHA256SUMS.txt
+
+      - name: Publish the nightly pre-release
+        if: github.event_name == 'workflow_run'
+        run: |
+          version="${{ steps.version.outputs.version }}"
+          gh release delete nightly --cleanup-tag --yes || true
+          gh release create nightly \
+            --prerelease --latest=false \
+            --target "$COMMIT" \
+            --title "Aeria nightly $version" \
+            --notes "Automatic build of main at $COMMIT. Nightly builds may contain bugs; use the stable channel for ordinary work." \
+            dist/Aeria_*_x64-setup.exe dist/Aeria_*_x64-setup.exe.sig dist/Aeria_*_x64-portable.zip dist/latest.json dist/SHA256SUMS.txt

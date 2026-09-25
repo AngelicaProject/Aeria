@@ -21,6 +21,6 @@ This section defines how changes are implemented, validated, reviewed, and shipp
 
 - [`testing.md`](./testing.md) — test strategy, fixtures, regression coverage, and fuzz/property testing.
 - [`documentation.md`](./documentation.md) — documentation ownership, structure, and writing standards.
-- [`releases.md`](./releases.md) — packaging, release channels, signing, and update expectations.
+- [`releases.md`](./releases.md) — versions, release channels, packaging, the release workflow, and application updates.
 
 For product or architecture decisions, use the corresponding indexes under [`../product/`](../product/README.md) and [`../architecture/`](../architecture/README.md) instead of adding development-only rules here.

@@ -343,3 +343,57 @@
 .font-details summary { cursor: pointer; color: var(--fg-muted); font-size: var(--text-sm); }
 .font-details[open] { display: flex; flex-direction: column; gap: 8px; }
 .font-source .field-label { overflow-wrap: anywhere; }
+
+/* Application updates ------------------------------------------------------ */
+
+.titlebar-update {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 5px;
+  height: 22px;
+  margin-right: 6px;
+  padding: 0 9px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent-text);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  cursor: pointer;
+}
+.titlebar-update:hover { background: color-mix(in srgb, var(--accent) 24%, transparent); }
+
+.update-notice {
+  position: fixed;
+  right: 16px;
+  bottom: calc(var(--statusbar-height) + 14px);
+  z-index: 80;
+  display: flex;
+  gap: 10px;
+  width: min(360px, calc(100vw - 32px));
+  padding: 12px 12px 12px 14px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-lg);
+  background: var(--panel-raised);
+  box-shadow: var(--shadow-pop);
+  animation: pop-in var(--duration) var(--ease-out);
+}
+.update-notice-icon { flex: none; margin-top: 1px; color: var(--accent-text); }
+.update-notice-body { display: flex; flex: 1; flex-direction: column; gap: 6px; min-width: 0; }
+.update-notice-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
+.update-notice-head strong { padding-top: 2px; font-size: var(--text-sm); }
+.update-notice-head .icon-button { margin: -4px -6px 0 0; }
+.update-notice-facts { margin-top: -4px; color: var(--fg-muted); font-size: var(--text-xs); }
+.update-notice-text { display: flex; align-items: flex-start; gap: 6px; color: var(--fg-muted); font-size: var(--text-sm); overflow-wrap: anywhere; }
+.update-notice-text svg { flex: none; margin-top: 3px; }
+.update-notice-waiting { color: var(--warn); }
+.update-notice-error { color: var(--bad); }
+.update-notice-progress { display: flex; flex-direction: column; gap: 4px; }
+.update-notice-progress small { color: var(--fg-subtle); font-size: var(--text-2xs); font-variant-numeric: tabular-nums; }
+.update-notice-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
+
+.update-setting { display: flex; flex-direction: column; gap: 8px; }
+.update-setting-summary { display: flex; align-items: flex-start; gap: 6px; font-size: var(--text-sm); }
+.update-setting-summary svg { flex: none; margin-top: 3px; }
+.update-setting-actions { display: flex; flex-wrap: wrap; gap: 6px; }

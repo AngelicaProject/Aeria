@@ -14,6 +14,7 @@ mod project_changes;
 mod search;
 mod source_store;
 mod state;
+mod updates;
 mod web;
 
 use serde::Serialize;
@@ -80,7 +81,11 @@ pub use source_store::{
     SourceAvailabilityDto, SourcePackageEntryDto, delete_source_package, list_source_packages,
     reveal_source_packages, source_availability,
 };
-pub use state::DesktopState;
+pub use state::{Activity, DesktopState};
+pub use updates::{
+    AvailableUpdateDto, UpdateChannel, UpdateDownloadDto, UpdateStatusDto, Updates, update_check,
+    update_download, update_install, update_open_release, update_set_channel, update_status,
+};
 
 #[derive(Serialize)]
 struct AppInfo {
@@ -108,15 +113,24 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(DesktopState::new())
+        .manage(Updates::default())
         .setup(|app| {
             paths::migrate_legacy_directories(app.handle());
             app.state::<DesktopState>()
                 .set_git(git::resolve_git(app.handle()));
+            updates::start_background_checks(app.handle());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             app_info,
+            update_status,
+            update_check,
+            update_set_channel,
+            update_download,
+            update_install,
+            update_open_release,
             open_project,
             open_project_from_game,
             game_settings,

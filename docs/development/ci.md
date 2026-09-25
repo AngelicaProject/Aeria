@@ -54,6 +54,17 @@ file those tests create lives under such a path. See
 
 When CI gains or removes a project-wide quality gate, update this document with the workflow change.
 
+## Releases
+
+`.github/workflows/release.yml` publishes stable releases from `v*` tags and
+the rolling `nightly` pre-release after every successful CI run of a push to
+`main`. It builds on `windows-latest` with the same pinned Atlas sidecar,
+MinGit, and toolchain, and signs installers with the updater key secrets.
+See [`releases.md`](./releases.md#release-workflow).
+
+`pnpm test` also runs `tools/release/version.test.mjs`, which covers the
+nightly version rule and the updater feed format.
+
 ## Local validation
 
 During implementation, run focused checks for fast feedback. Before requesting review, run the broader checks required by the affected area. Use locked/frozen dependency resolution where CI does.

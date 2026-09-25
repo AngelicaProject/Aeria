@@ -21,6 +21,7 @@
     ]
   },
   "bundle": {
+    "targets": ["nsis"],
     "resources": {
       "binaries/mingit": "git"
     }

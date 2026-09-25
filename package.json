@@ -9,7 +9,7 @@
   "scripts": {
     "dev": "pnpm --filter @aeria/desktop dev",
     "build": "pnpm --filter @aeria/desktop build",
-    "test": "pnpm --filter @aeria/desktop test",
+    "test": "pnpm --filter @aeria/desktop test && node --test tools/release/version.test.mjs",
     "typecheck": "pnpm --filter @aeria/desktop typecheck",
     "tauri": "pnpm --filter @aeria/desktop tauri"
   }

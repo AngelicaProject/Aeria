@@ -65,6 +65,15 @@ sign-in page from Rust, and `tokio` with only `rt` and `time`, already part of
 the Tauri runtime, to pace sign-in polling and to run a translation job's
 lanes as one abortable task set.
 
+## Application update dependencies
+
+The desktop crate uses `tauri-plugin-updater` (Apache-2.0 OR MIT) with only
+`rustls-tls`, the standard Tauri updater: it reads the release feed, verifies
+installer signatures with `minisign-verify` (MIT), and runs the NSIS
+installer. Its TLS stack is the `rustls` with `ring` already used by
+`aeria-ai`. `semver` (MIT OR Apache-2.0), already in the graph through Tauri,
+orders versions across the stable and nightly feeds.
+
 ## Renderer UI dependencies
 
 - `radix-ui`: accessible menus, dialogs, tooltips, and selects.
