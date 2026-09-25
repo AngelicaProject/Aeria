@@ -58,8 +58,12 @@ function CheckpointDiff({ baseline, current }: { baseline: CheckpointBaseline; c
   );
 }
 
+/** Marks the string reviewed, saving an edited target first, and moves on. */
+export type ApproveHandler = (cell: TranslationCellDto, draft: CellDraft, targetDirty: boolean, otherDirty: boolean, discardOtherDrafts: () => void) => void;
+
 export type TranslationEditorHandle = {
   saveTarget: (advance: boolean) => void;
+  approve: () => void;
   revert: () => void;
   copySource: () => void;
 };
@@ -72,12 +76,15 @@ type TranslationEditorProps = {
   onDirtyChange: (dirty: boolean) => void;
   onSelectCell: (binding: SourceBinding) => void;
   onSaveTarget: SaveTargetHandler;
+  onApprove: ApproveHandler;
   onSaveNote: (cell: TranslationCellDto, draft: CellDraft, otherDirty: boolean, discardOtherDrafts: () => void) => void;
   onReviewChange: (cell: TranslationCellDto, reviewState: ReviewState, discardDrafts: () => void) => void;
   onNavigate: (direction: 1 | -1) => void;
   /** Returns true once when the target should take focus after navigation. */
   takeFocusRequest: () => boolean;
   checkpoint: CheckpointBaseline | null;
+  /** Drafts a translation with Angelica; resolves to `null` when it failed. */
+  onDraftWithAngelica?: ((cell: TranslationCellDto) => Promise<string | null>) | undefined;
 };
 
 const reviewOptions: readonly ReviewState[] = ["draft", "needsReview", "reviewed"];
@@ -126,11 +133,13 @@ const TranslationEditorImpl = forwardRef<TranslationEditorHandle, TranslationEdi
   onDirtyChange,
   onSelectCell,
   onSaveTarget,
+  onApprove,
   onSaveNote,
   onReviewChange,
   onNavigate,
   takeFocusRequest,
   checkpoint,
+  onDraftWithAngelica,
 }, ref) {
   const { t } = useI18n();
   const [showDiff, setShowDiff] = useState(true);
@@ -198,6 +207,20 @@ const TranslationEditorImpl = forwardRef<TranslationEditorHandle, TranslationEdi
     onSaveTarget(selectedCell, currentDraft, otherDirty, () => discardDrafts(bindingKey(selectedCell.sourceBinding), "target"), advance);
   }, [cellBusy, discardDrafts, onNavigate, onSaveTarget, selectedCell, targetCanSave]);
 
+  const approve = useCallback(() => {
+    const currentRow = rowRef.current;
+    if (!currentRow || !selectedCell || cellBusy) return;
+    const currentDraft = draftForCell(selectedCell, draftsRef.current);
+    const dirtyTarget = currentDraft.target !== (selectedCell.translation?.targetMacro ?? "");
+    if (currentDraft.target.trim().length === 0) return;
+    if (!dirtyTarget && selectedCell.translation?.reviewState === "reviewed") {
+      onNavigate(1);
+      return;
+    }
+    const otherDirty = hasOtherDirtyDraft(currentRow, selectedCell, draftsRef.current, "target");
+    onApprove(selectedCell, currentDraft, dirtyTarget, otherDirty, () => discardDrafts(bindingKey(selectedCell.sourceBinding), "target"));
+  }, [cellBusy, discardDrafts, onApprove, onNavigate, selectedCell]);
+
   const saveNote = useCallback(() => {
     const currentRow = rowRef.current;
     if (!currentRow || !selectedCell || !noteCanSave) return;
@@ -214,7 +237,20 @@ const TranslationEditorImpl = forwardRef<TranslationEditorHandle, TranslationEdi
     if (selectedCell && !cellBusy) updateDraft(selectedCell, "target", selectedCell.sourceMacro);
   }, [cellBusy, selectedCell, updateDraft]);
 
-  useImperativeHandle(ref, () => ({ saveTarget, revert, copySource }), [copySource, revert, saveTarget]);
+  const [drafting, setDrafting] = useState(false);
+  const draftWithAngelica = useCallback(async () => {
+    if (!selectedCell || cellBusy || !onDraftWithAngelica) return;
+    const cell = selectedCell;
+    setDrafting(true);
+    try {
+      const target = await onDraftWithAngelica(cell);
+      if (target !== null) updateDraft(cell, "target", target);
+    } finally {
+      setDrafting(false);
+    }
+  }, [cellBusy, onDraftWithAngelica, selectedCell, updateDraft]);
+
+  useImperativeHandle(ref, () => ({ saveTarget, approve, revert, copySource }), [approve, copySource, revert, saveTarget]);
 
   useEffect(() => {
     if (selectedKey !== null && takeFocusRequest()) focusMacroEditor(targetHostRef.current);
@@ -291,6 +327,7 @@ const TranslationEditorImpl = forwardRef<TranslationEditorHandle, TranslationEdi
             <span className="chip">{sourceLanguage.toUpperCase()}</span>
             {selectedCell.formattingOnly ? <span className="chip" title={t("list.formattingHint")}>{t("list.kind.formatting")}</span> : null}
             <span className="spacer" />
+            {onDraftWithAngelica ? <IconButton icon="sparkles" label={drafting ? t("editor.drafting") : t("editor.draftWithAngelica")} disabled={cellBusy || drafting} onClick={() => void draftWithAngelica()} /> : null}
             <IconButton icon="copyPlus" label={t("editor.copySource")} disabled={cellBusy} onClick={copySource} />
           </div>
           <MacroEditor className="editor-surface" value={selectedCell.sourceMacro} readOnly ariaLabel={t("editor.sourceText", { column: String(selectedCell.sourceBinding.columnIndex) })} placeholder={t("editor.emptySource")} onNavigate={onNavigate} />
@@ -321,12 +358,16 @@ const TranslationEditorImpl = forwardRef<TranslationEditorHandle, TranslationEdi
             onChange={(value) => updateDraft(selectedCell, "target", value)}
             onSave={() => saveTarget(false)}
             onSaveAndNext={() => saveTarget(true)}
+            onApproveAndNext={approve}
             onNavigate={onNavigate}
           />
           <div className="editor-pane-foot">
             <span className="editor-hint">
               {targetIsBlank ? t("editor.enterTranslation") : targetDirty ? t("common.unsaved") : null}
             </span>
+            <button className="button button-ghost" type="button" disabled={cellBusy || targetIsBlank} title={t("editor.approveNextTitle")} onClick={approve}>
+              <UiIcon icon="check" size="xs" />{t("editor.approveNext")}
+            </button>
             <button className="button button-secondary" type="button" disabled={cellBusy} title={t(targetCanSave ? "editor.saveNextTitle" : "editor.nextTitle")} onClick={() => saveTarget(true)}>
               {t(targetCanSave ? "editor.saveNext" : "editor.next")}<UiIcon icon="arrowDown" size="xs" />
             </button>

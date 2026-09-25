@@ -146,12 +146,15 @@ The desktop offers two ways to update:
 
 - **Update from game.** The launcher runs Harmonia Atlas for an existing
   repository and the installed game, using the source language recorded in
-  the project, then opens the project with the update applied. This is also
-  how a collaborator without a source package starts on a cloned repository.
-- **Open with a package.** Opening a project (manually or from Recent
-  projects) with a package whose content differs fails with
-  `sourceUpdateRequired`. The launcher then previews the plan, shows the
-  counts, and applies the update only after confirmation.
+  the project, then opens the project with the update applied.
+- **Open with other content.** Opening a project from Recent projects with a
+  package whose content differs fails with `sourceUpdateRequired`. Open
+  project and Clone project build the package from the game when Aeria has
+  none matching the workspace, and return the plan without writing when that
+  package differs. In both cases the launcher previews the plan, shows the
+  counts, and applies the update only after confirmation. This is how a
+  collaborator starts on a cloned repository built from another game
+  version.
 
 After an update the workbench shows a summary. The status bar shows the
 number of detached translations, and the detached list shows each unit's last

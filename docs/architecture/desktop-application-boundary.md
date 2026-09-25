@@ -23,6 +23,25 @@ replacement constructs and verifies the new `ProjectSession` before acquiring
 the state lock, so failure preserves the previous active session. Closing is
 idempotent and drops the active session without changing the workspace.
 
+## Local data folders
+
+`<app-data>` is the `Aeria` folder in the platform data directory
+(`%APPDATA%\Aeria` on Windows, `~/.local/share/aeria` on Linux), and
+`<app-cache>` is the same folder name in the platform cache directory
+(`%LOCALAPPDATA%\Aeria`, `~/.cache/aeria`). All desktop code resolves them
+through `paths::AeriaPaths`, never Tauri's identifier-named directories. The
+bundle identifier `org.angelicaproject.aeria` still names the WebView profile
+and installer registration.
+
+Earlier versions stored data and caches under the identifier-named folders.
+At startup Aeria renames the legacy data folder to `<app-data>` when
+`<app-data>` does not exist yet, moves the `hxs` and `hsp-verification`
+caches the same way, and rewrites recent-project entries whose source package
+lay in the legacy `source-packages/` folder with
+`ProjectRegistry::relocate_source_packages`. A failed move is reported and
+leaves the legacy folder in use, so no data is lost; when both folders exist,
+the legacy one is left untouched.
+
 ## Local project registry
 
 The desktop keeps a bounded convenience registry at
@@ -89,11 +108,43 @@ active project, so the renderer can ask for confirmation. With the flag set,
 the command opens through `ProjectSession::open_with_source_update` and
 returns the applied report in `ProjectOpenResultDto.sourceUpdate`.
 
-`update_project_from_game(jobId, repositoryRoot, gamePath)` reads the source
-language from the existing workspace manifest, builds and publishes a source
-package with Harmonia Atlas exactly like project creation, and opens the
-project with the update applied. It is the path for an installed game after a
-patch and for a collaborator who has only a cloned repository.
+Commands that run Atlas take no game path. They resolve the installation in
+the worker from the application setting: the folder chosen with
+`set_game_path`, otherwise the first detected installation. A missing
+installation fails with `gameInstallationRequired`; a chosen folder that is
+no longer an installation fails with `gameInstallationInvalid`.
+`game_settings` returns the chosen folder, the installation in use, and the
+detected installations; `set_game_path(path)` validates and stores a folder,
+or with `null` returns to detection. The setting is local application state
+in `game-settings.json`; a malformed file fails with `gameSettings` and is
+never replaced with defaults.
+
+`update_project_from_game(jobId, repositoryRoot)` reads the source language
+from the existing workspace manifest, builds and publishes a source package
+with Harmonia Atlas exactly like project creation, and opens the project with
+the update applied. It is the path for an installed game after a patch.
+
+`open_project_from_game(jobId, repositoryRoot)` opens a project without a
+user-chosen HSP. It reads the source language and content ID from the
+workspace manifest, previews the manifests in Aeria's source-package store
+with `aeria_hsp::read_manifest`, and fully opens only a matching package;
+unreadable store files are skipped. With no match it builds a package from
+the game installation like `update_project_from_game`. It returns
+`GameOpenResultDto`: `opened` with the `ProjectOpenResultDto`, or
+`sourceUpdateRequired` with the package path and the plan, written nowhere;
+after confirmation the renderer calls `open_project` with that path and
+`acceptSourceUpdate`. `list_source_packages` returns the store's packages
+(language, game version, size, publication time, whether a build record
+makes them reusable, whether they are the current build, and which projects
+use them; see [`source.md`](./source.md)), and `reveal_source_packages` opens
+the store folder in the file manager. `delete_source_package(packageId)`
+deletes a package only when it is removable, and runs as an Atlas job so no
+build reuses it meanwhile. `source_availability(repositoryRoot,
+sourceLanguage, opening)` previews, without verifying, whether a job would
+find a package (`ready`), run Atlas (`build`), or cannot tell (`unknown`).
+`default_projects_directory_path` returns
+`Documents/Aeria`, the folder for new projects and for clones without a
+parent.
 
 `ProjectSummaryDto.detachedUnitCount` reports detached units, and
 `list_detached_units` returns each one's last binding, reason, target,
@@ -146,6 +197,99 @@ again. Project-wide attribution is cached in memory per repository root and
 `HEAD`; it is derived data and never persisted. Git failures map to stable
 `git*` error codes such as `gitUnavailable`, `gitIdentityMissing`,
 `gitMergeConflict`, `gitIncomingRejected`, and `gitInvalidSettings`.
+
+AI provider commands (`ai_settings`, `ai_save_provider`, `ai_remove_provider`,
+`ai_set_api_key`, `ai_clear_api_key`, `ai_set_agent_model`,
+`ai_list_remote_models`, and `ai_test_connection`) manage the local provider
+settings and OS-stored keys described in [`ai.md`](./ai.md#provider-boundary).
+They do not require an open project. Settings and secret-store access run in
+blocking workers; provider requests are async, use one shared HTTP client in
+`DesktopState`, and hold no desktop lock. A key is accepted from the renderer
+but never returned: provider DTOs report only `apiKey` as `stored`, `missing`,
+or `unavailable`. `ai_test_connection` sends one minimal Chat Completions
+request for any model ID and effort, so a model can be probed before it is
+saved or an effort enabled. Failures map to stable `ai*` codes such as
+`aiApiKeyMissing`, `aiUnauthorized`, `aiEndpointNotFound`, `aiRateLimited`,
+`aiInvalidSettings`, and `aiSecretStoreUnavailable`.
+
+`ai_chatgpt_login_start` starts the ChatGPT device sign-in for a ChatGPT
+provider, opens the sign-in page in the default browser through the opener
+plugin, and returns the code to show. Polling and the token exchange run in a
+registered async task; the result arrives as an `ai://chatgpt-login` event
+with the provider ID and either success or a typed error.
+`ai_chatgpt_login_cancel` stops a waiting sign-in. Provider commands resolve a
+ChatGPT provider's endpoint through the in-memory access-token cache in
+`DesktopState`, whose async lock also serializes token refreshes.
+
+Angelica commands (`angelica_conversations`, `angelica_conversation`,
+`angelica_send`, `angelica_cancel`, and `angelica_delete_conversation`) work on
+the active project's conversations described in [`ai.md`](./ai.md#angelica).
+`angelica_send` validates the model selection against the AI settings,
+appends the user message, stores the conversation, and returns it before the
+turn runs; at most one turn runs per conversation (`angelicaBusy`). The turn
+is an async task registered in `DesktopState` before it can start, so it can
+always be found and stopped. It holds no desktop lock; each tool runs in a
+blocking worker that locks the project only for its own read. Progress
+reaches the renderer as `angelica://event` events carrying the conversation
+ID and one of `textDelta`, `reasoningDelta`, `responseFinished`,
+`toolStarted`, `toolFinished`, `usage`, `turnFinished`, `turnFailed`, or
+`turnCancelled`. `angelica_cancel` aborts the task and emits `turnCancelled`.
+The `navigate_to` tool resolves its location to one translatable occurrence
+and emits `angelica://navigate` with that `SourceBinding`, which the editor
+reveals.
+
+`angelica_send` takes the conversation's mode. In Ask and Auto-draft modes
+the write tools run in the same blocking workers; immediate writes hold the
+project lock, and new proposals are appended under a separate proposal lock
+and announced with `angelica://proposals`. `angelica_proposals`,
+`angelica_apply_proposal`, and `angelica_reject_proposal` list and settle a
+conversation's proposals; applying writes through
+`ProjectSession::set_assisted_target` with the user's approval to replace a
+reviewed string. Every write emits `angelica://translation-applied` with the
+binding and its new `TranslationOverlayDto`. Guidance and glossary proposals
+are applied to the repository root by the same command. `angelica_draft` produces one
+draft with the default model and returns it without saving
+(`aiNoAgentModel`, `angelicaUntaggable`, and `angelicaDraftRejected` are its
+own errors).
+
+A job proposal is applied by starting the job: `angelica_apply_proposal`
+enumerates the scope under the project lock, creates the job in the
+project's job store, and starts its runner; the proposal's message holds the
+job ID. A runner is an async task registered per job in `DesktopState`; its
+lanes run in a Tokio join set, so aborting the runner aborts them. The runner
+keeps the job store and repository root it started with, and workers read and
+write only while that project is still open. Worker tools run in blocking
+workers that lock the project only for their own reads and writes, and every
+written draft emits `angelica://translation-applied`. Job changes emit
+`angelica://job` with the job ID. `angelica_jobs`, `angelica_job_units`,
+`angelica_job_events`, `angelica_job_control` (pause, resume, cancel), and
+`angelica_job_retry` (requeue strings with given statuses and resume) serve
+the renderer; `ai_set_worker_model` sets the jobs model. When a job
+completes or pauses on its own, the runner starts an automatic Angelica turn
+in the job's conversation unless one is running.
+
+Angelica's search tools and job workers' translation memory use
+`DesktopSearch`. The source index of the active package is built by a
+background blocking task registered in `DesktopState` (building, ready, or
+failed per package ID), from its own verified HXS handle; see
+[`search.md`](./search.md#desktop-use).
+
+`project_guide`, `save_project_guidance`, and `save_project_glossary` read
+and write the repository's guidance and glossary for the editor dialog. A save
+goes through the same compare-and-rename write as an approved file proposal,
+so a file changed since it was loaded is reported as `projectGuideConflict`
+and not overwritten; an invalid glossary entry is `projectGuideInvalid`.
+
+`fetch_url` runs in the turn's async task rather than a blocking worker,
+with a separate HTTP client (no automatic redirects) kept in `DesktopState`.
+Applying a web-access proposal updates the AI settings under their file lock
+and then wakes Angelica. `ai_set_web_domains` replaces the allowed domains;
+entries may be domains or links and are normalized, sorted, and
+deduplicated.
+
+Applying a review proposal holds the project lock while it compares each
+recorded target with the workspace and calls `set_review_state`, emitting
+`angelica://translation-applied` for every approved string.
 
 Commands that require an active project report `noProjectOpen` before
 validating project-scoped payload such as translation-unit IDs.

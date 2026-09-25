@@ -73,8 +73,8 @@ Source facts change only through a source update, described in
 Manual target edits use `aeria-se` intrinsic validation. Understood syntax and
 opaque-but-preservable syntax are valid targets; malformed or unsafe syntax is
 rejected. Manual translation does not require source and target protected
-structures to match. Strict structure compatibility remains a safety mechanism
-for future assisted or AI translation.
+structures to match. Assisted translation must also satisfy the assisted
+structure policy in [`strings.md`](./strings.md#assisted-structure-policy).
 
 ## Project scope
 
@@ -139,7 +139,10 @@ layout, manifest, and unit index for interactive mutations. `persist_unit`
 uses that cache to avoid repeating directory enumeration and JSONL parsing,
 while preserving the same invariant checks; callers that have not loaded
 through the store take the full validation path. The cache is updated only
-after atomic publication and is invalidated on publication failure. Before a
+after atomic publication and is invalidated on publication failure. After a
+publish only the written shard is hashed again and the directories are read
+again; the other files keep the state verified just before it, so one write
+costs one shard rather than the whole workspace. Before a
 cached publish, the store checks the managed `.aeria` paths against the cache
 snapshot using path metadata and content hashes for the manifest and target
 shard. If an external change is detected, the mutation fails closed; the

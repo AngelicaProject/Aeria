@@ -74,7 +74,54 @@ The initial preview prioritizes meaning: nesting, colors, branches, runtime valu
 
 ## AI boundary
 
-AI should receive structured translatable content and typed/protected placeholders wherever practical. The default operation translates text nodes and reconstructs the syntax tree in Rust. Structural edits may later be exposed as explicit validated operations rather than unrestricted mutation of raw syntax.
+AI receives structured translatable content with protected placeholders and never writes raw macro syntax. Structural edits beyond the policy below may later be exposed as explicit validated operations rather than unrestricted mutation of raw syntax.
+
+### Tagged text
+
+`aeria_se::project` turns a well-formed source string into tagged text. Prose
+is plain text with `&`, `<`, and `>` written as `&amp;`, `&lt;`, and `&gt;`.
+Each root or nested protected construct becomes a numbered tag in source
+order:
+
+- `<x id="N"/>` for a construct without translatable content, including
+  opaque constructs;
+- `<g id="N"><b>…</b>…</g>` for a known macro whose user-facing string
+  arguments are translated in place, one `<b>` per such argument, for example
+  the branches of `<if(…)>`, `<switch(…)>`, or `<ifpcgender(…)>`, or the text
+  of `<string(…)>`.
+
+Each tag has a legend entry with its exact source spelling, its semantic
+family, its branch count, and whether it may repeat. A malformed source has
+no projection and is not offered for assisted translation.
+
+`aeria_se::rebuild(source, tagged)` parses a tagged translation, checks it,
+and rebuilds the target by copying each construct's exact source spelling
+and splicing translated branch text into the source arguments. Prose is
+escaped for its context: `\` and `<` everywhere, and also `,`, `(`, `)`,
+`[`, `]`, and `>` inside arguments.
+
+### Assisted structure policy
+
+A tagged translation and, independently, the rebuilt syntax tree
+(`aeria_se::check_assisted_structure`) must satisfy:
+
+- every source construct is kept; no construct kind is droppable yet;
+- a construct stays in its container, the top level or one branch of one
+  construct;
+- constructs may move within their container, except that formatting
+  constructs keep their relative order, so start and end pairs cannot cross;
+- only runtime values without branches, such as the player's name, may
+  repeat;
+- constructs with branches keep their number of branches;
+- nothing else may be added. A changed game reference, parameter, argument,
+  or opaque construct is a different construct and is rejected, as is a
+  branch whose translation would parse as a number or runtime value.
+
+The tree check compares constructs by their protected structure without
+spans or branch prose, then compares the branches of matching constructs
+recursively. Refusals are returned as messages written for the model, so it
+can correct its translation. This policy, not strict structure comparison,
+is the acceptance rule for assisted translation.
 
 ## Semantic analysis
 

@@ -7,6 +7,7 @@ import type { CommandError, ProjectOpenResultDto, ProjectSummaryDto, SourceUpdat
 import { ThemeProvider } from "./ui/theme/theme";
 import { PreferencesProvider } from "./ui/preferences";
 import { I18nProvider, useI18n } from "./ui/i18n";
+import { TitleTooltips } from "./ui/primitives/TitleTooltips";
 import { DetachedToolWindow, isDetachedPanel } from "./components/DetachedToolWindow";
 import { SourceUpdateDialog } from "./components/SourceUpdateDialog";
 
@@ -92,6 +93,7 @@ export function App() {
         <I18nProvider>
           <Tooltip.Provider delayDuration={500} skipDelayDuration={200}>
             {isDetachedPanel(detachedPanel) ? <DetachedToolWindow panel={detachedPanel} /> : <MainWindow />}
+            <TitleTooltips />
           </Tooltip.Provider>
         </I18nProvider>
       </PreferencesProvider>

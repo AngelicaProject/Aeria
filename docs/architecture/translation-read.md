@@ -62,7 +62,10 @@ contracts.
 The row reader uses one bounded SQL query per page. A CTE first selects at most
 `limit + 1` distinct `(row_id, subrow_id)` coordinates containing String cells,
 using an exclusive keyset predicate and ordering by row/subrow. The query then
-joins those coordinates to `string_cells` and `rows`, returning
+joins those coordinates to `string_cells` and `rows` with the page groups
+pinned as the outer loop (`CROSS JOIN`), so each page reads only its own cells;
+a join driven from `string_cells` by sheet alone would rescan the whole sheet
+for every page. It returns
 `row_id`, `subrow_id`, `column_index`, macro text, macro hash, optional raw
 hash, and row technical hash. It does not select `raw_value` and does not call
 `page_rows` or `string_cell` repeatedly.
@@ -73,10 +76,12 @@ cursor points to the final returned row only when another row group exists.
 
 ## Application paging and overlay composition
 
-`MAX_TRANSLATION_PAGE_SIZE` remains 256. The desktop requests 100, now meaning
-up to 100 HXS row/subrow groups scanned, not 100 String cells. Classification
-can therefore make a visible page shorter, including zero visible rows with a
-non-null `next_after`. The reader does not loop to fill a visible page.
+`MAX_TRANSLATION_PAGE_SIZE` remains 256, meaning up to 256 HXS row/subrow
+groups scanned, not 256 String cells. Classification can therefore make a
+visible page shorter, including zero visible rows with a non-null `next_after`.
+The reader does not loop to fill a visible page. The desktop requests full
+256-row pages and follows `next_after` until the sheet is complete, so paging
+is a bounded transport detail rather than something the user navigates.
 
 The application cursor is an owned `TranslationRowCursor` containing only
 `sheet_name`, `row_id`, and `subrow_id`. Cross-sheet cursors are rejected.

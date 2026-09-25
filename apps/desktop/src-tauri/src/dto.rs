@@ -181,6 +181,22 @@ pub struct ProjectOpenResultDto {
     pub source_update: Option<SourceUpdateReportDto>,
 }
 
+/// The outcome of opening a project from a game installation.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "status", rename_all = "camelCase")]
+pub enum GameOpenResultDto {
+    /// The project is open with a source package matching its workspace.
+    Opened { result: Box<ProjectOpenResultDto> },
+    /// The only available package needs a source update first. Nothing was
+    /// written; after confirmation the renderer opens the project with this
+    /// package and `acceptSourceUpdate`.
+    #[serde(rename_all = "camelCase")]
+    SourceUpdateRequired {
+        source_package_path: String,
+        report: SourceUpdateReportDto,
+    },
+}
+
 /// Why a translation unit is detached from the current source.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]

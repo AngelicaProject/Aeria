@@ -6,9 +6,9 @@ use aeria_core::{DetachReason, ReviewState, Sha256Hash, SourceBinding, SourceSta
 use aeria_hxs::HxsSnapshot;
 use aeria_rebase::{Continuity, UnitUpdateOutcome};
 use aeria_workspace::{
-    MAX_TRANSLATION_PAGE_SIZE, ProjectSession, ProjectSessionError, SourceUpdateRequirement,
-    TranslationMutationError, TranslationReadError, TranslationRowCursor, Workspace,
-    WorkspaceError, WorkspaceStore, WorkspaceStoreError,
+    AssistedExpectation, AssistedWriteError, MAX_TRANSLATION_PAGE_SIZE, ProjectSession,
+    ProjectSessionError, SourceUpdateRequirement, TranslationMutationError, TranslationReadError,
+    TranslationRowCursor, Workspace, WorkspaceError, WorkspaceStore, WorkspaceStoreError,
 };
 use tempfile::TempDir;
 
@@ -1053,6 +1053,77 @@ fn session_mutations_create_update_and_read_back_the_committed_state() {
     let reopened_unit = reopened.workspace().unit(id).expect("persisted unit");
     assert_eq!(reopened_unit.target_macro(), "Salut");
     assert_eq!(reopened_unit.source_binding(), &source_binding);
+}
+
+#[test]
+fn assisted_targets_follow_the_structure_policy_and_compare_and_set() {
+    let fixture = write_fixture_with_text("en", "test-game", "Hi <pcname(lnum1)>!");
+    let repository = tempfile::tempdir().expect("temporary repository");
+    let binding = SourceBinding::new("Synthetic", 42, 0, 0);
+    let mut session = initialize_project(&repository, &fixture.package_path, "ru");
+    assert_eq!(
+        session.source_macro(&binding).expect("source"),
+        "Hi <pcname(lnum1)>!"
+    );
+    let untranslated = session.assisted_state(&binding);
+    assert_eq!(
+        untranslated,
+        AssistedExpectation {
+            target: None,
+            review_state: None
+        }
+    );
+    let files_before = managed_files(repository.path());
+
+    let dropped = session
+        .set_assisted_target(&binding, "Привет!", &untranslated, false)
+        .expect_err("a dropped runtime value is refused");
+    assert!(matches!(dropped, AssistedWriteError::Structure { .. }));
+    assert_eq!(managed_files(repository.path()), files_before);
+
+    let id = session
+        .set_assisted_target(
+            &binding,
+            "Привет, <pcname(lnum1)>, <pcname(lnum1)>!",
+            &untranslated,
+            false,
+        )
+        .expect("a repeated runtime value is allowed");
+    let written = session.assisted_state(&binding);
+    assert_eq!(written.review_state, Some(ReviewState::Draft));
+
+    let stale = session
+        .set_assisted_target(
+            &binding,
+            "Здравствуй, <pcname(lnum1)>!",
+            &untranslated,
+            false,
+        )
+        .expect_err("the unit changed since the translation was produced");
+    assert!(matches!(stale, AssistedWriteError::Conflict { ref current } if current == &written));
+
+    session
+        .set_review_state(id, ReviewState::Reviewed)
+        .expect("review");
+    let reviewed = session.assisted_state(&binding);
+    assert!(matches!(
+        session.set_assisted_target(&binding, "Здравствуй, <pcname(lnum1)>!", &reviewed, false),
+        Err(AssistedWriteError::Reviewed)
+    ));
+    session
+        .set_assisted_target(&binding, "Здравствуй, <pcname(lnum1)>!", &reviewed, true)
+        .expect("an approved replacement of a reviewed string");
+    assert_eq!(
+        session.assisted_state(&binding),
+        AssistedExpectation {
+            target: Some("Здравствуй, <pcname(lnum1)>!".to_owned()),
+            review_state: Some(ReviewState::Draft),
+        }
+    );
+    assert!(matches!(
+        session.source_macro(&SourceBinding::new("Synthetic", 42, 0, 9)),
+        Err(TranslationMutationError::SourceNotTranslatable { .. })
+    ));
 }
 
 #[test]

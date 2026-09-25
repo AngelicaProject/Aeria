@@ -1,7 +1,7 @@
 import type { MessageKey, Translate } from "./i18n/translate";
 import type { CommandError } from "./types";
 
-export type LauncherErrorOperation = "open" | "create" | "update" | "recentOpen";
+export type LauncherErrorOperation = "open" | "clone" | "create" | "update" | "recentOpen";
 
 export type LauncherError = {
   operation: LauncherErrorOperation;
@@ -12,6 +12,8 @@ export function launcherErrorTitle(operation: LauncherErrorOperation): MessageKe
   switch (operation) {
     case "open":
       return "launcher.error.open";
+    case "clone":
+      return "launcher.error.clone";
     case "create":
       return "launcher.error.create";
     case "update":

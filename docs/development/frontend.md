@@ -15,7 +15,7 @@ The renderer is a full React/TypeScript application, not a thin HTML skin, but p
 
 ## Project launcher layout
 
-The Tauri launcher window is 900×560 with matching minimum dimensions and is not resizable. It opens centered and recenters when returning from the workbench. The launcher is one screen: a fixed-width action column and a panel that swaps between Recent projects and the Open or New project form. Switching views never resizes the window, and only the panel content scrolls.
+The Tauri launcher window is 900×560 with matching minimum dimensions and is not resizable. It opens centered and recenters when returning from the workbench. The launcher is one screen: a fixed-width action column and a panel that swaps between Recent projects and the Open, Clone, New, or Update project form. Switching views never resizes the window, and only the panel content scrolls.
 
 ## Styling and primitives
 
@@ -35,6 +35,6 @@ The renderer interface ships in English and Russian. Only Aeria's own chrome is 
 
 Window APIs used by the renderer must be granted in `src-tauri/capabilities/default.json`. In particular, `onCloseRequested` destroys the window after its handler runs, so closing requires `core:window:allow-destroy`, and read-only window getters come from `core:window:default`.
 
-Menus, dialogs, tooltips, and selects use Radix primitives (`radix-ui`) styled with the shared `menu-*`, `dialog*`, and `tooltip` classes. Icon-only buttons use `IconButton`, which requires an accessible label and shows it as a tooltip. Source and target text use `MacroEditor` (CodeMirror 6); long lists use `@tanstack/react-virtual` or the existing fixed-height virtual tree.
+Menus, dialogs, tooltips, and selects use Radix primitives (`radix-ui`) styled with the shared `menu-*`, `dialog*`, and `tooltip` classes. Icon-only buttons use `IconButton`, which requires an accessible label and shows it as a tooltip. Any other hint is an ordinary `title`: `TitleTooltips`, mounted once in `App`, shows it as a themed tooltip after a short hover or on keyboard focus and moves it to `data-tooltip`, so the native tooltip never appears; an element whose only name was its title receives it as `aria-label`. Line breaks in a title are kept. Dropdowns use `ui/primitives/Select` (Radix Select in the shared `menu-*` style, with a `field` or `quiet` look, optional groups and hints, and the empty string allowed as a value); a test rejects native `<select>` elements. Richer pickers use a Radix menu or popover with the same classes. Source and target text use `MacroEditor` (CodeMirror 6); long lists use `@tanstack/react-virtual` or the existing fixed-height virtual tree.
 
 Ordinary renderer icons use the shared `UiIcon` mapping backed by `lucide-react`. Choose from its fixed `xs`, `sm`, `md`, `lg`, and `xl` sizes (`xl` is for empty-state illustrations); do not add inline SVGs, icon-font glyphs, emoji, or Unicode icon characters in feature components. Keep approved custom or native window icons centralized in the shared icon layer, and preserve semantic color through `currentColor`.

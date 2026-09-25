@@ -249,6 +249,50 @@ fn validated_package_can_relocate_its_runtime_path_without_reopening() {
 }
 
 #[test]
+fn manifest_preview_matches_the_verified_identity_without_materializing() {
+    let cache = tempdir().expect("cache directory");
+    let manifest = aeria_hsp::read_manifest(fixture_path()).expect("manifest preview");
+    assert!(
+        fs::read_dir(cache.path()).expect("cache").next().is_none(),
+        "the preview must not materialize the source"
+    );
+
+    let package = SourcePackage::open(fixture_path(), cache.path()).expect("valid Atlas package");
+    assert_eq!(manifest.package_id, package.package_id());
+    assert_eq!(manifest.source.language, package.source_language());
+    assert_eq!(manifest.source.content_id, package.source_content_id());
+    assert_eq!(manifest.game_version, package.game_version());
+
+    let invalid_zip = cache.path().join("invalid.hsp");
+    fs::write(&invalid_zip, b"not a zip").expect("invalid archive");
+    assert!(matches!(
+        aeria_hsp::read_manifest(&invalid_zip),
+        Err(aeria_hsp::HspError::Archive { .. })
+    ));
+}
+
+#[test]
+fn materialized_sources_can_be_removed_and_rebuilt() {
+    let cache = tempdir().expect("cache directory");
+    let package = SourcePackage::open(fixture_path(), cache.path()).expect("valid Atlas package");
+    let materialized = package.materialized_hxs_path().to_path_buf();
+    assert!(materialized.is_file());
+    drop(package);
+
+    let snapshot_id = aeria_hsp::read_manifest(fixture_path())
+        .expect("manifest")
+        .source
+        .snapshot_id;
+    aeria_hsp::remove_materialized_source(cache.path(), &snapshot_id).expect("remove");
+    assert!(!materialized.exists());
+    aeria_hsp::remove_materialized_source(cache.path(), &snapshot_id).expect("already removed");
+    assert!(aeria_hsp::remove_materialized_source(cache.path(), "not-canonical").is_err());
+
+    SourcePackage::open(fixture_path(), cache.path()).expect("materialized again");
+    assert!(materialized.is_file());
+}
+
+#[test]
 fn invalid_zip_duplicate_and_unlisted_entries_are_rejected() {
     let directory = tempdir().expect("test directory");
     let entries = fixture_entries();

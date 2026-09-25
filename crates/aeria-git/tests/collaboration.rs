@@ -741,3 +741,91 @@ fn a_project_in_a_repository_subdirectory_uses_project_relative_paths() {
             .any(|file| file.path == "README.md")
     );
 }
+
+#[test]
+fn clone_into_names_the_folder_after_the_remote_and_never_overwrites() {
+    let sandbox = Sandbox::new();
+    let remote = sandbox.bare_remote();
+    let ada = sandbox.project("ada", "Ada");
+    ada.set_remote("origin", &remote).expect("remote");
+    ada.checkpoint(None).expect("initial");
+    ada.push().expect("push");
+
+    let parent = sandbox.path("projects/nested");
+    let clone = GitRepository::clone_into(&remote, &parent, sandbox.git.clone()).expect("clone");
+    assert_eq!(clone.root(), parent.join("remote"));
+    assert!(parent.join("remote/.aeria/manifest.json").is_file());
+
+    assert!(matches!(
+        GitRepository::clone_into(&remote, &parent, sandbox.git.clone()),
+        Err(GitError::InvalidInput {
+            field: "clone destination",
+            ..
+        })
+    ));
+}
+
+/// Every repository operation works when the remote, the projects, a nested
+/// project folder, and the clone parent have Cyrillic names with spaces, as
+/// they do under a Russian Windows user profile.
+#[test]
+fn cyrillic_paths_with_spaces_work_for_every_operation() {
+    let sandbox = Sandbox::new();
+    let remote = sandbox.path("общий репозиторий.git");
+    fs::create_dir_all(&remote).expect("remote dir");
+    sandbox.raw_git(
+        &remote,
+        &["init", "--quiet", "--bare", "--initial-branch=main"],
+    );
+    let remote = remote.to_string_lossy().into_owned();
+
+    // A project in a Cyrillic subfolder of a Cyrillic repository.
+    let top = sandbox.path("мои проекты");
+    fs::create_dir_all(&top).expect("top");
+    sandbox.raw_git(&top, &["init", "--quiet", "--initial-branch=main"]);
+    let root = top.join("переводы/русский перевод");
+    fs::create_dir_all(root.join(".aeria")).expect("project");
+    fs::write(root.join(".aeria/manifest.json"), MANIFEST).expect("manifest");
+    let ada = GitRepository::open(&root, sandbox.git.clone()).expect("open");
+    set_translator(&ada, "Ада");
+    ada.set_remote("origin", &remote)
+        .expect("remote with spaces");
+    let unit = id(0x31, 1);
+    write_shard(&root, 0x31, &[(unit, 1, "Привет", "draft")]);
+    assert!(
+        ada.status()
+            .expect("status")
+            .files
+            .iter()
+            .all(|file| file.path.starts_with(".aeria/"))
+    );
+    ada.checkpoint(None).expect("checkpoint");
+    assert!(ada.push().expect("push"));
+
+    // The clone lands in a folder named after the remote inside a nested
+    // Cyrillic parent.
+    let parent = sandbox.path("клоны/вложенная папка");
+    let grace = GitRepository::clone_into(&remote, &parent, sandbox.git.clone()).expect("clone");
+    assert_eq!(grace.root(), parent.join("общий репозиторий"));
+    set_translator(&grace, "Грейс");
+    let grace_project = grace.root().join("переводы/русский перевод");
+    let grace = GitRepository::open(&grace_project, sandbox.git.clone()).expect("open clone");
+    set_translator(&grace, "Грейс");
+
+    write_shard(&root, 0x31, &[(unit, 1, "Здравствуйте", "draft")]);
+    ada.checkpoint(None).expect("second checkpoint");
+    ada.push().expect("second push");
+    grace.fetch().expect("fetch");
+    assert_eq!(
+        grace
+            .integrate(&no_resolutions(), || Ok(()))
+            .expect("fast-forward"),
+        IntegrateOutcome::FastForward
+    );
+    let history = grace.unit_history(unit, 10).expect("history");
+    assert_eq!(history.revisions.len(), 2);
+    assert_eq!(grace.attribution().expect("attribution").len(), 1);
+    let log = grace.log(0, 10).expect("log");
+    let (_, changes) = grace.commit_changes(&log[0].id).expect("changes");
+    assert_eq!(changes.len(), 1);
+}

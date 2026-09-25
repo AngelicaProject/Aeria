@@ -43,3 +43,23 @@ when set (Windows CI points it at the staged MinGit), otherwise `git` on
 `PATH`. They isolate Git from user and system configuration
 (`GIT_CONFIG_GLOBAL`, `GIT_CONFIG_NOSYSTEM`) and use only temporary
 repositories and local bare remotes.
+
+## Paths
+
+Every operation that takes or produces a path must work with non-ASCII
+characters and spaces, as under a Russian Windows user profile
+(`C:\Users\Анна Иванова\...`) or a game in `Program Files (x86)`:
+
+- Pass paths to the filesystem and to child processes (Git, Atlas) as
+  `Path`/`OsStr` arguments, never through a shell or a lossy conversion.
+- Code that treats a path as a string (parsing, prefix stripping, joining,
+  display, URL validation) needs a unit test with a Cyrillic case and a
+  space, in Rust and in the renderer.
+- Tests create their files under the system temporary folder, so running a
+  suite with `TMP`/`TEMP` (or `TMPDIR`) set to a Cyrillic folder with a
+  space exercises every filesystem path it touches. Windows CI does this
+  (see [`ci.md`](./ci.md)); run it locally the same way after changing path
+  handling.
+- Keep that temporary folder short and outside any Git repository. SQLite
+  on Windows rejects paths longer than 260 characters, and Git tests create
+  repositories that must not be nested in another one.

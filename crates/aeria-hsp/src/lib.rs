@@ -16,7 +16,7 @@ pub use model::{
     GuidanceSheet, GuidanceSheetStatus, GuidanceSourceIdentity, HspComponentDescriptor,
     HspManifest, HspSourceIdentity, SourceGuidance, SourcePackage,
 };
-pub use reader::open;
+pub use reader::{open, read_manifest, remove_materialized_source};
 
 /// Maximum decompressed size accepted for the HSP manifest JSON.
 pub const MAX_HSP_MANIFEST_BYTES: u64 = 1 << 20;

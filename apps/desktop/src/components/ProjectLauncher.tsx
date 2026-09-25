@@ -6,30 +6,39 @@ import { DropdownMenu } from "radix-ui";
 import {
   appInfo,
   cancelSourcePackage,
+  defaultProjectsDirectory,
   forgetRecentProject,
+  gameSettings,
+  gitCloneRepository,
   initializeProjectFromGame,
   listRecentProjects,
   normalizeCommandError,
   openProject,
+  openProjectFromGame,
   openRecentProject,
   previewSourceUpdate,
+  sourceAvailability,
   startSourcePackage,
   updateProjectFromGame,
 } from "../ipc";
 import type {
   AtlasEvent,
   CommandError,
+  GameSettingsDto,
   ProjectOpenResultDto,
   RecentProjectAvailability,
   RecentProjectDto,
+  SourceAvailability,
   SourcePackageEventPayload,
   SourceUpdateReportDto,
 } from "../types";
 import { ErrorBanner } from "./ErrorBanner";
-import { SettingsDialog } from "./SettingsDialog";
+import { gameInstallationFacts } from "./GameSettings";
+import { SettingsDialog, type SettingsSection } from "./SettingsDialog";
 import { SourceUpdateDialog } from "./SourceUpdateDialog";
 import { WindowChrome } from "./WindowChrome";
 import { displayPath, displayPathName } from "../pathDisplay";
+import { projectFolder } from "../projectFolder";
 import { formatRelativeTime } from "../timeDisplay";
 import {
   initialRecentProjectsState,
@@ -48,8 +57,8 @@ import { UiIcon, type UiIconName } from "../ui/primitives/UiIcon";
 import { useI18n, type Translate } from "../ui/i18n";
 import type { MessageKey } from "../i18n/translate";
 
-type LauncherView = "recent" | "open" | "create" | "update";
-type LauncherJob = "open" | "create" | "update";
+type LauncherView = "recent" | "open" | "clone" | "create" | "update";
+type LauncherJob = "open" | "clone" | "create" | "update";
 
 /** A source update that opening requires and the user has not yet accepted. */
 type PendingSourceUpdate = {
@@ -58,9 +67,13 @@ type PendingSourceUpdate = {
   apply: () => Promise<ProjectOpenResultDto>;
 };
 
-/** Jobs that run Harmonia Atlas and report source-package progress. */
+/**
+ * Jobs that run Harmonia Atlas and report source-package progress. Opening
+ * builds a package only when no local one matches; a clone continues as an
+ * open once Git finishes.
+ */
 function runsAtlas(job: LauncherJob | null): boolean {
-  return job === "create" || job === "update";
+  return job === "open" || job === "create" || job === "update";
 }
 
 type ProjectLauncherProps = {
@@ -132,20 +145,18 @@ type PathFieldProps = {
   value: string;
   placeholder: string;
   hint?: string | undefined;
-  directory?: boolean;
+  required?: boolean;
   disabled: boolean;
   onChange: (value: string) => void;
   onError: (message: string) => void;
 };
 
-function PathField({ id, label, value, placeholder, hint, directory = false, disabled, onChange, onError }: PathFieldProps) {
+/** A folder path input with a native folder picker. */
+function PathField({ id, label, value, placeholder, hint, required = true, disabled, onChange, onError }: PathFieldProps) {
   const { t, locale } = useI18n();
   async function handleBrowse() {
     try {
-      const options = directory
-        ? { directory: true, multiple: false }
-        : { directory: false, multiple: false, filters: [{ name: t("launcher.sourcePackageFilter"), extensions: ["hsp"] }] };
-      const selection = await openNativeDialog(options);
+      const selection = await openNativeDialog({ directory: true, multiple: false });
       if (typeof selection === "string") onChange(selection);
     } catch (error) {
       onError(error instanceof Error ? error.message : t("launcher.pathPickerFailed"));
@@ -156,7 +167,7 @@ function PathField({ id, label, value, placeholder, hint, directory = false, dis
     <div className="field">
       <label className="field-label" htmlFor={id}>{label}</label>
       <div className="path-field">
-        <input className="input mono" id={id} value={value} onChange={(event) => onChange(event.target.value)} placeholder={placeholder} autoComplete="off" spellCheck={false} disabled={disabled} required />
+        <input className="input mono" id={id} value={value} onChange={(event) => onChange(event.target.value)} placeholder={placeholder} autoComplete="off" spellCheck={false} disabled={disabled} required={required} />
         <button className="button button-secondary" type="button" disabled={disabled} onClick={() => void handleBrowse()} aria-label={t("launcher.browseFor", { field: label.toLocaleLowerCase(locale) })}>
           <UiIcon icon="folderOpen" size="sm" /> {t("launcher.browse")}
         </button>
@@ -214,6 +225,30 @@ function RecentProjectRow({ project, disabled, opening, now, onOpen, onUpdate, o
   );
 }
 
+/** The game installation launcher jobs use, with a shortcut to change it. */
+function GameStatus({ settings, sources, disabled, onChange }: { settings: GameSettingsDto | null; sources: SourceAvailability | null; disabled: boolean; onChange: () => void }) {
+  const { t } = useI18n();
+  const active = settings?.active ?? null;
+  const detail = settings === null
+    ? t("game.loading")
+    : active ? gameInstallationFacts(active, t) : t(settings.configuredPath ? "game.invalid" : "game.missing");
+  return (
+    <div className={settings !== null && !active ? "launcher-game missing" : "launcher-game"}>
+      <UiIcon icon={settings !== null && !active ? "triangleAlert" : "gamepad"} size="md" />
+      <span className="launcher-game-text">
+        <span className="field-label">{t("launcher.gameLabel")}</span>
+        {active ? <span className="mono launcher-game-path" title={active.path}>{displayPath(active.path)}</span> : null}
+        <small className="launcher-game-facts">
+          <span className="launcher-game-detail">{detail}</span>
+          {active && sources === "ready" ? <span className="chip chip-added" title={t("launcher.sourcesReadyHint")}>{t("launcher.sourcesReady")}</span> : null}
+          {active && sources === "build" ? <span className="chip chip-warn" title={t("launcher.sourcesBuildHint")}>{t("launcher.sourcesBuild")}</span> : null}
+        </small>
+      </span>
+      <button className="button button-secondary" type="button" disabled={disabled} onClick={onChange}>{t(active ? "launcher.gameChange" : "launcher.gameChoose")}</button>
+    </div>
+  );
+}
+
 function LauncherAction({ icon, title, description, active, disabled, onClick }: { icon: UiIconName; title: string; description: string; active: boolean; disabled: boolean; onClick: () => void }) {
   return (
     <button className={active ? "launcher-action active" : "launcher-action"} type="button" aria-pressed={active} disabled={disabled} onClick={onClick}>
@@ -228,8 +263,13 @@ export function ProjectLauncher({ initialError, onProjectReady }: ProjectLaunche
   const { t } = useI18n();
   const [view, setView] = useState<LauncherView>("recent");
   const [repositoryRoot, setRepositoryRoot] = useState("");
-  const [sourcePackagePath, setSourcePackagePath] = useState("");
-  const [gamePath, setGamePath] = useState("");
+  const [game, setGame] = useState<GameSettingsDto | null>(null);
+  const [sources, setSources] = useState<SourceAvailability | null>(null);
+  const [cloneUrl, setCloneUrl] = useState("");
+  const [cloneParent, setCloneParent] = useState("");
+  const [projectName, setProjectName] = useState("");
+  const [projectParent, setProjectParent] = useState("");
+  const [defaultDirectory, setDefaultDirectory] = useState<string | null>(null);
   const [sourceLanguage, setSourceLanguage] = useState<SourceLanguage>("en");
   const [busy, setBusy] = useState<LauncherJob | null>(null);
   const [jobId, setJobId] = useState<string | null>(null);
@@ -241,6 +281,7 @@ export function ProjectLauncher({ initialError, onProjectReady }: ProjectLaunche
   const [recentBusyId, setRecentBusyId] = useState<string | null>(null);
   const [recentQuery, setRecentQuery] = useState("");
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsSection, setSettingsSection] = useState<SettingsSection>("appearance");
   const [version, setVersion] = useState<string | null>(null);
   const [pendingUpdate, setPendingUpdate] = useState<PendingSourceUpdate | null>(null);
   const [applyingUpdate, setApplyingUpdate] = useState(false);
@@ -250,12 +291,30 @@ export function ProjectLauncher({ initialError, onProjectReady }: ProjectLaunche
 
   useEffect(() => setError(initialError ? { operation: "open", error: initialError } : null), [initialError]);
 
+  // Tells whether the job in the current form finds a package or builds one.
+  // Clones are unknown until the repository exists.
+  useEffect(() => {
+    setSources(null);
+    if (busy !== null || !game?.active || (view !== "open" && view !== "update" && view !== "create")) return;
+    const root = repositoryRoot.trim();
+    if (view !== "create" && !root) return;
+    let active = true;
+    const timer = window.setTimeout(() => {
+      sourceAvailability(view === "create" ? null : root, view === "create" ? sourceLanguage : null, view === "open")
+        .then((next) => { if (active) setSources(next); })
+        .catch(() => undefined);
+    }, 300);
+    return () => { active = false; window.clearTimeout(timer); };
+  }, [view, repositoryRoot, sourceLanguage, game, busy]);
+
   useEffect(() => {
     let disposed = false;
     void listRecentProjects()
       .then((projects) => { if (!disposed) setRecentState({ status: "loaded", projects }); })
       .catch((caughtError: unknown) => { if (!disposed) setRecentState({ status: "failed", error: normalizeCommandError(caughtError) }); });
     void appInfo().then((info) => { if (!disposed) setVersion(info.version); }).catch(() => undefined);
+    void defaultProjectsDirectory().then((path) => { if (!disposed) setDefaultDirectory(path); }).catch(() => undefined);
+    void refreshGame(() => disposed);
     return () => { disposed = true; };
   }, []);
 
@@ -279,10 +338,35 @@ export function ProjectLauncher({ initialError, onProjectReady }: ProjectLaunche
     // The listener registers once; `t` only formats a failure reported at registration.
   }, []);
 
+  /** Re-reads the game setting; a failure shows as a missing installation. */
+  async function refreshGame(disposed: () => boolean = () => false) {
+    try {
+      const next = await gameSettings();
+      if (!disposed()) setGame(next);
+    } catch {
+      if (!disposed()) setGame({ configuredPath: null, active: null, detected: [] });
+    }
+  }
+
+  function openSettings(section: SettingsSection) {
+    setSettingsSection(section);
+    setSettingsOpen(true);
+  }
+
+  function handleSettingsOpenChange(open: boolean) {
+    setSettingsOpen(open);
+    if (!open) void refreshGame();
+  }
+
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (view === "recent") return;
     const job: LauncherJob = view;
+    const newProjectRoot = job === "create" ? projectFolder(projectParent.trim() || (defaultDirectory ?? ""), projectName) : null;
+    if (job === "create" && (newProjectRoot === null || (!projectParent.trim() && defaultDirectory === null))) {
+      setError({ operation: "create", error: { code: "invalidInput", message: t("launcher.projectNameInvalid") } });
+      return;
+    }
     busyRef.current = job;
     jobIdRef.current = null;
     flushSync(() => {
@@ -292,6 +376,7 @@ export function ProjectLauncher({ initialError, onProjectReady }: ProjectLaunche
       setJobId(null);
       setCancelRequested(false);
     });
+    let operation: LauncherErrorOperation = job;
     try {
       const startAtlasJob = async () => {
         const started = await startSourcePackage();
@@ -299,21 +384,34 @@ export function ProjectLauncher({ initialError, onProjectReady }: ProjectLaunche
         setJobId(started.jobId);
         return started.jobId;
       };
-      const result = job === "open"
-        ? await openProject(repositoryRoot, sourcePackagePath)
-        : job === "update"
-          ? await updateProjectFromGame(await startAtlasJob(), repositoryRoot, gamePath)
-          : await initializeProjectFromGame(await startAtlasJob(), repositoryRoot, gamePath, sourceLanguage, "und");
+      let root = repositoryRoot;
+      if (job === "clone") {
+        root = await gitCloneRepository(cloneUrl.trim(), cloneParent.trim() || null);
+        // The clone exists now; continue as an open so a failure never clones again.
+        operation = "open";
+        busyRef.current = "open";
+        flushSync(() => {
+          setRepositoryRoot(root);
+          setView("open");
+          setBusy("open");
+        });
+      }
+      if (job === "open" || job === "clone") {
+        const opened = await openProjectFromGame(await startAtlasJob(), root);
+        if (opened.status === "opened") {
+          onProjectReady(opened.result);
+        } else {
+          const packagePath = opened.sourcePackagePath;
+          setPendingUpdate({ report: opened.report, operation, apply: () => openProject(root, packagePath, true) });
+        }
+        return;
+      }
+      const result = job === "update"
+        ? await updateProjectFromGame(await startAtlasJob(), repositoryRoot)
+        : await initializeProjectFromGame(await startAtlasJob(), newProjectRoot!, sourceLanguage, "und");
       onProjectReady(result);
     } catch (caughtError) {
-      const error = normalizeCommandError(caughtError);
-      if (job === "open" && error.code === "sourceUpdateRequired") {
-        const root = repositoryRoot;
-        const packagePath = sourcePackagePath;
-        await offerSourceUpdate("open", () => previewSourceUpdate(root, packagePath), () => openProject(root, packagePath, true));
-      } else {
-        setError({ operation: job, error });
-      }
+      setError({ operation, error: normalizeCommandError(caughtError) });
     } finally {
       busyRef.current = null;
       jobIdRef.current = null;
@@ -398,28 +496,31 @@ export function ProjectLauncher({ initialError, onProjectReady }: ProjectLaunche
   }
 
   const launcherDisabled = busy !== null || recentBusyId !== null || applyingUpdate;
-  const pickerOperation: LauncherErrorOperation = view === "open" ? "open" : view === "update" ? "update" : "create";
+  const pickerOperation: LauncherErrorOperation = view === "open" ? "open" : view === "clone" ? "clone" : view === "update" ? "update" : "create";
   const handlePickerError = (message: string) => setError({ operation: pickerOperation, error: { code: "pathPicker", message } });
-  const viewTitle: MessageKey = view === "open" ? "launcher.openProject" : view === "update" ? "launcher.updateProject" : "launcher.newProject";
-  const viewDescription: MessageKey = view === "open" ? "launcher.openDescription" : view === "update" ? "launcher.updateDescription" : "launcher.createDescription";
+  const viewTitle: MessageKey = view === "open" ? "launcher.openProject" : view === "clone" ? "launcher.cloneProject" : view === "update" ? "launcher.updateProject" : "launcher.newProject";
+  const viewDescription: MessageKey = view === "open" ? "launcher.openDescription" : view === "clone" ? "launcher.cloneDescription" : view === "update" ? "launcher.updateDescription" : "launcher.createDescription";
   const submitLabel: MessageKey = busy === "open"
     ? "launcher.opening"
-    : busy === "create"
+    : busy === "clone"
+      ? "launcher.cloning"
+      : busy === "create"
       ? "launcher.creating"
       : busy === "update"
         ? "launcher.updating"
-        : view === "open" ? "launcher.openProject" : view === "update" ? "launcher.updateProject" : "launcher.createProject";
+        : view === "open" ? "launcher.openProject" : view === "clone" ? "launcher.cloneProject" : view === "update" ? "launcher.updateProject" : "launcher.createProject";
   const fraction = progressFraction(progress);
   const recentProjects = recentState.status === "loaded" ? recentState.projects : [];
   const normalizedQuery = recentQuery.trim().toLocaleLowerCase();
   const visibleProjects = normalizedQuery
     ? recentProjects.filter((project) => displayPath(project.repositoryRoot).toLocaleLowerCase().includes(normalizedQuery))
     : recentProjects;
+  const gameStatus = <GameStatus settings={game} sources={sources} disabled={launcherDisabled} onChange={() => openSettings("game")} />;
   const showView = (next: LauncherView) => { if (!launcherDisabled) setView((current) => current === next ? "recent" : next); };
 
   return (
     <main className="launcher">
-      <WindowChrome mode="launcher" actions={<IconButton icon="settings" label={t("common.settings")} onClick={() => setSettingsOpen(true)} />} />
+      <WindowChrome mode="launcher" actions={<IconButton icon="settings" label={t("common.settings")} onClick={() => openSettings("appearance")} />} />
       <div className="launcher-body">
         <aside className="launcher-hero">
           <div className="launcher-brand">
@@ -428,6 +529,7 @@ export function ProjectLauncher({ initialError, onProjectReady }: ProjectLaunche
           </div>
           <nav className="launcher-actions" aria-label={t("launcher.startNavigation")}>
             <LauncherAction icon="folderOpen" title={t("launcher.openProject")} description={t("launcher.openProjectHint")} active={view === "open"} disabled={launcherDisabled} onClick={() => showView("open")} />
+            <LauncherAction icon="gitBranch" title={t("launcher.cloneProject")} description={t("launcher.cloneProjectHint")} active={view === "clone"} disabled={launcherDisabled} onClick={() => showView("clone")} />
             <LauncherAction icon="folderPlus" title={t("launcher.newProject")} description={t("launcher.newProjectHint")} active={view === "create"} disabled={launcherDisabled} onClick={() => showView("create")} />
             <LauncherAction icon="refreshCw" title={t("launcher.updateProject")} description={t("launcher.updateProjectHint")} active={view === "update"} disabled={launcherDisabled} onClick={() => showView("update")} />
           </nav>
@@ -486,20 +588,31 @@ export function ProjectLauncher({ initialError, onProjectReady }: ProjectLaunche
                 </div>
               </header>
               <form className="launcher-form" onSubmit={(event) => void handleSubmit(event)}>
-                <PathField id="repository-root" label={t(view === "create" ? "launcher.repositoryFolder" : "launcher.repository")} value={repositoryRoot} onChange={setRepositoryRoot} onError={handlePickerError} placeholder="C:\Projects\my-translation" directory disabled={launcherDisabled} hint={view === "create" ? t("launcher.repositoryFolderHint") : undefined} />
-                {view === "open" ? (
-                  <PathField id="source-package-path" label={t("launcher.sourcePackage")} value={sourcePackagePath} onChange={setSourcePackagePath} onError={handlePickerError} placeholder="C:\Sources\source-en.hsp" hint={t("launcher.sourcePackageHint")} disabled={launcherDisabled} />
-                ) : view === "update" ? (
-                  <PathField id="game-path" label={t("launcher.gameInstallation")} value={gamePath} onChange={setGamePath} onError={handlePickerError} placeholder="C:\Games\FINAL FANTASY XIV" directory disabled={launcherDisabled} />
-                ) : (
+                {view === "clone" ? (
                   <>
-                    <PathField id="game-path" label={t("launcher.gameInstallation")} value={gamePath} onChange={setGamePath} onError={handlePickerError} placeholder="C:\Games\FINAL FANTASY XIV" directory disabled={launcherDisabled} />
+                    <div className="field">
+                      <label className="field-label" htmlFor="clone-url">{t("launcher.cloneUrl")}</label>
+                      <input className="input mono" id="clone-url" value={cloneUrl} onChange={(event) => setCloneUrl(event.target.value)} placeholder="https://github.com/team/translation.git" autoComplete="off" spellCheck={false} disabled={launcherDisabled} required />
+                      <small className="field-hint">{t("launcher.cloneUrlHint")}</small>
+                    </div>
+                    <PathField id="clone-parent" label={t("launcher.cloneParent")} value={cloneParent} onChange={setCloneParent} onError={handlePickerError} placeholder={defaultDirectory ?? "C:\\Projects"} hint={t("launcher.cloneParentHint")} required={false} disabled={launcherDisabled} />
+                  </>
+                ) : view === "create" ? (
+                  <>
+                    <div className="field">
+                      <label className="field-label" htmlFor="project-name">{t("launcher.projectName")}</label>
+                      <input className="input" id="project-name" value={projectName} onChange={(event) => setProjectName(event.target.value)} placeholder="ffxiv-translation" autoComplete="off" spellCheck={false} disabled={launcherDisabled} required />
+                    </div>
+                    <PathField id="project-parent" label={t("launcher.projectLocation")} value={projectParent} onChange={setProjectParent} onError={handlePickerError} placeholder={defaultDirectory ?? "C:\\Projects"} hint={t("launcher.projectLocationHint")} required={false} disabled={launcherDisabled} />
                     <div className="field">
                       <span className="field-label" id="source-language-label">{t("launcher.sourceLanguage")}</span>
                       <Segmented size="md" label={t("launcher.sourceLanguage")} value={sourceLanguage} onChange={setSourceLanguage} disabled={launcherDisabled} options={sourceLanguages.map((language) => ({ value: language.value, label: t(language.label) }))} />
                     </div>
                   </>
+                ) : (
+                  <PathField id="repository-root" label={t("launcher.repository")} value={repositoryRoot} onChange={setRepositoryRoot} onError={handlePickerError} placeholder="C:\Projects\my-translation" disabled={launcherDisabled} />
                 )}
+                {runsAtlas(busy) ? null : gameStatus}
                 {runsAtlas(busy) ? (
                   <section className="job-progress" aria-label={t("launcher.progressLabel")}>
                     <div className="job-progress-head">
@@ -532,7 +645,7 @@ export function ProjectLauncher({ initialError, onProjectReady }: ProjectLaunche
           )}
         </section>
       </div>
-      <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} />
+      <SettingsDialog open={settingsOpen} onOpenChange={handleSettingsOpenChange} initialSection={settingsSection} />
       <SourceUpdateDialog
         open={pendingUpdate !== null}
         mode="confirm"

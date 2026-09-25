@@ -84,3 +84,18 @@ jobs:
         run: |
           $env:AERIA_GIT_PATH = (Resolve-Path apps/desktop/src-tauri/binaries/mingit/cmd/git.exe).Path
           cargo test -p aeria-git --all-targets --locked
+      # Every file the path-handling suites create lives under a Cyrillic
+      # folder with a space, as under a Russian Windows user profile. The
+      # folder name stays short: SQLite on Windows does not accept paths
+      # longer than 260 characters.
+      - name: Test path handling under a Cyrillic temporary folder
+        shell: pwsh
+        run: |
+          $temp = Join-Path $env:RUNNER_TEMP "тест путей"
+          New-Item -ItemType Directory -Force -Path $temp | Out-Null
+          $env:TMP = $temp
+          $env:TEMP = $temp
+          $env:AERIA_GIT_PATH = (Resolve-Path apps/desktop/src-tauri/binaries/mingit/cmd/git.exe).Path
+          cargo test --locked --all-targets -p aeria-hxs -p aeria-hsp -p aeria-workspace -p aeria-search -p aeria-projects -p aeria-atlas -p aeria-git
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --locked -p aeria-desktop --lib

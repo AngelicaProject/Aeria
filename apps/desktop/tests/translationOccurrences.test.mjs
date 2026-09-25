@@ -65,11 +65,33 @@ test("filters loaded occurrences by review state and text", async () => {
   assert.equal(adjacentOccurrence(occurrences, binding(3), 1)?.sourceMacro, "...");
   assert.equal(adjacentOccurrence(occurrences, binding(4), 1), null);
   assert.equal(adjacentOccurrence(occurrences, null, -1)?.sourceMacro, "...");
+  const withoutWorld = occurrences.filter((occurrence) => occurrence.sourceMacro !== "World");
+  assert.equal(adjacentOccurrence(withoutWorld, binding(3), 1)?.sourceMacro, "...");
+  assert.equal(adjacentOccurrence(withoutWorld, binding(3), -1)?.sourceMacro, "Hello <num(1)>");
+  assert.equal(adjacentOccurrence(withoutWorld.slice(0, 1), binding(3), 1), null);
 });
 
-test("cursorBefore starts a page at the requested row", async () => {
-  const { cursorBefore } = await import("../src/translationOccurrences.ts");
-  assert.deepEqual(cursorBefore("Addon", 12, 3), { sheetName: "Addon", rowId: 12, subrowId: 2 });
-  assert.deepEqual(cursorBefore("Addon", 12, 0), { sheetName: "Addon", rowId: 11, subrowId: 65535 });
-  assert.equal(cursorBefore("Addon", 0, 0), null);
+test("re-flattening a growing sheet reuses views of unchanged rows", async () => {
+  const { emptyOccurrenceFilter, filterOccurrences, occurrenceIndex } = await import("../src/translationOccurrences.ts");
+  const row = (rowId, target = null) => ({
+    sheetName: "Adventure",
+    rowId,
+    subrowId: 0,
+    context: [],
+    cells: [{ sourceBinding: { ...binding(0), rowId }, sourceMacro: `source ${rowId}`, formattingOnly: false, translation: target === null ? null : { translationUnitId: `tu${rowId}`, targetMacro: target, reviewState: "draft", translatorNote: null } }],
+  });
+  const first = row(1);
+  const second = row(2);
+  const before = flattenTranslationRows([first]);
+  const grown = flattenTranslationRows([first, second]);
+  assert.equal(grown[0], before[0]);
+
+  const updated = flattenTranslationRows([first, row(2, "target")]);
+  assert.equal(updated[0], before[0]);
+  assert.equal(updated[1].targetMacro, "target");
+
+  assert.equal(filterOccurrences(grown, emptyOccurrenceFilter), grown);
+  assert.equal(occurrenceIndex(grown, { ...binding(0), rowId: 2 }), 1);
+  assert.equal(occurrenceIndex(grown, { ...binding(1), rowId: 2 }), -1);
+  assert.equal(occurrenceIndex(grown, null), -1);
 });

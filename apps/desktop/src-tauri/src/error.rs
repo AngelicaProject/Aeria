@@ -1,3 +1,4 @@
+use aeria_ai::{AiSettingsError, ProviderError, SecretStoreError};
 use aeria_atlas::AtlasError;
 use aeria_core::TranslationUnitIdParseError;
 use aeria_git::GitError;
@@ -66,6 +67,50 @@ impl CommandError {
 impl From<RegistryError> for CommandError {
     fn from(error: RegistryError) -> Self {
         Self::registry_read(&error)
+    }
+}
+
+impl From<AiSettingsError> for CommandError {
+    fn from(error: AiSettingsError) -> Self {
+        let code = match &error {
+            AiSettingsError::Rejected { .. } => "aiInvalidSettings",
+            AiSettingsError::UnsupportedVersion { .. } => "aiSettingsVersion",
+            AiSettingsError::InvalidJson { .. } | AiSettingsError::InvalidData { .. } => {
+                "aiSettingsCorrupt"
+            }
+            AiSettingsError::Io { .. }
+            | AiSettingsError::Serialization { .. }
+            | AiSettingsError::AtomicPublication { .. } => "aiSettingsStorage",
+        };
+        Self::new(code, error.to_string())
+    }
+}
+
+impl From<SecretStoreError> for CommandError {
+    fn from(error: SecretStoreError) -> Self {
+        let code = match &error {
+            SecretStoreError::InvalidKey { .. } => "aiInvalidApiKey",
+            SecretStoreError::Unavailable { .. } => "aiSecretStoreUnavailable",
+            SecretStoreError::Failed { .. } => "aiSecretStore",
+        };
+        Self::new(code, error.to_string())
+    }
+}
+
+impl From<ProviderError> for CommandError {
+    fn from(error: ProviderError) -> Self {
+        let code = match &error {
+            ProviderError::Network { .. } => "aiNetwork",
+            ProviderError::Timeout => "aiTimeout",
+            ProviderError::Unauthorized { .. } => "aiUnauthorized",
+            ProviderError::NotFound { .. } => "aiEndpointNotFound",
+            ProviderError::RateLimited { .. } => "aiRateLimited",
+            ProviderError::Rejected { .. } => "aiRequestRejected",
+            ProviderError::Unavailable { .. } => "aiProviderUnavailable",
+            ProviderError::InvalidResponse { .. } => "aiInvalidResponse",
+            ProviderError::Client { .. } => "aiClient",
+        };
+        Self::new(code, error.to_string())
     }
 }
 

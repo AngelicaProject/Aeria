@@ -1,5 +1,5 @@
 import { bindingKey, rowKey } from "./binding.ts";
-import type { ReviewState, SourceBinding, TranslationRowCursorDto, TranslationRowDto } from "./types";
+import type { ReviewState, SourceBinding, TranslationRowDto } from "./types";
 
 /**
  * Renderer-only projection of one translatable source cell.
@@ -20,22 +20,41 @@ export type TranslationOccurrenceView = {
   lastInRow: boolean;
 };
 
+/**
+ * Row DTOs are immutable (an overlay update replaces the row object), so each
+ * row's occurrences are cached by identity. Re-flattening a growing sheet then
+ * only builds views for rows it has not seen.
+ */
+const rowOccurrences = new WeakMap<TranslationRowDto, readonly TranslationOccurrenceView[]>();
+
 export function flattenTranslationRows(rows: readonly TranslationRowDto[]): TranslationOccurrenceView[] {
-  return rows.flatMap((row) => {
-    const fieldCountInRow = row.cells.length;
-    return row.cells.map((cell, fieldIndexInRow) => ({
-      rowKey: rowKey(row),
-      binding: cell.sourceBinding,
-      sourceMacro: cell.sourceMacro,
-      formattingOnly: cell.formattingOnly,
-      targetMacro: cell.translation?.targetMacro ?? null,
-      reviewState: cell.translation?.reviewState ?? null,
-      fieldIndexInRow,
-      fieldCountInRow,
-      firstInRow: fieldIndexInRow === 0,
-      lastInRow: fieldIndexInRow === fieldCountInRow - 1,
-    }));
-  });
+  const occurrences: TranslationOccurrenceView[] = [];
+  for (const row of rows) {
+    let views = rowOccurrences.get(row);
+    if (!views) {
+      views = rowViews(row);
+      rowOccurrences.set(row, views);
+    }
+    for (const view of views) occurrences.push(view);
+  }
+  return occurrences;
+}
+
+function rowViews(row: TranslationRowDto): TranslationOccurrenceView[] {
+  const fieldCountInRow = row.cells.length;
+  const key = rowKey(row);
+  return row.cells.map((cell, fieldIndexInRow) => ({
+    rowKey: key,
+    binding: cell.sourceBinding,
+    sourceMacro: cell.sourceMacro,
+    formattingOnly: cell.formattingOnly,
+    targetMacro: cell.translation?.targetMacro ?? null,
+    reviewState: cell.translation?.reviewState ?? null,
+    fieldIndexInRow,
+    fieldCountInRow,
+    firstInRow: fieldIndexInRow === 0,
+    lastInRow: fieldIndexInRow === fieldCountInRow - 1,
+  }));
 }
 
 export function occurrenceKey(occurrence: Pick<TranslationOccurrenceView, "binding">): string {
@@ -59,11 +78,12 @@ export function isOccurrenceFilterActive(filter: OccurrenceFilter): boolean {
   return filter.status !== "all" || filter.kind !== "all" || filter.query.trim().length > 0;
 }
 
-/** Filters already-loaded occurrences only; it never implies sheet-wide results. */
+/** Filters the loaded occurrences; once the sheet has finished loading this covers the whole sheet. */
 export function filterOccurrences(
   occurrences: readonly TranslationOccurrenceView[],
   filter: OccurrenceFilter,
-): TranslationOccurrenceView[] {
+): readonly TranslationOccurrenceView[] {
+  if (!isOccurrenceFilterActive(filter)) return occurrences;
   const query = filter.query.trim().toLocaleLowerCase();
   return occurrences.filter((occurrence) => {
     if (filter.status === "untranslated" ? occurrence.reviewState !== null : filter.status !== "all" && occurrence.reviewState !== filter.status) {
@@ -84,19 +104,30 @@ export function adjacentOccurrence(
   direction: 1 | -1,
 ): TranslationOccurrenceView | null {
   if (occurrences.length === 0) return null;
-  const currentKey = current ? bindingKey(current) : null;
-  const index = currentKey === null ? -1 : occurrences.findIndex((occurrence) => bindingKey(occurrence.binding) === currentKey);
-  if (index < 0) return direction === 1 ? occurrences[0]! : occurrences.at(-1)!;
-  return occurrences[index + direction] ?? null;
+  const index = occurrenceIndex(occurrences, current);
+  if (index >= 0) return occurrences[index + direction] ?? null;
+  if (current === null) return direction === 1 ? occurrences[0]! : occurrences.at(-1)!;
+  // The current string left a filtered list, for example after approving
+  // it: continue from its place in sheet order.
+  const after = (occurrence: TranslationOccurrenceView) => compareBindings(occurrence.binding, current) > 0;
+  return direction === 1
+    ? occurrences.find(after) ?? null
+    : occurrences.filter((occurrence) => !after(occurrence)).at(-1) ?? null;
 }
 
-/**
- * Exclusive paging cursor that makes a page start at `rowId:subrowId`.
- * Cursors order by row then subrow, so the greatest subrow of the previous row
- * precedes every subrow of `rowId`. Returns null for the first possible row.
- */
-export function cursorBefore(sheetName: string, rowId: number, subrowId: number): TranslationRowCursorDto | null {
-  if (subrowId > 0) return { sheetName, rowId, subrowId: subrowId - 1 };
-  if (rowId > 0) return { sheetName, rowId: rowId - 1, subrowId: 0xffff };
-  return null;
+/** Index of the occurrence for `binding`, compared by field so large lists build no keys. */
+export function occurrenceIndex(occurrences: readonly TranslationOccurrenceView[], binding: SourceBinding | null): number {
+  if (binding === null) return -1;
+  return occurrences.findIndex(({ binding: candidate }) =>
+    candidate.rowId === binding.rowId
+    && candidate.subrowId === binding.subrowId
+    && candidate.columnIndex === binding.columnIndex
+    && candidate.sheetName === binding.sheetName);
+}
+
+function compareBindings(left: SourceBinding, right: SourceBinding): number {
+  return left.sheetName.localeCompare(right.sheetName)
+    || left.rowId - right.rowId
+    || left.subrowId - right.subrowId
+    || left.columnIndex - right.columnIndex;
 }

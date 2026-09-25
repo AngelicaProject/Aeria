@@ -7,6 +7,7 @@
 #![forbid(unsafe_code)]
 
 mod semantic;
+mod tagged;
 
 pub use semantic::{
     OpaqueIdentity, OpaqueSemanticKind, ProtectedExpression, ProtectedExpressionKind,
@@ -16,6 +17,7 @@ pub use semantic::{
     StructureCompatibility, StructureDifference, StructureDifferenceKind, TextRange, TextRangeKind,
     analyze, compare_analyses, compare_macro_strings, compare_structures, validate,
 };
+pub use tagged::{Tag, TaggedError, TaggedText, check_assisted_structure, project, rebuild};
 
 /// Maximum parser call depth used while inspecting nested macros and
 /// expressions.

@@ -25,6 +25,7 @@ type MacroEditorProps = {
   className?: string;
   onSave?: () => void;
   onSaveAndNext?: () => void;
+  onApproveAndNext?: () => void;
   onNavigate?: (direction: 1 | -1) => void;
 };
 
@@ -52,11 +53,11 @@ const macroHighlighter = ViewPlugin.fromClass(class {
   }
 }, { decorations: (plugin) => plugin.decorations });
 
-export function MacroEditor({ value, ariaLabel, onChange, readOnly = false, disabled = false, placeholder = "", className, onSave, onSaveAndNext, onNavigate }: MacroEditorProps) {
+export function MacroEditor({ value, ariaLabel, onChange, readOnly = false, disabled = false, placeholder = "", className, onSave, onSaveAndNext, onApproveAndNext, onNavigate }: MacroEditorProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
-  const handlers = useRef({ onChange, onSave, onSaveAndNext, onNavigate });
-  handlers.current = { onChange, onSave, onSaveAndNext, onNavigate };
+  const handlers = useRef({ onChange, onSave, onSaveAndNext, onApproveAndNext, onNavigate });
+  handlers.current = { onChange, onSave, onSaveAndNext, onApproveAndNext, onNavigate };
   const compartments = useRef({ editable: new Compartment(), placeholder: new Compartment(), label: new Compartment(), highlight: new Compartment(), specialChars: new Compartment() });
   const { preferences } = usePreferences();
 
@@ -66,6 +67,7 @@ export function MacroEditor({ value, ariaLabel, onChange, readOnly = false, disa
     const { editable, placeholder: placeholderCompartment, label, highlight, specialChars } = compartments.current;
     const commandKeys: Extension = Prec.highest(keymap.of([
       { key: "Mod-s", preventDefault: true, run: () => { handlers.current.onSave?.(); return Boolean(handlers.current.onSave); } },
+      { key: "Mod-Shift-Enter", preventDefault: true, run: () => { handlers.current.onApproveAndNext?.(); return Boolean(handlers.current.onApproveAndNext); } },
       { key: "Mod-Enter", preventDefault: true, run: () => { handlers.current.onSaveAndNext?.(); return Boolean(handlers.current.onSaveAndNext); } },
       { key: "Alt-ArrowDown", preventDefault: true, run: () => { handlers.current.onNavigate?.(1); return Boolean(handlers.current.onNavigate); } },
       { key: "Alt-ArrowUp", preventDefault: true, run: () => { handlers.current.onNavigate?.(-1); return Boolean(handlers.current.onNavigate); } },

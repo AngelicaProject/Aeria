@@ -51,7 +51,9 @@ directory, English diagnostics, `GIT_TERMINAL_PROMPT=0`, no stdin, and (on
 Windows) no console window. Porcelain formats are parsed; user-supplied
 remote names, URLs, branch names, identity values, and revisions are
 validated before they reach Git, and remote-helper transports such as `ext::`
-are rejected. Git error messages name only the subcommand, never its
+are rejected. A remote URL may contain spaces only when it is a local path
+(an absolute Unix path, a Windows drive path, or a UNC path), because folder
+names may; paths of any script are accepted. Git error messages name only the subcommand, never its
 arguments, so remote URLs with embedded credentials are not echoed.
 
 The project root may be the repository top level or a subdirectory of it.
@@ -85,8 +87,15 @@ is unavailable. Packaging details are in
   is configured) and appends `/.aeria/** text eol=lf` to the root
   `.gitattributes`, so workspace files stay LF-only even with
   `core.autocrlf=true` (the MinGit default). Nothing is committed.
-- **Clone** clones a remote into a new directory. The project is then opened
-  through the ordinary open flow with a local HSP.
+- **Clone** clones a remote into a new folder named after the repository, as
+  `git clone` would (the last URL segment without `.git`); an existing
+  non-empty folder is never overwritten. The parent folder is optional and
+  defaults to `Documents/Aeria`. The launcher's Clone project form takes only
+  the remote URL and the optional parent, then opens
+  the clone through the same flow as Open project (see
+  [`desktop-editor-ui.md`](./desktop-editor-ui.md#launcher)). When the clone
+  succeeds but opening fails, the launcher continues in the Open project form
+  with the cloned repository, so the remote is never cloned twice.
 
 ### Translator identity
 

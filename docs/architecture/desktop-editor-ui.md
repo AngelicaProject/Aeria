@@ -14,14 +14,20 @@ project launcher
 → immediate review-state persistence
 ```
 
-The renderer owns only ephemeral drafts, navigation, paging, filtering of loaded
-rows, and loading/error presentation. Rust remains authoritative for source
+The renderer owns only ephemeral drafts, navigation, sheet loading, filtering of
+loaded rows, and loading/error presentation. Rust remains authoritative for source
 bindings, workspace state, validation, classification, and mutation semantics.
 
 ## Launcher
 
+The interface never shows internal names such as source package, HSP,
+snapshot, or Atlas. It calls a source package the *game text* (in Russian
+«тексты игры»), which Aeria *extracts* from the game and keeps; "source text"
+is used only for the original of a single string.
+
 The launcher is a single screen. The left column holds the product name, the
-**Open project** and **New project** actions, and the application version from
+**Open project**, **Clone project**, **New project**, and **Update project**
+actions, and the application version from
 `app_info`. The right panel shows Recent projects by default; choosing an action
 replaces it with that action's form, and **Back** returns to the list. Settings
 open in a dialog from the titlebar.
@@ -36,14 +42,55 @@ visible with their availability state and offer **Remove from recent projects**;
 ready entries open on click. A name filter appears once more than three
 projects are listed.
 
-Open project takes a repository root and HSP source-package path. New project
-takes a repository folder, game installation, and one of Atlas's supported
-source languages (`en`, `ja`, `de`, or `fr`). Until project settings can choose
-a real target language, creation uses the explicit neutral compatibility tag
+Open project takes only a repository root; the user never chooses an HSP
+file. Aeria reads the source language and content ID from the workspace
+manifest and uses a verified package from its own source-package store with
+that identity (the newest game version first). Only when none matches does it
+build one from the game installation with Atlas. When the only package it has
+needs a source update, nothing is written and the launcher asks for
+confirmation with the planned counts, as for Update project.
+
+New and cloned projects go to `Documents/Aeria` unless another location is
+chosen. New project takes a project name, which becomes the repository folder
+name, an optional location, and one of Atlas's supported source languages
+(`en`, `ja`, `de`, or `fr`). The project folder and any missing parents are
+created before extraction starts, so an unusable path fails at once; when
+creation then fails or is cancelled, the folder is removed again if it is
+still empty. Until project settings can choose a real target
+language, creation uses the explicit neutral compatibility tag
 `und`; it is never displayed as a user translation target and does not
 reinterpret existing overlays. While Atlas runs, the form shows the current
 phase, per-sheet progress when Atlas reports a sheet index and count, and a
 cancel action.
+
+### Game installation
+
+The game installation is an application setting, not a field of each form.
+Settings → Game shows the installation in use and every installation
+detected on this computer; the user can choose another folder (picking the
+inner `game` folder selects its parent) or return to automatic detection.
+A chosen folder is stored in `game-settings.json` in the app-data directory;
+without one, Aeria uses the first detected installation. Detection checks the
+Square Enix launcher's installation record, Steam libraries, XIVLauncher's
+configured game path, and the default installation folders on Windows, and
+XIVLauncher.Core and Steam on Linux. A folder counts as an installation only
+when it has `game/sqpack` and a non-empty `game/ffxivgame.ver`; Atlas still
+validates the game data. Launcher forms show the installation in use with a
+shortcut to this setting, and jobs fail with `gameInstallationRequired` or
+`gameInstallationInvalid` when none is usable. While a job runs, its progress
+takes the place of that row so the form does not grow.
+
+A chip after the game version says whether the job will use source text
+Aeria already has ("Game text ready") or extract it from the game
+("Extraction needed"), with the details in its tooltip, so a multi-minute build is never
+a surprise. It stays on the version line so the row never grows, and is left
+out when this cannot be told, as for a clone.
+
+Settings → Game also lists the source packages Aeria keeps, newest first,
+with language, game version, size, and age. The current build and the
+number of projects using a package are marked; packages Aeria no longer
+needs (see [`source.md`](./source.md)) have a delete action with
+confirmation. The folder can be opened from there.
 
 Registry load failures show a dismissible, non-blocking launcher warning while
 manual Open project and New project remain available. After dismissal, the
@@ -56,11 +103,11 @@ application level. The launcher never automatically reopens the last project.
 
 ```text
 titlebar: menus · project / sheet · layout toggles · window controls
-left rail | Sheets or Search | sheet tabs             | Git or AI | right rail
-          |                  | strings list           |           |
-          |                  | (resizable split)      |           |
-          |                  | translation editor     |           |
-          |                  | optional bottom panel  |           |
+left rail | Sheets or Search | sheet tabs             | Git or Angelica | right rail
+          |                  | strings list           |                 |
+          |                  | (resizable split)      |                 |
+          |                  | translation editor     |                 |
+          |                  | optional bottom panel  |                 |
 status bar
 ```
 
@@ -68,7 +115,9 @@ The titlebar carries the File, Translation, Go, and View menus, a command
 center showing the project and active sheet, and toggles for the left, bottom,
 and right regions. Double-clicking an empty titlebar area maximizes or restores
 the window natively. Left and
-right docks, the editor height, and the bottom panel are resizable. Dock panels
+right docks, the editor height, and the bottom panel are resizable; a drag
+previews the size through the region's CSS variable and commits it to layout
+state on release, so dragging does not re-render the workbench. Dock panels
 keep serializable presentation state, can move between regions, and floatable
 tools open in real Tauri webview windows that share the active Rust project
 session. The right dock opens on Git; the bottom panel (Tasks, Git changes,
@@ -92,13 +141,14 @@ its mode:
 | none | Go to a sheet by fuzzy name match; empty input lists recently opened sheets first |
 | `>` | Run a workbench command, including theme switching (Ctrl+Shift+P) |
 | `:` | Go to `row`, `row:subrow`, or `row:subrow:column` in the active sheet (Ctrl+G) |
-| `#` | Project string search; shown as unavailable until a search backend exists |
+| `#` | Project string search; shown as unavailable until the Search tool is implemented |
 | `?` | List the prefixes |
 
-Going to a row that is not loaded pages the sheet so it starts at that row. The
-list then shows a "Showing rows from" notice with **Load from the start**, and
-**Load more** continues forward. A coordinate without a translatable string
-selects the first loaded row and shows a warning.
+Going to a row always keeps the list in sheet order from the top: the string is
+selected and scrolled into view once the sheet has loaded far enough to contain
+it. Angelica's navigation and search results reveal strings the same way. A
+coordinate without a translatable string shows a warning and keeps the current
+selection (or selects the first row of a newly opened sheet).
 
 ## Strings list
 
@@ -111,13 +161,21 @@ single-line source and target previews in which macro spans are tinted. Until
 EXDSchema exists, fields are labelled by column. Blocked source cells remain
 context only and are never used as permission heuristics.
 
-The list is virtualized, pages one sheet at a time with a limit of 100 entries,
-and keeps **Load more** explicit; a source page may return zero visible rows
-while its row cursor still has more source work. A text filter, a review
-state filter (untranslated, draft, needs review, reviewed), and a string kind
-toggle pair (text only or formatting only; pressing the active one again shows
-both) narrow the loaded occurrences only and are
-labelled as such. Formatting-only strings (no letters outside macros, such as
+The list is virtualized and always holds the whole sheet. Opening a sheet reads
+it with bounded `page_translation_rows` calls of 256 source rows. The sheet
+selection and loading state paint before any rows render. A sheet that loads
+within 150 ms then appears in one piece; a slower sheet shows the rows read by
+then and the rest once it is complete, so the list updates at most twice per
+load. A progress line under the list header tracks the strings read without
+re-rendering the list.
+Pages that contain no visible rows are simply skipped, and there is no manual
+**Load more**. Reloading the open sheet after a Git operation keeps the current
+rows and selection on screen and swaps in the new rows once complete. Overlays
+saved while a sheet streams are applied to pages read before the save. A text
+filter, a review state filter (untranslated, draft, needs review, reviewed),
+and a string kind toggle pair (text only or formatting only; pressing the
+active one again shows both) narrow the list; while the sheet is still
+loading they cover the rows loaded so far and grow as the rest arrives. Formatting-only strings (no letters outside macros, such as
 `...` or a number format) show a small `fmt` tag in the list and a
 **Formatting** chip in the editor's source header; they stay translatable. The toolbar shows sheet-wide
 coverage from `translation_progress`, never a figure derived from loaded pages.
@@ -160,6 +218,13 @@ no dirty draft remains, then selects the next occurrence in the filtered list
 and, unless disabled in settings, focuses its target. When there is nothing to
 save it only moves on.
 
+**Approve & next** (Ctrl+Shift+Enter, also in the Translation menu and the
+command palette) is for quick review: it saves an edited target first, marks
+the string reviewed, and moves on like Save & next. A reviewed string without
+edits only moves on; an empty target does nothing. When the selected string
+has left the filtered list, for example a draft filter after approving it,
+the next and previous strings are found from its place in sheet order.
+
 Unsaved target or note drafts are marked and protected by a discard
 confirmation when changing rows, changing sheets, closing the project, or
 performing a mutation that would refresh away another dirty cell draft. The UI
@@ -182,7 +247,8 @@ does not match, and the empty-sheet filter only when the active sheet itself
 has no translatable strings. Collapse all clears the name filter and closes
 every folder. The flattened visible tree is virtualized for large source
 catalogs. Project Search is a separate workbench tool and shows a truthful
-unavailable state until a domain search backend exists.
+unavailable state until it is implemented; the `aeria-search` backend
+currently serves Angelica's search tools only.
 
 ## Git dock
 
@@ -206,6 +272,92 @@ review policy toggle, the Git runtime, contributor counts, and the raw
 working-tree file list. A sync, branch switch, or finished contribution that
 changed the workspace reloads the current sheet and progress.
 
+## Angelica panel
+
+The right dock's Angelica tool (named Angelica in every interface language)
+is the chat with the agent described in [`ai.md`](./ai.md#angelica). Without
+a configured model it shows how to open Settings → AI.
+
+The header switches between the project's conversations, opens the glossary
+and guidance, starts a new conversation, and deletes the current one. The
+transcript shows user messages, Aeria's notices, and Angelica's replies with a
+small Markdown subset (paragraphs, lists, code, inline code, bold) rendered as
+text, so game macros stay visible. Reasoning and tool calls between two
+replies fold into one line, such as "3 tools · 1 failed · reasoning", which
+expands to the reasoning, rendered like replies, and a compact row per tool
+call with its state; a row opens its arguments and result. While Angelica
+works, the last folded line names the current step (the reasoning's latest
+heading or the running tool), and a status line below names the phase
+(thinking, which includes waiting for the provider, using tools, or writing
+the reply) with the
+elapsed time and the tokens generated in the turn. Only when no event has
+arrived for 8 seconds does a playful status replace the phase, a new one for
+each quiet stretch, until the next event. The transcript follows new output
+while scrolled to the bottom.
+
+The composer is one box. Above the text, the selected occurrence, shown by
+its last sheet segment and coordinate, is attached to the message and toggles
+whether it is sent. The text area grows with its text up to 200 pixels. Below
+it, a bar of quiet text controls: the mode (Chat, Ask, Auto-draft; Ask by
+default) opens a menu that explains each mode, and the model button shows the
+model and its effort and opens a popover with the configured models and, when
+the model accepts efforts, a stepped effort slider from faster to smarter
+(default first) that can be clicked, dragged, or moved with the arrow keys. A ring shows
+the share of the context window the last request used, with the
+conversation's tokens in its tooltip, followed by **Stop** while a turn runs
+and a round **Send** button. The bar never wraps: in a narrow panel it hides the
+effort label and then shortens the mode and model names. Enter sends and Shift+Enter adds a line; messages written while
+Angelica answers are queued and sent after the turn. The conversation's own
+model choice, then the default model, is preselected.
+
+Above the composer, a collapsible list shows the conversation's pending
+proposals and those that could not be applied. Each card shows the string's
+location, which opens it in the editor, a word diff from the current
+translation to the proposal, a mark when it would replace a reviewed
+translation, and **Apply** and **Reject**; several pending proposals can be
+applied or rejected together. A proposal to change `aeria-guidance.md` or
+`aeria-glossary.csv` shows the file name and a diff of its text. A written translation, from Auto-draft or an
+applied proposal, patches its cell like an ordinary save, so other unsaved
+drafts and the selection are kept.
+
+A review proposal shows Angelica's reason and how many translations she
+suggests approving, with the strings (location, source, and translation) on
+demand, **Approve N**, and **Reject**; it is never applied with the others.
+
+A web-access proposal shows the domain and the link Angelica asked for, with
+**Allow domain** and **Reject**; it is never applied with the others.
+
+A job proposal shows its sheets, filter and string count, the estimate and
+token limit, and the instructions, with **Start job** and **Reject**; job
+proposals are never applied with the others. Above the proposals, a
+collapsible list shows the project's running and paused jobs and the three
+latest finished ones: the scope, status, a progress bar, drafted and problem
+counts, tokens, the pause reason, **Pause**, **Resume**, **Cancel**, and
+**Retry problems**, and on demand the problem strings, which open in the
+editor, and the latest events. Messages Aeria sends Angelica, such as job
+reports, appear as notices, and a turn Aeria starts is shown live when its
+conversation is open.
+
+The editor's source header has **Draft with Angelica**, which fills the target
+with a validated draft for the selected string without saving it.
+
+## Glossary and guidance
+
+**Glossary and guidance** opens from the Translation menu, the command
+palette, and the Angelica panel header. It edits the project-shared
+`aeria-glossary.csv` and `aeria-guidance.md` described in
+[`ai.md`](./ai.md#guidance-and-glossary).
+
+The Glossary tab is a table of term, translation, note, and forbidden
+variants (separated by `;`) with a filter, **Add term**, and a remove button
+per row; at most 300 filtered rows are shown at once. Rows with an empty term
+or translation, or a term repeated case-insensitively, are marked and block
+saving. Rows the file excludes are listed with their line numbers; saving
+removes them only after confirmation. The Guidance tab is a Markdown text
+area with its size against the 64 KiB limit. Each tab has **Revert** and
+**Save**; closing with unsaved changes asks first. A save fails, without
+writing, when the file changed since it was loaded.
+
 ## Keyboard
 
 Shortcuts are listed in `src/shortcuts.ts` and shown under Settings → Keyboard
@@ -220,13 +372,35 @@ Monokai Pro, Night Owl, Rosé Pine, Ayu, Solarized, Palenight, Kanagawa, and
 Everforest) mapped onto Aeria's layered tokens; Catppuccin, Aeria's own themes,
 and High Contrast Dark are also available.
 
-Settings open as a dialog with Appearance, Editor, Workflow, Keyboard
+Settings open as a dialog with Appearance, Editor, Workflow, AI, Keyboard
 shortcuts, and About sections and a search across all settings. Theme, accent,
 Reduce transparency, interface zoom (webview zoom), editor text size, macro
 highlighting, control-character display, strings list density, and focusing the
 next target after Save & next are per-machine renderer preferences kept in local
 storage; they are never project data. Components consume semantic tokens from `ui/theme/tokens.css`, which
 derive surfaces, lines, and state colors from each theme's palette.
+
+The AI section manages the providers described in
+[`ai.md`](./ai.md#provider-boundary). It picks Angelica's default model and,
+when the model accepts efforts, its effort, and the same for translation jobs,
+which use Angelica's model when none is chosen. **Websites Angelica may read**
+lists allowed domains, one per line, saved with its own button. Each provider card edits the name
+and base URL (saved on blur), stores or removes the API key through a password
+field that is cleared after saving and never refilled, and lists models with
+toggles for accepted efforts, an optional context window, and a **Test**
+action that reports latency and the answering model or the provider's error.
+Saving the first key loads the provider's models; **Update from provider**
+reloads them and reports how many were added and removed, and a model can
+also be added by ID. A collapsible **Request headers** section edits the
+session header and extra headers and warns that header values are not secret
+storage. New providers come from preset buttons; the OpenAI-compatible preset
+first asks for a base URL. Removing a provider asks for confirmation inline.
+
+A ChatGPT (subscription) card has no base URL, key, or header fields. It
+shows the unofficial-use warning, **Sign in with ChatGPT**, and, while a
+sign-in waits, the code to enter with a copy action and **Cancel**. A
+successful sign-in loads the plan's models; **Sign out** removes the stored
+token.
 
 On supported Windows versions, the launcher, workbench, and tool windows use the
 system Acrylic backdrop and follow the selected light or dark theme. The

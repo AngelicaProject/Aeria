@@ -18,16 +18,19 @@ use serde::Serialize;
 use tauri::{Emitter, Manager, State};
 
 use crate::dto::{
-    DetachedUnitDto, ProjectOpenResultDto, ProjectSummaryDto, RecentProjectDto, ReviewStateDto,
-    SheetProgressDto, SourceBindingDto, SourcePackageJobDto, SourceUpdateReportDto,
+    DetachedUnitDto, GameOpenResultDto, ProjectOpenResultDto, ProjectSummaryDto, RecentProjectDto,
+    ReviewStateDto, SheetProgressDto, SourceBindingDto, SourcePackageJobDto, SourceUpdateReportDto,
     TranslationOverlayDto, TranslationRowCursorDto, TranslationRowPageDto,
 };
 use crate::error::CommandError;
+use crate::games::resolve_game_path;
+use crate::paths::AeriaPaths;
+use crate::source_store::{CurrentInputs, find_built_package, write_build_record};
 use crate::state::DesktopState;
 
 type CommandResult<T> = Result<T, CommandError>;
 
-const SOURCE_PACKAGES_DIRECTORY: &str = "source-packages";
+pub(crate) const SOURCE_PACKAGES_DIRECTORY: &str = "source-packages";
 const STAGING_DIRECTORY: &str = "staging";
 const STAGING_FILE: &str = "source.hsp";
 
@@ -42,8 +45,7 @@ where
 }
 
 fn app_registry_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
-    app.path()
-        .app_data_dir()
+    app.aeria_data_dir()
         .map(|path| path.join(REGISTRY_FILE_NAME))
         .map_err(|error| format!("could not resolve the Aeria app-data directory: {error}"))
 }
@@ -125,8 +127,7 @@ pub async fn open_project(
     accept_source_update: Option<bool>,
 ) -> CommandResult<ProjectOpenResultDto> {
     let cache_root = app
-        .path()
-        .app_cache_dir()
+        .aeria_cache_dir()
         .map_err(|error| CommandError::new("cachePath", error.to_string()))?;
     let registry_path = app_registry_path(&app);
     run_blocking(move || {
@@ -204,8 +205,7 @@ pub async fn preview_source_update(
     source_package_path: String,
 ) -> CommandResult<SourceUpdateReportDto> {
     let cache_root = app
-        .path()
-        .app_cache_dir()
+        .aeria_cache_dir()
         .map_err(|error| CommandError::new("cachePath", error.to_string()))?;
     run_blocking(move || {
         preview_source_update_with_paths(
@@ -267,8 +267,7 @@ pub async fn initialize_project(
     target_language: String,
 ) -> CommandResult<ProjectOpenResultDto> {
     let cache_root = app
-        .path()
-        .app_cache_dir()
+        .aeria_cache_dir()
         .map_err(|error| CommandError::new("cachePath", error.to_string()))?;
     let registry_path = app_registry_path(&app);
     run_blocking(move || {
@@ -344,8 +343,7 @@ pub async fn open_recent_project(
     accept_source_update: Option<bool>,
 ) -> CommandResult<ProjectOpenResultDto> {
     let cache_root = app
-        .path()
-        .app_cache_dir()
+        .aeria_cache_dir()
         .map_err(|error| CommandError::new("cachePath", error.to_string()))?;
     let registry_path = app_registry_path(&app)
         .map_err(|message| CommandError::new("projectRegistryRead", message))?;
@@ -502,25 +500,33 @@ pub fn start_source_package(state: State<'_, DesktopState>) -> CommandResult<Sou
     Ok(SourcePackageJobDto { job_id: started.id })
 }
 
-/// Generates a source package from a local game installation and initializes
-/// the project from the already validated package.
+/// Generates a source package from the game installation chosen in Settings
+/// (or detected) and initializes the project from the validated package.
 ///
 /// # Errors
 ///
-/// Returns a typed error when the job is no longer active, Atlas cannot run,
+/// Returns a typed error when the job is no longer active, no game
+/// installation is available, Atlas cannot run,
 /// package publication or validation fails, or workspace initialization fails.
 #[tauri::command(rename_all = "camelCase")]
-#[allow(clippy::too_many_arguments)]
 pub async fn initialize_project_from_game(
     app: tauri::AppHandle,
     state: State<'_, DesktopState>,
     job_id: String,
     repository_root: String,
-    game_path: String,
     source_language: String,
     target_language: String,
 ) -> CommandResult<ProjectOpenResultDto> {
     let token = state.atlas_job_token(&job_id)?;
+    // Created before extraction so an unusable path fails at once.
+    let created = match create_project_directory(Path::new(&repository_root)) {
+        Ok(created) => created,
+        Err(error) => {
+            state.finish_atlas_job(&job_id)?;
+            return Err(error);
+        }
+    };
+    let created_root = created.then(|| PathBuf::from(&repository_root));
     let worker_job_id = job_id.clone();
     let worker_token = token.clone();
     let worker_app = app.clone();
@@ -530,7 +536,6 @@ pub async fn initialize_project_from_game(
             &worker_job_id,
             &worker_token,
             repository_root,
-            game_path,
             source_language,
             target_language,
         )
@@ -541,7 +546,7 @@ pub async fn initialize_project_from_game(
             "Atlas creation worker failed: {error}"
         ))),
     };
-    match result {
+    let outcome = match result {
         Ok(prepared) => {
             let result = state.with_atlas_publication(&job_id, &token, |_| {
                 require_not_cancelled(&token)?;
@@ -562,17 +567,48 @@ pub async fn initialize_project_from_game(
             state.finish_atlas_job(&job_id)?;
             Err(error)
         }
+    };
+    if outcome.is_err()
+        && let Some(root) = created_root
+    {
+        // Only an empty folder is removed; anything written into it stays.
+        let _ = fs::remove_dir(root);
     }
+    outcome
 }
 
-/// Generates a source package from the local game installation for an
-/// existing project and opens the project with the deterministic source
+/// Creates a new project's folder, and missing parents, when it does not
+/// exist yet. Returns whether the folder was created.
+pub(crate) fn create_project_directory(root: &Path) -> CommandResult<bool> {
+    if root.as_os_str().is_empty() {
+        return Err(CommandError::new(
+            "invalidInput",
+            "the project folder is empty",
+        ));
+    }
+    if root.is_dir() {
+        return Ok(false);
+    }
+    fs::create_dir_all(root).map_err(|error| {
+        CommandError::new(
+            "projectFolder",
+            format!(
+                "could not create the project folder {}: {error}",
+                root.display()
+            ),
+        )
+    })?;
+    Ok(true)
+}
+
+/// Generates a source package from the game installation chosen in Settings
+/// (or detected) for an existing project and opens the project with the deterministic source
 /// update applied. The source language is read from the project.
 ///
 /// # Errors
 ///
 /// Returns a typed error when the job is no longer active, the project cannot
-/// be read, Atlas cannot run, package publication or validation fails, or the
+/// be read, no game installation is available, Atlas cannot run, package publication or validation fails, or the
 /// source update fails.
 #[tauri::command(rename_all = "camelCase")]
 pub async fn update_project_from_game(
@@ -580,7 +616,6 @@ pub async fn update_project_from_game(
     state: State<'_, DesktopState>,
     job_id: String,
     repository_root: String,
-    game_path: String,
 ) -> CommandResult<ProjectOpenResultDto> {
     let token = state.atlas_job_token(&job_id)?;
     let worker_job_id = job_id.clone();
@@ -593,6 +628,7 @@ pub async fn update_project_from_game(
             .map_err(CommandError::from)?
             .source_language()
             .to_owned();
+        let game_path = resolve_game_path(&worker_app)?;
         generate_source_package(
             &worker_app,
             &worker_job_id,
@@ -626,6 +662,204 @@ pub async fn update_project_from_game(
     }
 }
 
+/// Opens an existing project without a user-chosen source package.
+///
+/// The project's source language and content ID are read from its workspace
+/// manifest. A matching package already published in Aeria's source-package
+/// store is used directly; otherwise Harmonia Atlas builds one from the game
+/// installation chosen in Settings (or detected), reporting progress under `job_id`. When the package needs a
+/// source update, nothing is written and the plan is returned for
+/// confirmation.
+///
+/// # Errors
+///
+/// Returns a typed error when the workspace cannot be read, no local package
+/// matches and no game installation is available, Atlas or package
+/// validation fails, or the project cannot be opened.
+#[tauri::command(rename_all = "camelCase")]
+pub async fn open_project_from_game(
+    app: tauri::AppHandle,
+    state: State<'_, DesktopState>,
+    job_id: String,
+    repository_root: String,
+) -> CommandResult<GameOpenResultDto> {
+    let token = state.atlas_job_token(&job_id)?;
+    let worker_job_id = job_id.clone();
+    let worker_token = token.clone();
+    let worker_app = app.clone();
+    let worker_root = repository_root.clone();
+    let worker = tauri::async_runtime::spawn_blocking(move || {
+        resolve_project_source_package(
+            &worker_app,
+            &worker_job_id,
+            &worker_token,
+            Path::new(&worker_root),
+        )
+    });
+    let result = match worker.await {
+        Ok(result) => result,
+        Err(error) => Err(CommandError::internal_state(format!(
+            "source package worker failed: {error}"
+        ))),
+    };
+    let outcome = result.and_then(|(source_package, cache_root)| {
+        state.with_atlas_publication(&job_id, &token, |_| {
+            require_not_cancelled(&token)?;
+            open_or_plan_source_update(&state, &repository_root, source_package, cache_root)
+        })
+    });
+    state.finish_atlas_job(&job_id)?;
+    match outcome? {
+        GameOpenOutcome::Opened(project) => Ok(GameOpenResultDto::Opened {
+            result: Box::new(remember_project(&state, project, app_registry_path(&app))),
+        }),
+        GameOpenOutcome::SourceUpdateRequired {
+            source_package_path,
+            report,
+        } => Ok(GameOpenResultDto::SourceUpdateRequired {
+            source_package_path,
+            report,
+        }),
+    }
+}
+
+enum GameOpenOutcome {
+    Opened(ProjectSummaryDto),
+    SourceUpdateRequired {
+        source_package_path: String,
+        report: SourceUpdateReportDto,
+    },
+}
+
+/// Finds or builds the source package for an existing project and returns
+/// it with the cache root it was opened with.
+fn resolve_project_source_package(
+    app: &tauri::AppHandle,
+    job_id: &str,
+    cancellation: &CancellationToken,
+    repository_root: &Path,
+) -> CommandResult<(SourcePackage, PathBuf)> {
+    let metadata = WorkspaceStore::new(repository_root)
+        .read_metadata()
+        .map_err(CommandError::from)?;
+    let packages_root = app
+        .aeria_data_dir()
+        .map_err(|error| CommandError::new("atlasStorage", error.to_string()))?
+        .join(SOURCE_PACKAGES_DIRECTORY);
+    let cache_root = app
+        .aeria_cache_dir()
+        .map_err(|error| CommandError::new("cachePath", error.to_string()))?;
+    if let Some(source_package) = find_local_source_package(
+        &packages_root,
+        &cache_root,
+        metadata.source_language(),
+        metadata.source_content_id(),
+    ) {
+        return Ok((source_package, cache_root));
+    }
+    let source_package = generate_source_package(
+        app,
+        job_id,
+        cancellation,
+        resolve_game_path(app)?,
+        metadata.source_language().to_owned(),
+    )?;
+    Ok((source_package, cache_root))
+}
+
+/// Returns a verified package from Aeria's source-package store whose source
+/// language and content ID match, preferring the newest game version.
+///
+/// Manifests are previewed first so only a matching package is verified and
+/// materialized. Store files that cannot be read or verified are skipped:
+/// the store is a local cache, and the caller then builds a fresh, fully
+/// validated package instead.
+pub(crate) fn find_local_source_package(
+    packages_root: &Path,
+    cache_root: &Path,
+    source_language: &str,
+    content_id: &str,
+) -> Option<SourcePackage> {
+    let mut candidates = fs::read_dir(packages_root)
+        .ok()?
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.extension().is_some_and(|extension| extension == "hsp") && path.is_file()
+        })
+        .filter_map(|path| {
+            let manifest = aeria_hsp::read_manifest(&path).ok()?;
+            (manifest.source.language == source_language
+                && manifest.source.content_id == content_id)
+                .then_some((manifest.game_version, manifest.package_id, path))
+        })
+        .collect::<Vec<_>>();
+    candidates.sort_by(|left, right| right.0.cmp(&left.0).then_with(|| left.1.cmp(&right.1)));
+    candidates.into_iter().find_map(|(_, package_id, path)| {
+        SourcePackage::open(&path, cache_root)
+            .ok()
+            .filter(|package| {
+                package.package_id() == package_id
+                    && package.source_language() == source_language
+                    && package.source_content_id() == content_id
+            })
+    })
+}
+
+/// Opens the project when the package is current for it; otherwise plans
+/// the required source update without writing anything.
+fn open_or_plan_source_update(
+    state: &DesktopState,
+    repository_root: &str,
+    source_package: SourcePackage,
+    cache_root: PathBuf,
+) -> CommandResult<GameOpenOutcome> {
+    let package_path = source_package.package_path().to_owned();
+    match ProjectSession::open_from_source_package(repository_root, source_package) {
+        Ok(session) => Ok(GameOpenOutcome::Opened(replace_project(state, session)?)),
+        Err(ProjectSessionError::SourceUpdateRequired { .. }) => {
+            let report = preview_source_update_with_paths(
+                Path::new(repository_root),
+                &package_path,
+                cache_root,
+            )?;
+            Ok(GameOpenOutcome::SourceUpdateRequired {
+                source_package_path: package_path.to_string_lossy().into_owned(),
+                report,
+            })
+        }
+        Err(error) => Err(CommandError::from(error)),
+    }
+}
+
+/// Folder inside the user's Documents directory that receives new and cloned
+/// projects when no other folder is chosen.
+const DEFAULT_PROJECTS_FOLDER: &str = "Aeria";
+
+pub(crate) fn default_projects_directory(app: &tauri::AppHandle) -> CommandResult<PathBuf> {
+    app.path()
+        .document_dir()
+        .map(|documents| documents.join(DEFAULT_PROJECTS_FOLDER))
+        .map_err(|error| {
+            CommandError::new(
+                "projectsPath",
+                format!("could not resolve the Documents folder: {error}"),
+            )
+        })
+}
+
+#[tauri::command(rename_all = "camelCase")]
+#[allow(clippy::needless_pass_by_value)]
+/// Returns the folder that receives new and cloned projects when no other
+/// folder is chosen.
+///
+/// # Errors
+///
+/// Returns a typed command error when the Documents folder cannot be resolved.
+pub fn default_projects_directory_path(app: tauri::AppHandle) -> CommandResult<String> {
+    default_projects_directory(&app).map(|path| path.to_string_lossy().into_owned())
+}
+
 /// Cancels the active source-package generation job with the supplied ID.
 ///
 /// # Errors
@@ -638,16 +872,15 @@ pub fn cancel_source_package(state: State<'_, DesktopState>, job_id: String) -> 
     state.cancel_atlas_job(&job_id)
 }
 
-#[allow(clippy::too_many_arguments)]
 fn initialize_project_from_game_inner(
     app: &tauri::AppHandle,
     job_id: &str,
     cancellation: &CancellationToken,
     repository_root: String,
-    game_path: String,
     source_language: String,
     target_language: String,
 ) -> Result<PreparedAtlasProject, CommandError> {
+    let game_path = resolve_game_path(app)?;
     let source_package =
         generate_source_package(app, job_id, cancellation, game_path, source_language)?;
     Ok(PreparedAtlasProject {
@@ -658,7 +891,8 @@ fn initialize_project_from_game_inner(
 }
 
 /// Runs Atlas for one installed game and returns the validated, published
-/// immutable source package.
+/// immutable source package. A package in the store built from the same Atlas
+/// executable, source language, and game version files is reused instead.
 fn generate_source_package(
     app: &tauri::AppHandle,
     job_id: &str,
@@ -668,18 +902,25 @@ fn generate_source_package(
 ) -> Result<SourcePackage, CommandError> {
     let executable_path = resolve_atlas_executable(app)?;
     let app_data = app
-        .path()
-        .app_data_dir()
+        .aeria_data_dir()
         .map_err(|error| CommandError::new("atlasStorage", error.to_string()))?;
     let cache_root = app
-        .path()
-        .app_cache_dir()
+        .aeria_cache_dir()
         .map_err(|error| CommandError::new("atlasStorage", error.to_string()))?;
     let packages_root = app_data.join(SOURCE_PACKAGES_DIRECTORY);
     let staging_root = packages_root.join(STAGING_DIRECTORY);
     fs::create_dir_all(&staging_root)
         .map_err(|error| storage_error("create source-package staging directory", &error))?;
     let staging_path = staging_root.join(STAGING_FILE);
+
+    // Without a complete fingerprint nothing can be reused or recorded.
+    let build_record = CurrentInputs::new(Some(&executable_path), Some(Path::new(&game_path)))
+        .record(&source_language);
+    if let Some(record) = &build_record
+        && let Some(existing) = find_built_package(&packages_root, &cache_root, record)
+    {
+        return Ok(existing);
+    }
 
     let request = AtlasPackageRequest {
         executable_path,
@@ -715,6 +956,15 @@ fn generate_source_package(
         &cache_root,
         cancellation,
     )?;
+    if let Some(record) = &build_record
+        && let Err(error) = write_build_record(source_package.package_path(), record)
+    {
+        // The package is valid; without its record it is only not reused.
+        eprintln!(
+            "failed to record how source package {} was built: {error}",
+            source_package.package_id()
+        );
+    }
     require_not_cancelled(cancellation)?;
     Ok(source_package)
 }
@@ -725,7 +975,7 @@ struct PreparedAtlasProject {
     target_language: String,
 }
 
-fn resolve_atlas_executable(app: &tauri::AppHandle) -> CommandResult<PathBuf> {
+pub(crate) fn resolve_atlas_executable(app: &tauri::AppHandle) -> CommandResult<PathBuf> {
     if let Some(path) = atlas_override_path(env::var_os("AERIA_ATLAS_PATH"))? {
         return Ok(path);
     }
@@ -1595,6 +1845,119 @@ mod tests {
             remembered_entry
         );
         assert_eq!(before.source_package_id, entry.source_package_id);
+    }
+
+    fn v2_fixture_path() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../crates/aeria-hsp/tests/fixtures/synthetic-v2.hsp")
+    }
+
+    #[test]
+    fn new_project_folders_are_created_with_their_parents() {
+        let repository = TestRepository::new("create-project-folder");
+        let root = repository
+            .path()
+            .join("Документы")
+            .join("Aeria")
+            .join("Русский перевод");
+        assert!(create_project_directory(&root).expect("create"));
+        assert!(root.is_dir());
+        assert!(!create_project_directory(&root).expect("existing"));
+        let file = repository.path().join("file");
+        fs::write(&file, b"x").expect("file");
+        assert_eq!(
+            create_project_directory(&file.join("child"))
+                .expect_err("under a file")
+                .code,
+            "projectFolder"
+        );
+        assert_eq!(
+            create_project_directory(Path::new(""))
+                .expect_err("empty")
+                .code,
+            "invalidInput"
+        );
+    }
+
+    #[test]
+    fn local_source_packages_are_found_by_language_and_content() {
+        let repository = TestRepository::new("local-package-lookup");
+        let store = repository.path().join("source-packages");
+        fs::create_dir_all(store.join(STAGING_DIRECTORY)).expect("store");
+        fs::copy(fixture_path(), store.join("one.hsp")).expect("v1 package");
+        fs::copy(v2_fixture_path(), store.join("two.hsp")).expect("v2 package");
+        fs::write(store.join("broken.hsp"), b"not a zip").expect("broken package");
+        let cache_root = repository.path().join("cache");
+
+        for fixture in [fixture_path(), v2_fixture_path()] {
+            let expected = SourcePackage::open(&fixture, repository.path().join("expected-cache"))
+                .expect("fixture package");
+            let found = find_local_source_package(
+                &store,
+                &cache_root,
+                expected.source_language(),
+                expected.source_content_id(),
+            )
+            .expect("matching package");
+            assert_eq!(found.package_id(), expected.package_id());
+        }
+        let expected = SourcePackage::open(fixture_path(), &cache_root).expect("fixture package");
+        assert!(
+            find_local_source_package(&store, &cache_root, "ja", expected.source_content_id())
+                .is_none()
+        );
+        assert!(
+            find_local_source_package(
+                &store,
+                &cache_root,
+                "en",
+                "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+            )
+            .is_none()
+        );
+        assert!(
+            find_local_source_package(&repository.path().join("missing"), &cache_root, "en", "x")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn opening_with_another_source_plans_the_update_without_writing() {
+        let repository = TestRepository::new("game-open-plan");
+        let cache_root = repository.path().join("cache");
+        let state = DesktopState::new();
+        initialize_project_with_state(
+            &state,
+            repository.path().to_string_lossy().into_owned(),
+            fixture_path().to_string_lossy().into_owned(),
+            cache_root.clone(),
+            "fr".to_owned(),
+        )
+        .expect("initialize project");
+        close_project_with_state(&state).expect("close");
+        let manifest_path = repository.path().join(".aeria").join("manifest.json");
+        let manifest = fs::read(&manifest_path).expect("manifest");
+        let root = repository.path().to_string_lossy().into_owned();
+
+        let changed = SourcePackage::open(v2_fixture_path(), &cache_root).expect("v2 package");
+        match open_or_plan_source_update(&state, &root, changed, cache_root.clone())
+            .expect("planned update")
+        {
+            GameOpenOutcome::SourceUpdateRequired {
+                source_package_path,
+                ..
+            } => assert_eq!(PathBuf::from(source_package_path), v2_fixture_path()),
+            GameOpenOutcome::Opened(_) => panic!("changed content must not open directly"),
+        }
+        assert_eq!(fs::read(&manifest_path).expect("manifest"), manifest);
+        assert!(current_project_with_state(&state).expect("state").is_none());
+
+        let current = SourcePackage::open(fixture_path(), &cache_root).expect("v1 package");
+        assert!(matches!(
+            open_or_plan_source_update(&state, &root, current, cache_root),
+            Ok(GameOpenOutcome::Opened(_))
+        ));
+        assert!(current_project_with_state(&state).expect("state").is_some());
     }
 
     #[test]

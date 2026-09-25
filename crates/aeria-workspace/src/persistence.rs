@@ -485,7 +485,7 @@ impl WorkspaceStore {
             .join(UNITS_DIRECTORY)
             .join(shard_name(shard));
         let cached = self.take_session_cache();
-        let (layout, persisted_metadata, mut all_persisted_units, using_cache) =
+        let (layout, persisted_metadata, mut all_persisted_units, checked_paths) =
             if let Some(cache) = cached {
                 if let Err(error) = verify_cached_managed_paths(
                     &cache.managed_paths,
@@ -495,7 +495,12 @@ impl WorkspaceStore {
                     self.invalidate_session_cache();
                     return Err(error);
                 }
-                (cache.layout, cache.metadata, cache.units, true)
+                (
+                    cache.layout,
+                    cache.metadata,
+                    cache.units,
+                    Some(cache.managed_paths),
+                )
             } else {
                 let layout = self.inspect_existing_layout()?;
                 let (format_version, persisted_metadata) = read_manifest(&layout.manifest_path)?;
@@ -505,8 +510,9 @@ impl WorkspaceStore {
                         version: format_version,
                     });
                 }
-                (layout, persisted_metadata, BTreeMap::new(), false)
+                (layout, persisted_metadata, BTreeMap::new(), None)
             };
+        let using_cache = checked_paths.is_some();
         trace.mark(if using_cache {
             "workspace.persist-unit.cache-check"
         } else {
@@ -576,6 +582,7 @@ impl WorkspaceStore {
         ensure_directory(&self.repository_root.join(AERIA_DIRECTORY))?;
         ensure_directory(&units_path)?;
         let target_path = units_path.join(shard_name(shard));
+        let published_path = target_path.clone();
         let result = ensure_optional_regular_file(&target_path)
             .and_then(|()| atomic_publish(&self.repository_root, &target_path, &bytes));
         if result.is_err() && created_units_path {
@@ -602,9 +609,11 @@ impl WorkspaceStore {
                 .shards
                 .sort_by(|left, right| left.name.cmp(&right.name));
         }
-        if using_cache {
+        if let Some(checked_paths) = checked_paths {
             all_persisted_units.insert(id, replacement);
-            if let Ok(managed_paths) = capture_managed_paths(&published_layout) {
+            if let Ok(managed_paths) =
+                refresh_managed_paths(&checked_paths, &published_layout, &published_path)
+            {
                 self.replace_session_cache(PersistenceCache {
                     layout: published_layout,
                     metadata: persisted_metadata,
@@ -768,6 +777,40 @@ fn capture_managed_paths(
     paths
         .iter()
         .map(|path| managed_path_state(path, true))
+        .collect()
+}
+
+/// The managed path states after publishing one shard. Only the published
+/// shard is hashed again and directories are read again; every other file
+/// keeps the state verified just before the publish, so one write costs one
+/// shard rather than the whole workspace.
+fn refresh_managed_paths(
+    checked: &[ManagedPathState],
+    layout: &ExistingLayout,
+    published: &Path,
+) -> Result<Vec<ManagedPathState>, WorkspaceStoreError> {
+    let aeria_path = layout
+        .manifest_path
+        .parent()
+        .expect("manifest path must have a parent")
+        .to_owned();
+    let units_path = layout
+        .units_path
+        .clone()
+        .unwrap_or_else(|| aeria_path.join(UNITS_DIRECTORY));
+    let mut paths = vec![aeria_path, layout.manifest_path.clone(), units_path];
+    paths.extend(layout.shards.iter().map(|shard| shard.path.clone()));
+    paths.sort();
+    paths.dedup();
+    paths
+        .iter()
+        .map(|path| {
+            let previous = checked
+                .iter()
+                .find(|state| state.path == *path)
+                .filter(|state| path != published && state.exists && !state.is_dir);
+            previous.map_or_else(|| managed_path_state(path, true), |state| Ok(state.clone()))
+        })
         .collect()
 }
 

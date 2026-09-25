@@ -2,7 +2,9 @@ import { useCallback, useEffect, useMemo, useReducer, useRef, useState, type CSS
 import { flushSync } from "react-dom";
 import { Effect, getCurrentWindow } from "@tauri-apps/api/window";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
+import { listen } from "@tauri-apps/api/event";
 import {
+  angelicaDraft,
   closeProject,
   gitPendingChanges,
   normalizeCommandError,
@@ -14,6 +16,8 @@ import {
 } from "../ipc";
 import { bindingKey, rowKey } from "../binding";
 import type {
+  TranslationAppliedDto,
+  EditorContextDto,
   CommandError,
   ProjectSheetDto,
   ProjectSummaryDto,
@@ -44,13 +48,13 @@ import { TranslationEditor, type CellDraft, type CellMutation, type TranslationE
 import { TranslationList } from "./TranslationList";
 import { WindowChrome } from "./WindowChrome";
 import type { ApplicationMenuDefinition } from "./ApplicationMenu";
+import { ProjectGuideDialog, type ProjectGuideTab } from "./ProjectGuideDialog";
 import { WorkbenchToolDock, toolTitle, type GitPresentationMode, type WorkbenchTool } from "./WorkbenchToolDock";
 import { detachedPanelTitle, type DetachedPanel } from "./DetachedToolWindow";
 import { displayPathName } from "../pathDisplay";
 import { initialWorkbenchLayout, reduceWorkbenchLayout } from "../ui/layout";
 import {
   adjacentOccurrence,
-  cursorBefore,
   emptyOccurrenceFilter,
   filterOccurrences,
   flattenTranslationRows,
@@ -59,6 +63,7 @@ import {
 } from "../translationOccurrences";
 import { initialDocumentTabsState, reduceDocumentTabs, type DocumentTabsState } from "../documentTabs";
 import { initialDockLayout, reduceDockLayout, type DockRegion } from "../dockLayout";
+import { createLoadProgress } from "../loadProgress";
 import { hasWindowsBackdrop } from "../ui/theme/windowBackdrop";
 import { useTheme } from "../ui/theme/theme";
 import { themeRegistry } from "../ui/theme/registry";
@@ -67,7 +72,37 @@ import type { RowTarget } from "../commandPalette";
 import { UiIcon } from "../ui/primitives/UiIcon";
 import { useI18n, type MessageKey, type Translate } from "../ui/i18n";
 
-const PAGE_SIZE = 100;
+/** The Rust page bound (`MAX_TRANSLATION_PAGE_SIZE`); a sheet streams in these pages. */
+const PAGE_SIZE = 256;
+/**
+ * A sheet that loads within this time appears in one piece. A slower sheet
+ * shows what has loaded by then and the rest once it is complete, so the
+ * workbench re-renders at most twice per load rather than once per batch.
+ */
+const FIRST_COMMIT_DELAY_MS = 150;
+
+/** One sheet load. Pages are read until the sheet is complete. */
+type SheetLoader = {
+  generation: number;
+  sheetName: string;
+  /** Keeps the current rows on screen and swaps them in once complete. */
+  refresh: boolean;
+  byRowKey: Map<string, TranslationRowDto>;
+  uncommitted: TranslationRowDto[];
+  committed: boolean;
+  startedAt: number;
+  /** Strings read so far, including rows not yet handed to the list. */
+  loadedStrings: number;
+  /** Whether a row has been selected in this sheet, by the loader or the user. */
+  selected: boolean;
+  /** Last scanned source coordinate; every row up to it is loaded. */
+  scannedThrough: TranslationRowCursorDto | null;
+  complete: boolean;
+  failed: boolean;
+};
+
+/** A string to open once its sheet has loaded far enough to contain it. */
+type PendingReveal = { sheetName: string; target: RowTarget };
 
 type EditorError = {
   title: string;
@@ -96,6 +131,28 @@ function cursorForRow(row: TranslationRowDto): TranslationRowCursorDto {
   return { sheetName: row.sheetName, rowId: row.rowId, subrowId: row.subrowId };
 }
 
+function targetCell(row: TranslationRowDto, target: RowTarget): TranslationCellDto | undefined {
+  return row.cells.find((cell) => target.columnIndex === null || cell.sourceBinding.columnIndex === target.columnIndex) ?? row.cells[0];
+}
+
+function patchRow(row: TranslationRowDto, patches: ReadonlyMap<string, TranslationOverlayDto>): TranslationRowDto {
+  let changed = false;
+  const cells = row.cells.map((cell) => {
+    const translation = patches.get(bindingKey(cell.sourceBinding));
+    if (!translation) return cell;
+    changed = true;
+    return { ...cell, translation };
+  });
+  return changed ? { ...row, cells } : row;
+}
+
+/** True once the loader has scanned the source past `target`. */
+function scannedPast(loader: SheetLoader, target: RowTarget): boolean {
+  if (loader.complete || loader.failed) return true;
+  const last = loader.scannedThrough;
+  return last !== null && (last.rowId > target.rowId || (last.rowId === target.rowId && last.subrowId >= target.subrowId));
+}
+
 function panelTitle(panelId: string | null): MessageKey {
   if (panelId === "sheets") return "workbench.panel.sheets";
   if (panelId === "search" || panelId === "ai" || panelId === "git") return toolTitle(panelId);
@@ -110,6 +167,27 @@ const moveTargetLabels: Readonly<Record<DockRegion, MessageKey>> = {
 
 function cellCoordinates(sheet: string, target: { rowId: number; subrowId: number }): Parameters<Translate>[1] {
   return { sheet, row: String(target.rowId), subrow: String(target.subrowId) };
+}
+
+/**
+ * A callback with a stable identity that always runs the latest `callback`, so
+ * memoized panels do not re-render when only the closure changed.
+ */
+function useStableCallback<Args extends unknown[], Result>(callback: (...args: Args) => Result): (...args: Args) => Result {
+  const ref = useRef(callback);
+  ref.current = callback;
+  return useCallback((...args: Args) => ref.current(...args), []);
+}
+
+/** Resolves once the browser has painted, or after a short fallback when frames are paused. */
+function afterPaint(): Promise<void> {
+  return new Promise((resolve) => {
+    const fallback = window.setTimeout(resolve, 50);
+    requestAnimationFrame(() => window.setTimeout(() => {
+      window.clearTimeout(fallback);
+      resolve();
+    }, 0));
+  });
 }
 
 function isEditableTarget(target: EventTarget | null): boolean {
@@ -137,11 +215,13 @@ export function EditorShell({
   const [selectedSheetName, setSelectedSheetName] = useState<string | null>(firstSheetName);
   const [loadedSheetName, setLoadedSheetName] = useState<string | null>(null);
   const [rows, setRows] = useState<TranslationRowDto[]>([]);
-  const [nextAfter, setNextAfter] = useState<TranslationRowCursorDto | null>(null);
   const [selectedRowCursor, setSelectedRowCursor] = useState<TranslationRowCursorDto | null>(null);
   const [selectedBinding, setSelectedBinding] = useState<SourceBinding | null>(null);
+  /** True until the first page of the selected sheet is on screen. */
   const [sheetLoading, setSheetLoading] = useState(false);
-  const [loadingMore, setLoadingMore] = useState(false);
+  /** True while the rest of the sheet streams in behind the visible rows. */
+  const [sheetStreaming, setSheetStreaming] = useState(false);
+  const [loadProgress] = useState(createLoadProgress);
   const [mutations, setMutations] = useState<CellMutation[]>([]);
   const [dirty, setDirty] = useState(false);
   const [closing, setClosing] = useState(false);
@@ -162,12 +242,13 @@ export function EditorShell({
   const [lensFilter, setLensFilter] = useState<OccurrenceFilter>(emptyOccurrenceFilter);
   const [progress, setProgress] = useState<readonly SheetProgressDto[]>([]);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [guide, setGuide] = useState<{ open: boolean; tab: ProjectGuideTab }>({ open: false, tab: "glossary" });
+  const openGuide = useCallback((tab: ProjectGuideTab) => setGuide({ open: true, tab }), []);
+  const setGuideOpen = useCallback((open: boolean) => setGuide((current) => ({ ...current, open })), []);
   const [settingsSection, setSettingsSection] = useState<SettingsSection>("appearance");
   const [palette, setPalette] = useState<{ open: boolean; input: string; key: number }>({ open: false, input: "", key: 0 });
   const [recentSheets, setRecentSheets] = useState<string[]>([]);
   const [pendingChanges, setPendingChanges] = useState<UnitChangeDto[] | null>(null);
-  /** First row of a page loaded to reveal a string mid-sheet, or null when the list starts at the top. */
-  const [listStart, setListStart] = useState<{ rowId: number; subrowId: number } | null>(null);
   const { preferences } = usePreferences();
   const leftDockOpen = layout.regions.leftDock.visible;
   const rightDockOpen = layout.regions.rightDock.visible;
@@ -180,14 +261,24 @@ export function EditorShell({
   const editorRef = useRef<TranslationEditorHandle>(null);
   const pendingAdvance = useRef<string | null>(null);
   const focusTargetRequest = useRef(false);
+  const loaderRef = useRef<SheetLoader | null>(null);
+  const pendingReveal = useRef<PendingReveal | null>(null);
+  /** Overlays saved while a sheet streams, applied to pages read before the save. */
+  const overlayPatches = useRef(new Map<string, TranslationOverlayDto>());
+  const selectedRowKeyRef = useRef<string | null>(null);
+  selectedRowKeyRef.current = selectedRowCursor ? rowKey(selectedRowCursor) : null;
+  const lensFilterRef = useRef(lensFilter);
+  lensFilterRef.current = lensFilter;
 
   const selectedRow = useMemo(
-    () => selectedRowCursor ? rows.find((row) => rowKey(row) === rowKey(selectedRowCursor)) ?? null : null,
+    () => selectedRowCursor
+      ? rows.find((row) => row.rowId === selectedRowCursor.rowId && row.subrowId === selectedRowCursor.subrowId && row.sheetName === selectedRowCursor.sheetName) ?? null
+      : null,
     [rows, selectedRowCursor],
   );
   const allOccurrences = useMemo(() => flattenTranslationRows(rows), [rows]);
   const visibleOccurrences = useMemo(() => filterOccurrences(allOccurrences, lensFilter), [allOccurrences, lensFilter]);
-  const sheetHasNoRows = selectedSheetName !== null && loadedSheetName === selectedSheetName && !sheetLoading && rows.length === 0 && nextAfter === null;
+  const sheetHasNoRows = selectedSheetName !== null && loadedSheetName === selectedSheetName && !sheetLoading && !sheetStreaming && rows.length === 0;
 
   const progressBySheet = useMemo(() => new Map(progress.map((entry) => [entry.sheetName, entry])), [progress]);
   const projectProgress = useMemo(() => {
@@ -196,13 +287,13 @@ export function EditorShell({
     return total > 0 ? { translated, total } : null;
   }, [progress, project.sheets]);
   const selectedSheet = selectedSheetName ? sheetsByName.get(selectedSheetName) ?? null : null;
-  const selectedSheetProgress = selectedSheet && selectedSheet.translatableCellCount > 0
+  const selectedSheetProgress = useMemo(() => selectedSheet && selectedSheet.translatableCellCount > 0
     ? {
         translated: progressBySheet.get(selectedSheet.name)?.translated ?? 0,
         reviewed: progressBySheet.get(selectedSheet.name)?.reviewed ?? 0,
         total: selectedSheet.translatableCellCount,
       }
-    : null;
+    : null, [progressBySheet, selectedSheet]);
 
   const showError = useCallback((title: string, error: unknown) => {
     setEditorError({ title, error: normalizeCommandError(error) });
@@ -227,6 +318,7 @@ export function EditorShell({
 
   const applyOverlay = useCallback((sourceBinding: TranslationCellDto["sourceBinding"], translation: TranslationOverlayDto) => {
     const targetKey = bindingKey(sourceBinding);
+    overlayPatches.current.set(targetKey, translation);
     setWorkspaceRevision((current) => current + 1);
     setRows((current) => current.map((row) => {
       let changed = false;
@@ -239,12 +331,117 @@ export function EditorShell({
     }));
   }, []);
 
-  const beginSheetLoad = useCallback(async (sheetName: string, immediate = true, reveal: RowTarget | null = null) => {
+  /** Selects one cell on behalf of the loader, dropping a draft only when the row changes. */
+  const selectLoadedCell = useCallback((loader: SheetLoader, row: TranslationRowDto | undefined, cell: TranslationCellDto | undefined) => {
+    loader.selected = true;
+    if (row && rowKey(row) !== selectedRowKeyRef.current) {
+      hasDirtyDraft.current = false;
+      setDirty(false);
+    }
+    setSelectedRowCursor(row ? cursorForRow(row) : null);
+    setSelectedBinding(cell?.sourceBinding ?? null);
+  }, []);
+
+  /** Hands streamed rows to the list, patched with overlays saved since they were read. */
+  const commitRows = useCallback((loader: SheetLoader) => {
+    if (loader.refresh && !loader.complete) return;
+    if (loader.committed && loader.uncommitted.length === 0) return;
+    const patches = overlayPatches.current;
+    const batch = patches.size === 0 ? loader.uncommitted : loader.uncommitted.map((row) => patchRow(row, patches));
+    const first = !loader.committed;
+    loader.uncommitted = [];
+    loader.committed = true;
+    if (first) {
+      setRows(batch);
+      setLoadedSheetName(loader.sheetName);
+      setSheetLoading(false);
+    } else {
+      setRows((current) => current.concat(batch));
+    }
+
+    if (loader.refresh) {
+      const selected = selectedRowKeyRef.current;
+      if (selected === null || !loader.byRowKey.has(selected)) selectLoadedCell(loader, batch[0], batch[0]?.cells[0]);
+      return;
+    }
+    // A string being revealed is selected once it arrives, not the top row first.
+    if (pendingReveal.current?.sheetName === loader.sheetName) {
+      if (first) {
+        selectLoadedCell(loader, undefined, undefined);
+        loader.selected = false;
+      }
+      return;
+    }
+    // Leading pages may hold no translatable rows; select the first row that arrives.
+    if (first) {
+      selectLoadedCell(loader, batch[0], batch[0]?.cells[0]);
+      loader.selected = batch.length > 0;
+    } else if (!loader.selected && batch[0]) {
+      selectLoadedCell(loader, batch[0], batch[0].cells[0]);
+    }
+  }, [selectLoadedCell]);
+
+  /** Opens the pending string once the loader has read far enough to know whether it exists. */
+  const settleReveal = useCallback((loader: SheetLoader) => {
+    const reveal = pendingReveal.current;
+    if (!reveal || reveal.sheetName !== loader.sheetName || loader.generation !== requestGeneration.current) return;
+    const { target } = reveal;
+    const row = loader.byRowKey.get(rowKey({ sheetName: loader.sheetName, rowId: target.rowId, subrowId: target.subrowId }));
+    if (loader.refresh ? !loader.complete : !row && !scannedPast(loader, target)) return;
+    pendingReveal.current = null;
+    commitRows(loader);
+    const cell = row ? targetCell(row, target) : undefined;
+    if (row && cell) {
+      selectLoadedCell(loader, row, cell);
+      setEditorError(null);
+      const key = bindingKey(cell.sourceBinding);
+      const occurrence = flattenTranslationRows([row]).filter((candidate) => bindingKey(candidate.binding) === key);
+      if (filterOccurrences(occurrence, lensFilterRef.current).length === 0) setLensFilter(emptyOccurrenceFilter);
+      return;
+    }
+    if (loader.failed) return;
+    setEditorError({
+      title: t("workbench.error.stringNotFound"),
+      tone: "warning",
+      error: { code: "rowNotTranslatable", message: t("workbench.error.rowNotTranslatable", cellCoordinates(loader.sheetName, target)) },
+    });
+    if (!loader.selected) {
+      const first = loader.byRowKey.values().next().value;
+      selectLoadedCell(loader, first, first?.cells[0]);
+    }
+  }, [commitRows, selectLoadedCell, t]);
+
+  /**
+   * Loads a whole sheet. The first page shows immediately and the rest streams
+   * in behind it, so filtering, navigation, and reveal always see the full
+   * sheet once it completes. `refresh` reloads the open sheet in place.
+   */
+  const beginSheetLoad = useCallback(async (sheetName: string, options: { immediate?: boolean; reveal?: RowTarget | null; refresh?: boolean } = {}) => {
+    const { immediate = true, reveal = null, refresh = false } = options;
     const generation = ++requestGeneration.current;
     pendingAdvance.current = null;
+    overlayPatches.current = new Map();
+    pendingReveal.current = reveal ? { sheetName, target: reveal } : null;
+    const loader: SheetLoader = {
+      generation,
+      sheetName,
+      refresh,
+      byRowKey: new Map(),
+      uncommitted: [],
+      committed: false,
+      selected: false,
+      startedAt: performance.now(),
+      loadedStrings: 0,
+      scannedThrough: null,
+      complete: false,
+      failed: false,
+    };
+    loaderRef.current = loader;
+    loadProgress.set(0);
     const resetForSheet = () => {
       setSelectedSheetName(sheetName);
-      setNextAfter(null);
+      setSheetStreaming(true);
+      if (refresh) return;
       setDirty(false);
       hasDirtyDraft.current = false;
       setSheetLoading(true);
@@ -252,39 +449,48 @@ export function EditorShell({
     };
     if (immediate) flushSync(resetForSheet);
     else resetForSheet();
-    setRecentSheets((current) => [sheetName, ...current.filter((name) => name !== sheetName)].slice(0, RECENT_SHEET_LIMIT));
+    if (!refresh) setRecentSheets((current) => [sheetName, ...current.filter((name) => name !== sheetName)].slice(0, RECENT_SHEET_LIMIT));
+    // Let the selection and loading state paint before the new rows render,
+    // so a click gets feedback even when a small sheet loads within a frame.
+    const painted = refresh ? null : afterPaint();
 
-    const after = reveal ? cursorBefore(sheetName, reveal.rowId, reveal.subrowId) : null;
+    let after: TranslationRowCursorDto | null = null;
     try {
-      const page = await pageTranslationRows(sheetName, after, PAGE_SIZE);
-      if (generation !== requestGeneration.current) return;
-      setRows(page.rows);
-      setLoadedSheetName(sheetName);
-      setNextAfter(page.nextAfter);
-      setListStart(after && reveal ? { rowId: reveal.rowId, subrowId: reveal.subrowId } : null);
-      const revealedRow = reveal ? page.rows.find((row) => row.rowId === reveal.rowId && row.subrowId === reveal.subrowId) : undefined;
-      const revealedCell = revealedRow
-        ? revealedRow.cells.find((cell) => reveal?.columnIndex === null || cell.sourceBinding.columnIndex === reveal?.columnIndex) ?? revealedRow.cells[0]
-        : undefined;
-      const row = revealedRow ?? page.rows[0];
-      setSelectedRowCursor(row ? cursorForRow(row) : null);
-      setSelectedBinding((revealedCell ?? row?.cells[0])?.sourceBinding ?? null);
-      if (reveal && !revealedRow) {
-        setEditorError({
-          title: t("workbench.error.stringNotFound"),
-          tone: "warning",
-          error: { code: "rowNotTranslatable", message: t("workbench.error.rowNotTranslatable", cellCoordinates(sheetName, reveal)) },
-        });
-      }
+      do {
+        const page = await pageTranslationRows(sheetName, after, PAGE_SIZE);
+        if (generation !== requestGeneration.current) return;
+        for (const row of page.rows) {
+          loader.byRowKey.set(rowKey(row), row);
+          loader.uncommitted.push(row);
+          loader.loadedStrings += row.cells.length;
+        }
+        loadProgress.set(loader.loadedStrings);
+        after = page.nextAfter;
+        loader.scannedThrough = after;
+        loader.complete = after === null;
+        if (painted && !loader.committed) {
+          await painted;
+          if (generation !== requestGeneration.current) return;
+        }
+        if (loader.complete || (!loader.committed && performance.now() - loader.startedAt >= FIRST_COMMIT_DELAY_MS)) commitRows(loader);
+        settleReveal(loader);
+      } while (after !== null);
     } catch (error) {
-      if (generation === requestGeneration.current) showError(t("workbench.error.loadSheet"), error);
+      if (generation !== requestGeneration.current) return;
+      loader.failed = true;
+      if (pendingReveal.current?.sheetName === sheetName) pendingReveal.current = null;
+      if (!refresh) commitRows(loader);
+      showError(t("workbench.error.loadSheet"), error);
     } finally {
-      if (generation === requestGeneration.current) setSheetLoading(false);
+      if (generation === requestGeneration.current) {
+        setSheetLoading(false);
+        setSheetStreaming(false);
+      }
     }
-  }, [showError, t]);
+  }, [commitRows, loadProgress, settleReveal, showError, t]);
 
   useEffect(() => {
-    if (firstSheetName) void beginSheetLoad(firstSheetName, false);
+    if (firstSheetName) void beginSheetLoad(firstSheetName, { immediate: false });
   }, [beginSheetLoad, firstSheetName]);
 
   const requestDiscardConfirmation = useCallback((message: string): Promise<boolean> => {
@@ -383,6 +589,8 @@ export function EditorShell({
       return;
     }
     pendingAdvance.current = null;
+    pendingReveal.current = null;
+    if (loaderRef.current) loaderRef.current.selected = true;
 
     flushSync(() => {
       setSelectedRowCursor(cursor);
@@ -469,6 +677,28 @@ export function EditorShell({
     }
   }, [applyOverlay, confirmMutationDiscard, preferences.focusTargetOnNext, runMutation, selectedRow, t]);
 
+  const handleApprove = useCallback(async (cell: TranslationCellDto, draft: CellDraft, targetDirty: boolean, otherDirty: boolean, discardOtherDrafts: () => void) => {
+    if (!selectedRow || !(await confirmMutationDiscard(otherDirty, t("workbench.discard.review")))) return;
+    if (otherDirty) discardOtherDrafts();
+    const key = bindingKey(cell.sourceBinding);
+    const approved = await runMutation("review", key, t("workbench.error.review"), async () => {
+      let unitId = cell.translation?.translationUnitId ?? null;
+      if (targetDirty || unitId === null) {
+        const saved = await setTranslationTarget(cell.sourceBinding, draft.target);
+        applyOverlay(cell.sourceBinding, saved);
+        unitId = saved.translationUnitId;
+      }
+      const overlay = await setTranslationReviewState(unitId, "reviewed");
+      pendingAdvance.current = key;
+      focusTargetRequest.current = preferences.focusTargetOnNext;
+      applyOverlay(cell.sourceBinding, overlay);
+    });
+    if (!approved) {
+      pendingAdvance.current = null;
+      focusTargetRequest.current = false;
+    }
+  }, [applyOverlay, confirmMutationDiscard, preferences.focusTargetOnNext, runMutation, selectedRow, t]);
+
   const handleSaveNote = useCallback(async (cell: TranslationCellDto, draft: CellDraft, otherDirty: boolean, discardOtherDrafts: () => void) => {
     const translation = cell.translation;
     if (!translation || !selectedRow || !(await confirmMutationDiscard(otherDirty, t("workbench.discard.saveNote")))) return;
@@ -489,31 +719,6 @@ export function EditorShell({
       applyOverlay(cell.sourceBinding, overlay);
     });
   }, [applyOverlay, confirmMutationDiscard, runMutation, t]);
-
-  const handleLoadMore = useCallback(async () => {
-    if (!selectedSheetName || !nextAfter || loadingMore) return;
-    const generation = requestGeneration.current;
-    const after = nextAfter;
-    flushSync(() => setLoadingMore(true));
-
-    try {
-      const page = await pageTranslationRows(selectedSheetName, after, PAGE_SIZE);
-      if (generation !== requestGeneration.current) return;
-      setRows((current) => {
-        const seen = new Set(current.map((row) => rowKey(row)));
-        return [...current, ...page.rows.filter((row) => !seen.has(rowKey(row)))];
-      });
-      if (rows.length === 0 && page.rows[0]) {
-        setSelectedRowCursor(cursorForRow(page.rows[0]));
-        setSelectedBinding(page.rows[0].cells[0]?.sourceBinding ?? null);
-      }
-      setNextAfter(page.nextAfter);
-    } catch (error) {
-      if (generation === requestGeneration.current) showError(t("workbench.error.loadMore"), error);
-    } finally {
-      setLoadingMore(false);
-    }
-  }, [loadingMore, nextAfter, rows.length, selectedSheetName, showError, t]);
 
   const handleClose = useCallback(async () => {
     if (!(await requestDiscardConfirmation(t("workbench.discard.closeProject")))) return;
@@ -549,7 +754,7 @@ export function EditorShell({
 
   const handleWorkspaceChanged = useCallback(() => {
     setWorkspaceRevision((current) => current + 1);
-    if (selectedSheetName) void beginSheetLoad(selectedSheetName, false);
+    if (selectedSheetName) void beginSheetLoad(selectedSheetName, { immediate: false, refresh: true });
   }, [beginSheetLoad, selectedSheetName]);
 
   // Uncommitted translation-unit changes drive list markers and the editor
@@ -589,32 +794,54 @@ export function EditorShell({
     };
   }, [pendingByBinding, selectedBinding]);
 
-  /** Opens a string by coordinate, paging directly to it when it is not loaded. */
+  /** Opens a string by coordinate, waiting for its sheet to load far enough to contain it. */
   const revealString = useCallback(async (sheetName: string, target: RowTarget) => {
-    if (sheetName === selectedSheetName && loadedSheetName === sheetName) {
-      const occurrence = allOccurrences.find((candidate) =>
-        candidate.binding.rowId === target.rowId
-        && candidate.binding.subrowId === target.subrowId
-        && (target.columnIndex === null || candidate.binding.columnIndex === target.columnIndex));
-      if (occurrence) {
-        if (!visibleOccurrences.includes(occurrence)) setLensFilter(emptyOccurrenceFilter);
-        await handleOccurrenceSelect(occurrence);
-        return;
-      }
-    }
     if (!sheetsByName.has(sheetName)) {
       setEditorError({ title: t("workbench.error.sheetNotFound"), tone: "warning", error: { code: "sheetNotFound", message: t("workbench.error.sheetMissing", { sheet: sheetName }) } });
+      return;
+    }
+    const loader = loaderRef.current;
+    if (sheetName === selectedSheetName && loader?.sheetName === sheetName && !loader.failed) {
+      const sameRow = selectedRowKeyRef.current === rowKey({ sheetName, rowId: target.rowId, subrowId: target.subrowId });
+      if (!sameRow && !(await requestDiscardConfirmation(t("workbench.discard.openString")))) return;
+      if (loaderRef.current !== loader) return;
+      pendingReveal.current = { sheetName, target };
+      settleReveal(loader);
       return;
     }
     if (!(await requestDiscardConfirmation(t("workbench.discard.openString")))) return;
     if (sheetName !== selectedSheetName) setDocumentTabs((current) => reduceDocumentTabs(current, { type: "openSheet", sheetName, pin: true }));
     setLensFilter(emptyOccurrenceFilter);
-    void beginSheetLoad(sheetName, true, target);
-  }, [allOccurrences, beginSheetLoad, handleOccurrenceSelect, loadedSheetName, requestDiscardConfirmation, selectedSheetName, sheetsByName, t, visibleOccurrences]);
+    void beginSheetLoad(sheetName, { reveal: target });
+  }, [beginSheetLoad, requestDiscardConfirmation, selectedSheetName, settleReveal, sheetsByName, t]);
 
   const revealBinding = useCallback((binding: SourceBinding) => {
     void revealString(binding.sheetName, { rowId: binding.rowId, subrowId: binding.subrowId, columnIndex: binding.columnIndex });
   }, [revealString]);
+
+  // Angelica's navigate_to tool asks the editor to show one occurrence.
+  const stableRevealBinding = useStableCallback(revealBinding);
+  const stableWorkspaceChanged = useStableCallback(handleWorkspaceChanged);
+  const revealBindingRef = useRef(revealBinding);
+  revealBindingRef.current = revealBinding;
+  useEffect(() => {
+    const subscription = listen<SourceBinding>("angelica://navigate", ({ payload }) => revealBindingRef.current(payload));
+    return () => { void subscription.then((unlisten) => unlisten()); };
+  }, []);
+
+  // Translations Angelica writes patch their cell like an ordinary save.
+  const applyOverlayRef = useRef(applyOverlay);
+  applyOverlayRef.current = applyOverlay;
+  useEffect(() => {
+    const subscription = listen<TranslationAppliedDto>("angelica://translation-applied", ({ payload }) => applyOverlayRef.current(payload.sourceBinding, payload.overlay));
+    return () => { void subscription.then((unlisten) => unlisten()); };
+  }, []);
+
+  const angelicaContext = useMemo<EditorContextDto>(() => ({
+    sheet: selectedSheetName,
+    selection: selectedBinding ? { sheet: selectedBinding.sheetName, row: selectedBinding.rowId, subrow: selectedBinding.subrowId, column: selectedBinding.columnIndex } : null,
+    unsavedDraft: dirty,
+  }), [dirty, selectedBinding, selectedSheetName]);
 
   const openPalette = useCallback((input: string) => {
     setPalette((current) => ({ open: true, input, key: current.key + 1 }));
@@ -635,7 +862,44 @@ export function EditorShell({
     });
   }, [applyOverlay, requestDiscardConfirmation, runMutation, selectedBinding, t]);
 
+  // Stable handlers keep the memoized list and editor from re-rendering on
+  // unrelated workbench updates.
+  const selectOccurrence = useStableCallback((occurrence: TranslationOccurrenceView) => void handleOccurrenceSelect(occurrence));
+  const stableNavigateOccurrence = useStableCallback(navigateOccurrence);
+  const stableNavigateFromEditor = useStableCallback(navigateFromEditor);
+  const stableDirtyChange = useStableCallback(handleDirtyChange);
+  const saveTarget = useStableCallback((...args: Parameters<typeof handleSaveTarget>) => void handleSaveTarget(...args));
+  const approve = useStableCallback((...args: Parameters<typeof handleApprove>) => void handleApprove(...args));
+  const saveNote = useStableCallback((...args: Parameters<typeof handleSaveNote>) => void handleSaveNote(...args));
+  const changeReview = useStableCallback((...args: Parameters<typeof handleReviewChange>) => void handleReviewChange(...args));
+  const draftWithAngelica = useStableCallback(async (cell: TranslationCellDto) => {
+    try {
+      return (await angelicaDraft(cell.sourceBinding)).target;
+    } catch (reason) {
+      showError(t("editor.draftFailed"), reason);
+      return null;
+    }
+  });
+  const restoreTarget = useStableCallback((target: string) => void handleRestoreTarget(target));
+  const openAiSettings = useCallback(() => openSettings("ai"), [openSettings]);
+  const pendingState = useMemo(() => ({ changes: pendingChanges, refresh: refreshPendingChanges }), [pendingChanges, refreshPendingChanges]);
+
   // Layout ---------------------------------------------------------------
+
+  const workbenchBodyRef = useRef<HTMLDivElement>(null);
+  /** Props for a handle that resizes `regionId` through the CSS `variable` on the workbench body. */
+  const resizeProps = (regionId: string, variable: string, direction: 1 | -1) => {
+    const region = layout.regions[regionId]!;
+    return {
+      size: region.size,
+      min: region.minSize,
+      max: region.maxSize,
+      direction,
+      target: workbenchBodyRef,
+      variable,
+      onResize: (delta: number) => dispatchLayout({ type: "resizeRegion", regionId, delta }),
+    };
+  };
 
   const setRegionVisible = useCallback((regionId: string, visible: boolean) => {
     dispatchLayout({ type: "setRegionVisibility", regionId, visible });
@@ -734,6 +998,11 @@ export function EditorShell({
         openPalette(">");
         return;
       }
+      if (event.ctrlKey && event.shiftKey && !event.altKey && key === "enter" && !editable) {
+        event.preventDefault();
+        editorRef.current?.approve();
+        return;
+      }
       if (event.ctrlKey && !event.altKey && !event.shiftKey) {
         if (key === "p") {
           event.preventDefault();
@@ -792,7 +1061,7 @@ export function EditorShell({
       return <SheetSidebar sheets={project.sheets} selectedSheetName={selectedSheetName} disabled={closing} active={active} hideEmpty={hideEmptySheets} onHideEmptyChange={setHideEmptySheets} filterOpen={sheetFilterOpen} onFilterOpenChange={setSheetFilterOpen} onOpenFilter={focusSheetFilter} quickFindSignal={quickFindSignal} revealSignal={revealSheetSignal} collapseSignal={collapseSheetsSignal} onSelect={handleSheetSelect} progress={progressBySheet} />;
     }
     const tool: WorkbenchTool = panelId === "git" ? "git" : panelId === "search" ? "search" : "ai";
-    return <WorkbenchToolDock activeTool={tool} gitMode={gitMode} selectedBinding={selectedBinding} onGitModeChange={setGitMode} selectedUnitId={selectedUnitId} workspaceRevision={workspaceRevision} onWorkspaceChanged={handleWorkspaceChanged} onRestoreTarget={(target) => void handleRestoreTarget(target)} pending={{ changes: pendingChanges, refresh: refreshPendingChanges }} onRevealBinding={revealBinding} />;
+    return <WorkbenchToolDock activeTool={tool} gitMode={gitMode} selectedBinding={selectedBinding} onGitModeChange={setGitMode} selectedUnitId={selectedUnitId} workspaceRevision={workspaceRevision} onWorkspaceChanged={stableWorkspaceChanged} onRestoreTarget={restoreTarget} pending={pendingState} onRevealBinding={stableRevealBinding} editorContext={angelicaContext} onOpenSettings={openAiSettings} onOpenGuide={openGuide} />;
   };
 
   const renderDock = (region: "left" | "right", panelId: string | null, open: boolean) => {
@@ -851,8 +1120,12 @@ export function EditorShell({
       items: [
         { kind: "command", id: "save", label: t("menu.saveTarget"), shortcut: "Ctrl+S", ...(selectedRow ? { onSelect: () => editorRef.current?.saveTarget(false) } : {}) },
         { kind: "command", id: "save-next", label: t("menu.saveAndNext"), shortcut: "Ctrl+Enter", ...(selectedRow ? { onSelect: () => editorRef.current?.saveTarget(true) } : {}) },
+        { kind: "command", id: "approve-next", label: t("menu.approveAndNext"), shortcut: "Ctrl+Shift+Enter", ...(selectedRow ? { onSelect: () => editorRef.current?.approve() } : {}) },
         { kind: "command", id: "copy-source", label: t("menu.copySource"), ...(selectedRow ? { onSelect: () => editorRef.current?.copySource() } : {}) },
         { kind: "command", id: "revert", label: t("menu.revert"), ...(dirty ? { onSelect: () => editorRef.current?.revert() } : {}) },
+        { kind: "separator", id: "translation-sep-1" },
+        { kind: "command", id: "glossary", label: t("menu.glossary"), onSelect: () => openGuide("glossary") },
+        { kind: "command", id: "guidance", label: t("menu.guidance"), onSelect: () => openGuide("guidance") },
       ],
     },
     {
@@ -906,6 +1179,7 @@ export function EditorShell({
     { id: "go-next", category: category.go, title: t("menu.nextString"), shortcut: "Alt+Down", icon: "arrowDown", run: () => navigateOccurrence(1) },
     { id: "go-previous", category: category.go, title: t("menu.previousString"), shortcut: "Alt+Up", icon: "arrowUp", run: () => navigateOccurrence(-1) },
     { id: "save", category: category.translation, title: t("menu.saveTarget"), shortcut: "Ctrl+S", icon: "save", enabled: selectedRow !== null, run: () => editorRef.current?.saveTarget(false) },
+    { id: "approve-next", category: category.translation, title: t("menu.approveAndNext"), shortcut: "Ctrl+Shift+Enter", icon: "check", enabled: selectedRow !== null, run: () => editorRef.current?.approve() },
     { id: "save-next", category: category.translation, title: t("command.saveAndNext"), shortcut: "Ctrl+Enter", icon: "save", enabled: selectedRow !== null, run: () => editorRef.current?.saveTarget(true) },
     { id: "copy-source", category: category.translation, title: t("menu.copySource"), icon: "copyPlus", enabled: selectedRow !== null, run: () => editorRef.current?.copySource() },
     { id: "revert", category: category.translation, title: t("menu.revert"), icon: "undo", enabled: dirty, run: () => editorRef.current?.revert() },
@@ -919,6 +1193,8 @@ export function EditorShell({
     { id: "view-bottom", category: category.view, title: t("command.toggleBottom"), shortcut: "Ctrl+J", icon: "panelBottom", run: () => dispatchLayout({ type: "toggleRegion", regionId: "bottomPanel" }) },
     { id: "view-filter-sheets", category: category.view, title: t("workbench.filterSheets"), shortcut: "Ctrl+F", icon: "search", run: handleQuickFind },
     { id: "view-reveal-sheet", category: category.view, title: t("workbench.revealSheet"), icon: "locateFixed", enabled: selectedSheetName !== null, run: () => { showPanel("sheets", "left", false); setRevealSheetSignal((current) => current + 1); } },
+    { id: "project-glossary", category: category.translation, title: t("menu.glossary"), icon: "languages", run: () => openGuide("glossary") },
+    { id: "project-guidance", category: category.translation, title: t("menu.guidance"), icon: "messageSquare", run: () => openGuide("guidance") },
     { id: "git-open", category: category.git, title: t("command.showChanges"), icon: "gitBranch", run: () => showPanel("git", "right", false) },
     { id: "prefs-settings", category: category.preferences, title: t("command.openSettings"), shortcut: "Ctrl+,", icon: "settings", run: () => openSettings() },
     { id: "prefs-theme", category: category.preferences, title: t("settings.theme.title"), icon: "palette", run: () => openSettings("appearance") },
@@ -956,6 +1232,7 @@ export function EditorShell({
         </div>
       ) : null}
       <div
+        ref={workbenchBodyRef}
         className="workbench-body"
         style={{
           "--left-dock-width": `${layout.regions.leftDock.size}px`,
@@ -973,7 +1250,7 @@ export function EditorShell({
           footer={[{ id: "settings", label: t("common.settings"), icon: "settings", shortcut: "Ctrl+,", onSelect: () => openSettings() }]}
         />
         {renderDock("left", leftPanelId, leftDockOpen)}
-        {leftDockOpen && leftPanelId && detachedPanel !== leftPanelId ? <ResizeHandle axis="x" label={t("workbench.resizeLeft")} onDelta={(delta) => dispatchLayout({ type: "resizeRegion", regionId: "leftDock", delta })} /> : null}
+        {leftDockOpen && leftPanelId && detachedPanel !== leftPanelId ? <ResizeHandle axis="x" label={t("workbench.resizeLeft")} {...resizeProps("leftDock", "--left-dock-width", 1)} /> : null}
 
         <div className="workbench-center">
           <section className="panel document">
@@ -1008,29 +1285,29 @@ export function EditorShell({
                   loadedSheetName={loadedSheetName}
                   disabled={closing}
                   loading={sheetLoading}
-                  loadingMore={loadingMore}
-                  hasMore={nextAfter !== null}
-                  onSelect={(occurrence) => void handleOccurrenceSelect(occurrence)}
-                  onNavigate={navigateOccurrence}
-                  onLoadMore={() => void handleLoadMore()}
+                  streaming={sheetStreaming}
+                  loadProgress={loadProgress}
+                  sheetStringCount={selectedSheet?.translatableCellCount ?? null}
+                  onSelect={selectOccurrence}
+                  onNavigate={stableNavigateOccurrence}
                   changedKinds={changedKinds}
-                  listStart={listStart}
-                  onLoadFromStart={() => { if (selectedSheetName) void beginSheetLoad(selectedSheetName); }}
                 />
-                <ResizeHandle axis="y" label={t("workbench.resizeEditor")} onDelta={(delta) => dispatchLayout({ type: "resizeRegion", regionId: "editor", delta: -delta })} />
+                <ResizeHandle axis="y" label={t("workbench.resizeEditor")} {...resizeProps("editor", "--editor-height", -1)} />
                 <TranslationEditor
                   ref={editorRef}
+                  onDraftWithAngelica={draftWithAngelica}
                   key={selectedRow ? rowKey(selectedRow) : "empty-editor"}
                   row={selectedRow}
                   selectedBinding={selectedBinding}
                   sourceLanguage={project.sourceLanguage}
                   mutations={mutations}
-                  onDirtyChange={handleDirtyChange}
+                  onDirtyChange={stableDirtyChange}
                   onSelectCell={handleFieldSelect}
-                  onSaveTarget={(...args) => void handleSaveTarget(...args)}
-                  onSaveNote={(...args) => void handleSaveNote(...args)}
-                  onReviewChange={(...args) => void handleReviewChange(...args)}
-                  onNavigate={navigateFromEditor}
+                  onSaveTarget={saveTarget}
+                  onApprove={approve}
+                  onSaveNote={saveNote}
+                  onReviewChange={changeReview}
+                  onNavigate={stableNavigateFromEditor}
                   takeFocusRequest={takeFocusRequest}
                   checkpoint={selectedCheckpoint}
                 />
@@ -1038,7 +1315,7 @@ export function EditorShell({
             )}
           </section>
           {bottomOpen && bottomPanelId && detachedPanel !== bottomPanelId ? <>
-            <ResizeHandle axis="y" label={t("workbench.resizeBottom")} onDelta={(delta) => dispatchLayout({ type: "resizeRegion", regionId: "bottomPanel", delta: -delta })} />
+            <ResizeHandle axis="y" label={t("workbench.resizeBottom")} {...resizeProps("bottomPanel", "--bottom-panel-height", -1)} />
             {bottomIsTool ? (
               <DockPanel
                 panelId={bottomPanelId}
@@ -1064,7 +1341,7 @@ export function EditorShell({
           </> : null}
         </div>
 
-        {rightDockOpen && rightPanelId && detachedPanel !== rightPanelId ? <ResizeHandle axis="x" label={t("workbench.resizeRight")} onDelta={(delta) => dispatchLayout({ type: "resizeRegion", regionId: "rightDock", delta: -delta })} /> : null}
+        {rightDockOpen && rightPanelId && detachedPanel !== rightPanelId ? <ResizeHandle axis="x" label={t("workbench.resizeRight")} {...resizeProps("rightDock", "--right-dock-width", -1)} /> : null}
         {renderDock("right", rightPanelId, rightDockOpen)}
         <ActivityRail
           side="right"
@@ -1094,19 +1371,22 @@ export function EditorShell({
         onDiscard={() => resolveDiscardConfirmation(true)}
       />
       <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} initialSection={settingsSection} />
-      <CommandPalette
-        key={palette.key}
-        open={palette.open}
-        initialInput={palette.input}
-        onOpenChange={(open) => setPalette((current) => ({ ...current, open }))}
-        commands={commands}
-        sheets={project.sheets}
-        progress={progressBySheet}
-        recentSheets={recentSheets}
-        currentSheet={selectedSheetName}
-        onOpenSheet={(sheetName) => void handleSheetSelect(sheetName, true)}
-        onGoToRow={(target) => { if (selectedSheetName) void revealString(selectedSheetName, target); }}
-      />
+      <ProjectGuideDialog open={guide.open} initialTab={guide.tab} onOpenChange={setGuideOpen} />
+      {palette.open ? (
+        <CommandPalette
+          key={palette.key}
+          open={palette.open}
+          initialInput={palette.input}
+          onOpenChange={(open) => setPalette((current) => ({ ...current, open }))}
+          commands={commands}
+          sheets={project.sheets}
+          progress={progressBySheet}
+          recentSheets={recentSheets}
+          currentSheet={selectedSheetName}
+          onOpenSheet={(sheetName) => void handleSheetSelect(sheetName, true)}
+          onGoToRow={(target) => { if (selectedSheetName) void revealString(selectedSheetName, target); }}
+        />
+      ) : null}
     </main>
   );
 }

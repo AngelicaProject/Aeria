@@ -138,6 +138,55 @@ export type RecentProjectAvailability =
   | "sourcePackageMissing"
   | "repositoryAndSourceMissing";
 
+/** Outcome of opening a project from a game installation. */
+export type GameOpenResultDto =
+  | { status: "opened"; result: ProjectOpenResultDto }
+  | {
+    /** Nothing was written; confirm, then open with this package and `acceptSourceUpdate`. */
+    status: "sourceUpdateRequired";
+    sourcePackagePath: string;
+    report: SourceUpdateReportDto;
+  };
+
+export type GameOrigin = "settings" | "squareEnix" | "steam" | "xivLauncher" | "defaultLocation";
+
+/** A detected game installation root with its `game/ffxivgame.ver`. */
+export type GameInstallationDto = {
+  path: string;
+  gameVersion: string;
+  origin: GameOrigin;
+};
+
+/** One package in Aeria's source-package store. */
+export type SourcePackageEntryDto = {
+  path: string;
+  packageId: string;
+  sourceLanguage: string;
+  gameVersion: string;
+  sizeBytes: number;
+  builtAtUnixMs: number | null;
+  /** Whether a build record allows reusing it instead of running Atlas. */
+  reusable: boolean;
+  /** Built from the installed game with the current Atlas. */
+  current: boolean;
+  /** Repository roots of recent projects, and the open project, that use it. */
+  usedBy: string[];
+  /** Nothing uses it and it is not current, so it can be deleted. */
+  removable: boolean;
+};
+
+/** Whether a job finds a package without running Atlas. */
+export type SourceAvailability = "ready" | "build" | "unknown";
+
+/** The game installation setting and what it resolves to. */
+export type GameSettingsDto = {
+  /** The folder chosen in Settings; `null` uses the first detected installation. */
+  configuredPath: string | null;
+  /** The installation game operations use; `null` when none is usable. */
+  active: GameInstallationDto | null;
+  detected: GameInstallationDto[];
+};
+
 export type RecentProjectDto = {
   id: string;
   repositoryRoot: string;
@@ -379,4 +428,188 @@ export type GitSyncDto = {
 export type GitFinishDto = {
   integration: GitIntegration;
   deletedBranch: string | null;
+};
+
+export type AiProviderKind = "openCodeGo" | "openRouter" | "custom" | "chatGpt";
+export type ReasoningEffort = "minimal" | "low" | "medium" | "high" | "xhigh";
+export type ApiKeyState = "stored" | "missing" | "unavailable";
+
+export type AiModelConfig = {
+  id: string;
+  contextWindow: number | null;
+  reasoningEfforts: ReasoningEffort[];
+};
+
+export type AiHeaderConfig = { name: string; value: string };
+
+export type AiProviderDto = {
+  id: string;
+  kind: AiProviderKind;
+  name: string;
+  baseUrl: string;
+  models: AiModelConfig[];
+  sessionHeader: string | null;
+  headers: AiHeaderConfig[];
+  apiKey: ApiKeyState;
+};
+
+export type AiProviderPresetDto = {
+  kind: AiProviderKind;
+  name: string;
+  baseUrl: string | null;
+  sessionHeader: string | null;
+};
+
+export type AiModelSelection = {
+  providerId: string;
+  modelId: string;
+  effort: ReasoningEffort | null;
+};
+
+export type AiSettingsDto = {
+  providers: AiProviderDto[];
+  agentModel: AiModelSelection | null;
+  /** The model for translation-job workers; Angelica's model when null. */
+  workerModel: AiModelSelection | null;
+  /** Domains whose pages Angelica reads without asking. */
+  webDomains: string[];
+  presets: AiProviderPresetDto[];
+};
+
+export type AiProviderInput = {
+  id: string | null;
+  kind: AiProviderKind;
+  name: string;
+  baseUrl: string;
+  models: AiModelConfig[];
+  sessionHeader: string | null;
+  headers: AiHeaderConfig[];
+};
+
+export type ChatGptLoginDto = { loginId: string; userCode: string; verificationUrl: string; browserOpened: boolean };
+
+export type ChatGptLoginEventDto = { loginId: string; providerId: string; succeeded: boolean; code: string | null; message: string | null };
+
+export type AiConnectionCheckDto = {
+  latencyMs: number;
+  model: string | null;
+};
+
+export type ChatToolCall = { id: string; name: string; arguments: string };
+
+export type ChatMessage =
+  | { role: "user"; content: string; automatic?: boolean }
+  | { role: "assistant"; content: string; reasoning?: string; toolCalls?: ChatToolCall[] }
+  | { role: "tool"; toolCallId: string; name: string; content: string };
+
+export type AiUsage = { promptTokens: number; completionTokens: number };
+
+export type ConversationDto = {
+  id: string;
+  title: string;
+  model: AiModelSelection | null;
+  messages: ChatMessage[];
+  usage: AiUsage;
+  running: boolean;
+};
+
+export type ConversationSummaryDto = { id: string; title: string; updatedAtUnixMs: number; running: boolean };
+
+export type AgentEvent =
+  | { type: "textDelta"; text: string }
+  | { type: "reasoningDelta"; text: string }
+  | { type: "responseFinished" }
+  | { type: "toolStarted"; id: string; name: string; arguments: string }
+  | { type: "toolFinished"; id: string; name: string; content: string; isError: boolean }
+  | ({ type: "usage" } & AiUsage)
+  | { type: "turnFinished"; outcome: "completed" | "roundLimit"; usage: AiUsage }
+  | { type: "turnFailed"; code: string; message: string }
+  | { type: "turnCancelled" };
+
+export type AngelicaEventDto = { conversationId: string; event: AgentEvent };
+
+export type UnitLocationDto = { sheet: string; row: number; subrow: number; column: number | null };
+
+export type EditorContextDto = { sheet: string | null; selection: UnitLocationDto | null; unsavedDraft: boolean };
+
+export type AgentMode = "chat" | "ask" | "autoDraft";
+
+export type ProposalRecord = {
+  id: string;
+  /** The changed project file; null for a translation. */
+  file: "guidance" | "glossary" | null;
+  /** A job to start; `target` then holds its one-line summary. */
+  job?: JobProposal | null;
+  /** A domain Angelica asked to read; `target` then holds the link. */
+  web?: string | null;
+  /** Translations Angelica suggests marking reviewed; `target` holds her reason. */
+  review?: { reason: string; items: { location: UnitLocationDto; source: string; target: string }[] } | null;
+  location: UnitLocationDto | null;
+  source: string;
+  target: string;
+  expected: { target: string | null; reviewState: ReviewState | null };
+  status: "pending" | "applied" | "rejected" | "conflict" | "failed";
+  message: string | null;
+  createdAtUnixMs: number;
+};
+
+export type TranslationAppliedDto = { sourceBinding: SourceBinding; overlay: TranslationOverlayDto };
+
+export type JobFilter = "untranslated" | "needsReview" | "untranslatedAndDrafts";
+
+export type JobScope = { sheets: string[]; filter: JobFilter };
+
+export type JobEstimate = { units: number; chunks: number; estimatedTokens: number };
+
+export type JobProposal = { scope: JobScope; instructions: string; concurrency: number; estimate: JobEstimate; tokenLimit: number };
+
+export type JobSpec = { scope: JobScope; instructions: string; model: AiModelSelection; tokenLimit: number; concurrency: number };
+
+export type JobStatus = "running" | "paused" | "completed" | "cancelled";
+
+export type JobUnitStatus = "pending" | "running" | "drafted" | "rejected" | "failed" | "conflict";
+
+export type JobCounts = { total: number; pending: number; running: number; drafted: number; rejected: number; failed: number; conflict: number };
+
+export type JobSummary = {
+  id: string;
+  conversationId: string;
+  status: JobStatus;
+  /** Why a paused job paused. */
+  reason: string | null;
+  spec: JobSpec;
+  createdAtUnixMs: number;
+  counts: JobCounts;
+  /** Chunks being translated right now, one per busy worker. */
+  activeWorkers: number;
+  usage: AiUsage;
+};
+
+export type JobUnit = {
+  seq: number;
+  chunk: number;
+  location: UnitLocationDto;
+  status: JobUnitStatus;
+  attempts: number;
+  message: string | null;
+  expected: { target: string | null; reviewState: ReviewState | null };
+};
+
+export type JobEvent = { seq: number; createdAtUnixMs: number; kind: string; message: string; location: UnitLocationDto | null };
+
+export type JobAction = "pause" | "resume" | "cancel";
+
+export type GlossaryEntry = { term: string; translation: string; note?: string; forbidden?: string[] };
+
+export type GlossaryEntryInput = { term: string; translation: string; note: string | null; forbidden: string[] };
+
+export type ProjectGuideDto = {
+  /** The guidance text; null when the file does not exist. */
+  guidance: string | null;
+  /** The glossary file's exact content, sent back when saving. */
+  glossaryText: string | null;
+  entries: GlossaryEntry[];
+  diagnostics: { line: number; message: string }[];
+  guidanceError: string | null;
+  glossaryError: string | null;
 };
