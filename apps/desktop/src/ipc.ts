@@ -1,6 +1,16 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
   AgentMode,
+  ExportOverviewDto,
+  FontPreviewSizeDto,
+  ProjectChangeDto,
+  FontSettings,
+  FontsOverviewDto,
+  ImportedFontFileDto,
+  LocalExportDto,
+  PackSettings,
+  PublishedReleaseDto,
+  ReleaseInput,
   GlossaryEntryInput,
   ProjectGuideDto,
   JobAction,
@@ -24,7 +34,6 @@ import type {
   DetachedUnitDto,
   GameOpenResultDto,
   GameSettingsDto,
-  CollaborationPolicy,
   ContributorDto,
   GitBranchDto,
   GitCommitChangesDto,
@@ -287,6 +296,23 @@ export function gitContributors(): Promise<ContributorDto[]> {
   return call<ContributorDto[]>("git_contributors");
 }
 
+export function gitProjectChanges(): Promise<ProjectChangeDto[]> {
+  return call<ProjectChangeDto[]>("git_project_changes");
+}
+
+export function gitRemoveRemote(name: string): Promise<GitOverviewDto> {
+  return call<GitOverviewDto>("git_remove_remote", { name });
+}
+
+/** Fetches every remote first, so it needs the network. */
+export function gitRemoteBranches(): Promise<string[]> {
+  return call<string[]>("git_remote_branches");
+}
+
+export function gitSetUpstream(remoteBranch: string): Promise<GitOverviewDto> {
+  return call<GitOverviewDto>("git_set_upstream", { remoteBranch });
+}
+
 export function gitSync(resolutions: UnitResolutionDto[] = []): Promise<GitSyncDto> {
   return call<GitSyncDto>("git_sync", { resolutions });
 }
@@ -307,12 +333,28 @@ export function gitSwitchBranch(name: string): Promise<void> {
   return call<void>("git_switch_branch", { name });
 }
 
-export function gitSetCollaboration(policy: CollaborationPolicy, mainBranch: string | null): Promise<CollaborationDto> {
-  return call<CollaborationDto>("git_set_collaboration", { policy, mainBranch });
+/** Sets the main branch, or clears it so Aeria detects it. Writes the settings file only. */
+export function gitSetMainBranch(mainBranch: string | null): Promise<CollaborationDto> {
+  return call<CollaborationDto>("git_set_main_branch", { mainBranch });
+}
+
+/** A fingerprint of the repository state; null outside a repository. */
+export function gitStateStamp(): Promise<string | null> {
+  return call<string | null>("git_state_stamp");
 }
 
 export function gitFinishContribution(): Promise<GitFinishDto> {
   return call<GitFinishDto>("git_finish_contribution");
+}
+
+/** Deletes a local branch; `force` is needed when it has commits outside the main branch. */
+export function gitDeleteBranch(name: string, force: boolean): Promise<void> {
+  return call<void>("git_delete_branch", { name, force });
+}
+
+/** Merges the contribution into the main branch; only for repositories without a remote. */
+export function gitMergeContribution(): Promise<GitFinishDto> {
+  return call<GitFinishDto>("git_merge_contribution");
 }
 
 /** Clones into a folder named after the repository; `parent` defaults to the default projects directory. */
@@ -439,4 +481,60 @@ export function saveProjectGuidance(expected: string | null, text: string): Prom
 
 export function saveProjectGlossary(expected: string | null, entries: GlossaryEntryInput[]): Promise<ProjectGuideDto> {
   return call<ProjectGuideDto>("save_project_glossary", { expected, entries });
+}
+
+export function exportOverview(): Promise<ExportOverviewDto> {
+  return call<ExportOverviewDto>("export_overview");
+}
+
+export function exportSaveSettings(settings: PackSettings): Promise<ExportOverviewDto> {
+  return call<ExportOverviewDto>("export_save_settings", { settings });
+}
+
+export function exportGenerateKey(replaceProjectKey: boolean): Promise<ExportOverviewDto> {
+  return call<ExportOverviewDto>("export_generate_key", { replaceProjectKey });
+}
+
+export function exportImportKey(path: string): Promise<ExportOverviewDto> {
+  return call<ExportOverviewDto>("export_import_key", { path });
+}
+
+export function exportBackupKey(path: string): Promise<void> {
+  return call<void>("export_backup_key", { path });
+}
+
+export function exportRemoveKey(): Promise<ExportOverviewDto> {
+  return call<ExportOverviewDto>("export_remove_key");
+}
+
+export function exportInstallWorkflow(): Promise<ExportOverviewDto> {
+  return call<ExportOverviewDto>("export_install_workflow");
+}
+
+export function exportPack(release: ReleaseInput, directory: string, sign: boolean): Promise<LocalExportDto> {
+  return call<LocalExportDto>("export_pack", { release, directory, sign });
+}
+
+export function exportPublish(release: ReleaseInput): Promise<PublishedReleaseDto> {
+  return call<PublishedReleaseDto>("export_publish", { release });
+}
+
+export function fontsOverview(): Promise<FontsOverviewDto> {
+  return call<FontsOverviewDto>("fonts_overview");
+}
+
+export function fontsUseRecommended(): Promise<FontsOverviewDto> {
+  return call<FontsOverviewDto>("fonts_use_recommended");
+}
+
+export function fontsSave(settings: FontSettings): Promise<FontsOverviewDto> {
+  return call<FontsOverviewDto>("fonts_save", { settings });
+}
+
+export function fontsImportFile(path: string): Promise<ImportedFontFileDto> {
+  return call<ImportedFontFileDto>("fonts_import_file", { path });
+}
+
+export function fontsPreview(settings: FontSettings, font: string, text: string): Promise<FontPreviewSizeDto[]> {
+  return call<FontPreviewSizeDto[]>("fonts_preview", { settings, font, text });
 }

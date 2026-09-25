@@ -1,0 +1,25 @@
+[package]
+name = "aeria-publish"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Pack publishing: signing keys in the OS credential store, GitHub releases, and the feed workflow template."
+
+[dependencies]
+aeria-export = { path = "../aeria-export" }
+getrandom = "0.4.3"
+keyring = "4.2.0"
+reqwest = { version = "0.13.5", default-features = false, features = ["http2", "json", "query", "rustls-no-provider", "system-proxy"] }
+rustls = { version = "0.23.45", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+thiserror = "2.0.20"
+
+[dev-dependencies]
+tempfile = "3.27.0"
+tokio = { version = "1.53.1", features = ["rt"] }
+
+[lints]
+workspace = true

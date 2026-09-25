@@ -12,14 +12,9 @@ use aeria_core::TranslationUnitId;
 use aeria_workspace::encode_unit_shard;
 
 use crate::GitError;
-use crate::collaboration::CollaborationPolicy;
 use crate::merge::{ConflictResolution, merge_shard};
 use crate::repository::{GitRepository, strip_prefix};
 use crate::semantic::is_shard_path;
-
-/// Commit message for managed changes written while accepting an
-/// integration, such as reconciling merged units with the current source.
-pub const RECONCILE_MESSAGE: &str = "Reconcile translations with the current game source";
 
 /// How incoming commits were integrated.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -75,6 +70,18 @@ impl GitRepository {
         Ok(())
     }
 
+    /// Fetches every remote, for listing their branches.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when Git fails, for example without network access.
+    pub fn fetch_all(&self) -> Result<(), GitError> {
+        if !self.remotes()?.is_empty() {
+            self.run(&["fetch", "--all", "--prune", "--quiet"])?;
+        }
+        Ok(())
+    }
+
     /// Integrates already fetched commits into the current branch: its
     /// upstream and, on a contribution branch under the pull-request policy,
     /// the remote main branch.
@@ -86,8 +93,8 @@ impl GitRepository {
     /// [`GitError::TranslationConflicts`]. Once everything merged, `accept`
     /// must validate the resulting project; on failure the branch is reset
     /// to its starting commit. `accept` may rewrite Aeria-managed files to
-    /// reconcile merged units with the current source; such changes are
-    /// committed with [`RECONCILE_MESSAGE`].
+    /// reconcile merged units with the current source; such changes stay
+    /// uncommitted, like any other change, until the next checkpoint.
     ///
     /// # Errors
     ///
@@ -109,10 +116,8 @@ impl GitRepository {
         if let Some(upstream) = self.upstream(&branch)? {
             sources.push(upstream);
         }
-        let settings = self.collaboration()?;
-        if let (CollaborationPolicy::PullRequest, Some(main)) =
-            (settings.policy, &settings.main_branch)
-            && main != &branch
+        if let Some(main) = self.main_branch()?
+            && main != branch
         {
             let remote = self.sync_remote(&branch)?;
             let main_ref = format!("{remote}/{main}");
@@ -141,17 +146,11 @@ impl GitRepository {
                 }
             }
         }
-        if outcome.changed_working_tree() {
-            if let Err(reason) = accept() {
-                self.reset_to(&before)?;
-                return Err(GitError::IncomingRejected { reason });
-            }
-            // Acceptance may reconcile the merged units with the current
-            // source. Committing that keeps the pushed history consistent.
-            if let Err(error) = self.commit_integration_changes(RECONCILE_MESSAGE) {
-                self.reset_to(&before)?;
-                return Err(error);
-            }
+        if outcome.changed_working_tree()
+            && let Err(reason) = accept()
+        {
+            self.reset_to(&before)?;
+            return Err(GitError::IncomingRejected { reason });
         }
         Ok(outcome)
     }
@@ -166,7 +165,7 @@ impl GitRepository {
         Ok(())
     }
 
-    fn reset_to(&self, commit: &str) -> Result<(), GitError> {
+    pub(crate) fn reset_to(&self, commit: &str) -> Result<(), GitError> {
         if self.merge_in_progress()? {
             self.run(&["merge", "--abort"])?;
         }
@@ -176,7 +175,7 @@ impl GitRepository {
         Ok(())
     }
 
-    fn merge_from(
+    pub(crate) fn merge_from(
         &self,
         source: &str,
         resolutions: &BTreeMap<TranslationUnitId, ConflictResolution>,
@@ -289,6 +288,10 @@ impl GitRepository {
             let (ahead, _) = self.ahead_behind(&upstream)?;
             if ahead == 0 {
                 return Ok(false);
+            }
+            // The published main branch changes only through pull requests.
+            if self.main_branch()?.as_deref() == Some(branch.as_str()) {
+                return Err(GitError::MainBranchProtected { branch });
             }
             let merge_key = format!("branch.{branch}.merge");
             let (merge_ref, _) = self

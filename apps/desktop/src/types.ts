@@ -292,11 +292,15 @@ export type GitRuntimeDto = {
   origin: "system" | "bundled" | "override";
 };
 
-export type CollaborationPolicy = "direct" | "pullRequest";
 
+/** Changes reach the main branch only through pull requests. */
 export type CollaborationDto = {
-  policy: CollaborationPolicy;
+  /** The main branch set in aeria-collaboration.json, if any. */
+  configuredMainBranch: string | null;
+  /** The main branch in effect: configured or detected. */
   mainBranch: string | null;
+  /** Why aeria-collaboration.json cannot be used. */
+  error: string | null;
 };
 
 export type ContributionDto = {
@@ -305,6 +309,8 @@ export type ContributionDto = {
   branch: string | null;
   published: boolean;
   unmergedCommits: number;
+  /** No remote: the contribution is merged locally instead of through a pull request. */
+  local: boolean;
 };
 
 export type GitOverviewDto = {
@@ -321,6 +327,10 @@ export type GitBranchDto = {
   remote: boolean;
   current: boolean;
   upstream: string | null;
+  /** Every commit of the local branch is in the main branch. */
+  merged: boolean;
+  /** Why the open project cannot switch to this branch. */
+  blocked: "noProject" | "olderFormat" | "otherSource" | null;
 };
 
 export type AttributionDto = {
@@ -344,6 +354,8 @@ export type GitCommitDto = {
   authorEmail: string;
   /** Seconds since the Unix epoch. */
   authoredAt: number;
+  /** Branch and tag names at the commit: "HEAD -> main", "origin/main", "tag: harmonia/3". */
+  refs: string[];
   subject: string;
 };
 
@@ -387,9 +399,31 @@ export type UnitHistoryDto = {
   reviewedBy: AttributionDto | null;
 };
 
+export type ProjectArea = "glossary" | "guidance" | "packSettings" | "fontSettings" | "fontFile" | "collaboration" | "gitAttributes" | "feedWorkflow";
+
+export type ProjectChangeDetailDto = {
+  kind: UnitChangeKind;
+  /** The term, the settings path ("fonts › MiedingerMid › source"), or "" for a guidance line. */
+  label: string;
+  before: string | null;
+  after: string | null;
+};
+
+/** A readable change of a glossary, guidance, settings, or font file. */
+export type ProjectChangeDto = {
+  path: string;
+  area: ProjectArea;
+  kind: UnitChangeKind;
+  details: ProjectChangeDetailDto[];
+  truncated: boolean;
+  unreadable: boolean;
+  size: number;
+};
+
 export type GitCommitChangesDto = {
   commit: GitCommitDto;
   changes: UnitChangeDto[];
+  projectChanges: ProjectChangeDto[];
   branchCreated: string | null;
 };
 
@@ -423,6 +457,8 @@ export type GitSyncDto = {
   workspaceChanged: boolean;
   /** When non-empty nothing was integrated; sync again with resolutions. */
   conflicts: UnitConflictDto[];
+  /** Merged translations were reconciled with the current source and wait for a checkpoint. */
+  reconciled: boolean;
 };
 
 export type GitFinishDto = {
@@ -612,4 +648,138 @@ export type ProjectGuideDto = {
   diagnostics: { line: number; message: string }[];
   guidanceError: string | null;
   glossaryError: string | null;
+};
+
+/** Project-shared pack identity in aeria-pack.json. */
+export type PackSettings = {
+  packId: string;
+  title: string;
+  publisherName: string;
+  publisherUrl: string | null;
+  license: string | null;
+  minHarmonia: string;
+};
+
+export type ExportOverviewDto = {
+  settings: (PackSettings & { signingKeyFingerprint: string | null }) | null;
+  /** Why aeria-pack.json exists but cannot be used. */
+  settingsError: string | null;
+  key: { state: "stored" | "missing" | "unavailable"; fingerprint: string | null };
+  project: {
+    sourceLanguage: string;
+    targetLanguage: string;
+    gameVersion: string;
+    commit: string | null;
+    uncommitted: boolean;
+    /** aeria-pack.json itself has uncommitted changes. */
+    settingsUncommitted: boolean;
+    /** What the export needs committed but is not. */
+    uncommittedParts: ("translations" | "pack" | "fonts")[];
+    upstream: string | null;
+    ahead: number;
+  };
+  github: { owner: string; name: string; homepage: string; feedUrl: string } | null;
+  workflow: "missing" | "current" | "different";
+  /** The main branch on GitHub (as of the last fetch) has this Aeria's feed workflow. */
+  workflowOnGithub: boolean;
+  mainBranch: string | null;
+  /** Highest harmonia/<n> release tag in the local repository. */
+  latestReleaseTag: number | null;
+  /** aeria-fonts.json exists. */
+  fontsConfigured: boolean;
+};
+
+export type ReleaseChannel = "stable" | "testing";
+export type ContentPolicy = "reviewed" | "all";
+
+export type ReleaseInput = {
+  sequence: number;
+  version: string;
+  channel: ReleaseChannel;
+  contentPolicy: ContentPolicy;
+  changelog: string | null;
+};
+
+export type ExportReportDto = {
+  exported: number;
+  skippedDetached: number;
+  skippedUntranslated: number;
+  skippedUnreviewed: number;
+  skippedWithoutRawHash: number;
+  sheets: number;
+  strings: number;
+  packHash: string;
+  fontTargets: number;
+  fontGlyphs: number;
+  signedBy: string | null;
+};
+
+export type LocalExportDto = { path: string; report: ExportReportDto };
+export type PublishedReleaseDto = { sequence: number; releaseUrl: string; feedUrl: string; report: ExportReportDto };
+
+/** aeria-fonts.json: source fonts for glyphs the game fonts lack. */
+export type FontCaseMapping = "none" | "upper";
+
+export type FontSource = {
+  id: string;
+  file: string;
+  family: string;
+  copyright: string;
+  license: string;
+  licenseFile: string;
+};
+
+export type FontSizeOverride = {
+  source?: string;
+  axes?: Record<string, number>;
+  scale?: number;
+  widthScale?: number;
+  baselineShift?: number;
+  tracking?: number;
+};
+
+export type FontTarget = {
+  font: string;
+  source: string;
+  axes: Record<string, number>;
+  scale: number;
+  widthScale: number;
+  baselineShift: number;
+  tracking: number;
+  caseMapping: FontCaseMapping;
+  sizes: Record<string, FontSizeOverride>;
+};
+
+export type FontSettings = {
+  characters: string;
+  sources: FontSource[];
+  fonts: FontTarget[];
+};
+
+export type GameFontSizeDto = { size: string; lineHeight: number; ascent: number; capHeight: number; capAdvance: number; spaceAdvance: number };
+
+export type FontsOverviewDto = {
+  settings: FontSettings | null;
+  /** Why aeria-fonts.json exists but cannot be used. */
+  settingsError: string | null;
+  /** aeria-fonts.json or fonts/ has uncommitted changes. */
+  uncommitted: boolean;
+  gameFonts: { name: string; sizes: GameFontSizeDto[] }[];
+  sources: { id: string; error: string | null; axes: { tag: string; min: number; default: number; max: number }[] }[];
+};
+
+export type ImportedFontFileDto = { file: string; family: string | null; copyright: string | null; isFont: boolean };
+
+export type FontPreviewSizeDto = {
+  size: string;
+  lineHeight: number;
+  ascent: number;
+  capHeight: number;
+  capAdvance: number;
+  generatedCapAdvance: number | null;
+  width: number;
+  height: number;
+  pixels: number[];
+  missing: string[];
+  error: string | null;
 };

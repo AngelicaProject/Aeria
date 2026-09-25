@@ -6,6 +6,10 @@
 
 #![forbid(unsafe_code)]
 
+mod encode;
+
+pub use encode::{AtlasEncodeRunner, EncodeRejection};
+
 use std::collections::{BTreeMap, VecDeque};
 use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};

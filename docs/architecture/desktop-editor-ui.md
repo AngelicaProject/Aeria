@@ -252,25 +252,47 @@ currently serves Angelica's search tools only.
 
 ## Git dock
 
-The Git dock is a provisional functional panel over the commands in
-[`desktop-application-boundary.md`](./desktop-application-boundary.md). The
-Collaboration view opens with a summary of the branch, its sync state, and Sync
-and Refresh actions (or remote setup when no remote exists). It offers
-repository initialization, a per-string "Mine / Server" choice for same-unit
-sync conflicts, and the contribution status and "Finish contribution" under the
-pull-request policy. Pending translation-unit changes are grouped by sheet in
-source order with an A/M/D marker; clicking one opens that string in the editor
-(paging to it if needed) with its checkpoint diff. The checkpoint composer also
-edits the translator name and optional email; only a name is required, matching
-`aeria-git`, and the composer explains why Checkpoint is unavailable. The view
-also shows the
-history of the selected string with who translated and reviewed it and a
-"Restore this text" action that saves the historical target through the
-ordinary target mutation (resetting review to `draft`). The Advanced view adds
-project history with per-commit unit changes that open the same way, branches (switch and create), the
-review policy toggle, the Git runtime, contributor counts, and the raw
-working-tree file list. A sync, branch switch, or finished contribution that
-changed the workspace reloads the current sheet and progress.
+The Git dock is the Git view over the commands in
+[`desktop-application-boundary.md`](./desktop-application-boundary.md). It
+follows the repository by itself (see [`git.md`](./git.md#git-in-the-desktop))
+and has no refresh button.
+
+- The summary shows the branch, a branch switcher when there are several
+  local branches, the sync state, Sync, and a button to Settings →
+  Repository (or, without a remote, a link to connect one). On the main
+  branch it explains that the next checkpoint starts a contribution branch.
+- It offers repository initialization, a per-string "Mine / Server" choice
+  for same-unit sync conflicts, and, on a contribution branch, its status and
+  "Finish contribution" — or, in a repository without a remote, "Merge into
+  `<main>`" with a confirmation.
+- The branch switcher disables branches that hold the project in a state the
+  open session cannot load (no project, an older Workspace Format, or another
+  game source) and says why; when the main branch is such a branch, the dock
+  explains that the work is not merged into it yet.
+- **Changes** (collapsible) lists everything a checkpoint would commit:
+  translation-unit changes grouped by sheet with an A/M/D marker (clicking
+  one opens the string with its checkpoint diff) and project file changes
+  grouped by area, as described in
+  [`git.md`](./git.md#project-file-changes). The composer commits both and
+  edits the translator name and optional email.
+- **History** fills the rest of the dock: commits with a lane graph, branch
+  and tag labels, and time, loading older commits while scrolling. Clicking
+  one opens a commit tab.
+
+A commit tab shows the message, author, time, full id, labels, translation
+changes (which open in the editor), and project file changes.
+
+Dialogs that write project files (export, fonts, glossary and guidance)
+refresh the dock when they close. A sync, branch switch, or finished
+contribution that changed the workspace reloads the current sheet and
+progress.
+
+## String history
+
+The translation editor's side pane has two tabs, Note and History. History
+shows who translated and reviewed the selected string and every committed
+change to it; "Use this text" puts a historical text into the editor as an
+unsaved draft.
 
 ## Angelica panel
 
@@ -357,6 +379,19 @@ removes them only after confirmation. The Guidance tab is a Markdown text
 area with its size against the 64 KiB limit. Each tab has **Revert** and
 **Save**; closing with unsaved changes asks first. A save fails, without
 writing, when the file changed since it was loaded.
+
+## Export
+
+**Export pack…** opens from the File menu and the command palette. The dialog
+shows the source and target languages, the game version, and the commit the
+pack will record, and warns when translations or `aeria-pack.json` have
+uncommitted changes. Its sections edit the pack settings, manage the signing
+key (create, import or save a backup, remove from this computer), take the
+release parameters, and, when `origin` is on GitHub, show the feed URL and add
+or replace the feed workflow. **Check GitHub** reads the latest release number
+and raises the release number above it. **Export to folder…** and **Publish to
+GitHub** are enabled only when their preconditions hold; publishing asks for
+confirmation. The behavior behind the dialog is in [`export.md`](./export.md).
 
 ## Keyboard
 

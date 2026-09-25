@@ -40,6 +40,26 @@ Likely UI-level dependencies such as Tailwind, Radix primitives, CodeMirror, doc
 `aeria-search` uses `rusqlite` (MIT) with `bundled`, whose SQLite includes
 FTS5 with the `unicode61` and `trigram` tokenizers.
 
+`aeria-export` uses:
+
+- `p256` (Apache-2.0 OR MIT) with only `ecdsa` and `std`: deterministic
+  (RFC 6979) ECDSA P-256 pack signatures, verifiable by the .NET base library
+  in Harmonia without extra packages.
+- `brotli` (BSD-3-Clause AND MIT): the `.hpk.br` transport encoding. It is
+  already in the desktop dependency graph through Tauri.
+
+`aeria-fonts` uses `swash` (Apache-2.0 OR MIT) to read TrueType and OpenType
+fonts, apply variable font axes, and rasterize glyph outlines; it brings
+`skrifa`, `read-fonts`, `font-types`, `yazi`, and `zeno` (all Apache-2.0 OR
+MIT). The bundled recommended fonts in `crates/aeria-fonts/presets/`
+(Cormorant SC, Oswald, Unbounded) are SIL Open Font License 1.1 and ship with
+their license texts; the OFL allows bundling them with software.
+
+`aeria-publish` uses `reqwest`, `rustls` with `ring`, and `keyring` with the
+same versions and features as `aeria-ai`, plus `getrandom` (MIT OR
+Apache-2.0), already in the graph through `p256`, to draw signing keys from the
+operating system random source.
+
 The desktop adds `tauri-plugin-opener` (Apache-2.0 OR MIT) to open the ChatGPT
 sign-in page from Rust, and `tokio` with only `rt` and `time`, already part of
 the Tauri runtime, to pace sign-in polling and to run a translation job's

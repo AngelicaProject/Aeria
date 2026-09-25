@@ -1,6 +1,11 @@
 export type SheetDocumentTab = {
   id: string;
+  /** `commit` shows one commit of the project history. */
+  kind: "sheet" | "commit";
+  /** Empty for a commit. */
   sheetName: string;
+  /** The commit id of a commit tab. */
+  commitId?: string;
   label: string;
   pinned: boolean;
   preview: boolean;
@@ -14,6 +19,7 @@ export type DocumentTabsState = {
 
 export type DocumentTabsAction =
   | { type: "openSheet"; sheetName: string; pin?: boolean }
+  | { type: "openCommit"; commitId: string; label: string }
   | { type: "activate"; id: string }
   | { type: "pin"; id: string }
   | { type: "setDirty"; id: string; dirty: boolean }
@@ -24,6 +30,10 @@ export const initialDocumentTabsState: DocumentTabsState = { tabs: [], activeId:
 
 export function documentIdForSheet(sheetName: string): string {
   return `sheet:${sheetName}`;
+}
+
+export function documentIdForCommit(commitId: string): string {
+  return `commit:${commitId}`;
 }
 
 function selectNeighbor(tabs: readonly SheetDocumentTab[], closedIndex: number): string | null {
@@ -47,14 +57,29 @@ export function reduceDocumentTabs(
 
       const tab: SheetDocumentTab = {
         id,
+        kind: "sheet",
         sheetName: action.sheetName,
         label: action.sheetName.split("/").at(-1) ?? action.sheetName,
         pinned: Boolean(action.pin),
         preview: !action.pin,
         dirty: false,
       };
-      const previewIndex = state.tabs.findIndex((candidate) => candidate.preview && !candidate.pinned && !candidate.dirty);
+      const previewIndex = state.tabs.findIndex((candidate) => candidate.kind === "sheet" && candidate.preview && !candidate.pinned && !candidate.dirty);
       if (previewIndex >= 0 && !action.pin) {
+        const tabs = [...state.tabs];
+        tabs[previewIndex] = tab;
+        return { tabs, activeId: id };
+      }
+      return { tabs: [...state.tabs, tab], activeId: id };
+    }
+    case "openCommit": {
+      // Commit tabs behave like sheet previews: one unpinned commit tab is
+      // reused, so browsing history does not pile up tabs.
+      const id = documentIdForCommit(action.commitId);
+      if (state.tabs.some((tab) => tab.id === id)) return { ...state, activeId: id };
+      const tab: SheetDocumentTab = { id, kind: "commit", sheetName: "", commitId: action.commitId, label: action.label, pinned: false, preview: true, dirty: false };
+      const previewIndex = state.tabs.findIndex((candidate) => candidate.kind === "commit" && candidate.preview && !candidate.pinned);
+      if (previewIndex >= 0) {
         const tabs = [...state.tabs];
         tabs[previewIndex] = tab;
         return { tabs, activeId: id };

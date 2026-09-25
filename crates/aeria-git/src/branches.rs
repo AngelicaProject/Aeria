@@ -3,7 +3,6 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::GitError;
-use crate::collaboration::CollaborationPolicy;
 use crate::repository::GitRepository;
 use crate::sync::IntegrateOutcome;
 
@@ -31,6 +30,9 @@ pub struct ContributionStatus {
     /// not contain yet. Zero after a merge-commit or fast-forward review
     /// merge; squash merges keep this non-zero.
     pub unmerged_commits: u32,
+    /// The repository has no remote, so there is nowhere to open a pull
+    /// request; the contribution is merged locally instead.
+    pub local: bool,
 }
 
 /// The result of finishing a contribution.
@@ -143,17 +145,63 @@ impl GitRepository {
         Ok(())
     }
 
-    /// Returns the contribution state under the pull-request policy, or
-    /// `None` under the direct policy.
+    /// Whether every commit of a local branch is in the main branch.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an invalid name, a missing main branch, or when
+    /// Git fails.
+    pub fn is_merged_into_main(&self, branch: &str) -> Result<bool, GitError> {
+        self.validate_branch_name(branch)?;
+        let Some(main) = self.main_branch()? else {
+            return Ok(false);
+        };
+        if self.branch_head(&main)?.is_none() || self.branch_head(branch)?.is_none() {
+            return Ok(false);
+        }
+        let branch_ref = format!("refs/heads/{branch}");
+        let main_ref = format!("refs/heads/{main}");
+        Ok(self
+            .output(&["merge-base", "--is-ancestor", &branch_ref, &main_ref])?
+            .status
+            .success())
+    }
+
+    /// Deletes a local branch other than the current one. Without `force`
+    /// only a branch merged into the main branch is deleted; `force` also
+    /// deletes one whose commits exist nowhere else.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`GitError::InvalidInput`] for the current, an unknown, or an
+    /// unmerged branch without `force`, or an error when Git fails.
+    pub fn delete_branch(&self, branch: &str, force: bool) -> Result<(), GitError> {
+        let invalid = |reason: &str| GitError::InvalidInput {
+            field: "branch",
+            reason: reason.to_owned(),
+        };
+        self.validate_branch_name(branch)?;
+        if self.current_branch()?.as_deref() == Some(branch) {
+            return Err(invalid("is the current branch"));
+        }
+        if self.branch_head(branch)?.is_none() {
+            return Err(invalid("does not exist"));
+        }
+        if !force && !self.is_merged_into_main(branch)? {
+            return Err(invalid("has commits that are not in the main branch"));
+        }
+        self.run(&["branch", "--quiet", "-D", "--", branch])?;
+        Ok(())
+    }
+
+    /// Returns the contribution state, or `None` when no main branch can be
+    /// determined or `HEAD` is detached.
     ///
     /// # Errors
     ///
     /// Returns an error for invalid settings or a Git failure.
     pub fn contribution_status(&self) -> Result<Option<ContributionStatus>, GitError> {
-        let settings = self.collaboration()?;
-        let (CollaborationPolicy::PullRequest, Some(main_branch)) =
-            (settings.policy, settings.main_branch)
-        else {
+        let Some(main_branch) = self.main_branch()? else {
             return Ok(None);
         };
         let Some(branch) = self.current_branch()? else {
@@ -165,6 +213,7 @@ impl GitRepository {
                 branch: None,
                 published: false,
                 unmerged_commits: 0,
+                local: self.remotes()?.is_empty(),
             }));
         }
         let published = self.upstream(&branch)?.is_some();
@@ -176,6 +225,7 @@ impl GitRepository {
             Err(GitError::NoRemote) => None,
             Err(error) => return Err(error),
         };
+        let local = self.remotes()?.is_empty();
         let base = remote_main.unwrap_or_else(|| main_branch.clone());
         let unmerged_commits = if self.verify_ref(&base)?.is_some() {
             self.ahead_behind(&base)?.0
@@ -187,6 +237,7 @@ impl GitRepository {
             branch: Some(branch),
             published,
             unmerged_commits,
+            local,
         }))
     }
 
@@ -197,19 +248,17 @@ impl GitRepository {
     ///
     /// # Errors
     ///
-    /// Returns [`GitError::InvalidSettings`] outside the pull-request policy,
+    /// Returns [`GitError::InvalidSettings`] without a main branch,
     /// [`GitError::UncommittedTranslations`], [`GitError::IncomingRejected`],
     /// or another typed Git error.
     pub fn finish_contribution<F>(&self, accept: F) -> Result<FinishOutcome, GitError>
     where
         F: FnOnce() -> Result<(), String>,
     {
-        let settings = self.collaboration()?;
-        let (CollaborationPolicy::PullRequest, Some(main)) =
-            (settings.policy, settings.main_branch)
-        else {
+        let Some(main) = self.main_branch()? else {
             return Err(GitError::InvalidSettings {
-                reason: "contributions are used only with the pull-request policy".to_owned(),
+                reason: "the main branch cannot be determined; set it in the repository settings"
+                    .to_owned(),
             });
         };
         self.require_clean_translations()?;
@@ -235,6 +284,76 @@ impl GitRepository {
         };
         if let Err(reason) = accept() {
             self.run(&["switch", "--quiet", &contribution])?;
+            return Err(GitError::IncomingRejected { reason });
+        }
+        let deleted = self
+            .output(&["branch", "--quiet", "-d", &contribution])?
+            .status
+            .success();
+        Ok(FinishOutcome {
+            integration,
+            deleted_branch: deleted.then_some(contribution),
+        })
+    }
+
+    /// Merges the current contribution branch into the main branch in a
+    /// repository without remotes, where there is nowhere to open a pull
+    /// request. Switches to the main branch, integrates the contribution (a
+    /// fast-forward when the main branch has not moved, otherwise a merge
+    /// with per-unit merging of translations), lets `accept` validate the
+    /// project, and deletes the merged contribution branch. On any failure
+    /// the main branch is reset and the contribution branch restored.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`GitError::InvalidSettings`] when the repository has a remote
+    /// (merge through a pull request there) or no main branch,
+    /// [`GitError::UncommittedTranslations`],
+    /// [`GitError::TranslationConflicts`], [`GitError::MergeConflict`],
+    /// [`GitError::IncomingRejected`], or another typed Git error.
+    pub fn merge_contribution_locally<F>(&self, accept: F) -> Result<FinishOutcome, GitError>
+    where
+        F: FnOnce() -> Result<(), String>,
+    {
+        if !self.remotes()?.is_empty() {
+            return Err(GitError::InvalidSettings {
+                reason: "the repository has a remote; contributions reach the main branch through a pull request there".to_owned(),
+            });
+        }
+        let Some(main) = self.main_branch()? else {
+            return Err(GitError::InvalidSettings {
+                reason: "the main branch cannot be determined; set it in the repository settings"
+                    .to_owned(),
+            });
+        };
+        self.require_clean_translations()?;
+        let contribution = self.require_branch()?;
+        let Some(before) = self.branch_head(&main)? else {
+            return Err(GitError::InvalidSettings {
+                reason: format!("the main branch {main} does not exist"),
+            });
+        };
+        if contribution == main {
+            return Ok(FinishOutcome {
+                integration: IntegrateOutcome::UpToDate,
+                deleted_branch: None,
+            });
+        }
+        self.run(&["switch", "--quiet", &main])?;
+        let restore = |repository: &Self| -> Result<(), GitError> {
+            repository.reset_to(&before)?;
+            repository.run(&["switch", "--quiet", &contribution])?;
+            Ok(())
+        };
+        let integration = match self.merge_from(&contribution, &std::collections::BTreeMap::new()) {
+            Ok(integration) => integration,
+            Err(error) => {
+                restore(self)?;
+                return Err(error);
+            }
+        };
+        if let Err(reason) = accept() {
+            restore(self)?;
             return Err(GitError::IncomingRejected { reason });
         }
         let deleted = self

@@ -13,6 +13,8 @@ members = [
   "crates/aeria-ai",
   "crates/aeria-git",
   "crates/aeria-export",
+  "crates/aeria-fonts",
+  "crates/aeria-publish",
   "tools/workspace-format-evaluation",
   "apps/desktop/src-tauri",
 ]

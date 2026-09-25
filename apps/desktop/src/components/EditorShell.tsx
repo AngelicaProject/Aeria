@@ -48,8 +48,11 @@ import { TranslationEditor, type CellDraft, type CellMutation, type TranslationE
 import { TranslationList } from "./TranslationList";
 import { WindowChrome } from "./WindowChrome";
 import type { ApplicationMenuDefinition } from "./ApplicationMenu";
+import { ExportDialog } from "./ExportDialog";
 import { ProjectGuideDialog, type ProjectGuideTab } from "./ProjectGuideDialog";
-import { WorkbenchToolDock, toolTitle, type GitPresentationMode, type WorkbenchTool } from "./WorkbenchToolDock";
+import { WorkbenchToolDock, toolTitle, type WorkbenchTool } from "./WorkbenchToolDock";
+import { CommitView } from "./GitHistory";
+import type { GitCommitDto } from "../types";
 import { detachedPanelTitle, type DetachedPanel } from "./DetachedToolWindow";
 import { displayPathName } from "../pathDisplay";
 import { initialWorkbenchLayout, reduceWorkbenchLayout } from "../ui/layout";
@@ -237,14 +240,23 @@ export function EditorShell({
   const [detachedPanel, setDetachedPanel] = useState<DetachedPanel | null>(null);
   const [dockLayoutState, setDockLayoutState] = useState(initialDockLayout);
   const [activeTool, setActiveTool] = useState<WorkbenchTool>("git");
-  const [gitMode, setGitMode] = useState<GitPresentationMode>("collaboration");
+  /** Bumps when dialogs that write project files close, so Git views reload. */
+  const [projectRevision, setProjectRevision] = useState(0);
   const [workspaceRevision, setWorkspaceRevision] = useState(0);
   const [lensFilter, setLensFilter] = useState<OccurrenceFilter>(emptyOccurrenceFilter);
   const [progress, setProgress] = useState<readonly SheetProgressDto[]>([]);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [guide, setGuide] = useState<{ open: boolean; tab: ProjectGuideTab }>({ open: false, tab: "glossary" });
   const openGuide = useCallback((tab: ProjectGuideTab) => setGuide({ open: true, tab }), []);
-  const setGuideOpen = useCallback((open: boolean) => setGuide((current) => ({ ...current, open })), []);
+  const setGuideOpen = useCallback((open: boolean) => {
+    setGuide((current) => ({ ...current, open }));
+    if (!open) setProjectRevision((current) => current + 1);
+  }, []);
+  const [exportOpen, setExportOpenState] = useState(false);
+  const setExportOpen = useCallback((open: boolean) => {
+    setExportOpenState(open);
+    if (!open) setProjectRevision((current) => current + 1);
+  }, []);
   const [settingsSection, setSettingsSection] = useState<SettingsSection>("appearance");
   const [palette, setPalette] = useState<{ open: boolean; input: string; key: number }>({ open: false, input: "", key: 0 });
   const [recentSheets, setRecentSheets] = useState<string[]>([]);
@@ -558,20 +570,27 @@ export function EditorShell({
     if (!document || document.id === documentTabs.activeId) return;
     if (!(await requestDiscardConfirmation(t("workbench.discard.changeSheet")))) return;
     setDocumentTabs((current) => reduceDocumentTabs(current, { type: "activate", id: documentId }));
-    void beginSheetLoad(document.sheetName);
+    if (document.kind === "sheet") void beginSheetLoad(document.sheetName);
   }, [beginSheetLoad, documentTabs.activeId, documentTabs.tabs, requestDiscardConfirmation, t]);
 
   const handleDocumentClose = useCallback(async (documentId: string) => {
     const document = documentTabs.tabs.find((tab) => tab.id === documentId);
     if (!document) return;
-    if (document.id === documentTabs.activeId && !(await requestDiscardConfirmation(t("workbench.discard.closeSheet")))) return;
+    if (document.kind === "sheet" && document.id === documentTabs.activeId && !(await requestDiscardConfirmation(t("workbench.discard.closeSheet")))) return;
     const next = reduceDocumentTabs(documentTabs, { type: "close", id: documentId });
     setDocumentTabs(next);
     if (next.activeId && next.activeId !== documentTabs.activeId) {
       const nextDocument = next.tabs.find((tab) => tab.id === next.activeId);
-      if (nextDocument) void beginSheetLoad(nextDocument.sheetName);
+      if (nextDocument?.kind === "sheet") void beginSheetLoad(nextDocument.sheetName);
     }
   }, [beginSheetLoad, documentTabs, requestDiscardConfirmation, t]);
+
+  const openCommit = useCallback(async (commit: GitCommitDto) => {
+    const active = documentTabs.tabs.find((document) => document.id === documentTabs.activeId);
+    if (active?.kind === "sheet" && !(await requestDiscardConfirmation(t("workbench.discard.changeSheet")))) return;
+    setDocumentTabs((current) => reduceDocumentTabs(current, { type: "openCommit", commitId: commit.id, label: `${commit.id.slice(0, 7)} ${commit.subject}` }));
+  }, [documentTabs.activeId, documentTabs.tabs, requestDiscardConfirmation, t]);
+  const stableOpenCommit = useStableCallback((commit: GitCommitDto) => void openCommit(commit));
 
   const handleDocumentPin = useCallback((documentId: string) => {
     setDocumentTabs((current) => reduceDocumentTabs(current, { type: "pin", id: documentId }));
@@ -882,6 +901,7 @@ export function EditorShell({
   });
   const restoreTarget = useStableCallback((target: string) => void handleRestoreTarget(target));
   const openAiSettings = useCallback(() => openSettings("ai"), [openSettings]);
+  const openRepositorySettings = useCallback(() => openSettings("repository"), [openSettings]);
   const pendingState = useMemo(() => ({ changes: pendingChanges, refresh: refreshPendingChanges }), [pendingChanges, refreshPendingChanges]);
 
   // Layout ---------------------------------------------------------------
@@ -1047,7 +1067,9 @@ export function EditorShell({
     pinned: document.pinned,
     preview: document.preview,
     dirty: document.dirty,
+    icon: document.kind === "commit" ? "gitCommit" : "table2",
   }));
+  const activeCommitId = documentTabs.tabs.find((document) => document.id === documentTabs.activeId)?.commitId ?? null;
 
   const sheetHeaderActions = <>
     <IconButton icon={hideEmptySheets ? "eyeOff" : "eye"} label={t(hideEmptySheets ? "workbench.showEmptySheets" : "workbench.hideEmptySheets")} pressed={hideEmptySheets} disabled={closing} onClick={() => setHideEmptySheets((current) => !current)} />
@@ -1061,7 +1083,7 @@ export function EditorShell({
       return <SheetSidebar sheets={project.sheets} selectedSheetName={selectedSheetName} disabled={closing} active={active} hideEmpty={hideEmptySheets} onHideEmptyChange={setHideEmptySheets} filterOpen={sheetFilterOpen} onFilterOpenChange={setSheetFilterOpen} onOpenFilter={focusSheetFilter} quickFindSignal={quickFindSignal} revealSignal={revealSheetSignal} collapseSignal={collapseSheetsSignal} onSelect={handleSheetSelect} progress={progressBySheet} />;
     }
     const tool: WorkbenchTool = panelId === "git" ? "git" : panelId === "search" ? "search" : "ai";
-    return <WorkbenchToolDock activeTool={tool} gitMode={gitMode} selectedBinding={selectedBinding} onGitModeChange={setGitMode} selectedUnitId={selectedUnitId} workspaceRevision={workspaceRevision} onWorkspaceChanged={stableWorkspaceChanged} onRestoreTarget={restoreTarget} pending={pendingState} onRevealBinding={stableRevealBinding} editorContext={angelicaContext} onOpenSettings={openAiSettings} onOpenGuide={openGuide} />;
+    return <WorkbenchToolDock activeTool={tool} selectedBinding={selectedBinding} onOpenCommit={stableOpenCommit} selectedCommitId={activeCommitId} onOpenRepositorySettings={openRepositorySettings} projectRevision={projectRevision} selectedUnitId={selectedUnitId} workspaceRevision={workspaceRevision} onWorkspaceChanged={stableWorkspaceChanged} pending={pendingState} onRevealBinding={stableRevealBinding} editorContext={angelicaContext} onOpenSettings={openAiSettings} onOpenGuide={openGuide} />;
   };
 
   const renderDock = (region: "left" | "right", panelId: string | null, open: boolean) => {
@@ -1107,6 +1129,7 @@ export function EditorShell({
       label: t("menu.file"),
       items: [
         { kind: "command", id: "settings", label: t("menu.settings"), shortcut: "Ctrl+,", onSelect: () => openSettings() },
+        { kind: "command", id: "export-pack", label: t("menu.exportPack"), onSelect: () => setExportOpen(true) },
         { kind: "separator", id: "file-sep-1" },
         { kind: "command", id: "close-tab", label: t("menu.closeSheet"), shortcut: "Ctrl+W", ...(documentTabs.activeId ? { onSelect: () => void handleDocumentClose(documentTabs.activeId!) } : {}) },
         { kind: "command", id: "close-project", label: t("menu.closeProject"), onSelect: () => void handleClose() },
@@ -1201,6 +1224,7 @@ export function EditorShell({
     { id: "prefs-shortcuts", category: category.preferences, title: t("settings.section.keyboard"), icon: "listFilter", run: () => openSettings("keyboard") },
     ...themeRegistry.map((entry): PaletteCommand => ({ id: `theme-${entry.id}`, category: category.theme, title: themeLabel(entry), icon: "palette", run: () => setThemeId(entry.id) })),
     { id: "file-close-sheet", category: category.file, title: t("menu.closeSheet"), shortcut: "Ctrl+W", icon: "x", enabled: documentTabs.activeId !== null, run: () => { if (documentTabs.activeId) void handleDocumentClose(documentTabs.activeId); } },
+    { id: "file-export-pack", category: category.file, title: t("menu.exportPack"), icon: "arrowUpRight", run: () => setExportOpen(true) },
     { id: "file-close-project", category: category.file, title: t("menu.closeProject"), icon: "folder", run: () => void handleClose() },
   ];
 
@@ -1262,7 +1286,9 @@ export function EditorShell({
               onPin={handleDocumentPin}
               onReorder={(documentId, beforeDocumentId) => setDocumentTabs((current) => reduceDocumentTabs(current, { type: "reorder", id: documentId, beforeId: beforeDocumentId }))}
             />
-            {!selectedSheetName ? (
+            {activeCommitId ? (
+              <CommitView commitId={activeCommitId} onRevealBinding={stableRevealBinding} />
+            ) : !selectedSheetName ? (
               <div className="document-empty empty-state">
                 <strong>{t("workbench.noSheetOpen")}</strong>
                 <p>{t("workbench.noSheetOpenHint")}</p>
@@ -1310,6 +1336,7 @@ export function EditorShell({
                   onNavigate={stableNavigateFromEditor}
                   takeFocusRequest={takeFocusRequest}
                   checkpoint={selectedCheckpoint}
+                  historyRevision={workspaceRevision + projectRevision}
                 />
               </div>
             )}
@@ -1370,8 +1397,9 @@ export function EditorShell({
         onKeepEditing={() => resolveDiscardConfirmation(false)}
         onDiscard={() => resolveDiscardConfirmation(true)}
       />
-      <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} initialSection={settingsSection} />
+      <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} initialSection={settingsSection} projectOpen />
       <ProjectGuideDialog open={guide.open} initialTab={guide.tab} onOpenChange={setGuideOpen} />
+      <ExportDialog open={exportOpen} onOpenChange={setExportOpen} onOpenChanges={() => { setExportOpen(false); showPanel("git", "right", false); }} />
       {palette.open ? (
         <CommandPalette
           key={palette.key}

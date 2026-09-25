@@ -207,6 +207,7 @@ impl From<GitError> for CommandError {
             GitError::IncomingRejected { .. } => "gitIncomingRejected",
             GitError::TranslationConflicts { .. } => "gitTranslationConflicts",
             GitError::InvalidSettings { .. } => "gitInvalidSettings",
+            GitError::MainBranchProtected { .. } => "gitMainBranchProtected",
             GitError::Workspace(_) => "gitWorkspaceData",
             GitError::Io { .. } => "gitIo",
         };

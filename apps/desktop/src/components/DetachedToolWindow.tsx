@@ -6,7 +6,7 @@ import { useI18n } from "../ui/i18n";
 import { BottomPanel, bottomPanelTabs, type BottomPanelTab } from "./BottomPanel";
 import { ErrorBanner } from "./ErrorBanner";
 import { WindowChrome } from "./WindowChrome";
-import { WorkbenchToolDock, toolTitle, type GitPresentationMode, type WorkbenchTool } from "./WorkbenchToolDock";
+import { WorkbenchToolDock, toolTitle, type WorkbenchTool } from "./WorkbenchToolDock";
 import { displayPathName } from "../pathDisplay";
 
 export type DetachedPanel = "search" | "ai" | "git" | "tasks" | "gitChanges" | "diagnostics";
@@ -24,7 +24,6 @@ export function DetachedToolWindow({ panel }: { panel: DetachedPanel }) {
   const { t } = useI18n();
   const [project, setProject] = useState<ProjectSummaryDto | null>(null);
   const [error, setError] = useState<CommandError | null>(null);
-  const [gitMode, setGitMode] = useState<GitPresentationMode>("collaboration");
   const [bottomTab, setBottomTab] = useState<BottomPanelTab>(panel === "gitChanges" ? "gitChanges" : panel === "diagnostics" ? "diagnostics" : "tasks");
 
   useEffect(() => {
@@ -41,7 +40,7 @@ export function DetachedToolWindow({ panel }: { panel: DetachedPanel }) {
           {tool ? (
             <section className="panel">
               <div className="panel-body">
-                <WorkbenchToolDock activeTool={panel as WorkbenchTool} gitMode={gitMode} selectedBinding={null} onGitModeChange={setGitMode} />
+                <WorkbenchToolDock activeTool={panel as WorkbenchTool} selectedBinding={null} />
               </div>
             </section>
           ) : <BottomPanel activeTab={bottomTab} onTabChange={setBottomTab} />}

@@ -6,36 +6,40 @@ Git is Aeria's collaboration and history layer. Aeria does not require a proprie
 
 The core workflow must work with an ordinary Git remote. Forge-specific integrations such as GitHub/GitLab pull-request creation are optional adapters and must not become core requirements.
 
-## Simple mode
+## What gets committed, and when
 
-Simple mode presents domain-oriented operations such as:
+A **checkpoint is the only way Aeria commits.** Nothing else — saving pack,
+font, or collaboration settings, editing the glossary or guidance, recording a
+signing key, or reconciling merged translations after a sync — creates a
+commit. Those actions only write files; the files show up as uncommitted
+changes, described in readable form, until the translator creates a
+checkpoint. The export requires the files it builds from to be committed and
+points to the uncommitted changes instead of committing them.
 
-- Changes
-- Checkpoint
-- Sync
-- Share
-- Review
+## Git in the desktop
 
-It still operates on a real Git repository.
+- The **Git dock** is the whole everyday view and follows the repository on
+  its own (below): the branch, which can be switched there, sync state and
+  Sync, the uncommitted changes (translations grouped by sheet, and project
+  files grouped by area), the checkpoint composer, and the project history
+  with a commit graph. Clicking a commit opens it in a document tab.
+- **Settings → Repository** holds the setup: remotes, the upstream, the main
+  branch, the translator identity, and working-tree files outside the project.
+- The **string history** (who translated and reviewed a string, and every
+  committed change to it) is a tab beside the note in the translation editor.
 
-## Advanced mode
-
-Advanced mode exposes conventional source-control concepts:
-
-- working tree
-- staging/index
-- commits
-- branches
-- remotes
-- history
-- merge/rebase/conflicts
+The dock polls a fingerprint of `git status --porcelain=v2 --branch` (branch,
+`HEAD`, upstream, ahead/behind, changed files) every two seconds while the
+window is visible and when it gains focus, and reloads only when the
+fingerprint changed; it has no refresh button. Changes made outside Aeria
+therefore show up by themselves.
 
 ## Collaboration policy
 
-A project may declare a default policy such as:
-
-- `direct`: work in the current branch and push directly.
-- `pull-request`: create/use a contribution branch and guide the user toward review before integration.
+Translations reach the main branch (`main` or `master`) **only through pull
+requests**. Nobody commits to it directly: a checkpoint on the main branch
+starts a contribution branch, and Aeria never pushes local commits to the
+published main branch. There is no direct mode.
 
 ## Attribution and credentials
 
@@ -109,11 +113,38 @@ never invents an author.
 
 ### Checkpoint
 
-A checkpoint stages and commits only Aeria-managed paths: `.aeria/`,
-`.gitattributes`, and `aeria-collaboration.json` (`git commit --only`).
-Unrelated staged or modified files are left untouched. A blank message is
-replaced by a deterministic summary of the translation-unit changes, for
-example `Translate 3 strings, update 1 translation (Addon, Quest)`.
+A checkpoint stages and commits only Aeria-managed paths (`git commit
+--only`): `.aeria/` and the project files `.gitattributes`,
+`aeria-collaboration.json`, `aeria-pack.json`, `aeria-fonts.json`, the
+`fonts/` directory of source fonts, `aeria-glossary.csv`,
+`aeria-guidance.md`, and the feed workflow
+`.github/workflows/harmonia-feed.yml` (`PROJECT_PATHS`). Unrelated staged or modified files are
+left untouched and listed in Settings → Repository as other files. A blank
+message is replaced by a deterministic summary: the translation-unit changes,
+for example `Translate 3 strings, update 1 translation (Addon, Quest)`,
+followed by the changed project areas (`; update glossary, game fonts`), or
+`Update glossary, pack settings` when no translation changed.
+
+Whether a checkpoint first moves to a contribution branch follows the
+collaboration policy committed in `HEAD`, not the working copy, so committing
+a policy change does not move its author to a contribution branch.
+
+### Project file changes
+
+Uncommitted changes (`HEAD` against the working tree) and each commit's
+changes (against its first parent) are shown for project files in readable
+form, computed in the desktop (`project_changes.rs`):
+
+- the glossary is compared by term: added, removed, and changed entries with
+  translation, note, and forbidden translations;
+- guidance and `.gitattributes` are compared by line;
+- pack, font, and collaboration settings are compared by field, with list
+  entries keyed by their `id` or `font` (`fonts › MiedingerMid › source:
+  tektur → unbounded`);
+- font files are reported as added, replaced, or removed with their size;
+- the feed workflow is reported as added, updated, or removed.
+
+A file that cannot be parsed is reported as changed but unreadable.
 
 ### Semantic changes, history, and attribution
 
@@ -169,9 +200,10 @@ Sync is fetch, integrate, push:
    `ProjectSession`, including source compatibility and source guidance).
    If validation fails, the branch is reset to its starting commit with
    `git reset --merge`. Validation may reconcile merged units with the
-   session source (see below); such changes are committed right after the
-   merge with the message `Reconcile translations with the current game
-   source`, so the pushed history is consistent.
+   session source (see below); such changes are not committed. They stay in
+   the working tree like any other change, the sync result says so, and they
+   reach the remote with the next checkpoint and sync. Until then the next
+   sync is blocked by the uncommitted translations.
 3. Push local commits. A branch without an upstream is published to the
    sync remote and tracked. A push rejected by the remote (for example a
    protected branch) is reported as a Git failure.
@@ -227,30 +259,83 @@ or incoming version, supplied to a repeated sync; Aeria never chooses on its
 own. Conflicts in any other file, including `.aeria/manifest.json`, abort the
 merge.
 
-## Branches and collaboration policy
+## Branches and contributions
 
-Advanced mode lists local and remote-tracking branches, creates a branch at
-the current commit (uncommitted work moves with it), and switches branches.
-A switch requires checkpointed translations, reloads the project, and is
-undone when the reloaded project is not valid for the active source package.
+The Git dock switches between local branches. A switch requires checkpointed
+translations, reloads the project, and is undone when the reloaded project is
+not valid for the active source package.
 
-The project-shared policy is stored in
-[`aeria-collaboration.json`](../formats/collaboration-v1.md) and committed
-with the project. Without the file the policy is `direct`.
+The **main branch** is the one set in
+[`aeria-collaboration.json`](../formats/collaboration-v1.md); without a
+setting it is detected: the sync remote's default branch (`<remote>/HEAD`),
+else a local or remote `main`, else `master`, else the current branch of a
+repository without commits. Settings → Repository shows which applies and
+can set it; saving writes the file, and the next checkpoint commits it. The
+checkpoint decides by the main branch committed in `HEAD`, so committing a
+setting does not redirect its own checkpoint.
 
-- `direct`: checkpoints are committed to the current branch and sync pushes
-  it.
-- `pull-request`: a checkpoint on the main branch first creates a
-  contribution branch named `translations/<name>-<UTC timestamp>` from the
-  translator name (ASCII letters and digits; otherwise the email local part
-  or `translator`) and commits there. Sync keeps the contribution branch up
-  to date with the remote main branch and publishes it for review on the
-  hosting service. The contribution status reports whether the branch is
-  published and how many of its commits the remote main branch does not
-  contain yet. **Finish contribution** switches back to the main branch,
-  fast-forwards it, and deletes the contribution branch only when Git
-  confirms it is merged; branches merged by squash are kept.
+- A checkpoint on the main branch first creates a contribution branch named
+  `translations/<name>-<UTC timestamp>` from the translator name (ASCII
+  letters and digits; otherwise the email local part or `translator`) and
+  commits there. The only commit made on the current branch directly is the
+  first commit of a repository; when the project names a main branch and the
+  unborn branch has another name (for example `git init` chose `master` and
+  the project says `main`), the first checkpoint starts the named branch.
+- Upstreams need no setup: the first sync of a branch publishes it and sets
+  its upstream. Settings → Repository can point a branch with commits at
+  another fetched remote branch, and explains when there is nothing to choose
+  (no commits yet, or an empty remote).
+- Sync publishes the main branch only while the remote does not have it yet.
+  When the published main branch has local commits, push is refused
+  (`MainBranchProtected`) and the commits must move to a contribution branch.
+- Sync keeps a contribution branch up to date with the remote main branch and
+  publishes it for review on the hosting service. The contribution status
+  reports whether the branch is published and how many of its commits the
+  remote main branch does not contain yet. **Finish contribution** switches
+  back to the main branch, fast-forwards it, and deletes the contribution
+  branch only when Git confirms it is merged; branches merged by squash are
+  kept.
 
-The policy guides Aeria's workflow; enforcement, such as protected branches,
-belongs to the hosting service. Opening the pull request itself is left to
-the hosting service or a future optional adapter.
+- **Without a remote** there is nowhere to open a pull request. The Git dock
+  then offers **Merge into `<main>`** on a contribution branch, after an
+  explicit confirmation: Aeria switches to the main branch, integrates the
+  contribution (a fast-forward when the main branch has not moved, otherwise
+  a merge with per-unit merging of translations), validates the reloaded
+  project, and deletes the merged branch. A rejected project resets the main
+  branch and returns to the contribution branch. As soon as the repository
+  has a remote, this action is unavailable and pull requests are the only
+  way in.
+
+- Branches are deleted only on request. "Finish contribution" and "Merge
+  into `<main>`" delete the branch they finish; otherwise Settings →
+  Repository lists the other local branches, whether each is merged into the
+  main branch (`merge-base --is-ancestor`), and deletes one after a
+  confirmation. A branch with commits outside the main branch needs a second,
+  explicit warning. Branches on the remote are never deleted by Aeria.
+
+Several translators may share one contribution branch; they sync with each
+other through it exactly as described under Sync. Protecting the main branch
+on the hosting service (for example GitHub branch protection) is still
+recommended, because Git tools other than Aeria are not bound by these rules.
+Opening the pull request itself is left to the hosting service or a future
+optional adapter.
+
+## Remotes and upstream
+
+Settings → Repository lists every remote with its URL, which can be edited
+(`git remote set-url`) or removed (`git remote remove`; nothing is deleted on
+the server), and add a remote. The upstream of the current branch, which sync
+receives from and pushes to, is chosen from the remote-tracking branches
+after fetching every remote (`git fetch --all --prune`) and set with
+`git branch --set-upstream-to`.
+
+## History
+
+The project history lists commits of `HEAD` newest first in topological
+order in the Git dock, loaded in pages of 100 as the list scrolls, with branch and tag names
+(`%D`). A project at the repository top level shows the complete history,
+merges included; a project in a subdirectory shows its path-limited history
+with rewritten parents (`--parents`) so the graph stays connected. The graph
+lanes are laid out in the renderer (`commitGraph.ts`). Clicking a commit
+opens it in a document tab with its translation changes and project file
+changes; one unpinned commit tab is reused while browsing.
