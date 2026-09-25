@@ -410,7 +410,10 @@ export const ru: Catalog = {
   },
   "angelica.placeholder": "Сообщение для Angelica — Enter отправить, Shift+Enter новая строка",
   "angelica.model": "Модель",
-  "angelica.effort": "Усилие",
+  "angelica.effortFaster": "Быстрее",
+  "angelica.effortSmarter": "Умнее",
+  "angelica.noModel": "Выберите модель",
+  "angelica.effort": "Рассуждения",
   "angelica.usageHint": "Токенов в разговоре: запрос {prompt}, ответ {completion}",
   "angelica.contextFill": "Контекст {percent}%",
   "angelica.tokens": {

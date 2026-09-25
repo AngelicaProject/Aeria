@@ -509,11 +509,38 @@
 .angelica-box-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; min-width: 0; cursor: default; }
 .angelica-box-spacer { flex: 1 0 0; }
 .angelica-box-end { display: flex; flex: 0 1 auto; align-items: center; gap: 4px; min-width: 0; margin-left: auto; }
-.angelica-ghost-select { flex: none; width: auto; height: 24px; padding: 0 4px; border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--fg-muted); font: inherit; font-size: var(--text-2xs); text-overflow: ellipsis; cursor: pointer; }
-.angelica-ghost-select:hover,
-.angelica-ghost-select:focus-visible { background: var(--hover); color: var(--fg); outline: none; }
-.angelica-ghost-select option { background: var(--panel); color: var(--fg); }
-.angelica-model { flex: 0 1 auto; min-width: 72px; max-width: 160px; }
+.angelica-control { display: inline-flex; flex: none; align-items: center; gap: 4px; min-width: 0; height: 24px; padding: 0 6px; border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--fg-muted); font: inherit; font-size: var(--text-xs); white-space: nowrap; cursor: pointer; }
+.angelica-control:hover,
+.angelica-control[data-state="open"] { background: var(--hover); color: var(--fg); }
+.angelica-control:focus-visible { outline: 2px solid var(--line-focus); outline-offset: -2px; }
+.angelica-control svg { flex: none; color: var(--fg-subtle); }
+.angelica-selection { flex: 0 1 auto; color: var(--fg-subtle); }
+.angelica-selection-text { overflow: hidden; font-family: var(--font-mono); font-size: var(--text-2xs); text-overflow: ellipsis; }
+.angelica-selection.off .angelica-selection-text { color: var(--fg-faint); text-decoration: line-through; }
+.angelica-model { flex: 0 1 auto; }
+.angelica-model-name { overflow: hidden; text-overflow: ellipsis; }
+.angelica-model-effort { flex: none; padding: 0 5px; border-radius: var(--radius-xs); background: var(--hover); color: var(--fg-muted); font-size: var(--text-2xs); line-height: 16px; }
+.angelica-menu { min-width: 220px; max-width: min(320px, calc(100vw - 16px)); }
+.angelica-menu-label { padding-left: 8px; }
+.angelica-menu-item { align-items: flex-start; width: 100%; border: 0; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.angelica-menu-item .menu-item-check { height: 18px; }
+.angelica-menu-item:hover,
+.angelica-menu-item:focus-visible { background: var(--selected); outline: none; }
+.angelica-menu-text { display: grid; gap: 1px; min-width: 0; }
+.angelica-menu-hint { color: var(--fg-subtle); font-size: var(--text-2xs); line-height: 1.35; white-space: normal; }
+.angelica-model-list { display: grid; max-height: 260px; overflow-y: auto; }
+.angelica-effort { display: grid; gap: 6px; padding: 6px 10px 10px; }
+.angelica-effort-head { display: flex; align-items: baseline; gap: 8px; color: var(--fg-subtle); font-size: var(--text-xs); }
+.angelica-effort-head strong { color: var(--fg); font-weight: 600; }
+.angelica-effort-scale { display: flex; justify-content: space-between; color: var(--fg-subtle); font-size: var(--text-2xs); }
+.angelica-effort-track { position: relative; height: 22px; margin: 0 8px; border-radius: 11px; outline: none; }
+.angelica-effort-track::before { position: absolute; top: 50%; right: -8px; left: -8px; height: 16px; border-radius: 8px; background: var(--hover); content: ""; transform: translateY(-50%); }
+.angelica-effort-track:focus-visible::before { box-shadow: 0 0 0 2px var(--line-focus); }
+.angelica-effort-fill { position: absolute; top: 50%; left: -8px; height: 16px; min-width: 16px; border-radius: 8px; background: color-mix(in srgb, var(--accent) 35%, transparent); transform: translateY(-50%); pointer-events: none; }
+.angelica-effort-stop { position: absolute; top: 50%; width: 16px; height: 16px; padding: 0; border: 0; border-radius: 50%; background: transparent; transform: translate(-50%, -50%); cursor: pointer; }
+.angelica-effort-stop::after { position: absolute; inset: 6px; border-radius: 50%; background: var(--fg-faint); content: ""; }
+.angelica-effort-stop.current { width: 22px; height: 22px; background: var(--fg); box-shadow: var(--shadow-control); }
+.angelica-effort-stop.current::after { display: none; }
 .angelica-ring { position: relative; flex: none; width: 16px; height: 16px; margin: 0 2px; border-radius: 50%; background: conic-gradient(var(--accent) var(--fill, 0%), var(--line-strong) 0); cursor: help; }
 .angelica-ring::after { position: absolute; inset: 3px; border-radius: 50%; background: var(--panel-raised); content: ""; }
 .angelica-round { display: inline-grid; flex: none; place-items: center; width: 26px; height: 26px; padding: 0; border: 0; border-radius: 50%; cursor: pointer; }

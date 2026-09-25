@@ -2,8 +2,8 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProp
 import { listen } from "@tauri-apps/api/event";
 import { aiSettings, angelicaApplyProposal, angelicaProposals, angelicaRejectProposal, angelicaCancel, angelicaConversation, angelicaConversations, angelicaDeleteConversation, angelicaSend, normalizeCommandError } from "../ipc";
 import { ANGELICA, activitySummary, applyAgentEvent, contextFill, formatElapsed, formatTokens, groupTranscript, parseReply, reasoningTitle, resolveModel, toolSubject, totalTokens, transcriptFromMessages, type ActivityStep, type ReplySpan, type TranscriptBlock, type TranscriptItem } from "../angelica";
-import { parseSelectionKey, selectableEfforts, selectionKey } from "../aiSettings";
 import type { AgentMode, ProposalRecord, SourceBinding } from "../types";
+import { ModeMenu, ModelMenu, SelectionToggle } from "./AngelicaComposerControls";
 import { AngelicaJobs } from "./AngelicaJobs";
 import { AngelicaProposals } from "./AngelicaProposals";
 import type { AgentEvent, AiModelSelection, AiSettingsDto, AiUsage, AngelicaEventDto, CommandError, ConversationDto, ConversationSummaryDto, EditorContextDto, ReasoningEffort } from "../types";
@@ -17,18 +17,6 @@ type AngelicaPanelProps = {
   onOpenSettings?: (() => void) | undefined;
   onOpenGuide?: ((tab: "glossary" | "guidance") => void) | undefined;
   onReveal?: ((binding: SourceBinding) => void) | undefined;
-};
-
-const modeLabels: Readonly<Record<AgentMode, MessageKey>> = {
-  chat: "angelica.mode.chat",
-  ask: "angelica.mode.ask",
-  autoDraft: "angelica.mode.autoDraft",
-};
-
-const modeHints: Readonly<Record<AgentMode, MessageKey>> = {
-  chat: "angelica.mode.chatHint",
-  ask: "angelica.mode.askHint",
-  autoDraft: "angelica.mode.autoDraftHint",
 };
 
 const toolLabels: Readonly<Record<string, MessageKey>> = {
@@ -58,14 +46,6 @@ const toolLabels: Readonly<Record<string, MessageKey>> = {
   pause_job: "angelica.tool.pauseJob",
   resume_job: "angelica.tool.resumeJob",
   cancel_job: "angelica.tool.cancelJob",
-};
-
-const effortLabels: Readonly<Record<ReasoningEffort, MessageKey>> = {
-  minimal: "ai.effort.minimal",
-  low: "ai.effort.low",
-  medium: "ai.effort.medium",
-  high: "ai.effort.high",
-  xhigh: "ai.effort.xhigh",
 };
 
 const suggestionKeys: readonly MessageKey[] = ["angelica.suggestion.overview", "angelica.suggestion.selection", "angelica.suggestion.macros"];
@@ -435,7 +415,6 @@ export function AngelicaPanel({ editorContext, onOpenSettings, onOpenGuide, onRe
 
   const providers = settings?.providers ?? [];
   const hasModels = providers.some((provider) => provider.models.length > 0);
-  const efforts = selectableEfforts(providers, model);
   const modelConfig = model ? providers.find((provider) => provider.id === model.providerId)?.models.find((entry) => entry.id === model.modelId) ?? null : null;
   const fill = contextFill(lastPromptTokens, modelConfig?.contextWindow ?? null);
   const selection = editorContext?.selection ?? null;
@@ -450,7 +429,7 @@ export function AngelicaPanel({ editorContext, onOpenSettings, onOpenGuide, onRe
   const usageTitle = [
     contextPercent !== null ? t("angelica.contextFill", { percent: contextPercent }) : null,
     t("angelica.usageHint", { prompt: usage.promptTokens, completion: usage.completionTokens }),
-  ].filter(Boolean).join(" · ");
+  ].filter(Boolean).join("\n");
 
   if (settings && !hasModels) {
     return (
@@ -507,34 +486,11 @@ export function AngelicaPanel({ editorContext, onOpenSettings, onOpenGuide, onRe
         <div className="angelica-box" onClick={(event) => { if (event.target === event.currentTarget) inputRef.current?.focus(); }}>
           <textarea ref={inputRef} className="angelica-input" rows={1} value={draft} placeholder={t("angelica.placeholder")} aria-label={t("angelica.placeholder")} onChange={(event) => setDraft(event.target.value)} onKeyDown={onComposerKey} />
           <div className="angelica-box-bar">
-            <select className="angelica-ghost-select" value={mode} aria-label={t("angelica.mode.label")} title={t(modeHints[mode])} onChange={(event) => setMode(event.target.value as AgentMode)}>
-              {(Object.keys(modeLabels) as AgentMode[]).map((value) => <option key={value} value={value}>{t(modeLabels[value])}</option>)}
-            </select>
-            {selection ? (
-              <button type="button" className={attachContext ? "angelica-chip" : "angelica-chip off"} aria-pressed={attachContext} title={t(attachContext ? "angelica.contextOn" : "angelica.contextOff")} onClick={() => setAttachContext((value) => !value)}>
-                <UiIcon icon={attachContext ? "locateFixed" : "eyeOff"} size="xs" />
-                <code>{`${selection.sheet}:${selection.row}:${selection.subrow}${selection.column === null ? "" : `:${selection.column}`}`}</code>
-              </button>
-            ) : null}
-            <span className="angelica-box-spacer" />
+            <ModeMenu mode={mode} onChange={setMode} />
+            {selection ? <SelectionToggle selection={selection} attached={attachContext} onToggle={() => setAttachContext((value) => !value)} /> : null}
             <span className="angelica-box-end">
-            <select className="angelica-ghost-select angelica-model" value={model ? selectionKey(model) : ""} aria-label={t("angelica.model")} title={t("angelica.model")} onFocus={loadSettings} onChange={(event) => {
-              const next = parseSelectionKey(event.target.value);
-              setModel(next ? resolveModel(providers, [{ ...next, effort: model?.effort ?? null }]) : null);
-            }}>
-              {providers.filter((provider) => provider.models.length > 0).map((provider) => (
-                <optgroup key={provider.id} label={provider.name}>
-                  {provider.models.map((entry) => <option key={entry.id} value={selectionKey({ providerId: provider.id, modelId: entry.id })}>{entry.id}</option>)}
-                </optgroup>
-              ))}
-            </select>
-            {efforts.length > 0 && model ? (
-              <select className="angelica-ghost-select" value={model.effort ?? ""} aria-label={t("angelica.effort")} title={t("angelica.effort")} onChange={(event) => setModel({ ...model, effort: (event.target.value || null) as ReasoningEffort | null })}>
-                <option value="">{t("ai.effort.default")}</option>
-                {efforts.map((effort) => <option key={effort} value={effort}>{t(effortLabels[effort])}</option>)}
-              </select>
-            ) : null}
-            <span className="angelica-ring" role="img" aria-label={usageTitle} title={`${usageTitle} · ${t("angelica.tokens", { count: totalTokens(usage) })}`} style={{ "--fill": `${contextPercent ?? 0}%` } as CSSProperties} />
+            <ModelMenu providers={providers} model={model} onChange={setModel} onOpen={loadSettings} />
+            <span className="angelica-ring" role="img" aria-label={usageTitle} title={`${usageTitle}\n${t("angelica.tokens", { count: totalTokens(usage) })}`} style={{ "--fill": `${contextPercent ?? 0}%` } as CSSProperties} />
             {running ? (
               <button className="angelica-round angelica-stop" type="button" aria-label={t("angelica.stop")} title={t("angelica.stop")} onClick={stop}><UiIcon icon="square" size="xs" /></button>
             ) : null}

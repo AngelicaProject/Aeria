@@ -404,6 +404,7 @@ kbd {
   animation: fade-in 100ms ease-out;
 }
 .tooltip kbd { height: 16px; border-bottom-width: 1px; }
+.title-tooltip { position: fixed; max-width: min(360px, calc(100vw - 16px)); line-height: 1.4; white-space: pre-line; overflow-wrap: anywhere; pointer-events: none; }
 
 /* Dialogs ----------------------------------------------------------------- */
 

@@ -235,13 +235,16 @@ while a reply streams, that she is writing. The transcript follows new output
 while scrolled to the bottom.
 
 The composer is one box: a text area that grows with its text up to 200
-pixels, and a bar with the mode (Chat, Ask, Auto-draft; Ask by default), a
-chip for the selected occurrence, which the user can turn off so the
-selection is not sent, the model and, when the model accepts efforts, the
-effort for the next message, a ring showing the share of the context window
-the last request used (its tooltip also gives the conversation's tokens),
-**Stop** while a turn runs, and a round **Send** button. The bar wraps in a
-narrow panel. Enter sends and Shift+Enter adds a line; messages written while
+pixels, and a bar of quiet text controls. The mode (Chat, Ask, Auto-draft;
+Ask by default) opens a menu that explains each mode. The selected
+occurrence, shown by its last sheet segment and coordinate, toggles whether
+it is sent. The model button shows the model and its effort and opens a
+popover with the configured models and, when the model accepts efforts, a
+stepped effort slider from faster to smarter (default first). A ring shows
+the share of the context window the last request used, with the
+conversation's tokens in its tooltip, followed by **Stop** while a turn runs
+and a round **Send** button. The right-hand group stays right-aligned when the
+bar wraps in a narrow panel. Enter sends and Shift+Enter adds a line; messages written while
 Angelica answers are queued and sent after the turn. The conversation's own
 model choice, then the default model, is preselected.
 
