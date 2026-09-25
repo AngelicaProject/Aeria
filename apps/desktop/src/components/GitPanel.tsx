@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   gitBranches,
   gitCheckpoint,
+  gitFetchMain,
   gitFinishContribution,
   gitInitialize,
   gitMergeContribution,
@@ -37,6 +38,10 @@ import { ProjectChangeList, Section, TranslationChangeGroups, unitLabel } from "
 
 /** How often the dock checks whether the repository changed. */
 const POLL_MS = 2000;
+/** How often, and at most how often on focus, a contribution branch checks
+ * whether the remote main branch moved. */
+const MAIN_CHECK_MS = 5 * 60_000;
+const MAIN_CHECK_MIN_MS = 60_000;
 
 type GitPanelProps = {
   /** Translation unit of the selected cell, when it has one. */
@@ -87,6 +92,7 @@ export function GitPanel({ selectedUnitId, workspaceRevision, projectRevision, o
   const [notice, setNotice] = useState<string | null>(null);
   const [confirmMerge, setConfirmMerge] = useState(false);
   const stamp = useRef<string | null | undefined>(undefined);
+  const lastMainCheck = useRef(0);
 
   const identity = overview?.identity ?? null;
   // Git requires only a name; the email is optional (see aeria-git identity rules).
@@ -140,6 +146,33 @@ export function GitPanel({ selectedUnitId, workspaceRevision, projectRevision, o
       window.removeEventListener("focus", onFocus);
     };
   }, [busy, refresh]);
+
+  // On a contribution branch, notice when the remote main branch moves (for
+  // example when another pull request was merged), so the translator can
+  // sync before the pull request conflicts. The fetch never asks to sign in.
+  const watchMain = Boolean(overview?.contribution?.branch && !overview.contribution.local);
+  useEffect(() => {
+    if (!watchMain) return;
+    let cancelled = false;
+    const check = async () => {
+      if (document.visibilityState !== "visible" || busy !== null || Date.now() - lastMainCheck.current < MAIN_CHECK_MIN_MS) return;
+      lastMainCheck.current = Date.now();
+      try {
+        if (await gitFetchMain() && !cancelled) await refresh();
+      } catch {
+        // Offline or signed out: the next sync reports it.
+      }
+    };
+    void check();
+    const timer = window.setInterval(() => void check(), MAIN_CHECK_MS);
+    const onFocus = () => void check();
+    window.addEventListener("focus", onFocus);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+      window.removeEventListener("focus", onFocus);
+    };
+  }, [watchMain, busy, refresh]);
 
   const pending = externalPending ? externalPending.changes ?? [] : ownPending;
 
@@ -291,6 +324,9 @@ export function GitPanel({ selectedUnitId, workspaceRevision, projectRevision, o
       ) : overview.contribution?.branch ? (
         <Section title={t("git.contribution")} icon="gitPullRequest" meta={t("git.contributionInto", { branch: overview.contribution.mainBranch })}>
           <p className="muted">{t(overview.contribution.published ? "git.contributionSent" : "git.contributionNotSent")} · {overview.contribution.unmergedCommits === 0 ? t("git.contributionAccepted") : t("git.contributionWaiting", { count: overview.contribution.unmergedCommits })}</p>
+          {overview.contribution.mainAhead > 0 && overview.contribution.unmergedCommits > 0 ? (
+            <div className="git-feedback warning" role="status"><UiIcon icon="circleAlert" size="sm" /><span>{t("git.mainAhead", { count: overview.contribution.mainAhead, branch: overview.contribution.mainBranch })}</span></div>
+          ) : null}
           {overview.contribution.unmergedCommits === 0 && overview.contribution.published ? <button className="button button-secondary" type="button" disabled={busy !== null || status.hasTranslationChanges} onClick={() => void run("finish", async () => { const result = await gitFinishContribution(); onWorkspaceChanged?.(); return t(result.deletedBranch ? "git.contributionFinished" : "git.contributionKept"); })}>{t("git.finishContribution")}</button> : null}
         </Section>
       ) : null}

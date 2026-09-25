@@ -106,6 +106,9 @@ pub struct ContributionDto {
     pub branch: Option<String>,
     pub published: bool,
     pub unmerged_commits: u32,
+    /// Commits on the remote main branch, as last fetched, that the
+    /// contribution branch does not contain yet.
+    pub main_ahead: u32,
     /// No remote: the contribution is merged locally instead of through a
     /// pull request.
     pub local: bool,
@@ -118,6 +121,7 @@ impl From<ContributionStatus> for ContributionDto {
             branch: status.branch,
             published: status.published,
             unmerged_commits: status.unmerged_commits,
+            main_ahead: status.main_ahead,
             local: status.local,
         }
     }
@@ -967,6 +971,21 @@ pub async fn git_remove_remote(
         let state = app.state::<DesktopState>();
         open_repository(&state)?.remove_remote(&name)?;
         git_overview_with_state(&state)
+    })
+    .await
+}
+
+#[tauri::command(rename_all = "camelCase")]
+/// Updates the remote main branch's tracking ref in the background, without
+/// asking for credentials. Returns whether it moved.
+///
+/// # Errors
+///
+/// Returns a typed command error when Git fails, for example offline.
+pub async fn git_fetch_main(app: tauri::AppHandle) -> CommandResult<bool> {
+    run_blocking(move || {
+        let repository = open_repository(&app.state::<DesktopState>())?;
+        Ok(repository.fetch_main_branch()?)
     })
     .await
 }

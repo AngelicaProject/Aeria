@@ -290,8 +290,22 @@ setting does not redirect its own checkpoint.
   (`MainBranchProtected`) and the commits must move to a contribution branch.
 - Sync keeps a contribution branch up to date with the remote main branch and
   publishes it for review on the hosting service. The contribution status
-  reports whether the branch is published and how many of its commits the
-  remote main branch does not contain yet. **Finish contribution** switches
+  reports whether the branch is published, how many of its commits the
+  remote main branch does not contain yet, and how many commits of the
+  remote main branch, as last fetched, the branch does not contain.
+- The hosting service merges pull requests as plain text, so once another
+  contribution reached the main branch, a pull request whose unit shards
+  changed nearby shows textual conflicts even when no translation unit
+  conflicts. Syncing the contribution branch merges main per unit and
+  resolves them; the hosting service's own conflict resolution must not be
+  used, because it would commit conflict markers into unit shards. While
+  the Git dock shows a contribution branch with a remote, it therefore
+  fetches only the remote main branch's ref every five minutes and when the
+  window gains focus (at most once a minute), with credential prompts
+  disabled so it never asks to sign in, and fetch failures are ignored.
+  When main has commits the branch lacks and the branch still waits for
+  review, the dock asks the translator to sync and warns against the
+  hosting service's update and conflict-resolution buttons. **Finish contribution** switches
   back to the main branch, fast-forwards it, and deletes the contribution
   branch only when Git confirms it is merged; branches merged by squash are
   kept.

@@ -30,6 +30,11 @@ pub struct ContributionStatus {
     /// not contain yet. Zero after a merge-commit or fast-forward review
     /// merge; squash merges keep this non-zero.
     pub unmerged_commits: u32,
+    /// Commits on the remote main branch, as last fetched, that the
+    /// contribution branch does not contain yet. A pull request of a branch
+    /// behind main may conflict on the hosting service until a sync merges
+    /// main into it.
+    pub main_ahead: u32,
     /// The repository has no remote, so there is nowhere to open a pull
     /// request; the contribution is merged locally instead.
     pub local: bool,
@@ -213,6 +218,7 @@ impl GitRepository {
                 branch: None,
                 published: false,
                 unmerged_commits: 0,
+                main_ahead: 0,
                 local: self.remotes()?.is_empty(),
             }));
         }
@@ -227,16 +233,17 @@ impl GitRepository {
         };
         let local = self.remotes()?.is_empty();
         let base = remote_main.unwrap_or_else(|| main_branch.clone());
-        let unmerged_commits = if self.verify_ref(&base)?.is_some() {
-            self.ahead_behind(&base)?.0
+        let (unmerged_commits, main_ahead) = if self.verify_ref(&base)?.is_some() {
+            self.ahead_behind(&base)?
         } else {
-            0
+            (0, 0)
         };
         Ok(Some(ContributionStatus {
             main_branch,
             branch: Some(branch),
             published,
             unmerged_commits,
+            main_ahead,
             local,
         }))
     }

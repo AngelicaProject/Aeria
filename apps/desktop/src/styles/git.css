@@ -46,6 +46,8 @@
 .git-feedback svg { flex: none; margin-top: 1px; color: var(--accent-text); }
 .git-feedback.error { background: var(--bad-soft); color: var(--fg); }
 .git-feedback.error svg { color: var(--bad); }
+.git-feedback.warning { background: var(--warn-soft); color: var(--fg); }
+.git-feedback.warning svg { color: var(--warn); }
 .empty-state .git-feedback { margin: 4px 0 0; }
 
 .git-section { display: grid; gap: 8px; padding: 10px 12px; }

@@ -63,8 +63,8 @@ pub use games::{
 };
 pub use git::{
     git_branches, git_checkpoint, git_clone_repository, git_commit_changes, git_contributors,
-    git_create_branch, git_delete_branch, git_finish_contribution, git_initialize, git_log,
-    git_merge_contribution, git_overview, git_pending_changes, git_project_changes,
+    git_create_branch, git_delete_branch, git_fetch_main, git_finish_contribution, git_initialize,
+    git_log, git_merge_contribution, git_overview, git_pending_changes, git_project_changes,
     git_remote_branches, git_remove_remote, git_set_identity, git_set_main_branch, git_set_remote,
     git_set_upstream, git_state_stamp, git_switch_branch, git_sync, git_unit_attribution,
     git_unit_history,
@@ -179,6 +179,7 @@ pub fn run() {
             git_delete_branch,
             git_project_changes,
             git_remove_remote,
+            git_fetch_main,
             git_remote_branches,
             git_set_upstream,
             git_finish_contribution,

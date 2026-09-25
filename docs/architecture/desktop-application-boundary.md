@@ -203,7 +203,7 @@ patches that cell instead of reloading the current sheet.
 
 Git collaboration commands (`git_overview`, `git_initialize`,
 `git_set_identity`, `git_set_remote`, `git_remove_remote`,
-`git_remote_branches`, `git_set_upstream`, `git_pending_changes`,
+`git_remote_branches`, `git_fetch_main`, `git_set_upstream`, `git_pending_changes`,
 `git_project_changes`, `git_checkpoint`, `git_log`, `git_commit_changes`,
 `git_unit_history`, `git_unit_attribution`, `git_contributors`, `git_sync`,
 `git_branches`, `git_create_branch`, `git_switch_branch`,

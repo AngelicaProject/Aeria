@@ -309,6 +309,8 @@ export type ContributionDto = {
   branch: string | null;
   published: boolean;
   unmergedCommits: number;
+  /** Commits on the remote main branch, as last fetched, that this branch does not contain yet. */
+  mainAhead: number;
   /** No remote: the contribution is merged locally instead of through a pull request. */
   local: boolean;
 };

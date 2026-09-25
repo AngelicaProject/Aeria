@@ -70,6 +70,42 @@ impl GitRepository {
         Ok(())
     }
 
+    /// Updates only the remote-tracking ref of the main branch from the
+    /// current branch's sync remote, for noticing that main moved. It never
+    /// asks for credentials, so it can run in the background; a remote that
+    /// needs a new sign-in fails instead. Returns whether the ref changed.
+    ///
+    /// Without a main branch, a branch, or a remote there is nothing to
+    /// fetch and the result is `false`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the fetch fails, for example without network
+    /// access.
+    pub fn fetch_main_branch(&self) -> Result<bool, GitError> {
+        let (Some(main), Some(branch)) = (self.main_branch()?, self.current_branch()?) else {
+            return Ok(false);
+        };
+        let remote = match self.sync_remote(&branch) {
+            Ok(remote) => remote,
+            Err(GitError::NoRemote) => return Ok(false),
+            Err(error) => return Err(error),
+        };
+        let tracking = format!("refs/remotes/{remote}/{main}");
+        let before = self.verify_ref(&tracking)?;
+        let refspec = format!("+refs/heads/{main}:{tracking}");
+        self.run(&[
+            "-c",
+            "credential.interactive=never",
+            "fetch",
+            "--quiet",
+            "--no-tags",
+            &remote,
+            &refspec,
+        ])?;
+        Ok(self.verify_ref(&tracking)? != before)
+    }
+
     /// Fetches every remote, for listing their branches.
     ///
     /// # Errors

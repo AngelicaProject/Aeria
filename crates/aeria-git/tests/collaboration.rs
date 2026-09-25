@@ -11,9 +11,9 @@ use std::process::Command;
 
 use aeria_core::{ReviewState, TranslationUnitId};
 use aeria_git::{
-    CollaborationSettings, ConflictResolution, FONT_SETTINGS_FILE, FONTS_DIR, GLOSSARY_FILE,
-    GUIDANCE_FILE, GitError, GitExecutable, GitRepository, IntegrateOutcome, PACK_SETTINGS_FILE,
-    RecordVersion, UnitChangeKind,
+    CollaborationSettings, ConflictResolution, ContributionStatus, FONT_SETTINGS_FILE, FONTS_DIR,
+    GLOSSARY_FILE, GUIDANCE_FILE, GitError, GitExecutable, GitRepository, IntegrateOutcome,
+    PACK_SETTINGS_FILE, RecordVersion, UnitChangeKind,
 };
 use tempfile::TempDir;
 
@@ -588,6 +588,13 @@ fn rejected_incoming_changes_are_rolled_back() {
     assert_eq!(current_branch(&grace), "main");
 }
 
+fn contribution(repository: &GitRepository) -> ContributionStatus {
+    repository
+        .contribution_status()
+        .expect("status")
+        .expect("contribution status")
+}
+
 #[test]
 fn the_pull_request_policy_uses_contribution_branches() {
     let sandbox = Sandbox::new();
@@ -613,10 +620,7 @@ fn the_pull_request_policy_uses_contribution_branches() {
         translator.main_branch().expect("main").as_deref(),
         Some("main")
     );
-    let status = translator
-        .contribution_status()
-        .expect("status")
-        .expect("contribution status");
+    let status = contribution(&translator);
     assert_eq!(status.branch, None);
 
     write_shard(
@@ -633,10 +637,7 @@ fn the_pull_request_policy_uses_contribution_branches() {
         .integrate(&no_resolutions(), || Ok(()))
         .expect("nothing new");
     assert!(translator.push().expect("publish contribution"));
-    let status = translator
-        .contribution_status()
-        .expect("status")
-        .expect("contribution status");
+    let status = contribution(&translator);
     assert_eq!(status.branch.as_deref(), Some(branch.as_str()));
     assert!(status.published);
     assert_eq!(status.unmerged_commits, 1);
@@ -664,6 +665,12 @@ fn the_pull_request_policy_uses_contribution_branches() {
     merge.extend(["merge", "--no-edit", "--quiet", "--no-ff", "-"]);
     sandbox.raw_git(maintainer.root(), &merge);
     sandbox.raw_git(maintainer.root(), &["push", "--quiet", "origin", "main"]);
+    // Main moving is noticed without a sync; the contribution is behind it
+    // until main is merged in.
+    assert!(translator.fetch_main_branch().expect("fetch main"));
+    assert!(!translator.fetch_main_branch().expect("fetch main again"));
+    let status = contribution(&translator);
+    assert_eq!((status.unmerged_commits, status.main_ahead), (1, 2));
     translator.fetch().expect("fetch");
     assert_eq!(
         translator
@@ -671,6 +678,8 @@ fn the_pull_request_policy_uses_contribution_branches() {
             .expect("merge main"),
         IntegrateOutcome::Merged
     );
+    let status = contribution(&translator);
+    assert_eq!(status.main_ahead, 0);
     assert!(translator.root().join(".aeria/units/30.jsonl").exists());
     translator.push().expect("push");
 
@@ -693,10 +702,7 @@ fn the_pull_request_policy_uses_contribution_branches() {
     sandbox.raw_git(maintainer.root(), &["push", "--quiet", "origin", "main"]);
 
     translator.fetch().expect("fetch");
-    let status = translator
-        .contribution_status()
-        .expect("status")
-        .expect("contribution status");
+    let status = contribution(&translator);
     assert_eq!(status.unmerged_commits, 0);
     let finished = translator.finish_contribution(|| Ok(())).expect("finish");
     assert_eq!(finished.deleted_branch.as_deref(), Some(branch.as_str()));
