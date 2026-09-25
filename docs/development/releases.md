@@ -106,7 +106,9 @@ permissions and calls the `update_*` commands.
 
 1. For a tag, it waits for CI on `main` to pass for the tagged commit and
    fails if the commit is not on `main` or CI failed. A nightly starts only
-   after a successful CI run of a push to `main`.
+   after a successful CI run of a push to `main`, and only when that commit
+   is still the head of `main`; CI for an older merge that finishes late is
+   skipped, so a nightly is never replaced by an older build.
 2. It checks or computes the version with `tools/release/version.mjs`; a
    nightly writes its version into the declarations and the lockfile before
    building.

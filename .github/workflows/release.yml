@@ -23,10 +23,37 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'workflow_run' }}
 
 jobs:
-  windows:
+  # A nightly is built only for the current head of main. CI for an older
+  # merge can finish after a newer one landed; building it would publish an
+  # outdated nightly, possibly without the release tooling it needs.
+  gate:
     if: >-
       github.event_name == 'push' ||
       (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push')
+    runs-on: ubuntu-latest
+    outputs:
+      build: ${{ steps.head.outputs.build }}
+    steps:
+      - id: head
+        env:
+          GH_TOKEN: ${{ github.token }}
+          COMMIT: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = "push" ]; then
+            echo "build=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          head=$(gh api "repos/$GITHUB_REPOSITORY/commits/main" --jq .sha)
+          if [ "$head" = "$COMMIT" ]; then
+            echo "build=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "Skipping $COMMIT: main is now at $head"
+            echo "build=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  windows:
+    needs: gate
+    if: needs.gate.outputs.build == 'true'
     runs-on: windows-latest
     env:
       GH_TOKEN: ${{ github.token }}
