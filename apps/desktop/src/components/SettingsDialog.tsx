@@ -7,6 +7,7 @@ import { keyboardShortcuts, shortcutGroupLabels } from "../shortcuts";
 import { Segmented } from "../ui/primitives/Segmented";
 import { UiIcon, type UiIconName } from "../ui/primitives/UiIcon";
 import { BranchesSetting, IdentitySetting, MainBranchSetting, OtherFilesSetting, RemotesSetting, UpstreamSetting } from "./RepositorySettings";
+import { UpdateChannelSetting, UpdatesSetting } from "./UpdateSettings";
 import { editorFontSizes, interfaceZoomOptions, usePreferences } from "../ui/preferences";
 import { useTheme } from "../ui/theme/theme";
 import { themeRegistry, type ThemeDefinition } from "../ui/theme/registry";
@@ -207,6 +208,14 @@ export const SettingsDialog = memo(function SettingsDialog({ open, onOpenChange,
     {
       id: "about", section: "about", title: "Aeria", description: version ? t("launcher.version", { version }) : t("settings.about.description"), keywords: t("settings.about.keywords"),
       control: null,
+    },
+    {
+      id: "updates", section: "about", title: t("settings.updates.title"), keywords: t("settings.updates.keywords"), wide: true,
+      control: <UpdatesSetting />,
+    },
+    {
+      id: "update-channel", section: "about", title: t("settings.channel.title"), description: t("settings.channel.description"), keywords: t("settings.channel.keywords"),
+      control: <UpdateChannelSetting />,
     },
     ...(projectOpen ? [
       { id: "remotes", section: "repository" as const, title: t("repository.remotes"), description: t("repository.remotesHint"), keywords: t("repository.keywords"), wide: true, control: <RemotesSetting /> },

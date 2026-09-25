@@ -2,6 +2,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import { isTauri } from "@tauri-apps/api/core";
 import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
 import { ApplicationMenu, type ApplicationMenuDefinition } from "./ApplicationMenu";
+import { UpdateTitleButton } from "./UpdateNotice";
 import { UiIcon } from "../ui/primitives/UiIcon";
 import { useI18n } from "../ui/i18n";
 import appIcon from "../assets/app-icon-20.png";
@@ -144,6 +145,7 @@ export function WindowChrome({ mode, title, subtitle, center, menus = [], action
           </div>
         ) : null}
       </div>
+      {mode !== "detached" ? <UpdateTitleButton /> : null}
       {actions ? <div className="titlebar-actions">{actions}</div> : null}
       <div className="window-controls" role="group" aria-label={t("window.controls")}>
         <button className="window-control" type="button" aria-label={t("window.minimize")} onClick={handleMinimize}><UiIcon icon="minus" size="sm" /></button>

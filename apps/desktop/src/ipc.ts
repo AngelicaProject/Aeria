@@ -1,5 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
+  UpdateChannel,
+  UpdateStatusDto,
   AgentMode,
   ExportOverviewDto,
   FontPreviewSizeDto,
@@ -93,6 +95,34 @@ export type AppInfoDto = { name: string; version: string };
 
 export function appInfo(): Promise<AppInfoDto> {
   return call<AppInfoDto>("app_info");
+}
+
+export function updateStatus(): Promise<UpdateStatusDto> {
+  return call<UpdateStatusDto>("update_status");
+}
+
+/** Checks the release feed now; a failed check is reported in the status. */
+export function checkForUpdates(): Promise<UpdateStatusDto> {
+  return call<UpdateStatusDto>("update_check");
+}
+
+export function setUpdateChannel(channel: UpdateChannel): Promise<UpdateStatusDto> {
+  return call<UpdateStatusDto>("update_set_channel", { channel });
+}
+
+/** Downloads and verifies the offered update; progress arrives as status events. */
+export function downloadUpdate(): Promise<UpdateStatusDto> {
+  return call<UpdateStatusDto>("update_download");
+}
+
+/** Installs the downloaded update and restarts Aeria. */
+export function installUpdate(): Promise<void> {
+  return call<void>("update_install");
+}
+
+/** Opens the release page of the offered update in the browser. */
+export function openUpdateRelease(): Promise<void> {
+  return call<void>("update_open_release");
 }
 
 export function currentProject(): Promise<ProjectSummaryDto | null> {

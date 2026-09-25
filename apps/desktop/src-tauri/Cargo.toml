@@ -32,11 +32,13 @@ aeria-rebase = { path = "../../../crates/aeria-rebase" }
 aeria-search = { path = "../../../crates/aeria-search" }
 aeria-workspace = { path = "../../../crates/aeria-workspace" }
 serde = { version = "1.0", features = ["derive"] }
+semver = "1.0.28"
 serde_json = "1.0.151"
 sha2 = "0.11.0"
 tauri = { version = "2.11.5", features = [] }
 tauri-plugin-dialog = "2.4.0"
 tauri-plugin-opener = "2.5.5"
+tauri-plugin-updater = { version = "2.12.0", default-features = false, features = ["rustls-tls"] }
 tokio = { version = "1.53.1", features = ["rt", "time"] }
 
 [target.'cfg(windows)'.dependencies]

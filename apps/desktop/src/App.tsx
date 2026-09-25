@@ -10,6 +10,7 @@ import { I18nProvider, useI18n } from "./ui/i18n";
 import { TitleTooltips } from "./ui/primitives/TitleTooltips";
 import { DetachedToolWindow, isDetachedPanel } from "./components/DetachedToolWindow";
 import { SourceUpdateDialog } from "./components/SourceUpdateDialog";
+import { UpdateNotice } from "./components/UpdateNotice";
 
 type StartupState = "starting" | "launcher";
 
@@ -58,7 +59,12 @@ function MainWindow() {
   }
 
   if (!project) {
-    return <ProjectLauncher initialError={startupError} onProjectReady={handleProjectReady} />;
+    return (
+      <>
+        <ProjectLauncher initialError={startupError} onProjectReady={handleProjectReady} />
+        <UpdateNotice />
+      </>
+    );
   }
 
   return (
@@ -80,6 +86,7 @@ function MainWindow() {
         report={sourceUpdateView?.report ?? null}
         onClose={() => setSourceUpdateView(null)}
       />
+      <UpdateNotice />
     </>
   );
 }

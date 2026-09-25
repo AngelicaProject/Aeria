@@ -783,3 +783,32 @@ export type FontPreviewSizeDto = {
   missing: string[];
   error: string | null;
 };
+
+export type UpdateChannel = "stable" | "nightly";
+
+/** Work an application update waits for instead of interrupting. */
+export type RunningActivity = "translation" | "sync" | "export" | "sourcePackage";
+
+export type AvailableUpdateDto = {
+  version: string;
+  channel: UpdateChannel;
+  notes: string | null;
+  /** RFC 3339, as published in the feed. */
+  publishedAt: string | null;
+  releaseUrl: string;
+};
+
+export type UpdateStatusDto = {
+  currentVersion: string;
+  channel: UpdateChannel;
+  /** Only an installed copy updates itself; portable copies link to the release. */
+  canInstall: boolean;
+  checking: boolean;
+  /** Milliseconds since the Unix epoch. */
+  lastCheckedAt: number | null;
+  available: AvailableUpdateDto | null;
+  download: { received: number; total: number | null; ready: boolean } | null;
+  installing: boolean;
+  error: CommandError | null;
+  runningActivities: RunningActivity[];
+};

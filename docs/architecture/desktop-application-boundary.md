@@ -97,6 +97,29 @@ write failure is a non-fatal `projectRegistryWrite` warning after the active
 session is installed, so local convenience-state failure never rolls back a
 valid project. The desktop does not auto-open the last project at startup.
 
+## Application updates
+
+`updates.rs` owns application updates; the release model is described in
+[`../development/releases.md`](../development/releases.md#application-updates).
+The renderer has no updater permissions and uses `update_status`,
+`update_check`, `update_set_channel(channel)`, `update_download`,
+`update_install`, and `update_open_release`, and listens to
+`update://status`, which carries the full `UpdateStatusDto` after every
+change. The channel is local application state in `update-settings.json`; a
+malformed file fails with `updateSettings` and is never replaced with
+defaults.
+
+`DesktopState` records the work an update must not interrupt. Mutating Git
+commands (checkpoint, commit, sync, branch switch, finishing or merging a
+contribution, clone) hold a `Sync` activity guard and pack export and
+publication an `Export` guard for their whole run; Angelica turns,
+translation-job runners, and the Atlas job are read from their own
+registries. `update_install` runs through `DesktopState::while_idle`, which
+fails with `updateBusy` while any of them runs and holds the activity lock
+while the installer starts, so no guarded operation begins in between. The
+renderer additionally reports unsaved editor drafts and saves in flight to
+the update store and does not request installation while one exists.
+
 ## Source updates
 
 `open_project` and `open_recent_project` take an optional
