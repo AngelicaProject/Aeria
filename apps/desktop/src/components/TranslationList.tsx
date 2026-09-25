@@ -2,7 +2,7 @@ import { memo, useEffect, useMemo, useRef, type KeyboardEvent } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { bindingKey, domKey } from "../binding";
 import { segmentMacroText } from "../macroTokens";
-import { emptyOccurrenceFilter, isOccurrenceFilterActive, type OccurrenceFilter, type OccurrenceKindFilter, type OccurrenceStatusFilter, type TranslationOccurrenceView } from "../translationOccurrences";
+import { emptyOccurrenceFilter, isOccurrenceFilterActive, occurrenceIndex, type OccurrenceFilter, type OccurrenceKindFilter, type OccurrenceStatusFilter, type TranslationOccurrenceView } from "../translationOccurrences";
 import type { SourceBinding, UnitChangeKind } from "../types";
 import { Segmented } from "../ui/primitives/Segmented";
 import { UiIcon } from "../ui/primitives/UiIcon";
@@ -97,10 +97,7 @@ export const TranslationList = memo(function TranslationList({
     virtualizer.measure();
   }, [rowHeight, virtualizer]);
 
-  const selectedIndex = useMemo(
-    () => selectedKey === null ? -1 : occurrences.findIndex((occurrence) => bindingKey(occurrence.binding) === selectedKey),
-    [occurrences, selectedKey],
-  );
+  const selectedIndex = useMemo(() => occurrenceIndex(occurrences, selectedBinding), [occurrences, selectedBinding]);
 
   useEffect(() => {
     if (selectedIndex >= 0) virtualizer.scrollToIndex(selectedIndex, { align: "auto" });

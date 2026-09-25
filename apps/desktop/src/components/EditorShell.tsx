@@ -244,7 +244,9 @@ export function EditorShell({
   lensFilterRef.current = lensFilter;
 
   const selectedRow = useMemo(
-    () => selectedRowCursor ? rows.find((row) => rowKey(row) === rowKey(selectedRowCursor)) ?? null : null,
+    () => selectedRowCursor
+      ? rows.find((row) => row.rowId === selectedRowCursor.rowId && row.subrowId === selectedRowCursor.subrowId && row.sheetName === selectedRowCursor.sheetName) ?? null
+      : null,
     [rows, selectedRowCursor],
   );
   const allOccurrences = useMemo(() => flattenTranslationRows(rows), [rows]);
