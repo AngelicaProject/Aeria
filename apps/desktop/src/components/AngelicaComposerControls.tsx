@@ -1,4 +1,4 @@
-import { useState, type KeyboardEvent } from "react";
+import { useRef, useState, type KeyboardEvent, type PointerEvent } from "react";
 import { DropdownMenu, Popover } from "radix-ui";
 import { parseSelectionKey, selectableEfforts, selectionKey } from "../aiSettings";
 import { resolveModel } from "../angelica";
@@ -77,6 +77,17 @@ function EffortSlider({ efforts, value, onChange }: { efforts: readonly Reasonin
   const { t } = useI18n();
   const stops: (ReasoningEffort | null)[] = [null, ...efforts];
   const index = Math.max(0, stops.indexOf(value));
+  const trackRef = useRef<HTMLDivElement>(null);
+  const [dragging, setDragging] = useState(false);
+  // The stop nearest to the pointer, so the knob can be dragged as well as clicked.
+  const pick = (event: PointerEvent<HTMLDivElement>) => {
+    const track = trackRef.current;
+    if (!track || stops.length < 2) return;
+    const rect = track.getBoundingClientRect();
+    const ratio = Math.min(1, Math.max(0, (event.clientX - rect.left) / rect.width));
+    const next = stops[Math.round(ratio * (stops.length - 1))];
+    if (next !== undefined && next !== value) onChange(next);
+  };
   const move = (event: KeyboardEvent<HTMLDivElement>) => {
     const step = event.key === "ArrowRight" || event.key === "ArrowUp" ? 1 : event.key === "ArrowLeft" || event.key === "ArrowDown" ? -1 : 0;
     if (!step) return;
@@ -91,7 +102,22 @@ function EffortSlider({ efforts, value, onChange }: { efforts: readonly Reasonin
         <strong>{value ? t(effortLabels[value]) : t("ai.effort.default")}</strong>
       </div>
       <div className="angelica-effort-scale"><span>{t("angelica.effortFaster")}</span><span>{t("angelica.effortSmarter")}</span></div>
-      <div className="angelica-effort-track" role="radiogroup" aria-label={t("angelica.effort")} tabIndex={0} onKeyDown={move}>
+      <div
+        ref={trackRef}
+        className={dragging ? "angelica-effort-track dragging" : "angelica-effort-track"}
+        role="radiogroup"
+        aria-label={t("angelica.effort")}
+        tabIndex={0}
+        onKeyDown={move}
+        onPointerDown={(event) => {
+          event.currentTarget.setPointerCapture(event.pointerId);
+          setDragging(true);
+          pick(event);
+        }}
+        onPointerMove={(event) => { if (dragging) pick(event); }}
+        onPointerUp={() => setDragging(false)}
+        onPointerCancel={() => setDragging(false)}
+      >
         <span className="angelica-effort-fill" style={{ width: `${stops.length > 1 ? (index / (stops.length - 1)) * 100 : 0}%` }} />
         {stops.map((stop, position) => (
           <button
@@ -102,8 +128,7 @@ function EffortSlider({ efforts, value, onChange }: { efforts: readonly Reasonin
             aria-checked={position === index}
             className={position === index ? "angelica-effort-stop current" : "angelica-effort-stop"}
             style={{ left: `${stops.length > 1 ? (position / (stops.length - 1)) * 100 : 0}%` }}
-            title={stop ? t(effortLabels[stop]) : t("ai.effort.default")}
-            onClick={() => onChange(stop)}
+            aria-label={stop ? t(effortLabels[stop]) : t("ai.effort.default")}
           />
         ))}
       </div>

@@ -234,18 +234,18 @@ rotating status, the elapsed time, the tokens generated in the turn, and,
 while a reply streams, that she is writing. The transcript follows new output
 while scrolled to the bottom.
 
-The composer is one box: a text area that grows with its text up to 200
-pixels, and a bar of quiet text controls. The mode (Chat, Ask, Auto-draft;
-Ask by default) opens a menu that explains each mode. The selected
-occurrence, shown by its last sheet segment and coordinate, toggles whether
-it is sent. The model button shows the model and its effort and opens a
-popover with the configured models and, when the model accepts efforts, a
-stepped effort slider from faster to smarter (default first). A ring shows
+The composer is one box. Above the text, the selected occurrence, shown by
+its last sheet segment and coordinate, is attached to the message and toggles
+whether it is sent. The text area grows with its text up to 200 pixels. Below
+it, a bar of quiet text controls: the mode (Chat, Ask, Auto-draft; Ask by
+default) opens a menu that explains each mode, and the model button shows the
+model and its effort and opens a popover with the configured models and, when
+the model accepts efforts, a stepped effort slider from faster to smarter
+(default first) that can be clicked, dragged, or moved with the arrow keys. A ring shows
 the share of the context window the last request used, with the
 conversation's tokens in its tooltip, followed by **Stop** while a turn runs
-and a round **Send** button. The bar never wraps: as the panel narrows it hides
-the effort label, then the selection's text (keeping its icon), and finally
-shortens the mode and model names. Enter sends and Shift+Enter adds a line; messages written while
+and a round **Send** button. The bar never wraps: in a narrow panel it hides the
+effort label and then shortens the mode and model names. Enter sends and Shift+Enter adds a line; messages written while
 Angelica answers are queued and sent after the turn. The conversation's own
 model choice, then the default model, is preselected.
 

@@ -490,10 +490,10 @@ export function AngelicaPanel({ editorContext, onOpenSettings, onOpenGuide, onRe
       <div className="angelica-composer">
         {queue.length > 0 ? <span className="angelica-chip angelica-queue">{t("angelica.queued", { count: queue.length })}</span> : null}
         <div className="angelica-box" onClick={(event) => { if (event.target === event.currentTarget) inputRef.current?.focus(); }}>
+          {selection ? <SelectionToggle selection={selection} attached={attachContext} onToggle={() => setAttachContext((value) => !value)} /> : null}
           <textarea ref={inputRef} className="angelica-input" rows={1} value={draft} placeholder={t("angelica.placeholder")} aria-label={t("angelica.placeholder")} onChange={(event) => setDraft(event.target.value)} onKeyDown={onComposerKey} />
           <div className="angelica-box-bar">
             <ModeMenu mode={mode} onChange={setMode} />
-            {selection ? <SelectionToggle selection={selection} attached={attachContext} onToggle={() => setAttachContext((value) => !value)} /> : null}
             <span className="angelica-box-end">
             <ModelMenu providers={providers} model={model} onChange={setModel} onOpen={loadSettings} />
             <span className="angelica-ring" role="img" aria-label={usageTitle} title={`${usageTitle}\n${t("angelica.tokens", { count: totalTokens(usage) })}`} style={{ "--fill": `${contextPercent ?? 0}%` } as CSSProperties} />
