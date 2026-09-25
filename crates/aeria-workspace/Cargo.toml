@@ -25,4 +25,4 @@ workspace = true
 [dev-dependencies]
 rusqlite = { version = "0.40.2", features = ["bundled"] }
 sha2 = "0.11.0"
-zip = { version = "6.0.0", default-features = false, features = ["deflate"] }
+zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
