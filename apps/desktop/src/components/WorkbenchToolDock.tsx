@@ -1,3 +1,4 @@
+import { memo } from "react";
 import type { MessageKey } from "../i18n/translate";
 import type { EditorContextDto, SourceBinding, UnitChangeDto } from "../types";
 import { useI18n } from "../ui/i18n";
@@ -29,7 +30,8 @@ export function toolTitle(tool: WorkbenchTool): MessageKey {
   return tool === "ai" ? "workbench.tool.ai" : tool === "git" ? "workbench.tool.git" : "workbench.tool.search";
 }
 
-export function WorkbenchToolDock({ activeTool, gitMode, selectedBinding, onGitModeChange, selectedUnitId, workspaceRevision, onWorkspaceChanged, onRestoreTarget, pending, onRevealBinding, editorContext, onOpenSettings, onOpenGuide }: WorkbenchToolDockProps) {
+/** Memoized: Angelica and Git transcripts are costly to re-render on unrelated workbench updates. */
+export const WorkbenchToolDock = memo(function WorkbenchToolDock({ activeTool, gitMode, selectedBinding, onGitModeChange, selectedUnitId, workspaceRevision, onWorkspaceChanged, onRestoreTarget, pending, onRevealBinding, editorContext, onOpenSettings, onOpenGuide }: WorkbenchToolDockProps) {
   const { t } = useI18n();
   if (activeTool === "search") {
     return (
@@ -59,4 +61,4 @@ export function WorkbenchToolDock({ activeTool, gitMode, selectedBinding, onGitM
       <GitPanel mode={gitMode} selectedUnitId={selectedUnitId ?? null} workspaceRevision={workspaceRevision ?? 0} onWorkspaceChanged={onWorkspaceChanged} onRestoreTarget={onRestoreTarget} pending={pending} onRevealBinding={onRevealBinding} />
     </section>
   );
-}
+});

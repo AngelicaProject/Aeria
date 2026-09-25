@@ -451,6 +451,8 @@
 .angelica-head { display: flex; flex: none; align-items: center; gap: 4px; padding: 8px 10px; border-bottom: 1px solid var(--line); }
 .angelica-history { flex: 1; color: var(--fg); font-size: var(--text-xs); }
 .angelica-transcript { display: flex; flex: 1; flex-direction: column; gap: 10px; min-height: 0; padding: 12px; overflow-y: auto; }
+/* Off-screen turns skip layout and paint, so resizing the dock stays cheap in long conversations. */
+.angelica-transcript > * { content-visibility: auto; contain-intrinsic-size: auto 64px; }
 .angelica-welcome { display: grid; justify-items: center; gap: 8px; margin: auto 0; padding: 16px 4px; color: var(--fg-muted); text-align: center; }
 .angelica-welcome strong { color: var(--fg); font-family: var(--font-display); font-size: var(--text-lg); }
 .angelica-welcome p { font-size: var(--text-sm); }

@@ -1,4 +1,4 @@
-import { useEffect, useState, type CSSProperties, type ReactNode } from "react";
+import { memo, useEffect, useState, type CSSProperties, type ReactNode } from "react";
 import { Dialog } from "radix-ui";
 import { appInfo } from "../ipc";
 import { AiProvidersSettings } from "./AiProvidersSettings";
@@ -108,7 +108,8 @@ function ThemePicker() {
   );
 }
 
-export function SettingsDialog({ open, onOpenChange, initialSection = "appearance" }: SettingsDialogProps) {
+/** Memoized so the closed dialog does not re-render with the workbench. */
+export const SettingsDialog = memo(function SettingsDialog({ open, onOpenChange, initialSection = "appearance" }: SettingsDialogProps) {
   const { theme, accentOverride, setAccentOverride, reduceTransparency, setReduceTransparency } = useTheme();
   const { preferences, setPreference, resetPreferences } = usePreferences();
   const { t } = useI18n();
@@ -250,4 +251,4 @@ export function SettingsDialog({ open, onOpenChange, initialSection = "appearanc
       </Dialog.Portal>
     </Dialog.Root>
   );
-}
+});

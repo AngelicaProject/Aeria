@@ -68,7 +68,9 @@ The titlebar carries the File, Translation, Go, and View menus, a command
 center showing the project and active sheet, and toggles for the left, bottom,
 and right regions. Double-clicking an empty titlebar area maximizes or restores
 the window natively. Left and
-right docks, the editor height, and the bottom panel are resizable. Dock panels
+right docks, the editor height, and the bottom panel are resizable; a drag
+previews the size through the region's CSS variable and commits it to layout
+state on release, so dragging does not re-render the workbench. Dock panels
 keep serializable presentation state, can move between regions, and floatable
 tools open in real Tauri webview windows that share the active Rust project
 session. The right dock opens on Git; the bottom panel (Tasks, Git changes,
@@ -113,8 +115,9 @@ EXDSchema exists, fields are labelled by column. Blocked source cells remain
 context only and are never used as permission heuristics.
 
 The list is virtualized and always holds the whole sheet. Opening a sheet reads
-it with bounded `page_translation_rows` calls of 256 source rows. A sheet that
-loads within 300 ms appears in one piece; a slower sheet shows the rows read by
+it with bounded `page_translation_rows` calls of 256 source rows. The sheet
+selection and loading state paint before any rows render. A sheet that loads
+within 150 ms then appears in one piece; a slower sheet shows the rows read by
 then and the rest once it is complete, so the list updates at most twice per
 load. A progress line under the list header tracks the strings read without
 re-rendering the list.

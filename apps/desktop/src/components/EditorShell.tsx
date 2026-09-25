@@ -79,7 +79,7 @@ const PAGE_SIZE = 256;
  * shows what has loaded by then and the rest once it is complete, so the
  * workbench re-renders at most twice per load rather than once per batch.
  */
-const FIRST_COMMIT_DELAY_MS = 300;
+const FIRST_COMMIT_DELAY_MS = 150;
 
 /** One sheet load. Pages are read until the sheet is complete. */
 type SheetLoader = {
@@ -169,6 +169,27 @@ function cellCoordinates(sheet: string, target: { rowId: number; subrowId: numbe
   return { sheet, row: String(target.rowId), subrow: String(target.subrowId) };
 }
 
+/**
+ * A callback with a stable identity that always runs the latest `callback`, so
+ * memoized panels do not re-render when only the closure changed.
+ */
+function useStableCallback<Args extends unknown[], Result>(callback: (...args: Args) => Result): (...args: Args) => Result {
+  const ref = useRef(callback);
+  ref.current = callback;
+  return useCallback((...args: Args) => ref.current(...args), []);
+}
+
+/** Resolves once the browser has painted, or after a short fallback when frames are paused. */
+function afterPaint(): Promise<void> {
+  return new Promise((resolve) => {
+    const fallback = window.setTimeout(resolve, 50);
+    requestAnimationFrame(() => window.setTimeout(() => {
+      window.clearTimeout(fallback);
+      resolve();
+    }, 0));
+  });
+}
+
 function isEditableTarget(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false;
   return target.isContentEditable || target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.tagName === "SELECT";
@@ -223,6 +244,7 @@ export function EditorShell({
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [guide, setGuide] = useState<{ open: boolean; tab: ProjectGuideTab }>({ open: false, tab: "glossary" });
   const openGuide = useCallback((tab: ProjectGuideTab) => setGuide({ open: true, tab }), []);
+  const setGuideOpen = useCallback((open: boolean) => setGuide((current) => ({ ...current, open })), []);
   const [settingsSection, setSettingsSection] = useState<SettingsSection>("appearance");
   const [palette, setPalette] = useState<{ open: boolean; input: string; key: number }>({ open: false, input: "", key: 0 });
   const [recentSheets, setRecentSheets] = useState<string[]>([]);
@@ -265,13 +287,13 @@ export function EditorShell({
     return total > 0 ? { translated, total } : null;
   }, [progress, project.sheets]);
   const selectedSheet = selectedSheetName ? sheetsByName.get(selectedSheetName) ?? null : null;
-  const selectedSheetProgress = selectedSheet && selectedSheet.translatableCellCount > 0
+  const selectedSheetProgress = useMemo(() => selectedSheet && selectedSheet.translatableCellCount > 0
     ? {
         translated: progressBySheet.get(selectedSheet.name)?.translated ?? 0,
         reviewed: progressBySheet.get(selectedSheet.name)?.reviewed ?? 0,
         total: selectedSheet.translatableCellCount,
       }
-    : null;
+    : null, [progressBySheet, selectedSheet]);
 
   const showError = useCallback((title: string, error: unknown) => {
     setEditorError({ title, error: normalizeCommandError(error) });
@@ -428,6 +450,9 @@ export function EditorShell({
     if (immediate) flushSync(resetForSheet);
     else resetForSheet();
     if (!refresh) setRecentSheets((current) => [sheetName, ...current.filter((name) => name !== sheetName)].slice(0, RECENT_SHEET_LIMIT));
+    // Let the selection and loading state paint before the new rows render,
+    // so a click gets feedback even when a small sheet loads within a frame.
+    const painted = refresh ? null : afterPaint();
 
     let after: TranslationRowCursorDto | null = null;
     try {
@@ -443,6 +468,10 @@ export function EditorShell({
         after = page.nextAfter;
         loader.scannedThrough = after;
         loader.complete = after === null;
+        if (painted && !loader.committed) {
+          await painted;
+          if (generation !== requestGeneration.current) return;
+        }
         if (loader.complete || (!loader.committed && performance.now() - loader.startedAt >= FIRST_COMMIT_DELAY_MS)) commitRows(loader);
         settleReveal(loader);
       } while (after !== null);
@@ -791,6 +820,8 @@ export function EditorShell({
   }, [revealString]);
 
   // Angelica's navigate_to tool asks the editor to show one occurrence.
+  const stableRevealBinding = useStableCallback(revealBinding);
+  const stableWorkspaceChanged = useStableCallback(handleWorkspaceChanged);
   const revealBindingRef = useRef(revealBinding);
   revealBindingRef.current = revealBinding;
   useEffect(() => {
@@ -830,6 +861,28 @@ export function EditorShell({
       applyOverlay(binding, overlay);
     });
   }, [applyOverlay, requestDiscardConfirmation, runMutation, selectedBinding, t]);
+
+  // Stable handlers keep the memoized list and editor from re-rendering on
+  // unrelated workbench updates.
+  const selectOccurrence = useStableCallback((occurrence: TranslationOccurrenceView) => void handleOccurrenceSelect(occurrence));
+  const stableNavigateOccurrence = useStableCallback(navigateOccurrence);
+  const stableNavigateFromEditor = useStableCallback(navigateFromEditor);
+  const stableDirtyChange = useStableCallback(handleDirtyChange);
+  const saveTarget = useStableCallback((...args: Parameters<typeof handleSaveTarget>) => void handleSaveTarget(...args));
+  const approve = useStableCallback((...args: Parameters<typeof handleApprove>) => void handleApprove(...args));
+  const saveNote = useStableCallback((...args: Parameters<typeof handleSaveNote>) => void handleSaveNote(...args));
+  const changeReview = useStableCallback((...args: Parameters<typeof handleReviewChange>) => void handleReviewChange(...args));
+  const draftWithAngelica = useStableCallback(async (cell: TranslationCellDto) => {
+    try {
+      return (await angelicaDraft(cell.sourceBinding)).target;
+    } catch (reason) {
+      showError(t("editor.draftFailed"), reason);
+      return null;
+    }
+  });
+  const restoreTarget = useStableCallback((target: string) => void handleRestoreTarget(target));
+  const openAiSettings = useCallback(() => openSettings("ai"), [openSettings]);
+  const pendingState = useMemo(() => ({ changes: pendingChanges, refresh: refreshPendingChanges }), [pendingChanges, refreshPendingChanges]);
 
   // Layout ---------------------------------------------------------------
 
@@ -1008,7 +1061,7 @@ export function EditorShell({
       return <SheetSidebar sheets={project.sheets} selectedSheetName={selectedSheetName} disabled={closing} active={active} hideEmpty={hideEmptySheets} onHideEmptyChange={setHideEmptySheets} filterOpen={sheetFilterOpen} onFilterOpenChange={setSheetFilterOpen} onOpenFilter={focusSheetFilter} quickFindSignal={quickFindSignal} revealSignal={revealSheetSignal} collapseSignal={collapseSheetsSignal} onSelect={handleSheetSelect} progress={progressBySheet} />;
     }
     const tool: WorkbenchTool = panelId === "git" ? "git" : panelId === "search" ? "search" : "ai";
-    return <WorkbenchToolDock activeTool={tool} gitMode={gitMode} selectedBinding={selectedBinding} onGitModeChange={setGitMode} selectedUnitId={selectedUnitId} workspaceRevision={workspaceRevision} onWorkspaceChanged={handleWorkspaceChanged} onRestoreTarget={(target) => void handleRestoreTarget(target)} pending={{ changes: pendingChanges, refresh: refreshPendingChanges }} onRevealBinding={revealBinding} editorContext={angelicaContext} onOpenSettings={() => openSettings("ai")} onOpenGuide={openGuide} />;
+    return <WorkbenchToolDock activeTool={tool} gitMode={gitMode} selectedBinding={selectedBinding} onGitModeChange={setGitMode} selectedUnitId={selectedUnitId} workspaceRevision={workspaceRevision} onWorkspaceChanged={stableWorkspaceChanged} onRestoreTarget={restoreTarget} pending={pendingState} onRevealBinding={stableRevealBinding} editorContext={angelicaContext} onOpenSettings={openAiSettings} onOpenGuide={openGuide} />;
   };
 
   const renderDock = (region: "left" | "right", panelId: string | null, open: boolean) => {
@@ -1235,33 +1288,26 @@ export function EditorShell({
                   streaming={sheetStreaming}
                   loadProgress={loadProgress}
                   sheetStringCount={selectedSheet?.translatableCellCount ?? null}
-                  onSelect={(occurrence) => void handleOccurrenceSelect(occurrence)}
-                  onNavigate={navigateOccurrence}
+                  onSelect={selectOccurrence}
+                  onNavigate={stableNavigateOccurrence}
                   changedKinds={changedKinds}
                 />
                 <ResizeHandle axis="y" label={t("workbench.resizeEditor")} {...resizeProps("editor", "--editor-height", -1)} />
                 <TranslationEditor
                   ref={editorRef}
-                  onDraftWithAngelica={async (cell) => {
-                    try {
-                      return (await angelicaDraft(cell.sourceBinding)).target;
-                    } catch (reason) {
-                      showError(t("editor.draftFailed"), reason);
-                      return null;
-                    }
-                  }}
+                  onDraftWithAngelica={draftWithAngelica}
                   key={selectedRow ? rowKey(selectedRow) : "empty-editor"}
                   row={selectedRow}
                   selectedBinding={selectedBinding}
                   sourceLanguage={project.sourceLanguage}
                   mutations={mutations}
-                  onDirtyChange={handleDirtyChange}
+                  onDirtyChange={stableDirtyChange}
                   onSelectCell={handleFieldSelect}
-                  onSaveTarget={(...args) => void handleSaveTarget(...args)}
-                  onApprove={(...args) => void handleApprove(...args)}
-                  onSaveNote={(...args) => void handleSaveNote(...args)}
-                  onReviewChange={(...args) => void handleReviewChange(...args)}
-                  onNavigate={navigateFromEditor}
+                  onSaveTarget={saveTarget}
+                  onApprove={approve}
+                  onSaveNote={saveNote}
+                  onReviewChange={changeReview}
+                  onNavigate={stableNavigateFromEditor}
                   takeFocusRequest={takeFocusRequest}
                   checkpoint={selectedCheckpoint}
                 />
@@ -1325,20 +1371,22 @@ export function EditorShell({
         onDiscard={() => resolveDiscardConfirmation(true)}
       />
       <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} initialSection={settingsSection} />
-      <ProjectGuideDialog open={guide.open} initialTab={guide.tab} onOpenChange={(open) => setGuide((current) => ({ ...current, open }))} />
-      <CommandPalette
-        key={palette.key}
-        open={palette.open}
-        initialInput={palette.input}
-        onOpenChange={(open) => setPalette((current) => ({ ...current, open }))}
-        commands={commands}
-        sheets={project.sheets}
-        progress={progressBySheet}
-        recentSheets={recentSheets}
-        currentSheet={selectedSheetName}
-        onOpenSheet={(sheetName) => void handleSheetSelect(sheetName, true)}
-        onGoToRow={(target) => { if (selectedSheetName) void revealString(selectedSheetName, target); }}
-      />
+      <ProjectGuideDialog open={guide.open} initialTab={guide.tab} onOpenChange={setGuideOpen} />
+      {palette.open ? (
+        <CommandPalette
+          key={palette.key}
+          open={palette.open}
+          initialInput={palette.input}
+          onOpenChange={(open) => setPalette((current) => ({ ...current, open }))}
+          commands={commands}
+          sheets={project.sheets}
+          progress={progressBySheet}
+          recentSheets={recentSheets}
+          currentSheet={selectedSheetName}
+          onOpenSheet={(sheetName) => void handleSheetSelect(sheetName, true)}
+          onGoToRow={(target) => { if (selectedSheetName) void revealString(selectedSheetName, target); }}
+        />
+      ) : null}
     </main>
   );
 }

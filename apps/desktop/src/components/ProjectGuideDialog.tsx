@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Dialog } from "radix-ui";
 import { normalizeCommandError, projectGuide, saveProjectGlossary, saveProjectGuidance } from "../ipc";
 import { filterRows, inputsFromRows, rowProblems, rowsChanged, rowsFromEntries, type GlossaryRow, type RowProblem } from "../projectGuide";
@@ -29,7 +29,8 @@ const ROWS_SHOWN = 300;
 const GUIDANCE_LIMIT = 64 * 1024;
 
 /** The project's shared glossary and guidance, edited by translators. */
-export function ProjectGuideDialog({ open, initialTab, onOpenChange }: ProjectGuideDialogProps) {
+/** Memoized so the closed dialog does not re-render with the workbench. */
+export const ProjectGuideDialog = memo(function ProjectGuideDialog({ open, initialTab, onOpenChange }: ProjectGuideDialogProps) {
   const { t } = useI18n();
   const [tab, setTab] = useState<ProjectGuideTab>(initialTab);
   const [saved, setSaved] = useState<ProjectGuideDto | null>(null);
@@ -195,4 +196,4 @@ export function ProjectGuideDialog({ open, initialTab, onOpenChange }: ProjectGu
       </Dialog.Portal>
     </Dialog.Root>
   );
-}
+});
