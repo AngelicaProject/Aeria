@@ -1,5 +1,5 @@
 import { bindingKey, rowKey } from "./binding.ts";
-import type { ReviewState, SourceBinding, TranslationRowCursorDto, TranslationRowDto } from "./types";
+import type { ReviewState, SourceBinding, TranslationRowDto } from "./types";
 
 /**
  * Renderer-only projection of one translatable source cell.
@@ -59,7 +59,7 @@ export function isOccurrenceFilterActive(filter: OccurrenceFilter): boolean {
   return filter.status !== "all" || filter.kind !== "all" || filter.query.trim().length > 0;
 }
 
-/** Filters already-loaded occurrences only; it never implies sheet-wide results. */
+/** Filters the loaded occurrences; once the sheet has finished loading this covers the whole sheet. */
 export function filterOccurrences(
   occurrences: readonly TranslationOccurrenceView[],
   filter: OccurrenceFilter,
@@ -101,15 +101,4 @@ function compareBindings(left: SourceBinding, right: SourceBinding): number {
     || left.rowId - right.rowId
     || left.subrowId - right.subrowId
     || left.columnIndex - right.columnIndex;
-}
-
-/**
- * Exclusive paging cursor that makes a page start at `rowId:subrowId`.
- * Cursors order by row then subrow, so the greatest subrow of the previous row
- * precedes every subrow of `rowId`. Returns null for the first possible row.
- */
-export function cursorBefore(sheetName: string, rowId: number, subrowId: number): TranslationRowCursorDto | null {
-  if (subrowId > 0) return { sheetName, rowId, subrowId: subrowId - 1 };
-  if (rowId > 0) return { sheetName, rowId: rowId - 1, subrowId: 0xffff };
-  return null;
 }

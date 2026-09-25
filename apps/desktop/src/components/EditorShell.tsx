@@ -55,7 +55,6 @@ import { displayPathName } from "../pathDisplay";
 import { initialWorkbenchLayout, reduceWorkbenchLayout } from "../ui/layout";
 import {
   adjacentOccurrence,
-  cursorBefore,
   emptyOccurrenceFilter,
   filterOccurrences,
   flattenTranslationRows,
@@ -72,7 +71,34 @@ import type { RowTarget } from "../commandPalette";
 import { UiIcon } from "../ui/primitives/UiIcon";
 import { useI18n, type MessageKey, type Translate } from "../ui/i18n";
 
-const PAGE_SIZE = 100;
+/** The Rust page bound (`MAX_TRANSLATION_PAGE_SIZE`); a sheet streams in these pages. */
+const PAGE_SIZE = 256;
+/** How often streamed pages are handed to the list while a sheet loads. */
+const COMMIT_INTERVAL_MS = 200;
+
+/**
+ * One sheet load. Pages stream in until the sheet is complete; the list sees
+ * them in batches so a large sheet does not re-render once per page.
+ */
+type SheetLoader = {
+  generation: number;
+  sheetName: string;
+  /** Keeps the current rows on screen and swaps them in once complete. */
+  refresh: boolean;
+  byRowKey: Map<string, TranslationRowDto>;
+  uncommitted: TranslationRowDto[];
+  committed: boolean;
+  /** Whether a row has been selected in this sheet, by the loader or the user. */
+  selected: boolean;
+  lastCommit: number;
+  /** Last scanned source coordinate; every row up to it is loaded. */
+  scannedThrough: TranslationRowCursorDto | null;
+  complete: boolean;
+  failed: boolean;
+};
+
+/** A string to open once its sheet has loaded far enough to contain it. */
+type PendingReveal = { sheetName: string; target: RowTarget };
 
 type EditorError = {
   title: string;
@@ -99,6 +125,28 @@ const bottomPanelIds = new Set(["tasks", "gitChanges", "diagnostics"]);
 
 function cursorForRow(row: TranslationRowDto): TranslationRowCursorDto {
   return { sheetName: row.sheetName, rowId: row.rowId, subrowId: row.subrowId };
+}
+
+function targetCell(row: TranslationRowDto, target: RowTarget): TranslationCellDto | undefined {
+  return row.cells.find((cell) => target.columnIndex === null || cell.sourceBinding.columnIndex === target.columnIndex) ?? row.cells[0];
+}
+
+function patchRow(row: TranslationRowDto, patches: ReadonlyMap<string, TranslationOverlayDto>): TranslationRowDto {
+  let changed = false;
+  const cells = row.cells.map((cell) => {
+    const translation = patches.get(bindingKey(cell.sourceBinding));
+    if (!translation) return cell;
+    changed = true;
+    return { ...cell, translation };
+  });
+  return changed ? { ...row, cells } : row;
+}
+
+/** True once the loader has scanned the source past `target`. */
+function scannedPast(loader: SheetLoader, target: RowTarget): boolean {
+  if (loader.complete || loader.failed) return true;
+  const last = loader.scannedThrough;
+  return last !== null && (last.rowId > target.rowId || (last.rowId === target.rowId && last.subrowId >= target.subrowId));
 }
 
 function panelTitle(panelId: string | null): MessageKey {
@@ -142,11 +190,12 @@ export function EditorShell({
   const [selectedSheetName, setSelectedSheetName] = useState<string | null>(firstSheetName);
   const [loadedSheetName, setLoadedSheetName] = useState<string | null>(null);
   const [rows, setRows] = useState<TranslationRowDto[]>([]);
-  const [nextAfter, setNextAfter] = useState<TranslationRowCursorDto | null>(null);
   const [selectedRowCursor, setSelectedRowCursor] = useState<TranslationRowCursorDto | null>(null);
   const [selectedBinding, setSelectedBinding] = useState<SourceBinding | null>(null);
+  /** True until the first page of the selected sheet is on screen. */
   const [sheetLoading, setSheetLoading] = useState(false);
-  const [loadingMore, setLoadingMore] = useState(false);
+  /** True while the rest of the sheet streams in behind the visible rows. */
+  const [sheetStreaming, setSheetStreaming] = useState(false);
   const [mutations, setMutations] = useState<CellMutation[]>([]);
   const [dirty, setDirty] = useState(false);
   const [closing, setClosing] = useState(false);
@@ -173,8 +222,6 @@ export function EditorShell({
   const [palette, setPalette] = useState<{ open: boolean; input: string; key: number }>({ open: false, input: "", key: 0 });
   const [recentSheets, setRecentSheets] = useState<string[]>([]);
   const [pendingChanges, setPendingChanges] = useState<UnitChangeDto[] | null>(null);
-  /** First row of a page loaded to reveal a string mid-sheet, or null when the list starts at the top. */
-  const [listStart, setListStart] = useState<{ rowId: number; subrowId: number } | null>(null);
   const { preferences } = usePreferences();
   const leftDockOpen = layout.regions.leftDock.visible;
   const rightDockOpen = layout.regions.rightDock.visible;
@@ -187,6 +234,14 @@ export function EditorShell({
   const editorRef = useRef<TranslationEditorHandle>(null);
   const pendingAdvance = useRef<string | null>(null);
   const focusTargetRequest = useRef(false);
+  const loaderRef = useRef<SheetLoader | null>(null);
+  const pendingReveal = useRef<PendingReveal | null>(null);
+  /** Overlays saved while a sheet streams, applied to pages read before the save. */
+  const overlayPatches = useRef(new Map<string, TranslationOverlayDto>());
+  const selectedRowKeyRef = useRef<string | null>(null);
+  selectedRowKeyRef.current = selectedRowCursor ? rowKey(selectedRowCursor) : null;
+  const lensFilterRef = useRef(lensFilter);
+  lensFilterRef.current = lensFilter;
 
   const selectedRow = useMemo(
     () => selectedRowCursor ? rows.find((row) => rowKey(row) === rowKey(selectedRowCursor)) ?? null : null,
@@ -194,7 +249,7 @@ export function EditorShell({
   );
   const allOccurrences = useMemo(() => flattenTranslationRows(rows), [rows]);
   const visibleOccurrences = useMemo(() => filterOccurrences(allOccurrences, lensFilter), [allOccurrences, lensFilter]);
-  const sheetHasNoRows = selectedSheetName !== null && loadedSheetName === selectedSheetName && !sheetLoading && rows.length === 0 && nextAfter === null;
+  const sheetHasNoRows = selectedSheetName !== null && loadedSheetName === selectedSheetName && !sheetLoading && !sheetStreaming && rows.length === 0;
 
   const progressBySheet = useMemo(() => new Map(progress.map((entry) => [entry.sheetName, entry])), [progress]);
   const projectProgress = useMemo(() => {
@@ -234,6 +289,7 @@ export function EditorShell({
 
   const applyOverlay = useCallback((sourceBinding: TranslationCellDto["sourceBinding"], translation: TranslationOverlayDto) => {
     const targetKey = bindingKey(sourceBinding);
+    overlayPatches.current.set(targetKey, translation);
     setWorkspaceRevision((current) => current + 1);
     setRows((current) => current.map((row) => {
       let changed = false;
@@ -246,12 +302,116 @@ export function EditorShell({
     }));
   }, []);
 
-  const beginSheetLoad = useCallback(async (sheetName: string, immediate = true, reveal: RowTarget | null = null) => {
+  /** Selects one cell on behalf of the loader, dropping a draft only when the row changes. */
+  const selectLoadedCell = useCallback((loader: SheetLoader, row: TranslationRowDto | undefined, cell: TranslationCellDto | undefined) => {
+    loader.selected = true;
+    if (row && rowKey(row) !== selectedRowKeyRef.current) {
+      hasDirtyDraft.current = false;
+      setDirty(false);
+    }
+    setSelectedRowCursor(row ? cursorForRow(row) : null);
+    setSelectedBinding(cell?.sourceBinding ?? null);
+  }, []);
+
+  /** Hands streamed rows to the list, patched with overlays saved since they were read. */
+  const commitRows = useCallback((loader: SheetLoader) => {
+    if (loader.refresh && !loader.complete) return;
+    if (loader.committed && loader.uncommitted.length === 0) return;
+    const patches = overlayPatches.current;
+    const batch = patches.size === 0 ? loader.uncommitted : loader.uncommitted.map((row) => patchRow(row, patches));
+    const first = !loader.committed;
+    loader.uncommitted = [];
+    loader.committed = true;
+    loader.lastCommit = performance.now();
+    if (first) {
+      setRows(batch);
+      setLoadedSheetName(loader.sheetName);
+      setSheetLoading(false);
+    } else {
+      setRows((current) => current.concat(batch));
+    }
+
+    if (loader.refresh) {
+      const selected = selectedRowKeyRef.current;
+      if (selected === null || !loader.byRowKey.has(selected)) selectLoadedCell(loader, batch[0], batch[0]?.cells[0]);
+      return;
+    }
+    // A string being revealed is selected once it arrives, not the top row first.
+    if (pendingReveal.current?.sheetName === loader.sheetName) {
+      if (first) {
+        selectLoadedCell(loader, undefined, undefined);
+        loader.selected = false;
+      }
+      return;
+    }
+    // Leading pages may hold no translatable rows; select the first row that arrives.
+    if (first) {
+      selectLoadedCell(loader, batch[0], batch[0]?.cells[0]);
+      loader.selected = batch.length > 0;
+    } else if (!loader.selected && batch[0]) {
+      selectLoadedCell(loader, batch[0], batch[0].cells[0]);
+    }
+  }, [selectLoadedCell]);
+
+  /** Opens the pending string once the loader has read far enough to know whether it exists. */
+  const settleReveal = useCallback((loader: SheetLoader) => {
+    const reveal = pendingReveal.current;
+    if (!reveal || reveal.sheetName !== loader.sheetName || loader.generation !== requestGeneration.current) return;
+    const { target } = reveal;
+    const row = loader.byRowKey.get(rowKey({ sheetName: loader.sheetName, rowId: target.rowId, subrowId: target.subrowId }));
+    if (loader.refresh ? !loader.complete : !row && !scannedPast(loader, target)) return;
+    pendingReveal.current = null;
+    commitRows(loader);
+    const cell = row ? targetCell(row, target) : undefined;
+    if (row && cell) {
+      selectLoadedCell(loader, row, cell);
+      setEditorError(null);
+      const key = bindingKey(cell.sourceBinding);
+      const occurrence = flattenTranslationRows([row]).filter((candidate) => bindingKey(candidate.binding) === key);
+      if (filterOccurrences(occurrence, lensFilterRef.current).length === 0) setLensFilter(emptyOccurrenceFilter);
+      return;
+    }
+    if (loader.failed) return;
+    setEditorError({
+      title: t("workbench.error.stringNotFound"),
+      tone: "warning",
+      error: { code: "rowNotTranslatable", message: t("workbench.error.rowNotTranslatable", cellCoordinates(loader.sheetName, target)) },
+    });
+    if (!loader.selected) {
+      const first = loader.byRowKey.values().next().value;
+      selectLoadedCell(loader, first, first?.cells[0]);
+    }
+  }, [commitRows, selectLoadedCell, t]);
+
+  /**
+   * Loads a whole sheet. The first page shows immediately and the rest streams
+   * in behind it, so filtering, navigation, and reveal always see the full
+   * sheet once it completes. `refresh` reloads the open sheet in place.
+   */
+  const beginSheetLoad = useCallback(async (sheetName: string, options: { immediate?: boolean; reveal?: RowTarget | null; refresh?: boolean } = {}) => {
+    const { immediate = true, reveal = null, refresh = false } = options;
     const generation = ++requestGeneration.current;
     pendingAdvance.current = null;
+    overlayPatches.current = new Map();
+    pendingReveal.current = reveal ? { sheetName, target: reveal } : null;
+    const loader: SheetLoader = {
+      generation,
+      sheetName,
+      refresh,
+      byRowKey: new Map(),
+      uncommitted: [],
+      committed: false,
+      selected: false,
+      lastCommit: 0,
+      scannedThrough: null,
+      complete: false,
+      failed: false,
+    };
+    loaderRef.current = loader;
     const resetForSheet = () => {
       setSelectedSheetName(sheetName);
-      setNextAfter(null);
+      setSheetStreaming(true);
+      if (refresh) return;
       setDirty(false);
       hasDirtyDraft.current = false;
       setSheetLoading(true);
@@ -259,39 +419,39 @@ export function EditorShell({
     };
     if (immediate) flushSync(resetForSheet);
     else resetForSheet();
-    setRecentSheets((current) => [sheetName, ...current.filter((name) => name !== sheetName)].slice(0, RECENT_SHEET_LIMIT));
+    if (!refresh) setRecentSheets((current) => [sheetName, ...current.filter((name) => name !== sheetName)].slice(0, RECENT_SHEET_LIMIT));
 
-    const after = reveal ? cursorBefore(sheetName, reveal.rowId, reveal.subrowId) : null;
+    let after: TranslationRowCursorDto | null = null;
     try {
-      const page = await pageTranslationRows(sheetName, after, PAGE_SIZE);
-      if (generation !== requestGeneration.current) return;
-      setRows(page.rows);
-      setLoadedSheetName(sheetName);
-      setNextAfter(page.nextAfter);
-      setListStart(after && reveal ? { rowId: reveal.rowId, subrowId: reveal.subrowId } : null);
-      const revealedRow = reveal ? page.rows.find((row) => row.rowId === reveal.rowId && row.subrowId === reveal.subrowId) : undefined;
-      const revealedCell = revealedRow
-        ? revealedRow.cells.find((cell) => reveal?.columnIndex === null || cell.sourceBinding.columnIndex === reveal?.columnIndex) ?? revealedRow.cells[0]
-        : undefined;
-      const row = revealedRow ?? page.rows[0];
-      setSelectedRowCursor(row ? cursorForRow(row) : null);
-      setSelectedBinding((revealedCell ?? row?.cells[0])?.sourceBinding ?? null);
-      if (reveal && !revealedRow) {
-        setEditorError({
-          title: t("workbench.error.stringNotFound"),
-          tone: "warning",
-          error: { code: "rowNotTranslatable", message: t("workbench.error.rowNotTranslatable", cellCoordinates(sheetName, reveal)) },
-        });
-      }
+      do {
+        const page = await pageTranslationRows(sheetName, after, PAGE_SIZE);
+        if (generation !== requestGeneration.current) return;
+        for (const row of page.rows) {
+          loader.byRowKey.set(rowKey(row), row);
+          loader.uncommitted.push(row);
+        }
+        after = page.nextAfter;
+        loader.scannedThrough = after;
+        loader.complete = after === null;
+        if (!loader.committed || loader.complete || performance.now() - loader.lastCommit >= COMMIT_INTERVAL_MS) commitRows(loader);
+        settleReveal(loader);
+      } while (after !== null);
     } catch (error) {
-      if (generation === requestGeneration.current) showError(t("workbench.error.loadSheet"), error);
+      if (generation !== requestGeneration.current) return;
+      loader.failed = true;
+      if (pendingReveal.current?.sheetName === sheetName) pendingReveal.current = null;
+      if (!refresh) commitRows(loader);
+      showError(t("workbench.error.loadSheet"), error);
     } finally {
-      if (generation === requestGeneration.current) setSheetLoading(false);
+      if (generation === requestGeneration.current) {
+        setSheetLoading(false);
+        setSheetStreaming(false);
+      }
     }
-  }, [showError, t]);
+  }, [commitRows, settleReveal, showError, t]);
 
   useEffect(() => {
-    if (firstSheetName) void beginSheetLoad(firstSheetName, false);
+    if (firstSheetName) void beginSheetLoad(firstSheetName, { immediate: false });
   }, [beginSheetLoad, firstSheetName]);
 
   const requestDiscardConfirmation = useCallback((message: string): Promise<boolean> => {
@@ -390,6 +550,8 @@ export function EditorShell({
       return;
     }
     pendingAdvance.current = null;
+    pendingReveal.current = null;
+    if (loaderRef.current) loaderRef.current.selected = true;
 
     flushSync(() => {
       setSelectedRowCursor(cursor);
@@ -519,31 +681,6 @@ export function EditorShell({
     });
   }, [applyOverlay, confirmMutationDiscard, runMutation, t]);
 
-  const handleLoadMore = useCallback(async () => {
-    if (!selectedSheetName || !nextAfter || loadingMore) return;
-    const generation = requestGeneration.current;
-    const after = nextAfter;
-    flushSync(() => setLoadingMore(true));
-
-    try {
-      const page = await pageTranslationRows(selectedSheetName, after, PAGE_SIZE);
-      if (generation !== requestGeneration.current) return;
-      setRows((current) => {
-        const seen = new Set(current.map((row) => rowKey(row)));
-        return [...current, ...page.rows.filter((row) => !seen.has(rowKey(row)))];
-      });
-      if (rows.length === 0 && page.rows[0]) {
-        setSelectedRowCursor(cursorForRow(page.rows[0]));
-        setSelectedBinding(page.rows[0].cells[0]?.sourceBinding ?? null);
-      }
-      setNextAfter(page.nextAfter);
-    } catch (error) {
-      if (generation === requestGeneration.current) showError(t("workbench.error.loadMore"), error);
-    } finally {
-      setLoadingMore(false);
-    }
-  }, [loadingMore, nextAfter, rows.length, selectedSheetName, showError, t]);
-
   const handleClose = useCallback(async () => {
     if (!(await requestDiscardConfirmation(t("workbench.discard.closeProject")))) return;
     flushSync(() => {
@@ -578,7 +715,7 @@ export function EditorShell({
 
   const handleWorkspaceChanged = useCallback(() => {
     setWorkspaceRevision((current) => current + 1);
-    if (selectedSheetName) void beginSheetLoad(selectedSheetName, false);
+    if (selectedSheetName) void beginSheetLoad(selectedSheetName, { immediate: false, refresh: true });
   }, [beginSheetLoad, selectedSheetName]);
 
   // Uncommitted translation-unit changes drive list markers and the editor
@@ -618,28 +755,26 @@ export function EditorShell({
     };
   }, [pendingByBinding, selectedBinding]);
 
-  /** Opens a string by coordinate, paging directly to it when it is not loaded. */
+  /** Opens a string by coordinate, waiting for its sheet to load far enough to contain it. */
   const revealString = useCallback(async (sheetName: string, target: RowTarget) => {
-    if (sheetName === selectedSheetName && loadedSheetName === sheetName) {
-      const occurrence = allOccurrences.find((candidate) =>
-        candidate.binding.rowId === target.rowId
-        && candidate.binding.subrowId === target.subrowId
-        && (target.columnIndex === null || candidate.binding.columnIndex === target.columnIndex));
-      if (occurrence) {
-        if (!visibleOccurrences.includes(occurrence)) setLensFilter(emptyOccurrenceFilter);
-        await handleOccurrenceSelect(occurrence);
-        return;
-      }
-    }
     if (!sheetsByName.has(sheetName)) {
       setEditorError({ title: t("workbench.error.sheetNotFound"), tone: "warning", error: { code: "sheetNotFound", message: t("workbench.error.sheetMissing", { sheet: sheetName }) } });
+      return;
+    }
+    const loader = loaderRef.current;
+    if (sheetName === selectedSheetName && loader?.sheetName === sheetName && !loader.failed) {
+      const sameRow = selectedRowKeyRef.current === rowKey({ sheetName, rowId: target.rowId, subrowId: target.subrowId });
+      if (!sameRow && !(await requestDiscardConfirmation(t("workbench.discard.openString")))) return;
+      if (loaderRef.current !== loader) return;
+      pendingReveal.current = { sheetName, target };
+      settleReveal(loader);
       return;
     }
     if (!(await requestDiscardConfirmation(t("workbench.discard.openString")))) return;
     if (sheetName !== selectedSheetName) setDocumentTabs((current) => reduceDocumentTabs(current, { type: "openSheet", sheetName, pin: true }));
     setLensFilter(emptyOccurrenceFilter);
-    void beginSheetLoad(sheetName, true, target);
-  }, [allOccurrences, beginSheetLoad, handleOccurrenceSelect, loadedSheetName, requestDiscardConfirmation, selectedSheetName, sheetsByName, t, visibleOccurrences]);
+    void beginSheetLoad(sheetName, { reveal: target });
+  }, [beginSheetLoad, requestDiscardConfirmation, selectedSheetName, settleReveal, sheetsByName, t]);
 
   const revealBinding = useCallback((binding: SourceBinding) => {
     void revealString(binding.sheetName, { rowId: binding.rowId, subrowId: binding.subrowId, columnIndex: binding.columnIndex });
@@ -1071,14 +1206,11 @@ export function EditorShell({
                   loadedSheetName={loadedSheetName}
                   disabled={closing}
                   loading={sheetLoading}
-                  loadingMore={loadingMore}
-                  hasMore={nextAfter !== null}
+                  streaming={sheetStreaming}
+                  sheetStringCount={selectedSheet?.translatableCellCount ?? null}
                   onSelect={(occurrence) => void handleOccurrenceSelect(occurrence)}
                   onNavigate={navigateOccurrence}
-                  onLoadMore={() => void handleLoadMore()}
                   changedKinds={changedKinds}
-                  listStart={listStart}
-                  onLoadFromStart={() => { if (selectedSheetName) void beginSheetLoad(selectedSheetName); }}
                 />
                 <ResizeHandle axis="y" label={t("workbench.resizeEditor")} onDelta={(delta) => dispatchLayout({ type: "resizeRegion", regionId: "editor", delta: -delta })} />
                 <TranslationEditor

@@ -25,16 +25,14 @@ type TranslationListProps = {
   loadedSheetName: string | null;
   disabled: boolean;
   loading: boolean;
-  loadingMore: boolean;
-  hasMore: boolean;
+  /** True while the rest of the sheet streams in behind the loaded strings. */
+  streaming: boolean;
+  /** Translatable strings in the sheet, for the streaming indicator. */
+  sheetStringCount: number | null;
   onSelect: (occurrence: TranslationOccurrenceView) => void;
   onNavigate: (direction: 1 | -1) => void;
-  onLoadMore: () => void;
   /** Uncommitted change kind per binding key, for Git markers. */
   changedKinds: ReadonlyMap<string, UnitChangeKind>;
-  /** Set when the list was paged to a string mid-sheet. */
-  listStart: { rowId: number; subrowId: number } | null;
-  onLoadFromStart: () => void;
 };
 
 const statusOptions: ReadonlyArray<{ value: OccurrenceStatusFilter; label: MessageKey }> = [
@@ -76,14 +74,11 @@ export const TranslationList = memo(function TranslationList({
   loadedSheetName,
   disabled,
   loading,
-  loadingMore,
-  hasMore,
+  streaming,
+  sheetStringCount,
   onSelect,
   onNavigate,
-  onLoadMore,
   changedKinds,
-  listStart,
-  onLoadFromStart,
 }: TranslationListProps) {
   const { t, formatNumber } = useI18n();
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -91,10 +86,8 @@ export const TranslationList = memo(function TranslationList({
   const selectedKey = selectedBinding ? bindingKey(selectedBinding) : null;
   const showingPreviousSheet = loading && loadedOccurrenceCount > 0 && selectedSheetName !== loadedSheetName;
   const filtered = isOccurrenceFilterActive(filter);
-  const itemCount = occurrences.length + (hasMore ? 1 : 0);
-
   const virtualizer = useVirtualizer({
-    count: itemCount,
+    count: occurrences.length,
     getScrollElement: () => scrollRef.current,
     estimateSize: () => rowHeight,
     overscan: 12,
@@ -124,6 +117,11 @@ export const TranslationList = memo(function TranslationList({
       onNavigate(event.key === "ArrowDown" ? 1 : -1);
     }
   }
+
+  const streamedCount = sheetStringCount ? Math.min(loadedOccurrenceCount, sheetStringCount) : loadedOccurrenceCount;
+  const streamingLabel = sheetStringCount
+    ? t("list.streaming", { loaded: formatNumber(streamedCount), total: formatNumber(sheetStringCount) })
+    : t("list.loadingSheet");
 
   const translatedShare = sheetProgress && sheetProgress.total > 0 ? Math.min(1, sheetProgress.translated / sheetProgress.total) : 0;
   const reviewedShare = sheetProgress && sheetProgress.total > 0 ? Math.min(1, sheetProgress.reviewed / sheetProgress.total) : 0;
@@ -166,14 +164,6 @@ export const TranslationList = memo(function TranslationList({
         ) : null}
       </div>
 
-      {listStart ? (
-        <div className="lens-banner" role="status">
-          <UiIcon icon="info" size="sm" />
-          <span>{t("list.showingFrom")} <span className="mono">{listStart.rowId}:{listStart.subrowId}</span></span>
-          <button className="link-button" type="button" onClick={onLoadFromStart} disabled={disabled || loading}>{t("list.loadFromStart")}</button>
-        </div>
-      ) : null}
-
       <div className="lens-header" aria-hidden="true">
         <span />
         <span>{t("list.header.row")}</span>
@@ -181,19 +171,33 @@ export const TranslationList = memo(function TranslationList({
         <span>{t("list.header.source")}</span>
         <span>{t("list.header.target")}</span>
       </div>
+      {streaming && loadedOccurrenceCount > 0 && !showingPreviousSheet ? (
+        <div
+          className="lens-progress"
+          role="progressbar"
+          aria-label={streamingLabel}
+          aria-valuemin={0}
+          aria-valuemax={sheetStringCount ?? undefined}
+          aria-valuenow={sheetStringCount ? streamedCount : undefined}
+          title={streamingLabel}
+        >
+          <span style={sheetStringCount ? { width: `${(streamedCount / sheetStringCount) * 100}%` } : undefined} />
+        </div>
+      ) : null}
 
-      {loading && loadedOccurrenceCount === 0 ? (
-        <div className="lens-state" aria-live="polite"><span className="spinner" aria-hidden="true" />{t("list.loadingSheet")}</div>
+      {occurrences.length === 0 && (loading || streaming) ? (
+        <div className="lens-state" aria-live="polite"><span className="spinner" aria-hidden="true" />{t(filtered && loadedOccurrenceCount > 0 ? "list.searching" : "list.loadingSheet")}</div>
       ) : occurrences.length === 0 ? (
         <div className="lens-state">
           <div className="empty-state">
             <UiIcon icon={filtered ? "listFilter" : "table2"} size="xl" />
-            <strong>{t(filtered ? "list.noMatch" : hasMore ? "list.noPageText" : "list.noStrings")}</strong>
-            <p>{t(filtered ? "list.noMatchHint" : hasMore ? "list.noPageTextHint" : "list.noStringsHint")}</p>
-            <div className="empty-state-actions">
-              {filtered ? <button className="button button-secondary" type="button" onClick={() => onFilterChange(emptyOccurrenceFilter)}>{t("list.clearFilter")}</button> : null}
-              {hasMore ? <button className="button button-secondary" type="button" onClick={onLoadMore} disabled={disabled || loadingMore}>{t(loadingMore ? "common.loading" : "list.loadMore")}</button> : null}
-            </div>
+            <strong>{t(filtered ? "list.noMatch" : "list.noStrings")}</strong>
+            <p>{t(filtered ? "list.noMatchHint" : "list.noStringsHint")}</p>
+            {filtered ? (
+              <div className="empty-state-actions">
+                <button className="button button-secondary" type="button" onClick={() => onFilterChange(emptyOccurrenceFilter)}>{t("list.clearFilter")}</button>
+              </div>
+            ) : null}
           </div>
         </div>
       ) : (
@@ -208,16 +212,7 @@ export const TranslationList = memo(function TranslationList({
         >
           <div className="lens-spacer" style={{ height: virtualizer.getTotalSize() }}>
             {virtualizer.getVirtualItems().map((item) => {
-              const occurrence = occurrences[item.index];
-              if (!occurrence) {
-                return (
-                  <div className="lens-load-more" key="load-more" style={{ transform: `translateY(${item.start}px)`, height: item.size }}>
-                    <button className="button button-ghost" type="button" onClick={onLoadMore} disabled={disabled || loadingMore}>
-                      {loadingMore ? <><span className="spinner spinner-xs" />{t("common.loading")}</> : <><UiIcon icon="arrowDown" size="sm" />{t("list.loadMoreRows")}</>}
-                    </button>
-                  </div>
-                );
-              }
+              const occurrence = occurrences[item.index]!;
               const key = bindingKey(occurrence.binding);
               const selected = key === selectedKey;
               const continuation = !occurrence.firstInRow && occurrences[item.index - 1]?.rowKey === occurrence.rowKey;

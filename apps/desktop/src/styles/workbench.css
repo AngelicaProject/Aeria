@@ -384,7 +384,9 @@
   line-height: 14px;
   vertical-align: 1px;
 }
-.lens-load-more { position: absolute; top: 0; right: 0; left: 0; display: grid; place-items: center; }
+/* Thin progress line over the header's bottom border while a sheet streams in. */
+.lens-progress { position: relative; z-index: 1; flex: none; height: 2px; margin-top: -2px; overflow: hidden; }
+.lens-progress > span { display: block; width: 30%; height: 100%; background: var(--accent); transition: width var(--duration) var(--ease-out); }
 .lens-state { display: flex; flex: 1; align-items: center; justify-content: center; gap: 10px; color: var(--fg-muted); }
 .lens-loading-layer {
   position: absolute;
@@ -442,20 +444,6 @@
 }
 .lens-row.git-added::after { background: var(--ok); }
 .lens-row.git-modified::after { background: var(--accent); }
-.lens-banner {
-  display: flex;
-  flex: none;
-  align-items: center;
-  gap: 8px;
-  margin: 0 10px 8px;
-  padding: 6px 10px;
-  border-radius: var(--radius-sm);
-  background: var(--accent-soft);
-  color: var(--fg-muted);
-  font-size: var(--text-xs);
-}
-.lens-banner svg { color: var(--accent-text); }
-.lens-banner .link-button { margin-left: auto; }
 :root[data-list-density="compact"] .lens-text { font-size: var(--text-sm); }
 
 /* Angelica */

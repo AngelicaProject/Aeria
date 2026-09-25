@@ -14,8 +14,8 @@ project launcher
 → immediate review-state persistence
 ```
 
-The renderer owns only ephemeral drafts, navigation, paging, filtering of loaded
-rows, and loading/error presentation. Rust remains authoritative for source
+The renderer owns only ephemeral drafts, navigation, sheet loading, filtering of
+loaded rows, and loading/error presentation. Rust remains authoritative for source
 bindings, workspace state, validation, classification, and mutation semantics.
 
 ## Launcher
@@ -95,10 +95,11 @@ its mode:
 | `#` | Project string search; shown as unavailable until the Search tool is implemented |
 | `?` | List the prefixes |
 
-Going to a row that is not loaded pages the sheet so it starts at that row. The
-list then shows a "Showing rows from" notice with **Load from the start**, and
-**Load more** continues forward. A coordinate without a translatable string
-selects the first loaded row and shows a warning.
+Going to a row always keeps the list in sheet order from the top: the string is
+selected and scrolled into view once the sheet has loaded far enough to contain
+it. Angelica's navigation and search results reveal strings the same way. A
+coordinate without a translatable string shows a warning and keeps the current
+selection (or selects the first row of a newly opened sheet).
 
 ## Strings list
 
@@ -111,13 +112,18 @@ single-line source and target previews in which macro spans are tinted. Until
 EXDSchema exists, fields are labelled by column. Blocked source cells remain
 context only and are never used as permission heuristics.
 
-The list is virtualized, pages one sheet at a time with a limit of 100 entries,
-and keeps **Load more** explicit; a source page may return zero visible rows
-while its row cursor still has more source work. A text filter, a review
-state filter (untranslated, draft, needs review, reviewed), and a string kind
-toggle pair (text only or formatting only; pressing the active one again shows
-both) narrow the loaded occurrences only and are
-labelled as such. Formatting-only strings (no letters outside macros, such as
+The list is virtualized and always holds the whole sheet. Opening a sheet shows
+its first page immediately and streams the remaining pages in the background
+(bounded `page_translation_rows` calls of 256 source rows, appended to the list
+in batches); the toolbar shows loading progress until the sheet is complete.
+Pages that contain no visible rows are simply skipped, and there is no manual
+**Load more**. Reloading the open sheet after a Git operation keeps the current
+rows and selection on screen and swaps in the new rows once complete. Overlays
+saved while a sheet streams are applied to pages read before the save. A text
+filter, a review state filter (untranslated, draft, needs review, reviewed),
+and a string kind toggle pair (text only or formatting only; pressing the
+active one again shows both) narrow the list; while the sheet is still
+loading they cover the rows loaded so far and grow as the rest arrives. Formatting-only strings (no letters outside macros, such as
 `...` or a number format) show a small `fmt` tag in the list and a
 **Formatting** chip in the editor's source header; they stay translatable. The toolbar shows sheet-wide
 coverage from `translation_progress`, never a figure derived from loaded pages.

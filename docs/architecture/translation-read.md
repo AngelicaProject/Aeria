@@ -73,10 +73,12 @@ cursor points to the final returned row only when another row group exists.
 
 ## Application paging and overlay composition
 
-`MAX_TRANSLATION_PAGE_SIZE` remains 256. The desktop requests 100, now meaning
-up to 100 HXS row/subrow groups scanned, not 100 String cells. Classification
-can therefore make a visible page shorter, including zero visible rows with a
-non-null `next_after`. The reader does not loop to fill a visible page.
+`MAX_TRANSLATION_PAGE_SIZE` remains 256, meaning up to 256 HXS row/subrow
+groups scanned, not 256 String cells. Classification can therefore make a
+visible page shorter, including zero visible rows with a non-null `next_after`.
+The reader does not loop to fill a visible page. The desktop requests full
+256-row pages and follows `next_after` until the sheet is complete, so paging
+is a bounded transport detail rather than something the user navigates.
 
 The application cursor is an owned `TranslationRowCursor` containing only
 `sheet_name`, `row_id`, and `subrow_id`. Cross-sheet cursors are rejected.

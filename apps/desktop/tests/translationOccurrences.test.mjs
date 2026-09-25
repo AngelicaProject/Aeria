@@ -70,10 +70,3 @@ test("filters loaded occurrences by review state and text", async () => {
   assert.equal(adjacentOccurrence(withoutWorld, binding(3), -1)?.sourceMacro, "Hello <num(1)>");
   assert.equal(adjacentOccurrence(withoutWorld.slice(0, 1), binding(3), 1), null);
 });
-
-test("cursorBefore starts a page at the requested row", async () => {
-  const { cursorBefore } = await import("../src/translationOccurrences.ts");
-  assert.deepEqual(cursorBefore("Addon", 12, 3), { sheetName: "Addon", rowId: 12, subrowId: 2 });
-  assert.deepEqual(cursorBefore("Addon", 12, 0), { sheetName: "Addon", rowId: 11, subrowId: 65535 });
-  assert.equal(cursorBefore("Addon", 0, 0), null);
-});
