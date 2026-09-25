@@ -63,6 +63,7 @@ import {
 } from "../translationOccurrences";
 import { initialDocumentTabsState, reduceDocumentTabs, type DocumentTabsState } from "../documentTabs";
 import { initialDockLayout, reduceDockLayout, type DockRegion } from "../dockLayout";
+import { createLoadProgress } from "../loadProgress";
 import { hasWindowsBackdrop } from "../ui/theme/windowBackdrop";
 import { useTheme } from "../ui/theme/theme";
 import { themeRegistry } from "../ui/theme/registry";
@@ -73,13 +74,14 @@ import { useI18n, type MessageKey, type Translate } from "../ui/i18n";
 
 /** The Rust page bound (`MAX_TRANSLATION_PAGE_SIZE`); a sheet streams in these pages. */
 const PAGE_SIZE = 256;
-/** How often streamed pages are handed to the list while a sheet loads. */
-const COMMIT_INTERVAL_MS = 200;
-
 /**
- * One sheet load. Pages stream in until the sheet is complete; the list sees
- * them in batches so a large sheet does not re-render once per page.
+ * A sheet that loads within this time appears in one piece. A slower sheet
+ * shows what has loaded by then and the rest once it is complete, so the
+ * workbench re-renders at most twice per load rather than once per batch.
  */
+const FIRST_COMMIT_DELAY_MS = 300;
+
+/** One sheet load. Pages are read until the sheet is complete. */
 type SheetLoader = {
   generation: number;
   sheetName: string;
@@ -88,9 +90,11 @@ type SheetLoader = {
   byRowKey: Map<string, TranslationRowDto>;
   uncommitted: TranslationRowDto[];
   committed: boolean;
+  startedAt: number;
+  /** Strings read so far, including rows not yet handed to the list. */
+  loadedStrings: number;
   /** Whether a row has been selected in this sheet, by the loader or the user. */
   selected: boolean;
-  lastCommit: number;
   /** Last scanned source coordinate; every row up to it is loaded. */
   scannedThrough: TranslationRowCursorDto | null;
   complete: boolean;
@@ -196,6 +200,7 @@ export function EditorShell({
   const [sheetLoading, setSheetLoading] = useState(false);
   /** True while the rest of the sheet streams in behind the visible rows. */
   const [sheetStreaming, setSheetStreaming] = useState(false);
+  const [loadProgress] = useState(createLoadProgress);
   const [mutations, setMutations] = useState<CellMutation[]>([]);
   const [dirty, setDirty] = useState(false);
   const [closing, setClosing] = useState(false);
@@ -324,7 +329,6 @@ export function EditorShell({
     const first = !loader.committed;
     loader.uncommitted = [];
     loader.committed = true;
-    loader.lastCommit = performance.now();
     if (first) {
       setRows(batch);
       setLoadedSheetName(loader.sheetName);
@@ -404,12 +408,14 @@ export function EditorShell({
       uncommitted: [],
       committed: false,
       selected: false,
-      lastCommit: 0,
+      startedAt: performance.now(),
+      loadedStrings: 0,
       scannedThrough: null,
       complete: false,
       failed: false,
     };
     loaderRef.current = loader;
+    loadProgress.set(0);
     const resetForSheet = () => {
       setSelectedSheetName(sheetName);
       setSheetStreaming(true);
@@ -431,11 +437,13 @@ export function EditorShell({
         for (const row of page.rows) {
           loader.byRowKey.set(rowKey(row), row);
           loader.uncommitted.push(row);
+          loader.loadedStrings += row.cells.length;
         }
+        loadProgress.set(loader.loadedStrings);
         after = page.nextAfter;
         loader.scannedThrough = after;
         loader.complete = after === null;
-        if (!loader.committed || loader.complete || performance.now() - loader.lastCommit >= COMMIT_INTERVAL_MS) commitRows(loader);
+        if (loader.complete || (!loader.committed && performance.now() - loader.startedAt >= FIRST_COMMIT_DELAY_MS)) commitRows(loader);
         settleReveal(loader);
       } while (after !== null);
     } catch (error) {
@@ -450,7 +458,7 @@ export function EditorShell({
         setSheetStreaming(false);
       }
     }
-  }, [commitRows, settleReveal, showError, t]);
+  }, [commitRows, loadProgress, settleReveal, showError, t]);
 
   useEffect(() => {
     if (firstSheetName) void beginSheetLoad(firstSheetName, { immediate: false });
@@ -1209,6 +1217,7 @@ export function EditorShell({
                   disabled={closing}
                   loading={sheetLoading}
                   streaming={sheetStreaming}
+                  loadProgress={loadProgress}
                   sheetStringCount={selectedSheet?.translatableCellCount ?? null}
                   onSelect={(occurrence) => void handleOccurrenceSelect(occurrence)}
                   onNavigate={navigateOccurrence}

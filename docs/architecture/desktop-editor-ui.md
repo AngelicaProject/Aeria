@@ -112,10 +112,12 @@ single-line source and target previews in which macro spans are tinted. Until
 EXDSchema exists, fields are labelled by column. Blocked source cells remain
 context only and are never used as permission heuristics.
 
-The list is virtualized and always holds the whole sheet. Opening a sheet shows
-its first page immediately and streams the remaining pages in the background
-(bounded `page_translation_rows` calls of 256 source rows, appended to the list
-in batches); the toolbar shows loading progress until the sheet is complete.
+The list is virtualized and always holds the whole sheet. Opening a sheet reads
+it with bounded `page_translation_rows` calls of 256 source rows. A sheet that
+loads within 300 ms appears in one piece; a slower sheet shows the rows read by
+then and the rest once it is complete, so the list updates at most twice per
+load. A progress line under the list header tracks the strings read without
+re-rendering the list.
 Pages that contain no visible rows are simply skipped, and there is no manual
 **Load more**. Reloading the open sheet after a Git operation keeps the current
 rows and selection on screen and swaps in the new rows once complete. Overlays

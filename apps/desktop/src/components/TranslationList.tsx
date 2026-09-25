@@ -1,4 +1,4 @@
-import { memo, useEffect, useMemo, useRef, type KeyboardEvent } from "react";
+import { memo, useEffect, useMemo, useRef, useSyncExternalStore, type KeyboardEvent } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { bindingKey, domKey } from "../binding";
 import { segmentMacroText } from "../macroTokens";
@@ -10,6 +10,7 @@ import { ReviewDot } from "./ReviewDot";
 import { usePreferences } from "../ui/preferences";
 import { useI18n } from "../ui/i18n";
 import type { MessageKey } from "../i18n/translate";
+import type { LoadProgress } from "../loadProgress";
 
 const ROW_HEIGHT = { compact: 28, comfortable: 34 } as const;
 
@@ -27,6 +28,8 @@ type TranslationListProps = {
   loading: boolean;
   /** True while the rest of the sheet streams in behind the loaded strings. */
   streaming: boolean;
+  /** Strings read so far while streaming; only the progress line subscribes. */
+  loadProgress: LoadProgress;
   /** Translatable strings in the sheet, for the streaming indicator. */
   sheetStringCount: number | null;
   onSelect: (occurrence: TranslationOccurrenceView) => void;
@@ -63,6 +66,27 @@ function MacroPreview({ text, empty }: { text: string | null; empty: string }) {
   return <>{segments.map((segment, index) => segment.kind === "macro" ? <span className="lens-macro" key={index}>{segment.text}</span> : <span key={index}>{segment.text}</span>)}</>;
 }
 
+/** Subscribes to the streaming count on its own so the list does not re-render per page. */
+function StreamingProgress({ progress, total }: { progress: LoadProgress; total: number | null }) {
+  const { t, formatNumber } = useI18n();
+  const read = useSyncExternalStore(progress.subscribe, progress.current);
+  const loaded = total ? Math.min(read, total) : read;
+  const label = total ? t("list.streaming", { loaded: formatNumber(loaded), total: formatNumber(total) }) : t("list.loadingSheet");
+  return (
+    <div
+      className="lens-progress"
+      role="progressbar"
+      aria-label={label}
+      aria-valuemin={0}
+      aria-valuemax={total ?? undefined}
+      aria-valuenow={total ? loaded : undefined}
+      title={label}
+    >
+      <span style={total ? { width: `${(loaded / total) * 100}%` } : undefined} />
+    </div>
+  );
+}
+
 export const TranslationList = memo(function TranslationList({
   occurrences,
   loadedOccurrenceCount,
@@ -75,6 +99,7 @@ export const TranslationList = memo(function TranslationList({
   disabled,
   loading,
   streaming,
+  loadProgress,
   sheetStringCount,
   onSelect,
   onNavigate,
@@ -114,11 +139,6 @@ export const TranslationList = memo(function TranslationList({
       onNavigate(event.key === "ArrowDown" ? 1 : -1);
     }
   }
-
-  const streamedCount = sheetStringCount ? Math.min(loadedOccurrenceCount, sheetStringCount) : loadedOccurrenceCount;
-  const streamingLabel = sheetStringCount
-    ? t("list.streaming", { loaded: formatNumber(streamedCount), total: formatNumber(sheetStringCount) })
-    : t("list.loadingSheet");
 
   const translatedShare = sheetProgress && sheetProgress.total > 0 ? Math.min(1, sheetProgress.translated / sheetProgress.total) : 0;
   const reviewedShare = sheetProgress && sheetProgress.total > 0 ? Math.min(1, sheetProgress.reviewed / sheetProgress.total) : 0;
@@ -168,19 +188,7 @@ export const TranslationList = memo(function TranslationList({
         <span>{t("list.header.source")}</span>
         <span>{t("list.header.target")}</span>
       </div>
-      {streaming && loadedOccurrenceCount > 0 && !showingPreviousSheet ? (
-        <div
-          className="lens-progress"
-          role="progressbar"
-          aria-label={streamingLabel}
-          aria-valuemin={0}
-          aria-valuemax={sheetStringCount ?? undefined}
-          aria-valuenow={sheetStringCount ? streamedCount : undefined}
-          title={streamingLabel}
-        >
-          <span style={sheetStringCount ? { width: `${(streamedCount / sheetStringCount) * 100}%` } : undefined} />
-        </div>
-      ) : null}
+      {streaming && loadedOccurrenceCount > 0 && !showingPreviousSheet ? <StreamingProgress progress={loadProgress} total={sheetStringCount} /> : null}
 
       {occurrences.length === 0 && (loading || streaming) ? (
         <div className="lens-state" aria-live="polite"><span className="spinner" aria-hidden="true" />{t(filtered && loadedOccurrenceCount > 0 ? "list.searching" : "list.loadingSheet")}</div>
