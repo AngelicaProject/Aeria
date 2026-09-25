@@ -18,6 +18,7 @@ import type {
   JobAction,
   JobEvent,
   JobSummary,
+  WorkerActivity,
   JobUnit,
   JobUnitStatus,
   ProposalRecord,
@@ -496,6 +497,10 @@ export function angelicaJobUnits(jobId: string, statuses: JobUnitStatus[]): Prom
 
 export function angelicaJobEvents(jobId: string): Promise<JobEvent[]> {
   return call<JobEvent[]>("angelica_job_events", { jobId });
+}
+
+export function angelicaJobWorkers(jobId: string): Promise<WorkerActivity[]> {
+  return call<WorkerActivity[]>("angelica_job_workers", { jobId });
 }
 
 export function angelicaJobControl(jobId: string, action: JobAction): Promise<JobSummary> {

@@ -164,6 +164,9 @@ impl Usage {
 pub enum StreamDelta {
     Text(String),
     Reasoning(String),
+    /// Characters of tool-call arguments received; the arguments themselves
+    /// are only usable once the response completes.
+    ToolArguments(usize),
 }
 
 /// The complete assistant response assembled from a stream.
@@ -313,8 +316,11 @@ impl StreamAccumulator {
                     if let Some(name) = function.get("name").and_then(Value::as_str) {
                         partial.name.push_str(name);
                     }
-                    if let Some(arguments) = function.get("arguments").and_then(Value::as_str) {
+                    if let Some(arguments) = function.get("arguments").and_then(Value::as_str)
+                        && !arguments.is_empty()
+                    {
                         partial.arguments.push_str(arguments);
+                        on_delta(StreamDelta::ToolArguments(arguments.chars().count()));
                     }
                 }
             }
@@ -418,7 +424,7 @@ mod tests {
 
     #[test]
     fn tool_call_fragments_are_joined_by_index() {
-        let (response, _) = collect(&[
+        let (response, deltas) = collect(&[
             "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"c1\",\"function\":{\"name\":\"get_unit\",\"arguments\":\"{\\\"sheet\"}}]}}]}\n",
             "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":1,\"id\":\"c2\",\"function\":{\"name\":\"list_sheets\"}}]}}]}\n",
             "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"\\\":\\\"Item\\\"}\"}}]},\"finish_reason\":\"tool_calls\"}]}",
@@ -437,6 +443,10 @@ mod tests {
                     arguments: "{}".to_owned(),
                 },
             ]
+        );
+        assert_eq!(
+            deltas,
+            vec![StreamDelta::ToolArguments(7), StreamDelta::ToolArguments(9)]
         );
     }
 

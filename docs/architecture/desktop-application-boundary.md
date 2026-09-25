@@ -288,8 +288,10 @@ write only while that project is still open. Worker tools run in blocking
 workers that lock the project only for their own reads and writes, and every
 written draft emits `angelica://translation-applied`. Job changes emit
 `angelica://job` with the job ID. `angelica_jobs`, `angelica_job_units`,
-`angelica_job_events`, `angelica_job_control` (pause, resume, cancel), and
-`angelica_job_retry` (requeue strings with given statuses and resume) serve
+`angelica_job_events`, `angelica_job_control` (pause, resume, cancel),
+`angelica_job_retry` (requeue strings with given statuses and resume), and
+`angelica_job_workers` (each lane's live activity, kept with the runner's
+registration in `DesktopState` and empty once the runner ends) serve
 the renderer; `ai_set_worker_model` sets the jobs model. When a job
 completes or pauses on its own, the runner starts an automatic Angelica turn
 in the job's conversation unless one is running.
