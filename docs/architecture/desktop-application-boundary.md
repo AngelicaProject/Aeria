@@ -23,6 +23,25 @@ replacement constructs and verifies the new `ProjectSession` before acquiring
 the state lock, so failure preserves the previous active session. Closing is
 idempotent and drops the active session without changing the workspace.
 
+## Local data folders
+
+`<app-data>` is the `Aeria` folder in the platform data directory
+(`%APPDATA%\Aeria` on Windows, `~/.local/share/aeria` on Linux), and
+`<app-cache>` is the same folder name in the platform cache directory
+(`%LOCALAPPDATA%\Aeria`, `~/.cache/aeria`). All desktop code resolves them
+through `paths::AeriaPaths`, never Tauri's identifier-named directories. The
+bundle identifier `org.angelicaproject.aeria` still names the WebView profile
+and installer registration.
+
+Earlier versions stored data and caches under the identifier-named folders.
+At startup Aeria renames the legacy data folder to `<app-data>` when
+`<app-data>` does not exist yet, moves the `hxs` and `hsp-verification`
+caches the same way, and rewrites recent-project entries whose source package
+lay in the legacy `source-packages/` folder with
+`ProjectRegistry::relocate_source_packages`. A failed move is reported and
+leaves the legacy folder in use, so no data is lost; when both folders exist,
+the legacy one is left untouched.
+
 ## Local project registry
 
 The desktop keeps a bounded convenience registry at
@@ -89,11 +108,43 @@ active project, so the renderer can ask for confirmation. With the flag set,
 the command opens through `ProjectSession::open_with_source_update` and
 returns the applied report in `ProjectOpenResultDto.sourceUpdate`.
 
-`update_project_from_game(jobId, repositoryRoot, gamePath)` reads the source
-language from the existing workspace manifest, builds and publishes a source
-package with Harmonia Atlas exactly like project creation, and opens the
-project with the update applied. It is the path for an installed game after a
-patch and for a collaborator who has only a cloned repository.
+Commands that run Atlas take no game path. They resolve the installation in
+the worker from the application setting: the folder chosen with
+`set_game_path`, otherwise the first detected installation. A missing
+installation fails with `gameInstallationRequired`; a chosen folder that is
+no longer an installation fails with `gameInstallationInvalid`.
+`game_settings` returns the chosen folder, the installation in use, and the
+detected installations; `set_game_path(path)` validates and stores a folder,
+or with `null` returns to detection. The setting is local application state
+in `game-settings.json`; a malformed file fails with `gameSettings` and is
+never replaced with defaults.
+
+`update_project_from_game(jobId, repositoryRoot)` reads the source language
+from the existing workspace manifest, builds and publishes a source package
+with Harmonia Atlas exactly like project creation, and opens the project with
+the update applied. It is the path for an installed game after a patch.
+
+`open_project_from_game(jobId, repositoryRoot)` opens a project without a
+user-chosen HSP. It reads the source language and content ID from the
+workspace manifest, previews the manifests in Aeria's source-package store
+with `aeria_hsp::read_manifest`, and fully opens only a matching package;
+unreadable store files are skipped. With no match it builds a package from
+the game installation like `update_project_from_game`. It returns
+`GameOpenResultDto`: `opened` with the `ProjectOpenResultDto`, or
+`sourceUpdateRequired` with the package path and the plan, written nowhere;
+after confirmation the renderer calls `open_project` with that path and
+`acceptSourceUpdate`. `list_source_packages` returns the store's packages
+(language, game version, size, publication time, whether a build record
+makes them reusable, whether they are the current build, and which projects
+use them; see [`source.md`](./source.md)), and `reveal_source_packages` opens
+the store folder in the file manager. `delete_source_package(packageId)`
+deletes a package only when it is removable, and runs as an Atlas job so no
+build reuses it meanwhile. `source_availability(repositoryRoot,
+sourceLanguage, opening)` previews, without verifying, whether a job would
+find a package (`ready`), run Atlas (`build`), or cannot tell (`unknown`).
+`default_projects_directory_path` returns
+`Documents/Aeria`, the folder for new projects and for clones without a
+parent.
 
 `ProjectSummaryDto.detachedUnitCount` reports detached units, and
 `list_detached_units` returns each one's last binding, reason, target,

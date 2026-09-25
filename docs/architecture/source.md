@@ -19,7 +19,29 @@ staging artifact and checks its package ID against Atlas before atomically movin
 it to the immutable `source-packages/<package-id-hex>.hsp` path. A validated
 package is transferred into `ProjectSession` without reopening it. Existing
 valid immutable collisions are reused, while invalid collisions are replaced
-only after the new staging package is validated. Atlas is acquired only at
+only after the new staging package is validated. On Windows Atlas runs without
+a console window.
+
+Beside each package it publishes, Aeria writes a local build record
+`source-packages/<package-id-hex>.build.json` with the SHA-256 of the Atlas
+executable, the source language, and every game version file
+(`game/ffxivgame.ver` and each `game/sqpack/exN/exN.ver`). Before running
+Atlas, Aeria looks for a record with exactly these inputs and, when the
+package it names still verifies, uses that package instead of building again.
+Game version alone is not enough: two Atlas releases can produce different
+content from the same game version. Packages without a record, such as ones
+published before records existed, are never reused for a build; opening a
+project can still use them when their content ID matches the workspace.
+Records are cache metadata and never enter project data.
+
+Aeria keeps a package while it knows it needs it: a recent project or the
+open project uses its package ID, or its build record matches the current
+Atlas and game installation. Any other package is removable from Settings;
+deleting it also deletes its build record and, when no remaining package has
+the same snapshot, its materialized HXS. A project that is not in the recent
+list and still used a deleted package is updated from the game the next time
+it opens. When the recent-project registry cannot be read, nothing is
+removable. Atlas is acquired only at
 build time from this pinned release with a verified checksum; runtime downloads
 are not used. Materialized HXS files remain disposable app-cache artifacts, and
 the workspace format remains independent of game paths, Atlas paths, package

@@ -2,6 +2,7 @@ import { memo, useEffect, useState, type CSSProperties, type ReactNode } from "r
 import { Dialog } from "radix-ui";
 import { appInfo } from "../ipc";
 import { AiProvidersSettings } from "./AiProvidersSettings";
+import { GameSettings, SourcePackages } from "./GameSettings";
 import { keyboardShortcuts, shortcutGroupLabels } from "../shortcuts";
 import { Segmented } from "../ui/primitives/Segmented";
 import { UiIcon, type UiIconName } from "../ui/primitives/UiIcon";
@@ -21,12 +22,13 @@ export const accentPresets: readonly { value: string; label: MessageKey }[] = [
   { value: "#98c379", label: "settings.accent.green" },
 ];
 
-export type SettingsSection = "appearance" | "editor" | "workflow" | "ai" | "keyboard" | "about";
+export type SettingsSection = "appearance" | "editor" | "workflow" | "game" | "ai" | "keyboard" | "about";
 
 const sections: ReadonlyArray<{ id: SettingsSection; label: MessageKey; icon: UiIconName }> = [
   { id: "appearance", label: "settings.section.appearance", icon: "palette" },
   { id: "editor", label: "settings.section.editor", icon: "languages" },
   { id: "workflow", label: "settings.section.workflow", icon: "arrowRight" },
+  { id: "game", label: "settings.section.game", icon: "gamepad" },
   { id: "ai", label: "settings.section.ai", icon: "sparkles" },
   { id: "keyboard", label: "settings.section.keyboard", icon: "listFilter" },
   { id: "about", label: "settings.section.about", icon: "info" },
@@ -173,6 +175,14 @@ export const SettingsDialog = memo(function SettingsDialog({ open, onOpenChange,
     {
       id: "focus-next", section: "workflow", title: t("settings.focusNext.title"), description: t("settings.focusNext.description"), keywords: t("settings.focusNext.keywords"),
       control: <input type="checkbox" className="switch" aria-label={t("settings.focusNext.title")} checked={preferences.focusTargetOnNext} onChange={(event) => setPreference("focusTargetOnNext", event.target.checked)} />,
+    },
+    {
+      id: "game-installation", section: "game", title: t("settings.game.title"), description: t("settings.game.description"), keywords: t("settings.game.keywords"), wide: true,
+      control: <GameSettings />,
+    },
+    {
+      id: "source-packages", section: "game", title: t("settings.sources.title"), description: t("settings.sources.description"), keywords: t("settings.sources.keywords"), wide: true,
+      control: <SourcePackages />,
     },
     {
       id: "ai-providers", section: "ai", title: t("settings.ai.title"), description: t("settings.ai.description"), keywords: t("settings.ai.keywords"), wide: true,

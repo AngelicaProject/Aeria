@@ -20,8 +20,14 @@ bindings, workspace state, validation, classification, and mutation semantics.
 
 ## Launcher
 
+The interface never shows internal names such as source package, HSP,
+snapshot, or Atlas. It calls a source package the *game text* (in Russian
+«тексты игры»), which Aeria *extracts* from the game and keeps; "source text"
+is used only for the original of a single string.
+
 The launcher is a single screen. The left column holds the product name, the
-**Open project** and **New project** actions, and the application version from
+**Open project**, **Clone project**, **New project**, and **Update project**
+actions, and the application version from
 `app_info`. The right panel shows Recent projects by default; choosing an action
 replaces it with that action's form, and **Back** returns to the list. Settings
 open in a dialog from the titlebar.
@@ -36,14 +42,55 @@ visible with their availability state and offer **Remove from recent projects**;
 ready entries open on click. A name filter appears once more than three
 projects are listed.
 
-Open project takes a repository root and HSP source-package path. New project
-takes a repository folder, game installation, and one of Atlas's supported
-source languages (`en`, `ja`, `de`, or `fr`). Until project settings can choose
-a real target language, creation uses the explicit neutral compatibility tag
+Open project takes only a repository root; the user never chooses an HSP
+file. Aeria reads the source language and content ID from the workspace
+manifest and uses a verified package from its own source-package store with
+that identity (the newest game version first). Only when none matches does it
+build one from the game installation with Atlas. When the only package it has
+needs a source update, nothing is written and the launcher asks for
+confirmation with the planned counts, as for Update project.
+
+New and cloned projects go to `Documents/Aeria` unless another location is
+chosen. New project takes a project name, which becomes the repository folder
+name, an optional location, and one of Atlas's supported source languages
+(`en`, `ja`, `de`, or `fr`). The project folder and any missing parents are
+created before extraction starts, so an unusable path fails at once; when
+creation then fails or is cancelled, the folder is removed again if it is
+still empty. Until project settings can choose a real target
+language, creation uses the explicit neutral compatibility tag
 `und`; it is never displayed as a user translation target and does not
 reinterpret existing overlays. While Atlas runs, the form shows the current
 phase, per-sheet progress when Atlas reports a sheet index and count, and a
 cancel action.
+
+### Game installation
+
+The game installation is an application setting, not a field of each form.
+Settings → Game shows the installation in use and every installation
+detected on this computer; the user can choose another folder (picking the
+inner `game` folder selects its parent) or return to automatic detection.
+A chosen folder is stored in `game-settings.json` in the app-data directory;
+without one, Aeria uses the first detected installation. Detection checks the
+Square Enix launcher's installation record, Steam libraries, XIVLauncher's
+configured game path, and the default installation folders on Windows, and
+XIVLauncher.Core and Steam on Linux. A folder counts as an installation only
+when it has `game/sqpack` and a non-empty `game/ffxivgame.ver`; Atlas still
+validates the game data. Launcher forms show the installation in use with a
+shortcut to this setting, and jobs fail with `gameInstallationRequired` or
+`gameInstallationInvalid` when none is usable. While a job runs, its progress
+takes the place of that row so the form does not grow.
+
+A chip after the game version says whether the job will use source text
+Aeria already has ("Game text ready") or extract it from the game
+("Extraction needed"), with the details in its tooltip, so a multi-minute build is never
+a surprise. It stays on the version line so the row never grows, and is left
+out when this cannot be told, as for a clone.
+
+Settings → Game also lists the source packages Aeria keeps, newest first,
+with language, game version, size, and age. The current build and the
+number of projects using a package are marked; packages Aeria no longer
+needs (see [`source.md`](./source.md)) have a delete action with
+confirmation. The folder can be opened from there.
 
 Registry load failures show a dismissible, non-blocking launcher warning while
 manual Open project and New project remain available. After dismissal, the

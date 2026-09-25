@@ -3,10 +3,13 @@ mod angelica;
 mod commands;
 mod dto;
 mod error;
+mod games;
 mod git;
 mod guide;
 mod jobs;
+mod paths;
 mod search;
+mod source_store;
 mod state;
 mod web;
 
@@ -27,20 +30,24 @@ pub use angelica::{
     angelica_reject_proposal, angelica_send,
 };
 pub use commands::{
-    cancel_source_package, close_project, current_project, forget_recent_project,
-    initialize_project, initialize_project_from_game, list_detached_units, list_recent_projects,
-    open_project, open_recent_project, page_translation_rows, preview_source_update,
-    set_translation_note, set_translation_review_state, set_translation_target,
-    start_source_package, translation_progress, update_project_from_game,
+    cancel_source_package, close_project, current_project, default_projects_directory_path,
+    forget_recent_project, initialize_project, initialize_project_from_game, list_detached_units,
+    list_recent_projects, open_project, open_project_from_game, open_recent_project,
+    page_translation_rows, preview_source_update, set_translation_note,
+    set_translation_review_state, set_translation_target, start_source_package,
+    translation_progress, update_project_from_game,
 };
 pub use dto::{
-    DetachReasonDto, DetachedUnitDto, ProjectOpenResultDto, ProjectSheetDto, ProjectSummaryDto,
-    RecentProjectAvailability, RecentProjectDto, ReviewStateDto, SheetProgressDto,
-    SheetSchemaUpdateDto, SourceBindingDto, SourcePackageJobDto, SourceUpdateReportDto,
-    TranslationCellDto, TranslationContextCellDto, TranslationOverlayDto, TranslationRowCursorDto,
-    TranslationRowDto, TranslationRowPageDto, TranslationUnitIdDto,
+    DetachReasonDto, DetachedUnitDto, GameOpenResultDto, ProjectOpenResultDto, ProjectSheetDto,
+    ProjectSummaryDto, RecentProjectAvailability, RecentProjectDto, ReviewStateDto,
+    SheetProgressDto, SheetSchemaUpdateDto, SourceBindingDto, SourcePackageJobDto,
+    SourceUpdateReportDto, TranslationCellDto, TranslationContextCellDto, TranslationOverlayDto,
+    TranslationRowCursorDto, TranslationRowDto, TranslationRowPageDto, TranslationUnitIdDto,
 };
 pub use error::CommandError;
+pub use games::{
+    GameInstallationDto, GameOriginDto, GameSettingsDto, game_settings, set_game_path,
+};
 pub use git::{
     git_branches, git_checkpoint, git_clone_repository, git_commit_changes, git_contributors,
     git_create_branch, git_finish_contribution, git_initialize, git_log, git_overview,
@@ -54,6 +61,10 @@ pub use guide::{
 pub use jobs::{
     angelica_job_control, angelica_job_events, angelica_job_retry, angelica_job_units,
     angelica_jobs,
+};
+pub use source_store::{
+    SourceAvailabilityDto, SourcePackageEntryDto, delete_source_package, list_source_packages,
+    reveal_source_packages, source_availability,
 };
 pub use state::DesktopState;
 
@@ -84,6 +95,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .manage(DesktopState::new())
         .setup(|app| {
+            paths::migrate_legacy_directories(app.handle());
             app.state::<DesktopState>()
                 .set_git(git::resolve_git(app.handle()));
             Ok(())
@@ -91,6 +103,14 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             app_info,
             open_project,
+            open_project_from_game,
+            game_settings,
+            set_game_path,
+            list_source_packages,
+            reveal_source_packages,
+            delete_source_package,
+            source_availability,
+            default_projects_directory_path,
             initialize_project,
             start_source_package,
             initialize_project_from_game,

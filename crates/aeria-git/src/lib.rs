@@ -28,7 +28,7 @@ pub use merge::{ConflictResolution, UnitConflict};
 pub use process::{GitExecutable, GitOrigin};
 pub use repository::{
     CheckpointOutcome, CommitSummary, ConfigScope, FileChangeKind, FileStatus, GitRepository,
-    RemoteInfo, RepositoryStatus, TranslatorIdentity,
+    RemoteInfo, RepositoryStatus, TranslatorIdentity, clone_folder_name,
 };
 pub use semantic::{
     Attribution, ContributorSummary, RecordVersion, UnitAttribution, UnitChange, UnitChangeKind,

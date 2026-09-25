@@ -1076,21 +1076,27 @@ pub async fn git_finish_contribution(app: tauri::AppHandle) -> CommandResult<Git
 }
 
 #[tauri::command(rename_all = "camelCase")]
-/// Clones a translation repository into a new directory and returns its path.
-/// The project is opened afterwards through the ordinary open flow.
+/// Clones a translation repository into a new folder named after the
+/// repository and returns its path. Without `parent`, the folder is created
+/// in the default projects directory. The project is opened afterwards through
+/// the ordinary open flow.
 ///
 /// # Errors
 ///
-/// Returns a typed command error for an unsafe URL, an unusable destination,
-/// or a failed clone.
+/// Returns a typed command error for an unsafe URL, a URL that names no
+/// folder, an existing destination, or a failed clone.
 pub async fn git_clone_repository(
     app: tauri::AppHandle,
     url: String,
-    destination: String,
+    parent: Option<String>,
 ) -> CommandResult<String> {
+    let parent = match parent.filter(|parent| !parent.trim().is_empty()) {
+        Some(parent) => PathBuf::from(parent.trim()),
+        None => crate::commands::default_projects_directory(&app)?,
+    };
     run_blocking(move || {
         let git = app.state::<DesktopState>().git();
-        let repository = GitRepository::clone_from(&url, destination, git)?;
+        let repository = GitRepository::clone_into(url.trim(), parent, git)?;
         Ok(repository.root().to_string_lossy().into_owned())
     })
     .await

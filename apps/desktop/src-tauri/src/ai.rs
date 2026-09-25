@@ -17,6 +17,7 @@ use tauri::{Emitter, Manager};
 
 use crate::commands::run_blocking;
 use crate::error::CommandError;
+use crate::paths::AeriaPaths;
 use crate::state::DesktopState;
 
 type CommandResult<T> = Result<T, CommandError>;
@@ -89,8 +90,7 @@ pub struct AiConnectionCheckDto {
 }
 
 pub(crate) fn settings_store(app: &tauri::AppHandle) -> CommandResult<AiSettingsStore> {
-    app.path()
-        .app_data_dir()
+    app.aeria_data_dir()
         .map(|path| AiSettingsStore::new(path.join(SETTINGS_FILE_NAME)))
         .map_err(|error| {
             CommandError::new(

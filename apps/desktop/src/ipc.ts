@@ -22,6 +22,8 @@ import type {
   ReasoningEffort,
   CollaborationDto,
   DetachedUnitDto,
+  GameOpenResultDto,
+  GameSettingsDto,
   CollaborationPolicy,
   ContributorDto,
   GitBranchDto,
@@ -42,6 +44,8 @@ import type {
   ReviewState,
   SheetProgressDto,
   SourceBinding,
+  SourceAvailability,
+  SourcePackageEntryDto,
   SourcePackageJobDto,
   SourceUpdateReportDto,
   TranslationRowCursorDto,
@@ -107,9 +111,50 @@ export function previewSourceUpdate(repositoryRoot: string, sourcePackagePath: s
   return call<SourceUpdateReportDto>("preview_source_update", { repositoryRoot, sourcePackagePath });
 }
 
-/** Builds a source package from the installed game and updates the project to it. */
-export function updateProjectFromGame(jobId: string, repositoryRoot: string, gamePath: string): Promise<ProjectOpenResultDto> {
-  return call<ProjectOpenResultDto>("update_project_from_game", { jobId, repositoryRoot, gamePath });
+/**
+ * Opens a project with a local source package matching its workspace, or
+ * builds one from the configured game installation under `jobId`.
+ */
+export function openProjectFromGame(jobId: string, repositoryRoot: string): Promise<GameOpenResultDto> {
+  return call<GameOpenResultDto>("open_project_from_game", { jobId, repositoryRoot });
+}
+
+/** The game installation setting, what it resolves to, and detected installations. */
+export function gameSettings(): Promise<GameSettingsDto> {
+  return call<GameSettingsDto>("game_settings");
+}
+
+/** Chooses the game installation; `null` returns to automatic detection. */
+export function setGamePath(path: string | null): Promise<GameSettingsDto> {
+  return call<GameSettingsDto>("set_game_path", { path });
+}
+
+/** Packages in Aeria's source-package store, newest first. */
+export function listSourcePackages(): Promise<SourcePackageEntryDto[]> {
+  return call<SourcePackageEntryDto[]>("list_source_packages");
+}
+
+/** Deletes a package Aeria no longer needs and returns the updated list. */
+export function deleteSourcePackage(packageId: string): Promise<SourcePackageEntryDto[]> {
+  return call<SourcePackageEntryDto[]>("delete_source_package", { packageId });
+}
+
+/**
+ * Whether opening (`opening`) or updating the project at `repositoryRoot`, or
+ * creating one in `sourceLanguage`, finds a package without running Atlas.
+ */
+export function sourceAvailability(repositoryRoot: string | null, sourceLanguage: string | null, opening: boolean): Promise<SourceAvailability> {
+  return call<SourceAvailability>("source_availability", { repositoryRoot, sourceLanguage, opening });
+}
+
+/** Opens the source-package store folder in the file manager. */
+export function revealSourcePackages(): Promise<void> {
+  return call<void>("reveal_source_packages");
+}
+
+/** Builds a source package from the configured game and updates the project to it. */
+export function updateProjectFromGame(jobId: string, repositoryRoot: string): Promise<ProjectOpenResultDto> {
+  return call<ProjectOpenResultDto>("update_project_from_game", { jobId, repositoryRoot });
 }
 
 export function listDetachedUnits(): Promise<DetachedUnitDto[]> {
@@ -131,14 +176,12 @@ export function initializeProject(
 export function initializeProjectFromGame(
   jobId: string,
   repositoryRoot: string,
-  gamePath: string,
   sourceLanguage: string,
   targetLanguage: string,
 ): Promise<ProjectOpenResultDto> {
   return call<ProjectOpenResultDto>("initialize_project_from_game", {
     jobId,
     repositoryRoot,
-    gamePath,
     sourceLanguage,
     targetLanguage,
   });
@@ -272,8 +315,14 @@ export function gitFinishContribution(): Promise<GitFinishDto> {
   return call<GitFinishDto>("git_finish_contribution");
 }
 
-export function gitCloneRepository(url: string, destination: string): Promise<string> {
-  return call<string>("git_clone_repository", { url, destination });
+/** Clones into a folder named after the repository; `parent` defaults to the default projects directory. */
+export function gitCloneRepository(url: string, parent: string | null): Promise<string> {
+  return call<string>("git_clone_repository", { url, parent });
+}
+
+/** The folder that receives new and cloned projects when no other folder is chosen. */
+export function defaultProjectsDirectory(): Promise<string> {
+  return call<string>("default_projects_directory_path");
 }
 
 export function aiSettings(): Promise<AiSettingsDto> {

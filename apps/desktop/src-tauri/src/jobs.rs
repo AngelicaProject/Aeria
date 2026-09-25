@@ -41,6 +41,7 @@ use crate::angelica::{
 };
 use crate::commands::run_blocking;
 use crate::error::CommandError;
+use crate::paths::AeriaPaths;
 use crate::search::DesktopSearch;
 use crate::state::DesktopState;
 
@@ -85,7 +86,7 @@ fn tool_error(error: impl std::fmt::Display) -> ToolError {
 /// paused the first time a store is opened in this process.
 pub(crate) fn job_store(app: &tauri::AppHandle) -> CommandResult<JobStore> {
     let root = repository_root(app)?;
-    let data = app.path().app_data_dir().map_err(|error| {
+    let data = app.aeria_data_dir().map_err(|error| {
         CommandError::new(
             "angelicaJobStorage",
             format!("could not resolve the Aeria app-data directory: {error}"),

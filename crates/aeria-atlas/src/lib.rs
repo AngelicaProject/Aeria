@@ -35,7 +35,11 @@ pub struct AtlasPackageRequest {
 
 /// A protocol event emitted by Atlas.
 #[derive(Clone, Debug, PartialEq, Serialize)]
-#[serde(tag = "type", rename_all = "camelCase")]
+#[serde(
+    tag = "type",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
 pub enum AtlasEvent {
     Started {
         protocol_version: u32,
@@ -218,7 +222,16 @@ impl AtlasPackageRunner {
             });
         }
 
-        let mut child = Command::new(&request.executable_path)
+        let mut command = Command::new(&request.executable_path);
+        #[cfg(windows)]
+        {
+            // Atlas is a console program; without this flag Windows opens a
+            // console window for it beside the desktop application.
+            use std::os::windows::process::CommandExt;
+            const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+            command.creation_flags(CREATE_NO_WINDOW);
+        }
+        let mut child = command
             .arg("package")
             .arg("--game-path")
             .arg(&request.game_path)
@@ -630,6 +643,34 @@ fn join_stderr(thread: thread::JoinHandle<String>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn events_serialize_with_the_renderer_field_names() {
+        let event = AtlasEvent::Progress {
+            protocol_version: 1,
+            phase: "extractSource".to_owned(),
+            sheet: Some("Item".to_owned()),
+            language: None,
+            sheet_index: Some(2),
+            sheet_count: Some(10),
+            rows_processed: Some(42),
+            sheet_completed: Some(false),
+        };
+        assert_eq!(
+            serde_json::to_value(event).expect("event"),
+            serde_json::json!({
+                "type": "progress",
+                "protocolVersion": 1,
+                "phase": "extractSource",
+                "sheet": "Item",
+                "language": null,
+                "sheetIndex": 2,
+                "sheetCount": 10,
+                "rowsProcessed": 42,
+                "sheetCompleted": false,
+            })
+        );
+    }
 
     #[test]
     fn package_command_arguments_are_not_changed_by_the_parser() {

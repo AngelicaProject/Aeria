@@ -245,6 +245,38 @@ impl ProjectRegistry {
         Ok(entry)
     }
 
+    /// Points entries whose source package lies under `from` at the same
+    /// relative path under `to`, after the package folder was moved there.
+    /// Paths are compared without the Windows verbatim prefix; rewritten
+    /// paths use the canonical form of `to`. Returns the number of entries
+    /// changed; nothing is written when none match.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed error when `to` cannot be canonicalized, the registry
+    /// is invalid, or the updated document cannot be published.
+    pub fn relocate_source_packages(&self, from: &Path, to: &Path) -> Result<usize, RegistryError> {
+        let to = canonicalize(to)?;
+        let from = without_verbatim_prefix(from);
+        let _lock = self.acquire_lock()?;
+        let mut projects = self.load_locked()?;
+        let mut changed = 0;
+        for project in &mut projects {
+            let path = without_verbatim_prefix(Path::new(&project.source_package_path));
+            if let Ok(relative) = path.strip_prefix(&from) {
+                project.source_package_path = to.join(relative).to_string_lossy().into_owned();
+                changed += 1;
+            }
+        }
+        if changed > 0 {
+            self.write_document(&RegistryDocument {
+                format_version: FORMAT_VERSION,
+                projects,
+            })?;
+        }
+        Ok(changed)
+    }
+
     /// Removes exactly one local entry without touching any project files.
     ///
     /// # Errors
@@ -382,6 +414,15 @@ impl ProjectRegistry {
         file.lock_exclusive()
             .map_err(|source| io_error("lock registry file", &path, source))?;
         Ok(RegistryLock { file })
+    }
+}
+
+/// Drops the Windows verbatim prefix (`\\?\`) of a drive path.
+fn without_verbatim_prefix(path: &Path) -> PathBuf {
+    let text = path.to_string_lossy();
+    match text.strip_prefix(r"\\?\") {
+        Some(rest) if rest.as_bytes().get(1) == Some(&b':') => PathBuf::from(rest),
+        _ => path.to_owned(),
     }
 }
 
@@ -611,6 +652,59 @@ mod tests {
             game_version: "test".to_owned(),
             last_opened_at_unix_ms: timestamp,
         }
+    }
+
+    #[test]
+    fn moved_source_packages_are_relocated() {
+        let temp = tempdir().expect("tempdir");
+        let store = registry(&temp);
+        let old_root = temp.path().join("старые данные");
+        let new_root = temp.path().join("Новые данные Aeria");
+        fs::create_dir_all(&new_root).expect("new root");
+        let moved = |name: &str| format!("{}", old_root.join(format!("{name}.hsp")).display());
+        let mut inside = entry("inside", 20);
+        inside.source_package_path = format!(r"\\?\{}", moved("inside"));
+        let mut plain = entry("plain", 10);
+        plain.source_package_path = moved("plain");
+        let outside = entry("outside", 5);
+        fs::write(
+            store.path(),
+            serde_json::to_vec(&document(vec![inside, plain, outside.clone()])).expect("json"),
+        )
+        .expect("write");
+
+        // Only Windows drive paths carry a verbatim prefix.
+        let root_prefixed = cfg!(windows);
+        let changed = store
+            .relocate_source_packages(&old_root, &new_root)
+            .expect("relocate");
+        let canonical = fs::canonicalize(&new_root).expect("canonical");
+        let loaded = store.load().expect("load");
+        let path_of = |id: &str| {
+            loaded
+                .iter()
+                .find(|project| project.id == id)
+                .map(|project| project.source_package_path.clone())
+                .expect(id)
+        };
+        assert_eq!(changed, if root_prefixed { 2 } else { 1 });
+        assert_eq!(
+            path_of("plain"),
+            canonical.join("plain.hsp").to_string_lossy()
+        );
+        if root_prefixed {
+            assert_eq!(
+                path_of("inside"),
+                canonical.join("inside.hsp").to_string_lossy()
+            );
+        }
+        assert_eq!(path_of("outside"), outside.source_package_path);
+        assert_eq!(
+            store
+                .relocate_source_packages(&old_root, &new_root)
+                .expect("again"),
+            0
+        );
     }
 
     #[test]

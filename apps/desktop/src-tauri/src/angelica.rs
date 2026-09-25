@@ -46,6 +46,7 @@ use crate::dto::{ProjectSummaryDto, SourceBindingDto, TranslationOverlayDto};
 use crate::error::CommandError;
 use crate::git::{UnitChangeDto, UnitHistoryDto, open_repository};
 use crate::jobs::{DesktopJobs, start_proposed_job};
+use crate::paths::AeriaPaths;
 use crate::search::{DesktopSearch, prepare_source_index};
 use crate::state::DesktopState;
 use crate::web::{allow_domain, fetch_tool};
@@ -162,7 +163,7 @@ pub(crate) fn project_key(root: &std::path::Path) -> String {
 /// Returns the conversation store of the active project.
 pub(crate) fn conversation_store(app: &tauri::AppHandle) -> CommandResult<ConversationStore> {
     let key = project_key(&repository_root(app)?);
-    let data = app.path().app_data_dir().map_err(|error| {
+    let data = app.aeria_data_dir().map_err(|error| {
         CommandError::new(
             "angelicaConversationStorage",
             format!("could not resolve the Aeria app-data directory: {error}"),

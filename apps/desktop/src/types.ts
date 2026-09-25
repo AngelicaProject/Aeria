@@ -138,6 +138,55 @@ export type RecentProjectAvailability =
   | "sourcePackageMissing"
   | "repositoryAndSourceMissing";
 
+/** Outcome of opening a project from a game installation. */
+export type GameOpenResultDto =
+  | { status: "opened"; result: ProjectOpenResultDto }
+  | {
+    /** Nothing was written; confirm, then open with this package and `acceptSourceUpdate`. */
+    status: "sourceUpdateRequired";
+    sourcePackagePath: string;
+    report: SourceUpdateReportDto;
+  };
+
+export type GameOrigin = "settings" | "squareEnix" | "steam" | "xivLauncher" | "defaultLocation";
+
+/** A detected game installation root with its `game/ffxivgame.ver`. */
+export type GameInstallationDto = {
+  path: string;
+  gameVersion: string;
+  origin: GameOrigin;
+};
+
+/** One package in Aeria's source-package store. */
+export type SourcePackageEntryDto = {
+  path: string;
+  packageId: string;
+  sourceLanguage: string;
+  gameVersion: string;
+  sizeBytes: number;
+  builtAtUnixMs: number | null;
+  /** Whether a build record allows reusing it instead of running Atlas. */
+  reusable: boolean;
+  /** Built from the installed game with the current Atlas. */
+  current: boolean;
+  /** Repository roots of recent projects, and the open project, that use it. */
+  usedBy: string[];
+  /** Nothing uses it and it is not current, so it can be deleted. */
+  removable: boolean;
+};
+
+/** Whether a job finds a package without running Atlas. */
+export type SourceAvailability = "ready" | "build" | "unknown";
+
+/** The game installation setting and what it resolves to. */
+export type GameSettingsDto = {
+  /** The folder chosen in Settings; `null` uses the first detected installation. */
+  configuredPath: string | null;
+  /** The installation game operations use; `null` when none is usable. */
+  active: GameInstallationDto | null;
+  detected: GameInstallationDto[];
+};
+
 export type RecentProjectDto = {
   id: string;
   repositoryRoot: string;

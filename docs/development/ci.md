@@ -45,6 +45,13 @@ restore behavior:
 cargo test -p aeria-projects --all-targets --locked
 ```
 
+The Windows Atlas job then reruns the path-handling suites (`aeria-hxs`,
+`aeria-hsp`, `aeria-workspace`, `aeria-search`, `aeria-projects`,
+`aeria-atlas`, `aeria-git` with the bundled MinGit, and the desktop library)
+with `TMP` and `TEMP` pointing at a Cyrillic folder with a space, so every
+file those tests create lives under such a path. See
+[`testing.md`](./testing.md#paths).
+
 When CI gains or removes a project-wide quality gate, update this document with the workflow change.
 
 ## Local validation

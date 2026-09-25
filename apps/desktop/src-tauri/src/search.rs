@@ -18,6 +18,7 @@ use sha2::{Digest, Sha256};
 use tauri::Manager;
 
 use crate::angelica::review_label;
+use crate::paths::AeriaPaths;
 use crate::state::DesktopState;
 
 const SEARCH_DIRECTORY: &str = "search";
@@ -33,7 +34,7 @@ pub(crate) enum IndexState {
 }
 
 fn index_path(app: &tauri::AppHandle, package_id: &str) -> Result<PathBuf, ToolError> {
-    let data = app.path().app_data_dir().map_err(|error| {
+    let data = app.aeria_data_dir().map_err(|error| {
         ToolError::new(format!(
             "could not resolve the Aeria app-data directory: {error}"
         ))

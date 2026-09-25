@@ -12,3 +12,10 @@ test("display paths remove Windows device prefixes without changing ordinary pat
 test("display path names use the repository folder after prefix normalization", () => {
   assert.equal(displayPathName(String.raw`\\?\D:\projects\aerlatest`), "aerlatest");
 });
+
+test("Cyrillic paths with spaces keep every character", () => {
+  const path = String.raw`\\?\C:\Users\Анна Иванова\Documents\Aeria\мой перевод`;
+  assert.equal(displayPath(path), String.raw`C:\Users\Анна Иванова\Documents\Aeria\мой перевод`);
+  assert.equal(displayPathName(path), "мой перевод");
+  assert.equal(displayPathName("/home/анна/мои проекты/перевод ru/"), "перевод ru");
+});

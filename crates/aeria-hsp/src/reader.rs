@@ -602,6 +602,61 @@ impl PerfTrace {
     }
 }
 
+/// Reads and validates only the manifest of an HSP v1 package.
+///
+/// This is a cheap identity preview for choosing among local packages: the
+/// components are neither hashed nor materialized, so the result must not be
+/// trusted as a verified source. Open the chosen package with [`open`].
+///
+/// # Errors
+///
+/// Returns [`HspError`] when the archive or manifest is invalid.
+pub fn read_manifest(package_path: impl AsRef<Path>) -> Result<HspManifest, HspError> {
+    let package_path = package_path.as_ref();
+    let file = File::open(package_path).map_err(|source| HspError::Io {
+        path: package_path.to_path_buf(),
+        message: source.to_string(),
+    })?;
+    let mut archive = ZipArchive::new(file).map_err(|source| HspError::Archive {
+        message: source.to_string(),
+    })?;
+    validate_archive_names(&mut archive)?;
+    let manifest_bytes = read_bounded_entry(&mut archive, MANIFEST_PATH, MAX_HSP_MANIFEST_BYTES)?;
+    let manifest: HspManifest =
+        serde_json::from_slice(&manifest_bytes).map_err(|source| HspError::Manifest {
+            message: format!("manifest JSON is invalid: {source}"),
+        })?;
+    validate_manifest(&manifest)?;
+    Ok(manifest)
+}
+
+/// Removes the HXS materialized under `cache_root` for `snapshot_id`, if any.
+///
+/// The cache is disposable: a later [`open`] of a package with this snapshot
+/// materializes it again.
+///
+/// # Errors
+///
+/// Returns [`HspError`] for a non-canonical snapshot ID or when the cached
+/// files exist but cannot be removed.
+pub fn remove_materialized_source(
+    cache_root: impl AsRef<Path>,
+    snapshot_id: &str,
+) -> Result<(), HspError> {
+    let source = cache_path(cache_root.as_ref(), snapshot_id)?;
+    let Some(directory) = source.parent() else {
+        return Ok(());
+    };
+    match fs::remove_dir_all(directory) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(HspError::Cache {
+            path: directory.to_path_buf(),
+            message: error.to_string(),
+        }),
+    }
+}
+
 fn cleanup_materialized_source(materialized: bool, path: &Path) {
     if materialized {
         let _ = fs::remove_file(path);

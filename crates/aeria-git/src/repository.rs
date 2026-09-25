@@ -241,6 +241,40 @@ impl GitRepository {
         Self::open(destination, git)
     }
 
+    /// Clones `url` into a new folder inside `parent`, named after the
+    /// repository by [`clone_folder_name`]. `parent` is created when missing.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an unsafe URL, a URL that names no folder, an
+    /// existing non-empty destination, or a failed clone.
+    pub fn clone_into(
+        url: &str,
+        parent: impl AsRef<Path>,
+        git: GitExecutable,
+    ) -> Result<Self, GitError> {
+        validate_url(url)?;
+        let name = clone_folder_name(url)?;
+        let parent = parent.as_ref();
+        fs::create_dir_all(parent).map_err(|source| GitError::Io {
+            operation: "create clone parent directory",
+            path: parent.to_owned(),
+            source,
+        })?;
+        let destination = parent.join(name);
+        let occupied = match fs::read_dir(&destination) {
+            Ok(mut entries) => entries.next().is_some(),
+            Err(error) => error.kind() != std::io::ErrorKind::NotFound,
+        };
+        if occupied {
+            return Err(GitError::InvalidInput {
+                field: "clone destination",
+                reason: format!("{} already exists", destination.display()),
+            });
+        }
+        Self::clone_from(url, destination, git)
+    }
+
     /// Returns the project root.
     #[must_use]
     pub fn root(&self) -> &Path {
@@ -750,16 +784,60 @@ fn validate_url(url: &str) -> Result<(), GitError> {
     if url.trim().is_empty() || url.starts_with('-') {
         return Err(invalid("must be non-empty and must not start with '-'"));
     }
-    if url
-        .chars()
-        .any(|character| character.is_whitespace() || character.is_control())
-    {
-        return Err(invalid("must not contain whitespace or control characters"));
+    if url.trim() != url {
+        return Err(invalid("must not start or end with whitespace"));
+    }
+    // Folder names may contain spaces, so a local path remote may too. Git
+    // receives the URL as one argument, never through a shell.
+    let local = is_local_path(url);
+    if url.chars().any(|character| {
+        character.is_control() || (character.is_whitespace() && !(local && character == ' '))
+    }) {
+        return Err(invalid(
+            "must not contain control characters, or whitespace other than spaces in a local path",
+        ));
     }
     if url.starts_with("ext::") || url.starts_with("fd::") {
         return Err(invalid("remote helper transports are not allowed"));
     }
     Ok(())
+}
+
+/// Whether `url` is a local filesystem path: absolute Unix (`/srv/x`),
+/// Windows drive (`D:\x`, `D:/x`), or UNC (`\\server\share`).
+fn is_local_path(url: &str) -> bool {
+    let bytes = url.as_bytes();
+    url.starts_with('/')
+        || url.starts_with(r"\\")
+        || (bytes.len() >= 3
+            && bytes[0].is_ascii_alphabetic()
+            && bytes[1] == b':'
+            && matches!(bytes[2], b'\\' | b'/'))
+}
+
+/// Returns the folder name `git clone` would choose for `url`: the last path
+/// segment without a trailing `.git`.
+///
+/// # Errors
+///
+/// Returns an error when the URL names no usable folder, for example when the
+/// segment is empty, ends with a dot or space (which includes `.`/`..`), or
+/// contains characters Windows forbids.
+pub fn clone_folder_name(url: &str) -> Result<String, GitError> {
+    let path = url.trim().trim_end_matches(['/', '\\']);
+    let path = path.strip_suffix("/.git").unwrap_or(path);
+    let path = path.strip_suffix(".git").unwrap_or(path);
+    let name = path.rsplit(['/', '\\', ':']).next().unwrap_or_default();
+    let forbidden = |character: char| character.is_control() || "<>:\"/\\|?*".contains(character);
+    // Windows drops a trailing dot or space, so such a name is not the folder
+    // the user expects.
+    if name.is_empty() || name.ends_with(['.', ' ']) || name.contains(forbidden) {
+        return Err(GitError::InvalidInput {
+            field: "remote URL",
+            reason: "does not end with a repository name to use as the folder name".to_owned(),
+        });
+    }
+    Ok(name.to_owned())
 }
 
 pub(crate) fn validate_revision(revision: &str) -> Result<(), GitError> {
@@ -897,6 +975,57 @@ fn tracked_file(xy: &str, path: &str, original: Option<&str>, prefix: &str) -> O
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn local_path_remotes_may_contain_spaces_and_any_script() {
+        for url in [
+            r"D:\Общие проекты\перевод.git",
+            "D:/Общие проекты/перевод.git",
+            r"\\сервер\общая папка\перевод.git",
+            "/home/пользователь/мои репозитории/перевод.git",
+            "https://git.example/команда/перевод.git",
+            "git@git.example:команда/перевод.git",
+        ] {
+            assert!(validate_url(url).is_ok(), "{url}");
+        }
+        for url in [
+            "https://git.example/my repo.git",
+            "git@git.example:team/my repo.git",
+            "D:\\repo\tname.git",
+            "D:\\repo\nname.git",
+            " D:\\repo.git",
+            "D:\\repo.git ",
+            "ext::sh -c touch% /tmp/pwned",
+        ] {
+            assert!(validate_url(url).is_err(), "{url:?}");
+        }
+    }
+
+    #[test]
+    fn clone_folder_names_follow_git_clone() {
+        for (url, name) in [
+            ("https://github.com/team/ffxiv-ru.git", "ffxiv-ru"),
+            ("https://gitlab.com/team/ffxiv-ru/", "ffxiv-ru"),
+            ("https://host/team/ffxiv-ru/.git", "ffxiv-ru"),
+            ("git@github.com:team/ffxiv-ru.git", "ffxiv-ru"),
+            ("ssh://git@host:2222/team/ffxiv-ru.git", "ffxiv-ru"),
+            (r"D:\Remotes\ffxiv-ru.git", "ffxiv-ru"),
+            ("file:///srv/git/ffxiv-ru", "ffxiv-ru"),
+            ("https://git.example/команда/перевод.git", "перевод"),
+            (r"D:\Общие проекты\перевод ffxiv.git", "перевод ffxiv"),
+        ] {
+            assert_eq!(clone_folder_name(url).expect(url), name, "{url}");
+        }
+        for url in [
+            "",
+            "https://",
+            "https://host/..",
+            "https://host/a?b",
+            "https://host/name.",
+        ] {
+            assert!(clone_folder_name(url).is_err(), "{url}");
+        }
+    }
 
     #[test]
     fn porcelain_v2_status_is_parsed_relative_to_the_project() {

@@ -15,7 +15,7 @@ The renderer is a full React/TypeScript application, not a thin HTML skin, but p
 
 ## Project launcher layout
 
-The Tauri launcher window is 900×560 with matching minimum dimensions and is not resizable. It opens centered and recenters when returning from the workbench. The launcher is one screen: a fixed-width action column and a panel that swaps between Recent projects and the Open or New project form. Switching views never resizes the window, and only the panel content scrolls.
+The Tauri launcher window is 900×560 with matching minimum dimensions and is not resizable. It opens centered and recenters when returning from the workbench. The launcher is one screen: a fixed-width action column and a panel that swaps between Recent projects and the Open, Clone, New, or Update project form. Switching views never resizes the window, and only the panel content scrolls.
 
 ## Styling and primitives
 

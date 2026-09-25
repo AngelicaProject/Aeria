@@ -71,6 +71,7 @@ dependencies = [
  "tauri-plugin-opener",
  "tempfile",
  "tokio",
+ "windows-registry",
  "zip",
 ]
 

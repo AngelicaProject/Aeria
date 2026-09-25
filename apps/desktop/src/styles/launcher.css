@@ -173,6 +173,14 @@
 .recent-row.unavailable .recent-text strong { color: var(--fg-muted); }
 
 .launcher-form { display: flex; flex: 1; flex-direction: column; gap: 16px; min-height: 0; overflow-y: auto; }
+.launcher-game { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--panel); color: var(--accent); }
+.launcher-game.missing { color: var(--warn); }
+.launcher-game-text { display: grid; flex: 1; gap: 2px; min-width: 0; color: var(--fg); }
+.launcher-game-text small { color: var(--fg-muted); font-size: var(--text-xs); }
+.launcher-game-path { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.launcher-game-facts { display: flex; align-items: center; gap: 8px; min-width: 0; white-space: nowrap; }
+.launcher-game-detail { overflow: hidden; text-overflow: ellipsis; }
+.launcher-game-facts .chip { flex: none; }
 .path-field { display: flex; gap: 6px; }
 .path-field .input { font-size: var(--text-xs); }
 .launcher-form-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: auto; padding-top: 8px; }
