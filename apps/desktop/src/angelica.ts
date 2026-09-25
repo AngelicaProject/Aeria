@@ -291,14 +291,17 @@ export function formatTokens(count: number): string {
   return `${(count / 1_000_000).toFixed(1)}M`;
 }
 
-/** What a running turn is doing, from its latest transcript item. */
-export type WorkingPhase = "waiting" | "thinking" | "tools" | "writing";
+/**
+ * What a running turn is doing, from its latest transcript item. Angelica is
+ * one agent to the user, so time spent waiting for the provider is thinking.
+ */
+export type WorkingPhase = "thinking" | "tools" | "writing";
 
 export function workingPhase(items: readonly TranscriptItem[]): WorkingPhase {
   const last = items.at(-1);
-  if (last?.kind === "tool") return last.result === null ? "tools" : "waiting";
-  if (last?.kind === "assistant" && last.streaming) return last.text ? "writing" : "thinking";
-  return "waiting";
+  if (last?.kind === "tool" && last.result === null) return "tools";
+  if (last?.kind === "assistant" && last.streaming && last.text) return "writing";
+  return "thinking";
 }
 
 /** Silence after which a playful status fills the wait. */

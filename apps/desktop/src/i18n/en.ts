@@ -382,7 +382,6 @@ export const en = {
   "angelica.activity.tools": { one: "{count} tool", other: "{count} tools" },
   "angelica.activity.failed": { one: "{count} failed", other: "{count} failed" },
   "angelica.activity.reasoning": "reasoning",
-  "angelica.phase.waiting": "Waiting for the model",
   "angelica.phase.thinking": "Thinking",
   "angelica.phase.tools": "Using tools",
   "angelica.phase.writing": "Writing the reply",

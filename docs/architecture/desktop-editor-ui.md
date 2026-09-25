@@ -230,7 +230,8 @@ expands to the reasoning, rendered like replies, and a compact row per tool
 call with its state; a row opens its arguments and result. While Angelica
 works, the last folded line names the current step (the reasoning's latest
 heading or the running tool), and a status line below names the phase
-(waiting for the model, thinking, using tools, or writing the reply) with the
+(thinking, which includes waiting for the provider, using tools, or writing
+the reply) with the
 elapsed time and the tokens generated in the turn. Only when no event has
 arrived for 8 seconds does a playful status replace the phase, a new one for
 each quiet stretch, until the next event. The transcript follows new output

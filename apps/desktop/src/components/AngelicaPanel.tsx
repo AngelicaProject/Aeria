@@ -143,7 +143,6 @@ function TranscriptEntry({ block }: { block: TranscriptBlock }) {
 const STATUS_COUNT = 16;
 
 const phaseLabels: Readonly<Record<WorkingPhase, MessageKey>> = {
-  waiting: "angelica.phase.waiting",
   thinking: "angelica.phase.thinking",
   tools: "angelica.phase.tools",
   writing: "angelica.phase.writing",

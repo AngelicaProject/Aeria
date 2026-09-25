@@ -396,7 +396,6 @@ export const ru: Catalog = {
   "angelica.activity.tools": { one: "{count} инструмент", few: "{count} инструмента", many: "{count} инструментов", other: "{count} инструмента" },
   "angelica.activity.failed": { one: "{count} с ошибкой", few: "{count} с ошибкой", many: "{count} с ошибкой", other: "{count} с ошибкой" },
   "angelica.activity.reasoning": "размышления",
-  "angelica.phase.waiting": "Ждёт ответа модели",
   "angelica.phase.thinking": "Размышляет",
   "angelica.phase.tools": "Работает с инструментами",
   "angelica.phase.writing": "Пишет ответ",
