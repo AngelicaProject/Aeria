@@ -25,24 +25,14 @@ Lumina 7.7.0 does, with no dependency on Lumina or .NET:
   string arguments that spell a number, parameter, or placeholder, which
   become that expression. It rejects what Lumina rejects, including the
   fallback forms `decode` prints.
-- `encode_checked` adds the checks of the Atlas `encode` command: the bytes
+- `encode_checked` adds the checks a pack string needs: the bytes
   are not empty, contain no `0x00`, are at most 65,535 bytes, and encode to the
   same bytes again after decoding.
 
 The codec keeps Lumina's lossy behavior so that its output stays
 byte-identical to Lumina's: text printed from invalid UTF-8 or malformed payloads does not
-encode back to the original bytes. Two ignored tests check it against real
-data: `tests/hxs_corpus.rs` decodes every `raw_value` of an HXS snapshot and
-compares the result with its `macro_text`, and `tests/atlas_encode.rs`
-compares `encode_checked` with results recorded from the Atlas `encode`
-command. On the English 2026.09.15 snapshot (2,474,141 strings) every string
-decodes to its stored macro text, and every string except 95 with invalid
-UTF-8 or malformed payloads encodes back to its raw bytes; on those strings
-and 100,000 generated inputs the results match Atlas 0.4.0 exactly.
-
-One deliberate difference: when a text encodes but its decoded form cannot be
-parsed again, Atlas 0.4.0's round-trip check throws and stops the whole
-`encode` batch, while `encode_checked` reports that one string as not
+encode back to the original bytes. When a text encodes but its decoded form
+cannot be parsed again, `encode_checked` reports that one string as not
 round-trippable.
 
 ## Syntax-layer contract

@@ -3,9 +3,9 @@
 //! [`decode`] prints bytes the way Lumina 7.7.0's `ToMacroString()` does, and
 //! [`encode`] parses macro text the way its `ReadOnlySeString.FromMacroString`
 //! does with default options. Both reproduce Lumina's behavior exactly,
-//! including its lossy corners, so that text Harmonia Atlas extracted and
-//! bytes it encoded stay identical. Deliberate differences from Lumina are
-//! listed in `docs/architecture/strings.md`.
+//! including its lossy corners, so that exported bytes stay those of the
+//! `lumina-7.7.0` dialect recorded in pack manifests. See
+//! `docs/architecture/strings.md`.
 //!
 //! The formats involved:
 //!
@@ -410,8 +410,7 @@ impl std::error::Error for CheckedEncodeError {}
 /// Longest encoded string the game accepts.
 pub const MAX_ENCODED_LENGTH: usize = 65535;
 
-/// Encodes macro text for the game with the checks of Harmonia Atlas's
-/// `encode` command: the bytes are not empty, contain no NUL, fit the
+/// Encodes macro text for a pack string: the bytes are not empty, contain no NUL, fit the
 /// length limit, and encode again to the same bytes after decoding.
 ///
 /// # Errors

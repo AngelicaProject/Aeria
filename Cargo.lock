@@ -163,9 +163,6 @@ dependencies = [
 [[package]]
 name = "aeria-se"
 version = "0.1.0"
-dependencies = [
- "rusqlite",
-]
 
 [[package]]
 name = "aeria-search"
@@ -186,7 +183,6 @@ dependencies = [
  "aeria-core",
  "aeria-se",
  "aeria-sqpack",
- "serde_json",
  "sha2 0.11.0",
  "tempfile",
  "thiserror 2.0.20",
@@ -198,7 +194,6 @@ version = "0.1.0"
 dependencies = [
  "crc32fast",
  "flate2",
- "rusqlite",
  "thiserror 2.0.20",
 ]
 
