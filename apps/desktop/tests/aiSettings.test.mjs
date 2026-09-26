@@ -13,6 +13,7 @@ import {
   normalizeHeaders,
   syncModels,
   toggleEffort,
+  toggleVision,
 } from "../src/aiSettings.ts";
 
 const model = (id, reasoningEfforts = []) => ({ id, contextWindow: null, reasoningEfforts });
@@ -42,9 +43,19 @@ test("a stored provider becomes a replacement input without its key state", () =
 
 test("syncing models follows the provider list and keeps known settings", () => {
   const result = syncModels([model("glm-5.3", ["high"]), model("retired")], [model("kimi-k3", ["low"]), { id: "glm-5.3", contextWindow: 200000, reasoningEfforts: ["low"] }, model("kimi-k3"), model(" ")]);
-  assert.deepEqual(result.models, [model("kimi-k3", ["low"]), { id: "glm-5.3", contextWindow: 200000, reasoningEfforts: ["high"] }]);
+  assert.deepEqual(result.models, [{ ...model("kimi-k3", ["low"]), vision: false }, { id: "glm-5.3", contextWindow: 200000, reasoningEfforts: ["high"], vision: false }]);
   assert.equal(result.added, 1);
   assert.equal(result.removed, 1);
+});
+
+test("image input is kept when the user enabled it or the provider lists it", () => {
+  const result = syncModels([{ ...model("kimi-k3"), vision: true }, model("glm-5.3")], [model("kimi-k3"), { ...model("glm-5.3"), vision: true }, model("new")]);
+  assert.deepEqual(result.models.map((entry) => [entry.id, entry.vision]), [["kimi-k3", true], ["glm-5.3", true], ["new", false]]);
+  let models = toggleVision(result.models, "kimi-k3");
+  assert.equal(models[0].vision, false);
+  models = toggleVision(models, "kimi-k3");
+  assert.equal(models[0].vision, true);
+  assert.equal(models[1], result.models[1]);
 });
 
 test("header rows are trimmed, lowercased, and blank names dropped", () => {

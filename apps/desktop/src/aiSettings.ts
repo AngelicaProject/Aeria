@@ -24,8 +24,8 @@ export function providerInput(provider: AiProviderDto, changes: Partial<Omit<AiP
 
 /**
  * Replaces the model list with the provider's own listing. Models the
- * provider still reports keep the efforts and context window the user set;
- * what the user left unknown is taken from the listing.
+ * provider still reports keep the efforts, context window, and image input
+ * the user set; what the user left unknown is taken from the listing.
  */
 export function syncModels(models: readonly AiModelConfig[], remote: readonly AiModelConfig[]): { models: AiModelConfig[]; added: number; removed: number } {
   const configured = new Map(models.map((model) => [model.id, model]));
@@ -34,11 +34,12 @@ export function syncModels(models: readonly AiModelConfig[], remote: readonly Ai
   const next = addModels([], remote.map((model) => model.id)).map((model) => {
     const reported = listed.get(model.id) ?? model;
     const own = configured.get(model.id);
-    if (!own) return { id: model.id, contextWindow: reported.contextWindow, reasoningEfforts: [...reported.reasoningEfforts] };
+    if (!own) return { id: model.id, contextWindow: reported.contextWindow, reasoningEfforts: [...reported.reasoningEfforts], vision: reported.vision === true };
     return {
       id: own.id,
       contextWindow: own.contextWindow ?? reported.contextWindow,
       reasoningEfforts: own.reasoningEfforts.length > 0 ? own.reasoningEfforts : [...reported.reasoningEfforts],
+      vision: own.vision === true || reported.vision === true,
     };
   });
   const kept = new Set(next.map((model) => model.id));
@@ -82,6 +83,11 @@ export function toggleEffort(models: readonly AiModelConfig[], id: string, effor
     else enabled.add(effort);
     return { ...model, reasoningEfforts: reasoningEfforts.filter((value) => enabled.has(value)) };
   });
+}
+
+/** Turns image input on or off for one model. */
+export function toggleVision(models: readonly AiModelConfig[], id: string): AiModelConfig[] {
+  return models.map((model) => model.id === id ? { ...model, vision: model.vision !== true } : model);
 }
 
 /** Parses a context window field; blank means unknown. Returns `undefined` for invalid input. */

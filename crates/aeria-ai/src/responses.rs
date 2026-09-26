@@ -6,6 +6,7 @@ use crate::chat::{
     AssistantResponse, ChatMessage, ChatRequest, MAX_TOOL_CALLS_PER_RESPONSE, StreamDelta,
     StreamError, ToolCall, Usage,
 };
+use crate::images::user_parts;
 
 /// Builds a streaming Responses request from Aeria's conversation.
 ///
@@ -17,11 +18,17 @@ pub fn request_body(request: &ChatRequest<'_>, session: &str) -> Value {
     let mut input = Vec::with_capacity(request.messages.len());
     for message in request.messages {
         match message {
-            ChatMessage::User { content, .. } => input.push(json!({
-                "type": "message",
-                "role": "user",
-                "content": [{ "type": "input_text", "text": content }],
-            })),
+            ChatMessage::User {
+                content, images, ..
+            } => {
+                let (text, urls) = user_parts(content, images, request.images);
+                let mut parts = vec![json!({ "type": "input_text", "text": text })];
+                parts.extend(
+                    urls.into_iter()
+                        .map(|url| json!({ "type": "input_image", "image_url": url })),
+                );
+                input.push(json!({ "type": "message", "role": "user", "content": parts }));
+            }
             ChatMessage::Assistant {
                 content,
                 tool_calls,
@@ -296,6 +303,7 @@ mod tests {
             ChatMessage::User {
                 content: "q".to_owned(),
                 automatic: false,
+                images: Vec::new(),
             },
             ChatMessage::Assistant {
                 content: "looking".to_owned(),
@@ -325,6 +333,7 @@ mod tests {
                 messages: &messages,
                 tools: &tools,
                 turn_start: 0,
+                images: None,
             },
             "conversation-1",
         );
@@ -398,5 +407,39 @@ mod tests {
         );
         let unfinished = run(&[json!({ "type": "response.output_text.delta", "delta": "hi" })]);
         assert!(unfinished.is_err());
+    }
+
+    #[test]
+    fn user_images_become_input_images() {
+        let bytes = crate::images::tests::png(8, 8);
+        let image = crate::images::inspect(&bytes).expect("image");
+        let messages = vec![ChatMessage::User {
+            content: "Что на скриншоте?".to_owned(),
+            automatic: false,
+            images: vec![image.clone()],
+        }];
+        let mut payloads = crate::images::ImagePayloads::default();
+        payloads.insert(&image, &bytes);
+        let body = request_body(
+            &ChatRequest {
+                model: "gpt-5.5",
+                effort: None,
+                system: "",
+                messages: &messages,
+                tools: &[],
+                turn_start: 0,
+                images: Some(&payloads),
+            },
+            "conversation-1",
+        );
+        let content = &body["input"][0]["content"];
+        assert_eq!(content[0]["type"], "input_text");
+        assert_eq!(content[1]["type"], "input_image");
+        assert!(
+            content[1]["image_url"]
+                .as_str()
+                .expect("url")
+                .starts_with("data:image/png;base64,")
+        );
     }
 }

@@ -174,6 +174,7 @@ export function ModelMenu({ providers, model, onChange, onOpen }: { providers: r
                     >
                       <span className="menu-item-check">{key === current ? <UiIcon icon="check" size="xs" /> : null}</span>
                       <span className="menu-item-label">{entry.id}</span>
+                      {entry.vision ? <span className="angelica-model-vision" title={t("angelica.modelAcceptsImages")}><UiIcon icon="image" size="xs" /></span> : null}
                     </button>
                   );
                 })}

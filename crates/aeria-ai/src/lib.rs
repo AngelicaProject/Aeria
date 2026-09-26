@@ -14,6 +14,7 @@ pub mod client;
 pub mod conversation;
 pub mod draft;
 pub mod guidance;
+pub mod images;
 pub mod jobs;
 pub mod prompt;
 pub mod provider;

@@ -154,6 +154,8 @@ impl OpenAiCompatibleClient {
         #[derive(Deserialize)]
         struct ModelEntry {
             id: String,
+            #[serde(flatten)]
+            rest: serde_json::Map<String, Value>,
         }
 
         let mut models = match endpoint.protocol {
@@ -169,9 +171,11 @@ impl OpenAiCompatibleClient {
                 })?;
                 list.data
                     .into_iter()
-                    .map(|entry| entry.id.trim().to_owned())
-                    .filter(|id| !id.is_empty())
-                    .map(ModelConfig::new)
+                    .filter(|entry| !entry.id.trim().is_empty())
+                    .map(|entry| ModelConfig {
+                        vision: lists_image_input(&entry.rest),
+                        ..ModelConfig::new(entry.id.trim())
+                    })
                     .collect::<Vec<_>>()
             }
             Protocol::CodexResponses => {
@@ -224,6 +228,7 @@ impl OpenAiCompatibleClient {
             let messages = [ChatMessage::User {
                 content: "Reply with the single word OK.".to_owned(),
                 automatic: false,
+                images: Vec::new(),
             }];
             let request = ChatRequest {
                 model,
@@ -232,6 +237,7 @@ impl OpenAiCompatibleClient {
                 messages: &messages,
                 tools: &[],
                 turn_start: 0,
+                images: None,
             };
             let (_, answered_by) = self
                 .stream_codex(endpoint, &session, &request, &mut |_| {})
@@ -401,6 +407,25 @@ pub(crate) fn install_crypto_provider() {
         // acceptable for verifying provider certificates.
         let _ = rustls::crypto::ring::default_provider().install_default();
     });
+}
+
+/// Whether a model listing entry states image input in
+/// `architecture.input_modalities`, `input_modalities`, or
+/// `modalities.input`. Most listings state nothing, which is read as no
+/// image input.
+fn lists_image_input(entry: &serde_json::Map<String, Value>) -> bool {
+    [
+        entry
+            .get("architecture")
+            .and_then(|value| value.get("input_modalities")),
+        entry.get("input_modalities"),
+        entry.get("modalities").and_then(|value| value.get("input")),
+    ]
+    .into_iter()
+    .flatten()
+    .filter_map(Value::as_array)
+    .flatten()
+    .any(|modality| modality == "image")
 }
 
 async fn send(request: reqwest::RequestBuilder, key: &ApiKey) -> Result<Value, ProviderError> {
@@ -724,7 +749,7 @@ data: {}
     fn list_models_returns_sorted_unique_ids() {
         let (url, server) = serve_once(
             "200 OK",
-            r#"{"object":"list","data":[{"id":"kimi-k3"},{"id":"glm-5.3"},{"id":"kimi-k3"},{"id":" "}]}"#,
+            r#"{"object":"list","data":[{"id":"kimi-k3","architecture":{"input_modalities":["text","image"]}},{"id":"glm-5.3","modalities":{"input":["text"]}},{"id":"kimi-k3"},{"id":" "}]}"#,
         );
         let client = OpenAiCompatibleClient::new().expect("client");
         let models = runtime()
@@ -739,6 +764,8 @@ data: {}
                 .collect::<Vec<_>>(),
             vec!["glm-5.3", "kimi-k3"]
         );
+        assert!(!models[0].vision);
+        assert!(models[1].vision);
     }
 
     #[test]

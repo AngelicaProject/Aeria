@@ -12,6 +12,7 @@ use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use serde::{Deserialize, Serialize};
 
 use crate::chat::Usage;
+use crate::images::ImageRef;
 use crate::settings::ModelSelection;
 use crate::tools::{ReviewLabel, UnitLocation, UnitState};
 
@@ -76,6 +77,9 @@ pub struct JobSpec {
     pub token_limit: u64,
     /// Chunks translated at the same time.
     pub concurrency: u8,
+    /// Images of the job's conversation sent to every worker.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub images: Vec<ImageRef>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -329,6 +333,9 @@ impl JobEstimate {
 pub struct JobProposal {
     pub scope: JobScope,
     pub instructions: String,
+    /// Images of the conversation for every worker.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub images: Vec<ImageRef>,
     pub concurrency: u8,
     pub estimate: JobEstimate,
     pub token_limit: u64,
@@ -1036,6 +1043,7 @@ mod tests {
             },
             token_limit: 1000,
             concurrency: 2,
+            images: Vec::new(),
         }
     }
 

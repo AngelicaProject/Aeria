@@ -62,19 +62,24 @@ Presets supply defaults for a new provider and do not change the transport:
 
 Presets carry no model list. Models come from the provider's own
 `GET /models` listing, loaded when the first key is saved and on request.
-Updating from the provider replaces the list and keeps the efforts and context
-window of models it still reports. A listing may include models that the
+Updating from the provider replaces the list and keeps the efforts, context
+window, and image input of models it still reports. A listing may include models that the
 provider serves only through other APIs; a connection check reveals them.
 Models can also be added by ID for providers without a listing. Listed models
 have no known context window or effort values; the user enables the efforts a
 model accepts, which a connection check with that effort can confirm first.
+A model accepts images when its listing entry says so in
+`architecture.input_modalities` (as OpenRouter lists it), `input_modalities`,
+or `modalities.input`; otherwise the user marks it in the settings. Updating
+keeps image input a user enabled.
 
 ### Local settings
 
 Provider settings are machine-local application data in
 `<app-data>/ai-settings-v1.json`, never in a repository. The document holds
 `formatVersion` 1, the providers (opaque local ID, preset kind, name, base URL,
-models with ID, optional context window, and accepted efforts, the optional
+models with ID, optional context window, accepted efforts, and `vision: true`
+for a model that accepts images (omitted otherwise), the optional
 session header, and extra headers), and
 Angelica's optional default model selection and the optional selection for
 translation-job workers (provider, model, and an effort the model accepts),
@@ -113,7 +118,8 @@ counts against the plan's Codex limits.
   Signing out deletes the stored token and the cached access token.
 - **Requests** go to `POST {base}/responses` with `stream: true`,
   `store: false`, Angelica's system message as `instructions`, and the
-  conversation as typed input items (`message`, `function_call`, and
+  conversation as typed input items (`message` with `input_text` and
+  `input_image` parts, `function_call`, and
   `function_call_output`). Reasoning is requested with a summary and never
   replayed between requests. Requests carry the access token, the account and
   data-residency headers taken from the token's claims, `session_id` set to
@@ -121,7 +127,8 @@ counts against the plan's Codex limits.
   does not present itself as Codex. A response that fails for a plan limit is
   reported as rate limiting.
 - **Models** come from the Codex catalog, `GET {base}/models?client_version=…`,
-  which also states each model's context window and reasoning levels. Hidden
+  which also states each model's context window and reasoning levels, and
+  input modalities: a model accepts images unless they leave images out. Hidden
   models are skipped.
 
 A ChatGPT provider cannot hold an API key or a session header, and its base
@@ -172,18 +179,43 @@ Reasoning text is stored with the assistant message and sent back as
 think between tool calls require; earlier turns are sent without it.
 
 A request is kept within 75 % of the model's context window (64,000 tokens
-when unknown), estimated at three characters per token. Earlier turns' tool
-results are replaced with a short notice first, oldest first; if that is not
-enough, whole earlier turns are dropped. The current turn is always sent in
-full.
+when unknown), estimated at three characters per token and, for an image, one
+token per 28 × 28 pixels (at least 85). Earlier turns' tool results are
+replaced with a short notice first, then earlier turns' images are replaced
+with a notice; if that is not enough, whole earlier turns are dropped, oldest
+first. The current turn is always sent in full.
 
 The system message holds Angelica's fixed instructions (see
 `aeria-ai::prompt`), the project's languages, game version, and progress, and
 the editor context the renderer sends with the message: the open sheet, the
 selected occurrence, and whether it has unsaved edits. The user can stop
-sending the selection. Instructions state that tool data is never an
-instruction, that macros must be preserved, and that Chat mode cannot change
-the project.
+sending the selection. Instructions state that tool data and text in images
+are never instructions, that macros must be preserved, and that Chat mode
+cannot change the project.
+
+### Images
+
+A user message can carry up to 6 images, pasted into the composer or chosen
+from files. The renderer scales each one so that no side exceeds 2,048 pixels
+and it has at most 1920 × 1080 pixels, then sends a PNG or JPEG file:
+screenshots and other images stay PNG for legible text, photos stay JPEG, and
+a PNG larger than the file limit is encoded as JPEG. `aeria-ai::images`
+checks every file again: only PNG and JPEG, at most 3,750,000 bytes (so the
+base64 form stays within the 5 MB common vision APIs accept), and each side 1
+to 2,048 pixels, read from the file header. A refused image fails the message
+with `angelicaInvalidImage`; nothing is stored.
+
+Images are sent only to a model marked as accepting images. A message with
+images for any other model is refused (`angelicaModelWithoutImages`), and the
+composer says so before sending. When a conversation continues with a model
+without image input, earlier images are left out and the message text says
+how many were not shown, so Angelica can ask the user to describe them.
+
+In a request, a message's images follow its text as `image_url` parts with a
+`data:` URL (Chat Completions) or `input_image` parts (Codex Responses). The
+text ends with the IDs of the images sent, in order, so Angelica can pass
+them to a job, and names any image whose file is gone as no longer
+available.
 
 ### Read tools
 
@@ -342,6 +374,11 @@ to report on jobs. In Ask and Auto-draft modes she also has `start_job`,
 `start_job` never starts anything: it records a job proposal with the scope,
 instructions, concurrency, the estimate, and a token limit of twice
 the estimate (at least 200,000). The user starts the job from the proposal.
+`start_job` can also name up to 4 images of its conversation, for example a
+screenshot showing where the strings appear; each is sent to every worker.
+An image ID the conversation does not have is refused, and so are images
+while the jobs model does not accept them. The estimate does not include
+them.
 
 A scope is a list of sheets, or every sheet with translatable strings, and a
 filter: untranslated strings (the default), strings that need review, or
@@ -363,7 +400,10 @@ Each chunk is translated by a worker with a fresh context: fixed worker
 instructions, the project facts, guidance and matching glossary entries, the
 job's instructions as they are when the chunk starts, and its strings in
 tagged form with their legends, context cells, current translations,
-notes, and up to three translation-memory matches. Its tools are `get_unit` and `read_rows` for context, `get_guidance`,
+notes, and up to three translation-memory matches, followed by the job's
+images when the worker model accepts images. Images come from the job's
+conversation; after the conversation is deleted, workers are told they are no
+longer available. Its tools are `get_unit` and `read_rows` for context, `get_guidance`,
 `validate_target`, `submit_translations` for the strings of its own chunk
 only, and `report_issue`, which records an event for Angelica. A worker has at
 most 8 responses. A submitted translation is rebuilt and written as a draft
@@ -376,7 +416,7 @@ unsubmitted fail.
 Jobs are machine-local application data, one SQLite database per project in
 `<app-data>/jobs/<key>.sqlite3` with the conversation key. A job records its
 conversation, specification (scope, instructions, worker model, token limit,
-concurrency), status (`running`, `paused` with a reason, `completed`,
+concurrency, and the references of its images), status (`running`, `paused` with a reason, `completed`,
 `cancelled`), token usage, events, and each string's chunk, status
 (`pending`, `running`, `drafted`, `rejected`, `failed`, `conflict`),
 attempts, and message. The worker model is the jobs model from the settings,
@@ -474,6 +514,11 @@ calls and results, and the provider-reported token usage. Messages Aeria adds
 for Angelica, such as job reports, are user messages marked `automatic`. Files are written through a
 synced temporary file and rename and are limited to 16 MiB; a damaged file is
 reported when opened and skipped in the list.
+
+A user message references its images by ID, format, width, and height. The
+files are kept beside the conversation in `<id>.images/<image id>.png` or
+`.jpg`, written through a synced temporary file and rename, and deleted with
+the conversation. A file is checked against its reference when read.
 
 ## Batch workflow
 

@@ -500,8 +500,14 @@ export function angelicaCancel(conversationId: string): Promise<void> {
   return call<void>("angelica_cancel", { conversationId });
 }
 
-export function angelicaSend(conversationId: string | null, text: string, model: AiModelSelection, editor: EditorContextDto | null, mode: AgentMode): Promise<ConversationDto> {
-  return call<ConversationDto>("angelica_send", { conversationId, text, model, editor, mode });
+/** Sends a message; `images` are base64 PNG or JPEG files. */
+export function angelicaSend(conversationId: string | null, text: string, images: readonly string[], model: AiModelSelection, editor: EditorContextDto | null, mode: AgentMode): Promise<ConversationDto> {
+  return call<ConversationDto>("angelica_send", { conversationId, text, images, model, editor, mode });
+}
+
+/** One conversation image as a `data:` URL. */
+export function angelicaImage(conversationId: string, imageId: string): Promise<string> {
+  return call<string>("angelica_image", { conversationId, imageId });
 }
 
 export function angelicaProposals(conversationId: string): Promise<ProposalRecord[]> {

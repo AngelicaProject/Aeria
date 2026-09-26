@@ -368,6 +368,17 @@ effort label and then shortens the mode and model names. Enter sends and Shift+E
 Angelica answers are queued and sent after the turn. The conversation's own
 model choice, then the default model, is preselected.
 
+Images pasted with Ctrl+V are attached to the next message, as are images
+chosen with the image button in the bar; clipboard content that also carries
+text, such as copied spreadsheet cells, pastes as text. Attached images show
+as thumbnails above the text with a remove button, and a message may consist
+of images alone. When the selected model does not accept images, a warning
+under the thumbnails says so and **Send** stays disabled. The model popover
+marks models that accept images with an image icon. Images in the transcript
+appear as thumbnails in their message; one that is no longer available shows
+a placeholder. Clicking a thumbnail opens the image over the window; a click
+or Escape closes it.
+
 Above the composer, a collapsible list shows the conversation's pending
 proposals and those that could not be applied. Each card shows the string's
 location, which opens it in the editor, a word diff from the current
@@ -458,7 +469,7 @@ which use Angelica's model when none is chosen. **Websites Angelica may read**
 lists allowed domains, one per line, saved with its own button. Each provider card edits the name
 and base URL (saved on blur), stores or removes the API key through a password
 field that is cleared after saving and never refilled, and lists models with
-toggles for accepted efforts, an optional context window, and a **Test**
+toggles for accepted efforts and image input, an optional context window, and a **Test**
 action that reports latency and the answering model or the provider's error.
 Saving the first key loads the provider's models; **Update from provider**
 reloads them and reports how many were added and removed, and a model can

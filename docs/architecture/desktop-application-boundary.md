@@ -248,11 +248,18 @@ ChatGPT provider's endpoint through the in-memory access-token cache in
 `DesktopState`, whose async lock also serializes token refreshes.
 
 Angelica commands (`angelica_conversations`, `angelica_conversation`,
-`angelica_send`, `angelica_cancel`, and `angelica_delete_conversation`) work on
-the active project's conversations described in [`ai.md`](./ai.md#angelica).
+`angelica_image`, `angelica_send`, `angelica_cancel`, and
+`angelica_delete_conversation`) work on the active project's conversations
+described in [`ai.md`](./ai.md#angelica).
 `angelica_send` validates the model selection against the AI settings,
-appends the user message, stores the conversation, and returns it before the
-turn runs; at most one turn runs per conversation (`angelicaBusy`). The turn
+checks and stores the message's base64 images (see
+[`ai.md`](./ai.md#images)), appends the user message, stores the
+conversation, and returns it before the turn runs; at most one turn runs per
+conversation (`angelicaBusy`). A turn for a model that accepts images loads
+the conversation's image files once before its first request.
+`angelica_image` returns one image of a conversation as a `data:` URL for
+display (`angelicaImageNotFound` when the conversation has no such image or
+its file is gone). The turn
 is an async task registered in `DesktopState` before it can start, so it can
 always be found and stopped. It holds no desktop lock; each tool runs in a
 blocking worker that locks the project only for its own read. Progress

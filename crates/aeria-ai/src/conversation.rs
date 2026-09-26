@@ -12,6 +12,7 @@ use thiserror::Error;
 
 use crate::chat::{ChatMessage, Usage};
 use crate::guidance::ProjectFile;
+use crate::images::{ImageError, ImageRef, inspect};
 use crate::jobs::JobProposal;
 use crate::prompt::AgentMode;
 use crate::settings::ModelSelection;
@@ -65,12 +66,14 @@ impl Conversation {
         self.messages.push(ChatMessage::User {
             content: text.to_owned(),
             automatic: true,
+            images: Vec::new(),
         });
         self.updated_at_unix_ms = now_unix_ms;
     }
 
-    /// Appends a user message, titling a new conversation after it.
-    pub fn push_user(&mut self, text: &str, now_unix_ms: u64) {
+    /// Appends a user message with its attached images, titling a new
+    /// conversation after its text.
+    pub fn push_user(&mut self, text: &str, images: Vec<ImageRef>, now_unix_ms: u64) {
         if self.title.is_empty() {
             let line = text
                 .lines()
@@ -86,6 +89,7 @@ impl Conversation {
         self.messages.push(ChatMessage::User {
             content: text.to_owned(),
             automatic: false,
+            images,
         });
         self.updated_at_unix_ms = now_unix_ms;
     }
@@ -167,6 +171,9 @@ pub enum ConversationError {
 
     #[error("conversation {id:?} was not found")]
     NotFound { id: String },
+
+    #[error("the image is not accepted: {0}")]
+    Image(#[from] ImageError),
 }
 
 /// Conversation files of one project: `<directory>/<id>.json`.
@@ -294,6 +301,75 @@ impl ConversationStore {
             .map_err(|source| io_error("publish conversation", &path, source))
     }
 
+    fn images_path(&self, id: &str) -> Result<PathBuf, ConversationError> {
+        Ok(self.path(id)?.with_extension("images"))
+    }
+
+    fn image_path(&self, id: &str, image: &ImageRef) -> Result<PathBuf, ConversationError> {
+        if !ImageRef::is_valid_id(&image.id) {
+            return Err(invalid(&self.images_path(id)?, "the image ID is invalid"));
+        }
+        Ok(self
+            .images_path(id)?
+            .join(format!("{}.{}", image.id, image.format.extension())))
+    }
+
+    /// Checks an image and stores it for a conversation under a new ID,
+    /// through a synced temporary file and rename. The conversation file
+    /// itself need not exist yet.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ConversationError::Image`] for an image that is not
+    /// accepted, or an error when it cannot be written.
+    pub fn save_image(&self, id: &str, bytes: &[u8]) -> Result<ImageRef, ConversationError> {
+        let image = inspect(bytes)?;
+        let directory = self.images_path(id)?;
+        let path = self.image_path(id, &image)?;
+        fs::create_dir_all(&directory)
+            .map_err(|source| io_error("create image directory", &directory, source))?;
+        let partial = path.with_extension("partial");
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&partial)
+            .map_err(|source| io_error("create image temporary file", &partial, source))?;
+        file.write_all(bytes)
+            .and_then(|()| file.sync_all())
+            .map_err(|source| io_error("write image temporary file", &partial, source))?;
+        drop(file);
+        fs::rename(&partial, &path).map_err(|source| io_error("publish image", &path, source))?;
+        Ok(image)
+    }
+
+    /// Reads a conversation's image; `None` when its file is gone.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an unreadable file or one that no longer
+    /// matches its reference.
+    pub fn load_image(
+        &self,
+        id: &str,
+        image: &ImageRef,
+    ) -> Result<Option<Vec<u8>>, ConversationError> {
+        let path = self.image_path(id, image)?;
+        let file = match File::open(&path) {
+            Ok(file) => file,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(source) => return Err(io_error("open image", &path, source)),
+        };
+        let mut bytes = Vec::new();
+        file.take(crate::images::MAX_IMAGE_BYTES as u64 + 1)
+            .read_to_end(&mut bytes)
+            .map_err(|source| io_error("read image", &path, source))?;
+        let found = inspect(&bytes).map_err(|error| invalid(&path, &error.0))?;
+        if (found.format, found.width, found.height) != (image.format, image.width, image.height) {
+            return Err(invalid(&path, "the image does not match its reference"));
+        }
+        Ok(Some(bytes))
+    }
+
     fn proposals_path(&self, id: &str) -> Result<PathBuf, ConversationError> {
         Ok(self.path(id)?.with_extension("proposals.json"))
     }
@@ -351,7 +427,8 @@ impl ConversationStore {
         fs::rename(&partial, &path).map_err(|source| io_error("publish proposals", &path, source))
     }
 
-    /// Deletes a conversation. Deleting a missing one succeeds.
+    /// Deletes a conversation with its proposals and images. Deleting a
+    /// missing one succeeds.
     ///
     /// # Errors
     ///
@@ -364,7 +441,12 @@ impl ConversationStore {
                 Err(source) => return Err(io_error("delete conversation", &path, source)),
             }
         }
-        Ok(())
+        let images = self.images_path(id)?;
+        match fs::remove_dir_all(&images) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+            Err(source) => Err(io_error("delete conversation images", &images, source)),
+        }
     }
 }
 
@@ -394,10 +476,10 @@ mod tests {
         assert!(store.list().expect("empty list").is_empty());
 
         let mut older = Conversation::new(1);
-        older.push_user("  \nЧто такое <if>?", 1);
+        older.push_user("  \nЧто такое <if>?", Vec::new(), 1);
         store.save(&older).expect("save older");
         let mut newer = Conversation::new(2);
-        newer.push_user(&"Переведи ".repeat(20), 5);
+        newer.push_user(&"Переведи ".repeat(20), Vec::new(), 5);
         store.save(&newer).expect("save newer");
 
         assert_eq!(store.load(&older.id).expect("load"), older);
@@ -461,6 +543,46 @@ mod tests {
                 .load_proposals(&conversation.id)
                 .expect("gone")
                 .is_empty()
+        );
+    }
+
+    #[test]
+    fn images_are_stored_beside_the_conversation_and_deleted_with_it() {
+        let directory = tempfile::tempdir().expect("directory");
+        let store = ConversationStore::new(directory.path());
+        let mut conversation = Conversation::new(1);
+        let bytes = crate::images::tests::png(16, 9);
+        let image = store.save_image(&conversation.id, &bytes).expect("image");
+        assert_eq!((image.width, image.height), (16, 9));
+        conversation.push_user("", vec![image.clone()], 2);
+        store.save(&conversation).expect("save");
+        assert_eq!(
+            store.load(&conversation.id).expect("load").messages,
+            conversation.messages
+        );
+        assert_eq!(store.list().expect("list").len(), 1);
+        assert_eq!(
+            store.load_image(&conversation.id, &image).expect("read"),
+            Some(bytes)
+        );
+        assert!(matches!(
+            store.save_image(&conversation.id, b"GIF89a"),
+            Err(ConversationError::Image(_))
+        ));
+        let mut forged = image.clone();
+        forged.id = "../../escape".to_owned();
+        assert!(store.load_image(&conversation.id, &forged).is_err());
+
+        store.delete(&conversation.id).expect("delete");
+        assert_eq!(
+            store.load_image(&conversation.id, &image).expect("gone"),
+            None
+        );
+        assert!(
+            !directory
+                .path()
+                .join(format!("{}.images", conversation.id))
+                .exists()
         );
     }
 

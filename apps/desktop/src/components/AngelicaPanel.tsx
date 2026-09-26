@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type KeyboardEvent } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ClipboardEvent, type CSSProperties, type KeyboardEvent } from "react";
 import { listen } from "@tauri-apps/api/event";
-import { aiSettings, angelicaApplyProposal, angelicaProposals, angelicaRejectProposal, angelicaCancel, angelicaConversation, angelicaConversations, angelicaDeleteConversation, angelicaSend, normalizeCommandError } from "../ipc";
-import { ANGELICA, activitySummary, applyAgentEvent, contextFill, formatElapsed, formatTokens, groupTranscript, isQuietWait, parseReply, reasoningTitle, resolveModel, toolSubject, totalTokens, transcriptFromMessages, workingPhase, type ActivityStep, type ReplySpan, type TranscriptBlock, type TranscriptItem, type WorkingPhase } from "../angelica";
+import { aiSettings, angelicaApplyProposal, angelicaProposals, angelicaRejectProposal, angelicaCancel, angelicaConversation, angelicaConversations, angelicaDeleteConversation, angelicaImage, angelicaSend, normalizeCommandError } from "../ipc";
+import { ANGELICA, activitySummary, applyAgentEvent, contextFill, formatElapsed, formatTokens, groupTranscript, isQuietWait, modelAcceptsImages, parseReply, reasoningTitle, resolveModel, toolSubject, totalTokens, transcriptFromMessages, workingPhase, type ActivityStep, type MessageImage, type ReplySpan, type TranscriptBlock, type TranscriptItem, type WorkingPhase } from "../angelica";
+import { ImageAttachError, MAX_IMAGES_PER_MESSAGE, prepareImage, transferredImages, type PreparedImage } from "../imageAttachments";
 import type { AgentMode, ProposalRecord, SourceBinding } from "../types";
 import { ModeMenu, ModelMenu, SelectionToggle } from "./AngelicaComposerControls";
 import { AngelicaJobs } from "./AngelicaJobs";
@@ -50,6 +51,9 @@ const toolLabels: Readonly<Record<string, MessageKey>> = {
   set_job_workers: "angelica.tool.setJobWorkers",
   cancel_job: "angelica.tool.cancelJob",
 };
+
+/** A message waiting to be sent after the running turn. */
+type QueuedMessage = { text: string; images: PreparedImage[] };
 
 const suggestionKeys: readonly MessageKey[] = ["angelica.suggestion.overview", "angelica.suggestion.selection", "angelica.suggestion.macros"];
 const EMPTY_USAGE: AiUsage = { promptTokens: 0, completionTokens: 0 };
@@ -135,8 +139,55 @@ function ActivityBlock({ block }: { block: Extract<TranscriptBlock, { kind: "act
   );
 }
 
-function TranscriptEntry({ block }: { block: TranscriptBlock }) {
-  if (block.kind === "user") return <div className="angelica-user">{block.text}</div>;
+/** Loaded conversation images by conversation and image ID. */
+const storedImages = new Map<string, Promise<string>>();
+
+function storedImageUrl(conversationId: string, imageId: string): Promise<string> {
+  const key = `${conversationId}/${imageId}`;
+  let url = storedImages.get(key);
+  if (!url) {
+    url = angelicaImage(conversationId, imageId);
+    // A failed load is retried the next time the image is shown.
+    url.catch(() => storedImages.delete(key));
+    storedImages.set(key, url);
+  }
+  return url;
+}
+
+/** One image of a message; a stored image loads when it is shown. */
+function MessageThumb({ conversationId, image, onOpen }: { conversationId: string | null; image: MessageImage; onOpen: (url: string) => void }) {
+  const { t } = useI18n();
+  const [url, setUrl] = useState<string | null>(image.kind === "preview" ? image.url : null);
+  const [failed, setFailed] = useState(false);
+  useEffect(() => {
+    if (image.kind === "preview" || !conversationId) return;
+    let current = true;
+    storedImageUrl(conversationId, image.image.id)
+      .then((next) => { if (current) setUrl(next); })
+      .catch(() => { if (current) setFailed(true); });
+    return () => { current = false; };
+  }, [conversationId, image]);
+  if (failed) return <span className="angelica-thumb missing" title={t("angelica.imageMissing")}><UiIcon icon="imageOff" size="sm" /></span>;
+  return (
+    <button className="angelica-thumb" type="button" disabled={!url} aria-label={t("angelica.openImage")} title={t("angelica.openImage")} onClick={() => { if (url) onOpen(url); }}>
+      {url ? <img src={url} alt="" /> : <UiIcon icon="image" size="sm" />}
+    </button>
+  );
+}
+
+function TranscriptEntry({ block, conversationId, onOpenImage }: { block: TranscriptBlock; conversationId: string | null; onOpenImage: (url: string) => void }) {
+  if (block.kind === "user") {
+    return (
+      <div className="angelica-user">
+        {block.images.length > 0 ? (
+          <div className="angelica-thumbs">
+            {block.images.map((image) => <MessageThumb key={image.kind === "stored" ? image.image.id : image.key} conversationId={conversationId} image={image} onOpen={onOpenImage} />)}
+          </div>
+        ) : null}
+        {block.text ? <span>{block.text}</span> : null}
+      </div>
+    );
+  }
   if (block.kind === "notice") return <div className="angelica-notice"><UiIcon icon="info" size="xs" />{block.text.replace(/^\[Aeria\]\s*/, "")}</div>;
   if (block.kind === "activity") return <ActivityBlock block={block} />;
   return <div className="angelica-assistant"><Reply text={block.text} /></div>;
@@ -195,7 +246,12 @@ export function AngelicaPanel({ editorContext, onOpenSettings, onOpenGuide, onRe
   const [lastPromptTokens, setLastPromptTokens] = useState<number | null>(null);
   const [model, setModel] = useState<AiModelSelection | null>(null);
   const [draft, setDraft] = useState("");
-  const [queue, setQueue] = useState<string[]>([]);
+  const [attachments, setAttachments] = useState<PreparedImage[]>([]);
+  const attachmentsRef = useRef<PreparedImage[]>([]);
+  attachmentsRef.current = attachments;
+  const [viewing, setViewing] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [queue, setQueue] = useState<QueuedMessage[]>([]);
   const [attachContext, setAttachContext] = useState(true);
   const [mode, setMode] = useState<AgentMode>("ask");
   const [proposals, setProposals] = useState<ProposalRecord[]>([]);
@@ -357,7 +413,7 @@ export function AngelicaPanel({ editorContext, onOpenSettings, onOpenGuide, onRe
     if (element && stickToBottom.current) element.scrollTop = element.scrollHeight;
   }, [items]);
 
-  const send = useCallback(async (text: string) => {
+  const send = useCallback(async ({ text, images }: QueuedMessage) => {
     if (!model) return;
     setError(null);
     setNotice(null);
@@ -367,9 +423,10 @@ export function AngelicaPanel({ editorContext, onOpenSettings, onOpenGuide, onRe
     const context = attachContext ? editorContext : null;
     const isNew = conversationIdRef.current === null;
     awaitingIdRef.current = isNew;
-    setItems((current) => [...current, { kind: "user", key: `pending${current.length}`, text }]);
+    const previews: MessageImage[] = images.map((image) => ({ kind: "preview", key: image.key, url: image.preview }));
+    setItems((current) => [...current, { kind: "user", key: `pending${current.length}`, text, images: previews }]);
     try {
-      const next = await angelicaSend(conversationIdRef.current, text, model, context, mode);
+      const next = await angelicaSend(conversationIdRef.current, text, images.map((image) => image.data), model, context, mode);
       conversationIdRef.current = next.id;
       setConversation(next);
       const buffered = bufferedRef.current.get(next.id) ?? [];
@@ -383,6 +440,8 @@ export function AngelicaPanel({ editorContext, onOpenSettings, onOpenGuide, onRe
       setRunning(false);
       setItems((current) => current.filter((item) => !item.key.startsWith("pending")));
       setDraft((current) => current || text);
+      // Unsent images return to the composer unless new ones were attached.
+      setAttachments((current) => current.length > 0 ? current : images);
       setError(normalizeCommandError(reason));
     }
   }, [attachContext, editorContext, handleEvent, loadConversations, mode, model]);
@@ -395,12 +454,39 @@ export function AngelicaPanel({ editorContext, onOpenSettings, onOpenGuide, onRe
     void send(next!);
   }, [queue, running, send]);
 
+  const acceptsImages = model !== null && modelAcceptsImages(settings?.providers ?? [], model);
+  const imagesBlocked = attachments.length > 0 && !acceptsImages;
+
   const submit = () => {
     const text = draft.trim();
-    if (!text || !model) return;
+    if ((!text && attachments.length === 0) || !model || imagesBlocked) return;
+    const message = { text, images: attachments };
     setDraft("");
-    if (running) setQueue((current) => [...current, text]);
-    else void send(text);
+    setAttachments([]);
+    if (running) setQueue((current) => [...current, message]);
+    else void send(message);
+  };
+
+  /** Scales and encodes images and adds them to the next message, up to the limit. */
+  const attachImages = async (files: readonly Blob[]) => {
+    setNotice(null);
+    const room = MAX_IMAGES_PER_MESSAGE - attachmentsRef.current.length;
+    if (files.length > room) setNotice("angelica.imageLimit");
+    for (const file of files.slice(0, Math.max(0, room))) {
+      try {
+        const image = await prepareImage(file);
+        setAttachments((current) => current.length < MAX_IMAGES_PER_MESSAGE ? [...current, image] : current);
+      } catch (reason) {
+        setNotice(reason instanceof ImageAttachError && reason.reason === "tooLarge" ? "angelica.imageTooLarge" : "angelica.imageUnreadable");
+      }
+    }
+  };
+
+  const onComposerPaste = (event: ClipboardEvent<HTMLTextAreaElement>) => {
+    const files = transferredImages(event.clipboardData);
+    if (files.length === 0) return;
+    event.preventDefault();
+    void attachImages(files);
   };
 
   const onComposerKey = (event: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -419,6 +505,13 @@ export function AngelicaPanel({ editorContext, onOpenSettings, onOpenGuide, onRe
     showConversation(null);
     setQueue([]);
   };
+
+  useEffect(() => {
+    if (!viewing) return;
+    const close = (event: globalThis.KeyboardEvent) => { if (event.key === "Escape") setViewing(null); };
+    window.addEventListener("keydown", close);
+    return () => window.removeEventListener("keydown", close);
+  }, [viewing]);
 
   const openConversation = (id: string) => {
     if (!id) { newConversation(); return; }
@@ -486,10 +579,10 @@ export function AngelicaPanel({ editorContext, onOpenSettings, onOpenGuide, onRe
             <strong>{ANGELICA}</strong>
             <p>{t("angelica.welcome")}</p>
             <div className="angelica-suggestions">
-              {suggestionKeys.map((key) => <button key={key} className="button button-ghost" type="button" disabled={!model} onClick={() => void send(t(key))}>{t(key)}</button>)}
+              {suggestionKeys.map((key) => <button key={key} className="button button-ghost" type="button" disabled={!model} onClick={() => void send({ text: t(key), images: [] })}>{t(key)}</button>)}
             </div>
           </div>
-        ) : blocks.map((block) => <TranscriptEntry key={block.key} block={block} />)}
+        ) : blocks.map((block) => <TranscriptEntry key={block.key} block={block} conversationId={conversation?.id ?? null} onOpenImage={setViewing} />)}
         {running ? <WorkingLine startedAt={turnStartedAt} tokens={turnTokens} phase={phase} lastActivityAt={lastActivityAt} /> : null}
         {notice ? <p className="field-hint">{t(notice)}</p> : null}
       </div>
@@ -504,22 +597,46 @@ export function AngelicaPanel({ editorContext, onOpenSettings, onOpenGuide, onRe
         {queue.length > 0 ? <span className="angelica-chip angelica-queue">{t("angelica.queued", { count: queue.length })}</span> : null}
         <div className="angelica-box" onClick={(event) => { if (event.target === event.currentTarget) inputRef.current?.focus(); }}>
           {selection ? <SelectionToggle selection={selection} attached={attachContext} onToggle={() => setAttachContext((value) => !value)} /> : null}
-          <textarea ref={inputRef} className="angelica-input" rows={1} value={draft} placeholder={t("angelica.placeholder")} aria-label={t("angelica.placeholder")} onChange={(event) => setDraft(event.target.value)} onKeyDown={onComposerKey} />
+          {attachments.length > 0 ? (
+            <div className="angelica-attachments">
+              {attachments.map((image) => (
+                <span key={image.key} className="angelica-attachment">
+                  <button className="angelica-thumb" type="button" aria-label={t("angelica.openImage")} title={`${image.width}×${image.height}`} onClick={() => setViewing(image.preview)}><img src={image.preview} alt="" /></button>
+                  <button className="angelica-attachment-remove" type="button" aria-label={t("angelica.removeImage")} title={t("angelica.removeImage")} onClick={() => setAttachments((current) => current.filter((entry) => entry.key !== image.key))}><UiIcon icon="x" size="xs" /></button>
+                </span>
+              ))}
+            </div>
+          ) : null}
+          {imagesBlocked ? <p className="angelica-image-warning"><UiIcon icon="triangleAlert" size="xs" />{t("angelica.modelWithoutImages")}</p> : null}
+          <textarea ref={inputRef} className="angelica-input" rows={1} value={draft} placeholder={t("angelica.placeholder")} aria-label={t("angelica.placeholder")} onChange={(event) => setDraft(event.target.value)} onKeyDown={onComposerKey} onPaste={onComposerPaste} />
           <div className="angelica-box-bar">
             <ModeMenu mode={mode} onChange={setMode} />
+            <button className="angelica-control angelica-attach" type="button" disabled={attachments.length >= MAX_IMAGES_PER_MESSAGE} aria-label={t("angelica.attachImage")} title={t(acceptsImages ? "angelica.attachImageHint" : "angelica.attachImageNoVision")} onClick={() => fileInputRef.current?.click()}><UiIcon icon="imagePlus" size="xs" /></button>
+            <input ref={fileInputRef} className="angelica-file-input" type="file" accept="image/*" multiple hidden onChange={(event) => {
+              const files = Array.from(event.currentTarget.files ?? []);
+              event.currentTarget.value = "";
+              void attachImages(files);
+            }} />
             <span className="angelica-box-end">
             <ModelMenu providers={providers} model={model} onChange={setModel} onOpen={loadSettings} />
             <span className="angelica-ring" role="img" aria-label={usageTitle} title={`${usageTitle}\n${t("angelica.tokens", { count: totalTokens(usage) })}`} style={{ "--fill": `${contextPercent ?? 0}%` } as CSSProperties} />
             {running ? (
               <button className="angelica-round angelica-stop" type="button" aria-label={t("angelica.stop")} title={t("angelica.stop")} onClick={stop}><UiIcon icon="square" size="xs" /></button>
             ) : null}
-            <button className="angelica-round angelica-send" type="button" disabled={!draft.trim() || !model} aria-label={running ? t("angelica.queue") : t("angelica.send")} title={running ? t("angelica.queue") : t("angelica.send")} onClick={submit}>
+            <button className="angelica-round angelica-send" type="button" disabled={(!draft.trim() && attachments.length === 0) || !model || imagesBlocked} aria-label={running ? t("angelica.queue") : t("angelica.send")} title={running ? t("angelica.queue") : t("angelica.send")} onClick={submit}>
               <UiIcon icon="arrowUp" size="sm" />
             </button>
             </span>
           </div>
         </div>
       </div>
+
+      {viewing ? (
+        <div className="angelica-lightbox" role="dialog" aria-modal="true" aria-label={t("angelica.openImage")} onClick={() => setViewing(null)}>
+          <img src={viewing} alt="" />
+          <button className="icon-button angelica-lightbox-close" type="button" aria-label={t("angelica.closeImage")} title={t("angelica.closeImage")} onClick={() => setViewing(null)}><UiIcon icon="x" size="md" /></button>
+        </div>
+      ) : null}
     </section>
   );
 }

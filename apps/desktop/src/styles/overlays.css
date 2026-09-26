@@ -256,6 +256,7 @@
 .ai-effort-chip { height: 22px; padding: 0 7px; border: 1px solid var(--line); border-radius: var(--radius-xs); background: transparent; color: var(--fg-subtle); font-size: var(--text-2xs); }
 .ai-effort-chip:not(:disabled):hover { background: var(--hover); color: var(--fg); }
 .ai-effort-chip.enabled { border-color: color-mix(in srgb, var(--accent) 60%, transparent); background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--fg); }
+.ai-effort-chip svg { margin-right: 4px; vertical-align: -2px; }
 .ai-context { width: 88px; height: 24px; font-size: var(--text-xs); }
 .ai-context.invalid { border-color: var(--bad); }
 .ai-test-result { display: flex; align-items: center; gap: 6px; font-size: var(--text-xs); overflow-wrap: anywhere; }

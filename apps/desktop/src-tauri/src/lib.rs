@@ -32,8 +32,8 @@ pub use ai::{
 pub use angelica::{
     AngelicaDraftDto, AngelicaEventDto, ConversationDto, ConversationSummaryDto,
     TranslationAppliedDto, angelica_apply_proposal, angelica_cancel, angelica_conversation,
-    angelica_conversations, angelica_delete_conversation, angelica_draft, angelica_proposals,
-    angelica_reject_proposal, angelica_send,
+    angelica_conversations, angelica_delete_conversation, angelica_draft, angelica_image,
+    angelica_proposals, angelica_reject_proposal, angelica_send,
 };
 pub use check_workflow::{
     CheckWorkflowDto, git_check_workflow, git_install_check_workflow, git_open_branch_settings,
@@ -247,6 +247,7 @@ pub fn run() {
             angelica_conversations,
             angelica_conversation,
             angelica_delete_conversation,
+            angelica_image,
             angelica_cancel,
             angelica_send,
             angelica_proposals,

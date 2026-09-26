@@ -84,6 +84,9 @@ pub struct ModelConfig {
     pub context_window: Option<u32>,
     /// Effort values the model accepts. Empty means the field is never sent.
     pub reasoning_efforts: Vec<ReasoningEffort>,
+    /// Whether the model accepts images in user messages.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub vision: bool,
 }
 
 impl ModelConfig {
@@ -94,6 +97,7 @@ impl ModelConfig {
             id: id.into(),
             context_window: None,
             reasoning_efforts: Vec::new(),
+            vision: false,
         }
     }
 }
