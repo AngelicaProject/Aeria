@@ -30,7 +30,9 @@ function scanTag(text: string, start: number, names: Array<[number, number]>): n
   const nameIndex = names.length;
   names.push([nameStart, index]);
 
+  // Comparisons such as `($n1 >= 2)` sit in parentheses, where `<` and `>` are operators.
   let quoted = false;
+  let depth = 0;
   while (index < text.length) {
     const character = text[index]!;
     if (character === "\\") {
@@ -42,9 +44,15 @@ function scanTag(text: string, start: number, names: Array<[number, number]>): n
       const nestedEnd = scanTag(text, index, names);
       if (nestedEnd < 0) break;
       index = nestedEnd;
-    } else if (!quoted && character === "<") {
+    } else if (!quoted && character === "(") {
+      depth += 1;
+      index += 1;
+    } else if (!quoted && character === ")") {
+      depth = Math.max(0, depth - 1);
+      index += 1;
+    } else if (!quoted && depth === 0 && character === "<") {
       break;
-    } else if (!quoted && character === ">") {
+    } else if (!quoted && depth === 0 && character === ">") {
       return index + 1;
     } else {
       index += 1;

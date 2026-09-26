@@ -11,6 +11,7 @@ import { useMacroView } from "../ui/useMacroView";
 import { ReviewDot, reviewLabel } from "./ReviewDot";
 import { StringHistory } from "./StringHistory";
 import { useI18n } from "../ui/i18n";
+import { usePreferences } from "../ui/preferences";
 import type { MessageKey } from "../i18n/translate";
 
 export type CellDraft = {
@@ -196,8 +197,11 @@ const TranslationEditorImpl = forwardRef<TranslationEditorHandle, TranslationEdi
   const cellBusy = mutation !== null;
   const targetCanSave = selectedCell !== null && !cellBusy && !targetIsBlank && (selectedCell.translation === null || targetDirty);
   const noteCanSave = selectedCell?.translation != null && !cellBusy && noteDirty;
+  const { preferences, setPreference } = usePreferences();
+  const showPreview = preferences.showGamePreview;
   const sourceView = useMacroView(selectedCell?.sourceMacro ?? null);
   const targetView = useMacroView(draft === null ? null : draft.target);
+  const previewToggle = <IconButton icon={showPreview ? "eye" : "eyeOff"} label={t(showPreview ? "preview.hide" : "preview.show")} pressed={showPreview} onClick={() => setPreference("showGamePreview", !showPreview)} />;
 
   const updateDraft = useCallback((cell: TranslationCellDto, field: keyof CellDraft, value: string) => {
     const key = bindingKey(cell.sourceBinding);
@@ -349,9 +353,10 @@ const TranslationEditorImpl = forwardRef<TranslationEditorHandle, TranslationEdi
             <span className="spacer" />
             {onDraftWithAngelica ? <IconButton icon="sparkles" label={drafting ? t("editor.drafting") : t("editor.draftWithAngelica")} disabled={cellBusy || drafting} onClick={() => void draftWithAngelica()} /> : null}
             <IconButton icon="copyPlus" label={t("editor.copySource")} disabled={cellBusy} onClick={copySource} />
+            {previewToggle}
           </div>
           <MacroEditor className="editor-surface" value={selectedCell.sourceMacro} readOnly view={sourceView} ariaLabel={t("editor.sourceText", { column: String(selectedCell.sourceBinding.columnIndex) })} placeholder={t("editor.emptySource")} onNavigate={onNavigate} />
-          {sourceView && sourceView.text === selectedCell.sourceMacro ? <PreviewBlock pieces={sourceView.view.preview} /> : null}
+          {showPreview && sourceView && sourceView.text === selectedCell.sourceMacro ? <PreviewBlock pieces={sourceView.view.preview} /> : null}
           {row.context.length > 0 ? (
             <details className="context-block">
               <summary><UiIcon icon="chevronRight" size="xs" />{t("editor.context")} <span className="count">{row.context.length}</span></summary>
@@ -367,6 +372,7 @@ const TranslationEditorImpl = forwardRef<TranslationEditorHandle, TranslationEdi
             {mutation === "target" ? <span className="saving-label"><span className="spinner spinner-xs" />{t("editor.savingInline")}</span> : null}
             <span className="spacer" />
             {checkpoint ? <IconButton icon="gitCompareArrows" label={t(showDiff ? "editor.hideDiff" : "editor.showDiff")} pressed={showDiff} onClick={() => setShowDiff((current) => !current)} className={`git-mark git-mark-${checkpoint.kind}`} /> : null}
+            {previewToggle}
           </div>
           {checkpoint && showDiff ? <CheckpointDiff baseline={checkpoint} current={draft.target} /> : null}
           <MacroEditor
@@ -383,7 +389,7 @@ const TranslationEditorImpl = forwardRef<TranslationEditorHandle, TranslationEdi
             onNavigate={onNavigate}
             view={targetView}
           />
-          {targetView && draft.target.length > 0 ? <PreviewBlock pieces={targetView.view.preview} /> : null}
+          {showPreview && targetView && draft.target.length > 0 ? <PreviewBlock pieces={targetView.view.preview} /> : null}
           <div className="editor-pane-foot">
             <span className="editor-hint">
               {targetIsBlank ? t("editor.enterTranslation") : targetDirty ? t("common.unsaved") : null}

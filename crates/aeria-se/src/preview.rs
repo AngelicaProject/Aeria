@@ -203,6 +203,10 @@ impl Renderer<'_> {
         let saved = self.state.clone();
         let pieces = match &expr.kind {
             ExprKind::Str(nodes) => self.nodes(nodes),
+            ExprKind::Int(value) => vec![Piece::Text {
+                text: value.to_string(),
+                style: self.state.style(),
+            }],
             _ => vec![self.value(expr, ValueKind::Other, "")],
         };
         self.state = saved;
@@ -628,6 +632,18 @@ mod tests {
 
     #[test]
     fn choices_keep_every_branch_and_transforms_apply() {
+        assert_eq!(
+            preview("<if $gn1>{320}<else>{240}</if>", &NoData),
+            [Piece::Choice {
+                kind: ChoiceKind::If {
+                    condition: "$gn1".to_owned()
+                },
+                branches: vec![
+                    vec![text("320", Style::default())],
+                    vec![text("240", Style::default())]
+                ],
+            }]
+        );
         let pieces = preview(
             "<if ($n1 == 1)>him<else>her</if><capitalize>x y</capitalize><br>",
             &NoData,

@@ -284,6 +284,8 @@ export const ru: Catalog = {
   "preview.time.year": "год",
   "preview.time.stackcolor": "предыдущий цвет",
   "preview.title": "В игре",
+  "preview.show": "Показать, как выглядит в игре",
+  "preview.hide": "Скрыть, как выглядит в игре",
   "preview.empty": "Ничего не выводится",
   "preview.param.n": "числовой параметр {index} строки",
   "preview.param.s": "текстовый параметр {index} строки",

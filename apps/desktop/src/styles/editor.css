@@ -92,7 +92,7 @@
 }
 .editor-hint { display: flex; flex: 1; flex-wrap: wrap; align-items: center; gap: 3px; min-width: 0; padding-left: 6px; color: var(--fg-faint); font-size: var(--text-2xs); }
 
-.editor-surface { flex: 1; min-height: 0; }
+.editor-surface { flex: 1; min-height: 72px; }
 .button-kbd { height: 16px; border-color: color-mix(in srgb, currentColor 30%, transparent); border-bottom-width: 1px; color: inherit; opacity: 0.7; }
 
 .note-input {
@@ -215,14 +215,18 @@
 
 /* The string as the game shows it: light text on the dark game window. */
 .editor-preview {
-  display: grid;
-  flex: none;
+  display: flex;
+  flex: 0 1 auto;
+  flex-direction: column;
+  min-height: 0;
+  max-height: 40%;
   gap: 4px;
   padding: 8px 12px 10px;
   border-top: 1px solid var(--line);
 }
 .game-preview {
-  max-height: 180px;
+  flex: 0 1 auto;
+  min-height: 0;
   overflow: auto;
   padding: 8px 10px;
   border-radius: var(--radius-sm);

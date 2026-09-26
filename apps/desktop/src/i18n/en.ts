@@ -279,6 +279,8 @@ export const en = {
   "preview.time.year": "year",
   "preview.time.stackcolor": "previous color",
   "preview.title": "In game",
+  "preview.show": "Show how it looks in game",
+  "preview.hide": "Hide how it looks in game",
   "preview.empty": "Nothing is shown",
   "preview.param.n": "number parameter {index} of the string",
   "preview.param.s": "text parameter {index} of the string",

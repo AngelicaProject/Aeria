@@ -12,6 +12,7 @@ export type Preferences = {
   editorFontSize: number;
   highlightMacros: boolean;
   showControlCharacters: boolean;
+  showGamePreview: boolean;
   listDensity: ListDensity;
   focusTargetOnNext: boolean;
 };
@@ -25,6 +26,7 @@ export const defaultPreferences: Preferences = {
   editorFontSize: 14,
   highlightMacros: true,
   showControlCharacters: true,
+  showGamePreview: true,
   listDensity: "comfortable",
   focusTargetOnNext: true,
 };
@@ -49,6 +51,7 @@ export function parsePreferences(raw: string | null): Preferences {
     editorFontSize: pick(stored.editorFontSize, editorFontSizes, defaultPreferences.editorFontSize),
     highlightMacros: boolean("highlightMacros"),
     showControlCharacters: boolean("showControlCharacters"),
+    showGamePreview: boolean("showGamePreview"),
     listDensity: pick(stored.listDensity, ["compact", "comfortable"] as const, defaultPreferences.listDensity),
     focusTargetOnNext: boolean("focusTargetOnNext"),
   };

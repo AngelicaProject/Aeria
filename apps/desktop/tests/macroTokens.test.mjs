@@ -17,6 +17,17 @@ test("macro scanner finds tags, separators, and closing tags", () => {
   assert.deepEqual(spans[5].names.map(([from, to]) => text.slice(from, to)), ["/color"]);
 });
 
+test("comparison operators inside parentheses do not end a tag", () => {
+  const text = "<if ($gn72 >= 94)>{320}<else><if ($n1 < 2)>a</if></if>";
+  assert.deepEqual(scanMacros(text).map((span) => text.slice(span.from, span.to)), [
+    "<if ($gn72 >= 94)>",
+    "<else>",
+    "<if ($n1 < 2)>",
+    "</if>",
+    "</if>",
+  ]);
+});
+
 test("macro scanner reads tags nested in quoted arguments", () => {
   const text = "<kilo $n1 \"<platform 1>\">";
   const spans = scanMacros(text);

@@ -202,7 +202,10 @@ an older text):
   game variable such as the player's class;
   conditions show one branch at a time, and clicking one shows the next with
   its condition in the tooltip. Icons are shown by number until the game's
-  icon textures are read.
+  icon textures are read. The preview takes at most 40% of its pane and
+  scrolls, so the editor keeps its room; the eye button in the source and
+  target headers hides or shows it, and the choice is a local preference
+  (`showGamePreview`).
 
 Row context cells are available in a collapsible section under the source. **Copy source to target** replaces the target draft
 with the source macro text.
