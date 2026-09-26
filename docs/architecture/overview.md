@@ -63,6 +63,7 @@ depend on Tauri, React, aeria-workspace, aeria-hsp, or aeria-export.
 - `aeria-core`: domain types and application contracts that should not know Tauri, Git implementation details, or SQLite.
 - `aeria-hxs`: HXS reader and verifier.
 - `aeria-hsp`: HSP/HSG reader, relationship validator, source cache materializer, and guidance index.
+- `aeria-sqpack`: read-only access to an installed game's SqPack archives and Excel sheets: the sheet list, sheet headers, and the rows and String cell bytes of a sheet in one language. It never writes to the installation. The application does not use it yet; it replaces Harmonia Atlas as the source reader.
 - `aeria-se`: structured FFXIV string parsing, syntax tree, validation, and rendering model.
 - `aeria-workspace`: versioned translation workspace model, deterministic serialization, and application of planned source updates.
 - `aeria-rebase`: deterministic source update planning.
