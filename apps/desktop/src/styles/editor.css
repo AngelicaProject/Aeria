@@ -214,25 +214,23 @@
 .macro-hover.is-error .macro-hover-title { color: var(--bad); }
 
 /* The string as the game shows it: light text on the dark game window. */
-.editor-preview {
+.editor-surface.is-hidden { display: none; }
+.pane-preview {
   display: flex;
-  flex: 0 1 auto;
   flex-direction: column;
-  min-height: 0;
-  max-height: 40%;
-  gap: 4px;
-  padding: 8px 12px 10px;
-  border-top: 1px solid var(--line);
+  overflow: hidden;
+  padding: 2px 12px 12px;
 }
+.pane-preview .game-preview { flex: 1; }
+.pane-preview .lens-empty { padding: 8px 0; }
 .game-preview {
-  flex: 0 1 auto;
   min-height: 0;
   overflow: auto;
   padding: 8px 10px;
   border-radius: var(--radius-sm);
   background: #1b1b1f;
   color: #eeeeee;
-  font-size: var(--text-sm);
+  font-size: var(--editor-font-size, 14px);
   line-height: 1.55;
   white-space: pre-wrap;
   overflow-wrap: anywhere;

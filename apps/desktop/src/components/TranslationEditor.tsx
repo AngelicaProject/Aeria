@@ -12,6 +12,7 @@ import { ReviewDot, reviewLabel } from "./ReviewDot";
 import { StringHistory } from "./StringHistory";
 import { useI18n } from "../ui/i18n";
 import { usePreferences } from "../ui/preferences";
+import type { PaneMode } from "../ui/preferencesModel";
 import type { MessageKey } from "../i18n/translate";
 
 export type CellDraft = {
@@ -127,13 +128,27 @@ function hasOtherDirtyDraft(row: TranslationRowDto, targetCell: TranslationCellD
   });
 }
 
-/** The string as the game shows it, under an editor. */
-function PreviewBlock({ pieces }: { pieces: PreviewPieceDto[] }) {
+/** Switches a pane between its macro text and the string as the game shows it. */
+function PaneModeSwitch({ value, onChange }: { value: PaneMode; onChange: (mode: PaneMode) => void }) {
   const { t } = useI18n();
   return (
-    <div className="editor-preview">
-      <span className="eyebrow">{t("preview.title")}</span>
-      <GamePreview pieces={pieces} />
+    <Segmented<PaneMode>
+      label={t("preview.mode")}
+      value={value}
+      onChange={onChange}
+      options={[
+        { value: "game", label: t("preview.mode.game"), title: t("preview.mode.gameHint") },
+        { value: "text", label: t("preview.mode.text"), title: t("preview.mode.textHint") },
+      ]}
+    />
+  );
+}
+
+/** The string as the game shows it, filling a pane. */
+function PanePreview({ pieces, empty }: { pieces: readonly PreviewPieceDto[] | null; empty: string }) {
+  return (
+    <div className="editor-surface pane-preview">
+      {pieces === null ? null : pieces.length === 0 ? <span className="lens-empty">{empty}</span> : <GamePreview pieces={pieces} />}
     </div>
   );
 }
@@ -198,10 +213,10 @@ const TranslationEditorImpl = forwardRef<TranslationEditorHandle, TranslationEdi
   const targetCanSave = selectedCell !== null && !cellBusy && !targetIsBlank && (selectedCell.translation === null || targetDirty);
   const noteCanSave = selectedCell?.translation != null && !cellBusy && noteDirty;
   const { preferences, setPreference } = usePreferences();
-  const showPreview = preferences.showGamePreview;
+  const sourceMode = preferences.sourcePaneMode;
+  const targetMode = preferences.targetPaneMode;
   const sourceView = useMacroView(selectedCell?.sourceMacro ?? null);
   const targetView = useMacroView(draft === null ? null : draft.target);
-  const previewToggle = <IconButton icon={showPreview ? "eye" : "eyeOff"} label={t(showPreview ? "preview.hide" : "preview.show")} pressed={showPreview} onClick={() => setPreference("showGamePreview", !showPreview)} />;
 
   const updateDraft = useCallback((cell: TranslationCellDto, field: keyof CellDraft, value: string) => {
     const key = bindingKey(cell.sourceBinding);
@@ -353,10 +368,11 @@ const TranslationEditorImpl = forwardRef<TranslationEditorHandle, TranslationEdi
             <span className="spacer" />
             {onDraftWithAngelica ? <IconButton icon="sparkles" label={drafting ? t("editor.drafting") : t("editor.draftWithAngelica")} disabled={cellBusy || drafting} onClick={() => void draftWithAngelica()} /> : null}
             <IconButton icon="copyPlus" label={t("editor.copySource")} disabled={cellBusy} onClick={copySource} />
-            {previewToggle}
+            <PaneModeSwitch value={sourceMode} onChange={(mode) => setPreference("sourcePaneMode", mode)} />
           </div>
-          <MacroEditor className="editor-surface" value={selectedCell.sourceMacro} readOnly view={sourceView} ariaLabel={t("editor.sourceText", { column: String(selectedCell.sourceBinding.columnIndex) })} placeholder={t("editor.emptySource")} onNavigate={onNavigate} />
-          {showPreview && sourceView && sourceView.text === selectedCell.sourceMacro ? <PreviewBlock pieces={sourceView.view.preview} /> : null}
+          {sourceMode === "game"
+            ? <PanePreview pieces={sourceView && sourceView.text === selectedCell.sourceMacro ? sourceView.view.preview : null} empty={t("editor.emptySource")} />
+            : <MacroEditor className="editor-surface" value={selectedCell.sourceMacro} readOnly view={sourceView} ariaLabel={t("editor.sourceText", { column: String(selectedCell.sourceBinding.columnIndex) })} placeholder={t("editor.emptySource")} onNavigate={onNavigate} />}
           {row.context.length > 0 ? (
             <details className="context-block">
               <summary><UiIcon icon="chevronRight" size="xs" />{t("editor.context")} <span className="count">{row.context.length}</span></summary>
@@ -372,12 +388,13 @@ const TranslationEditorImpl = forwardRef<TranslationEditorHandle, TranslationEdi
             {mutation === "target" ? <span className="saving-label"><span className="spinner spinner-xs" />{t("editor.savingInline")}</span> : null}
             <span className="spacer" />
             {checkpoint ? <IconButton icon="gitCompareArrows" label={t(showDiff ? "editor.hideDiff" : "editor.showDiff")} pressed={showDiff} onClick={() => setShowDiff((current) => !current)} className={`git-mark git-mark-${checkpoint.kind}`} /> : null}
-            {previewToggle}
+            <PaneModeSwitch value={targetMode} onChange={(mode) => setPreference("targetPaneMode", mode)} />
           </div>
           {checkpoint && showDiff ? <CheckpointDiff baseline={checkpoint} current={draft.target} /> : null}
+          {targetMode === "game" ? <PanePreview pieces={draft.target.length === 0 ? [] : targetView && targetView.text === draft.target ? targetView.view.preview : null} empty={t("editor.enterTranslation")} /> : null}
           <MacroEditor
             key={bindingKey(selectedCell.sourceBinding)}
-            className="editor-surface"
+            className={`editor-surface${targetMode === "game" ? " is-hidden" : ""}`}
             value={draft.target}
             ariaLabel={t("editor.targetText", { column: String(selectedCell.sourceBinding.columnIndex) })}
             placeholder={t("editor.targetPlaceholder")}
@@ -389,7 +406,6 @@ const TranslationEditorImpl = forwardRef<TranslationEditorHandle, TranslationEdi
             onNavigate={onNavigate}
             view={targetView}
           />
-          {showPreview && targetView && draft.target.length > 0 ? <PreviewBlock pieces={targetView.view.preview} /> : null}
           <div className="editor-pane-foot">
             <span className="editor-hint">
               {targetIsBlank ? t("editor.enterTranslation") : targetDirty ? t("common.unsaved") : null}

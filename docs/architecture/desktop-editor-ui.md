@@ -192,20 +192,21 @@ an older text):
   from the macro catalog and are localized in the renderer.
 - **Errors.** Diagnostics are underlined, and hovering one shows its message,
   such as `<colour> is not a macro; did you mean <color>?`.
-- **In game.** Under the source and under a non-empty target, a preview shows
-  the string as the game shows it: colors from `<color>` and the game's
-  `UIColor` sheet, outlines, italics, bold, line breaks, and names read from
-  game data for constant references such as `<sheet Item 4 0>`. Values
-  supplied at runtime are chips that show the code as written (`$n1`,
-  `ClassJob · $n1`, or "player name"), and their tooltip says in full words
-  what fills them in: a parameter the game passes to the string, or a global
-  game variable such as the player's class;
-  conditions show one branch at a time, and clicking one shows the next with
-  its condition in the tooltip. Icons are shown by number until the game's
-  icon textures are read. The preview takes at most 40% of its pane and
-  scrolls, so the editor keeps its room; the eye button in the source and
-  target headers hides or shows it, and the choice is a local preference
-  (`showGamePreview`).
+- **In game.** Each of the source and target panes switches between
+  **In game** and **Text**, and the chosen mode fills the pane. The source
+  opens in game, since it is only read; the target opens as text for
+  editing, and its editor keeps its state while the pane shows the game
+  view. Both modes are local preferences (`sourcePaneMode`,
+  `targetPaneMode`). The game view shows the string as the game shows it:
+  colors from `<color>` and the game's `UIColor` sheet, outlines, italics,
+  bold, line breaks, and names read from game data for constant references
+  such as `<sheet Item 4 0>`, at the editor's font size. Values supplied at
+  runtime are chips that show the code as written (`$n1`, `ClassJob · $n1`,
+  or "player name"), and their tooltip says in full words what fills them
+  in: a parameter the game passes to the string, or a global game variable
+  such as the player's class. Conditions show one branch at a time, and
+  clicking one shows the next with its condition in the tooltip. Icons are
+  shown by number until the game's icon textures are read.
 
 Row context cells are available in a collapsible section under the source. **Copy source to target** replaces the target draft
 with the source macro text.
