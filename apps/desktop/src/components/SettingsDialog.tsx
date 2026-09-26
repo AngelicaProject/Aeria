@@ -6,7 +6,7 @@ import { GameSettings, SourcePackages } from "./GameSettings";
 import { keyboardShortcuts, shortcutGroupLabels } from "../shortcuts";
 import { Segmented } from "../ui/primitives/Segmented";
 import { UiIcon, type UiIconName } from "../ui/primitives/UiIcon";
-import { BranchesSetting, IdentitySetting, MainBranchSetting, OtherFilesSetting, RemotesSetting, UpstreamSetting } from "./RepositorySettings";
+import { BranchesSetting, IdentitySetting, MainBranchSetting, MergeDriverSetting, OtherFilesSetting, RemotesSetting, UpstreamSetting } from "./RepositorySettings";
 import { UpdateChannelSetting, UpdatesSetting } from "./UpdateSettings";
 import { editorFontSizes, interfaceZoomOptions, usePreferences } from "../ui/preferences";
 import { useTheme } from "../ui/theme/theme";
@@ -223,6 +223,7 @@ export const SettingsDialog = memo(function SettingsDialog({ open, onOpenChange,
       { id: "main-branch", section: "repository" as const, title: t("repository.mainBranch"), description: t("repository.mainBranchHint"), keywords: t("repository.keywords"), wide: true, control: <MainBranchSetting /> },
       { id: "branches", section: "repository" as const, title: t("repository.branches"), description: t("repository.branchesHint"), keywords: t("repository.keywords"), wide: true, control: <BranchesSetting /> },
       { id: "identity", section: "repository" as const, title: t("git.identity"), description: t("repository.identityHint"), keywords: t("repository.keywords"), wide: true, control: <IdentitySetting /> },
+      { id: "merge-driver", section: "repository" as const, title: t("repository.mergeDriver"), description: t("repository.mergeDriverHint"), keywords: t("repository.keywords"), wide: true, control: <MergeDriverSetting /> },
       { id: "other-files", section: "repository" as const, title: t("repository.otherFiles"), description: t("repository.otherFilesHint"), keywords: t("repository.keywords"), wide: true, control: <OtherFilesSetting /> },
     ] : [
       { id: "repository-closed", section: "repository" as const, title: t("repository.noProject"), description: t("repository.noProjectHint"), control: null },

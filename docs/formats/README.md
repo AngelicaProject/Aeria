@@ -5,6 +5,7 @@ This section owns Aeria-defined persisted and exported contracts.
 - [`workspace-v2.md`](./workspace-v2.md) — current translation workspace format version 2.
 - [`workspace-v1.md`](./workspace-v1.md) — superseded workspace format version 1, read only for migration.
 - [`workspace-v1-evaluation.md`](./workspace-v1-evaluation.md) — Git diff/merge evidence supporting the workspace layout decision, unchanged in version 2.
+- [`workspace-v2-workload-evaluation.md`](./workspace-v2-workload-evaluation.md) — measurements of version 2 under realistic AI-job and parallel-translator workloads, with two alternatives for future format work.
 - [`glossary-v1.md`](./glossary-v1.md) — project-shared glossary (`aeria-glossary.csv`).
 - [`collaboration-v1.md`](./collaboration-v1.md) — project-shared collaboration policy (`aeria-collaboration.json`).
 - [`pack-settings-v1.md`](./pack-settings-v1.md) — project-shared pack identity and signing key fingerprint (`aeria-pack.json`).

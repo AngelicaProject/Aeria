@@ -27,13 +27,15 @@ use thiserror::Error;
 pub use branches::{BranchInfo, ContributionStatus, FinishOutcome};
 pub use collaboration::{COLLABORATION_FILE, CollaborationSettings};
 pub use credential::HostCredential;
-pub use merge::{ConflictResolution, UnitConflict};
+pub use merge::{
+    ConflictResolution, DriverMerge, UnitConflict, merge_shard_for_driver, run_merge_driver,
+};
 pub use process::{GitExecutable, GitOrigin};
 pub use repository::{
     ATTRIBUTES_FILE, CheckpointOutcome, CommitSummary, ConfigScope, FEED_WORKFLOW_FILE,
     FONT_SETTINGS_FILE, FONTS_DIR, FileChangeKind, FileStatus, GLOSSARY_FILE, GUIDANCE_FILE,
-    GitRepository, PACK_SETTINGS_FILE, PROJECT_PATHS, RemoteInfo, RepositoryStatus,
-    TranslatorIdentity, clone_folder_name,
+    GitRepository, MERGE_DRIVER, PACK_SETTINGS_FILE, PROJECT_PATHS, RemoteInfo, RepositoryStatus,
+    TranslatorIdentity, clone_folder_name, merge_driver_command,
 };
 pub use semantic::{
     Attribution, ContributorSummary, RecordVersion, UnitAttribution, UnitChange, UnitChangeKind,

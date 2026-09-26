@@ -17,6 +17,7 @@ members = [
   "crates/aeria-publish",
   "crates/aeria-check",
   "tools/workspace-format-evaluation",
+  "tools/workspace-workload-evaluation",
   "apps/desktop/src-tauri",
 ]
 

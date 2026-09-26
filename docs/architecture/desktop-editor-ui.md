@@ -268,7 +268,7 @@ and has no refresh button.
   stages, with "Add workflow" or, when the file differs, "Update workflow".
   The card can be dismissed for the session. After adding, the dock says to
   commit and push it and links to the branch settings on GitHub, where the
-  check is made required. Development builds and projects in a repository
+  check is made required and branches can be required to be up to date. Development builds and projects in a repository
   subfolder show why the workflow cannot be added.
 - The branch switcher is a popover below the branch name, not a list over
   it: a filter field, local branches (the current one first and checked,

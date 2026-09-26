@@ -69,10 +69,11 @@ pub use games::{
 pub use git::{
     git_branches, git_checkpoint, git_clone_repository, git_commit_changes, git_contributors,
     git_create_branch, git_delete_branch, git_fetch, git_fetch_main, git_finish_contribution,
-    git_initialize, git_log, git_merge_contribution, git_overview, git_pending_changes,
-    git_project_changes, git_pull, git_push, git_remote_branches, git_remove_remote,
-    git_set_identity, git_set_main_branch, git_set_remote, git_set_upstream, git_state_stamp,
-    git_switch_branch, git_sync, git_unit_attribution, git_unit_history,
+    git_initialize, git_log, git_merge_contribution, git_merge_driver, git_overview,
+    git_pending_changes, git_project_changes, git_pull, git_push, git_remote_branches,
+    git_remove_remote, git_set_identity, git_set_main_branch, git_set_merge_driver, git_set_remote,
+    git_set_upstream, git_state_stamp, git_switch_branch, git_sync, git_unit_attribution,
+    git_unit_history,
 };
 pub use guide::{
     GlossaryEntryInput, ProjectGuideDto, project_guide, save_project_glossary,
@@ -105,6 +106,40 @@ fn app_info() -> AppInfo {
         name: "Aeria",
         version: env!("CARGO_PKG_VERSION"),
     }
+}
+
+/// Handles the command-line modes that run without a window and returns
+/// their exit code, or `None` to start the application.
+///
+/// `merge-driver BASE OURS THEIRS PATH` is Git's merge driver for unit
+/// shards (`%O %A %B %P`): it merges per translation unit and exits 0 when
+/// clean, 1 when units conflict (they are marked in the file), and 2 when a
+/// version is not a valid shard, which leaves the local version for Git.
+#[must_use]
+pub fn run_command_line() -> Option<i32> {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.first().map(String::as_str) != Some("merge-driver") {
+        return None;
+    }
+    let [base, ours, theirs, path] = &args[1..] else {
+        eprintln!("usage: aeria merge-driver BASE OURS THEIRS PATH");
+        return Some(2);
+    };
+    Some(
+        match aeria_git::run_merge_driver(base.as_ref(), ours.as_ref(), theirs.as_ref(), path) {
+            Ok(0) => 0,
+            Ok(conflicts) => {
+                eprintln!(
+                    "aeria: {conflicts} translation unit(s) in {path} changed differently on both sides"
+                );
+                1
+            }
+            Err(error) => {
+                eprintln!("aeria: cannot merge {path} per unit: {error}");
+                2
+            }
+        },
+    )
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -177,6 +212,8 @@ pub fn run() {
             git_fetch,
             git_pull,
             git_push,
+            git_merge_driver,
+            git_set_merge_driver,
             git_check_workflow,
             git_install_check_workflow,
             git_open_branch_settings,

@@ -11,7 +11,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use aeria_core::{TranslationUnit, TranslationUnitId};
-use aeria_workspace::decode_unit_shard;
+use aeria_workspace::{decode_unit_shard, encode_unit_shard};
 
 use crate::GitError;
 
@@ -87,6 +87,116 @@ pub(crate) fn merge_shard(
         }
     }
     Ok(merged)
+}
+
+/// Git passes an absent version of a file as an empty one.
+fn present(bytes: &[u8]) -> Option<&[u8]> {
+    (!bytes.is_empty()).then_some(bytes)
+}
+
+/// A shard merged for Git's merge driver.
+#[derive(Debug, Eq, PartialEq)]
+pub struct DriverMerge {
+    /// The merged shard: canonical records in ID order, with every
+    /// conflicting unit written between Git's conflict markers.
+    pub bytes: Vec<u8>,
+    /// Units changed differently on both sides.
+    pub conflicts: usize,
+}
+
+/// Merges three versions of a unit shard per translation unit, as the
+/// `aeria-units` Git merge driver does for `git merge` and `git pull` on the
+/// command line. An empty version stands for an absent shard, as Git passes
+/// it. A same-unit conflict is not resolved: its versions are written
+/// between Git's `<<<<<<<`, `|||||||`, `=======`, and `>>>>>>>` markers, so
+/// the file stays conflicted until someone keeps one version.
+///
+/// # Errors
+///
+/// Returns [`GitError::Workspace`] when a version is not a valid shard.
+pub fn merge_shard_for_driver(
+    path: &str,
+    base: &[u8],
+    ours: &[u8],
+    theirs: &[u8],
+) -> Result<DriverMerge, GitError> {
+    let merged = merge_shard(
+        path,
+        present(base),
+        present(ours),
+        present(theirs),
+        &BTreeMap::new(),
+    )?;
+    let file = Path::new(path);
+    let line = |unit: &TranslationUnit| encode_unit_shard(std::slice::from_ref(unit), file);
+    let mut entries = merged
+        .units
+        .iter()
+        .map(|unit| Ok((unit.id(), line(unit)?)))
+        .collect::<Result<Vec<_>, GitError>>()?;
+    for conflict in &merged.conflicts {
+        let mut block = b"<<<<<<< ours
+"
+        .to_vec();
+        for (unit, marker) in [
+            (
+                &conflict.ours,
+                &b"||||||| base
+"[..],
+            ),
+            (
+                &conflict.base,
+                &b"=======
+"[..],
+            ),
+            (
+                &conflict.theirs,
+                &b">>>>>>> theirs
+"[..],
+            ),
+        ] {
+            if let Some(unit) = unit {
+                block.extend(line(unit)?);
+            }
+            block.extend_from_slice(marker);
+        }
+        entries.push((conflict.id, block));
+    }
+    entries.sort_by_key(|(id, _)| *id);
+    Ok(DriverMerge {
+        bytes: entries.into_iter().flat_map(|(_, bytes)| bytes).collect(),
+        conflicts: merged.conflicts.len(),
+    })
+}
+
+/// Runs the merge driver on Git's temporary files: merges `base`, `ours`,
+/// and `theirs` and writes the result over `ours`. `path` is the shard's
+/// repository path (Git's `%P`). Returns the number of conflicting units.
+///
+/// # Errors
+///
+/// Returns an I/O error or [`GitError::Workspace`] for an invalid shard; the
+/// file at `ours` is then left unchanged.
+pub fn run_merge_driver(
+    base: &Path,
+    ours: &Path,
+    theirs: &Path,
+    path: &str,
+) -> Result<usize, GitError> {
+    let read = |file: &Path| {
+        std::fs::read(file).map_err(|source| GitError::Io {
+            operation: "read a merge driver input",
+            path: file.to_owned(),
+            source,
+        })
+    };
+    let merged = merge_shard_for_driver(path, &read(base)?, &read(ours)?, &read(theirs)?)?;
+    std::fs::write(ours, &merged.bytes).map_err(|source| GitError::Io {
+        operation: "write the merge driver result",
+        path: ours.to_owned(),
+        source,
+    })?;
+    Ok(merged.conflicts)
 }
 
 /// Merges one unit. Returns `None` for a conflict, otherwise the merged
@@ -197,6 +307,65 @@ mod tests {
     }
 
     use ReviewState::{Draft, NeedsReview, Reviewed};
+
+    const SHARD: &str = ".aeria/units/07.jsonl";
+
+    fn shard(units: &[TranslationUnit]) -> Vec<u8> {
+        encode_unit_shard(units, Path::new(SHARD)).expect("encode")
+    }
+
+    fn with_id(mut unit: TranslationUnit, last: u8) -> TranslationUnit {
+        let mut bytes = [7; 32];
+        bytes[31] = last;
+        unit = TranslationUnit::new(
+            TranslationUnitId::from_bytes(bytes),
+            SourceBinding::new("Addon", u32::from(last), 0, 0),
+            *unit.source_fingerprint(),
+            unit.target_macro(),
+        )
+        .with_source_layout(SourceLayout::new(Sha256Hash::from_bytes([3; 32]), 0));
+        unit
+    }
+
+    #[test]
+    fn the_driver_merges_adjacent_units_and_marks_real_conflicts() {
+        let first = with_id(unit("a", Draft, None), 1);
+        let second = with_id(unit("b", Draft, None), 2);
+        let base = shard(&[first.clone(), second.clone()]);
+
+        // Adjacent lines change on both sides: Git's text merge conflicts,
+        // the driver does not.
+        let ours = shard(&[with_id(unit("A", Draft, None), 1), second.clone()]);
+        let theirs = shard(&[first.clone(), with_id(unit("B", Draft, None), 2)]);
+        let merged = merge_shard_for_driver(SHARD, &base, &ours, &theirs).expect("merge");
+        assert_eq!(merged.conflicts, 0);
+        assert_eq!(
+            merged.bytes,
+            shard(&[
+                with_id(unit("A", Draft, None), 1),
+                with_id(unit("B", Draft, None), 2)
+            ])
+        );
+
+        // The same unit changes differently: only that unit is marked.
+        let theirs = shard(&[with_id(unit("X", Draft, None), 1), second.clone()]);
+        let merged = merge_shard_for_driver(SHARD, &base, &ours, &theirs).expect("merge");
+        assert_eq!(merged.conflicts, 1);
+        let text = String::from_utf8(merged.bytes).expect("UTF-8");
+        let lines: Vec<&str> = text.lines().collect();
+        assert_eq!(lines[0], "<<<<<<< ours");
+        assert_eq!(lines[2], "||||||| base");
+        assert_eq!(lines[4], "=======");
+        assert_eq!(lines[6], ">>>>>>> theirs");
+        assert!(
+            lines[7].contains("\"targetMacro\":\"b\""),
+            "the other unit follows"
+        );
+
+        // An absent side is an empty file.
+        let merged = merge_shard_for_driver(SHARD, b"", b"", &base).expect("added");
+        assert_eq!(merged.bytes, base);
+    }
 
     #[test]
     fn one_sided_changes_take_the_changed_side() {

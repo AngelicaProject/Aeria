@@ -242,6 +242,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "aeria-workspace-workload-evaluation"
+version = "0.1.0"
+dependencies = [
+ "aeria-core",
+ "aeria-git",
+ "aeria-workspace",
+ "tempfile",
+]
+
+[[package]]
 name = "aes"
 version = "0.9.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"

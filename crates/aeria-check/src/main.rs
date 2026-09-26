@@ -17,6 +17,7 @@ use aeria_check::{Finding, Severity, Stage, StageReport, run_stage};
 
 const USAGE: &str =
     "usage: aeria-check [integrity|translations|merge|all] [--project DIR] [--base REV]
+       aeria-check merge-driver BASE OURS THEIRS PATH
 
 Stages:
   integrity     conflict markers, the manifest, and project settings
@@ -124,8 +125,36 @@ fn summary(report: &StageReport) -> String {
     text
 }
 
+/// `merge-driver BASE OURS THEIRS PATH`: Git's merge driver for unit shards
+/// (`%O %A %B %P`). Exits 0 for a clean merge, 1 when units conflict (they
+/// are marked in the file), and 2 when a version is not a valid shard, which
+/// leaves the local version for Git to report as a conflict.
+fn merge_driver(args: &[String]) -> ExitCode {
+    let [base, ours, theirs, path] = args else {
+        eprintln!("aeria-check: merge-driver needs BASE OURS THEIRS PATH\n\n{USAGE}");
+        return ExitCode::from(2);
+    };
+    match aeria_git::run_merge_driver(base.as_ref(), ours.as_ref(), theirs.as_ref(), path) {
+        Ok(0) => ExitCode::SUCCESS,
+        Ok(conflicts) => {
+            eprintln!(
+                "aeria-check: {conflicts} translation unit(s) in {path} changed differently on both sides; keep one version of each marked unit"
+            );
+            ExitCode::FAILURE
+        }
+        Err(error) => {
+            eprintln!("aeria-check: cannot merge {path} per unit: {error}");
+            ExitCode::from(2)
+        }
+    }
+}
+
 fn main() -> ExitCode {
-    let arguments = match parse(std::env::args().skip(1)) {
+    let raw: Vec<String> = std::env::args().skip(1).collect();
+    if raw.first().map(String::as_str) == Some("merge-driver") {
+        return merge_driver(&raw[1..]);
+    }
+    let arguments = match parse(raw.into_iter()) {
         Ok(Some(arguments)) => arguments,
         Ok(None) => {
             println!("{USAGE}");

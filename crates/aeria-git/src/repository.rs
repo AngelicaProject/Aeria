@@ -40,6 +40,22 @@ pub const PROJECT_PATHS: [&str; 9] = [
 /// Workspace Format files are LF-only. This rule keeps Git from
 /// converting them on checkout (for example with `core.autocrlf=true`).
 const ATTRIBUTES_RULE: &str = "/.aeria/** text eol=lf";
+/// The name of Aeria's merge driver in Git configuration and attributes.
+pub const MERGE_DRIVER: &str = "aeria-units";
+/// Unit shards merge with Aeria's driver where it is configured. Without the
+/// configuration Git merges them as text, as before.
+const MERGE_ATTRIBUTE_RULE: &str = "/.aeria/units/*.jsonl merge=aeria-units";
+
+/// The command Git runs as the merge driver for `executable`, which must
+/// accept `merge-driver <base> <ours> <theirs> <path>`. Git runs it through
+/// its shell, where forward slashes work on every platform.
+#[must_use]
+pub fn merge_driver_command(executable: &Path) -> String {
+    format!(
+        "\"{}\" merge-driver %O %A %B %P",
+        executable.to_string_lossy().replace('\\', "/")
+    )
+}
 const LOG_FORMAT: &str = "--format=%H%x1f%P%x1f%an%x1f%ae%x1f%at%x1f%D%x1f%s";
 
 /// A Git working tree that contains an Aeria project root.
@@ -551,6 +567,86 @@ impl GitRepository {
         Ok(())
     }
 
+    /// The command this repository's own configuration runs as Aeria's merge
+    /// driver, if it has one.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when Git fails.
+    pub fn merge_driver(&self) -> Result<Option<String>, GitError> {
+        Ok(self
+            .config_get(&format!("merge.{MERGE_DRIVER}.driver"))?
+            .filter(|(_, scope)| *scope == ConfigScope::Repository)
+            .map(|(command, _)| command))
+    }
+
+    /// Points an enabled merge driver at `executable`, for example after
+    /// Aeria moved or updated. Returns whether it changed; a repository
+    /// without the driver is left alone.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when Git fails.
+    pub fn update_merge_driver(&self, executable: &Path) -> Result<bool, GitError> {
+        let command = merge_driver_command(executable);
+        match self.merge_driver()? {
+            Some(current) if current != command => {
+                self.run(&[
+                    "config",
+                    "--local",
+                    "--",
+                    &format!("merge.{MERGE_DRIVER}.driver"),
+                    &command,
+                ])?;
+                Ok(true)
+            }
+            _ => Ok(false),
+        }
+    }
+
+    /// Makes command-line `git merge` and `git pull` merge unit shards per
+    /// translation unit with `executable`, or stops doing so with `None`.
+    ///
+    /// The driver is set in this repository's configuration, which is local
+    /// to the machine. Enabling it also adds the attribute rule to
+    /// `.gitattributes`, a project file the next checkpoint commits; the rule
+    /// stays when the driver is disabled, because Git merges as text wherever
+    /// the driver is not configured.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when Git or writing `.gitattributes` fails.
+    pub fn set_merge_driver(&self, executable: Option<&Path>) -> Result<(), GitError> {
+        let section = format!("merge.{MERGE_DRIVER}");
+        let Some(executable) = executable else {
+            // A missing section is already the goal.
+            let _ = self.git.output(
+                &self.root,
+                &["config", "--local", "--remove-section", &section],
+            )?;
+            return Ok(());
+        };
+        self.run(&[
+            "config",
+            "--local",
+            "--",
+            &format!("{section}.name"),
+            "Aeria per-string merge of translation units",
+        ])?;
+        self.run(&[
+            "config",
+            "--local",
+            "--",
+            &format!("{section}.driver"),
+            &merge_driver_command(executable),
+        ])?;
+        ensure_attribute_rule(
+            &self.root,
+            MERGE_ATTRIBUTE_RULE,
+            "# Command-line Git merges translation units per string where Aeria's driver is configured.",
+        )
+    }
+
     /// Returns Git options that make commits use only the configured
     /// translator identity, with an empty email when none is configured.
     ///
@@ -996,6 +1092,10 @@ fn require_directory(path: &Path) -> Result<(), GitError> {
 }
 
 fn ensure_line_ending_rule(root: &Path) -> Result<(), GitError> {
+    ensure_attribute_rule(root, ATTRIBUTES_RULE, "# Aeria workspace data is LF-only.")
+}
+
+fn ensure_attribute_rule(root: &Path, rule: &str, comment: &str) -> Result<(), GitError> {
     let path = root.join(ATTRIBUTES_FILE);
     let existing = match fs::read_to_string(&path) {
         Ok(text) => text,
@@ -1008,15 +1108,16 @@ fn ensure_line_ending_rule(root: &Path) -> Result<(), GitError> {
             });
         }
     };
-    if existing.lines().any(|line| line.trim() == ATTRIBUTES_RULE) {
+    if existing.lines().any(|line| line.trim() == rule) {
         return Ok(());
     }
     let mut updated = existing;
     if !updated.is_empty() && !updated.ends_with('\n') {
         updated.push('\n');
     }
-    updated.push_str("# Aeria workspace data is LF-only.\n");
-    updated.push_str(ATTRIBUTES_RULE);
+    updated.push_str(comment);
+    updated.push('\n');
+    updated.push_str(rule);
     updated.push('\n');
     fs::write(&path, updated).map_err(|source| GitError::Io {
         operation: "write .gitattributes",

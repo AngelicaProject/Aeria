@@ -6,7 +6,7 @@
 //! operations do not.
 
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use aeria_core::TranslationUnit;
@@ -1413,6 +1413,70 @@ pub async fn git_push(app: tauri::AppHandle) -> CommandResult<bool> {
             ));
         }
         Ok(repository.push()?)
+    })
+    .await
+}
+
+/// Whether command-line Git in this repository merges unit shards with
+/// Aeria's driver.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MergeDriverDto {
+    pub enabled: bool,
+}
+
+/// Keeps an enabled merge driver pointing at this executable after Aeria
+/// moved or updated. Best effort: the project opens regardless.
+pub(crate) fn refresh_merge_driver(state: &DesktopState, root: &Path) {
+    let (Ok(executable), Ok(Some(repository))) = (
+        std::env::current_exe(),
+        GitRepository::discover(root.to_owned(), state.git()),
+    ) else {
+        return;
+    };
+    let _ = repository.update_merge_driver(&executable);
+}
+
+#[tauri::command(rename_all = "camelCase")]
+/// Whether command-line Git merges unit shards with Aeria's driver.
+///
+/// # Errors
+///
+/// Returns `noProjectOpen` or a Git error.
+pub async fn git_merge_driver(app: tauri::AppHandle) -> CommandResult<MergeDriverDto> {
+    run_blocking(move || {
+        let repository = open_repository(&app.state::<DesktopState>())?;
+        Ok(MergeDriverDto {
+            enabled: repository.merge_driver()?.is_some(),
+        })
+    })
+    .await
+}
+
+#[tauri::command(rename_all = "camelCase")]
+/// Makes command-line `git merge` and `git pull` merge unit shards per
+/// translation unit with this Aeria, or stops doing so. Enabling adds a rule
+/// to `.gitattributes`, which the next checkpoint commits.
+///
+/// # Errors
+///
+/// Returns `noProjectOpen`, `gitMergeDriver` when this executable cannot be
+/// located, or a Git error.
+pub async fn git_set_merge_driver(
+    app: tauri::AppHandle,
+    enabled: bool,
+) -> CommandResult<MergeDriverDto> {
+    run_blocking(move || {
+        let repository = open_repository(&app.state::<DesktopState>())?;
+        if enabled {
+            let executable = std::env::current_exe().map_err(|error| {
+                CommandError::new("gitMergeDriver", format!("cannot locate Aeria: {error}"))
+            })?;
+            repository.set_merge_driver(Some(&executable))?;
+        } else {
+            repository.set_merge_driver(None)?;
+        }
+        Ok(MergeDriverDto { enabled })
     })
     .await
 }
