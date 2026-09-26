@@ -1,6 +1,6 @@
 use std::fmt::Write as _;
 use std::path::PathBuf;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use aeria_hxs::{
     ExcludedSheet, HxsError, HxsSnapshot, MAX_EVIDENCE_STRING_ROW_PAGE_SIZE, MAX_ROW_PAGE_SIZE,
@@ -73,6 +73,20 @@ impl Drop for TempFixture {
     fn drop(&mut self) {
         let _ = std::fs::remove_file(&self.path);
     }
+}
+
+/// A temporary fixture path unique within this test process. Tests run in
+/// parallel and the clock can return the same time to two of them. A file
+/// left by an aborted run of an earlier process with the same id is removed.
+fn fixture_path(prefix: &str) -> PathBuf {
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let path = std::env::temp_dir().join(format!(
+        "{prefix}-{}-{}.hxs",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    ));
+    let _ = std::fs::remove_file(&path);
+    path
 }
 
 #[test]
@@ -909,14 +923,7 @@ struct ExpectedRow {
 
 #[allow(clippy::too_many_lines)]
 fn write_fixture() -> (TempFixture, Expected) {
-    let path = std::env::temp_dir().join(format!(
-        "aeria-hxs-{}-{}.hxs",
-        std::process::id(),
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("clock after epoch")
-            .as_nanos()
-    ));
+    let path = fixture_path("aeria-hxs");
     let connection = Connection::open(&path).expect("create fixture database");
     connection
         .execute_batch(SYNTHETIC_SCHEMA)
@@ -1049,14 +1056,7 @@ fn write_fixture() -> (TempFixture, Expected) {
 
 #[allow(clippy::too_many_lines)]
 fn write_grouped_fixture() -> TempFixture {
-    let path = std::env::temp_dir().join(format!(
-        "aeria-hxs-grouped-{}-{}.hxs",
-        std::process::id(),
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("clock after epoch")
-            .as_nanos()
-    ));
+    let path = fixture_path("aeria-hxs-grouped");
     let connection = Connection::open(&path).expect("create grouped fixture database");
     connection
         .execute_batch(SYNTHETIC_SCHEMA)
@@ -1157,14 +1157,7 @@ fn write_grouped_fixture() -> TempFixture {
 }
 
 fn write_technical_only_fixture() -> TempFixture {
-    let path = std::env::temp_dir().join(format!(
-        "aeria-hxs-technical-only-{}-{}.hxs",
-        std::process::id(),
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("clock after epoch")
-            .as_nanos()
-    ));
+    let path = fixture_path("aeria-hxs-technical-only");
     let connection = Connection::open(&path).expect("create technical-only fixture database");
     connection
         .execute_batch(SYNTHETIC_SCHEMA)
@@ -1206,14 +1199,7 @@ fn write_technical_only_fixture() -> TempFixture {
 }
 
 fn write_atlas_golden_fixture(sheet_id: i64) -> TempFixture {
-    let path = std::env::temp_dir().join(format!(
-        "aeria-hxs-atlas-golden-{}-{}.hxs",
-        std::process::id(),
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("clock after epoch")
-            .as_nanos()
-    ));
+    let path = fixture_path("aeria-hxs-atlas-golden");
     let connection = Connection::open(&path).expect("create golden fixture database");
     connection
         .execute_batch(SYNTHETIC_SCHEMA)
@@ -1318,14 +1304,7 @@ fn write_atlas_golden_v2_fixture(
 }
 
 fn write_named_fixture(name: &str) -> TempFixture {
-    let path = std::env::temp_dir().join(format!(
-        "aeria-hxs-blank-name-{}-{}.hxs",
-        std::process::id(),
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("clock after epoch")
-            .as_nanos()
-    ));
+    let path = fixture_path("aeria-hxs-blank-name");
     let connection = Connection::open(&path).expect("create blank-name fixture database");
     connection
         .execute_batch(SYNTHETIC_SCHEMA)
@@ -1371,14 +1350,7 @@ fn write_named_fixture(name: &str) -> TempFixture {
 }
 
 fn write_reader_edge_fixture() -> TempFixture {
-    let path = std::env::temp_dir().join(format!(
-        "aeria-hxs-reader-edge-{}-{}.hxs",
-        std::process::id(),
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("clock after epoch")
-            .as_nanos()
-    ));
+    let path = fixture_path("aeria-hxs-reader-edge");
     let connection = Connection::open(&path).expect("create edge fixture database");
     connection
         .execute_batch(SYNTHETIC_SCHEMA)
