@@ -1,5 +1,5 @@
 import { useState, type CSSProperties, type ReactNode } from "react";
-import { choiceLabels, valueLabel } from "../macroLabels";
+import { choiceLabels, valueHint, valueLabel } from "../macroLabels";
 import type { PreviewPieceDto, PreviewStyleDto } from "../types";
 import { useI18n } from "../ui/i18n";
 
@@ -34,7 +34,7 @@ function Piece({ piece, path, choices }: { piece: PreviewPieceDto; path: string;
     case "break":
       return <br />;
     case "value":
-      return <span className={`preview-value preview-value-${piece.valueKind}`} style={textStyle(piece.style)} title={piece.label}>{valueLabel(piece, t)}</span>;
+      return <span className={`preview-value preview-value-${piece.valueKind}`} style={textStyle(piece.style)} title={valueHint(piece, t)}>{valueLabel(piece, t)}</span>;
     case "icon":
       return <span className="preview-icon" title={t("preview.icon", { icon: piece.icon })}>{piece.icon}</span>;
     case "opaque":

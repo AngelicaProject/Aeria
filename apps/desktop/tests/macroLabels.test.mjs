@@ -1,19 +1,20 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { choiceLabels, describeTag, parameterLabel, tagAt, valueLabel } from "../src/macroLabels.ts";
+import { choiceLabels, describeTag, parameterLabel, tagAt, valueHint, valueLabel } from "../src/macroLabels.ts";
 import { createTranslator } from "../src/i18n/translate.ts";
 
 const en = createTranslator("en");
 const ru = createTranslator("ru");
 
 test("parameters and values read as words", () => {
-  assert.equal(parameterLabel({ prefix: "n", index: 1 }, en), "number 1");
-  assert.equal(parameterLabel({ prefix: "gs", index: 2 }, ru), "глобальный текст 2");
+  assert.equal(parameterLabel({ prefix: "n", index: 1 }, en), "var 1");
+  assert.equal(parameterLabel({ prefix: "gs", index: 2 }, ru), "игр. текст 2");
   const style = { color: null, edge: null, italic: false, bold: false };
-  assert.equal(valueLabel({ kind: "value", valueKind: "number", source: "num", parameter: { prefix: "n", index: 2 }, label: "$n2", style }, en), "number 2");
+  assert.equal(valueLabel({ kind: "value", valueKind: "number", source: "num", parameter: { prefix: "n", index: 2 }, label: "$n2", style }, en), "var 2");
+  assert.equal(valueHint({ kind: "value", valueKind: "number", source: "num", parameter: { prefix: "n", index: 2 }, label: "$n2", style }, ru), "Число, которое игра передаёт в эту строку при показе: $n2");
   assert.equal(valueLabel({ kind: "value", valueKind: "time", source: "num2", parameter: null, label: "$min", style }, ru), "минуты");
-  assert.equal(valueLabel({ kind: "value", valueKind: "playerName", source: "player-name", parameter: { prefix: "n", index: 1 }, label: "$n1", style }, en), "player name (number 1)");
-  assert.equal(valueLabel({ kind: "value", valueKind: "gameData", source: "sheet", parameter: { prefix: "n", index: 1 }, label: "Item $n1 0", style }, en), "Item · number 1");
+  assert.equal(valueLabel({ kind: "value", valueKind: "playerName", source: "player-name", parameter: { prefix: "n", index: 1 }, label: "$n1", style }, en), "player name (var 1)");
+  assert.equal(valueLabel({ kind: "value", valueKind: "gameData", source: "sheet", parameter: { prefix: "n", index: 1 }, label: "Item $n1 0", style }, en), "Item · var 1");
   assert.equal(valueLabel({ kind: "value", valueKind: "gameData", source: "platform", parameter: null, label: "41", style }, en), "41");
 });
 
@@ -40,7 +41,7 @@ test("tags describe themselves and their arguments", () => {
   assert.deepEqual(described.lines, [
     "A value from a game data sheet, such as a name.",
     "sheet: Item",
-    "row: $n1 — number 1",
+    "row: $n1 — var 1",
     "Game data",
   ]);
   assert.equal(describeTag({ ...sheet, name: "i", part: "close", family: "formatting", args: [] }, ru).title, "</i>");

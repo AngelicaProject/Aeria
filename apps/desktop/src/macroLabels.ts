@@ -31,6 +31,14 @@ export function valueLabel(piece: Extract<PreviewPieceDto, { kind: "value" }>, t
   return time ? t(time) : piece.label;
 }
 
+/** The tooltip of a runtime value: what fills it in, with its macro text. */
+export function valueHint(piece: Extract<PreviewPieceDto, { kind: "value" }>, t: Translate): string {
+  if (piece.parameter && piece.valueKind !== "gameData") {
+    return t(`preview.paramHint.${piece.parameter.prefix}` as MessageKey, { code: `${piece.parameter.prefix}${piece.parameter.index}` });
+  }
+  return t("preview.valueHint", { label: piece.label });
+}
+
 /** Labels for the branches of a choice, in order. */
 export function choiceLabels(choice: PreviewChoiceDto, count: number, t: Translate): string[] {
   const labels = (first: MessageKey, second: MessageKey) => Array.from({ length: count }, (_, index) => t(index === 0 ? first : second));
