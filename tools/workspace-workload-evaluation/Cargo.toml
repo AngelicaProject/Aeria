@@ -1,0 +1,18 @@
+[package]
+name = "aeria-workspace-workload-evaluation"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Measures Workspace Format v2 under realistic translation workloads with real Git."
+publish = false
+
+[dependencies]
+aeria-core = { path = "../../crates/aeria-core" }
+aeria-git = { path = "../../crates/aeria-git" }
+aeria-workspace = { path = "../../crates/aeria-workspace" }
+tempfile = "3.27.0"
+
+[lints]
+workspace = true

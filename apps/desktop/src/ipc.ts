@@ -374,6 +374,14 @@ export function gitOpenBranchSettings(): Promise<void> {
   return call<void>("git_open_branch_settings");
 }
 
+export function gitMergeDriver(): Promise<{ enabled: boolean }> {
+  return call<{ enabled: boolean }>("git_merge_driver");
+}
+
+export function gitSetMergeDriver(enabled: boolean): Promise<{ enabled: boolean }> {
+  return call<{ enabled: boolean }>("git_set_merge_driver", { enabled });
+}
+
 export function gitSync(resolutions: UnitResolutionDto[] = []): Promise<GitSyncDto> {
   return call<GitSyncDto>("git_sync", { resolutions });
 }

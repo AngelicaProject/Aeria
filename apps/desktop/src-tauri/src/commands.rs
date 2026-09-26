@@ -1210,8 +1210,11 @@ fn replace_project(
     replacement: ProjectSession,
 ) -> CommandResult<ProjectSummaryDto> {
     let summary = ProjectSummaryDto::from_session(&replacement);
+    let root = replacement.repository_root().to_owned();
     let mut project = state.lock_project()?;
     *project = Some(replacement);
+    drop(project);
+    crate::git::refresh_merge_driver(state, &root);
     Ok(summary)
 }
 

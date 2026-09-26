@@ -42,6 +42,13 @@ fn repository() -> tempfile::TempDir {
     for shard in ["00.jsonl", "ff.jsonl"] {
         fs::copy(fixture().join("units").join(shard), aeria.join(shard)).expect("shard");
     }
+    // As in every Aeria project: workspace files stay LF on checkout.
+    fs::write(
+        folder.path().join("project/.gitattributes"),
+        "/.aeria/** text eol=lf
+",
+    )
+    .expect("attributes");
     git(folder.path(), &["init", "--quiet"]);
     git(folder.path(), &["add", "."]);
     git(folder.path(), &["commit", "--quiet", "-m", "base"]);
@@ -68,6 +75,53 @@ fn a_canonical_project_passes_every_stage() {
             .iter()
             .all(|finding| finding.severity == Severity::Notice)
     );
+}
+
+#[test]
+fn command_line_git_merges_adjacent_units_with_the_driver() {
+    let repository = repository();
+    let root = repository.path();
+    let project = root.join("project");
+    let shard = project.join(".aeria/units/00.jsonl");
+    let text = fs::read_to_string(&shard).expect("shard");
+    let lines: Vec<String> = text.lines().map(str::to_owned).collect();
+    assert!(lines.len() > 1, "the fixture shard has several units");
+    let edit = |line: &str, target: &str| {
+        let mut record: serde_json::Value = serde_json::from_str(line).expect("record");
+        record["targetMacro"] = serde_json::Value::from(target);
+        serde_json::to_string(&record).expect("record")
+    };
+    let write = |first: &str, second: &str| {
+        let mut changed = lines.clone();
+        changed[0] = first.to_owned();
+        changed[1] = second.to_owned();
+        fs::write(&shard, format!("{}\n", changed.join("\n"))).expect("shard");
+    };
+
+    let repository_handle =
+        aeria_git::GitRepository::open(&project, aeria_git::GitExecutable::system()).expect("open");
+    repository_handle
+        .set_merge_driver(Some(Path::new(env!("CARGO_BIN_EXE_aeria-check"))))
+        .expect("driver");
+    git(root, &["add", "."]);
+    git(root, &["commit", "--quiet", "-m", "driver"]);
+
+    // Adjacent records change on two branches: a text merge conflicts.
+    git(root, &["switch", "--quiet", "-c", "other"]);
+    write(&edit(&lines[0], "left"), &lines[1]);
+    git(root, &["commit", "--quiet", "-am", "left"]);
+    git(root, &["switch", "--quiet", "-"]);
+    write(&lines[0], &edit(&lines[1], "right"));
+    git(root, &["commit", "--quiet", "-am", "right"]);
+    git(root, &["merge", "--quiet", "--no-edit", "other"]);
+
+    let merged = fs::read_to_string(&shard).expect("merged");
+    assert!(merged.contains("\"targetMacro\":\"left\""));
+    assert!(merged.contains("\"targetMacro\":\"right\""));
+    for stage in [Stage::Integrity, Stage::Translations] {
+        let report = run_stage(stage, &project, None);
+        assert!(!report.failed(), "{stage:?}: {:?}", report.findings);
+    }
 }
 
 #[test]

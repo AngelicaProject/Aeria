@@ -2,11 +2,13 @@ import { useCallback, useEffect, useState } from "react";
 import {
   gitBranches,
   gitDeleteBranch,
+  gitMergeDriver,
   gitOverview,
   gitRemoteBranches,
   gitRemoveRemote,
   gitSetIdentity,
   gitSetMainBranch,
+  gitSetMergeDriver,
   gitSetRemote,
   gitSetUpstream,
   normalizeCommandError,
@@ -200,6 +202,35 @@ export function OtherFilesSetting() {
         </ul>
       )}
       {overview ? <p className="muted small">{t("git.runtime", { origin: overview.runtime.origin })}{overview.runtime.version ? ` · ${overview.runtime.version}` : ""}</p> : null}
+    </div>
+  );
+}
+
+/** Aeria's per-string merge for command-line `git merge` and `git pull`. */
+export function MergeDriverSetting() {
+  const { t } = useI18n();
+  const { overview, busy, run, feedback } = useRepository();
+  const [enabled, setEnabled] = useState<boolean | null>(null);
+  useEffect(() => { void gitMergeDriver().then((state) => setEnabled(state.enabled)).catch(() => setEnabled(null)); }, [overview]);
+  if (!overview?.repository) return feedback;
+  return (
+    <div className="repository-setting">
+      {feedback}
+      <p className="field-hint">{t(enabled ? "repository.mergeDriverOn" : "repository.mergeDriverOff")}</p>
+      <div className="git-form-actions">
+        <button
+          className={enabled ? "button button-ghost" : "button button-primary"}
+          type="button"
+          disabled={busy !== null || enabled === null}
+          onClick={() => void run("mergeDriver", async () => {
+            const next = await gitSetMergeDriver(!enabled);
+            setEnabled(next.enabled);
+            return t(next.enabled ? "repository.mergeDriverEnabled" : "repository.mergeDriverDisabled");
+          })}
+        >
+          {t(enabled ? "repository.mergeDriverDisable" : "repository.mergeDriverEnable")}
+        </button>
+      </div>
     </div>
   );
 }

@@ -29,7 +29,9 @@ branch is a branch for a pull request.
   files grouped by area), the checkpoint composer, and the project history
   with a commit graph. Clicking a commit opens it in a document tab.
 - **Settings → Repository** holds the setup: remotes, the upstream, the main
-  branch, the translator identity, and working-tree files outside the project.
+  branch, the translator identity, local branches, the
+  [command-line merge driver](#command-line-merge-driver), and working-tree
+  files outside the project.
 - The **string history** (who translated and reviewed a string, and every
   committed change to it) is a tab beside the note in the translation editor.
 
@@ -271,6 +273,34 @@ or incoming version, supplied to a repeated sync; Aeria never chooses on its
 own. Conflicts in any other file, including `.aeria/manifest.json`, abort the
 merge.
 
+### Command-line merge driver
+
+Aeria's own merges (Sync, Pull, and local merges into the main branch) merge
+unit shards per unit as above. Command-line `git merge` and `git pull` merge
+them as text unless the repository uses Aeria's merge driver, which
+**Settings → Repository → Command-line merges** turns on:
+
+- It sets `merge.aeria-units.name` and `merge.aeria-units.driver` in the
+  repository's own configuration, local to the machine, to run the Aeria
+  executable as `"<aeria>" merge-driver %O %A %B %P` (forward slashes, run by
+  Git's shell). Opening a project points an enabled driver at the running
+  executable again, so a moved or updated Aeria keeps working. Turning it
+  off removes the configuration section.
+- It appends `/.aeria/units/*.jsonl merge=aeria-units` to `.gitattributes`,
+  which the next checkpoint commits. Where the driver is not configured,
+  Git treats the unknown driver as a text merge, so the rule changes nothing
+  for other collaborators or on a Git host.
+- `merge-driver` (in `aeria` and in `aeria-check`) merges the three versions
+  with the rules of this section (`merge_shard_for_driver`) and writes the
+  canonical result. A same-unit conflict is not resolved: the unit's local,
+  base, and incoming records are written between `<<<<<<< ours`,
+  `||||||| base`, `=======`, and `>>>>>>> theirs`, and the driver exits 1,
+  so Git reports the file as conflicted. A version that is not a valid shard
+  exits 2 and leaves the local version for Git to report. An absent version
+  is an empty file, as Git passes it.
+
+A Git host never runs a repository's merge drivers.
+
 ## Branches and contributions
 
 The Git dock switches between local branches. A switch requires checkpointed
@@ -388,7 +418,12 @@ development builds cannot offer the workflow. Like the feed workflow it is a
 project file: installing only writes it, the next checkpoint commits it, and
 the dock offers an update when the file differs from what this Aeria writes.
 Making the check required is a branch protection setting on GitHub, which
-Aeria cannot change; the dock links to the repository's branch settings.
+Aeria cannot change; the dock links to the repository's branch settings and
+also recommends "Require branches to be up to date before merging". With it,
+a pull request merges only when its branch already contains the base, which
+Sync or Pull in Aeria achieves by merging per unit; GitHub's merge then
+produces exactly the branch's tree, so no text merge of shards happens on
+the host at all and the check remains a second line of defense.
 
 ## Remotes and upstream
 
