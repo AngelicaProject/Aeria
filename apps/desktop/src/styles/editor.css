@@ -158,9 +158,6 @@
 .cm-macro-name { color: var(--macro); font-weight: 600; }
 
 /* Narrow documents: stack the note under source and target. */
-@container (max-width: 700px) {
-  .editor-view-switch { display: none; }
-}
 @container (max-width: 860px) {
   .editor-grid { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) auto; }
   .editor-note { grid-column: 1 / -1; flex-direction: row; align-items: stretch; height: 64px; }

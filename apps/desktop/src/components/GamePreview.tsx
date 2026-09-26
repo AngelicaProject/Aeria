@@ -86,10 +86,14 @@ function Piece({ piece, path, choices }: { piece: PreviewPieceDto; path: string;
  */
 export function GamePreview({ pieces, className }: { pieces: readonly PreviewPieceDto[]; className?: string }) {
   const { t } = useI18n();
-  const [selected, setSelected] = useState<ReadonlyMap<string, number>>(new Map());
+  // Chosen branches belong to one string: new pieces start at the first branch.
+  const [chosen, setChosen] = useState<{ pieces: readonly PreviewPieceDto[]; selected: ReadonlyMap<string, number> }>({ pieces, selected: new Map() });
   const choices: Choices = {
-    selected,
-    select: (path, branch) => setSelected((current) => new Map(current).set(path, branch)),
+    selected: chosen.pieces === pieces ? chosen.selected : new Map(),
+    select: (path, branch) => setChosen((current) => ({
+      pieces,
+      selected: new Map(current.pieces === pieces ? current.selected : []).set(path, branch),
+    })),
   };
   return (
     <div className={`game-preview${className ? ` ${className}` : ""}`} aria-label={t("preview.title")}>

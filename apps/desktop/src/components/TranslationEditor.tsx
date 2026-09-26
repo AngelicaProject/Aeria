@@ -333,17 +333,6 @@ const TranslationEditorImpl = forwardRef<TranslationEditorHandle, TranslationEdi
             </div>
           ) : <span className="editor-field mono">{t("common.column", { column: String(selectedCell.sourceBinding.columnIndex) })}</span>}
         </div>
-        <div className="editor-view-switch">
-        <Segmented
-          label={t("editor.view")}
-          value="text"
-          onChange={() => undefined}
-          options={[
-            { value: "text", label: t("editor.viewText") },
-            { value: "preview", label: <><UiIcon icon="gamepad" size="xs" /> {t("editor.viewInGame")}</>, disabled: true, title: t("editor.inGameUnavailable") },
-          ]}
-        />
-        </div>
         <div className="editor-bar-end">
           {rowDirty ? <span className="pill pill-warn">{t("common.unsaved")}</span> : null}
           <div className="review-control" title={translation ? undefined : t("editor.saveTargetFirst")}>
@@ -371,7 +360,7 @@ const TranslationEditorImpl = forwardRef<TranslationEditorHandle, TranslationEdi
             <PaneModeSwitch value={sourceMode} onChange={(mode) => setPreference("sourcePaneMode", mode)} />
           </div>
           {sourceMode === "game"
-            ? <PanePreview pieces={sourceView && sourceView.text === selectedCell.sourceMacro ? sourceView.view.preview : null} empty={t("editor.emptySource")} />
+            ? <PanePreview pieces={sourceView ? sourceView.view.preview : null} empty={t("editor.emptySource")} />
             : <MacroEditor className="editor-surface" value={selectedCell.sourceMacro} readOnly view={sourceView} ariaLabel={t("editor.sourceText", { column: String(selectedCell.sourceBinding.columnIndex) })} placeholder={t("editor.emptySource")} onNavigate={onNavigate} />}
           {row.context.length > 0 ? (
             <details className="context-block">
@@ -391,7 +380,7 @@ const TranslationEditorImpl = forwardRef<TranslationEditorHandle, TranslationEdi
             <PaneModeSwitch value={targetMode} onChange={(mode) => setPreference("targetPaneMode", mode)} />
           </div>
           {checkpoint && showDiff ? <CheckpointDiff baseline={checkpoint} current={draft.target} /> : null}
-          {targetMode === "game" ? <PanePreview pieces={draft.target.length === 0 ? [] : targetView && targetView.text === draft.target ? targetView.view.preview : null} empty={t("editor.enterTranslation")} /> : null}
+          {targetMode === "game" ? <PanePreview pieces={draft.target.length === 0 ? [] : targetView ? targetView.view.preview : null} empty={t("editor.enterTranslation")} /> : null}
           <MacroEditor
             key={bindingKey(selectedCell.sourceBinding)}
             className={`editor-surface${targetMode === "game" ? " is-hidden" : ""}`}

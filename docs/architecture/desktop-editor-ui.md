@@ -171,10 +171,8 @@ derived from `git_pending_changes`.
 
 The editor sits below the list and edits one occurrence at a time. Its bar shows
 the occurrence's review state and coordinate, field tabs for multi-cell rows,
-a Text / In-game view switch, the review-state control, and Revert. The In-game
-view is disabled with a truthful unavailable state until a semantic preview
-exists; the layout reserves it so a preview can replace the text panes without
-restructuring the editor.
+the review-state control, and Revert. The source and target panes each have
+their own Text / In game switch (see below).
 
 Source and target sit side by side, with the translator note beside them (or
 below them in a narrow document). Source is read-only; target is a CodeMirror
@@ -205,7 +203,10 @@ an older text):
   or "player name"), and their tooltip says in full words what fills them
   in: a parameter the game passes to the string, or a global game variable
   such as the player's class. Conditions show one branch at a time, and
-  clicking one shows the next with its condition in the tooltip. Icons are
+  clicking one shows the next with its condition in the tooltip; another
+  string starts at the first branches. Switching strings keeps the previous
+  view until the new one arrives, requests it without delay (only typing is
+  debounced), and shows strings seen before at once from a cache. Icons are
   shown by number until the game's icon textures are read.
 
 Row context cells are available in a collapsible section under the source. **Copy source to target** replaces the target draft
