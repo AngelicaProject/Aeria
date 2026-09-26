@@ -1,8 +1,7 @@
 //! Production Workspace Format filesystem persistence.
 //!
-//! The writer produces Workspace Format v2 only. The reader also accepts
-//! Workspace Format v1 so that a source update can migrate it; a v1
-//! workspace is never activated for ordinary editing.
+//! Reads and writes Workspace Format v3; earlier formats are reported as
+//! unsupported.
 //!
 //! The DTOs in this module are deliberately private. They describe the file
 //! contract without making the domain types in `aeria-core` serialization
@@ -19,8 +18,8 @@ use std::sync::{Arc, Mutex};
 use std::time::{Instant, SystemTime};
 
 use aeria_core::{
-    DetachReason, ReviewState, Sha256Hash, SourceBinding, SourceFingerprint, SourceLayout,
-    SourceStatus, TranslationUnit, TranslationUnitId, WorkspaceMetadata,
+    DetachReason, GameVersion, LayoutHash, ReviewState, SourceBinding, SourceFacts, SourceStatus,
+    TranslationUnit, TranslationUnitId, WorkspaceMetadata,
 };
 use aeria_se::{SemanticValidity, parse};
 use serde::{Deserialize, Serialize};
@@ -32,9 +31,9 @@ use thiserror::Error;
 use super::{Workspace, WorkspaceError};
 
 /// The Workspace Format version written by this implementation.
-pub const FORMAT_VERSION: u8 = 2;
-/// The previous Workspace Format version, readable only for migration.
-const LEGACY_FORMAT_VERSION: u8 = 1;
+pub const FORMAT_VERSION: u8 = 3;
+/// Source languages a workspace may record.
+const SOURCE_LANGUAGES: [&str; 4] = ["ja", "en", "de", "fr"];
 const AERIA_DIRECTORY: &str = ".aeria";
 const MANIFEST_FILE: &str = "manifest.json";
 const UNITS_DIRECTORY: &str = "units";
@@ -89,11 +88,6 @@ pub enum WorkspaceStoreError {
     #[error("unsupported Workspace Format version {version} in {path}")]
     UnsupportedFormatVersion { path: PathBuf, version: u64 },
 
-    /// A readable older format must be migrated by a source update before
-    /// it can be edited.
-    #[error("Workspace Format version {version} in {path} must be migrated by a source update")]
-    MigrationRequired { path: PathBuf, version: u8 },
-
     /// JSON serialization failed before publication.
     #[error("failed to serialize canonical workspace data for {path}: {source}")]
     Serialization {
@@ -134,7 +128,6 @@ impl WorkspaceStoreError {
             | Self::AlreadyInitialized { path }
             | Self::InvalidData { path, .. }
             | Self::UnsupportedFormatVersion { path, .. }
-            | Self::MigrationRequired { path, .. }
             | Self::Serialization { path, .. }
             | Self::AtomicPublication { path, .. }
             | Self::ExternalChange { path }
@@ -171,7 +164,6 @@ impl Eq for WorkspaceStore {}
 /// bindings.
 #[derive(Clone, Debug)]
 pub(crate) struct StoredWorkspace {
-    pub(crate) format_version: u8,
     pub(crate) metadata: WorkspaceMetadata,
     pub(crate) units: BTreeMap<TranslationUnitId, TranslationUnit>,
     /// Bound units whose binding another bound unit already claims. Every
@@ -225,8 +217,8 @@ impl WorkspaceStore {
     /// # Errors
     ///
     /// Returns an error when the managed namespace is missing, unsafe,
-    /// malformed, contains invalid unit data, or uses Workspace Format v1,
-    /// which must first be migrated by a source update.
+    /// malformed, contains invalid unit data, or uses another format
+    /// version.
     pub fn load(&self) -> Result<Workspace, WorkspaceStoreError> {
         let stored = self.read_stored()?;
         self.activate(stored)
@@ -260,7 +252,7 @@ impl WorkspaceStore {
         Ok(files)
     }
 
-    /// Reads and validates only the manifest, in either supported format.
+    /// Reads and validates only the manifest.
     ///
     /// # Errors
     ///
@@ -268,26 +260,21 @@ impl WorkspaceStore {
     /// unsafe, malformed, or uses an unsupported format version.
     pub fn read_metadata(&self) -> Result<WorkspaceMetadata, WorkspaceStoreError> {
         let layout = self.inspect_existing_layout()?;
-        read_manifest(&layout.manifest_path).map(|(_, metadata)| metadata)
+        read_manifest(&layout.manifest_path)
     }
 
-    /// Reads and validates every managed file in either supported format.
+    /// Reads and validates every managed file.
     pub(crate) fn read_stored(&self) -> Result<StoredWorkspace, WorkspaceStoreError> {
         let trace = PerfTrace::new();
         let layout = self.inspect_existing_layout()?;
         trace.mark("workspace.layout");
-        let (format_version, metadata) = read_manifest(&layout.manifest_path)?;
-        let shape = if format_version == FORMAT_VERSION {
-            RecordShape::Current
-        } else {
-            RecordShape::Legacy
-        };
+        let metadata = read_manifest(&layout.manifest_path)?;
 
         let mut units = BTreeMap::new();
         let mut bound_bindings = BTreeSet::new();
         let mut duplicate_bound_bindings = 0;
         for shard in &layout.shards {
-            for unit in read_shard(&shard.path, shard.shard, &shard.name, shape)? {
+            for unit in read_shard(&shard.path, shard.shard, &shard.name)? {
                 let id = unit.id();
                 if unit.is_bound() && !bound_bindings.insert(unit.source_binding().clone()) {
                     duplicate_bound_bindings += 1;
@@ -303,7 +290,6 @@ impl WorkspaceStore {
         }
         trace.mark("workspace.store-read");
         Ok(StoredWorkspace {
-            format_version,
             metadata,
             units,
             duplicate_bound_bindings,
@@ -311,18 +297,12 @@ impl WorkspaceStore {
         })
     }
 
-    /// Activates validated current-format state for editing and primes the
-    /// session cache used by ordinary one-unit persistence.
+    /// Activates validated state for editing and primes the session cache
+    /// used by ordinary one-unit persistence.
     pub(crate) fn activate(
         &self,
         stored: StoredWorkspace,
     ) -> Result<Workspace, WorkspaceStoreError> {
-        if stored.format_version != FORMAT_VERSION {
-            return Err(WorkspaceStoreError::MigrationRequired {
-                path: stored.layout.manifest_path,
-                version: stored.format_version,
-            });
-        }
         if stored.duplicate_bound_bindings > 0 {
             return Err(invalid(
                 &stored.layout.manifest_path,
@@ -356,7 +336,7 @@ impl WorkspaceStore {
     /// rewritten from `workspace`, then the manifest is written last.
     ///
     /// Each file is replaced atomically. An interruption leaves the previous
-    /// manifest content ID in place, so the next open plans the same update
+    /// manifest game version in place, so the next open plans the same update
     /// again; the plan is idempotent over already rewritten shards. The
     /// published state is reloaded and must equal `workspace`.
     pub(crate) fn publish_source_update(
@@ -421,7 +401,7 @@ impl WorkspaceStore {
     ///
     /// # Errors
     ///
-    /// Returns an error when metadata is not representable in v1, the
+    /// Returns an error when metadata is not representable, the
     /// repository is unavailable, or staging/publication fails.
     pub fn initialize(&self, workspace: &Workspace) -> Result<(), WorkspaceStoreError> {
         self.ensure_repository_root()?;
@@ -552,13 +532,7 @@ impl WorkspaceStore {
                 )
             } else {
                 let layout = self.inspect_existing_layout()?;
-                let (format_version, persisted_metadata) = read_manifest(&layout.manifest_path)?;
-                if format_version != FORMAT_VERSION {
-                    return Err(WorkspaceStoreError::MigrationRequired {
-                        path: layout.manifest_path,
-                        version: format_version,
-                    });
-                }
+                let persisted_metadata = read_manifest(&layout.manifest_path)?;
                 (layout, persisted_metadata, BTreeMap::new(), None)
             };
         let using_cache = checked_paths.is_some();
@@ -584,12 +558,7 @@ impl WorkspaceStore {
         if !using_cache
             && let Some(shard_file) = layout.shards.iter().find(|file| file.shard == shard)
         {
-            for unit in read_shard(
-                &shard_file.path,
-                shard,
-                &shard_file.name,
-                RecordShape::Current,
-            )? {
+            for unit in read_shard(&shard_file.path, shard, &shard_file.name)? {
                 persisted_units.insert(unit.id(), unit);
             }
         }
@@ -1010,106 +979,25 @@ struct ManifestDto {
     source_language: String,
     #[serde(rename = "targetLanguage")]
     target_language: String,
-    #[serde(rename = "contentId")]
-    content_id: String,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct LegacyManifestDto {
-    #[serde(rename = "formatVersion")]
-    _format_version: u64,
-    #[serde(rename = "sourceLanguage")]
-    source_language: String,
-    #[serde(rename = "targetLanguage")]
-    target_language: String,
-    #[serde(rename = "contentId")]
-    content_id: String,
-    #[serde(rename = "snapshotId")]
-    snapshot_id: String,
-}
-
-/// Which unit record shape a reader accepts.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum RecordShape {
-    /// Workspace Format v2 records only.
-    Current,
-    /// Workspace Format v1 records only.
-    Legacy,
-    /// Either shape, for Git history and merge inputs that may predate v2.
-    Either,
+    #[serde(rename = "gameVersion")]
+    game_version: String,
 }
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct UnitDto {
     id: String,
-    #[serde(rename = "sourceStatus")]
-    source_status: String,
-    #[serde(rename = "sourceBinding")]
-    source_binding: SourceBindingDto,
-    #[serde(rename = "sourceFingerprint")]
-    source_fingerprint: SourceFingerprintDto,
-    #[serde(rename = "sourceLayout")]
-    source_layout: Value,
-    #[serde(rename = "sourceRowKey")]
-    source_row_key: Value,
-    #[serde(rename = "targetMacro")]
-    target_macro: String,
-    #[serde(rename = "reviewState")]
-    review_state: String,
-    #[serde(rename = "translatorNote")]
-    translator_note: Value,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct LegacyUnitDto {
-    id: String,
-    #[serde(rename = "sourceBinding")]
-    source_binding: SourceBindingDto,
-    #[serde(rename = "sourceFingerprint")]
-    source_fingerprint: SourceFingerprintDto,
-    #[serde(rename = "targetMacro")]
-    target_macro: String,
-    #[serde(rename = "reviewState")]
-    review_state: String,
-    #[serde(rename = "translatorNote")]
-    translator_note: Value,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct SourceLayoutDto {
-    #[serde(rename = "sheetSchemaHash")]
-    sheet_schema_hash: String,
-    #[serde(rename = "columnOffset")]
-    column_offset: u32,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct SourceBindingDto {
-    #[serde(rename = "sheetName")]
-    sheet_name: String,
-    #[serde(rename = "rowId")]
-    row_id: u32,
-    #[serde(rename = "subrowId")]
-    subrow_id: u16,
-    #[serde(rename = "columnIndex")]
-    column_index: u32,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-#[allow(clippy::struct_field_names)]
-struct SourceFingerprintDto {
-    #[serde(rename = "macroTextHash")]
-    macro_text_hash: String,
-    #[serde(rename = "rawValueHash")]
-    raw_value_hash: Value,
-    #[serde(rename = "rowTechnicalHash")]
-    row_technical_hash: String,
+    status: String,
+    sheet: String,
+    row: u32,
+    subrow: u16,
+    column: u32,
+    layout: String,
+    source: String,
+    key: Value,
+    target: String,
+    review: String,
+    note: Value,
 }
 
 #[derive(Serialize)]
@@ -1120,63 +1008,27 @@ struct CanonicalManifestDto<'a> {
     source_language: &'a str,
     #[serde(rename = "targetLanguage")]
     target_language: &'a str,
-    #[serde(rename = "contentId")]
-    content_id: &'a str,
+    #[serde(rename = "gameVersion")]
+    game_version: &'a str,
 }
 
 #[derive(Serialize)]
-struct CanonicalUnitDto {
+struct CanonicalUnitDto<'a> {
     id: String,
-    #[serde(rename = "sourceStatus")]
-    source_status: &'static str,
-    #[serde(rename = "sourceBinding")]
-    source_binding: CanonicalSourceBindingDto,
-    #[serde(rename = "sourceFingerprint")]
-    source_fingerprint: CanonicalSourceFingerprintDto,
-    #[serde(rename = "sourceLayout")]
-    source_layout: Option<CanonicalSourceLayoutDto>,
-    #[serde(rename = "sourceRowKey")]
-    source_row_key: Option<String>,
-    #[serde(rename = "targetMacro")]
-    target_macro: String,
-    #[serde(rename = "reviewState")]
-    review_state: &'static str,
-    #[serde(rename = "translatorNote")]
-    translator_note: Option<String>,
+    status: &'static str,
+    sheet: &'a str,
+    row: u32,
+    subrow: u16,
+    column: u32,
+    layout: String,
+    source: &'a str,
+    key: Option<&'a str>,
+    target: &'a str,
+    review: &'static str,
+    note: Option<&'a str>,
 }
 
-#[derive(Serialize)]
-struct CanonicalSourceBindingDto {
-    #[serde(rename = "sheetName")]
-    sheet_name: String,
-    #[serde(rename = "rowId")]
-    row_id: u32,
-    #[serde(rename = "subrowId")]
-    subrow_id: u16,
-    #[serde(rename = "columnIndex")]
-    column_index: u32,
-}
-
-#[derive(Serialize)]
-#[allow(clippy::struct_field_names)]
-struct CanonicalSourceFingerprintDto {
-    #[serde(rename = "macroTextHash")]
-    macro_text_hash: String,
-    #[serde(rename = "rawValueHash")]
-    raw_value_hash: Option<String>,
-    #[serde(rename = "rowTechnicalHash")]
-    row_technical_hash: String,
-}
-
-#[derive(Serialize)]
-struct CanonicalSourceLayoutDto {
-    #[serde(rename = "sheetSchemaHash")]
-    sheet_schema_hash: String,
-    #[serde(rename = "columnOffset")]
-    column_offset: u32,
-}
-
-fn read_manifest(path: &Path) -> Result<(u8, WorkspaceMetadata), WorkspaceStoreError> {
+fn read_manifest(path: &Path) -> Result<WorkspaceMetadata, WorkspaceStoreError> {
     let bytes = read_file(path, "read manifest")?;
     let text = decode_json_text(&bytes, path, None, true)?;
     let json_error = |source: serde_json::Error| {
@@ -1187,46 +1039,36 @@ fn read_manifest(path: &Path) -> Result<(u8, WorkspaceMetadata), WorkspaceStoreE
         )
     };
     let probe: ManifestVersionProbe = serde_json::from_str(text).map_err(json_error)?;
-    let (format_version, source_language, target_language, content_id) =
-        if probe.format_version == u64::from(FORMAT_VERSION) {
-            let manifest: ManifestDto = serde_json::from_str(text).map_err(json_error)?;
-            (
-                FORMAT_VERSION,
-                manifest.source_language,
-                manifest.target_language,
-                manifest.content_id,
-            )
-        } else if probe.format_version == u64::from(LEGACY_FORMAT_VERSION) {
-            let manifest: LegacyManifestDto = serde_json::from_str(text).map_err(json_error)?;
-            validate_hxs_id(&manifest.snapshot_id, "snapshotId", path, None)?;
-            (
-                LEGACY_FORMAT_VERSION,
-                manifest.source_language,
-                manifest.target_language,
-                manifest.content_id,
-            )
-        } else {
-            return Err(WorkspaceStoreError::UnsupportedFormatVersion {
-                path: path.to_owned(),
-                version: probe.format_version,
-            });
-        };
-    validate_hxs_id(&content_id, "contentId", path, None)?;
-    let metadata = WorkspaceMetadata::new(source_language, target_language, content_id)
-        .map_err(|source| invalid(path, None, format!("invalid manifest metadata: {source}")))?;
-    Ok((format_version, metadata))
+    if probe.format_version != u64::from(FORMAT_VERSION) {
+        return Err(WorkspaceStoreError::UnsupportedFormatVersion {
+            path: path.to_owned(),
+            version: probe.format_version,
+        });
+    }
+    let manifest: ManifestDto = serde_json::from_str(text).map_err(json_error)?;
+    let game_version: GameVersion = manifest
+        .game_version
+        .parse()
+        .map_err(|source| invalid(path, None, format!("gameVersion is invalid: {source}")))?;
+    let metadata = WorkspaceMetadata::new(
+        manifest.source_language,
+        manifest.target_language,
+        game_version,
+    )
+    .map_err(|source| invalid(path, None, format!("invalid manifest metadata: {source}")))?;
+    validate_workspace_metadata(&metadata, path)?;
+    Ok(metadata)
 }
 
 fn read_shard(
     path: &Path,
     shard: u8,
     shard_name: &str,
-    shape: RecordShape,
 ) -> Result<Vec<TranslationUnit>, WorkspaceStoreError> {
     #[cfg(test)]
     READ_SHARD_COUNT.fetch_add(1, Ordering::SeqCst);
     let file = File::open(path).map_err(|source| io_error("open unit shard", path, source))?;
-    decode_shard(BufReader::new(file), path, shard, shard_name, shape)
+    decode_shard(BufReader::new(file), path, shard, shard_name)
 }
 
 /// Returns the repository-relative Workspace Format shard path that stores
@@ -1244,10 +1086,7 @@ pub fn unit_shard_path(id: TranslationUnitId) -> String {
 ///
 /// `path` names the shard (its file name selects the expected shard) and is
 /// used in errors. The full reader contract applies: the shard must be
-/// non-empty, strictly ordered, and every record must be valid. Because Git
-/// history may predate Workspace Format v2, each record may use either the v2
-/// or the v1 record shape; a v1 record decodes as a bound unit without
-/// source layout facts.
+/// non-empty, strictly ordered, and every record must be valid.
 ///
 /// # Errors
 ///
@@ -1258,15 +1097,14 @@ pub fn decode_unit_shard(
     path: &Path,
 ) -> Result<Vec<TranslationUnit>, WorkspaceStoreError> {
     let (shard, name) = shard_from_path(path)?;
-    decode_shard(bytes, path, shard, &name, RecordShape::Either)
+    decode_shard(bytes, path, shard, &name)
 }
 
 /// Decodes one unit record line, such as a line taken from a historical Git
 /// diff of `path`.
 ///
 /// The record is validated exactly as a shard reader would validate it,
-/// including shard placement and intrinsic target validation. As with
-/// [`decode_unit_shard`], either the v2 or the v1 record shape is accepted.
+/// including shard placement and intrinsic target validation.
 ///
 /// # Errors
 ///
@@ -1276,13 +1114,12 @@ pub fn decode_unit_record(line: &str, path: &Path) -> Result<TranslationUnit, Wo
     let (shard, name) = shard_from_path(path)?;
     let line = line.strip_suffix('\n').unwrap_or(line);
     let line = line.strip_suffix('\r').unwrap_or(line);
-    parse_unit_record(line, path, None, shard, &name, RecordShape::Either)
+    parse_unit_record(line, path, None, shard, &name)
 }
 
-/// Encodes the canonical Workspace Format v2 bytes of one unit shard, for
+/// Encodes the canonical Workspace Format v3 bytes of one unit shard, for
 /// example the result of a semantic merge. Units are written in ascending ID
-/// order. An empty result means the shard must be absent. A unit without
-/// source layout facts cannot be encoded.
+/// order. An empty result means the shard must be absent.
 ///
 /// # Errors
 ///
@@ -1327,7 +1164,6 @@ fn decode_shard(
     path: &Path,
     shard: u8,
     shard_name: &str,
-    shape: RecordShape,
 ) -> Result<Vec<TranslationUnit>, WorkspaceStoreError> {
     let mut records = Vec::new();
     let mut previous_id = None;
@@ -1363,7 +1199,7 @@ fn decode_shard(
             ));
         }
         let line = decode_json_text(&line, path, Some(line_number), line_number == 1)?;
-        let unit = parse_unit_record(line, path, Some(line_number), shard, shard_name, shape)?;
+        let unit = parse_unit_record(line, path, Some(line_number), shard, shard_name)?;
         if let Some(previous_id) = previous_id {
             if unit.id() == previous_id {
                 return Err(invalid(
@@ -1395,106 +1231,31 @@ fn parse_unit_record(
     line: Option<usize>,
     shard: u8,
     shard_name: &str,
-    shape: RecordShape,
 ) -> Result<TranslationUnit, WorkspaceStoreError> {
-    let json_error =
-        |source: serde_json::Error| invalid(path, line, format!("unit JSON is invalid: {source}"));
-    match shape {
-        RecordShape::Current => {
-            let dto: UnitDto = serde_json::from_str(line_text).map_err(json_error)?;
-            unit_from_dto(dto, path, line, shard, shard_name)
-        }
-        RecordShape::Legacy => {
-            let dto: LegacyUnitDto = serde_json::from_str(line_text).map_err(json_error)?;
-            legacy_unit_from_dto(dto, path, line, shard, shard_name)
-        }
-        RecordShape::Either => match serde_json::from_str::<UnitDto>(line_text) {
-            Ok(dto) => unit_from_dto(dto, path, line, shard, shard_name),
-            Err(current_error) => match serde_json::from_str::<LegacyUnitDto>(line_text) {
-                Ok(dto) => legacy_unit_from_dto(dto, path, line, shard, shard_name),
-                Err(_) => Err(json_error(current_error)),
-            },
-        },
+    let dto: UnitDto = serde_json::from_str(line_text)
+        .map_err(|source| invalid(path, line, format!("unit JSON is invalid: {source}")))?;
+    unit_from_dto(dto, path, line, shard, shard_name)
+}
+
+fn optional_string(
+    value: Value,
+    field: &str,
+    path: &Path,
+    line: Option<usize>,
+) -> Result<Option<String>, WorkspaceStoreError> {
+    match value {
+        Value::Null => Ok(None),
+        Value::String(value) => Ok(Some(value)),
+        _ => Err(invalid(
+            path,
+            line,
+            format!("{field} must be a string or null"),
+        )),
     }
 }
 
 fn unit_from_dto(
     dto: UnitDto,
-    path: &Path,
-    line: Option<usize>,
-    shard: u8,
-    shard_name: &str,
-) -> Result<TranslationUnit, WorkspaceStoreError> {
-    let source_status = parse_source_status(&dto.source_status, path, line)?;
-    let layout = match dto.source_layout {
-        Value::Null if source_status.is_bound() => {
-            return Err(invalid(
-                path,
-                line,
-                "sourceLayout must not be null for a bound unit",
-            ));
-        }
-        Value::Null => None,
-        value @ Value::Object(_) => {
-            let layout: SourceLayoutDto = serde_json::from_value(value).map_err(|source| {
-                invalid(path, line, format!("sourceLayout is invalid: {source}"))
-            })?;
-            let sheet_schema_hash = parse_hash(
-                &layout.sheet_schema_hash,
-                "sourceLayout.sheetSchemaHash",
-                path,
-                line,
-            )?;
-            Some(SourceLayout::new(
-                Sha256Hash::from_bytes(sheet_schema_hash),
-                layout.column_offset,
-            ))
-        }
-        _ => {
-            return Err(invalid(
-                path,
-                line,
-                "sourceLayout must be an object or null",
-            ));
-        }
-    };
-    let unit = legacy_unit_from_dto(
-        LegacyUnitDto {
-            id: dto.id,
-            source_binding: dto.source_binding,
-            source_fingerprint: dto.source_fingerprint,
-            target_macro: dto.target_macro,
-            review_state: dto.review_state,
-            translator_note: dto.translator_note,
-        },
-        path,
-        line,
-        shard,
-        shard_name,
-    )?;
-    let source_row_key = match dto.source_row_key {
-        Value::Null => None,
-        Value::String(value) => Some(Sha256Hash::from_bytes(parse_hash(
-            &value,
-            "sourceRowKey",
-            path,
-            line,
-        )?)),
-        _ => {
-            return Err(invalid(path, line, "sourceRowKey must be a string or null"));
-        }
-    };
-    let unit = unit
-        .with_source_status(source_status)
-        .with_source_row_key(source_row_key);
-    Ok(match layout {
-        Some(layout) => unit.with_source_layout(layout),
-        None => unit,
-    })
-}
-
-fn legacy_unit_from_dto(
-    dto: LegacyUnitDto,
     path: &Path,
     line: Option<usize>,
     shard: u8,
@@ -1514,37 +1275,20 @@ fn legacy_unit_from_dto(
             format!("TranslationUnitId is in the wrong shard; expected {shard_name}"),
         ));
     }
-
-    let macro_text_hash = parse_hash(
-        &dto.source_fingerprint.macro_text_hash,
-        "sourceFingerprint.macroTextHash",
-        path,
-        line,
-    )?;
-    let raw_value_hash = match dto.source_fingerprint.raw_value_hash {
-        Value::Null => None,
-        Value::String(value) => Some(parse_hash(
-            &value,
-            "sourceFingerprint.rawValueHash",
-            path,
-            line,
-        )?),
-        _ => {
-            return Err(invalid(
-                path,
-                line,
-                "sourceFingerprint.rawValueHash must be a string or null",
-            ));
-        }
-    };
-    let row_technical_hash = parse_hash(
-        &dto.source_fingerprint.row_technical_hash,
-        "sourceFingerprint.rowTechnicalHash",
-        path,
-        line,
-    )?;
-
-    let review_state = match dto.review_state.as_str() {
+    let status = parse_source_status(&dto.status, path, line)?;
+    if dto.sheet.is_empty() {
+        return Err(invalid(path, line, "sheet must not be empty"));
+    }
+    if dto.source.is_empty() {
+        return Err(invalid(path, line, "source must not be empty"));
+    }
+    let layout = LayoutHash::from_str(&dto.layout)
+        .map_err(|source| invalid(path, line, format!("layout is invalid: {source}")))?;
+    let key = optional_string(dto.key, "key", path, line)?;
+    if key.as_deref() == Some("") {
+        return Err(invalid(path, line, "key must not be an empty string"));
+    }
+    let review_state = match dto.review.as_str() {
         "draft" => ReviewState::Draft,
         "reviewed" => ReviewState::Reviewed,
         "needs-review" => ReviewState::NeedsReview,
@@ -1552,55 +1296,45 @@ fn legacy_unit_from_dto(
             return Err(invalid(
                 path,
                 line,
-                "reviewState must be one of draft, reviewed, needs-review",
+                "review must be one of draft, reviewed, needs-review",
             ));
         }
     };
+    validate_target(&dto.target, path, line)?;
+    let note = optional_string(dto.note, "note", path, line)?;
 
-    let validation = parse(&dto.target_macro).semantic_validation();
-    if !matches!(
+    let source = SourceFacts::new(
+        SourceBinding::new(dto.sheet, dto.row, dto.subrow, dto.column),
+        layout,
+        dto.source,
+        key,
+    );
+    let mut unit = TranslationUnit::new(id, source, dto.target).with_source_status(status);
+    unit.set_review_state(review_state);
+    unit.set_translator_note(note);
+    Ok(unit)
+}
+
+fn validate_target(
+    target: &str,
+    path: &Path,
+    line: Option<usize>,
+) -> Result<(), WorkspaceStoreError> {
+    let validation = parse(target).semantic_validation();
+    if matches!(
         validation.status(),
         SemanticValidity::ValidAndUnderstood | SemanticValidity::ValidWithOpaque
     ) {
-        return Err(invalid(
-            path,
-            line,
-            format!(
-                "targetMacro is malformed or unsafe: {:?}",
-                validation.diagnostics()
-            ),
-        ));
+        return Ok(());
     }
-
-    let mut unit = TranslationUnit::new(
-        id,
-        SourceBinding::new(
-            dto.source_binding.sheet_name,
-            dto.source_binding.row_id,
-            dto.source_binding.subrow_id,
-            dto.source_binding.column_index,
+    Err(invalid(
+        path,
+        line,
+        format!(
+            "target is malformed or unsafe: {:?}",
+            validation.diagnostics()
         ),
-        SourceFingerprint::new(
-            Sha256Hash::from_bytes(macro_text_hash),
-            raw_value_hash.map(Sha256Hash::from_bytes),
-            Sha256Hash::from_bytes(row_technical_hash),
-        ),
-        dto.target_macro,
-    );
-    unit.set_review_state(review_state);
-    let translator_note = match dto.translator_note {
-        Value::Null => None,
-        Value::String(value) => Some(value),
-        _ => {
-            return Err(invalid(
-                path,
-                line,
-                "translatorNote must be a string or null",
-            ));
-        }
-    };
-    unit.set_translator_note(translator_note);
-    Ok(unit)
+    ))
 }
 
 fn parse_source_status(
@@ -1621,7 +1355,7 @@ fn parse_source_status(
             return Err(invalid(
                 path,
                 line,
-                "sourceStatus must be bound or a defined detach reason",
+                "status must be bound or a defined detach reason",
             ));
         }
     })
@@ -1644,11 +1378,11 @@ fn validate_workspace_metadata(
     metadata: &WorkspaceMetadata,
     path: &Path,
 ) -> Result<(), WorkspaceStoreError> {
-    if metadata.source_language().trim().is_empty() {
+    if !SOURCE_LANGUAGES.contains(&metadata.source_language()) {
         return Err(invalid(
             path,
             None,
-            "sourceLanguage must not be empty or whitespace-only",
+            "sourceLanguage must be one of ja, en, de, fr",
         ));
     }
     if metadata.target_language().trim().is_empty() {
@@ -1658,7 +1392,7 @@ fn validate_workspace_metadata(
             "targetLanguage must not be empty or whitespace-only",
         ));
     }
-    validate_hxs_id(metadata.source_content_id(), "contentId", path, None)
+    Ok(())
 }
 
 fn require_metadata_match(
@@ -1711,9 +1445,7 @@ fn require_persisted_identity(
             ),
         ));
     }
-    if persisted.source_fingerprint() != replacement.source_fingerprint()
-        || persisted.source_layout() != replacement.source_layout()
-        || persisted.source_row_key() != replacement.source_row_key()
+    if persisted.source() != replacement.source()
         || persisted.source_status() != replacement.source_status()
     {
         return Err(invalid(
@@ -1747,7 +1479,7 @@ fn require_new_binding_is_unowned(
         if shard.shard == target_shard {
             continue;
         }
-        for unit in read_shard(&shard.path, shard.shard, &shard.name, RecordShape::Current)? {
+        for unit in read_shard(&shard.path, shard.shard, &shard.name)? {
             if !unit.is_bound() {
                 continue;
             }
@@ -1810,7 +1542,7 @@ fn canonical_manifest_bytes(
         format_version: FORMAT_VERSION,
         source_language: workspace.metadata().source_language(),
         target_language: workspace.metadata().target_language(),
-        content_id: workspace.metadata().source_content_id(),
+        game_version: workspace.metadata().game_version().as_str(),
     };
     let mut bytes =
         serde_json::to_vec_pretty(&dto).map_err(|source| WorkspaceStoreError::Serialization {
@@ -1847,59 +1579,36 @@ where
     Ok(bytes)
 }
 
-fn canonical_unit_dto(
-    unit: &TranslationUnit,
+fn canonical_unit_dto<'a>(
+    unit: &'a TranslationUnit,
     path: &Path,
-) -> Result<CanonicalUnitDto, WorkspaceStoreError> {
-    let validation = parse(unit.target_macro()).semantic_validation();
-    if !matches!(
-        validation.status(),
-        SemanticValidity::ValidAndUnderstood | SemanticValidity::ValidWithOpaque
-    ) {
+) -> Result<CanonicalUnitDto<'a>, WorkspaceStoreError> {
+    validate_target(unit.target_macro(), path, None)?;
+    let source = unit.source();
+    let binding = source.binding();
+    if source.text().is_empty() || binding.sheet_name().is_empty() {
         return Err(invalid(
             path,
             None,
             format!(
-                "targetMacro is malformed or unsafe: {:?}",
-                validation.diagnostics()
-            ),
-        ));
-    }
-    if unit.is_bound() && unit.source_layout().is_none() {
-        return Err(invalid(
-            path,
-            None,
-            format!(
-                "bound TranslationUnitId {} has no source layout and cannot be written",
+                "TranslationUnitId {} has an empty sheet or source text",
                 unit.id()
             ),
         ));
     }
     Ok(CanonicalUnitDto {
         id: unit.id().to_string(),
-        source_status: source_status_name(unit.source_status()),
-        source_binding: CanonicalSourceBindingDto {
-            sheet_name: unit.source_binding().sheet_name().to_owned(),
-            row_id: unit.source_binding().row_id(),
-            subrow_id: unit.source_binding().subrow_id(),
-            column_index: unit.source_binding().column_index(),
-        },
-        source_fingerprint: CanonicalSourceFingerprintDto {
-            macro_text_hash: unit.source_fingerprint().macro_text_hash().to_hex(),
-            raw_value_hash: unit
-                .source_fingerprint()
-                .raw_value_hash()
-                .map(Sha256Hash::to_hex),
-            row_technical_hash: unit.source_fingerprint().row_technical_hash().to_hex(),
-        },
-        source_layout: unit.source_layout().map(|layout| CanonicalSourceLayoutDto {
-            sheet_schema_hash: layout.sheet_schema_hash().to_hex(),
-            column_offset: layout.column_offset(),
-        }),
-        source_row_key: unit.source_row_key().map(Sha256Hash::to_hex),
-        target_macro: unit.target_macro().to_owned(),
-        review_state: review_state_name(unit.review_state()),
-        translator_note: unit.translator_note().map(str::to_owned),
+        status: source_status_name(unit.source_status()),
+        sheet: binding.sheet_name(),
+        row: binding.row_id(),
+        subrow: binding.subrow_id(),
+        column: binding.column_index(),
+        layout: source.layout().to_string(),
+        source: source.text(),
+        key: source.row_key(),
+        target: unit.target_macro(),
+        review: review_state_name(unit.review_state()),
+        note: unit.translator_note(),
     })
 }
 
@@ -2008,58 +1717,6 @@ fn decode_json_text<'a>(
     }
     std::str::from_utf8(bytes)
         .map_err(|source| invalid(path, line, format!("file is not valid UTF-8: {source}")))
-}
-
-fn parse_hash(
-    value: &str,
-    field: &str,
-    path: &Path,
-    line: Option<usize>,
-) -> Result<[u8; 32], WorkspaceStoreError> {
-    if value.len() != 64 {
-        return Err(invalid(
-            path,
-            line,
-            format!("{field} must contain exactly 64 lowercase hexadecimal characters"),
-        ));
-    }
-    let mut bytes = [0_u8; 32];
-    for (index, byte) in bytes.iter_mut().enumerate() {
-        let offset = index * 2;
-        let high = lower_hex_nibble(value.as_bytes()[offset]);
-        let low = lower_hex_nibble(value.as_bytes()[offset + 1]);
-        let (Some(high), Some(low)) = (high, low) else {
-            return Err(invalid(
-                path,
-                line,
-                format!("{field} must contain only lowercase hexadecimal characters"),
-            ));
-        };
-        *byte = (high << 4) | low;
-    }
-    Ok(bytes)
-}
-
-fn validate_hxs_id(
-    value: &str,
-    field: &str,
-    path: &Path,
-    line: Option<usize>,
-) -> Result<(), WorkspaceStoreError> {
-    let bytes = value.as_bytes();
-    if bytes.len() != 71
-        || &bytes[..bytes.len().min(7)] != b"sha256:"
-        || !bytes[7..]
-            .iter()
-            .all(|byte| lower_hex_nibble(*byte).is_some())
-    {
-        return Err(invalid(
-            path,
-            line,
-            format!("{field} must be a canonical sha256:<64 lowercase hexadecimal characters> ID"),
-        ));
-    }
-    Ok(())
 }
 
 fn lower_hex_nibble(value: u8) -> Option<u8> {
@@ -2177,7 +1834,7 @@ mod tests {
             aeria_path.join(MANIFEST_FILE),
             include_bytes!(concat!(
                 env!("CARGO_MANIFEST_DIR"),
-                "/tests/fixtures/workspace-v2/manifest.json"
+                "/tests/fixtures/workspace-v3/manifest.json"
             )),
         )
         .expect("manifest");
@@ -2185,17 +1842,14 @@ mod tests {
             units_path.join("00.jsonl"),
             include_bytes!(concat!(
                 env!("CARGO_MANIFEST_DIR"),
-                "/tests/fixtures/workspace-v2/units/00.jsonl"
+                "/tests/fixtures/workspace-v3/units/00.jsonl"
             )),
         )
         .expect("shard");
 
         let store = WorkspaceStore::new(repository.path());
         let mut workspace = store.load().expect("fixture loads");
-        let id = TranslationUnitId::from_str(
-            "tu1:0000000000000000000000000000000000000000000000000000000000000000",
-        )
-        .expect("ID");
+        let id = TranslationUnitId::from_str("00000000000000000000000000000000").expect("ID");
         workspace
             .update_target(id, "staged but unpublished")
             .expect("target is valid");
@@ -2242,7 +1896,7 @@ mod tests {
             aeria_path.join(MANIFEST_FILE),
             include_bytes!(concat!(
                 env!("CARGO_MANIFEST_DIR"),
-                "/tests/fixtures/workspace-v2/manifest.json"
+                "/tests/fixtures/workspace-v3/manifest.json"
             )),
         )
         .expect("manifest");
@@ -2250,7 +1904,7 @@ mod tests {
             units_path.join("00.jsonl"),
             include_bytes!(concat!(
                 env!("CARGO_MANIFEST_DIR"),
-                "/tests/fixtures/workspace-v2/units/00.jsonl"
+                "/tests/fixtures/workspace-v3/units/00.jsonl"
             )),
         )
         .expect("00 shard");
@@ -2258,17 +1912,14 @@ mod tests {
             units_path.join("ff.jsonl"),
             include_bytes!(concat!(
                 env!("CARGO_MANIFEST_DIR"),
-                "/tests/fixtures/workspace-v2/units/ff.jsonl"
+                "/tests/fixtures/workspace-v3/units/ff.jsonl"
             )),
         )
         .expect("ff shard");
 
         let store = WorkspaceStore::new(repository.path());
         let mut workspace = store.load().expect("fixture loads");
-        let id = TranslationUnitId::from_str(
-            "tu1:0000000000000000000000000000000000000000000000000000000000000000",
-        )
-        .expect("ID");
+        let id = TranslationUnitId::from_str("00000000000000000000000000000000").expect("ID");
         workspace
             .update_target(id, "ordinary update")
             .expect("target is valid");
@@ -2310,7 +1961,7 @@ mod tests {
             aeria_path.join(MANIFEST_FILE),
             include_bytes!(concat!(
                 env!("CARGO_MANIFEST_DIR"),
-                "/tests/fixtures/workspace-v2/manifest.json"
+                "/tests/fixtures/workspace-v3/manifest.json"
             )),
         )
         .expect("manifest");
@@ -2319,25 +1970,21 @@ mod tests {
             &shard_path,
             include_bytes!(concat!(
                 env!("CARGO_MANIFEST_DIR"),
-                "/tests/fixtures/workspace-v2/units/00.jsonl"
+                "/tests/fixtures/workspace-v3/units/00.jsonl"
             )),
         )
         .expect("00 shard");
 
         let store = WorkspaceStore::new(repository.path());
         let mut workspace = store.load().expect("fixture loads");
-        let original_id = TranslationUnitId::from_str(
-            "tu1:0000000000000000000000000000000000000000000000000000000000000000",
-        )
-        .expect("original ID");
-        let external_id = TranslationUnitId::from_str(
-            "tu1:0000000000000000000000000000000000000000000000000000000000000002",
-        )
-        .expect("external ID");
+        let original_id =
+            TranslationUnitId::from_str("00000000000000000000000000000000").expect("original ID");
+        let external_id =
+            TranslationUnitId::from_str("00000000000000000000000000000002").expect("external ID");
 
         let mut externally_changed = fs::read(&shard_path).expect("cached shard");
         externally_changed.extend_from_slice(
-            br#"{"id":"tu1:0000000000000000000000000000000000000000000000000000000000000002","sourceStatus":"bound","sourceBinding":{"sheetName":"External","rowId":7,"subrowId":0,"columnIndex":1},"sourceFingerprint":{"macroTextHash":"1212121212121212121212121212121212121212121212121212121212121212","rawValueHash":null,"rowTechnicalHash":"3434343434343434343434343434343434343434343434343434343434343434"},"sourceLayout":{"sheetSchemaHash":"5656565656565656565656565656565656565656565656565656565656565656","columnOffset":4},"sourceRowKey":null,"targetMacro":"external","reviewState":"draft","translatorNote":null}"#,
+            br#"{"id":"00000000000000000000000000000002","status":"bound","sheet":"External","row":7,"subrow":0,"column":1,"layout":"5656565656565656","source":"External source","key":null,"target":"external","review":"draft","note":null}"#,
         );
         externally_changed.push(b'\n');
         fs::write(&shard_path, externally_changed).expect("external unit update");
@@ -2363,7 +2010,7 @@ mod tests {
                 .unit(original_id)
                 .expect("original unit")
                 .target_macro(),
-            "Quote \" slash \\ line\n tab\t control\u{0}"
+            "Salut\u{7} «monde»"
         );
     }
 }

@@ -1,12 +1,12 @@
-//! The game installation Aeria builds source packages from.
+//! The game installation projects read their source from.
 //!
 //! The installation is an application setting: the folder chosen in
 //! Settings, or, while none is chosen, the first installation detected on
 //! this computer. Detection only proposes paths: an installation is reported
-//! when it has the layout Harmonia Atlas reads (`game/sqpack` and
-//! `game/ffxivgame.ver`), and Atlas validates the game data itself.
+//! when it has the installation layout (`game/sqpack` and
+//! `game/ffxivgame.ver`); `aeria-source` reads and validates the game data.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::HashSet;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -45,7 +45,7 @@ pub enum GameOriginDto {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GameInstallationDto {
-    /// The installation root to pass to Atlas.
+    /// The installation root.
     pub path: String,
     /// Contents of `game/ffxivgame.ver`.
     pub game_version: String,
@@ -275,7 +275,7 @@ fn plain_path(path: &Path) -> PathBuf {
     }
 }
 
-/// Returns the game version when `root` has the installation layout Atlas
+/// Returns the game version when `root` has the installation layout Aeria
 /// reads.
 pub(crate) fn installation_version(root: &Path) -> Option<String> {
     let game = root.join("game");
@@ -290,30 +290,6 @@ pub(crate) fn installation_version(root: &Path) -> Option<String> {
     let version = fs::read_to_string(version_path).ok()?;
     let version = version.trim();
     (!version.is_empty()).then(|| version.to_owned())
-}
-
-/// Returns every version file of an installation: `ffxivgame` for
-/// `game/ffxivgame.ver` and `exN` for each `game/sqpack/exN/exN.ver`. A patch
-/// changes at least one of them, so equal maps mean equal game data for
-/// source-package reuse.
-pub(crate) fn installation_versions(root: &Path) -> Option<BTreeMap<String, String>> {
-    let mut versions = BTreeMap::from([("ffxivgame".to_owned(), installation_version(root)?)]);
-    let sqpack = root.join("game").join("sqpack");
-    for entry in fs::read_dir(&sqpack).ok()? {
-        let name = entry.ok()?.file_name().to_string_lossy().into_owned();
-        if !name.starts_with("ex") {
-            continue;
-        }
-        let path = sqpack.join(&name).join(format!("{name}.ver"));
-        let Ok(metadata) = fs::metadata(&path) else {
-            continue;
-        };
-        if !metadata.is_file() || metadata.len() > MAX_VERSION_FILE_BYTES {
-            return None;
-        }
-        versions.insert(name, fs::read_to_string(path).ok()?.trim().to_owned());
-    }
-    Some(versions)
 }
 
 /// Reads the library paths from a Steam `libraryfolders.vdf`.
@@ -492,31 +468,6 @@ mod tests {
                 origin: GameOriginDto::Steam,
             }]
         );
-    }
-
-    #[test]
-    fn installation_versions_include_every_expansion() {
-        let directory = tempfile::tempdir().expect("temp dir");
-        let game = directory.path().join("ffxiv");
-        fake_installation(&game, "2026.09.15.0000.0000\r\n");
-        for (name, version) in [
-            ("ex1", "2026.09.01.0000.0000"),
-            ("ex2", "2026.09.02.0000.0000"),
-        ] {
-            let folder = game.join("game").join("sqpack").join(name);
-            fs::create_dir_all(&folder).expect("expansion");
-            fs::write(folder.join(format!("{name}.ver")), version).expect("version");
-        }
-        fs::create_dir_all(game.join("game").join("sqpack").join("ffxiv")).expect("base");
-        assert_eq!(
-            installation_versions(&game),
-            Some(BTreeMap::from([
-                ("ex1".to_owned(), "2026.09.01.0000.0000".to_owned()),
-                ("ex2".to_owned(), "2026.09.02.0000.0000".to_owned()),
-                ("ffxivgame".to_owned(), "2026.09.15.0000.0000".to_owned()),
-            ]))
-        );
-        assert_eq!(installation_versions(directory.path()), None);
     }
 
     #[test]

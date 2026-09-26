@@ -17,8 +17,8 @@ use aeria_git::{
 };
 use tempfile::TempDir;
 
-const HASH: &str = "1111111111111111111111111111111111111111111111111111111111111111";
-const MANIFEST: &str = "{\n  \"formatVersion\": 1,\n  \"sourceLanguage\": \"en\",\n  \"targetLanguage\": \"fr\",\n  \"contentId\": \"sha256:1111111111111111111111111111111111111111111111111111111111111111\",\n  \"snapshotId\": \"sha256:2222222222222222222222222222222222222222222222222222222222222222\"\n}\n";
+const LAYOUT: &str = "1111111111111111";
+const MANIFEST: &str = "{\n  \"formatVersion\": 3,\n  \"sourceLanguage\": \"en\",\n  \"targetLanguage\": \"fr\",\n  \"gameVersion\": \"2026.09.15.0000.0000\"\n}\n";
 
 fn git_program() -> std::ffi::OsString {
     std::env::var_os("AERIA_GIT_PATH")
@@ -104,9 +104,9 @@ fn set_translator(repository: &GitRepository, translator: &str) {
 }
 
 fn id(first_byte: u8, last: u8) -> TranslationUnitId {
-    let mut bytes = [0u8; 32];
+    let mut bytes = [0u8; 16];
     bytes[0] = first_byte;
-    bytes[31] = last;
+    bytes[15] = last;
     TranslationUnitId::from_bytes(bytes)
 }
 
@@ -114,7 +114,7 @@ type Record<'a> = (TranslationUnitId, u32, &'a str, &'a str);
 
 fn record((id, row, target, review): Record<'_>) -> String {
     format!(
-        "{{\"id\":\"{id}\",\"sourceStatus\":\"bound\",\"sourceBinding\":{{\"sheetName\":\"Addon\",\"rowId\":{row},\"subrowId\":0,\"columnIndex\":0}},\"sourceFingerprint\":{{\"macroTextHash\":\"{HASH}\",\"rawValueHash\":null,\"rowTechnicalHash\":\"{HASH}\"}},\"sourceLayout\":{{\"sheetSchemaHash\":\"{HASH}\",\"columnOffset\":0}},\"sourceRowKey\":null,\"targetMacro\":\"{target}\",\"reviewState\":\"{review}\",\"translatorNote\":null}}\n"
+        "{{\"id\":\"{id}\",\"status\":\"bound\",\"sheet\":\"Addon\",\"row\":{row},\"subrow\":0,\"column\":0,\"layout\":\"{LAYOUT}\",\"source\":\"Source {row}\",\"key\":null,\"target\":\"{target}\",\"review\":\"{review}\",\"note\":null}}\n"
     )
 }
 
@@ -320,7 +320,7 @@ fn integration_leaves_the_reconciliation_for_a_checkpoint() {
     assert_eq!(parents.split_whitespace().count(), 3, "HEAD is the merge");
     // The reconciliation is an ordinary uncommitted change.
     assert!(grace.status().expect("status").has_translation_changes());
-    assert!(shard_text(grace.root(), 0x10).contains("\"rowId\":3"));
+    assert!(shard_text(grace.root(), 0x10).contains("\"row\":3"));
     grace
         .checkpoint(None)
         .expect("checkpoint the reconciliation");

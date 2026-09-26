@@ -1,8 +1,9 @@
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use aeria_core::{ReviewState, SourceBinding, TranslationUnit};
-use aeria_hxs::{ColumnType, HxsSnapshot, SheetVariant as HxsSheetVariant};
 use aeria_se::{SemanticValidity, parse};
+use aeria_source::{GameSource, SheetLookup, SheetVariant as SourceVariant, SourceSheet};
 use aeria_workspace::Workspace;
 
 use crate::error::ExportError;
@@ -22,8 +23,8 @@ pub trait StringEncoder {
     fn encode(&mut self, macros: &[&str]) -> Result<Vec<Result<Vec<u8>, String>>, String>;
 }
 
-/// Encodes with `aeria_se::codec::encode_checked`, which follows the Lumina
-/// 7.7.0 dialect that produced the HXS macro text.
+/// Encodes with `aeria_se::codec::encode_checked`, the inverse of the
+/// decoder that prints source text.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct SeStringEncoder;
 
@@ -49,9 +50,6 @@ pub struct ExportReport {
     pub skipped_detached: u64,
     pub skipped_untranslated: u64,
     pub skipped_unreviewed: u64,
-    /// Units whose source occurrence has no raw-value hash, so the runtime
-    /// could not verify the source string.
-    pub skipped_without_raw_hash: Vec<SourceBinding>,
 }
 
 #[derive(Debug)]
@@ -60,38 +58,39 @@ pub struct ProjectExport {
     pub report: ExportReport,
 }
 
-/// Manifest source facts of the verified snapshot.
+/// Manifest source facts of the game.
 #[must_use]
-pub fn pack_source(source: &HxsSnapshot) -> PackSource {
-    let metadata = source.metadata();
+pub fn pack_source(source: &GameSource) -> PackSource {
     PackSource {
-        language: metadata.source_language,
-        game_version: metadata.game_version,
-        content_id: metadata.content_id,
-        snapshot_id: metadata.snapshot_id,
+        language: source.language().code().to_owned(),
+        game_version: source.version().as_str().to_owned(),
     }
 }
 
 /// Collects the translations of a project for a pack.
 ///
-/// `source` must be the verified snapshot the workspace is bound to. Every
-/// selected target is validated again and encoded; a target that fails either
-/// step fails the export, because the workspace must never hold one.
+/// `source` must be the game the workspace describes. Every exported unit is
+/// checked against the game again, and its source guard is computed from
+/// the game's current bytes. Every selected target is validated again and
+/// encoded; a target that fails either step fails the export, because the
+/// workspace must never hold one.
 ///
 /// # Errors
 /// Returns [`ExportError`] for an invalid target, a failed encoding, a bound
-/// unit whose sheet or column is missing from `source`, or an encoder failure.
+/// unit that does not describe the game, a game read error, or an encoder
+/// failure.
 ///
 /// # Panics
 /// Never: a sheet is looked up only after it was inserted.
 pub fn collect_project(
     workspace: &Workspace,
-    source: &HxsSnapshot,
+    source: &GameSource,
     policy: ContentPolicy,
     encoder: &mut dyn StringEncoder,
 ) -> Result<ProjectExport, ExportError> {
     let mut report = ExportReport::default();
     let mut selected: Vec<(&TranslationUnit, CellState, [u8; 8])> = Vec::new();
+    let mut game_sheets: BTreeMap<&str, Arc<SourceSheet>> = BTreeMap::new();
 
     for unit in workspace.units() {
         if !unit.is_bound() {
@@ -110,12 +109,6 @@ pub fn collect_project(
                 continue;
             }
         };
-        let Some(raw_hash) = unit.source_fingerprint().raw_value_hash() else {
-            report
-                .skipped_without_raw_hash
-                .push(unit.source_binding().clone());
-            continue;
-        };
         let validation = parse(unit.target_macro()).semantic_validation();
         if !matches!(
             validation.status(),
@@ -126,16 +119,48 @@ pub fn collect_project(
                 "target is not a valid macro string",
             ));
         }
-        selected.push((unit, state, source_guard(raw_hash.as_bytes())));
+        let binding = unit.source_binding();
+        if !game_sheets.contains_key(binding.sheet_name()) {
+            let SheetLookup::Present(sheet) = source.sheet(binding.sheet_name())? else {
+                return Err(cell_error(
+                    binding,
+                    "the sheet cannot be read from the game",
+                ));
+            };
+            game_sheets.insert(binding.sheet_name(), sheet);
+        }
+        let sheet = &game_sheets[binding.sheet_name()];
+        let facts = sheet.facts(
+            binding.row_id(),
+            binding.subrow_id(),
+            binding.column_index(),
+        );
+        let cell = sheet.cell(
+            binding.row_id(),
+            binding.subrow_id(),
+            binding.column_index(),
+        );
+        let (Some(facts), Some(cell)) = (facts, cell) else {
+            return Err(cell_error(binding, "the cell is not in the game"));
+        };
+        if &facts != unit.source() {
+            return Err(cell_error(
+                binding,
+                "the translation does not describe the game; open the project again",
+            ));
+        }
+        selected.push((unit, state, source_guard(cell.bytes)));
     }
-    report.skipped_without_raw_hash.sort();
 
     let texts = encode_all(&selected, encoder)?;
     let mut sheets: BTreeMap<&str, PackSheet> = BTreeMap::new();
     for ((unit, state, guard), text) in selected.iter().zip(texts) {
         let binding = unit.source_binding();
         if !sheets.contains_key(binding.sheet_name()) {
-            sheets.insert(binding.sheet_name(), sheet_for(source, binding)?);
+            sheets.insert(
+                binding.sheet_name(),
+                pack_sheet(&game_sheets[binding.sheet_name()]),
+            );
         }
         let sheet = sheets
             .get_mut(binding.sheet_name())
@@ -147,7 +172,7 @@ pub fn collect_project(
         {
             return Err(cell_error(
                 binding,
-                "column is not a String column of the current source",
+                "column is not a String column of the game",
             ));
         }
         sheet.cells.push(PackCell {
@@ -194,30 +219,23 @@ fn encode_all(
     Ok(output)
 }
 
-fn sheet_for(source: &HxsSnapshot, binding: &SourceBinding) -> Result<PackSheet, ExportError> {
-    let Some(metadata) = source.sheet(binding.sheet_name()) else {
-        return Err(cell_error(
-            binding,
-            "sheet is not stored in the current source",
-        ));
-    };
-    Ok(PackSheet {
-        name: metadata.name,
-        variant: match metadata.variant {
-            HxsSheetVariant::DefaultRows => SheetVariant::DefaultRows,
-            HxsSheetVariant::Subrows => SheetVariant::Subrows,
+fn pack_sheet(sheet: &SourceSheet) -> PackSheet {
+    PackSheet {
+        name: sheet.name().to_owned(),
+        variant: match sheet.variant() {
+            SourceVariant::Default => SheetVariant::DefaultRows,
+            SourceVariant::Subrows => SheetVariant::Subrows,
         },
-        layout: metadata
-            .columns
+        layout: sheet
+            .columns()
             .iter()
-            .filter(|column| column.column_type == ColumnType::String)
             .map(|column| LayoutColumn {
                 column_index: column.index,
-                offset: column.offset,
+                offset: u32::from(column.offset),
             })
             .collect(),
         cells: Vec::new(),
-    })
+    }
 }
 
 fn cell_error(binding: &SourceBinding, reason: &str) -> ExportError {

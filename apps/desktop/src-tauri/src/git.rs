@@ -600,7 +600,7 @@ pub enum BranchBlockDto {
 fn branch_block(
     repository: &GitRepository,
     branch: &str,
-    content_id: &str,
+    game_version: &str,
 ) -> Option<BranchBlockDto> {
     let revision = repository.branch_head(branch).ok().flatten()?;
     let Ok(manifest) = repository.file_at(&revision, ".aeria/manifest.json") else {
@@ -617,7 +617,7 @@ fn branch_block(
     {
         return Some(BranchBlockDto::OlderFormat);
     }
-    (value.get("contentId").and_then(serde_json::Value::as_str) != Some(content_id))
+    (value.get("gameVersion").and_then(serde_json::Value::as_str) != Some(game_version))
         .then_some(BranchBlockDto::OtherSource)
 }
 
@@ -1182,17 +1182,17 @@ pub async fn git_branches(app: tauri::AppHandle) -> CommandResult<Vec<GitBranchD
     run_blocking(move || {
         let state = app.state::<DesktopState>();
         let repository = open_repository(&state)?;
-        let content_id = {
+        let game_version = {
             let project = state.lock_project()?;
             let session = project.as_ref().ok_or_else(CommandError::no_project)?;
-            session.source().metadata().content_id
+            session.workspace().metadata().game_version().to_string()
         };
         Ok(repository
             .branches()?
             .into_iter()
             .map(|branch| {
                 let blocked = (!branch.remote && !branch.current)
-                    .then(|| branch_block(&repository, &branch.name, &content_id))
+                    .then(|| branch_block(&repository, &branch.name, &game_version))
                     .flatten();
                 let merged = !branch.remote
                     && !branch.current
@@ -1505,7 +1505,7 @@ mod tests {
 
     use super::*;
     use crate::commands::{
-        initialize_project_with_state, open_project_with_state, set_translation_target_with_state,
+        initialize_with_game, open_with_game, set_translation_target_with_state,
     };
     use crate::dto::SourceBindingDto;
 
@@ -1534,9 +1534,9 @@ mod tests {
             fs::write(root.join(".aeria/manifest.json"), manifest).expect("manifest");
             repository.checkpoint(Some(message)).expect("commit");
         };
-        commit(r#"{"formatVersion":1,"contentId":"sha256:old"}"#, "old");
+        commit(r#"{"formatVersion":2,"contentId":"sha256:old"}"#, "old");
         let old = repository.status().expect("status").branch.expect("branch");
-        let current = r#"{"formatVersion":2,"contentId":"sha256:new"}"#;
+        let current = r#"{"formatVersion":3,"gameVersion":"2026.10.01.0000.0000"}"#;
         commit(current, "migrated");
         let migrated = repository.status().expect("status").branch.expect("branch");
         assert_ne!(
@@ -1545,12 +1545,15 @@ mod tests {
         );
 
         assert_eq!(
-            branch_block(&repository, &old, "sha256:new"),
+            branch_block(&repository, &old, "2026.10.01.0000.0000"),
             Some(BranchBlockDto::OlderFormat)
         );
-        assert_eq!(branch_block(&repository, &migrated, "sha256:new"), None);
         assert_eq!(
-            branch_block(&repository, &migrated, "sha256:other"),
+            branch_block(&repository, &migrated, "2026.10.01.0000.0000"),
+            None
+        );
+        assert_eq!(
+            branch_block(&repository, &migrated, "2026.11.01.0000.0000"),
             Some(BranchBlockDto::OtherSource)
         );
     }
@@ -1568,13 +1571,7 @@ mod tests {
     fn pull_and_sync_reload_the_active_session_with_incoming_translations() {
         let sandbox = tempfile::tempdir().expect("sandbox");
         let git = isolated_git(sandbox.path());
-        let source = sandbox.path().join("source.hsp");
-        fs::copy(
-            Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../../../crates/aeria-hsp/tests/fixtures/synthetic.hsp"),
-            &source,
-        )
-        .expect("source package");
+        let game = crate::test_support::test_game();
         let remote = sandbox.path().join("remote.git");
         let status = std::process::Command::new(
             std::env::var_os("AERIA_GIT_PATH")
@@ -1593,11 +1590,11 @@ mod tests {
         ada.set_git(git.clone());
         let ada_root = sandbox.path().join("ada");
         fs::create_dir_all(&ada_root).expect("ada root");
-        initialize_project_with_state(
+        initialize_with_game(
             &ada,
-            ada_root.to_string_lossy().into_owned(),
-            source.to_string_lossy().into_owned(),
-            sandbox.path().join("cache-ada"),
+            &ada_root,
+            crate::test_support::open(game.path()),
+            &sandbox.path().join("cache-ada"),
             "fr".to_owned(),
         )
         .expect("initialize");
@@ -1620,13 +1617,18 @@ mod tests {
             .expect("identity");
         let grace = DesktopState::new();
         grace.set_git(git);
-        open_project_with_state(
+        let opened = open_with_game(
             &grace,
-            grace_root.to_string_lossy().into_owned(),
-            source.to_string_lossy().into_owned(),
-            sandbox.path().join("cache-grace"),
+            &grace_root,
+            crate::test_support::open(game.path()),
+            &sandbox.path().join("cache-grace"),
+            false,
         )
         .expect("open clone");
+        assert!(matches!(
+            opened,
+            crate::commands::GameOpenOutcome::Opened { .. }
+        ));
 
         set_translation_target_with_state(&ada, binding(), "Bonjour").expect("translate");
         // The checkpoint on main starts a contribution branch; Ada publishes it.

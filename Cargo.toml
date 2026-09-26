@@ -2,12 +2,10 @@
 resolver = "2"
 members = [
   "crates/aeria-core",
-  "crates/aeria-atlas",
   "crates/aeria-projects",
-  "crates/aeria-hxs",
-  "crates/aeria-hsp",
   "crates/aeria-se",
   "crates/aeria-sqpack",
+  "crates/aeria-source",
   "crates/aeria-workspace",
   "crates/aeria-rebase",
   "crates/aeria-search",
@@ -17,8 +15,6 @@ members = [
   "crates/aeria-fonts",
   "crates/aeria-publish",
   "crates/aeria-check",
-  "tools/workspace-format-evaluation",
-  "tools/workspace-workload-evaluation",
   "apps/desktop/src-tauri",
 ]
 

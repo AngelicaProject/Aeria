@@ -7,6 +7,10 @@ license.workspace = true
 repository.workspace = true
 description = "Read-only access to an installed game's SqPack archives and Excel sheets."
 
+[features]
+# Writes synthetic game installations for tests of dependent crates.
+testing = []
+
 [dependencies]
 crc32fast = "1.5.2"
 flate2 = "1.1.10"

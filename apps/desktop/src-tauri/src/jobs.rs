@@ -1382,26 +1382,20 @@ pub async fn angelica_job_remove(app: tauri::AppHandle, job_id: String) -> Comma
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
 
     use aeria_ai::tools::ReviewLabel;
     use aeria_core::{ReviewState, SourceBinding};
 
     use super::*;
 
-    fn session() -> (tempfile::TempDir, ProjectSession) {
+    fn session() -> (
+        (tempfile::TempDir, crate::test_support::TestGame),
+        ProjectSession,
+    ) {
         let directory = tempfile::tempdir().expect("directory");
-        std::fs::create_dir(directory.path().join("repository")).expect("repository");
-        let package = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../../crates/aeria-hsp/tests/fixtures/synthetic.hsp");
-        let session = ProjectSession::initialize(
-            directory.path().join("repository"),
-            package,
-            directory.path().join("cache"),
-            "ru".to_owned(),
-        )
-        .expect("session");
-        (directory, session)
+        let game = crate::test_support::test_game();
+        let session = crate::test_support::test_session(directory.path(), &game);
+        ((directory, game), session)
     }
 
     /// Every sheet's matching strings, as a job over the whole project.

@@ -19,17 +19,15 @@ tauri-build = { version = "2.6.3", features = [] }
 
 [dependencies]
 aeria-ai = { path = "../../../crates/aeria-ai" }
-aeria-atlas = { path = "../../../crates/aeria-atlas" }
 aeria-core = { path = "../../../crates/aeria-core" }
 aeria-export = { path = "../../../crates/aeria-export" }
 aeria-fonts = { path = "../../../crates/aeria-fonts" }
 aeria-git = { path = "../../../crates/aeria-git" }
-aeria-hsp = { path = "../../../crates/aeria-hsp" }
-aeria-hxs = { path = "../../../crates/aeria-hxs" }
 aeria-projects = { path = "../../../crates/aeria-projects" }
 aeria-publish = { path = "../../../crates/aeria-publish" }
 aeria-rebase = { path = "../../../crates/aeria-rebase" }
 aeria-search = { path = "../../../crates/aeria-search" }
+aeria-source = { path = "../../../crates/aeria-source" }
 aeria-workspace = { path = "../../../crates/aeria-workspace" }
 serde = { version = "1.0", features = ["derive"] }
 semver = "1.0.28"
@@ -48,6 +46,5 @@ windows-registry = "0.6.1"
 workspace = true
 
 [dev-dependencies]
-rusqlite = { version = "0.40.2", features = ["bundled"] }
+aeria-sqpack = { path = "../../../crates/aeria-sqpack", features = ["testing"] }
 tempfile = "3.27.0"
-zip = { version = "6.0.0", default-features = false, features = ["deflate"] }

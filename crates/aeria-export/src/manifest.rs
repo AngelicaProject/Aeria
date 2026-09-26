@@ -25,13 +25,11 @@ pub struct Publisher {
     pub url: Option<String>,
 }
 
-/// Facts copied from the verified HXS the pack is built from.
+/// The game the pack is built from.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PackSource {
     pub language: String,
     pub game_version: String,
-    pub content_id: String,
-    pub snapshot_id: String,
 }
 
 /// Release metadata of one pack. `sequence` is an explicit export input so
@@ -97,8 +95,6 @@ struct LanguageJson<'a> {
 struct SourceJson<'a> {
     language: &'a str,
     game_version: &'a str,
-    content_id: &'a str,
-    snapshot_id: &'a str,
 }
 
 #[derive(Serialize)]
@@ -160,11 +156,6 @@ impl PackManifest {
         if self.sequence == 0 || self.sequence > i64::MAX as u64 {
             return fail("release.sequence must be positive");
         }
-        if !is_sha256_identity(&self.source.content_id)
-            || !is_sha256_identity(&self.source.snapshot_id)
-        {
-            return fail("source identities must be sha256:<64 lowercase hex>");
-        }
         if self.project_commit.len() != 40 || !is_lower_hex(&self.project_commit) {
             return fail("project.commit must be 40 lowercase hex digits");
         }
@@ -194,8 +185,6 @@ impl PackManifest {
             source: SourceJson {
                 language: &self.source.language,
                 game_version: &self.source.game_version,
-                content_id: &self.source.content_id,
-                snapshot_id: &self.source.snapshot_id,
             },
             content_policy: self.content_policy,
             project: ProjectJson {
@@ -229,12 +218,6 @@ fn is_lower_hex(value: &str) -> bool {
     value
         .bytes()
         .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
-}
-
-fn is_sha256_identity(value: &str) -> bool {
-    value
-        .strip_prefix("sha256:")
-        .is_some_and(|hex| hex.len() == 64 && is_lower_hex(hex))
 }
 
 // Two to four dot-separated numbers, the form .NET `Version.Parse` accepts.

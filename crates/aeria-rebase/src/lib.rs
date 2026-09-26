@@ -1,117 +1,59 @@
 //! Deterministic source update planning.
 //!
-//! The planner moves managed translation units from the source facts they
-//! were last bound to onto one verified HXS snapshot. It needs only the
-//! workspace's persisted source facts, the new snapshot, and the new
-//! snapshot's translation permission. The previous snapshot is not required:
-//! a game update overwrites the installation that produced it.
+//! The planner moves translation units from the source facts they were last
+//! bound to onto the installed game. It needs only the units' persisted facts
+//! and the game: a patch has already replaced the previous game version. The
+//! rules are specified in `docs/architecture/rebase-safety.md`.
 
 #![forbid(unsafe_code)]
 
-pub mod candidates;
-mod row_key;
-
-pub use row_key::{MIN_KEYED_ROWS, RowKeys};
-
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use aeria_core::{
-    DetachReason, Sha256Hash, SourceBinding, SourceFingerprint, SourceLayout, SourceStatus,
+    DetachReason, GameVersion, LayoutHash, SourceBinding, SourceFacts, SourceStatus,
     TranslationUnit, TranslationUnitId, WorkspaceMetadata,
 };
-use aeria_hxs::{
-    ColumnType, HxsError, HxsSnapshot, MAX_STRING_OCCURRENCE_PAGE_SIZE, SheetMetadata,
-    SnapshotMetadata, StringOccurrenceCoordinate,
-};
+use aeria_source::{GameSource, RowKeys, SheetLookup, SourceError, SourceSheet};
 use thiserror::Error;
 
-/// Errors raised when a deterministic source update plan cannot be built.
+/// Errors raised when a source update cannot be planned.
 #[derive(Debug, Error)]
 pub enum SourceUpdateError {
-    /// The new snapshot has a different source language than the workspace.
-    #[error(
-        "new HXS source language does not match the workspace: expected {expected:?}, found {found:?}"
-    )]
+    /// The game is opened in another language than the project's source.
+    #[error("the game source language {found:?} differs from the project's {expected:?}")]
     SourceLanguageMismatch { expected: String, found: String },
 
-    /// The new snapshot could not be read.
-    #[error("could not read the new HXS source: {0}")]
-    SourceRead(#[source] HxsError),
+    /// The game is older than the version the project describes.
+    #[error("the game version {game} is older than the project's {project}")]
+    GameOutdated {
+        project: GameVersion,
+        game: GameVersion,
+    },
 
-    /// The borrowed workspace view did not satisfy its own uniqueness rules.
+    /// The game could not be read.
+    #[error("could not read the game: {0}")]
+    SourceRead(#[from] SourceError),
+
+    /// The units repeat an ID.
     #[error("invalid workspace input: {message}")]
     InvalidWorkspace { message: String },
 }
 
-/// The stable identity facts of one HXS snapshot included in a plan.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct SourceSnapshotIdentity {
-    pub game_version: String,
-    pub source_language: String,
-    pub scope: String,
-    pub content_id: String,
-    pub snapshot_id: String,
-}
-
-impl SourceSnapshotIdentity {
-    pub(crate) fn from_metadata(metadata: &SnapshotMetadata) -> Self {
-        Self {
-            game_version: metadata.game_version.clone(),
-            source_language: metadata.source_language.clone(),
-            scope: metadata.scope.clone(),
-            content_id: metadata.content_id.clone(),
-            snapshot_id: metadata.snapshot_id.clone(),
-        }
-    }
-}
-
-/// Deterministic evidence for a non-authoritative candidate suggestion.
-///
-/// Candidate suggestions are review assistance only. No variant establishes
-/// source identity or changes a plan.
-#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub enum CandidateEvidence {
-    /// The complete persisted fingerprint matches at another binding.
-    CompleteFingerprint,
-    /// Macro-text and the old optional raw-value hash matched.
-    MacroAndRawValue,
-    /// Macro-text and row technical hashes matched.
-    MacroAndRowTechnical,
-    /// The macro-text hash matched.
-    ExactMacroText,
-    /// Protected macro structure was equivalent while macro text differed.
-    ProtectedStructureCompatible,
-    /// Visible/translatable text similarity supplied the ranking evidence.
-    VisibleTextSimilarity,
-}
-
-/// Diagnostic status for row technical context at the resolved occurrence.
-#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub enum SourceContextStatus {
-    /// The row technical hash is unchanged.
-    Unchanged,
-    /// The row technical hash changed; this does not change the outcome.
-    Changed,
-}
-
-/// The deterministic result for one managed translation unit.
+/// The deterministic result for one translation unit.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum UnitUpdateOutcome {
-    /// The unit is bound to an occurrence with unchanged String content.
+    /// The unit is bound to a cell with the same text.
     Unchanged,
-    /// The unit is bound to an occurrence with the same macro text whose raw
-    /// source bytes changed. The translation is written against the macro
-    /// text, so its review state is kept.
-    EncodingChanged,
-    /// The unit is bound to an occurrence whose macro text changed; its
-    /// translation needs review.
+    /// The unit is bound to a cell whose text changed; its translation
+    /// needs review.
     SourceChanged,
-    /// The unit is preserved without a current source occurrence.
+    /// The unit is preserved without a current cell.
     Detached(DetachReason),
 }
 
 impl UnitUpdateOutcome {
-    /// Returns whether the outcome binds the unit to an occurrence.
+    /// Returns whether the outcome binds the unit to a cell.
     #[must_use]
     pub const fn is_bound(self) -> bool {
         !matches!(self, Self::Detached(_))
@@ -133,19 +75,17 @@ pub enum RowContinuity {
 /// How a bound outcome's column was established.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum ColumnContinuity {
-    /// The column index was interpreted in an unchanged sheet schema. A bound
-    /// Workspace Format v1 unit without recorded layout is treated the same
-    /// way when the source content ID did not change.
+    /// The column index was interpreted in an unchanged layout.
     SameColumn,
-    /// The sheet schema changed and the unit's column was mapped by a
-    /// sheet-level column mapping.
+    /// The layout changed and the column was mapped by a sheet-level column
+    /// mapping.
     Mapped {
         previous_column: u32,
         evidence: ColumnMappingEvidence,
     },
 }
 
-/// How a bound outcome's occurrence was established.
+/// How a bound outcome's cell was established.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct Continuity {
     pub row: RowContinuity,
@@ -153,90 +93,59 @@ pub struct Continuity {
 }
 
 impl Continuity {
-    /// The previous binding, unchanged, in an unchanged schema generation.
+    /// The previous binding, unchanged, in an unchanged layout.
     pub const SAME_BINDING: Self = Self {
         row: RowContinuity::SameRow,
         column: ColumnContinuity::SameColumn,
     };
-
-    /// An unchanged row with a column established by a column mapping.
-    #[must_use]
-    pub const fn column_mapped(previous_column: u32, evidence: ColumnMappingEvidence) -> Self {
-        Self {
-            row: RowContinuity::SameRow,
-            column: ColumnContinuity::Mapped {
-                previous_column,
-                evidence,
-            },
-        }
-    }
 }
 
 /// Evidence for one sheet-level column mapping.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum ColumnMappingEvidence {
-    /// A strict majority of the column's managed units found their exact
-    /// previous macro text in exactly one String column of their resolved
-    /// row, and it was this column.
+    /// A strict majority of the column's units found their exact previous
+    /// text in exactly one String column of their resolved row, and it was
+    /// this column.
     ExactContent { supporting: usize, cast: usize },
-    /// No managed unit of the column found exact content evidence, and the
-    /// new schema has a String column at the same index and offset.
-    UnchangedPosition,
 }
 
-/// The mapping of one previous String column of a schema-changed sheet.
+/// The mapping of one previous String column of a sheet whose layout
+/// changed.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ColumnMapping {
     pub previous_column: u32,
-    /// The mapped current column. `None` means the column is unresolved and
+    /// The mapped current column; `None` when the column is unresolved and
     /// its units are detached.
     pub column: Option<u32>,
     pub evidence: Option<ColumnMappingEvidence>,
 }
 
-/// A sheet whose managed units were bound in another schema generation.
+/// A sheet whose units were bound in another layout, or that is gone.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct SheetSchemaUpdate {
+pub struct SheetLayoutUpdate {
     pub sheet_name: String,
-    /// The schema the units were bound in; `None` for Workspace Format v1
-    /// units that did not record it.
-    pub previous_schema_hash: Option<Sha256Hash>,
-    /// The current schema; `None` when the sheet was removed or is
-    /// unavailable.
-    pub schema_hash: Option<Sha256Hash>,
-    /// The sheet exists in the game catalog but the current source excludes
-    /// it as unreadable or unsupported.
+    /// The layout the units were bound in.
+    pub previous_layout: LayoutHash,
+    /// The current layout; `None` when the sheet was removed or cannot be
+    /// read.
+    pub layout: Option<LayoutHash>,
+    /// The sheet is listed by the game but cannot be read.
     pub unavailable: bool,
     /// Column mappings in ascending previous-column order.
     pub columns: Vec<ColumnMapping>,
 }
 
-/// The source facts proposed for a bound outcome.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ProposedSource {
-    pub binding: SourceBinding,
-    pub fingerprint: SourceFingerprint,
-    pub layout: SourceLayout,
-    /// The row key of the new row when the new sheet is keyed.
-    pub row_key: Option<Sha256Hash>,
-}
-
-/// One deterministic plan entry for an existing managed unit.
+/// One plan entry for an existing unit.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct UnitUpdate {
     pub translation_unit_id: TranslationUnitId,
     pub previous_status: SourceStatus,
-    pub previous_binding: SourceBinding,
-    pub previous_fingerprint: SourceFingerprint,
-    pub previous_layout: Option<SourceLayout>,
-    pub previous_row_key: Option<Sha256Hash>,
+    pub previous: SourceFacts,
     pub outcome: UnitUpdateOutcome,
     /// Present for bound outcomes.
     pub continuity: Option<Continuity>,
-    /// Present for bound outcomes.
-    pub proposed: Option<ProposedSource>,
-    /// Present for bound outcomes.
-    pub context_status: Option<SourceContextStatus>,
+    /// The new source facts; present for bound outcomes.
+    pub proposed: Option<SourceFacts>,
 }
 
 impl UnitUpdate {
@@ -248,11 +157,7 @@ impl UnitUpdate {
                 self.previous_status != SourceStatus::Detached(*reason)
             }
             (_, Some(proposed)) => {
-                self.previous_status != SourceStatus::Bound
-                    || proposed.binding != self.previous_binding
-                    || proposed.fingerprint != self.previous_fingerprint
-                    || Some(proposed.layout) != self.previous_layout
-                    || proposed.row_key != self.previous_row_key
+                self.previous_status != SourceStatus::Bound || *proposed != self.previous
             }
             (_, None) => false,
         }
@@ -265,18 +170,14 @@ impl UnitUpdate {
     }
 }
 
-/// Deterministic counts derived from the plan entries.
+/// Counts derived from the plan entries.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct SourceUpdateSummary {
-    /// Bound units with unchanged source content.
+    /// Bound units with unchanged text.
     pub unchanged: usize,
-    /// Bound units whose macro text is unchanged but whose raw source bytes
-    /// changed; their review state is kept.
-    pub encoding_changed: usize,
-    /// Bound units whose macro text changed and now need review.
+    /// Bound units whose text changed and now need review.
     pub source_changed: usize,
-    /// Units detached after the update, including units that were already
-    /// detached and remain so.
+    /// Units detached after the update, including units that stay detached.
     pub detached: usize,
     /// Previously bound units that the update detaches.
     pub newly_detached: usize,
@@ -290,12 +191,12 @@ pub struct SourceUpdateSummary {
     pub changed_units: usize,
 }
 
-/// A pure, owned plan for moving managed units onto one verified snapshot.
+/// A pure, owned plan for moving units onto the installed game.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SourceUpdatePlan {
-    pub previous_content_id: String,
-    pub source_snapshot: SourceSnapshotIdentity,
-    pub sheet_schema_updates: Vec<SheetSchemaUpdate>,
+    pub previous_game_version: GameVersion,
+    pub game_version: GameVersion,
+    pub sheet_layout_updates: Vec<SheetLayoutUpdate>,
     pub unit_entries: Vec<UnitUpdate>,
     pub summary: SourceUpdateSummary,
 }
@@ -307,60 +208,57 @@ impl SourceUpdatePlan {
         &self.unit_entries
     }
 
-    /// Returns whether the source content identity changes.
+    /// Returns whether the project's game version changes.
     #[must_use]
-    pub fn changes_content_id(&self) -> bool {
-        self.previous_content_id != self.source_snapshot.content_id
+    pub fn changes_game_version(&self) -> bool {
+        self.previous_game_version != self.game_version
+    }
+
+    /// Returns whether applying the plan changes anything.
+    #[must_use]
+    pub fn changes_workspace(&self) -> bool {
+        self.changes_game_version() || self.summary.changed_units > 0
     }
 }
 
 /// Builds a deterministic source update plan.
 ///
-/// `is_translatable` must answer from the permission index that belongs to
-/// `snapshot`. Units are collected and sorted by durable ID, so callers may
-/// provide them in any order. Nothing is mutated.
+/// Units may be given in any order; the plan lists them by ID. Nothing is
+/// mutated.
 ///
 /// # Errors
 ///
-/// Returns [`SourceUpdateError`] when the source language differs, the
-/// snapshot cannot be read, or the unit view repeats an ID.
-pub fn plan_source_update<'a, I, F>(
+/// Returns [`SourceUpdateError`] when the source language differs, the game
+/// is older than the project, the game cannot be read, or an ID repeats.
+pub fn plan_source_update<'a, I>(
     workspace_metadata: &WorkspaceMetadata,
     units: I,
-    snapshot: &HxsSnapshot,
-    is_translatable: F,
+    source: &GameSource,
 ) -> Result<SourceUpdatePlan, SourceUpdateError>
 where
     I: IntoIterator<Item = &'a TranslationUnit>,
-    F: Fn(&SourceBinding) -> bool,
 {
-    let metadata = snapshot.metadata();
-    if metadata.source_language != workspace_metadata.source_language() {
+    if source.language().code() != workspace_metadata.source_language() {
         return Err(SourceUpdateError::SourceLanguageMismatch {
             expected: workspace_metadata.source_language().to_owned(),
-            found: metadata.source_language,
+            found: source.language().code().to_owned(),
         });
     }
-    let same_content = metadata.content_id == workspace_metadata.source_content_id();
+    if source.version() < workspace_metadata.game_version() {
+        return Err(SourceUpdateError::GameOutdated {
+            project: workspace_metadata.game_version().clone(),
+            game: source.version().clone(),
+        });
+    }
 
     let mut units: Vec<&TranslationUnit> = units.into_iter().collect();
     units.sort_unstable_by_key(|unit| unit.id());
     if let Some(pair) = units.windows(2).find(|pair| pair[0].id() == pair[1].id()) {
         return Err(SourceUpdateError::InvalidWorkspace {
-            message: format!("duplicate TranslationUnitId {}", pair[0].id()),
+            message: format!("the translation unit ID {} repeats", pair[0].id()),
         });
     }
 
-    let sheets: BTreeMap<String, SheetMetadata> = snapshot
-        .sheets()
-        .into_iter()
-        .map(|sheet| (sheet.name.clone(), sheet))
-        .collect();
-    let excluded_sheets: BTreeSet<String> = snapshot
-        .excluded_sheets()
-        .iter()
-        .map(|sheet| sheet.name.clone())
-        .collect();
     let mut by_sheet: BTreeMap<&str, Vec<usize>> = BTreeMap::new();
     for (index, unit) in units.iter().enumerate() {
         by_sheet
@@ -370,38 +268,23 @@ where
     }
 
     let mut resolved: BTreeMap<usize, Resolution> = BTreeMap::new();
-    let mut sheet_schema_updates = Vec::new();
+    let mut sheet_layout_updates = Vec::new();
     for (sheet_name, members) in by_sheet {
         let members: Vec<(usize, &TranslationUnit)> = members
             .into_iter()
             .map(|index| (index, units[index]))
             .collect();
-        let sheet_plan = match sheets.get(sheet_name) {
-            Some(sheet) => {
-                let current = CurrentSheet::read(snapshot, sheet)?;
-                let row_keys = RowKeys::detect(
-                    &current.name,
-                    current.string_columns.keys().copied(),
-                    &current.occurrences,
-                    &is_translatable,
-                );
-                plan_sheet(&current, row_keys.as_ref(), &members, same_content)
-            }
-            None => plan_absent_sheet(sheet_name, &members, excluded_sheets.contains(sheet_name)),
+        let sheet_plan = match source.sheet(sheet_name)? {
+            SheetLookup::Present(sheet) => plan_sheet(&sheet, &members),
+            SheetLookup::Missing => plan_absent_sheet(sheet_name, &members, false),
+            SheetLookup::Unavailable(_) => plan_absent_sheet(sheet_name, &members, true),
         };
         resolved.extend(sheet_plan.resolutions);
-        sheet_schema_updates.extend(sheet_plan.schema_updates);
+        sheet_layout_updates.extend(sheet_plan.layout_updates);
     }
 
     let mut resolutions: Vec<Resolution> = resolved.into_values().collect();
     debug_assert_eq!(resolutions.len(), units.len());
-    for resolution in &mut resolutions {
-        if let Resolution::Bound(bound) = resolution
-            && !is_translatable(&bound.proposed.binding)
-        {
-            *resolution = Resolution::Detached(DetachReason::NotTranslatable);
-        }
-    }
     resolve_binding_conflicts(&units, &mut resolutions);
 
     let unit_entries: Vec<UnitUpdate> = units
@@ -411,52 +294,47 @@ where
         .collect();
     let summary = summarize(&unit_entries);
     Ok(SourceUpdatePlan {
-        previous_content_id: workspace_metadata.source_content_id().to_owned(),
-        source_snapshot: SourceSnapshotIdentity::from_metadata(&metadata),
-        sheet_schema_updates,
+        previous_game_version: workspace_metadata.game_version().clone(),
+        game_version: source.version().clone(),
+        sheet_layout_updates,
         unit_entries,
         summary,
     })
 }
 
-fn schema_of(unit: &TranslationUnit) -> Option<Sha256Hash> {
-    unit.source_layout()
-        .map(|layout| layout.sheet_schema_hash())
-}
-
 /// Resolutions for one sheet's units, keyed by their index in the sorted
-/// unit view, and the schema generations that needed column mapping.
+/// unit view, and the layouts that needed column mapping.
 struct SheetPlan {
     resolutions: Vec<(usize, Resolution)>,
-    schema_updates: Vec<SheetSchemaUpdate>,
+    layout_updates: Vec<SheetLayoutUpdate>,
 }
 
-/// Detaches every unit of a sheet that is absent from the current source.
-/// An excluded sheet still exists in the game but could not be read, so it
-/// is reported as unavailable rather than removed.
+/// Detaches every unit of a sheet that is missing or cannot be read.
 fn plan_absent_sheet(
     sheet_name: &str,
     members: &[(usize, &TranslationUnit)],
     unavailable: bool,
 ) -> SheetPlan {
-    let previous_schemas: BTreeSet<Option<Sha256Hash>> =
-        members.iter().map(|(_, unit)| schema_of(unit)).collect();
     let reason = if unavailable {
         DetachReason::SheetUnavailable
     } else {
         DetachReason::SheetRemoved
     };
+    let previous_layouts: std::collections::BTreeSet<LayoutHash> = members
+        .iter()
+        .map(|(_, unit)| unit.source().layout())
+        .collect();
     SheetPlan {
         resolutions: members
             .iter()
             .map(|(index, _)| (*index, Resolution::Detached(reason)))
             .collect(),
-        schema_updates: previous_schemas
+        layout_updates: previous_layouts
             .into_iter()
-            .map(|previous_schema_hash| SheetSchemaUpdate {
+            .map(|previous_layout| SheetLayoutUpdate {
                 sheet_name: sheet_name.to_owned(),
-                previous_schema_hash,
-                schema_hash: None,
+                previous_layout,
+                layout: None,
                 unavailable,
                 columns: Vec::new(),
             })
@@ -476,17 +354,17 @@ enum RowTarget {
     KeyRemoved,
 }
 
-/// Resolves every unit's row. Row keys are used for a sheet only when the
-/// new sheet has a row key column and at least one unit's persisted key is
-/// found in it; otherwise row IDs are kept, which is also the behavior for
-/// units without a persisted key.
+/// Resolves every unit's row. Row keys are used when the sheet has a row
+/// key column and at least one unit's key is found in it; otherwise row IDs
+/// are kept, which is also the behavior for units without a key.
 fn row_targets(
     row_keys: Option<&RowKeys>,
     members: &[(usize, &TranslationUnit)],
 ) -> BTreeMap<usize, RowTarget> {
     let keyed = row_keys.filter(|keys| {
         members.iter().any(|(_, unit)| {
-            unit.source_row_key()
+            unit.source()
+                .row_key()
                 .is_some_and(|key| keys.row_of(key).is_some())
         })
     });
@@ -495,43 +373,36 @@ fn row_targets(
         .map(|&(index, unit)| {
             let binding = unit.source_binding();
             let previous = (binding.row_id(), binding.subrow_id());
-            let target = match (keyed, unit.source_row_key()) {
+            let same_row = RowTarget::Row {
+                row_id: previous.0,
+                subrow_id: previous.1,
+                continuity: RowContinuity::SameRow,
+            };
+            let target = match (keyed, unit.source().row_key()) {
                 (Some(keys), Some(key)) => match keys.row_of(key) {
+                    Some(row) if row == previous => same_row,
                     Some((row_id, subrow_id)) => RowTarget::Row {
                         row_id,
                         subrow_id,
-                        continuity: if (row_id, subrow_id) == previous {
-                            RowContinuity::SameRow
-                        } else {
-                            RowContinuity::RowKey {
-                                previous_row_id: previous.0,
-                                previous_subrow_id: previous.1,
-                            }
+                        continuity: RowContinuity::RowKey {
+                            previous_row_id: previous.0,
+                            previous_subrow_id: previous.1,
                         },
                     },
                     None => RowTarget::KeyRemoved,
                 },
-                _ => RowTarget::Row {
-                    row_id: previous.0,
-                    subrow_id: previous.1,
-                    continuity: RowContinuity::SameRow,
-                },
+                _ => same_row,
             };
             (index, target)
         })
         .collect()
 }
 
-fn plan_sheet(
-    current: &CurrentSheet,
-    row_keys: Option<&RowKeys>,
-    members: &[(usize, &TranslationUnit)],
-    same_content: bool,
-) -> SheetPlan {
-    let rows = row_targets(row_keys, members);
+fn plan_sheet(sheet: &Arc<SourceSheet>, members: &[(usize, &TranslationUnit)]) -> SheetPlan {
+    let current = CurrentSheet { sheet };
+    let rows = row_targets(sheet.row_keys(), members);
     let mut resolutions = Vec::with_capacity(members.len());
-    let mut generations: BTreeMap<Option<Sha256Hash>, Vec<(usize, &TranslationUnit)>> =
-        BTreeMap::new();
+    let mut generations: BTreeMap<LayoutHash, Vec<(usize, &TranslationUnit)>> = BTreeMap::new();
     for &(index, unit) in members {
         let RowTarget::Row {
             row_id,
@@ -542,14 +413,7 @@ fn plan_sheet(
             resolutions.push((index, Resolution::Detached(DetachReason::RowRemoved)));
             continue;
         };
-        let previous_schema = schema_of(unit);
-        // Unchanged content proves an unchanged schema only for units that
-        // are bound in the workspace's content. A detached unit keeps the
-        // layout it was last bound in, which may be older.
-        let bound_in_same_content = same_content && unit.is_bound();
-        if previous_schema == Some(current.schema_hash)
-            || (bound_in_same_content && previous_schema.is_none())
-        {
+        if unit.source().layout() == sheet.layout() {
             let target = Target {
                 row_id,
                 subrow_id,
@@ -559,17 +423,17 @@ fn plan_sheet(
                     column: ColumnContinuity::SameColumn,
                 },
             };
-            resolutions.push((index, current.resolve(unit, target, row_keys)));
+            resolutions.push((index, current.resolve(unit, target)));
         } else {
             generations
-                .entry(previous_schema)
+                .entry(unit.source().layout())
                 .or_default()
                 .push((index, unit));
         }
     }
 
-    let mut schema_updates = Vec::with_capacity(generations.len());
-    for (previous_schema_hash, generation) in generations {
+    let mut layout_updates = Vec::with_capacity(generations.len());
+    for (previous_layout, generation) in generations {
         let voters: Vec<(&TranslationUnit, (u32, u16))> = generation
             .iter()
             .filter_map(|(index, unit)| match rows[index] {
@@ -595,8 +459,9 @@ fn plan_sheet(
                     column: Some(column),
                     evidence: Some(evidence),
                     ..
-                }) => {
-                    let target = Target {
+                }) => current.resolve(
+                    unit,
+                    Target {
                         row_id,
                         subrow_id,
                         column: *column,
@@ -607,28 +472,27 @@ fn plan_sheet(
                                 evidence: *evidence,
                             },
                         },
-                    };
-                    current.resolve(unit, target, row_keys)
-                }
+                    },
+                ),
                 _ => Resolution::Detached(DetachReason::ColumnUnresolved),
             };
             resolutions.push((index, resolution));
         }
-        schema_updates.push(SheetSchemaUpdate {
-            sheet_name: current.name.clone(),
-            previous_schema_hash,
-            schema_hash: Some(current.schema_hash),
+        layout_updates.push(SheetLayoutUpdate {
+            sheet_name: sheet.name().to_owned(),
+            previous_layout,
+            layout: Some(sheet.layout()),
             unavailable: false,
             columns: mappings.into_values().collect(),
         });
     }
     SheetPlan {
         resolutions,
-        schema_updates,
+        layout_updates,
     }
 }
 
-/// The occurrence a unit is resolved at and how it was established.
+/// The cell a unit is resolved at and how it was established.
 #[derive(Clone, Copy, Debug)]
 struct Target {
     row_id: u32,
@@ -639,10 +503,9 @@ struct Target {
 
 #[derive(Clone, Debug)]
 struct BoundResolution {
-    proposed: ProposedSource,
+    proposed: SourceFacts,
     outcome: UnitUpdateOutcome,
     continuity: Continuity,
-    context_status: SourceContextStatus,
 }
 
 #[derive(Clone, Debug)]
@@ -656,21 +519,16 @@ impl Resolution {
         let mut entry = UnitUpdate {
             translation_unit_id: unit.id(),
             previous_status: unit.source_status(),
-            previous_binding: unit.source_binding().clone(),
-            previous_fingerprint: *unit.source_fingerprint(),
-            previous_layout: unit.source_layout(),
-            previous_row_key: unit.source_row_key(),
+            previous: unit.source().clone(),
             outcome: UnitUpdateOutcome::Unchanged,
             continuity: None,
             proposed: None,
-            context_status: None,
         };
         match self {
             Self::Bound(bound) => {
                 let bound = *bound;
                 entry.outcome = bound.outcome;
                 entry.continuity = Some(bound.continuity);
-                entry.context_status = Some(bound.context_status);
                 entry.proposed = Some(bound.proposed);
             }
             Self::Detached(reason) => entry.outcome = UnitUpdateOutcome::Detached(reason),
@@ -679,200 +537,103 @@ impl Resolution {
     }
 }
 
-/// Hash-only String occurrences of one current sheet.
-pub(crate) struct CurrentSheet {
-    pub(crate) name: String,
-    schema_hash: Sha256Hash,
-    /// String column index to column offset.
-    pub(crate) string_columns: BTreeMap<u32, u32>,
-    pub(crate) occurrences: BTreeMap<(u32, u16, u32), SourceFingerprint>,
+struct CurrentSheet<'a> {
+    sheet: &'a SourceSheet,
 }
 
-impl CurrentSheet {
-    pub(crate) fn read(
-        snapshot: &HxsSnapshot,
-        sheet: &SheetMetadata,
-    ) -> Result<Self, SourceUpdateError> {
-        let string_columns = sheet
-            .columns
+impl CurrentSheet<'_> {
+    fn resolve(&self, unit: &TranslationUnit, target: Target) -> Resolution {
+        if !self
+            .sheet
+            .columns()
             .iter()
-            .filter(|column| column.column_type == ColumnType::String)
-            .map(|column| (column.index, column.offset))
-            .collect();
-        let mut occurrences = BTreeMap::new();
-        let mut after: Option<StringOccurrenceCoordinate> = None;
-        loop {
-            let page = snapshot
-                .page_string_occurrences(
-                    &sheet.name,
-                    after.as_ref(),
-                    MAX_STRING_OCCURRENCE_PAGE_SIZE,
-                )
-                .map_err(SourceUpdateError::SourceRead)?;
-            for occurrence in page.occurrences {
-                let coordinate = &occurrence.coordinate;
-                occurrences.insert(
-                    (
-                        coordinate.row_id,
-                        coordinate.subrow_id,
-                        coordinate.column_index,
-                    ),
-                    SourceFingerprint::new(
-                        Sha256Hash::from_bytes(*occurrence.macro_text_hash.as_bytes()),
-                        occurrence
-                            .raw_value_hash
-                            .as_ref()
-                            .map(|hash| Sha256Hash::from_bytes(*hash.as_bytes())),
-                        Sha256Hash::from_bytes(*occurrence.row_technical_hash.as_bytes()),
-                    ),
-                );
-            }
-            match page.next_after {
-                Some(next) => after = Some(next),
-                None => break,
-            }
-        }
-        Ok(Self {
-            name: sheet.name.clone(),
-            schema_hash: Sha256Hash::from_bytes(*sheet.hashes.schema.as_bytes()),
-            string_columns,
-            occurrences,
-        })
-    }
-
-    fn row_occurrences(
-        &self,
-        row_id: u32,
-        subrow_id: u16,
-    ) -> impl Iterator<Item = (u32, &SourceFingerprint)> {
-        self.occurrences
-            .range((row_id, subrow_id, 0)..=(row_id, subrow_id, u32::MAX))
-            .map(|(&(_, _, column), fingerprint)| (column, fingerprint))
-    }
-
-    fn resolve(
-        &self,
-        unit: &TranslationUnit,
-        target: Target,
-        row_keys: Option<&RowKeys>,
-    ) -> Resolution {
-        let Some(&column_offset) = self.string_columns.get(&target.column) else {
+            .any(|column| column.index == target.column)
+        {
             return Resolution::Detached(DetachReason::CellRemoved);
-        };
-        let Some(fingerprint) =
-            self.occurrences
-                .get(&(target.row_id, target.subrow_id, target.column))
+        }
+        let Some(cell) = self
+            .sheet
+            .cell(target.row_id, target.subrow_id, target.column)
         else {
             return Resolution::Detached(DetachReason::RowRemoved);
         };
-        let previous = unit.source_fingerprint();
-        let outcome = if previous.macro_text_hash() != fingerprint.macro_text_hash() {
-            UnitUpdateOutcome::SourceChanged
-        } else if previous.raw_value_hash() != fingerprint.raw_value_hash() {
-            UnitUpdateOutcome::EncodingChanged
-        } else {
+        if !cell.translatable {
+            return Resolution::Detached(DetachReason::NotTranslatable);
+        }
+        let text = cell.text();
+        let outcome = if text == unit.source().text() {
             UnitUpdateOutcome::Unchanged
-        };
-        let context_status = if previous.row_technical_hash() == fingerprint.row_technical_hash() {
-            SourceContextStatus::Unchanged
         } else {
-            SourceContextStatus::Changed
+            UnitUpdateOutcome::SourceChanged
         };
+        let row_key = self
+            .sheet
+            .row_keys()
+            .and_then(|keys| keys.key_of(target.row_id, target.subrow_id))
+            .map(str::to_owned);
         Resolution::Bound(Box::new(BoundResolution {
-            proposed: ProposedSource {
-                binding: SourceBinding::new(
-                    self.name.clone(),
+            proposed: SourceFacts::new(
+                SourceBinding::new(
+                    self.sheet.name(),
                     target.row_id,
                     target.subrow_id,
                     target.column,
                 ),
-                fingerprint: *fingerprint,
-                layout: SourceLayout::new(self.schema_hash, column_offset),
-                row_key: row_keys.and_then(|keys| keys.key_of(target.row_id, target.subrow_id)),
-            },
+                self.sheet.layout(),
+                text,
+                row_key,
+            ),
             outcome,
             continuity: target.continuity,
-            context_status,
         }))
     }
 
-    /// Maps every previous column used by one schema generation's units.
+    /// Maps every previous column used by one layout's units.
     ///
-    /// Each unit is given with the row it resolves to. A unit casts a vote
-    /// for a current column only when its exact previous macro text occurs
-    /// in exactly one String column of that row. A previous column maps to
-    /// the column that holds a strict majority of the votes cast by its
-    /// units. A column without any cast vote maps to the same index only
-    /// when the current schema has a String column at the same index and
-    /// offset. Two previous columns mapping to one current column are both
-    /// unresolved.
+    /// Each unit is given with the row it resolves to. A unit votes for a
+    /// current column only when its exact previous text occurs in exactly
+    /// one String column of that row. A previous column maps to the column
+    /// that holds a strict majority of the votes cast by its units. Two
+    /// previous columns mapping to one current column are both unresolved.
     fn map_columns(
         &self,
         units: &[(&TranslationUnit, (u32, u16))],
     ) -> BTreeMap<u32, ColumnMapping> {
         let mut votes: BTreeMap<u32, BTreeMap<u32, usize>> = BTreeMap::new();
-        let mut offsets: BTreeMap<u32, BTreeSet<Option<u32>>> = BTreeMap::new();
         for &(unit, (row_id, subrow_id)) in units {
             let previous_column = unit.source_binding().column_index();
-            votes.entry(previous_column).or_default();
-            offsets
-                .entry(previous_column)
-                .or_default()
-                .insert(unit.source_layout().map(|layout| layout.column_offset()));
-            let macro_text_hash = unit.source_fingerprint().macro_text_hash();
+            let column_votes = votes.entry(previous_column).or_default();
+            let Some(row) = self.sheet.row(row_id, subrow_id) else {
+                continue;
+            };
             let mut matches = self
-                .row_occurrences(row_id, subrow_id)
-                .filter(|(_, fingerprint)| fingerprint.macro_text_hash() == macro_text_hash)
-                .map(|(column, _)| column);
+                .sheet
+                .cells(row)
+                .filter(|cell| cell.text() == unit.source().text())
+                .map(|cell| cell.column);
             if let (Some(column), None) = (matches.next(), matches.next()) {
-                *votes
-                    .entry(previous_column)
-                    .or_default()
-                    .entry(column)
-                    .or_default() += 1;
+                *column_votes.entry(column).or_default() += 1;
             }
         }
 
-        let mut mappings: BTreeMap<u32, ColumnMapping> = BTreeMap::new();
-        for (previous_column, column_votes) in &votes {
-            let cast: usize = column_votes.values().sum();
-            let leader = column_votes
-                .iter()
-                .max_by(|left, right| left.1.cmp(right.1).then(right.0.cmp(left.0)));
-            let mapping = if let Some((&column, &supporting)) = leader {
-                if supporting * 2 > cast {
-                    ColumnMapping {
-                        previous_column: *previous_column,
+        let mut mappings: BTreeMap<u32, ColumnMapping> = votes
+            .iter()
+            .map(|(&previous_column, column_votes)| {
+                let cast: usize = column_votes.values().sum();
+                let leader = column_votes
+                    .iter()
+                    .max_by(|left, right| left.1.cmp(right.1).then(right.0.cmp(left.0)));
+                let mapping = match leader {
+                    Some((&column, &supporting)) if supporting * 2 > cast => ColumnMapping {
+                        previous_column,
                         column: Some(column),
                         evidence: Some(ColumnMappingEvidence::ExactContent { supporting, cast }),
-                    }
-                } else {
-                    unresolved(*previous_column)
-                }
-            } else {
-                let unchanged_position = offsets.get(previous_column).is_some_and(|offsets| {
-                    offsets.len() == 1
-                        && offsets
-                            .iter()
-                            .next()
-                            .copied()
-                            .flatten()
-                            .is_some_and(|offset| {
-                                self.string_columns.get(previous_column) == Some(&offset)
-                            })
-                });
-                if unchanged_position {
-                    ColumnMapping {
-                        previous_column: *previous_column,
-                        column: Some(*previous_column),
-                        evidence: Some(ColumnMappingEvidence::UnchangedPosition),
-                    }
-                } else {
-                    unresolved(*previous_column)
-                }
-            };
-            mappings.insert(*previous_column, mapping);
-        }
+                    },
+                    _ => unresolved(previous_column),
+                };
+                (previous_column, mapping)
+            })
+            .collect();
 
         let mut claims: BTreeMap<u32, usize> = BTreeMap::new();
         for mapping in mappings.values() {
@@ -899,15 +660,14 @@ const fn unresolved(previous_column: u32) -> ColumnMapping {
 
 /// Keeps exactly one unit per resolved binding and detaches the others.
 ///
-/// Preference order: a bound unit that keeps its exact binding in an
-/// unchanged schema generation, then unchanged macro text, then a previously
-/// bound unit, then the smallest durable ID.
+/// Preference order: a bound unit that keeps its exact binding and layout,
+/// then unchanged text, then a previously bound unit, then the smallest ID.
 fn resolve_binding_conflicts(units: &[&TranslationUnit], resolutions: &mut [Resolution]) {
     let mut claims: BTreeMap<SourceBinding, Vec<usize>> = BTreeMap::new();
     for (index, resolution) in resolutions.iter().enumerate() {
         if let Resolution::Bound(bound) = resolution {
             claims
-                .entry(bound.proposed.binding.clone())
+                .entry(bound.proposed.binding().clone())
                 .or_default()
                 .push(index);
         }
@@ -923,7 +683,7 @@ fn resolve_binding_conflicts(units: &[&TranslationUnit], resolutions: &mut [Reso
             };
             let keeps_binding = unit.is_bound()
                 && unit.source_binding() == &binding
-                && unit.source_layout() == Some(bound.proposed.layout);
+                && unit.source().layout() == bound.proposed.layout();
             (
                 !keeps_binding,
                 bound.outcome == UnitUpdateOutcome::SourceChanged,
@@ -948,7 +708,6 @@ fn summarize(entries: &[UnitUpdate]) -> SourceUpdateSummary {
     for entry in entries {
         match entry.outcome {
             UnitUpdateOutcome::Unchanged => summary.unchanged += 1,
-            UnitUpdateOutcome::EncodingChanged => summary.encoding_changed += 1,
             UnitUpdateOutcome::SourceChanged => summary.source_changed += 1,
             UnitUpdateOutcome::Detached(_) => {
                 summary.detached += 1;
@@ -962,7 +721,7 @@ fn summarize(entries: &[UnitUpdate]) -> SourceUpdateSummary {
         }
         if let (Some(continuity), Some(proposed)) = (entry.continuity, entry.proposed.as_ref()) {
             if matches!(continuity.column, ColumnContinuity::Mapped { .. })
-                && proposed.binding.column_index() != entry.previous_binding.column_index()
+                && proposed.binding().column_index() != entry.previous.binding().column_index()
             {
                 summary.column_mapped += 1;
             }

@@ -1,72 +1,71 @@
+//! Source update planning over synthetic game installations.
+
 use std::collections::{BTreeMap, BTreeSet};
-use std::fmt::Write as _;
-use std::path::PathBuf;
+
+use std::sync::Arc;
 
 use aeria_core::{
-    DetachReason, ReviewState, SourceBinding, SourceStatus, TranslationUnit, TranslationUnitId,
-};
-use aeria_hxs::HxsSnapshot;
-use aeria_rebase::candidates::{
-    CandidateQuery, CandidateSuggester, CandidateSuggestionError, MAX_GENERATED_CANDIDATES,
-    MAX_RESULT_LIMIT,
+    DetachReason, GameVersion, ReviewState, SourceBinding, SourceFacts, TranslationUnit,
+    TranslationUnitId, WorkspaceMetadata,
 };
 use aeria_rebase::{
-    CandidateEvidence, ColumnContinuity, ColumnMappingEvidence, Continuity, RowContinuity, RowKeys,
-    SourceContextStatus, SourceUpdateError, SourceUpdatePlan, UnitUpdate, UnitUpdateOutcome,
-    plan_source_update,
+    ColumnContinuity, ColumnMappingEvidence, Continuity, RowContinuity, SourceUpdateError,
+    SourceUpdatePlan, UnitUpdate, UnitUpdateOutcome, plan_source_update,
 };
-use aeria_workspace::Workspace;
-use rusqlite::{Connection, params};
-use sha2::{Digest, Sha256};
+use aeria_source::{GameSource, SheetLookup, SourceLanguage, SourceSheet};
+use aeria_sqpack::excel::{ColumnKind, Language};
+use aeria_sqpack::testing::{FakeGame, FakeRow, FakeSheet, TextSheet as Spec};
 use tempfile::TempDir;
 
-const SYNTHETIC_SCHEMA: &str = include_str!("../../aeria-hxs/tests/fixtures/synthetic_v1.sql");
-const APPLICATION_ID: i64 = 0x4841_544c;
 const SHEET: &str = "台詞";
+const OLD: &str = "2026.09.15.0000.0000";
+const NEW: &str = "2026.10.01.0000.0000";
 
-#[derive(Clone)]
-struct CellSpec {
-    column_index: u32,
-    macro_text: String,
-    raw_value: Option<Vec<u8>>,
+struct Game {
+    _folder: TempDir,
+    source: GameSource,
 }
 
-#[derive(Clone)]
-struct RowSpec {
-    row_id: u32,
-    subrow_id: u16,
-    technical: u8,
-    cells: Vec<CellSpec>,
-}
-
-#[derive(Clone)]
-struct SnapshotSpec {
-    game_version: String,
-    source_language: String,
-    scope: String,
-    extractor_version: String,
-    lumina_version: String,
-    sheet_name: String,
-    rows: Vec<RowSpec>,
-    reverse_insertion: bool,
-    /// Sheets listed as unreadable; a non-empty list writes HXS v2.
-    excluded_sheets: Vec<String>,
-}
-
-struct Fixture {
-    _directory: TempDir,
-    path: PathBuf,
-}
-
-impl Drop for Fixture {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.path);
+fn game(version: &str, sheets: &[(&str, &Spec)]) -> Game {
+    let folder = tempfile::tempdir().expect("folder");
+    let mut fake = FakeGame::new(version);
+    for (name, spec) in sheets {
+        fake = fake.with_sheet(*name, spec.fake());
+    }
+    fake.write(folder.path()).expect("game");
+    let source = GameSource::open(folder.path(), SourceLanguage::English).expect("source");
+    Game {
+        _folder: folder,
+        source,
     }
 }
 
-fn plan(workspace: &Workspace, snapshot: &HxsSnapshot) -> SourceUpdatePlan {
-    plan_source_update(workspace.metadata(), workspace.units(), snapshot, |_| true)
-        .expect("plan succeeds")
+fn sheet(source: &GameSource, name: &str) -> Arc<SourceSheet> {
+    match source.sheet(name).expect("readable") {
+        SheetLookup::Present(sheet) => sheet,
+        other => panic!("{name} is {other:?}"),
+    }
+}
+
+fn metadata(version: &str) -> WorkspaceMetadata {
+    WorkspaceMetadata::new("en", "fr", version.parse().expect("version")).expect("metadata")
+}
+
+/// A bound unit at one cell of `source`, as the workspace creates it.
+fn unit(source: &GameSource, row_id: u32, column: u32) -> TranslationUnit {
+    unit_in(source, SHEET, row_id, column)
+}
+
+fn unit_in(source: &GameSource, name: &str, row_id: u32, column: u32) -> TranslationUnit {
+    let facts = sheet(source, name)
+        .facts(row_id, 0, column)
+        .expect("a String cell");
+    let id = TranslationUnitId::derive(facts.binding(), facts.text()).expect("ID");
+    TranslationUnit::new(id, facts, "target")
+}
+
+fn plan(units: &[TranslationUnit], game: &Game) -> SourceUpdatePlan {
+    plan_source_update(&metadata(OLD), units, &game.source).expect("plan")
 }
 
 fn entry(plan: &SourceUpdatePlan, id: TranslationUnitId) -> &UnitUpdate {
@@ -76,585 +75,456 @@ fn entry(plan: &SourceUpdatePlan, id: TranslationUnitId) -> &UnitUpdate {
         .expect("plan entry")
 }
 
-fn proposed_binding(entry: &UnitUpdate) -> &SourceBinding {
-    &entry.proposed.as_ref().expect("bound outcome").binding
+fn proposed(entry: &UnitUpdate) -> &SourceBinding {
+    entry.proposed.as_ref().expect("bound outcome").binding()
 }
 
-fn open(fixture: &Fixture) -> HxsSnapshot {
-    HxsSnapshot::open(&fixture.path).expect("verified HXS")
+fn binding(row_id: u32, column: u32) -> SourceBinding {
+    SourceBinding::new(SHEET, row_id, 0, column)
 }
 
 #[test]
-fn identical_snapshot_keeps_every_unit_and_planning_is_pure_and_deterministic() {
-    let spec = snapshot("old", vec![row(1, "Привет", Some(b"raw".to_vec()), &[1])]);
-    let old_fixture = write_snapshot(&spec);
-    let new_fixture = write_snapshot(&spec);
-    let old = open(&old_fixture);
-    let new = open(&new_fixture);
-    let mut workspace = Workspace::from_verified_snapshot(&old, "fr").expect("workspace");
-    let id = workspace
-        .create_unit_from_hxs(&old, SHEET, 1, 0, 0, "<future(1)>target")
-        .expect("unit");
-    workspace
-        .update_review_state(id, ReviewState::Reviewed)
-        .expect("review state");
-    let before = workspace.clone();
+fn an_identical_game_keeps_every_unit_and_planning_is_pure_and_deterministic() {
+    let spec = Spec::new(1, &[0])
+        .row(1, &[(0, "Привет")])
+        .row(2, &[(0, "Пока")]);
+    let old = game(OLD, &[(SHEET, &spec)]);
+    let new = game(NEW, &[(SHEET, &spec)]);
+    let mut units = vec![unit(&old.source, 1, 0), unit(&old.source, 2, 0)];
+    units[0].set_review_state(ReviewState::Reviewed);
+    let before = units.clone();
 
-    let first = plan(&workspace, &new);
-    let mut reversed_units: Vec<_> = workspace.units().collect();
-    reversed_units.reverse();
-    let second = plan_source_update(workspace.metadata(), reversed_units, &new, |_| true)
-        .expect("reversed units plan succeeds");
-
+    let first = plan(&units, &new);
+    let reversed: Vec<_> = units.iter().rev().collect();
+    let second =
+        plan_source_update(&metadata(OLD), reversed, &new.source).expect("reversed units plan");
     assert_eq!(first, second);
-    assert_eq!(workspace, before);
-    assert!(!first.changes_content_id());
-    assert!(first.sheet_schema_updates.is_empty());
-    assert_eq!(first.summary.unchanged, 1);
+    assert_eq!(units, before);
+    assert!(first.changes_game_version());
+    assert!(first.sheet_layout_updates.is_empty());
+    assert_eq!(first.summary.unchanged, 2);
     assert_eq!(first.summary.changed_units, 0);
-    let entry = entry(&first, id);
-    assert_eq!(entry.outcome, UnitUpdateOutcome::Unchanged);
-    assert_eq!(entry.continuity, Some(Continuity::SAME_BINDING));
-    assert_eq!(entry.context_status, Some(SourceContextStatus::Unchanged));
-    assert!(!entry.changes_unit());
-}
-
-#[test]
-fn surviving_bindings_classify_content_and_context_separately() {
-    let old_fixture = write_snapshot(&snapshot(
-        "old",
-        vec![
-            row(1, "Alpha", None, &[1]),
-            row(2, "Beta", Some(b"beta".to_vec()), &[2]),
-            row(3, "Gamma", None, &[3]),
-            row(4, "Delta", Some(b"delta".to_vec()), &[4]),
-        ],
-    ));
-    let new_fixture = write_snapshot(&snapshot(
-        "new",
-        vec![
-            row(1, "Alpha", None, &[1]),
-            row(2, "Beta", Some(b"beta".to_vec()), &[9]),
-            row(3, "Gamma revised", None, &[3]),
-            row(4, "Delta", Some(b"delta-bytes".to_vec()), &[4]),
-        ],
-    ));
-    let old = open(&old_fixture);
-    let new = open(&new_fixture);
-    let mut workspace = Workspace::from_verified_snapshot(&old, "fr").expect("workspace");
-    let ids: Vec<_> = (1..=4)
-        .map(|row_id| {
-            workspace
-                .create_unit_from_hxs(&old, SHEET, row_id, 0, 0, "target")
-                .expect("unit")
-        })
-        .collect();
-
-    let plan = plan(&workspace, &new);
-    assert!(plan.changes_content_id());
-    assert!(plan.sheet_schema_updates.is_empty());
-    let expected = [
-        (UnitUpdateOutcome::Unchanged, SourceContextStatus::Unchanged),
-        (UnitUpdateOutcome::Unchanged, SourceContextStatus::Changed),
-        (
-            UnitUpdateOutcome::SourceChanged,
-            SourceContextStatus::Unchanged,
-        ),
-        (
-            UnitUpdateOutcome::EncodingChanged,
-            SourceContextStatus::Unchanged,
-        ),
-    ];
-    for (id, (outcome, context)) in ids.iter().zip(expected) {
-        let entry = entry(&plan, *id);
-        assert_eq!(entry.outcome, outcome);
-        assert_eq!(entry.context_status, Some(context));
+    for unit in &units {
+        let entry = entry(&first, unit.id());
+        assert_eq!(entry.outcome, UnitUpdateOutcome::Unchanged);
         assert_eq!(entry.continuity, Some(Continuity::SAME_BINDING));
-        assert_eq!(proposed_binding(entry), &entry.previous_binding);
+        assert!(!entry.changes_unit());
     }
-    assert!(!entry(&plan, ids[0]).changes_unit());
-    assert!(
-        entry(&plan, ids[1]).changes_unit(),
-        "a context-only change still refreshes the fingerprint"
+
+    let same_version = game(OLD, &[(SHEET, &spec)]);
+    assert!(!plan(&units, &same_version).changes_workspace());
+}
+
+#[test]
+fn changed_text_needs_review_and_re_encoded_bytes_with_the_same_text_do_not() {
+    let old = game(
+        OLD,
+        &[(
+            SHEET,
+            &Spec::new(1, &[0])
+                .row(1, &[(0, "Alpha")])
+                .row(2, &[(0, "Beta")])
+                .row_bytes(3, 0, b"Gamma\xff"),
+        )],
     );
-    assert_eq!(plan.summary.unchanged, 2);
+    let new = game(
+        NEW,
+        &[(
+            SHEET,
+            &Spec::new(1, &[0])
+                .row(1, &[(0, "Alpha")])
+                .row(2, &[(0, "Beta revised")])
+                .row_bytes(3, 0, b"Gamma\xfe"),
+        )],
+    );
+    let units: Vec<_> = (1..=3).map(|row| unit(&old.source, row, 0)).collect();
+    assert_eq!(units[2].source().text(), "Gamma\u{fffd}");
+
+    let plan = plan(&units, &new);
+    let outcomes: Vec<_> = units
+        .iter()
+        .map(|unit| entry(&plan, unit.id()).outcome)
+        .collect();
+    assert_eq!(
+        outcomes,
+        [
+            UnitUpdateOutcome::Unchanged,
+            UnitUpdateOutcome::SourceChanged,
+            UnitUpdateOutcome::Unchanged,
+        ]
+    );
+    let changed = entry(&plan, units[1].id());
+    assert_eq!(
+        changed.proposed.as_ref().expect("bound").text(),
+        "Beta revised"
+    );
+    assert_eq!(changed.previous.text(), "Beta");
     assert_eq!(plan.summary.source_changed, 1);
-    assert_eq!(plan.summary.encoding_changed, 1);
-    assert_eq!(plan.summary.changed_units, 3);
+    assert_eq!(plan.summary.changed_units, 1);
 }
 
 #[test]
-fn missing_rows_and_sheets_detach_units_and_keep_their_last_facts() {
-    let old_fixture = write_snapshot(&snapshot(
-        "old",
-        vec![row(1, "kept", None, &[1]), row(2, "removed", None, &[2])],
-    ));
-    let without_row = write_snapshot(&snapshot("new", vec![row(1, "kept", None, &[1])]));
-    let renamed_sheet = write_snapshot(&renamed(
-        snapshot(
-            "new",
-            vec![row(1, "kept", None, &[1]), row(2, "removed", None, &[2])],
-        ),
-        "Renamed",
-    ));
-    let old = open(&old_fixture);
-    let mut workspace = Workspace::from_verified_snapshot(&old, "fr").expect("workspace");
-    let kept = workspace
-        .create_unit_from_hxs(&old, SHEET, 1, 0, 0, "kept")
-        .expect("unit");
-    let removed = workspace
-        .create_unit_from_hxs(&old, SHEET, 2, 0, 0, "removed")
-        .expect("unit");
+fn removed_rows_removed_sheets_and_unreadable_sheets_detach_units_with_their_facts() {
+    let spec = Spec::new(1, &[0])
+        .row(1, &[(0, "kept")])
+        .row(2, &[(0, "removed")]);
+    let old = game(OLD, &[(SHEET, &spec), ("Gone", &spec), ("Broken", &spec)]);
+    let units = vec![
+        unit(&old.source, 1, 0),
+        unit(&old.source, 2, 0),
+        unit_in(&old.source, "Gone", 1, 0),
+        unit_in(&old.source, "Broken", 1, 0),
+    ];
 
-    let plan_without_row = plan(&workspace, &open(&without_row));
-    assert_eq!(
-        entry(&plan_without_row, kept).outcome,
-        UnitUpdateOutcome::Unchanged
-    );
-    let detached = entry(&plan_without_row, removed);
-    assert_eq!(
-        detached.outcome,
-        UnitUpdateOutcome::Detached(DetachReason::RowRemoved)
-    );
-    assert!(detached.proposed.is_none());
-    assert!(detached.continuity.is_none());
-    assert_eq!(
-        detached.previous_binding,
-        SourceBinding::new(SHEET, 2, 0, 0)
-    );
-    assert_eq!(plan_without_row.summary.newly_detached, 1);
+    let folder = tempfile::tempdir().expect("folder");
+    let japanese_only = FakeSheet::new(vec![ColumnKind::String])
+        .with_rows(Language::Japanese, vec![FakeRow::new(1, vec!["x".into()])]);
+    FakeGame::new(NEW)
+        .with_sheet(SHEET, Spec::new(1, &[0]).row(1, &[(0, "kept")]).fake())
+        .with_sheet("Broken", japanese_only)
+        .write(folder.path())
+        .expect("game");
+    let new = Game {
+        source: GameSource::open(folder.path(), SourceLanguage::English).expect("source"),
+        _folder: folder,
+    };
 
-    let plan_renamed = plan(&workspace, &open(&renamed_sheet));
-    assert!(
-        plan_renamed
-            .entries()
-            .iter()
-            .all(|entry| entry.outcome == UnitUpdateOutcome::Detached(DetachReason::SheetRemoved))
+    let plan = plan(&units, &new);
+    let outcomes: Vec<_> = units
+        .iter()
+        .map(|unit| entry(&plan, unit.id()).outcome)
+        .collect();
+    assert_eq!(
+        outcomes,
+        [
+            UnitUpdateOutcome::Unchanged,
+            UnitUpdateOutcome::Detached(DetachReason::RowRemoved),
+            UnitUpdateOutcome::Detached(DetachReason::SheetRemoved),
+            UnitUpdateOutcome::Detached(DetachReason::SheetUnavailable),
+        ]
     );
-    assert_eq!(plan_renamed.sheet_schema_updates.len(), 1);
-    assert_eq!(plan_renamed.sheet_schema_updates[0].sheet_name, SHEET);
-    assert!(plan_renamed.sheet_schema_updates[0].schema_hash.is_none());
+    for unit in &units[1..] {
+        let entry = entry(&plan, unit.id());
+        assert_eq!(&entry.previous, unit.source());
+        assert!(entry.proposed.is_none());
+        assert!(entry.changes_unit());
+    }
+    let unavailable: Vec<_> = plan
+        .sheet_layout_updates
+        .iter()
+        .map(|update| {
+            (
+                update.sheet_name.as_str(),
+                update.unavailable,
+                update.layout,
+            )
+        })
+        .collect();
+    assert_eq!(unavailable, [("Broken", true, None), ("Gone", false, None)]);
 }
 
 #[test]
-fn a_sheet_the_new_source_cannot_read_is_unavailable_not_removed() {
-    let rows = vec![row(1, "kept", None, &[1])];
-    let old_fixture = write_snapshot(&snapshot("old", rows.clone()));
-    let old = open(&old_fixture);
-    let unreadable = write_snapshot(&with_excluded_sheet(
-        renamed(snapshot("new", rows), "Other"),
-        SHEET,
-    ));
-    let unreadable = open(&unreadable);
-    assert_eq!(unreadable.excluded_sheets().len(), 1);
-
-    let mut workspace = Workspace::from_verified_snapshot(&old, "fr").expect("workspace");
-    let unit = workspace
-        .create_unit_from_hxs(&old, SHEET, 1, 0, 0, "kept")
-        .expect("unit");
-
-    let plan = plan(&workspace, &unreadable);
-    let entry = entry(&plan, unit);
-    assert_eq!(
-        entry.outcome,
-        UnitUpdateOutcome::Detached(DetachReason::SheetUnavailable)
+fn a_shifted_row_keeps_its_binding_and_needs_review_in_an_unkeyed_sheet() {
+    let old = game(
+        OLD,
+        &[(
+            SHEET,
+            &Spec::new(1, &[0])
+                .row(100, &[(0, "Alpha")])
+                .row(101, &[(0, "Beta")]),
+        )],
     );
-    assert!(entry.proposed.is_none());
-    assert_eq!(entry.previous_binding, SourceBinding::new(SHEET, 1, 0, 0));
-    assert_eq!(plan.summary.newly_detached, 1);
-    assert_eq!(plan.sheet_schema_updates.len(), 1);
-    assert!(plan.sheet_schema_updates[0].unavailable);
-    assert!(plan.sheet_schema_updates[0].schema_hash.is_none());
-}
-
-#[test]
-fn a_shifted_row_keeps_its_binding_and_is_marked_for_review_not_rebound() {
-    let old_fixture = write_snapshot(&snapshot(
-        "old",
-        vec![row(100, "Alpha", None, &[1]), row(101, "Beta", None, &[2])],
-    ));
-    let new_fixture = write_snapshot(&snapshot(
-        "new",
-        vec![
-            row(100, "Inserted", None, &[1]),
-            row(101, "Alpha", None, &[2]),
-            row(102, "Beta", None, &[3]),
-        ],
-    ));
-    let old = open(&old_fixture);
-    let mut workspace = Workspace::from_verified_snapshot(&old, "fr").expect("workspace");
-    let alpha = workspace
-        .create_unit_from_hxs(&old, SHEET, 100, 0, 0, "alpha")
-        .expect("unit");
-    let beta = workspace
-        .create_unit_from_hxs(&old, SHEET, 101, 0, 0, "beta")
-        .expect("unit");
-
-    let plan = plan(&workspace, &open(&new_fixture));
-    for id in [alpha, beta] {
-        let entry = entry(&plan, id);
+    let new = game(
+        NEW,
+        &[(
+            SHEET,
+            &Spec::new(1, &[0])
+                .row(100, &[(0, "Inserted")])
+                .row(101, &[(0, "Alpha")])
+                .row(102, &[(0, "Beta")]),
+        )],
+    );
+    let units = vec![unit(&old.source, 100, 0), unit(&old.source, 101, 0)];
+    let plan = plan(&units, &new);
+    for (unit, text) in units.iter().zip(["Inserted", "Alpha"]) {
+        let entry = entry(&plan, unit.id());
         assert_eq!(entry.outcome, UnitUpdateOutcome::SourceChanged);
-        assert_eq!(proposed_binding(entry), &entry.previous_binding);
+        assert_eq!(proposed(entry), unit.source_binding());
+        assert_eq!(entry.proposed.as_ref().expect("bound").text(), text);
     }
 }
 
 #[test]
-fn an_inserted_column_is_mapped_by_exact_content_instead_of_shifting_translations() {
-    let old_rows = (1..=4)
-        .map(|row_id| {
-            row_with_cells(
-                row_id,
-                1,
-                vec![
-                    cell(0, &format!("name {row_id}"), None),
-                    cell(2, &format!("description {row_id}"), None),
-                ],
-            )
-        })
-        .collect();
-    let new_rows = (1..=4)
-        .map(|row_id| {
-            let description = if row_id == 4 {
-                "description 4 revised".to_owned()
-            } else {
-                format!("description {row_id}")
-            };
-            row_with_cells(
-                row_id,
-                1,
-                vec![
-                    cell(2, &format!("name {row_id}"), None),
-                    cell(4, &description, None),
-                ],
-            )
-        })
-        .collect();
-    let old_fixture = write_snapshot(&snapshot("old", old_rows));
-    let new_fixture = write_snapshot(&snapshot("new", new_rows));
-    let old = open(&old_fixture);
-    let new = open(&new_fixture);
-    let mut workspace = Workspace::from_verified_snapshot(&old, "fr").expect("workspace");
-    let mut units = Vec::new();
-    for row_id in 1..=4 {
-        for column in [0, 2] {
-            let id = workspace
-                .create_unit_from_hxs(&old, SHEET, row_id, 0, column, "target")
-                .expect("unit");
-            units.push((id, row_id, column));
-        }
-    }
+fn an_inserted_column_is_mapped_by_exact_text_instead_of_shifting_translations() {
+    // Columns 0 and 2 hold the name and description; the patch inserts a
+    // String column at 0, moving them to 1 and 3.
+    let old = game(
+        OLD,
+        &[(
+            SHEET,
+            &Spec::new(3, &[0, 2])
+                .row(1, &[(0, "Sword"), (2, "A blade")])
+                .row(2, &[(0, "Shield"), (2, "A board")])
+                .row(3, &[(0, "Bow"), (2, "A stick")]),
+        )],
+    );
+    let new = game(
+        NEW,
+        &[(
+            SHEET,
+            &Spec::new(4, &[0, 1, 3])
+                .row(1, &[(0, "new"), (1, "Sword"), (3, "A blade")])
+                .row(2, &[(0, "new"), (1, "Shield"), (3, "A board, revised")])
+                .row(3, &[(0, "new"), (1, "Bow"), (3, "A stick")]),
+        )],
+    );
+    let names: Vec<_> = (1..=3).map(|row| unit(&old.source, row, 0)).collect();
+    let descriptions: Vec<_> = (1..=3).map(|row| unit(&old.source, row, 2)).collect();
+    let units: Vec<_> = names.iter().chain(&descriptions).cloned().collect();
 
-    let plan = plan(&workspace, &new);
-    assert_eq!(plan.sheet_schema_updates.len(), 1);
-    let columns: Vec<_> = plan.sheet_schema_updates[0]
+    let plan = plan(&units, &new);
+    for (unit, column) in names
+        .iter()
+        .map(|unit| (unit, 1))
+        .chain(descriptions.iter().map(|unit| (unit, 3)))
+    {
+        let entry = entry(&plan, unit.id());
+        assert_eq!(proposed(entry).column_index(), column);
+        assert!(matches!(
+            entry.continuity.expect("bound").column,
+            ColumnContinuity::Mapped {
+                evidence: ColumnMappingEvidence::ExactContent { .. },
+                ..
+            }
+        ));
+    }
+    assert_eq!(
+        entry(&plan, descriptions[1].id()).outcome,
+        UnitUpdateOutcome::SourceChanged,
+        "a changed cell in a mapped column needs review"
+    );
+    assert_eq!(plan.summary.column_mapped, 6);
+    assert_eq!(plan.summary.source_changed, 1);
+    let update = &plan.sheet_layout_updates[0];
+    let mapped: Vec<_> = update
         .columns
         .iter()
         .map(|mapping| (mapping.previous_column, mapping.column))
         .collect();
-    assert_eq!(columns, vec![(0, Some(2)), (2, Some(4))]);
-    for (id, row_id, column) in units {
-        let entry = entry(&plan, id);
-        let (expected_column, supporting) = if column == 0 { (2, 4) } else { (4, 3) };
-        assert_eq!(
-            proposed_binding(entry),
-            &SourceBinding::new(SHEET, row_id, 0, expected_column),
-            "a translation never moves to a different logical column"
-        );
-        assert_eq!(
-            entry.continuity,
-            Some(Continuity::column_mapped(
-                column,
-                ColumnMappingEvidence::ExactContent {
-                    supporting,
-                    cast: supporting,
-                }
-            ))
-        );
-        let expected_outcome = if row_id == 4 && column == 2 {
-            UnitUpdateOutcome::SourceChanged
-        } else {
-            UnitUpdateOutcome::Unchanged
-        };
-        assert_eq!(entry.outcome, expected_outcome);
-    }
-    assert_eq!(plan.summary.column_mapped, 8);
-    assert_eq!(plan.summary.detached, 0);
+    assert_eq!(mapped, [(0, Some(1)), (2, Some(3))]);
+    assert_eq!(
+        update.columns[1].evidence,
+        Some(ColumnMappingEvidence::ExactContent {
+            supporting: 2,
+            cast: 2
+        })
+    );
 }
 
 #[test]
-fn without_content_evidence_only_an_unchanged_column_position_is_trusted() {
-    let old_fixture = write_snapshot(&snapshot(
-        "old",
-        vec![row(1, "a", None, &[1]), row(2, "b", None, &[2])],
-    ));
-    let appended_column = write_snapshot(&snapshot(
-        "new",
-        vec![
-            row_with_cells(1, 1, vec![cell(0, "a revised", None), cell(6, "x", None)]),
-            row_with_cells(2, 2, vec![cell(0, "b revised", None), cell(6, "y", None)]),
-        ],
-    ));
-    let moved_column = write_snapshot(&snapshot(
-        "new",
-        vec![
-            row_at(1, 2, "a revised", None, &[1]),
-            row_at(2, 2, "b revised", None, &[2]),
-        ],
-    ));
-    let old = open(&old_fixture);
-    let mut workspace = Workspace::from_verified_snapshot(&old, "fr").expect("workspace");
-    for row_id in [1, 2] {
-        workspace
-            .create_unit_from_hxs(&old, SHEET, row_id, 0, 0, "target")
-            .expect("unit");
-    }
+fn a_number_column_change_keeps_the_layout_and_every_binding() {
+    let old = game(OLD, &[(SHEET, &Spec::new(2, &[0]).row(1, &[(0, "Alpha")]))]);
+    let new = game(NEW, &[(SHEET, &Spec::new(3, &[0]).row(1, &[(0, "Alpha")]))]);
+    let units = vec![unit(&old.source, 1, 0)];
+    let plan = plan(&units, &new);
+    assert!(plan.sheet_layout_updates.is_empty());
+    assert_eq!(
+        entry(&plan, units[0].id()).continuity,
+        Some(Continuity::SAME_BINDING)
+    );
+}
 
-    let appended = plan(&workspace, &open(&appended_column));
-    for entry in appended.entries() {
-        assert_eq!(entry.outcome, UnitUpdateOutcome::SourceChanged);
-        assert_eq!(proposed_binding(entry), &entry.previous_binding);
+#[test]
+fn a_layout_change_without_evidence_or_with_split_or_colliding_evidence_is_never_guessed() {
+    let old = game(
+        OLD,
+        &[(
+            SHEET,
+            &Spec::new(2, &[0, 1])
+                .row(1, &[(0, "A1"), (1, "B1")])
+                .row(2, &[(0, "A2"), (1, "B2")])
+                .row(3, &[(0, "A3"), (1, "Same")]),
+        )],
+    );
+    // Column 0's texts all changed (no votes); column 1's votes split
+    // between the new columns 1 and 2.
+    let split = game(
+        NEW,
+        &[(
+            SHEET,
+            &Spec::new(3, &[0, 1, 2])
+                .row(1, &[(0, "x"), (1, "B1"), (2, "y")])
+                .row(2, &[(0, "x"), (1, "y"), (2, "B2")])
+                .row(3, &[(0, "x"), (1, "Same"), (2, "Same")]),
+        )],
+    );
+    let units: Vec<_> = [(1, 0), (2, 0), (1, 1), (2, 1), (3, 1)]
+        .into_iter()
+        .map(|(row, column)| unit(&old.source, row, column))
+        .collect();
+    let plan = plan(&units, &split);
+    for unit in &units {
         assert_eq!(
-            entry.continuity,
-            Some(Continuity::column_mapped(
-                0,
-                ColumnMappingEvidence::UnchangedPosition
-            ))
-        );
-    }
-
-    let moved = plan(&workspace, &open(&moved_column));
-    for entry in moved.entries() {
-        assert_eq!(
-            entry.outcome,
+            entry(&plan, unit.id()).outcome,
             UnitUpdateOutcome::Detached(DetachReason::ColumnUnresolved)
         );
     }
-    assert_eq!(moved.sheet_schema_updates[0].columns[0].column, None);
-}
 
-#[test]
-fn split_or_colliding_column_evidence_is_never_guessed() {
-    let split_old = write_snapshot(&snapshot(
-        "old",
-        vec![row(1, "p", None, &[1]), row(2, "q", None, &[2])],
-    ));
-    let split_new = write_snapshot(&snapshot(
-        "new",
-        vec![
-            row_with_cells(1, 1, vec![cell(2, "p", None), cell(4, "other", None)]),
-            row_with_cells(2, 2, vec![cell(2, "another", None), cell(4, "q", None)]),
-        ],
-    ));
-    let old = open(&split_old);
-    let mut workspace = Workspace::from_verified_snapshot(&old, "fr").expect("workspace");
-    for row_id in [1, 2] {
-        workspace
-            .create_unit_from_hxs(&old, SHEET, row_id, 0, 0, "target")
-            .expect("unit");
-    }
-    let split = plan(&workspace, &open(&split_new));
-    assert!(
-        split
-            .entries()
-            .iter()
-            .all(|entry| entry.outcome
-                == UnitUpdateOutcome::Detached(DetachReason::ColumnUnresolved))
+    // Both previous columns find their texts in the same new column.
+    let colliding = game(
+        NEW,
+        &[(
+            SHEET,
+            &Spec::new(3, &[0, 2])
+                .row(1, &[(0, "x"), (2, "A1")])
+                .row(2, &[(0, "x"), (2, "B2")]),
+        )],
     );
-
-    let collision_old = write_snapshot(&snapshot(
-        "old",
-        vec![
-            row_with_cells(1, 1, vec![cell(0, "first", None), cell(2, "x", None)]),
-            row_with_cells(2, 2, vec![cell(0, "y", None), cell(2, "second", None)]),
-        ],
-    ));
-    let collision_new = write_snapshot(&snapshot(
-        "new",
-        vec![
-            row_at(1, 4, "first", None, &[1]),
-            row_at(2, 4, "second", None, &[2]),
-        ],
-    ));
-    let old = open(&collision_old);
-    let mut workspace = Workspace::from_verified_snapshot(&old, "fr").expect("workspace");
-    workspace
-        .create_unit_from_hxs(&old, SHEET, 1, 0, 0, "target")
-        .expect("unit");
-    workspace
-        .create_unit_from_hxs(&old, SHEET, 2, 0, 2, "target")
-        .expect("unit");
-    let collision = plan(&workspace, &open(&collision_new));
-    assert!(
-        collision
-            .entries()
-            .iter()
-            .all(|entry| entry.outcome
-                == UnitUpdateOutcome::Detached(DetachReason::ColumnUnresolved))
-    );
-    assert!(
-        collision.sheet_schema_updates[0]
-            .columns
-            .iter()
-            .all(|mapping| mapping.column.is_none())
-    );
-}
-
-#[test]
-fn guidance_detaches_blocked_occurrences_and_detached_units_reattach_later() {
-    let fixture = write_snapshot(&snapshot(
-        "old",
-        vec![row(1, "one", None, &[1]), row(2, "two", None, &[2])],
-    ));
-    let source = open(&fixture);
-    let mut workspace = Workspace::from_verified_snapshot(&source, "fr").expect("workspace");
-    workspace
-        .create_unit_from_hxs(&source, SHEET, 1, 0, 0, "one")
-        .expect("unit");
-    let blocked = workspace
-        .create_unit_from_hxs(&source, SHEET, 2, 0, 0, "two")
-        .expect("unit");
-    workspace
-        .update_review_state(blocked, ReviewState::Reviewed)
-        .expect("review");
-
-    let blocked_plan = plan_source_update(workspace.metadata(), workspace.units(), &source, |b| {
-        b.row_id() != 2
-    })
-    .expect("plan");
+    let units = vec![unit(&old.source, 1, 0), unit(&old.source, 2, 1)];
+    let plan = self::plan(&units, &colliding);
+    let mapped: Vec<_> = plan.sheet_layout_updates[0]
+        .columns
+        .iter()
+        .map(|mapping| mapping.column)
+        .collect();
     assert_eq!(
-        entry(&blocked_plan, blocked).outcome,
+        mapped,
+        [None, None],
+        "two columns mapping to one are unresolved"
+    );
+}
+
+#[test]
+fn a_removed_string_column_detaches_as_cell_removed_in_an_unchanged_row() {
+    let old = game(
+        OLD,
+        &[(SHEET, &Spec::new(2, &[0, 1]).row(1, &[(0, "A"), (1, "B")]))],
+    );
+    let units = vec![unit(&old.source, 1, 1)];
+    // Same layout hash is impossible when a String column is removed, so the
+    // unit goes through mapping; its text is gone and the column unresolved.
+    let new = game(NEW, &[(SHEET, &Spec::new(2, &[0]).row(1, &[(0, "A")]))]);
+    assert_eq!(
+        entry(&plan(&units, &new), units[0].id()).outcome,
+        UnitUpdateOutcome::Detached(DetachReason::ColumnUnresolved)
+    );
+    // A unit whose recorded layout matches but whose column is no longer a
+    // String column (a merged unit with a stale column) is cell-removed.
+    let current = sheet(&new.source, SHEET);
+    let stale = SourceFacts::new(binding(1, 1), current.layout(), "B", None);
+    let stale = TranslationUnit::new(
+        TranslationUnitId::derive(stale.binding(), "B").expect("ID"),
+        stale,
+        "t",
+    );
+    assert_eq!(
+        entry(&plan(std::slice::from_ref(&stale), &new), stale.id()).outcome,
+        UnitUpdateOutcome::Detached(DetachReason::CellRemoved)
+    );
+}
+
+#[test]
+fn lost_permission_detaches_and_a_later_game_reattaches() {
+    let spec = Spec::new(1, &[0]).row(1, &[(0, "Name")]);
+    let old = game(OLD, &[(SHEET, &spec)]);
+    let units = vec![unit(&old.source, 1, 0)];
+    let blanked = game(
+        NEW,
+        &[(SHEET, &Spec::new(1, &[0]).keyed(0).row(1, &[(0, "Name")]))],
+    );
+    let plan = plan(&units, &blanked);
+    assert_eq!(
+        entry(&plan, units[0].id()).outcome,
         UnitUpdateOutcome::Detached(DetachReason::NotTranslatable)
     );
-    assert_eq!(blocked_plan.summary.newly_detached, 1);
 
-    let mut detached = workspace.unit(blocked).expect("unit").clone();
+    let mut detached = units[0].clone();
     detached.detach(DetachReason::NotTranslatable);
-    let units = [
-        workspace
-            .units()
-            .find(|unit| unit.id() != blocked)
-            .expect("permitted unit")
-            .clone(),
-        detached,
-    ];
-    let permitted =
-        plan_source_update(workspace.metadata(), units.iter(), &source, |_| true).expect("plan");
-    let reattached = entry(&permitted, blocked);
-    assert_eq!(reattached.outcome, UnitUpdateOutcome::Unchanged);
-    assert!(reattached.reattaches());
-    assert!(reattached.changes_unit());
-    assert_eq!(permitted.summary.reattached, 1);
-    assert_eq!(permitted.summary.detached, 0);
-}
-
-fn dialogue_row(row_id: u32, key: &str, text: &str) -> RowSpec {
-    row_with_cells(
-        row_id,
-        u8::try_from(row_id).expect("small test row"),
-        vec![cell(0, key, None), cell(2, text, None)],
-    )
-}
-
-fn dialogue_guidance(binding: &SourceBinding) -> bool {
-    binding.column_index() == 2
-}
-
-/// Units at column 2 of the given rows, carrying the row keys of `snapshot`.
-fn keyed_units(snapshot: &HxsSnapshot, rows: &[u32]) -> (Workspace, Vec<TranslationUnit>) {
-    let keys = RowKeys::read(snapshot, SHEET, dialogue_guidance)
-        .expect("row keys read")
-        .expect("dialogue sheet is keyed");
-    assert_eq!(keys.column(), 0);
-    let mut workspace = Workspace::from_verified_snapshot(snapshot, "fr").expect("workspace");
-    let units = rows
-        .iter()
-        .map(|&row_id| {
-            let id = workspace
-                .create_unit_from_hxs(snapshot, SHEET, row_id, 0, 2, "target")
-                .expect("unit");
-            workspace
-                .unit(id)
-                .expect("unit")
-                .clone()
-                .with_source_row_key(keys.key_of(row_id, 0))
-        })
-        .collect();
-    (workspace, units)
+    let restored = game("2026.11.01.0000.0000", &[(SHEET, &spec)]);
+    let plan = plan_source_update(&metadata(NEW), [&detached], &restored.source).expect("plan");
+    let entry = entry(&plan, detached.id());
+    assert_eq!(entry.outcome, UnitUpdateOutcome::Unchanged);
+    assert!(entry.reattaches());
+    assert_eq!(plan.summary.reattached, 1);
 }
 
 #[test]
-fn keyed_rows_follow_their_line_when_a_line_is_inserted() {
-    let old_fixture = write_snapshot(&snapshot(
-        "old",
-        vec![
-            dialogue_row(1, "TEXT_Q_001", "Hello"),
-            dialogue_row(2, "TEXT_Q_002", "Goodbye"),
-        ],
-    ));
-    let new_fixture = write_snapshot(&snapshot(
-        "new",
-        vec![
-            dialogue_row(1, "TEXT_Q_000", "Inserted"),
-            dialogue_row(2, "TEXT_Q_001", "Hello"),
-            dialogue_row(3, "TEXT_Q_002", "Goodbye"),
-        ],
-    ));
-    let old = open(&old_fixture);
-    let new = open(&new_fixture);
-    let (workspace, units) = keyed_units(&old, &[1, 2]);
-    let new_keys = RowKeys::read(&new, SHEET, dialogue_guidance)
-        .expect("row keys")
-        .expect("keyed");
-
-    let plan = plan_source_update(workspace.metadata(), units.iter(), &new, dialogue_guidance)
-        .expect("plan");
-    for (unit, (previous_row, new_row)) in units.iter().zip([(1, 2), (2, 3)]) {
+fn a_detached_unit_reattaches_when_its_sheet_or_row_returns() {
+    let spec = Spec::new(1, &[0]).row(1, &[(0, "Back")]);
+    let old = game(OLD, &[(SHEET, &spec)]);
+    let mut removed_row = unit(&old.source, 1, 0);
+    removed_row.detach(DetachReason::RowRemoved);
+    let mut removed_sheet = removed_row.clone();
+    removed_sheet.detach(DetachReason::SheetRemoved);
+    let new = game(NEW, &[(SHEET, &spec)]);
+    for unit in [removed_row, removed_sheet] {
+        let plan = plan(std::slice::from_ref(&unit), &new);
         let entry = entry(&plan, unit.id());
         assert_eq!(entry.outcome, UnitUpdateOutcome::Unchanged);
-        assert_eq!(
-            proposed_binding(entry),
-            &SourceBinding::new(SHEET, new_row, 0, 2)
-        );
-        assert_eq!(
-            entry.continuity.map(|continuity| continuity.row),
-            Some(RowContinuity::RowKey {
-                previous_row_id: previous_row,
-                previous_subrow_id: 0,
-            })
-        );
-        assert_eq!(
-            entry
-                .proposed
-                .as_ref()
-                .and_then(|proposed| proposed.row_key),
-            new_keys.key_of(new_row, 0)
-        );
+        assert!(entry.reattaches() && entry.changes_unit());
+    }
+}
+
+fn dialogue(rows: &[(u32, &str, &str)]) -> Spec {
+    rows.iter()
+        .fold(Spec::new(2, &[0, 1]).keyed(0), |spec, (row, key, text)| {
+            spec.row(*row, &[(0, key), (1, text)])
+        })
+}
+
+#[test]
+fn keyed_lines_follow_their_key_when_a_line_is_inserted() {
+    let old = game(
+        OLD,
+        &[(
+            SHEET,
+            &dialogue(&[(100, "K1", "Alpha"), (101, "K2", "Beta")]),
+        )],
+    );
+    let new = game(
+        NEW,
+        &[(
+            SHEET,
+            &dialogue(&[
+                (100, "K0", "Inserted"),
+                (101, "K1", "Alpha"),
+                (102, "K2", "Beta"),
+            ]),
+        )],
+    );
+    let units = vec![unit(&old.source, 100, 1), unit(&old.source, 101, 1)];
+    assert_eq!(units[0].source().row_key(), Some("K1"));
+    let plan = plan(&units, &new);
+    for (unit, row) in units.iter().zip([101, 102]) {
+        let entry = entry(&plan, unit.id());
+        assert_eq!(entry.outcome, UnitUpdateOutcome::Unchanged);
+        assert_eq!(proposed(entry), &binding(row, 1));
+        assert!(matches!(
+            entry.continuity.expect("bound").row,
+            RowContinuity::RowKey { .. }
+        ));
     }
     assert_eq!(plan.summary.row_moved, 2);
 }
 
 #[test]
 fn a_removed_keyed_line_is_detached_even_when_its_row_id_is_reused() {
-    let old_fixture = write_snapshot(&snapshot(
-        "old",
-        vec![
-            dialogue_row(1, "TEXT_Q_001", "Hello"),
-            dialogue_row(2, "TEXT_Q_002", "Goodbye"),
-        ],
-    ));
-    let new_fixture = write_snapshot(&snapshot(
-        "new",
-        vec![
-            dialogue_row(1, "TEXT_Q_001", "Hello"),
-            dialogue_row(2, "TEXT_Q_003", "A different line"),
-        ],
-    ));
-    let old = open(&old_fixture);
-    let new = open(&new_fixture);
-    let (workspace, units) = keyed_units(&old, &[1, 2]);
-
-    let plan = plan_source_update(workspace.metadata(), units.iter(), &new, dialogue_guidance)
-        .expect("plan");
+    let old = game(
+        OLD,
+        &[(
+            SHEET,
+            &dialogue(&[(100, "K1", "Alpha"), (101, "K2", "Beta")]),
+        )],
+    );
+    let new = game(
+        NEW,
+        &[(
+            SHEET,
+            &dialogue(&[(100, "K1", "Alpha"), (101, "K3", "Gamma")]),
+        )],
+    );
+    let units = vec![unit(&old.source, 100, 1), unit(&old.source, 101, 1)];
+    let plan = plan(&units, &new);
     assert_eq!(
         entry(&plan, units[0].id()).outcome,
         UnitUpdateOutcome::Unchanged
@@ -666,1423 +536,235 @@ fn a_removed_keyed_line_is_detached_even_when_its_row_id_is_reused() {
 }
 
 #[test]
-fn units_without_row_keys_keep_their_row_ids_and_receive_keys() {
-    let old_fixture = write_snapshot(&snapshot(
-        "old",
-        vec![
-            dialogue_row(1, "TEXT_Q_001", "Hello"),
-            dialogue_row(2, "TEXT_Q_002", "Goodbye"),
-        ],
-    ));
-    let new_fixture = write_snapshot(&snapshot(
-        "new",
-        vec![
-            dialogue_row(1, "TEXT_Q_000", "Inserted"),
-            dialogue_row(2, "TEXT_Q_001", "Hello"),
-            dialogue_row(3, "TEXT_Q_002", "Goodbye"),
-        ],
-    ));
-    let old = open(&old_fixture);
-    let new = open(&new_fixture);
-    let (workspace, units) = keyed_units(&old, &[1, 2]);
-    let keyless: Vec<TranslationUnit> = units
-        .iter()
-        .map(|unit| unit.clone().with_source_row_key(None))
-        .collect();
-    let new_keys = RowKeys::read(&new, SHEET, dialogue_guidance)
-        .expect("row keys")
-        .expect("keyed");
+fn units_without_keys_keep_their_rows_and_receive_keys() {
+    let old = game(
+        OLD,
+        &[(
+            SHEET,
+            &Spec::new(2, &[0, 1])
+                .row(1, &[(0, "a"), (1, "Alpha")])
+                .row(2, &[(0, "b"), (1, "Beta")]),
+        )],
+    );
+    let units = vec![unit(&old.source, 1, 1)];
+    assert_eq!(units[0].source().row_key(), None);
+    let new = game(
+        NEW,
+        &[(SHEET, &dialogue(&[(1, "K1", "Alpha"), (2, "K2", "Beta")]))],
+    );
+    let plan = plan(&units, &new);
+    let entry = entry(&plan, units[0].id());
+    assert_eq!(entry.outcome, UnitUpdateOutcome::Unchanged);
+    assert_eq!(proposed(entry), &binding(1, 1));
+    assert_eq!(
+        entry.proposed.as_ref().expect("bound").row_key(),
+        Some("K1")
+    );
+    assert!(entry.changes_unit(), "a new key is written");
+}
 
-    let plan = plan_source_update(
-        workspace.metadata(),
-        keyless.iter(),
-        &new,
-        dialogue_guidance,
-    )
-    .expect("plan");
-    for unit in &keyless {
+#[test]
+fn when_keys_stop_being_unique_rows_keep_their_ids() {
+    let old = game(
+        OLD,
+        &[(SHEET, &dialogue(&[(1, "K1", "Alpha"), (2, "K2", "Beta")]))],
+    );
+    let new = game(
+        NEW,
+        &[(
+            SHEET,
+            &dialogue(&[(1, "K", "Beta"), (2, "K", "Alpha"), (3, "K3", "Gamma")]),
+        )],
+    );
+    let units = vec![unit(&old.source, 1, 1), unit(&old.source, 2, 1)];
+    let plan = plan(&units, &new);
+    for unit in &units {
         let entry = entry(&plan, unit.id());
         assert_eq!(entry.outcome, UnitUpdateOutcome::SourceChanged);
-        assert_eq!(proposed_binding(entry), &entry.previous_binding);
-        assert_eq!(
-            entry
-                .proposed
-                .as_ref()
-                .and_then(|proposed| proposed.row_key),
-            new_keys.key_of(entry.previous_binding.row_id(), 0),
-            "the next update can follow the row by its key"
-        );
+        assert_eq!(proposed(entry), unit.source_binding());
+        assert_eq!(entry.proposed.as_ref().expect("bound").row_key(), None);
     }
-
-    let unkeyed = plan_source_update(workspace.metadata(), units.iter(), &new, |_| true)
-        .expect("plan without a key column");
-    assert!(unkeyed.entries().iter().all(|entry| {
-        entry.outcome == UnitUpdateOutcome::SourceChanged
-            && entry
-                .proposed
-                .as_ref()
-                .is_some_and(|proposed| proposed.row_key.is_none())
-    }));
 }
 
 #[test]
 fn a_binding_claimed_twice_keeps_its_current_owner_and_detaches_the_other() {
-    let fixture = write_snapshot(&snapshot("old", vec![row(1, "one", None, &[1])]));
-    let source = open(&fixture);
-    let mut workspace = Workspace::from_verified_snapshot(&source, "fr").expect("workspace");
-    let owner = workspace
-        .create_unit_from_hxs(&source, SHEET, 1, 0, 0, "owner")
-        .expect("unit");
-    let owner_unit = workspace.unit(owner).expect("unit").clone();
-    let claimant_id = TranslationUnitId::from_bytes([0; 32]);
-    assert!(claimant_id < owner);
-    let claimant = TranslationUnit::new(
-        claimant_id,
-        owner_unit.source_binding().clone(),
-        *owner_unit.source_fingerprint(),
-        "older translation",
-    )
-    .with_source_layout(owner_unit.source_layout().expect("layout"))
-    .with_source_status(SourceStatus::Detached(DetachReason::NotTranslatable));
-
-    let plan = plan_source_update(
-        workspace.metadata(),
-        [&owner_unit, &claimant],
-        &source,
-        |_| true,
-    )
-    .expect("plan");
-    assert_eq!(entry(&plan, owner).outcome, UnitUpdateOutcome::Unchanged);
+    let spec = Spec::new(1, &[0]).row(1, &[(0, "Line")]);
+    let old = game(OLD, &[(SHEET, &spec)]);
+    let owner = unit(&old.source, 1, 0);
+    // A unit merged from another branch that was bound to the same cell
+    // under an older text.
+    let facts = SourceFacts::new(binding(1, 0), owner.source().layout(), "Old line", None);
+    let other = TranslationUnit::new(
+        TranslationUnitId::derive(facts.binding(), facts.text()).expect("ID"),
+        facts,
+        "other",
+    );
+    let new = game(NEW, &[(SHEET, &spec)]);
+    let units = vec![owner.clone(), other.clone()];
+    let plan = plan(&units, &new);
     assert_eq!(
-        entry(&plan, claimant_id).outcome,
+        entry(&plan, owner.id()).outcome,
+        UnitUpdateOutcome::Unchanged
+    );
+    assert_eq!(
+        entry(&plan, other.id()).outcome,
+        UnitUpdateOutcome::Detached(DetachReason::BindingConflict)
+    );
+
+    // Between two units with the same claim, the smallest ID wins.
+    let mut twin = owner.clone();
+    twin.set_target_macro("twin");
+    let twin = TranslationUnit::new(
+        TranslationUnitId::from_bytes([0; 16]),
+        owner.source().clone(),
+        "twin",
+    );
+    let plan = self::plan(&[owner.clone(), twin.clone()], &new);
+    assert_eq!(
+        entry(&plan, twin.id()).outcome,
+        UnitUpdateOutcome::Unchanged
+    );
+    assert_eq!(
+        entry(&plan, owner.id()).outcome,
         UnitUpdateOutcome::Detached(DetachReason::BindingConflict)
     );
 }
 
 #[test]
-fn workspace_format_v1_units_use_unchanged_content_or_exact_content_evidence() {
-    let old_fixture = write_snapshot(&snapshot(
-        "old",
-        vec![row(1, "one", None, &[1]), row(2, "two", None, &[2])],
-    ));
-    let new_fixture = write_snapshot(&snapshot(
-        "new",
-        vec![row(1, "one", None, &[1]), row(2, "two revised", None, &[2])],
-    ));
-    let old = open(&old_fixture);
-    let new = open(&new_fixture);
-    let mut workspace = Workspace::from_verified_snapshot(&old, "fr").expect("workspace");
-    for row_id in [1, 2] {
-        workspace
-            .create_unit_from_hxs(&old, SHEET, row_id, 0, 0, "target")
-            .expect("unit");
-    }
-    let legacy: Vec<_> = workspace
-        .units()
-        .map(|unit| {
-            let mut legacy = TranslationUnit::new(
-                unit.id(),
-                unit.source_binding().clone(),
-                *unit.source_fingerprint(),
-                unit.target_macro(),
-            );
-            legacy.set_review_state(unit.review_state());
-            legacy
-        })
-        .collect();
-    assert!(legacy.iter().all(|unit| unit.source_layout().is_none()));
-
-    let same_content =
-        plan_source_update(workspace.metadata(), legacy.iter(), &old, |_| true).expect("plan");
-    for (entry, unit) in same_content.entries().iter().zip(workspace.units()) {
-        assert_eq!(entry.outcome, UnitUpdateOutcome::Unchanged);
-        assert_eq!(entry.continuity, Some(Continuity::SAME_BINDING));
-        assert_eq!(
-            entry.proposed.as_ref().map(|proposed| proposed.layout),
-            unit.source_layout()
-        );
-    }
-
-    let new_content =
-        plan_source_update(workspace.metadata(), legacy.iter(), &new, |_| true).expect("plan");
-    assert_eq!(new_content.sheet_schema_updates.len(), 1);
-    assert!(
-        new_content.sheet_schema_updates[0]
-            .previous_schema_hash
-            .is_none()
-    );
-    let outcomes: Vec<_> = new_content
-        .entries()
-        .iter()
-        .map(|entry| (entry.previous_binding.row_id(), entry.outcome))
-        .collect();
-    assert!(outcomes.contains(&(1, UnitUpdateOutcome::Unchanged)));
-    assert!(outcomes.contains(&(2, UnitUpdateOutcome::SourceChanged)));
-    assert!(new_content.entries().iter().all(|entry| entry.continuity
-        == Some(Continuity::column_mapped(
-            0,
-            ColumnMappingEvidence::ExactContent {
-                supporting: 1,
-                cast: 1,
-            }
-        ))));
-}
-
-#[test]
-fn a_different_source_language_and_repeated_ids_are_errors() {
-    let old_fixture = write_snapshot(&snapshot("old", vec![row(1, "one", None, &[1])]));
-    let other_language = write_snapshot(&snapshot_with_language(
-        "new",
-        "ja",
-        vec![row(1, "one", None, &[1])],
-    ));
-    let old = open(&old_fixture);
-    let mut workspace = Workspace::from_verified_snapshot(&old, "fr").expect("workspace");
-    let id = workspace
-        .create_unit_from_hxs(&old, SHEET, 1, 0, 0, "target")
-        .expect("unit");
+fn another_language_an_older_game_and_repeated_ids_are_errors() {
+    let spec = Spec::new(1, &[0]).row(1, &[(0, "Line")]);
+    let old = game(OLD, &[(SHEET, &spec)]);
+    let units = vec![unit(&old.source, 1, 0)];
+    let german =
+        WorkspaceMetadata::new("de", "fr", OLD.parse().expect("version")).expect("metadata");
     assert!(matches!(
-        plan_source_update(
-            workspace.metadata(),
-            workspace.units(),
-            &open(&other_language),
-            |_| true
-        ),
+        plan_source_update(&german, &units, &old.source),
         Err(SourceUpdateError::SourceLanguageMismatch { .. })
     ));
-
-    let unit = workspace.unit(id).expect("unit");
     assert!(matches!(
-        plan_source_update(workspace.metadata(), [unit, unit], &old, |_| true),
-        Err(SourceUpdateError::InvalidWorkspace { message }) if message.contains("duplicate")
+        plan_source_update(&metadata(NEW), &units, &old.source),
+        Err(SourceUpdateError::GameOutdated { .. })
     ));
-}
-
-#[test]
-fn equivalent_physical_insertion_order_produces_the_same_plan() {
-    let old_spec = snapshot(
-        "old",
-        vec![row(1, "one", None, &[1]), row(2, "two", None, &[2])],
-    );
-    let mut new_spec = snapshot(
-        "new",
-        vec![row(1, "one!", None, &[9]), row(2, "two", None, &[10])],
-    );
-    new_spec.reverse_insertion = true;
-    let old_fixture = write_snapshot(&old_spec);
-    let new_fixture = write_snapshot(&new_spec);
-    let equivalent_new_fixture = write_snapshot(&snapshot(
-        "new",
-        vec![row(2, "two", None, &[10]), row(1, "one!", None, &[9])],
-    ));
-    let old = open(&old_fixture);
-    let mut workspace = Workspace::from_verified_snapshot(&old, "fr").expect("workspace");
-    workspace
-        .create_unit_from_hxs(&old, SHEET, 1, 0, 0, "one")
-        .expect("first unit");
-    workspace
-        .create_unit_from_hxs(&old, SHEET, 2, 0, 0, "two")
-        .expect("second unit");
-
-    assert_eq!(
-        plan(&workspace, &open(&new_fixture)),
-        plan(&workspace, &open(&equivalent_new_fixture))
-    );
-}
-
-#[test]
-#[allow(clippy::too_many_lines)]
-fn bounded_exhaustive_transition_model_obeys_binding_continuity_oracle() {
-    let old_fixture = write_snapshot(&snapshot(
-        "old",
-        vec![
-            row(10, "Alpha", None, &[1]),
-            row(11, "Beta", Some(b"beta".to_vec()), &[2]),
-            row(12, "Gamma", Some(b"gamma".to_vec()), &[3]),
-        ],
-    ));
-    let old = open(&old_fixture);
-    let mut workspace = Workspace::from_verified_snapshot(&old, "fr").expect("workspace");
-    for (row_id, column_index, target) in [(10, 0, "a"), (11, 0, "b"), (12, 0, "c")] {
-        workspace
-            .create_unit_from_hxs(&old, SHEET, row_id, 0, column_index, target)
-            .expect("model unit");
-    }
-    let unit_origins: BTreeMap<_, _> = workspace
-        .units()
-        .map(|unit| {
-            (
-                unit.id(),
-                usize::try_from(unit.source_binding().row_id() - 10).expect("model origin"),
-            )
-        })
-        .collect();
-    let old_content = [
-        (macro_hash("Alpha"), None, 1_u8),
-        (macro_hash("Beta"), Some(raw_hash(b"beta")), 2_u8),
-        (macro_hash("Gamma"), Some(raw_hash(b"gamma")), 3_u8),
-    ];
-    let placements = model_placements();
-    let mut states = 0_usize;
-    let mut bound = 0_usize;
-    let mut source_changed = 0_usize;
-    let mut detached = 0_usize;
-    let mut wrong_mappings = 0_usize;
-
-    for placement in placements {
-        for mutation_mask in 0_u8..8 {
-            for include_inserted in [false, true] {
-                let mut new_rows = Vec::new();
-                let mut new_content = BTreeMap::new();
-                for (origin, slot) in placement.iter().enumerate() {
-                    let Some(slot) = slot else {
-                        continue;
-                    };
-                    let (row_id, column_index) = model_slot(*slot);
-                    let mutated = mutation_mask & (1 << origin) != 0;
-                    let (macro_text, raw_value, technical) = if mutated {
-                        (
-                            format!("changed-{origin}"),
-                            Some(vec![90 + u8::try_from(origin).expect("origin")]),
-                            90 + u8::try_from(origin).expect("origin"),
-                        )
-                    } else {
-                        match origin {
-                            0 => ("Alpha".into(), None, 1),
-                            1 => ("Beta".into(), Some(b"beta".to_vec()), 2),
-                            2 => ("Gamma".into(), Some(b"gamma".to_vec()), 3),
-                            _ => unreachable!("bounded model origin"),
-                        }
-                    };
-                    new_rows.push(row_at(
-                        row_id,
-                        column_index,
-                        &macro_text,
-                        raw_value.clone(),
-                        &[technical],
-                    ));
-                    let binding = SourceBinding::new(SHEET, row_id, 0, column_index);
-                    new_content.insert(
-                        binding,
-                        (
-                            macro_hash(&macro_text),
-                            raw_value.as_deref().map(raw_hash),
-                            technical,
-                        ),
-                    );
-                }
-                if include_inserted {
-                    let occupied: BTreeSet<_> = placement.iter().flatten().copied().collect();
-                    if let Some(slot) = (0..4).find(|slot| !occupied.contains(slot)) {
-                        let (row_id, column_index) = model_slot(slot);
-                        new_rows.push(row_at(
-                            row_id,
-                            column_index,
-                            "Beta",
-                            Some(b"beta".to_vec()),
-                            &[7],
-                        ));
-                        let binding = SourceBinding::new(SHEET, row_id, 0, column_index);
-                        new_content
-                            .insert(binding, (macro_hash("Beta"), Some(raw_hash(b"beta")), 7));
-                    }
-                }
-
-                let new_fixture = write_snapshot(&snapshot("new", new_rows));
-                let new = open(&new_fixture);
-                let plan = plan(&workspace, &new);
-                states += 1;
-                let actual_ids: BTreeSet<_> = plan
-                    .entries()
-                    .iter()
-                    .map(|entry| entry.translation_unit_id)
-                    .collect();
-                let expected_ids: BTreeSet<_> = unit_origins.keys().copied().collect();
-                assert_eq!(actual_ids, expected_ids);
-                for entry in plan.entries() {
-                    let origin = unit_origins[&entry.translation_unit_id];
-                    if let Some((new_macro, new_raw, new_technical)) =
-                        new_content.get(&entry.previous_binding)
-                    {
-                        bound += 1;
-                        assert_eq!(entry.continuity, Some(Continuity::SAME_BINDING));
-                        let (old_macro, old_raw, old_technical) = old_content[origin];
-                        let expected_outcome = if old_macro != *new_macro {
-                            source_changed += 1;
-                            UnitUpdateOutcome::SourceChanged
-                        } else if old_raw != *new_raw {
-                            UnitUpdateOutcome::EncodingChanged
-                        } else {
-                            UnitUpdateOutcome::Unchanged
-                        };
-                        assert_eq!(entry.outcome, expected_outcome);
-                        assert_eq!(
-                            entry.context_status,
-                            Some(if old_technical == *new_technical {
-                                SourceContextStatus::Unchanged
-                            } else {
-                                SourceContextStatus::Changed
-                            })
-                        );
-                        if proposed_binding(entry) != &entry.previous_binding {
-                            wrong_mappings += 1;
-                        }
-                    } else {
-                        detached += 1;
-                        assert!(matches!(entry.outcome, UnitUpdateOutcome::Detached(_)));
-                        assert!(entry.proposed.is_none());
-                        assert!(entry.continuity.is_none());
-                        assert!(entry.context_status.is_none());
-                    }
-                }
-            }
-        }
-    }
-
-    println!(
-        "model states: {states}; bound entries: {bound}; source-changed entries: {source_changed}; detached entries: {detached}; wrong mappings: {wrong_mappings}"
-    );
-    assert_eq!(wrong_mappings, 0);
-    assert_eq!(states, 73 * 8 * 2);
-    assert!(bound > 0);
-    assert!(source_changed > 0);
-    assert!(detached > 0);
-}
-
-#[test]
-fn candidate_suggestions_are_bounded_and_non_authoritative() {
-    let old_fixture = write_snapshot(&snapshot(
-        "old",
-        vec![row(1, "Hello", Some(b"raw".to_vec()), &[1])],
-    ));
-    let new_fixture = write_snapshot(&snapshot(
-        "new",
-        vec![
-            row(2, "Hello", Some(b"raw".to_vec()), &[1]),
-            row(3, "Hella", None, &[1]),
-            row(4, "Hello", Some(b"raw".to_vec()), &[1]),
-        ],
-    ));
-    let old = HxsSnapshot::open(&old_fixture.path).expect("old HXS");
-    let new = HxsSnapshot::open(&new_fixture.path).expect("new HXS");
-    let mut workspace = Workspace::from_verified_snapshot(&old, "fr").expect("workspace");
-    let id = workspace
-        .create_unit_from_hxs(&old, SHEET, 1, 0, 0, "target")
-        .expect("unit");
-    let before = workspace.clone();
-    let unit = workspace.units().next().expect("unit view");
-    assert_eq!(id, unit.id());
-    let suggester = CandidateSuggester::from_snapshot(&new).expect("candidate index");
-    let suggestions = suggester
-        .suggest(CandidateQuery::new(id), unit, &old, &new)
-        .expect("suggestions");
-
-    assert_eq!(suggestions.len(), 3);
-    assert_eq!(suggestions[0].binding.row_id(), 2);
-    assert_eq!(suggestions[0].evidence, CandidateEvidence::MacroAndRawValue);
-    assert_eq!(suggestions[1].binding.row_id(), 4);
-    assert_eq!(suggestions[2].binding.row_id(), 3);
-    assert!(
-        suggestions
-            .iter()
-            .all(|candidate| candidate.binding.row_id() != 1)
-    );
-    assert_eq!(workspace, before);
-    let after = workspace.units().next().expect("unit view after");
-    assert_eq!(after.id(), id);
-    assert_eq!(after.source_binding().row_id(), 1);
-}
-
-#[test]
-fn unique_exact_candidate_remains_only_a_review_suggestion() {
-    let old_fixture = write_snapshot(&snapshot("old", vec![row(1, "Cancel", None, &[1])]));
-    let new_fixture = write_snapshot(&snapshot("new", vec![row(2, "Cancel", None, &[1])]));
-    let old = HxsSnapshot::open(&old_fixture.path).expect("old HXS");
-    let new = HxsSnapshot::open(&new_fixture.path).expect("new HXS");
-    let mut workspace = Workspace::from_verified_snapshot(&old, "fr").expect("workspace");
-    let id = workspace
-        .create_unit_from_hxs(&old, SHEET, 1, 0, 0, "target")
-        .expect("unit");
-    let before = workspace.clone();
-    let unit = workspace.units().next().expect("unit view");
-    let suggestions = CandidateSuggester::from_snapshot(&new)
-        .expect("candidate index")
-        .suggest(CandidateQuery::new(id), unit, &old, &new)
-        .expect("suggestions");
-    assert_eq!(suggestions.len(), 1);
-    assert_eq!(suggestions[0].binding.row_id(), 2);
-    assert_eq!(workspace, before);
-    assert_eq!(
-        workspace
-            .units()
-            .next()
-            .expect("unit view")
-            .source_binding()
-            .row_id(),
-        1
-    );
-}
-
-#[test]
-fn candidate_payload_snapshot_must_match_the_index_snapshot() {
-    let old_fixture = write_snapshot(&snapshot("old", vec![row(1, "Cancel", None, &[1])]));
-    let index_fixture = write_snapshot(&snapshot("new-a", vec![row(2, "Cancel", None, &[1])]));
-    let payload_fixture = write_snapshot(&snapshot("new-b", vec![row(3, "Cancel", None, &[1])]));
-    let old = HxsSnapshot::open(&old_fixture.path).expect("old HXS");
-    let index_snapshot = HxsSnapshot::open(&index_fixture.path).expect("new A HXS");
-    let payload_snapshot = HxsSnapshot::open(&payload_fixture.path).expect("new B HXS");
-    let mut workspace = Workspace::from_verified_snapshot(&old, "fr").expect("workspace");
-    let id = workspace
-        .create_unit_from_hxs(&old, SHEET, 1, 0, 0, "target")
-        .expect("unit");
-    let unit = workspace.units().next().expect("unit view");
-    let error = CandidateSuggester::from_snapshot(&index_snapshot)
-        .expect("candidate index")
-        .suggest(CandidateQuery::new(id), unit, &old, &payload_snapshot)
-        .expect_err("different payload snapshot must be rejected");
+    let repeated = vec![units[0].clone(), units[0].clone()];
     assert!(matches!(
-        error,
-        CandidateSuggestionError::NewSnapshotMismatch { .. }
+        plan_source_update(&metadata(OLD), &repeated, &old.source),
+        Err(SourceUpdateError::InvalidWorkspace { .. })
     ));
 }
 
-#[test]
-fn producer_metadata_does_not_change_candidate_payload_compatibility() {
-    let old_fixture = write_snapshot(&snapshot("old", vec![row(1, "Cancel", None, &[1])]));
-    let index_fixture = write_snapshot(&snapshot_with_producer(
-        "new",
-        "en",
-        "extractor-a",
-        "lumina-a",
-        vec![row(2, "Cancel", None, &[1])],
-    ));
-    let payload_fixture = write_snapshot(&snapshot_with_producer(
-        "new",
-        "en",
-        "extractor-b",
-        "lumina-b",
-        vec![row(2, "Cancel", None, &[1])],
-    ));
-    let old = HxsSnapshot::open(&old_fixture.path).expect("old HXS");
-    let index_snapshot = HxsSnapshot::open(&index_fixture.path).expect("index HXS");
-    let payload_snapshot = HxsSnapshot::open(&payload_fixture.path).expect("payload HXS");
-    assert_eq!(
-        index_snapshot.metadata().game_version,
-        payload_snapshot.metadata().game_version
-    );
-    assert_eq!(
-        index_snapshot.metadata().source_language,
-        payload_snapshot.metadata().source_language
-    );
-    assert_eq!(
-        index_snapshot.metadata().scope,
-        payload_snapshot.metadata().scope
-    );
-    assert_eq!(
-        index_snapshot.metadata().content_id,
-        payload_snapshot.metadata().content_id
-    );
-    assert_eq!(
-        index_snapshot.metadata().snapshot_id,
-        payload_snapshot.metadata().snapshot_id
-    );
-    assert_ne!(
-        index_snapshot.metadata().producer,
-        payload_snapshot.metadata().producer
-    );
-    let mut workspace = Workspace::from_verified_snapshot(&old, "fr").expect("workspace");
-    let id = workspace
-        .create_unit_from_hxs(&old, SHEET, 1, 0, 0, "target")
-        .expect("unit");
-    let unit = workspace.units().next().expect("unit view");
-    let suggester = CandidateSuggester::from_snapshot(&index_snapshot).expect("candidate index");
-    let with_producer_difference = suggester
-        .suggest(CandidateQuery::new(id), unit, &old, &payload_snapshot)
-        .expect("producer-only metadata difference must be accepted");
-    let with_same_snapshot = suggester
-        .suggest(CandidateQuery::new(id), unit, &old, &index_snapshot)
-        .expect("index snapshot payload must be accepted");
-    assert_eq!(with_producer_difference, with_same_snapshot);
+/// Row slots of the bounded model: two rows and two String columns.
+fn model_slot(slot: usize) -> (u32, usize) {
+    (10 + u32::try_from(slot / 2).expect("small"), slot % 2)
 }
 
-#[test]
-fn old_payload_must_match_the_managed_unit_baseline() {
-    let managed_fixture = write_snapshot(&snapshot("old-a", vec![row(1, "Cancel", None, &[1])]));
-    let supplied_fixture = write_snapshot(&snapshot("old-b", vec![row(1, "Changed", None, &[1])]));
-    let new_fixture = write_snapshot(&snapshot("new", vec![row(2, "Cancel", None, &[1])]));
-    let managed_snapshot = HxsSnapshot::open(&managed_fixture.path).expect("old A HXS");
-    let supplied_snapshot = HxsSnapshot::open(&supplied_fixture.path).expect("old B HXS");
-    let new = HxsSnapshot::open(&new_fixture.path).expect("new HXS");
-    let mut workspace =
-        Workspace::from_verified_snapshot(&managed_snapshot, "fr").expect("workspace");
-    let id = workspace
-        .create_unit_from_hxs(&managed_snapshot, SHEET, 1, 0, 0, "target")
-        .expect("unit");
-    let unit = workspace.units().next().expect("unit view");
-    let error = CandidateSuggester::from_snapshot(&new)
-        .expect("candidate index")
-        .suggest(CandidateQuery::new(id), unit, &supplied_snapshot, &new)
-        .expect_err("stale old payload must be rejected");
-    assert!(matches!(
-        error,
-        CandidateSuggestionError::OldBaselineMismatch { .. }
-    ));
-}
-
-#[test]
-fn surviving_bindings_never_compete_for_candidate_suggestions() {
-    let old_fixture = write_snapshot(&snapshot("old", vec![row(1, "Hello", None, &[1])]));
-    let new_fixture = write_snapshot(&snapshot(
-        "new",
-        vec![row(1, "Hello", None, &[1]), row(2, "Hello", None, &[1])],
-    ));
-    let old = HxsSnapshot::open(&old_fixture.path).expect("old HXS");
-    let new = HxsSnapshot::open(&new_fixture.path).expect("new HXS");
-    let mut workspace = Workspace::from_verified_snapshot(&old, "fr").expect("workspace");
-    let id = workspace
-        .create_unit_from_hxs(&old, SHEET, 1, 0, 0, "target")
-        .expect("unit");
-    let unit = workspace.units().next().expect("unit view");
-    let suggestions = CandidateSuggester::from_snapshot(&new)
-        .expect("candidate index")
-        .suggest(CandidateQuery::new(id), unit, &old, &new)
-        .expect("suggestions");
-    assert!(suggestions.is_empty());
-}
-
-#[test]
-fn duplicate_candidate_groups_are_capped_and_requested_top_k_is_clamped() {
-    let old_fixture = write_snapshot(&snapshot("old", vec![row(1, "Yes", None, &[1])]));
-    let generated_limit =
-        u32::try_from(MAX_GENERATED_CANDIDATES).expect("test limit fits HXS coordinate");
-    let new_rows = (100..(100 + generated_limit + 10))
-        .map(|row_id| row(row_id, "Yes", None, &[1]))
-        .collect();
-    let new_fixture = write_snapshot(&snapshot("new", new_rows));
-    let old = HxsSnapshot::open(&old_fixture.path).expect("old HXS");
-    let new = HxsSnapshot::open(&new_fixture.path).expect("new HXS");
-    let mut workspace = Workspace::from_verified_snapshot(&old, "fr").expect("workspace");
-    let id = workspace
-        .create_unit_from_hxs(&old, SHEET, 1, 0, 0, "target")
-        .expect("unit");
-    let unit = workspace.units().next().expect("unit view");
-    let suggestions = CandidateSuggester::from_snapshot(&new)
-        .expect("candidate index")
-        .suggest(
-            CandidateQuery {
-                translation_unit_id: id,
-                limit: usize::MAX,
-            },
-            unit,
-            &old,
-            &new,
-        )
-        .expect("suggestions");
-    assert_eq!(suggestions.len(), MAX_RESULT_LIMIT);
-    assert_eq!(suggestions.first().expect("first").binding.row_id(), 100);
-    let result_limit = u32::try_from(MAX_RESULT_LIMIT).expect("test limit fits HXS coordinate");
-    assert_eq!(
-        suggestions.last().expect("last").binding.row_id(),
-        100 + result_limit - 1
-    );
-}
-
-#[test]
-fn equivalent_physical_insertion_order_produces_identical_candidate_suggestions() {
-    let old_fixture = write_snapshot(&snapshot("old", vec![row(1, "one", None, &[1])]));
-    let mut indexed_spec = snapshot(
-        "new",
-        vec![
-            row(9, "one", None, &[9]),
-            row(10, "one", None, &[10]),
-            row(11, "near", None, &[11]),
-        ],
-    );
-    indexed_spec.reverse_insertion = true;
-    let indexed_fixture = write_snapshot(&indexed_spec);
-    let payload_fixture = write_snapshot(&snapshot(
-        "new",
-        vec![
-            row(11, "near", None, &[11]),
-            row(9, "one", None, &[9]),
-            row(10, "one", None, &[10]),
-        ],
-    ));
-    let old = HxsSnapshot::open(&old_fixture.path).expect("old HXS");
-    let indexed = HxsSnapshot::open(&indexed_fixture.path).expect("indexed new HXS");
-    let payload = HxsSnapshot::open(&payload_fixture.path).expect("payload new HXS");
-    let mut workspace = Workspace::from_verified_snapshot(&old, "fr").expect("workspace");
-    let id = workspace
-        .create_unit_from_hxs(&old, SHEET, 1, 0, 0, "target")
-        .expect("unit");
-    let unit = workspace.units().next().expect("unit view");
-    let suggester = CandidateSuggester::from_snapshot(&indexed).expect("candidate index");
-    let from_indexed_storage = suggester
-        .suggest(CandidateQuery::new(id), unit, &old, &indexed)
-        .expect("indexed payload");
-    let from_reordered_storage = suggester
-        .suggest(CandidateQuery::new(id), unit, &old, &payload)
-        .expect("reordered payload");
-    assert_eq!(from_indexed_storage, from_reordered_storage);
-}
-
-fn snapshot(game_version: &str, rows: Vec<RowSpec>) -> SnapshotSpec {
-    snapshot_with_language(game_version, "en", rows)
-}
-
-fn model_slot(slot: usize) -> (u32, u32) {
-    (10 + u32::try_from(slot).expect("bounded model slot"), 0)
-}
-
+/// Every injective placement of three logical rows into four slots, where a
+/// row may also be removed.
 fn model_placements() -> Vec<[Option<usize>; 3]> {
-    fn visit(
-        origin: usize,
-        current: &mut [Option<usize>; 3],
-        used_slots: u8,
-        result: &mut Vec<[Option<usize>; 3]>,
-    ) {
-        if origin == current.len() {
-            result.push(*current);
-            return;
-        }
-        current[origin] = None;
-        visit(origin + 1, current, used_slots, result);
-        for slot in 0..4 {
-            let bit = 1_u8 << slot;
-            if used_slots & bit == 0 {
-                current[origin] = Some(slot);
-                visit(origin + 1, current, used_slots | bit, result);
-            }
-        }
-    }
-
-    let mut result = Vec::new();
-    visit(0, &mut [None; 3], 0, &mut result);
-    result
-}
-
-fn snapshot_with_language(
-    game_version: &str,
-    source_language: &str,
-    rows: Vec<RowSpec>,
-) -> SnapshotSpec {
-    snapshot_with_producer(game_version, source_language, "test", "7.7.0", rows)
-}
-
-fn snapshot_with_producer(
-    game_version: &str,
-    source_language: &str,
-    extractor_version: &str,
-    lumina_version: &str,
-    rows: Vec<RowSpec>,
-) -> SnapshotSpec {
-    SnapshotSpec {
-        game_version: game_version.into(),
-        source_language: source_language.into(),
-        scope: "full".into(),
-        extractor_version: extractor_version.into(),
-        lumina_version: lumina_version.into(),
-        sheet_name: "台詞".into(),
-        rows,
-        reverse_insertion: false,
-        excluded_sheets: Vec::new(),
-    }
-}
-
-fn row(row_id: u32, macro_text: &str, raw_value: Option<Vec<u8>>, technical: &[u8]) -> RowSpec {
-    row_at(row_id, 0, macro_text, raw_value, technical)
-}
-
-fn cell(column_index: u32, macro_text: &str, raw_value: Option<Vec<u8>>) -> CellSpec {
-    CellSpec {
-        column_index,
-        macro_text: macro_text.into(),
-        raw_value,
-    }
-}
-
-fn with_excluded_sheet(mut spec: SnapshotSpec, sheet_name: &str) -> SnapshotSpec {
-    spec.excluded_sheets.push(sheet_name.into());
-    spec.excluded_sheets.sort();
-    spec
-}
-
-fn renamed(mut spec: SnapshotSpec, sheet_name: &str) -> SnapshotSpec {
-    spec.sheet_name = sheet_name.into();
-    spec
-}
-
-fn row_with_cells(row_id: u32, technical: u8, cells: Vec<CellSpec>) -> RowSpec {
-    RowSpec {
-        row_id,
-        subrow_id: 0,
-        technical,
-        cells,
-    }
-}
-
-fn row_at(
-    row_id: u32,
-    column_index: u32,
-    macro_text: &str,
-    raw_value: Option<Vec<u8>>,
-    technical: &[u8],
-) -> RowSpec {
-    RowSpec {
-        row_id,
-        subrow_id: 0,
-        technical: technical.first().copied().unwrap_or_default(),
-        cells: vec![cell(column_index, macro_text, raw_value)],
-    }
-}
-
-#[allow(clippy::too_many_lines)]
-fn write_snapshot(spec: &SnapshotSpec) -> Fixture {
-    let directory = tempfile::tempdir().expect("fixture directory");
-    let path = directory.path().join("snapshot.hxs");
-    let connection = Connection::open(&path).expect("fixture database");
-    connection.execute_batch(SYNTHETIC_SCHEMA).expect("schema");
-    let format_version = if spec.excluded_sheets.is_empty() {
-        1
-    } else {
-        2
-    };
-    connection
-        .execute_batch(&format!(
-            "PRAGMA application_id = {APPLICATION_ID}; PRAGMA user_version = {format_version}; PRAGMA foreign_keys = ON;"
-        ))
-        .expect("identity");
-    if format_version == 2 {
-        connection
-            .execute_batch(
-                "ALTER TABLE hxs_meta ADD COLUMN excluded_sheet_count INTEGER NOT NULL DEFAULT 0;
-                 CREATE TABLE excluded_sheets (
-                     name TEXT PRIMARY KEY,
-                     reason INTEGER NOT NULL CHECK (reason IN (1, 2, 3))
-                 );",
-            )
-            .expect("HXS v2 schema");
-        for name in &spec.excluded_sheets {
-            connection
-                .execute(
-                    "INSERT INTO excluded_sheets (name, reason) VALUES (?1, 3)",
-                    params![name],
-                )
-                .expect("excluded sheet");
-        }
-    }
-
-    let mut string_columns: Vec<_> = spec
-        .rows
-        .iter()
-        .flat_map(|row| row.cells.iter().map(|cell| cell.column_index))
-        .collect();
-    string_columns.sort_unstable();
-    string_columns.dedup();
-    let mut built_rows: Vec<_> = spec
-        .rows
-        .iter()
-        .map(|row| build_row(spec, row, &string_columns))
-        .collect();
-    built_rows.sort_by_key(|row| (row.spec.row_id, row.spec.subrow_id));
-    let schema_hash = schema_hash(&spec.sheet_name, &string_columns);
-    let technical_hash = sheet_rows_hash(
-        "HARMONIA-HXS-V1-SHEET-TECHNICAL",
-        &spec.sheet_name,
-        &built_rows,
-        |row| &row.technical_hash,
-    );
-    let string_hash = sheet_rows_hash(
-        "HARMONIA-HXS-V1-SHEET-STRINGS",
-        &spec.sheet_name,
-        &built_rows,
-        |row| &row.string_hash,
-    );
-    let content_hash = digest(|hasher| {
-        hasher.update(b"HARMONIA-HXS-V1-SHEET");
-        framed_text(hasher, &spec.sheet_name);
-        hasher.update(0_u32.to_le_bytes());
-        hasher.update(schema_hash);
-        hasher.update(technical_hash);
-        hasher.update(string_hash);
-    });
-    let content_id = format!(
-        "sha256:{}",
-        hex(&digest(|hasher| {
-            if format_version == 1 {
-                hasher.update(b"HARMONIA-HXS-CONTENT-v1");
-                framed_text(hasher, &spec.source_language);
-            } else {
-                hasher.update(b"HARMONIA-HXS-CONTENT-v2");
-                framed_text(hasher, &spec.source_language);
-                hasher.update(1_u32.to_le_bytes());
-            }
-            framed_text(hasher, &spec.sheet_name);
-            framed_text(hasher, &spec.source_language);
-            hasher.update(schema_hash);
-            hasher.update(content_hash);
-            if format_version == 2 {
-                let count = u32::try_from(spec.excluded_sheets.len()).expect("count");
-                hasher.update(count.to_le_bytes());
-                for name in &spec.excluded_sheets {
-                    framed_text(hasher, name);
-                    hasher.update(3_u32.to_le_bytes());
+    let choices: Vec<Option<usize>> = std::iter::once(None).chain((0..4).map(Some)).collect();
+    let mut placements = Vec::new();
+    for &a in &choices {
+        for &b in &choices {
+            for &c in &choices {
+                let used: Vec<usize> = [a, b, c].into_iter().flatten().collect();
+                let unique: BTreeSet<usize> = used.iter().copied().collect();
+                if used.len() == unique.len() {
+                    placements.push([a, b, c]);
                 }
             }
-        }))
-    );
-    let snapshot_id = format!(
-        "sha256:{}",
-        hex(&digest(|hasher| {
-            hasher.update(b"HARMONIA-HXS-SNAPSHOT-v1");
-            framed_text(hasher, &spec.game_version);
-            framed_text(hasher, &spec.source_language);
-            framed_text(hasher, &content_id);
-        }))
-    );
-
-    connection
-        .execute(
-            "INSERT INTO sheets (id, name, variant, effective_language, column_count, row_count, schema_hash, technical_hash, string_hash, content_hash) VALUES (1, ?1, 0, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-            params![
-                spec.sheet_name,
-                spec.source_language,
-                i64::try_from(string_columns.len() + 1).expect("column count"),
-                i64::try_from(built_rows.len()).expect("row count"),
-                schema_hash.as_slice(),
-                technical_hash.as_slice(),
-                string_hash.as_slice(),
-                content_hash.as_slice()
-            ],
-        )
-        .expect("sheet");
-    connection
-        .execute(
-            "INSERT INTO columns (sheet_id, column_index, offset, type) VALUES (1, 1, 4, 14)",
-            [],
-        )
-        .expect("String column");
-    for column_index in &string_columns {
-        connection
-            .execute(
-                "INSERT INTO columns (sheet_id, column_index, offset, type) VALUES (1, ?1, ?2, 1)",
-                params![column_index, column_index * 4],
-            )
-            .expect("String column");
-    }
-    let row_iter: Box<dyn Iterator<Item = &BuiltRow>> = if spec.reverse_insertion {
-        Box::new(built_rows.iter().rev())
-    } else {
-        Box::new(built_rows.iter())
-    };
-    for built in row_iter {
-        connection
-            .execute(
-                "INSERT INTO rows (sheet_id, row_id, subrow_id, technical_payload, row_hash, technical_hash, string_hash) VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6)",
-                params![
-                    built.spec.row_id,
-                    built.spec.subrow_id,
-                    built.technical_payload,
-                    built.row_hash.as_slice(),
-                    built.technical_hash.as_slice(),
-                    built.string_hash.as_slice()
-                ],
-            )
-            .expect("row");
-        let cells: Box<dyn Iterator<Item = &BuiltCell>> = if spec.reverse_insertion {
-            Box::new(built.cells.iter().rev())
-        } else {
-            Box::new(built.cells.iter())
-        };
-        for cell in cells {
-            connection
-                .execute(
-                    "INSERT INTO string_cells (sheet_id, row_id, subrow_id, column_index, macro_text, raw_value, macro_hash, raw_hash) VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-                    params![
-                        built.spec.row_id,
-                        built.spec.subrow_id,
-                        cell.spec.column_index,
-                        cell.spec.macro_text,
-                        cell.spec.raw_value,
-                        cell.macro_hash.as_slice(),
-                        cell.raw_hash.as_ref().map(<[u8; 32]>::as_slice)
-                    ],
-                )
-                .expect("String cell");
         }
     }
-    connection
-        .execute(
-            "INSERT INTO hxs_meta (id, format_version, game_version, language, scope, content_id, snapshot_id, extractor_version, lumina_version, sheet_count, row_count, string_cell_count) VALUES (1, 1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, 1, ?8, ?9)",
-            params![
-                spec.game_version,
-                spec.source_language,
-                spec.scope,
-                content_id,
-                snapshot_id,
-                spec.extractor_version,
-                spec.lumina_version,
-                i64::try_from(built_rows.len()).expect("row count"),
-                i64::try_from(built_rows.iter().map(|row| row.cells.len()).sum::<usize>())
-                    .expect("String-cell count")
-            ],
-        )
-        .expect("metadata");
-    if format_version == 2 {
-        connection
-            .execute(
-                "UPDATE hxs_meta SET format_version = 2, excluded_sheet_count = ?1",
-                params![i64::try_from(spec.excluded_sheets.len()).expect("count")],
-            )
-            .expect("HXS v2 metadata");
-    }
-    drop(connection);
-    Fixture {
-        _directory: directory,
-        path,
-    }
+    placements
 }
 
-struct BuiltCell {
-    spec: CellSpec,
-    macro_hash: [u8; 32],
-    raw_hash: Option<[u8; 32]>,
-}
-
-struct BuiltRow {
-    spec: RowSpec,
-    technical_payload: Vec<u8>,
-    row_hash: [u8; 32],
-    technical_hash: [u8; 32],
-    string_hash: [u8; 32],
-    cells: Vec<BuiltCell>,
-}
-
-fn build_row(snapshot: &SnapshotSpec, row: &RowSpec, string_columns: &[u32]) -> BuiltRow {
-    let mut cells: Vec<_> = row
-        .cells
+#[test]
+#[allow(clippy::single_match_else)]
+fn bounded_exhaustive_transition_model_obeys_the_binding_continuity_oracle() {
+    let texts = ["Alpha", "Beta", "Gamma"];
+    let old_spec = Spec::new(2, &[0, 1])
+        .row(10, &[(0, "Alpha"), (1, "Beta")])
+        .row(11, &[(0, "Gamma")]);
+    let old = game(OLD, &[(SHEET, &old_spec)]);
+    let origins = [(10, 0), (10, 1), (11, 0)];
+    let units: Vec<_> = origins
         .iter()
-        .cloned()
-        .map(|cell| BuiltCell {
-            macro_hash: macro_hash(&cell.macro_text),
-            raw_hash: cell.raw_value.as_deref().map(raw_hash),
-            spec: cell,
-        })
+        .map(|(row, column)| unit(&old.source, *row, *column))
         .collect();
-    for column_index in string_columns {
-        if !cells
-            .iter()
-            .any(|cell| cell.spec.column_index == *column_index)
-        {
-            let spec = CellSpec {
-                column_index: *column_index,
-                macro_text: String::new(),
-                raw_value: None,
-            };
-            cells.push(BuiltCell {
-                macro_hash: macro_hash(&spec.macro_text),
-                raw_hash: None,
-                spec,
-            });
-        }
-    }
-    cells.sort_by_key(|cell| cell.spec.column_index);
-    let mut string_parts = Vec::new();
-    for cell in &cells {
-        string_parts.extend(string_part(
-            cell.spec.column_index,
-            &cell.macro_hash,
-            cell.raw_hash.as_ref(),
-        ));
-    }
-    let technical_value = [row.technical, 0, 0, 0];
-    let technical_payload = [
-        1_u32.to_le_bytes().as_slice(),
-        14_u32.to_le_bytes().as_slice(),
-        4_u32.to_le_bytes().as_slice(),
-        &technical_value,
-    ]
-    .concat();
-    let technical_hash = digest(|hasher| {
-        hasher.update(b"HARMONIA-HXS-V1-ROW-TECHNICAL");
-        row_identity(hasher, &snapshot.sheet_name, row.row_id, row.subrow_id);
-        hasher.update(1_u32.to_le_bytes());
-        hasher.update(14_u32.to_le_bytes());
-        framed_bytes(hasher, &technical_value);
-    });
-    let string_hash = digest(|hasher| {
-        hasher.update(b"HARMONIA-HXS-V1-ROW-STRINGS");
-        row_identity(hasher, &snapshot.sheet_name, row.row_id, row.subrow_id);
-        hasher.update(string_parts);
-    });
-    let row_hash = digest(|hasher| {
-        hasher.update(b"HARMONIA-HXS-V1-ROW");
-        row_identity(hasher, &snapshot.sheet_name, row.row_id, row.subrow_id);
-        hasher.update(technical_hash);
-        hasher.update(string_hash);
-    });
-    BuiltRow {
-        spec: row.clone(),
-        technical_payload,
-        row_hash,
-        technical_hash,
-        string_hash,
-        cells,
-    }
-}
 
-fn schema_hash(sheet_name: &str, string_columns: &[u32]) -> [u8; 32] {
-    digest(|hasher| {
-        hasher.update(b"HARMONIA-HXS-V1-SCHEMA");
-        framed_text(hasher, sheet_name);
-        hasher.update(0_u32.to_le_bytes());
-        let mut columns: Vec<_> = string_columns
-            .iter()
-            .map(|column_index| (*column_index, column_index * 4, 1_u32))
-            .chain([(1_u32, 4_u32, 14_u32)])
-            .collect();
-        columns.sort_unstable_by_key(|column| column.0);
-        for (index, offset, type_code) in columns {
-            hasher.update(index.to_le_bytes());
-            hasher.update(offset.to_le_bytes());
-            hasher.update(type_code.to_le_bytes());
-        }
-    })
-}
-
-fn sheet_rows_hash(
-    domain: &str,
-    sheet_name: &str,
-    rows: &[BuiltRow],
-    select: impl Fn(&BuiltRow) -> &[u8; 32],
-) -> [u8; 32] {
-    digest(|hasher| {
-        hasher.update(domain.as_bytes());
-        framed_text(hasher, sheet_name);
-        for row in rows {
-            hasher.update(row.spec.row_id.to_le_bytes());
-            hasher.update(u32::from(row.spec.subrow_id).to_le_bytes());
-            hasher.update(select(row));
-        }
-    })
-}
-
-fn string_part(column_index: u32, macro_hash: &[u8; 32], raw_hash: Option<&[u8; 32]>) -> Vec<u8> {
-    let mut result = column_index.to_le_bytes().to_vec();
-    result.extend(macro_hash);
-    result.push(u8::from(raw_hash.is_some()));
-    if let Some(raw_hash) = raw_hash {
-        result.extend(raw_hash);
-    }
-    result
-}
-
-fn row_identity(hasher: &mut Sha256, sheet_name: &str, row_id: u32, subrow_id: u16) {
-    framed_text(hasher, sheet_name);
-    hasher.update(row_id.to_le_bytes());
-    hasher.update(u32::from(subrow_id).to_le_bytes());
-}
-
-fn macro_hash(value: &str) -> [u8; 32] {
-    digest(|hasher| {
-        hasher.update(b"HARMONIA-HXS-V1-MACRO");
-        framed_text(hasher, value);
-    })
-}
-
-fn raw_hash(value: &[u8]) -> [u8; 32] {
-    digest(|hasher| {
-        hasher.update(b"HARMONIA-HXS-V1-RAW-STRING");
-        framed_bytes(hasher, value);
-    })
-}
-
-fn framed_text(hasher: &mut Sha256, value: &str) {
-    hasher.update(
-        u32::try_from(value.len())
-            .expect("fixture text fits HXS framing")
-            .to_le_bytes(),
-    );
-    hasher.update(value.as_bytes());
-}
-
-fn framed_bytes(hasher: &mut Sha256, value: &[u8]) {
-    hasher.update(
-        u32::try_from(value.len())
-            .expect("fixture bytes fit HXS framing")
-            .to_le_bytes(),
-    );
-    hasher.update(value);
-}
-
-fn digest(update: impl FnOnce(&mut Sha256)) -> [u8; 32] {
-    let mut hasher = Sha256::new();
-    update(&mut hasher);
-    hasher.finalize().into()
-}
-
-fn hex(bytes: &[u8; 32]) -> String {
-    let mut result = String::with_capacity(64);
-    for byte in bytes {
-        write!(&mut result, "{byte:02x}").expect("String writing cannot fail");
-    }
-    result
-}
-
-#[test]
-fn a_legacy_unit_on_a_column_that_is_no_longer_text_is_detached_as_cell_removed() {
-    let fixture = write_snapshot(&snapshot(
-        "game",
-        vec![row(1, "one", None, &[1]), row(2, "two", None, &[2])],
-    ));
-    let source = open(&fixture);
-    let mut workspace = Workspace::from_verified_snapshot(&source, "fr").expect("workspace");
-    let text_unit = workspace
-        .create_unit_from_hxs(&source, SHEET, 1, 0, 0, "Un")
-        .expect("unit");
-    let text_unit = workspace.unit(text_unit).expect("unit").clone();
-    // A Workspace Format v1 unit records no layout. Column 1 is the sheet's
-    // Int32 column, so no String occurrence exists at this binding.
-    let mut legacy = TranslationUnit::new(
-        TranslationUnitId::from_bytes([9; 32]),
-        SourceBinding::new(SHEET, 1, 0, 1),
-        *text_unit.source_fingerprint(),
-        "kept",
-    );
-    legacy.set_translator_note(Some("note".to_owned()));
-    let units = [text_unit.clone(), legacy.clone()];
-
-    let plan =
-        plan_source_update(workspace.metadata(), units.iter(), &source, |_| true).expect("plan");
-    assert_eq!(
-        entry(&plan, legacy.id()).outcome,
-        UnitUpdateOutcome::Detached(DetachReason::CellRemoved)
-    );
-    assert!(entry(&plan, legacy.id()).proposed.is_none());
-    assert_eq!(
-        entry(&plan, text_unit.id()).outcome,
-        UnitUpdateOutcome::Unchanged
-    );
-}
-
-#[test]
-fn a_detached_unit_reattaches_when_its_sheet_or_row_returns() {
-    let original = write_snapshot(&snapshot(
-        "7.0",
-        vec![row(1, "one", None, &[1]), row(2, "two", None, &[2])],
-    ));
-    let original = open(&original);
-    let mut workspace = Workspace::from_verified_snapshot(&original, "fr").expect("workspace");
-    let id = workspace
-        .create_unit_from_hxs(&original, SHEET, 2, 0, 0, "Deux")
-        .expect("unit");
-    let bound = workspace.unit(id).expect("unit").clone();
-
-    for (reason, returned_text, expected) in [
-        (
-            DetachReason::SheetUnavailable,
-            "two",
-            UnitUpdateOutcome::Unchanged,
-        ),
-        (
-            DetachReason::SheetRemoved,
-            "two",
-            UnitUpdateOutcome::Unchanged,
-        ),
-        (
-            DetachReason::RowRemoved,
-            "two",
-            UnitUpdateOutcome::Unchanged,
-        ),
-        (
-            DetachReason::RowRemoved,
-            "two, revised",
-            UnitUpdateOutcome::SourceChanged,
-        ),
-    ] {
-        let mut detached = bound.clone();
-        detached.detach(reason);
-        let returned = write_snapshot(&snapshot(
-            "7.2",
-            vec![row(1, "one", None, &[1]), row(2, returned_text, None, &[2])],
-        ));
-        let returned = open(&returned);
-        let plan = plan_source_update(
-            workspace.metadata(),
-            std::iter::once(&detached),
-            &returned,
-            |_| true,
-        )
-        .expect("plan");
-        let entry = entry(&plan, id);
-        assert_eq!(entry.outcome, expected, "{reason:?} -> {returned_text}");
-        assert!(entry.reattaches());
-        assert_eq!(proposed_binding(entry), &SourceBinding::new(SHEET, 2, 0, 0));
-        assert_eq!(plan.summary.reattached, 1);
-    }
-}
-
-#[test]
-fn one_patch_with_an_inserted_column_moved_lines_changed_and_removed_text_resolves_each_unit() {
-    let old_fixture = write_snapshot(&snapshot(
-        "7.0",
-        vec![
-            dialogue_row(1, "Q1", "Hello"),
-            dialogue_row(2, "Q2", "Goodbye"),
-            dialogue_row(3, "Q3", "Later"),
-            dialogue_row(4, "Q4", "Farewell"),
-        ],
-    ));
-    // A speaker column is inserted before the text, a line is inserted at
-    // the top, Q2 and Q3 swap places, Q3's text changes, and Q4 is removed.
-    let speaker_row = |row_id: u32, key: &str, speaker: &str, text: &str| {
-        row_with_cells(
-            row_id,
-            u8::try_from(row_id).expect("small row"),
-            vec![
-                cell(0, key, None),
-                cell(2, speaker, None),
-                cell(4, text, None),
-            ],
-        )
-    };
-    let new_fixture = write_snapshot(&snapshot(
-        "7.1",
-        vec![
-            speaker_row(1, "Q0", "Alisaie", "Inserted line"),
-            speaker_row(2, "Q1", "Alphinaud", "Hello"),
-            speaker_row(3, "Q3", "Alisaie", "Later, revised"),
-            speaker_row(4, "Q2", "Alphinaud", "Goodbye"),
-        ],
-    ));
-    let old = open(&old_fixture);
-    let new = open(&new_fixture);
-    let (workspace, units) = keyed_units(&old, &[1, 2, 3, 4]);
-    let translatable = |binding: &SourceBinding| binding.column_index() >= 2;
-
-    let plan =
-        plan_source_update(workspace.metadata(), units.iter(), &new, translatable).expect("plan");
-    let expected = [
-        (1, Some((2, UnitUpdateOutcome::Unchanged))),
-        (2, Some((4, UnitUpdateOutcome::Unchanged))),
-        (3, Some((3, UnitUpdateOutcome::SourceChanged))),
-        (4, None),
-    ];
-    for (unit, (previous_row, expectation)) in units.iter().zip(expected) {
-        let entry = entry(&plan, unit.id());
-        match expectation {
-            Some((row_id, outcome)) => {
-                assert_eq!(entry.outcome, outcome, "line from row {previous_row}");
-                assert_eq!(
-                    proposed_binding(entry),
-                    &SourceBinding::new(SHEET, row_id, 0, 4),
-                    "line from row {previous_row} follows its key into the text column"
-                );
+    let (mut states, mut bound, mut source_changed, mut detached, mut wrong) = (0, 0, 0, 0, 0);
+    let placements = model_placements();
+    assert_eq!(placements.len(), 73);
+    for placement in placements {
+        for mask in 0_u8..8 {
+            for inserted in [false, true] {
+                let mut cells: BTreeMap<(u32, usize), String> = BTreeMap::new();
+                for (origin, slot) in placement.iter().enumerate() {
+                    if let Some(slot) = slot {
+                        let text = if mask & (1 << origin) == 0 {
+                            texts[origin].to_owned()
+                        } else {
+                            format!("changed-{origin}")
+                        };
+                        cells.insert(model_slot(*slot), text);
+                    }
+                }
+                if inserted {
+                    let occupied: BTreeSet<usize> = placement.iter().flatten().copied().collect();
+                    if let Some(slot) = (0..4).find(|slot| !occupied.contains(slot)) {
+                        cells.insert(model_slot(slot), "Beta".to_owned());
+                    }
+                }
+                let mut spec = Spec::new(2, &[0, 1]);
+                for row in [10, 11] {
+                    let row_cells: Vec<(usize, &str)> = cells
+                        .iter()
+                        .filter(|((cell_row, _), _)| *cell_row == row)
+                        .map(|((_, column), text)| (*column, text.as_str()))
+                        .collect();
+                    if !row_cells.is_empty() {
+                        spec = spec.row(row, &row_cells);
+                    }
+                }
+                let new = game(NEW, &[(SHEET, &spec)]);
+                let plan = plan(&units, &new);
+                states += 1;
+                assert_eq!(plan.entries().len(), units.len());
+                for (origin, unit) in units.iter().enumerate() {
+                    let entry = entry(&plan, unit.id());
+                    let previous = unit.source_binding();
+                    let key = (previous.row_id(), previous.column_index() as usize);
+                    // An empty cell is not translatable, so a surviving
+                    // binding is one that holds text.
+                    match cells.get(&key) {
+                        Some(text) => {
+                            bound += 1;
+                            assert_eq!(entry.continuity, Some(Continuity::SAME_BINDING));
+                            let expected = if text == texts[origin] {
+                                UnitUpdateOutcome::Unchanged
+                            } else {
+                                source_changed += 1;
+                                UnitUpdateOutcome::SourceChanged
+                            };
+                            assert_eq!(entry.outcome, expected);
+                            if proposed(entry) != previous {
+                                wrong += 1;
+                            }
+                        }
+                        None => {
+                            detached += 1;
+                            assert!(matches!(entry.outcome, UnitUpdateOutcome::Detached(_)));
+                            assert!(entry.proposed.is_none() && entry.continuity.is_none());
+                        }
+                    }
+                }
             }
-            None => assert_eq!(
-                entry.outcome,
-                UnitUpdateOutcome::Detached(DetachReason::RowRemoved)
-            ),
         }
     }
-    let mapping: Vec<_> = plan.sheet_schema_updates[0]
-        .columns
-        .iter()
-        .map(|mapping| (mapping.previous_column, mapping.column))
-        .collect();
-    assert_eq!(mapping, vec![(2, Some(4))]);
-    assert_eq!(plan.summary.source_changed, 1);
-    assert_eq!(plan.summary.newly_detached, 1);
-}
-
-#[test]
-fn when_row_keys_stop_being_unique_rows_keep_their_ids_and_changed_lines_need_review() {
-    let old_fixture = write_snapshot(&snapshot(
-        "7.0",
-        vec![
-            dialogue_row(1, "Q1", "Hello"),
-            dialogue_row(2, "Q2", "Goodbye"),
-        ],
-    ));
-    let new_fixture = write_snapshot(&snapshot(
-        "7.1",
-        vec![
-            dialogue_row(1, "DUP", "Inserted"),
-            dialogue_row(2, "DUP", "Hello"),
-            dialogue_row(3, "Q2", "Goodbye"),
-        ],
-    ));
-    let old = open(&old_fixture);
-    let new = open(&new_fixture);
-    assert!(
-        RowKeys::read(&new, SHEET, dialogue_guidance)
-            .expect("read")
-            .is_none(),
-        "a column with repeated values is not a row key"
+    println!(
+        "model states: {states}; bound: {bound}; source changed: {source_changed}; detached: {detached}; wrong mappings: {wrong}"
     );
-    let (workspace, units) = keyed_units(&old, &[1, 2]);
-
-    let plan = plan_source_update(workspace.metadata(), units.iter(), &new, dialogue_guidance)
-        .expect("plan");
-    for (unit, row_id) in units.iter().zip([1, 2]) {
-        let entry = entry(&plan, unit.id());
-        // The line cannot be followed, so the unit keeps its row and is never
-        // treated as unchanged against different text.
-        assert_eq!(entry.outcome, UnitUpdateOutcome::SourceChanged);
-        assert_eq!(
-            proposed_binding(entry),
-            &SourceBinding::new(SHEET, row_id, 0, 2)
-        );
-        assert_eq!(
-            entry.continuity.map(|continuity| continuity.row),
-            Some(RowContinuity::SameRow)
-        );
-        assert!(entry.proposed.as_ref().expect("bound").row_key.is_none());
-    }
-}
-
-#[test]
-fn a_row_key_column_that_moves_still_identifies_its_lines() {
-    let old_fixture = write_snapshot(&snapshot(
-        "7.0",
-        vec![
-            dialogue_row(1, "Q1", "Hello"),
-            dialogue_row(2, "Q2", "Goodbye"),
-        ],
-    ));
-    let moved_key_row = |row_id: u32, key: &str, text: &str| {
-        row_with_cells(
-            row_id,
-            u8::try_from(row_id).expect("small row"),
-            vec![cell(2, text, None), cell(4, key, None)],
-        )
-    };
-    let new_fixture = write_snapshot(&snapshot(
-        "7.1",
-        vec![
-            moved_key_row(1, "Q0", "Inserted"),
-            moved_key_row(2, "Q1", "Hello"),
-            moved_key_row(3, "Q2", "Goodbye"),
-        ],
-    ));
-    let old = open(&old_fixture);
-    let new = open(&new_fixture);
-    let new_keys = RowKeys::read(&new, SHEET, dialogue_guidance)
-        .expect("read")
-        .expect("keyed");
-    assert_eq!(new_keys.column(), 4);
-    let (workspace, units) = keyed_units(&old, &[1, 2]);
-
-    let plan = plan_source_update(workspace.metadata(), units.iter(), &new, dialogue_guidance)
-        .expect("plan");
-    for (unit, row_id) in units.iter().zip([2, 3]) {
-        let entry = entry(&plan, unit.id());
-        assert_eq!(entry.outcome, UnitUpdateOutcome::Unchanged);
-        assert_eq!(
-            proposed_binding(entry),
-            &SourceBinding::new(SHEET, row_id, 0, 2)
-        );
-    }
+    assert_eq!(states, 73 * 8 * 2);
+    assert_eq!(wrong, 0);
+    assert!(bound > 0 && source_changed > 0 && detached > 0);
 }
 
 /// A small deterministic generator for randomized patches.
@@ -2115,21 +797,39 @@ impl Lcg {
 /// and move between rows and columns.
 const VOCABULARY: [&str; 6] = ["Hello", "Goodbye", "Later", "Farewell", "Yes", "No"];
 
-type RandomRow = (u32, Vec<CellSpec>);
+type RandomRow = (u32, Vec<(usize, String)>);
 
 struct RandomPatch {
-    old: SnapshotSpec,
-    new: SnapshotSpec,
-    keyed: bool,
+    old: Spec,
+    new: Spec,
 }
 
-/// Builds an old sheet version and a patched version: removed lines, lines
-/// moved to other row IDs (keyed sheets only), edited texts, inserted lines,
-/// and sometimes an inserted column that shifts every text column.
+fn random_spec(width: usize, text_columns: &[usize], keyed: bool, rows: &[RandomRow]) -> Spec {
+    let mut columns = text_columns.to_vec();
+    if keyed {
+        columns.push(0);
+    }
+    let mut spec = Spec::new(width, &columns);
+    if keyed {
+        spec = spec.keyed(0);
+    }
+    for (row_id, cells) in rows {
+        let cells: Vec<(usize, &str)> = cells
+            .iter()
+            .map(|(column, text)| (*column, text.as_str()))
+            .collect();
+        spec = spec.row(*row_id, &cells);
+    }
+    spec
+}
+
+/// Builds an old sheet and a patched one: removed lines, lines moved to other
+/// row IDs (keyed sheets only), edited texts, inserted lines, and sometimes
+/// an inserted column that shifts every text column.
 fn random_patch(random: &mut Lcg) -> RandomPatch {
     let keyed = random.chance(50);
-    let first_text_column = if keyed { 2 } else { 0 };
-    let text_columns = [first_text_column, first_text_column + 2];
+    let first = if keyed { 2 } else { 0 };
+    let text_columns = [first, first + 2];
     let shift = if random.chance(30) { 2 } else { 0 };
     let mut keys = 0;
     let mut next_key = || {
@@ -2141,12 +841,12 @@ fn random_patch(random: &mut Lcg) -> RandomPatch {
     let mut old_rows: Vec<RandomRow> = Vec::new();
     for _ in 0..3 + random.below(5) {
         let row_id = free.remove(random.below(free.len()));
-        let mut cells: Vec<CellSpec> = text_columns
+        let mut cells: Vec<(usize, String)> = text_columns
             .iter()
-            .map(|&column| cell(column, random.text(), None))
+            .map(|&column| (column, random.text().to_owned()))
             .collect();
         if keyed {
-            cells.insert(0, cell(0, &next_key(), None));
+            cells.insert(0, (0, next_key()));
         }
         old_rows.push((row_id, cells));
     }
@@ -2154,7 +854,6 @@ fn random_patch(random: &mut Lcg) -> RandomPatch {
 
     let mut new_rows: Vec<RandomRow> = Vec::new();
     let taken = |rows: &[RandomRow], row_id: u32| rows.iter().any(|(id, _)| *id == row_id);
-    // A line inserted above shifts every keyed line into the next line's row.
     let shifted = keyed && random.chance(40);
     let next_row: BTreeMap<u32, u32> = old_rows
         .iter()
@@ -2169,7 +868,6 @@ fn random_patch(random: &mut Lcg) -> RandomPatch {
         if shifted {
             target = next_row.get(row_id).copied().unwrap_or(row_id + 30);
         } else if keyed && random.chance(40) {
-            // Any row ID, including one another line used before the patch.
             let candidate = u32::try_from(1 + random.below(40)).expect("small");
             if !taken(&new_rows, candidate) {
                 target = candidate;
@@ -2180,16 +878,16 @@ fn random_patch(random: &mut Lcg) -> RandomPatch {
         }
         let cells = cells
             .iter()
-            .map(|spec| {
-                if keyed && spec.column_index == 0 {
-                    return spec.clone();
+            .map(|(column, text)| {
+                if keyed && *column == 0 {
+                    return (0, text.clone());
                 }
                 let text = if random.chance(25) {
                     random.text().to_owned()
                 } else {
-                    spec.macro_text.clone()
+                    text.clone()
                 };
-                cell(spec.column_index + shift, &text, None)
+                (column + shift, text)
             })
             .collect();
         new_rows.push((target, cells));
@@ -2199,12 +897,12 @@ fn random_patch(random: &mut Lcg) -> RandomPatch {
         if taken(&new_rows, row_id) {
             continue;
         }
-        let mut cells: Vec<CellSpec> = text_columns
+        let mut cells: Vec<(usize, String)> = text_columns
             .iter()
-            .map(|&column| cell(column + shift, random.text(), None))
+            .map(|&column| (column + shift, random.text().to_owned()))
             .collect();
         if keyed {
-            cells.insert(0, cell(0, &next_key(), None));
+            cells.insert(0, (0, next_key()));
         }
         new_rows.push((row_id, cells));
     }
@@ -2212,30 +910,12 @@ fn random_patch(random: &mut Lcg) -> RandomPatch {
         new_rows.push(old_rows[0].clone());
     }
     new_rows.sort_by_key(|(row_id, _)| *row_id);
-    let specs = |rows: Vec<RandomRow>| {
-        rows.into_iter()
-            .map(|(row_id, cells)| {
-                row_with_cells(row_id, u8::try_from(row_id % 7).expect("small"), cells)
-            })
-            .collect()
-    };
+    let width = first + 3;
+    let new_columns: Vec<usize> = text_columns.iter().map(|column| column + shift).collect();
     RandomPatch {
-        old: snapshot("old", specs(old_rows)),
-        new: snapshot("new", specs(new_rows)),
-        keyed,
+        old: random_spec(width, &text_columns, keyed, &old_rows),
+        new: random_spec(width + shift, &new_columns, keyed, &new_rows),
     }
-}
-
-fn macro_text(source: &HxsSnapshot, binding: &SourceBinding) -> Option<String> {
-    source
-        .string_cell(
-            binding.sheet_name(),
-            binding.row_id(),
-            binding.subrow_id(),
-            binding.column_index(),
-        )
-        .expect("cell lookup")
-        .map(|cell| cell.macro_text)
 }
 
 #[derive(Debug, Default)]
@@ -2250,10 +930,10 @@ struct RandomTotals {
 }
 
 /// Randomized patches over plain and keyed sheets. Whatever the planner
-/// decides, a translation stays "unchanged" only on identical text, every
+/// decides, a translation stays unchanged only on identical text, every
 /// other bound translation is flagged as changed, proposed facts describe the
-/// new source exactly, no two units share an occurrence, keyed lines follow
-/// their key, and planning is deterministic.
+/// new game exactly, no two units share a cell, keyed lines follow their key,
+/// and planning is deterministic.
 #[test]
 #[allow(clippy::too_many_lines)]
 fn randomized_patches_never_attach_a_translation_to_different_text() {
@@ -2261,40 +941,32 @@ fn randomized_patches_never_attach_a_translation_to_different_text() {
     let mut totals = RandomTotals::default();
     for case in 0..150 {
         let patch = random_patch(&mut random);
-        let old_fixture = write_snapshot(&patch.old);
-        let new_fixture = write_snapshot(&patch.new);
-        let old = open(&old_fixture);
-        let new = open(&new_fixture);
-        let keyed = patch.keyed;
-        let translatable = |binding: &SourceBinding| !keyed || binding.column_index() != 0;
+        let old = game(OLD, &[(SHEET, &patch.old)]);
+        let new = game(NEW, &[(SHEET, &patch.new)]);
+        let old_sheet = sheet(&old.source, SHEET);
+        let new_sheet = sheet(&new.source, SHEET);
 
-        let old_keys = if keyed {
-            RowKeys::read(&old, SHEET, translatable).expect("keys")
-        } else {
-            None
-        };
-        let mut workspace = Workspace::from_verified_snapshot(&old, "fr").expect("workspace");
         let mut units = Vec::new();
-        for spec in &patch.old.rows {
-            for cell_spec in &spec.cells {
-                let binding = SourceBinding::new(SHEET, spec.row_id, 0, cell_spec.column_index);
-                if !translatable(&binding) || random.chance(30) {
+        for row in old_sheet.rows() {
+            for cell in old_sheet.cells(row) {
+                if !cell.translatable || random.chance(30) {
                     continue;
                 }
-                let id = workspace
-                    .create_unit_from_hxs(&old, SHEET, spec.row_id, 0, cell_spec.column_index, "t")
-                    .expect("unit");
+                let mut facts = old_sheet
+                    .facts(row.row_id, row.subrow_id, cell.column)
+                    .expect("cell");
                 // Some units predate row keys, and some are already detached;
-                // both can then compete with other units for one occurrence.
-                let key = old_keys
-                    .as_ref()
-                    .and_then(|keys| keys.key_of(spec.row_id, 0))
-                    .filter(|_| !random.chance(20));
-                let mut unit = workspace
-                    .unit(id)
-                    .expect("unit")
-                    .clone()
-                    .with_source_row_key(key);
+                // both can then compete with other units for one cell.
+                if random.chance(20) {
+                    facts = SourceFacts::new(
+                        facts.binding().clone(),
+                        facts.layout(),
+                        facts.text(),
+                        None,
+                    );
+                }
+                let id = TranslationUnitId::derive(facts.binding(), facts.text()).expect("ID");
+                let mut unit = TranslationUnit::new(id, facts, "t");
                 if random.chance(15) {
                     unit.detach(DetachReason::RowRemoved);
                 }
@@ -2302,43 +974,16 @@ fn randomized_patches_never_attach_a_translation_to_different_text() {
             }
         }
 
-        let plan = plan_source_update(workspace.metadata(), units.iter(), &new, translatable)
-            .expect("plan");
-        let again = plan_source_update(workspace.metadata(), units.iter(), &new, translatable)
-            .expect("plan");
-        assert_eq!(plan, again, "case {case}: planning is deterministic");
+        let plan = plan(&units, &new);
+        assert_eq!(plan, self::plan(&units, &new), "case {case}: deterministic");
         assert_eq!(plan.entries().len(), units.len(), "case {case}");
-
-        let new_keys = if keyed {
-            RowKeys::read(&new, SHEET, translatable).expect("keys")
-        } else {
-            None
-        };
-        let current: BTreeMap<(u32, u16, u32), [u8; 32]> = new
-            .page_string_occurrences(SHEET, None, aeria_hxs::MAX_STRING_OCCURRENCE_PAGE_SIZE)
-            .expect("page")
-            .occurrences
-            .into_iter()
-            .map(|occurrence| {
-                let coordinate = occurrence.coordinate;
-                (
-                    (
-                        coordinate.row_id,
-                        coordinate.subrow_id,
-                        coordinate.column_index,
-                    ),
-                    *occurrence.macro_text_hash.as_bytes(),
-                )
-            })
-            .collect();
         let mut claimed = BTreeSet::new();
         for unit in &units {
             let entry = entry(&plan, unit.id());
-            let old_text = macro_text(&old, unit.source_binding()).expect("old text");
-            let Some(proposed) = &entry.proposed else {
+            let Some(facts) = &entry.proposed else {
                 assert!(
                     matches!(entry.outcome, UnitUpdateOutcome::Detached(_)),
-                    "case {case}: only a detached outcome has no proposal"
+                    "case {case}"
                 );
                 totals.detached += 1;
                 if entry.outcome == UnitUpdateOutcome::Detached(DetachReason::BindingConflict) {
@@ -2349,32 +994,29 @@ fn randomized_patches_never_attach_a_translation_to_different_text() {
             if entry.reattaches() {
                 totals.reattached += 1;
             }
-            let binding = &proposed.binding;
+            let binding = facts.binding();
             assert!(
                 claimed.insert(binding.clone()),
-                "case {case}: an occurrence has one owner"
+                "case {case}: one owner per cell"
             );
-            let key = (
-                binding.row_id(),
-                binding.subrow_id(),
-                binding.column_index(),
-            );
+            let current = new_sheet
+                .facts(
+                    binding.row_id(),
+                    binding.subrow_id(),
+                    binding.column_index(),
+                )
+                .expect("the proposed cell exists");
             assert_eq!(
-                Some(proposed.fingerprint.macro_text_hash().as_bytes()),
-                current.get(&key),
-                "case {case}: proposed facts describe the new source"
+                &current, facts,
+                "case {case}: proposed facts describe the game"
             );
-            let new_text = macro_text(&new, binding).expect("proposed occurrence exists");
             match entry.outcome {
-                UnitUpdateOutcome::Unchanged | UnitUpdateOutcome::EncodingChanged => {
-                    assert_eq!(
-                        new_text, old_text,
-                        "case {case}: unchanged means identical text"
-                    );
+                UnitUpdateOutcome::Unchanged => {
+                    assert_eq!(facts.text(), unit.source().text(), "case {case}");
                     totals.unchanged += 1;
                 }
                 UnitUpdateOutcome::SourceChanged => {
-                    assert_ne!(new_text, old_text, "case {case}: changed text is flagged");
+                    assert_ne!(facts.text(), unit.source().text(), "case {case}");
                     totals.changed += 1;
                 }
                 UnitUpdateOutcome::Detached(_) => {
@@ -2386,10 +1028,10 @@ fn randomized_patches_never_attach_a_translation_to_different_text() {
                 totals.column_mapped += 1;
             }
             if let RowContinuity::RowKey { .. } = continuity.row {
-                let keys = new_keys.as_ref().expect("row keys were used");
-                let unit_key = unit.source_row_key().expect("a keyed unit");
+                let keys = new_sheet.row_keys().expect("row keys were used");
+                let key = unit.source().row_key().expect("a keyed unit");
                 assert_eq!(
-                    keys.row_of(unit_key),
+                    keys.row_of(key),
                     Some((binding.row_id(), binding.subrow_id())),
                     "case {case}: a keyed line follows its key"
                 );
@@ -2398,7 +1040,6 @@ fn randomized_patches_never_attach_a_translation_to_different_text() {
         }
     }
     println!("{totals:?}");
-    // The generator must exercise every kind of outcome.
     assert!(totals.unchanged > 100, "{totals:?}");
     assert!(totals.changed > 30, "{totals:?}");
     assert!(totals.followed_keys > 10, "{totals:?}");
@@ -2406,4 +1047,17 @@ fn randomized_patches_never_attach_a_translation_to_different_text() {
     assert!(totals.detached > 30, "{totals:?}");
     assert!(totals.reattached > 20, "{totals:?}");
     assert!(totals.binding_conflicts > 5, "{totals:?}");
+}
+
+#[test]
+fn game_versions_are_recorded_in_the_plan() {
+    let spec = Spec::new(1, &[0]).row(1, &[(0, "Line")]);
+    let new = game(NEW, &[(SHEET, &spec)]);
+    let units = vec![unit(&new.source, 1, 0)];
+    let plan = plan(&units, &new);
+    assert_eq!(
+        plan.previous_game_version,
+        OLD.parse::<GameVersion>().expect("version")
+    );
+    assert_eq!(plan.game_version.as_str(), NEW);
 }

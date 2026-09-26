@@ -1,18 +1,20 @@
 //! Desktop adapter for project search and translation memory.
 //!
-//! The source index of the active source package is built once in the
-//! background from its own verified HXS handle, so building never holds the
-//! project lock. Searches read the index without the lock and take it only
-//! to add translations from the workspace.
+//! The source index of the active project's game is built once per source
+//! language and game version, in the background from the session's shared
+//! game source, so building never holds the project lock. Searches read the
+//! index without the lock and take it only to add translations from the
+//! workspace.
 
 use std::fmt::Write as _;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use aeria_ai::search::{MemoryMatch, ProjectSearch, SearchMatch, SearchMatches, SearchQuery};
 use aeria_ai::tools::{ToolError, UnitLocation};
 use aeria_core::SourceBinding;
-use aeria_hxs::HxsSnapshot;
 use aeria_search::{SearchError, SimilarSource, SourceHit, SourceIndex, SourceQuery, Tokenizer};
+use aeria_source::GameSource;
 use aeria_workspace::ProjectSession;
 use sha2::{Digest, Sha256};
 use tauri::Manager;
@@ -25,12 +27,17 @@ const SEARCH_DIRECTORY: &str = "search";
 /// Index candidates read to find translated similar strings.
 const MEMORY_CANDIDATES: usize = 100;
 
-/// The index state of one source package.
+/// The index state of one source language and game version.
 #[derive(Clone, Debug)]
 pub(crate) enum IndexState {
     Building,
     Ready(SourceIndex),
     Failed(String),
+}
+
+/// The key of the game data an index is built from.
+fn source_key(source: &GameSource) -> String {
+    format!("{}/{}", source.language(), source.version())
 }
 
 fn index_path(app: &tauri::AppHandle, package_id: &str) -> Result<PathBuf, ToolError> {
@@ -52,8 +59,7 @@ fn index_path(app: &tauri::AppHandle, package_id: &str) -> Result<PathBuf, ToolE
 /// What building an index needs, read under the project lock.
 struct BuildInput {
     package_id: String,
-    hxs: PathBuf,
-    guidance: aeria_hsp::GuidanceIndex,
+    source: Arc<GameSource>,
     tokenizer: Tokenizer,
 }
 
@@ -65,7 +71,7 @@ fn active_package(app: &tauri::AppHandle) -> Result<String, ToolError> {
     let session = project
         .as_ref()
         .ok_or_else(|| ToolError::new("no project is open"))?;
-    Ok(session.source_package().package_id().to_owned())
+    Ok(source_key(session.source()))
 }
 
 fn build_input(app: &tauri::AppHandle) -> Result<BuildInput, ToolError> {
@@ -76,30 +82,27 @@ fn build_input(app: &tauri::AppHandle) -> Result<BuildInput, ToolError> {
     let session = project
         .as_ref()
         .ok_or_else(|| ToolError::new("no project is open"))?;
-    let package = session.source_package();
+    let source = session.source_handle();
     Ok(BuildInput {
-        package_id: package.package_id().to_owned(),
-        hxs: package.materialized_hxs_path().to_owned(),
-        guidance: package.guidance_index().clone(),
-        tokenizer: Tokenizer::for_language(package.source_language()),
+        package_id: source_key(&source),
+        tokenizer: Tokenizer::for_language(source.language().code()),
+        source,
     })
 }
 
 fn build(app: &tauri::AppHandle, input: &BuildInput) -> Result<SourceIndex, SearchError> {
     let path = index_path(app, &input.package_id)
         .map_err(|error| SearchError::Io(std::io::Error::other(error.0)))?;
-    let source = HxsSnapshot::open(&input.hxs)?;
     SourceIndex::build(
         path,
         &input.package_id,
         input.tokenizer,
-        &source,
-        &input.guidance,
+        &input.source,
         &|| true,
     )
 }
 
-/// Returns the active source package's ID and index, or starts building the
+/// Returns the active game data's key and index, or starts building the
 /// index and reports that it is not ready yet. A failed build is retried on
 /// the next request.
 pub(crate) fn source_index(app: &tauri::AppHandle) -> Result<(String, SourceIndex), ToolError> {
@@ -187,7 +190,7 @@ impl DesktopSearch {
         let session = project
             .as_ref()
             .ok_or_else(|| ToolError::new("no project is open"))?;
-        if package_id.is_some_and(|id| id != session.source_package().package_id()) {
+        if package_id.is_some_and(|id| id != source_key(session.source())) {
             return Err(ToolError::new("the project changed during the search"));
         }
         read(session)
@@ -315,77 +318,39 @@ fn memory_matches(
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
 
     use aeria_ai::tools::ReviewLabel;
 
     use super::*;
 
-    fn session() -> (tempfile::TempDir, ProjectSession) {
+    fn session() -> (
+        (tempfile::TempDir, crate::test_support::TestGame),
+        ProjectSession,
+    ) {
         let directory = tempfile::tempdir().expect("directory");
-        std::fs::create_dir(directory.path().join("repository")).expect("repository");
-        let package = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../../crates/aeria-hsp/tests/fixtures/synthetic.hsp");
-        let session = ProjectSession::initialize(
-            directory.path().join("repository"),
-            package,
-            directory.path().join("cache"),
-            "ru".to_owned(),
-        )
-        .expect("session");
-        (directory, session)
+        let game = crate::test_support::test_game();
+        let session = crate::test_support::test_session(directory.path(), &game);
+        ((directory, game), session)
     }
 
     #[test]
     fn translations_and_memory_come_from_bound_units() {
-        let (directory, mut session) = session();
-        let package = session.source_package();
+        let ((directory, _game), mut session) = session();
+        let source = session.source_handle();
         let index = SourceIndex::build(
             directory.path().join("index.sqlite3"),
-            package.package_id(),
+            "en/test",
             Tokenizer::Words,
-            package.source(),
-            package.guidance_index(),
+            &source,
             &|| true,
         )
         .expect("index");
-        let hit = {
-            let source = session.source();
-            let sheet = source
-                .sheets()
-                .into_iter()
-                .find(|sheet| {
-                    package
-                        .guidance_index()
-                        .translatable_cell_count(&sheet.name)
-                        > 0
-                })
-                .expect("translatable sheet");
-            let page = source
-                .page_string_occurrence_records(&sheet.name, None, 4096)
-                .expect("page");
-            let record = page
-                .occurrences
-                .iter()
-                .find(|record| {
-                    let at = &record.fingerprint.coordinate;
-                    !aeria_search::plain_text(&record.macro_text).is_empty()
-                        && package.guidance_index().is_translatable(
-                            &at.sheet_name,
-                            at.row_id,
-                            at.subrow_id,
-                            at.column_index,
-                        )
-                })
-                .expect("translatable string with text");
-            let at = &record.fingerprint.coordinate;
-            SourceHit {
-                sheet: at.sheet_name.clone(),
-                row: at.row_id,
-                subrow: at.subrow_id,
-                column: at.column_index,
-                source: record.macro_text.clone(),
-            }
+        let hit = SourceHit {
+            sheet: "Synthetic".to_owned(),
+            row: 42,
+            subrow: 0,
+            column: 0,
+            source: "Hello there".to_owned(),
         };
         let binding = binding_of(&hit);
         let query = |text: &str| SearchQuery {

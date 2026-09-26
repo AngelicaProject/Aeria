@@ -1,8 +1,8 @@
 //! Local, bounded recent-project registry persistence.
 //!
 //! This crate deliberately knows nothing about Tauri, the workspace format, or
-//! source-package validation. The desktop layer supplies metadata from an
-//! already successful project operation.
+//! the game source. The desktop layer supplies metadata from an already
+//! successful project operation.
 
 #![forbid(unsafe_code)]
 
@@ -18,23 +18,21 @@ use serde_json::Value;
 use thiserror::Error;
 use uuid::Uuid;
 
-pub const FORMAT_VERSION: u32 = 1;
+pub const FORMAT_VERSION: u32 = 2;
 pub const RETENTION_LIMIT: usize = 50;
 pub const MAX_REGISTRY_FILE_BYTES: u64 = 256 * 1024;
 
 /// The filename used by the desktop application under its app-data directory.
-pub const REGISTRY_FILE_NAME: &str = "projects-v1.json";
+pub const REGISTRY_FILE_NAME: &str = "projects-v2.json";
 
-const PARTIAL_FILE_NAME: &str = "projects-v1.json.partial";
-const PREVIOUS_FILE_NAME: &str = "projects-v1.json.previous";
-const LOCK_FILE_NAME: &str = "projects-v1.json.lock";
+const PARTIAL_FILE_NAME: &str = "projects-v2.json.partial";
+const PREVIOUS_FILE_NAME: &str = "projects-v2.json.previous";
+const LOCK_FILE_NAME: &str = "projects-v2.json.lock";
 
 /// Metadata obtained from an already opened or initialized project.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ProjectMetadata {
     pub repository_root: PathBuf,
-    pub source_package_path: PathBuf,
-    pub source_package_id: String,
     pub source_language: String,
     pub target_language: String,
     pub game_version: String,
@@ -47,10 +45,6 @@ pub struct RegistryEntry {
     pub id: String,
     #[serde(rename = "repositoryRoot")]
     pub repository_root: String,
-    #[serde(rename = "sourcePackagePath")]
-    pub source_package_path: String,
-    #[serde(rename = "sourcePackageId")]
-    pub source_package_id: String,
     #[serde(rename = "sourceLanguage")]
     pub source_language: String,
     #[serde(rename = "targetLanguage")]
@@ -208,7 +202,6 @@ impl ProjectRegistry {
         last_opened_at_unix_ms: u64,
     ) -> Result<RegistryEntry, RegistryError> {
         let repository_root = canonicalize(&metadata.repository_root)?;
-        let source_package_path = canonicalize(&metadata.source_package_path)?;
         let _lock = self.acquire_lock()?;
         let mut projects = self.load_locked()?;
 
@@ -224,8 +217,6 @@ impl ProjectRegistry {
         let entry = RegistryEntry {
             id,
             repository_root: repository_root.to_string_lossy().into_owned(),
-            source_package_path: source_package_path.to_string_lossy().into_owned(),
-            source_package_id: metadata.source_package_id.clone(),
             source_language: metadata.source_language.clone(),
             target_language: metadata.target_language.clone(),
             game_version: metadata.game_version.clone(),
@@ -243,38 +234,6 @@ impl ProjectRegistry {
             projects,
         })?;
         Ok(entry)
-    }
-
-    /// Points entries whose source package lies under `from` at the same
-    /// relative path under `to`, after the package folder was moved there.
-    /// Paths are compared without the Windows verbatim prefix; rewritten
-    /// paths use the canonical form of `to`. Returns the number of entries
-    /// changed; nothing is written when none match.
-    ///
-    /// # Errors
-    ///
-    /// Returns a typed error when `to` cannot be canonicalized, the registry
-    /// is invalid, or the updated document cannot be published.
-    pub fn relocate_source_packages(&self, from: &Path, to: &Path) -> Result<usize, RegistryError> {
-        let to = canonicalize(to)?;
-        let from = without_verbatim_prefix(from);
-        let _lock = self.acquire_lock()?;
-        let mut projects = self.load_locked()?;
-        let mut changed = 0;
-        for project in &mut projects {
-            let path = without_verbatim_prefix(Path::new(&project.source_package_path));
-            if let Ok(relative) = path.strip_prefix(&from) {
-                project.source_package_path = to.join(relative).to_string_lossy().into_owned();
-                changed += 1;
-            }
-        }
-        if changed > 0 {
-            self.write_document(&RegistryDocument {
-                format_version: FORMAT_VERSION,
-                projects,
-            })?;
-        }
-        Ok(changed)
     }
 
     /// Removes exactly one local entry without touching any project files.
@@ -417,15 +376,6 @@ impl ProjectRegistry {
     }
 }
 
-/// Drops the Windows verbatim prefix (`\\?\`) of a drive path.
-fn without_verbatim_prefix(path: &Path) -> PathBuf {
-    let text = path.to_string_lossy();
-    match text.strip_prefix(r"\\?\") {
-        Some(rest) if rest.as_bytes().get(1) == Some(&b':') => PathBuf::from(rest),
-        _ => path.to_owned(),
-    }
-}
-
 fn canonicalize(path: &Path) -> Result<PathBuf, RegistryError> {
     fs::canonicalize(path).map_err(|source| io_error("canonicalize project path", path, source))
 }
@@ -455,22 +405,12 @@ fn validate_document(document: &RegistryDocument, path: &Path) -> Result<(), Reg
         }
         for (name, value) in [
             ("repositoryRoot", &project.repository_root),
-            ("sourcePackagePath", &project.source_package_path),
             ("sourceLanguage", &project.source_language),
             ("targetLanguage", &project.target_language),
         ] {
             if value.trim().is_empty() {
                 return invalid_data(path, format!("{name} must not be empty"));
             }
-        }
-        if !is_canonical_package_id(&project.source_package_id) {
-            return invalid_data(
-                path,
-                format!(
-                    "sourcePackageId must match sha256:<64 lowercase hex>, got {:?}",
-                    project.source_package_id
-                ),
-            );
         }
     }
     Ok(())
@@ -574,16 +514,6 @@ fn sync_parent(path: &Path) -> io::Result<()> {
     File::open(path.parent().unwrap_or_else(|| Path::new(".")))?.sync_all()
 }
 
-/// Returns whether a package identity has the canonical HSP SHA-256 spelling.
-#[must_use]
-pub fn is_canonical_package_id(value: &str) -> bool {
-    value.len() == "sha256:".len() + 64
-        && value.starts_with("sha256:")
-        && value["sha256:".len()..]
-            .chars()
-            .all(|character| character.is_ascii_hexdigit() && !character.is_ascii_uppercase())
-}
-
 #[cfg(test)]
 fn pause_test_writer_after_load() {
     let Ok(index) = std::env::var("AERIA_PROJECTS_TEST_WRITER_INDEX") else {
@@ -612,9 +542,6 @@ mod tests {
     use std::time::{Duration, Instant};
     use tempfile::{TempDir, tempdir};
 
-    const PACKAGE_ID: &str =
-        "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
-
     fn registry(temp: &TempDir) -> ProjectRegistry {
         ProjectRegistry::new(temp.path().join(REGISTRY_FILE_NAME))
     }
@@ -622,12 +549,8 @@ mod tests {
     fn metadata(temp: &TempDir, name: &str) -> ProjectMetadata {
         let repository_root = temp.path().join(name);
         fs::create_dir_all(&repository_root).expect("repository");
-        let source_package_path = temp.path().join(format!("{name}.hsp"));
-        fs::write(&source_package_path, b"hsp").expect("source package");
         ProjectMetadata {
             repository_root,
-            source_package_path,
-            source_package_id: PACKAGE_ID.to_owned(),
             source_language: "en".to_owned(),
             target_language: "fr".to_owned(),
             game_version: "test-game".to_owned(),
@@ -645,66 +568,11 @@ mod tests {
         RegistryEntry {
             id: id.to_owned(),
             repository_root: format!("C:/projects/{id}"),
-            source_package_path: format!("C:/sources/{id}.hsp"),
-            source_package_id: PACKAGE_ID.to_owned(),
             source_language: "en".to_owned(),
             target_language: "fr".to_owned(),
             game_version: "test".to_owned(),
             last_opened_at_unix_ms: timestamp,
         }
-    }
-
-    #[test]
-    fn moved_source_packages_are_relocated() {
-        let temp = tempdir().expect("tempdir");
-        let store = registry(&temp);
-        let old_root = temp.path().join("старые данные");
-        let new_root = temp.path().join("Новые данные Aeria");
-        fs::create_dir_all(&new_root).expect("new root");
-        let moved = |name: &str| format!("{}", old_root.join(format!("{name}.hsp")).display());
-        let mut inside = entry("inside", 20);
-        inside.source_package_path = format!(r"\\?\{}", moved("inside"));
-        let mut plain = entry("plain", 10);
-        plain.source_package_path = moved("plain");
-        let outside = entry("outside", 5);
-        fs::write(
-            store.path(),
-            serde_json::to_vec(&document(vec![inside, plain, outside.clone()])).expect("json"),
-        )
-        .expect("write");
-
-        // Only Windows drive paths carry a verbatim prefix.
-        let root_prefixed = cfg!(windows);
-        let changed = store
-            .relocate_source_packages(&old_root, &new_root)
-            .expect("relocate");
-        let canonical = fs::canonicalize(&new_root).expect("canonical");
-        let loaded = store.load().expect("load");
-        let path_of = |id: &str| {
-            loaded
-                .iter()
-                .find(|project| project.id == id)
-                .map(|project| project.source_package_path.clone())
-                .expect(id)
-        };
-        assert_eq!(changed, if root_prefixed { 2 } else { 1 });
-        assert_eq!(
-            path_of("plain"),
-            canonical.join("plain.hsp").to_string_lossy()
-        );
-        if root_prefixed {
-            assert_eq!(
-                path_of("inside"),
-                canonical.join("inside.hsp").to_string_lossy()
-            );
-        }
-        assert_eq!(path_of("outside"), outside.source_package_path);
-        assert_eq!(
-            store
-                .relocate_source_packages(&old_root, &new_root)
-                .expect("again"),
-            0
-        );
     }
 
     #[test]
@@ -714,14 +582,14 @@ mod tests {
     }
 
     #[test]
-    fn valid_v1_round_trip_is_pretty_and_canonical() {
+    fn valid_round_trip_is_pretty_and_canonical() {
         let temp = tempdir().expect("tempdir");
         let store = registry(&temp);
         let first = store.upsert(&metadata(&temp, "one"), 10).expect("upsert");
         let loaded = store.load().expect("load");
         assert_eq!(loaded, vec![first]);
         let contents = fs::read_to_string(store.path()).expect("contents");
-        assert!(contents.contains("\n  \"formatVersion\": 1,"));
+        assert!(contents.contains("\n  \"formatVersion\": 2,"));
         assert!(contents.ends_with('\n'));
     }
 
@@ -729,10 +597,10 @@ mod tests {
     fn unsupported_version_is_explicit() {
         let temp = tempdir().expect("tempdir");
         let store = registry(&temp);
-        fs::write(store.path(), r#"{"formatVersion":2,"projects":[]}"#).expect("write");
+        fs::write(store.path(), r#"{"formatVersion":3,"projects":[]}"#).expect("write");
         assert!(matches!(
             store.load(),
-            Err(RegistryError::UnsupportedVersion { version: 2, .. })
+            Err(RegistryError::UnsupportedVersion { version: 3, .. })
         ));
     }
 
@@ -833,7 +701,7 @@ mod tests {
         ));
 
         let mut invalid = entry("different", 1);
-        invalid.source_package_id = "sha256:ABC".to_owned();
+        invalid.source_language = " ".to_owned();
         fs::write(
             store.path(),
             serde_json::to_vec(&document(vec![invalid])).expect("json"),
@@ -887,9 +755,7 @@ mod tests {
         let store = registry(&temp);
         let first = store.upsert(&metadata(&temp, "one"), 1).expect("first");
         let mut refreshed = metadata(&temp, "one");
-        refreshed.source_package_path = temp.path().join("replacement.hsp");
-        fs::write(&refreshed.source_package_path, b"hsp").expect("replacement");
-        refreshed.source_package_id = PACKAGE_ID.replace('0', "f");
+        refreshed.game_version = "newer-game".to_owned();
         refreshed.target_language = "de".to_owned();
         let second = store.upsert(&refreshed, 2).expect("refresh");
         assert_eq!(second.id, first.id);
@@ -924,7 +790,6 @@ mod tests {
         store.remove(&project.id).expect("remove");
         assert!(store.load().expect("load").is_empty());
         assert!(temp.path().join("one").is_dir());
-        assert!(temp.path().join("one.hsp").is_file());
     }
 
     #[test]
@@ -987,12 +852,8 @@ mod tests {
             .expect("numeric writer index");
         let repository_root = root.join(format!("project-{index}"));
         fs::create_dir_all(&repository_root).expect("repository");
-        let source_package_path = root.join(format!("project-{index}.hsp"));
-        fs::write(&source_package_path, b"hsp").expect("source package");
         let metadata = ProjectMetadata {
             repository_root,
-            source_package_path,
-            source_package_id: PACKAGE_ID.to_owned(),
             source_language: "en".to_owned(),
             target_language: "fr".to_owned(),
             game_version: "test-game".to_owned(),

@@ -13,7 +13,7 @@ use thiserror::Error;
 use crate::{GameData, SqPackError};
 
 /// A sheet language as the game numbers it.
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum Language {
     /// Language-neutral data.
     None,

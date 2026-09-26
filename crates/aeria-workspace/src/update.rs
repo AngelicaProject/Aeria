@@ -11,28 +11,20 @@ use aeria_rebase::{SourceUpdatePlan, UnitUpdateOutcome};
 
 use crate::{Workspace, WorkspaceError};
 
-/// The plan behind a source update together with the stored format it was
-/// applied to.
+/// The plan behind a source update that was applied or previewed.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SourceUpdateReport {
-    /// The deterministic plan that was applied or previewed.
+    /// The deterministic plan.
     pub plan: SourceUpdatePlan,
-    /// The Workspace Format version read before the update. It is older than
-    /// the current version when the update also migrates the format.
-    pub previous_format_version: u8,
 }
 
 /// Builds the post-update workspace and the shards whose bytes change.
-///
-/// `rewrite_all` requests every existing shard, which a format migration
-/// requires even for units whose source facts are unchanged.
 pub(crate) fn apply_plan(
     metadata: &WorkspaceMetadata,
     units: &BTreeMap<TranslationUnitId, TranslationUnit>,
     plan: &SourceUpdatePlan,
-    rewrite_all: bool,
 ) -> Result<(Workspace, BTreeSet<u8>), WorkspaceError> {
-    let metadata = metadata.with_source_content_id(plan.source_snapshot.content_id.clone())?;
+    let metadata = metadata.with_game_version(plan.game_version.clone());
     let mut updated = units.clone();
     let mut shards = BTreeSet::new();
     for entry in plan.entries() {
@@ -46,18 +38,12 @@ pub(crate) fn apply_plan(
         match (entry.outcome, &entry.proposed) {
             (UnitUpdateOutcome::Detached(reason), _) => unit.detach(reason),
             (outcome, Some(proposed)) => unit.bind_after_source_update(
-                proposed.binding.clone(),
-                proposed.fingerprint,
-                proposed.layout,
-                proposed.row_key,
+                proposed.clone(),
                 outcome == UnitUpdateOutcome::SourceChanged,
             ),
             (_, None) => unreachable!("bound plan outcomes always carry proposed source facts"),
         }
         shards.insert(id.as_bytes()[0]);
-    }
-    if rewrite_all {
-        shards.extend(updated.keys().map(|id| id.as_bytes()[0]));
     }
     let workspace = Workspace::from_loaded(metadata, updated)?;
     Ok((workspace, shards))

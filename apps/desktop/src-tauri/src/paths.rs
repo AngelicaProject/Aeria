@@ -6,30 +6,23 @@
 //! bundle identifier, which also names the `WebView` data folder and the
 //! installer registration, is unchanged.
 //!
-//! Earlier versions used folders named after the bundle identifier. They are
-//! moved once at startup by [`migrate_legacy_directories`]; until a move
+//! Earlier versions used a data folder named after the bundle identifier. It
+//! is moved once at startup by [`migrate_legacy_directories`]; until a move
 //! succeeds, the legacy data folder remains in use so nothing is lost.
 
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use aeria_projects::{ProjectRegistry, REGISTRY_FILE_NAME};
 use tauri::Manager;
-
-use crate::commands::SOURCE_PACKAGES_DIRECTORY;
 
 #[cfg(windows)]
 const APP_FOLDER: &str = "Aeria";
 #[cfg(not(windows))]
 const APP_FOLDER: &str = "aeria";
 
-/// Cache folders that move with the legacy cache directory. Other entries
-/// there, such as the `WebView` profile, stay under the bundle identifier.
-const CACHE_ENTRIES: [&str; 2] = ["hxs", "hsp-verification"];
-
 /// Resolves Aeria's data and cache folders.
 pub(crate) trait AeriaPaths {
-    /// The folder for settings, registries, and source packages.
+    /// The folder for settings and registries.
     fn aeria_data_dir(&self) -> tauri::Result<PathBuf>;
     /// The folder for disposable caches.
     fn aeria_cache_dir(&self) -> tauri::Result<PathBuf>;
@@ -56,9 +49,8 @@ fn choose_data_dir(current: PathBuf, legacy: &Path) -> PathBuf {
     }
 }
 
-/// Moves data and caches from the folders named after the bundle identifier
-/// and points recent projects at the moved source packages. Failures are
-/// reported and leave the legacy folders in place.
+/// Moves data from the folder named after the bundle identifier. Failures
+/// are reported and leave the legacy folder in place.
 pub(crate) fn migrate_legacy_directories<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
     let paths = app.path();
     if let (Ok(data), Ok(legacy)) = (paths.data_dir(), paths.app_data_dir())
@@ -69,33 +61,13 @@ pub(crate) fn migrate_legacy_directories<R: tauri::Runtime>(app: &tauri::AppHand
             legacy.display()
         );
     }
-    if let (Ok(cache), Ok(legacy)) = (paths.cache_dir(), paths.app_cache_dir()) {
-        let current = cache.join(APP_FOLDER);
-        for entry in CACHE_ENTRIES {
-            if let Err(error) = move_if_absent(&legacy.join(entry), &current.join(entry)) {
-                eprintln!("could not move the Aeria {entry} cache: {error}");
-            }
-        }
-    }
 }
 
 pub(crate) fn migrate_data(legacy: &Path, current: &Path) -> std::io::Result<()> {
     if legacy == current {
         return Ok(());
     }
-    move_if_absent(legacy, current)?;
-    if current.exists() {
-        let registry = ProjectRegistry::new(current.join(REGISTRY_FILE_NAME));
-        if registry.path().is_file() {
-            registry
-                .relocate_source_packages(
-                    &legacy.join(SOURCE_PACKAGES_DIRECTORY),
-                    &current.join(SOURCE_PACKAGES_DIRECTORY),
-                )
-                .map_err(std::io::Error::other)?;
-        }
-    }
-    Ok(())
+    move_if_absent(legacy, current)
 }
 
 /// Renames `from` to `to` when `from` exists and `to` does not.
@@ -124,16 +96,10 @@ mod tests {
         fs::create_dir_all(&legacy).expect("legacy");
         assert_eq!(choose_data_dir(current.clone(), &legacy), legacy);
 
-        fs::create_dir_all(legacy.join(SOURCE_PACKAGES_DIRECTORY)).expect("store");
-        fs::write(legacy.join(SOURCE_PACKAGES_DIRECTORY).join("a.hsp"), b"x").expect("package");
+        fs::write(legacy.join("settings.json"), b"x").expect("settings");
         migrate_data(&legacy, &current).expect("migrate");
         assert!(!legacy.exists());
-        assert!(
-            current
-                .join(SOURCE_PACKAGES_DIRECTORY)
-                .join("a.hsp")
-                .is_file()
-        );
+        assert!(current.join("settings.json").is_file());
         assert_eq!(choose_data_dir(current.clone(), &legacy), current);
 
         // A second run, or one where both folders exist, changes nothing.

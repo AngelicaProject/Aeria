@@ -170,9 +170,9 @@ impl Reporter<'_> {
 
     fn workspace_error(&mut self, error: &WorkspaceStoreError) {
         let message = match error {
-            WorkspaceStoreError::MigrationRequired { .. } => format!(
-                "{error}; open the project in Aeria, which updates it, and commit the result"
-            ),
+            WorkspaceStoreError::UnsupportedFormatVersion { .. } => {
+                format!("{error}; this project was written by another version of Aeria")
+            }
             _ => error.to_string(),
         };
         self.add(Severity::Error, error.path(), message);
@@ -412,11 +412,15 @@ fn merge(report: &mut Reporter<'_>, base: &str) {
             ),
         );
     }
-    if old.source_content_id() != new.source_content_id() {
+    if old.game_version() != new.game_version() {
         report.add(
             Severity::Warning,
             Some(&manifest),
-            "updates the project to other game data (a source update); after the merge, every collaborator needs the same game version to keep working",
+            format!(
+                "updates the project from game version {} to {} (a source update); after the merge, every collaborator needs that game version to keep working",
+                old.game_version(),
+                new.game_version()
+            ),
         );
     }
 

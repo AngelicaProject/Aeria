@@ -1,18 +1,16 @@
 //! Bounded, read-only application composition for source rows.
 
-use aeria_core::{ReviewState, SourceBinding, SourceFingerprint, SourceLayout, TranslationUnitId};
-use aeria_hxs::{ColumnType, HxsError, StringRowCoordinate};
+use aeria_core::{ReviewState, SourceBinding, SourceFacts, TranslationUnitId};
 use aeria_se::parse;
-use std::cell::Cell;
+use aeria_source::{SheetLookup, SourceError};
 use std::collections::BTreeMap;
-use std::time::Instant;
 use thiserror::Error;
 
-use crate::{ProjectSession, source_fingerprint_from_hashes, source_layout_from_hashes};
+use crate::ProjectSession;
 
 /// Conservative application-level maximum for one translation read page.
 ///
-/// The limit counts physical HXS row/subrow groups scanned. A page can contain
+/// The limit counts physical row/subrow groups scanned. A page can contain
 /// fewer visible rows because context-only and empty-only source rows are
 /// deliberately filtered from the editor projection.
 pub const MAX_TRANSLATION_PAGE_SIZE: u32 = 256;
@@ -74,7 +72,7 @@ pub struct TranslationCellView {
     pub translation: Option<TranslationOverlayView>,
 }
 
-/// One logical editor row composed from one HXS physical row/subrow.
+/// One logical editor row composed from one physical row/subrow.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TranslationRowView {
     pub sheet_name: String,
@@ -84,7 +82,7 @@ pub struct TranslationRowView {
     pub cells: Vec<TranslationCellView>,
 }
 
-/// The Workspace state overlaid on one verified source String cell.
+/// The Workspace state overlaid on one source String cell.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TranslationOverlayView {
     pub translation_unit_id: TranslationUnitId,
@@ -93,7 +91,7 @@ pub struct TranslationOverlayView {
     pub translator_note: Option<String>,
 }
 
-/// One bounded page of logical translation rows from one HXS sheet.
+/// One bounded page of logical translation rows from one sheet.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TranslationRowPage {
     pub rows: Vec<TranslationRowView>,
@@ -116,19 +114,19 @@ pub enum TranslationReadError {
         cursor_sheet: String,
     },
 
-    /// The verified source page could not be read.
-    #[error("verified HXS source error: {0}")]
-    Source(#[from] HxsError),
+    /// The game could not be read.
+    #[error("game source error: {0}")]
+    Source(#[from] SourceError),
 
-    /// A sparse unit does not describe the exact verified source occurrence.
+    /// A sparse unit does not describe the game's cell.
     #[error(
-        "translation unit {translation_unit_id} at {source_binding:?} has stale source facts: persisted {expected:?}, verified {verified:?}"
+        "translation unit {translation_unit_id} at {source_binding:?} has stale source facts: persisted {expected:?}, game {found:?}"
     )]
     WorkspaceSourceMismatch {
         translation_unit_id: TranslationUnitId,
         source_binding: SourceBinding,
-        expected: Box<(SourceFingerprint, Option<SourceLayout>)>,
-        verified: Box<(SourceFingerprint, Option<SourceLayout>)>,
+        expected: Box<SourceFacts>,
+        found: Box<Option<SourceFacts>>,
     },
 }
 
@@ -136,28 +134,25 @@ impl ProjectSession {
     /// Reads one bounded page of logical source rows and composes the sparse
     /// Workspace overlay for each translatable String cell.
     ///
-    /// The cursor is exclusive and ordered by row ID then subrow ID. The HXS
-    /// page bound counts source row groups, so context-only and empty-only
-    /// groups may make the visible result shorter without preventing the
-    /// source cursor from advancing.
+    /// The cursor is exclusive and ordered by row ID then subrow ID. The page
+    /// bound counts source rows, so rows without translatable cells may make
+    /// the visible result shorter without preventing the cursor from
+    /// advancing. A sheet that is missing or cannot be read has no rows.
     ///
-    /// HSG is the sole permission source. An allowed occurrence is editable,
-    /// including when its source macro is empty. A blocked non-empty
-    /// occurrence is returned as read-only context; blocked empty occurrences
-    /// are omitted from the presentation.
+    /// A translatable cell is editable. A non-empty cell that is not
+    /// translatable is returned as read-only context; empty ones are omitted.
     ///
     /// # Errors
     ///
     /// Returns a typed request error for invalid limits or a cross-sheet
-    /// cursor, a source error for HXS failures, or an integrity error when an
-    /// existing Workspace unit has stale source facts.
+    /// cursor, a source error when the game cannot be read, or an integrity
+    /// error when an existing unit has stale source facts.
     pub fn page_translation_rows(
         &self,
         sheet_name: &str,
         after: Option<&TranslationRowCursor>,
         limit: u32,
     ) -> Result<TranslationRowPage, TranslationReadError> {
-        let trace = PerfTrace::new();
         if !(1..=MAX_TRANSLATION_PAGE_SIZE).contains(&limit) {
             return Err(TranslationReadError::InvalidPageLimit {
                 limit,
@@ -172,56 +167,40 @@ impl ProjectSession {
                 cursor_sheet: after.sheet_name().to_owned(),
             });
         }
+        let SheetLookup::Present(sheet) = self.source.sheet(sheet_name)? else {
+            return Ok(TranslationRowPage {
+                rows: Vec::new(),
+                next_after: None,
+            });
+        };
 
-        let after_coordinate = after.map(|cursor| {
-            StringRowCoordinate::new(cursor.sheet_name(), cursor.row_id(), cursor.subrow_id())
-        });
-        let source_page =
-            self.source()
-                .page_string_rows(sheet_name, after_coordinate.as_ref(), limit)?;
-        trace.mark("workspace.page-rows.source");
-        let layouts = self.string_column_layouts(sheet_name);
-
-        let mut rows = Vec::with_capacity(source_page.rows.len());
-        for source_row in source_page.rows {
+        let source_rows =
+            sheet.rows_after(after.map(|cursor| (cursor.row_id(), cursor.subrow_id())));
+        let page_length = source_rows.len().min(limit as usize);
+        let mut rows = Vec::with_capacity(page_length);
+        for source_row in &source_rows[..page_length] {
             let mut context = Vec::new();
             let mut cells = Vec::new();
-            for occurrence in source_row.occurrences {
-                let coordinate = &occurrence.fingerprint.coordinate;
-                let column_index = coordinate.column_index;
-                let source_macro = occurrence.macro_text;
-                let source_binding = SourceBinding::new(
-                    coordinate.sheet_name.clone(),
-                    coordinate.row_id,
-                    coordinate.subrow_id,
-                    column_index,
-                );
-                let allowed = self.source_package.guidance_index().is_translatable(
-                    source_binding.sheet_name(),
-                    source_binding.row_id(),
-                    source_binding.subrow_id(),
-                    source_binding.column_index(),
-                );
-                if !allowed {
-                    if source_macro.is_empty() {
-                        continue;
+            for cell in sheet.cells(source_row) {
+                let source_macro = cell.text();
+                if !cell.translatable {
+                    if !source_macro.is_empty() {
+                        context.push(TranslationContextCellView {
+                            column_index: cell.column,
+                            source_macro,
+                        });
                     }
-                    context.push(TranslationContextCellView {
-                        column_index,
-                        source_macro,
-                    });
                     continue;
                 }
-                let verified_fingerprint = source_fingerprint_from_hashes(
-                    &occurrence.fingerprint.macro_text_hash,
-                    occurrence.fingerprint.raw_value_hash.as_ref(),
-                    &occurrence.fingerprint.row_technical_hash,
+                let source_binding = SourceBinding::new(
+                    sheet_name,
+                    source_row.row_id,
+                    source_row.subrow_id,
+                    cell.column,
                 );
-                let translation = self.overlay_for_binding(
-                    &source_binding,
-                    &verified_fingerprint,
-                    layouts.get(&column_index).copied(),
-                )?;
+                let translation = self.overlay_for_binding(&source_binding, || {
+                    sheet.facts(source_row.row_id, source_row.subrow_id, cell.column)
+                })?;
                 let formatting_only = parse(&source_macro).is_formatting_only();
                 cells.push(TranslationCellView {
                     source_binding,
@@ -230,83 +209,52 @@ impl ProjectSession {
                     translation,
                 });
             }
-
             if cells.is_empty() {
                 continue;
             }
             rows.push(TranslationRowView {
-                sheet_name: source_row.coordinate.sheet_name,
-                row_id: source_row.coordinate.row_id,
-                subrow_id: source_row.coordinate.subrow_id,
+                sheet_name: sheet_name.to_owned(),
+                row_id: source_row.row_id,
+                subrow_id: source_row.subrow_id,
                 context,
                 cells,
             });
         }
 
-        trace.mark("workspace.page-rows.compose");
-        Ok(TranslationRowPage {
-            rows,
-            next_after: source_page.next_after.map(|coordinate| {
-                TranslationRowCursor::new(
-                    coordinate.sheet_name,
-                    coordinate.row_id,
-                    coordinate.subrow_id,
-                )
-            }),
-        })
-    }
-
-    /// Returns the verified layout of every String column in one sheet.
-    fn string_column_layouts(&self, sheet_name: &str) -> BTreeMap<u32, SourceLayout> {
-        self.source()
-            .sheet(sheet_name)
-            .map(|sheet| {
-                sheet
-                    .columns
-                    .iter()
-                    .filter(|column| column.column_type == ColumnType::String)
-                    .map(|column| {
-                        (
-                            column.index,
-                            source_layout_from_hashes(&sheet.hashes.schema, column.offset),
-                        )
-                    })
-                    .collect()
-            })
-            .unwrap_or_default()
+        let next_after = (page_length < source_rows.len()).then(|| {
+            let last = &source_rows[page_length - 1];
+            TranslationRowCursor::new(sheet_name, last.row_id, last.subrow_id)
+        });
+        Ok(TranslationRowPage { rows, next_after })
     }
 
     fn overlay_for_binding(
         &self,
         source_binding: &SourceBinding,
-        verified_fingerprint: &SourceFingerprint,
-        verified_layout: Option<SourceLayout>,
+        facts: impl FnOnce() -> Option<SourceFacts>,
     ) -> Result<Option<TranslationOverlayView>, TranslationReadError> {
-        self.workspace()
-            .unit_by_source_binding(source_binding)
-            .map(|unit| {
-                if unit.source_fingerprint() != verified_fingerprint
-                    || unit.source_layout() != verified_layout
-                {
-                    return Err(TranslationReadError::WorkspaceSourceMismatch {
-                        translation_unit_id: unit.id(),
-                        source_binding: source_binding.clone(),
-                        expected: Box::new((*unit.source_fingerprint(), unit.source_layout())),
-                        verified: Box::new((*verified_fingerprint, verified_layout)),
-                    });
-                }
-                Ok(TranslationOverlayView {
-                    translation_unit_id: unit.id(),
-                    target_macro: unit.target_macro().to_owned(),
-                    review_state: unit.review_state(),
-                    translator_note: unit.translator_note().map(str::to_owned),
-                })
-            })
-            .transpose()
+        let Some(unit) = self.workspace().unit_by_source_binding(source_binding) else {
+            return Ok(None);
+        };
+        let found = facts();
+        if found.as_ref() != Some(unit.source()) {
+            return Err(TranslationReadError::WorkspaceSourceMismatch {
+                translation_unit_id: unit.id(),
+                source_binding: source_binding.clone(),
+                expected: Box::new(unit.source().clone()),
+                found: Box::new(found),
+            });
+        }
+        Ok(Some(TranslationOverlayView {
+            translation_unit_id: unit.id(),
+            target_macro: unit.target_macro().to_owned(),
+            review_state: unit.review_state(),
+            translator_note: unit.translator_note().map(str::to_owned),
+        }))
     }
 }
 
-/// Workspace coverage for one sheet's HSG-permitted occurrences.
+/// Workspace coverage for one sheet.
 ///
 /// `translated` counts Workspace units, including explicitly empty targets.
 /// `reviewed` and `needs_review` are subsets of `translated`.
@@ -321,25 +269,14 @@ pub struct SheetTranslationProgress {
 impl ProjectSession {
     /// Summarizes bound Workspace units per sheet, ordered by sheet name.
     ///
-    /// Only bound units whose binding is permitted by the HSG index are
-    /// counted, so every count is bounded by the sheet's translatable cell
-    /// count. Detached units are not counted. Sheets without units are
-    /// omitted. This reads in-memory Workspace state only; it does not
-    /// re-verify source fingerprints.
+    /// Detached units are not counted, and sheets without units are omitted.
+    /// This reads in-memory Workspace state only; bound units were verified
+    /// against the game when the project was opened.
     #[must_use]
     pub fn translation_progress(&self) -> Vec<SheetTranslationProgress> {
-        let guidance = self.source_package.guidance_index();
         let mut by_sheet: BTreeMap<&str, SheetTranslationProgress> = BTreeMap::new();
         for unit in self.workspace().units().filter(|unit| unit.is_bound()) {
             let binding = unit.source_binding();
-            if !guidance.is_translatable(
-                binding.sheet_name(),
-                binding.row_id(),
-                binding.subrow_id(),
-                binding.column_index(),
-            ) {
-                continue;
-            }
             let progress =
                 by_sheet
                     .entry(binding.sheet_name())
@@ -355,33 +292,5 @@ impl ProjectSession {
             }
         }
         by_sheet.into_values().collect()
-    }
-}
-
-struct PerfTrace {
-    enabled: bool,
-    started: Instant,
-    last: Cell<Instant>,
-}
-
-impl PerfTrace {
-    fn new() -> Self {
-        Self {
-            enabled: std::env::var("AERIA_PERF_TRACE").as_deref() == Ok("1"),
-            started: Instant::now(),
-            last: Cell::new(Instant::now()),
-        }
-    }
-
-    fn mark(&self, phase: &str) {
-        if self.enabled {
-            let now = Instant::now();
-            let duration = now.duration_since(self.last.get()).as_secs_f64() * 1_000.0;
-            self.last.set(now);
-            eprintln!(
-                "[aeria-perf] {phase}: duration_ms={duration:.3} total_ms={:.3}",
-                self.started.elapsed().as_secs_f64() * 1_000.0
-            );
-        }
     }
 }

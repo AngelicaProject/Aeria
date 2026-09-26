@@ -10,8 +10,8 @@ description = "Validated deterministic runtime pack export."
 [dependencies]
 aeria-core = { path = "../aeria-core" }
 aeria-fonts = { path = "../aeria-fonts" }
-aeria-hxs = { path = "../aeria-hxs" }
 aeria-se = { path = "../aeria-se" }
+aeria-source = { path = "../aeria-source" }
 aeria-workspace = { path = "../aeria-workspace" }
 brotli = "8.0.4"
 p256 = { version = "0.14.0", default-features = false, features = ["ecdsa", "std"] }
@@ -21,10 +21,8 @@ sha2 = "0.11.0"
 thiserror = "2.0.20"
 
 [dev-dependencies]
-aeria-hsp = { path = "../aeria-hsp" }
-rusqlite = { version = "0.40.2", features = ["bundled"] }
+aeria-sqpack = { path = "../aeria-sqpack", features = ["testing"] }
 tempfile = "3.27.0"
-zip = { version = "6.0.0", default-features = false, features = ["deflate"] }
 
 [lints]
 workspace = true

@@ -1,7 +1,7 @@
 //! `SqPack` data files: file headers and deflate blocks.
 
 use std::fs::File;
-use std::io::{Read, Seek, SeekFrom};
+use std::io::Read;
 
 /// A standard file: stored as blocks.
 const STANDARD: u32 = 2;
@@ -12,12 +12,24 @@ const MAX_FILE_SIZE: u32 = 256 * 1024 * 1024;
 /// Largest block accepted; the game writes blocks of at most 16,000 bytes.
 const MAX_BLOCK_SIZE: u32 = 1024 * 1024;
 
-fn read_exact(file: &mut File, offset: u64, length: usize) -> Result<Vec<u8>, String> {
-    file.seek(SeekFrom::Start(offset))
-        .map_err(|error| error.to_string())?;
+/// Reads `length` bytes at `offset` without moving a shared file position,
+/// so several threads can read one file at once.
+fn read_exact(file: &File, offset: u64, length: usize) -> Result<Vec<u8>, String> {
     let mut buffer = vec![0; length];
-    file.read_exact(&mut buffer)
-        .map_err(|error| error.to_string())?;
+    let mut filled = 0;
+    while filled < length {
+        let position = offset + filled as u64;
+        #[cfg(windows)]
+        let read = std::os::windows::fs::FileExt::seek_read(file, &mut buffer[filled..], position);
+        #[cfg(unix)]
+        let read = std::os::unix::fs::FileExt::read_at(file, &mut buffer[filled..], position);
+        match read {
+            Ok(0) => return Err(format!("the file ends before offset {position}")),
+            Ok(count) => filled += count,
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(error) => return Err(error.to_string()),
+        }
+    }
     Ok(buffer)
 }
 
@@ -26,7 +38,7 @@ fn u32_at(bytes: &[u8], offset: usize) -> u32 {
 }
 
 /// Reads the standard file whose header starts at `offset`.
-pub(crate) fn read_file(file: &mut File, offset: u64) -> Result<Vec<u8>, String> {
+pub(crate) fn read_file(file: &File, offset: u64) -> Result<Vec<u8>, String> {
     // Header: size, type, raw size, two unknown words, block count.
     let header = read_exact(file, offset, 24)?;
     let header_size = u64::from(u32_at(&header, 0));
@@ -68,7 +80,7 @@ pub(crate) fn read_file(file: &mut File, offset: u64) -> Result<Vec<u8>, String>
 
 /// Appends one block: a 16-byte header (size, unknown, compressed size or
 /// the uncompressed marker, data size) and its data.
-fn read_block(file: &mut File, offset: u64, output: &mut Vec<u8>) -> Result<(), String> {
+fn read_block(file: &File, offset: u64, output: &mut Vec<u8>) -> Result<(), String> {
     let header = read_exact(file, offset, 16)?;
     let stored = u32_at(&header, 8);
     let size = u32_at(&header, 12);
@@ -140,8 +152,8 @@ mod tests {
 
     #[test]
     fn standard_files_join_stored_and_deflated_blocks() {
-        let (path, mut file) = temporary_file("blocks", &two_block_file());
-        let data = read_file(&mut file, 0);
+        let (path, file) = temporary_file("blocks", &two_block_file());
+        let data = read_file(&file, 0);
         drop(file);
         std::fs::remove_file(path).expect("remove");
         assert_eq!(data.as_deref(), Ok(b"helloworld".as_slice()));
@@ -151,8 +163,8 @@ mod tests {
     fn a_size_that_disagrees_with_the_blocks_is_rejected() {
         let mut bytes = two_block_file();
         bytes[8..12].copy_from_slice(&word(9));
-        let (path, mut file) = temporary_file("size", &bytes);
-        let data = read_file(&mut file, 0);
+        let (path, file) = temporary_file("size", &bytes);
+        let data = read_file(&file, 0);
         drop(file);
         std::fs::remove_file(path).expect("remove");
         assert!(data.is_err());

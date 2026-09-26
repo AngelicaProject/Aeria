@@ -32,8 +32,6 @@ fn manifest(policy: ContentPolicy) -> PackManifest {
         source: PackSource {
             language: "en".to_owned(),
             game_version: "2026.08.12.0000.0000".to_owned(),
-            content_id: format!("sha256:{}", "1".repeat(64)),
-            snapshot_id: format!("sha256:{}", "2".repeat(64)),
         },
         content_policy: policy,
         project_commit: "a".repeat(40),
@@ -43,7 +41,7 @@ fn manifest(policy: ContentPolicy) -> PackManifest {
     }
 }
 
-// The HXS raw-string hash, as Atlas computes it.
+// The raw-string hash Harmonia computes for its source guard.
 fn raw_hash(raw: &[u8]) -> [u8; 32] {
     let mut hasher = Sha256::new();
     hasher.update(b"HARMONIA-HXS-V1-RAW-STRING");
@@ -59,7 +57,7 @@ fn cell(row_id: u32, subrow_id: u16, column_index: u32, text: &str, source: &str
         column_index,
         state: CellState::Reviewed,
         text: text.as_bytes().to_vec(),
-        source_guard: source_guard(&raw_hash(source.as_bytes())),
+        source_guard: source_guard(source.as_bytes()),
     }
 }
 

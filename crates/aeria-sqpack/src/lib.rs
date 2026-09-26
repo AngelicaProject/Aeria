@@ -9,6 +9,8 @@
 mod dat;
 pub mod excel;
 mod index;
+#[cfg(feature = "testing")]
+pub mod testing;
 
 use std::collections::HashMap;
 use std::fs::File;
@@ -92,8 +94,8 @@ type ChunkCache = HashMap<(String, u8), std::sync::Arc<Vec<Chunk>>>;
 pub struct GameData {
     sqpack: PathBuf,
     chunks: Mutex<ChunkCache>,
-    /// Open data files by name.
-    files: Mutex<HashMap<String, File>>,
+    /// Open data files by name, read with positioned reads.
+    files: Mutex<HashMap<String, std::sync::Arc<File>>>,
 }
 
 impl GameData {
@@ -205,16 +207,22 @@ impl GameData {
     ) -> Result<Vec<u8>, SqPackError> {
         let name = format!("{}.win32.dat{}", chunk.prefix, entry.data_file);
         let path = self.sqpack.join(repository).join(&name);
-        let mut files = self
-            .files
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if !files.contains_key(&name) {
-            let file = File::open(&path).map_err(|error| SqPackError::io(&path, error))?;
-            files.insert(name.clone(), file);
-        }
-        let file = files.get_mut(&name).expect("the file was just opened");
-        dat::read_file(file, entry.offset).map_err(|message| {
+        let file = {
+            let mut files = self
+                .files
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if let Some(file) = files.get(&name) {
+                std::sync::Arc::clone(file)
+            } else {
+                let file = std::sync::Arc::new(
+                    File::open(&path).map_err(|error| SqPackError::io(&path, error))?,
+                );
+                files.insert(name.clone(), std::sync::Arc::clone(&file));
+                file
+            }
+        };
+        dat::read_file(&file, entry.offset).map_err(|message| {
             SqPackError::invalid(format!(
                 "{} at {:#x}: {message}",
                 path.display(),

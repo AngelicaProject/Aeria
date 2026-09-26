@@ -33,7 +33,6 @@ struct EntryJson<'a> {
 struct SourceJson<'a> {
     language: &'a str,
     game_version: &'a str,
-    content_id: &'a str,
 }
 
 #[derive(Serialize)]
@@ -71,7 +70,6 @@ pub fn feed_entry(
         source: SourceJson {
             language: &manifest.source.language,
             game_version: &manifest.source.game_version,
-            content_id: &manifest.source.content_id,
         },
         target: TargetJson {
             language: &manifest.target_language,
