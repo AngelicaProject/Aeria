@@ -27,6 +27,7 @@ import {
   selectionKey,
   syncModels,
   toggleEffort,
+  toggleVision,
 } from "../aiSettings";
 import type { ChatGptLoginDto, ChatGptLoginEventDto } from "../types";
 import type { AiHeaderConfig, AiModelConfig, AiModelSelection, AiProviderDto, AiProviderPresetDto, AiSettingsDto, CommandError, ReasoningEffort } from "../types";
@@ -310,6 +311,7 @@ function ProviderCard({ provider, disabled, apply, run }: { provider: AiProvider
           {provider.models.map((model) => (
             <ModelRow key={model.id} model={model} disabled={disabled} test={tests[model.id]} canTest={provider.apiKey === "stored"}
               onToggleEffort={(effort) => void saveModels(toggleEffort(provider.models, model.id, effort))}
+              onToggleVision={() => void saveModels(toggleVision(provider.models, model.id))}
               onContextWindow={(contextWindow) => void saveModels(provider.models.map((entry) => entry.id === model.id ? { ...entry, contextWindow } : entry))}
               onRemove={() => void saveModels(removeModel(provider.models, model.id))}
               onTest={() => void testModel(model.id)} />
@@ -331,12 +333,13 @@ function ProviderCard({ provider, disabled, apply, run }: { provider: AiProvider
   );
 }
 
-function ModelRow({ model, disabled, test, canTest, onToggleEffort, onContextWindow, onRemove, onTest }: {
+function ModelRow({ model, disabled, test, canTest, onToggleEffort, onToggleVision, onContextWindow, onRemove, onTest }: {
   model: AiModelConfig;
   disabled: boolean;
   test: TestResult | undefined;
   canTest: boolean;
   onToggleEffort: (effort: ReasoningEffort) => void;
+  onToggleVision: () => void;
   onContextWindow: (value: number | null) => void;
   onRemove: () => void;
   onTest: () => void;
@@ -368,6 +371,14 @@ function ModelRow({ model, disabled, test, canTest, onToggleEffort, onContextWin
             const enabled = model.reasoningEfforts.includes(effort);
             return <button key={effort} type="button" className={enabled ? "ai-effort-chip enabled" : "ai-effort-chip"} aria-pressed={enabled} disabled={disabled} onClick={() => onToggleEffort(effort)}>{t(effortLabels[effort])}</button>;
           })}
+        </div>
+      </div>
+      <div className="ai-model-efforts">
+        <span className="ai-model-caption" title={t("ai.settings.visionHint")}>{t("ai.settings.inputShort")}</span>
+        <div className="ai-efforts">
+          <button type="button" className={model.vision ? "ai-effort-chip enabled" : "ai-effort-chip"} aria-pressed={model.vision === true} disabled={disabled} title={t("ai.settings.visionHint")} onClick={onToggleVision}>
+            <UiIcon icon="image" size="xs" />{t("ai.settings.vision")}
+          </button>
         </div>
       </div>
       {test && test.state !== "running" ? (

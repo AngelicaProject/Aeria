@@ -343,7 +343,8 @@ fn auth_transport_error(error: &reqwest::Error) -> ProviderError {
 /// Reads the Codex model catalog (`GET /models?client_version=…`).
 ///
 /// Hidden models are skipped. Context windows and reasoning levels are taken
-/// when the catalog states them.
+/// when the catalog states them; a model accepts images unless its
+/// `input_modalities` leave them out.
 #[must_use]
 pub fn parse_model_catalog(value: &Value) -> Vec<ModelConfig> {
     let Some(models) = value.get("models").and_then(Value::as_array) else {
@@ -377,10 +378,17 @@ pub fn parse_model_catalog(value: &Value) -> Vec<ModelConfig> {
                 .collect();
             reasoning_efforts.sort();
             reasoning_efforts.dedup();
+            // Codex treats a model without listed modalities as accepting
+            // text and images.
+            let vision = model
+                .get("input_modalities")
+                .and_then(Value::as_array)
+                .is_none_or(|modalities| modalities.iter().any(|entry| entry == "image"));
             Some(ModelConfig {
                 id: id.to_owned(),
                 context_window,
                 reasoning_efforts,
+                vision,
             })
         })
         .collect();
@@ -439,7 +447,7 @@ mod tests {
             "models": [
                 { "slug": "gpt-5.5", "context_window": 272_000, "supported_reasoning_levels": [{ "effort": "high" }, { "effort": "xhigh" }, { "effort": "low" }, { "effort": "unknown" }] },
                 { "slug": "internal", "visibility": "hide" },
-                { "slug": "gpt-5.5-mini", "supported_reasoning_levels": ["medium"] },
+                { "slug": "gpt-5.5-mini", "supported_reasoning_levels": ["medium"], "input_modalities": ["text"] },
                 { "name": "no slug" },
             ]
         }));
@@ -455,6 +463,8 @@ mod tests {
             ]
         );
         assert_eq!(models[1].reasoning_efforts, vec![ReasoningEffort::Medium]);
+        assert!(models[0].vision);
+        assert!(!models[1].vision);
         assert!(parse_model_catalog(&json!({})).is_empty());
     }
 }

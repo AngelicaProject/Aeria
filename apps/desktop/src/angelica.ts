@@ -1,11 +1,14 @@
-import type { AgentEvent, AiModelSelection, AiProviderDto, AiUsage, ChatMessage, JobCounts, JobSummary, WorkerActivity } from "./types";
+import type { AgentEvent, AiModelSelection, AiProviderDto, AiUsage, ChatMessage, ImageRef, JobCounts, JobSummary, WorkerActivity } from "./types";
 
 /** Angelica's fixed name. It is never localized. */
 export const ANGELICA = "Angelica";
 
 /** One rendered entry of a conversation. */
+/** An image shown with a user message: a stored one, or a preview while the message is sent. */
+export type MessageImage = { kind: "stored"; image: ImageRef } | { kind: "preview"; key: string; url: string };
+
 export type TranscriptItem =
-  | { kind: "user"; key: string; text: string }
+  | { kind: "user"; key: string; text: string; images: MessageImage[] }
   /** An update Aeria sent to Angelica, such as a finished job. */
   | { kind: "notice"; key: string; text: string }
   | { kind: "assistant"; key: string; text: string; reasoning: string; streaming: boolean }
@@ -27,7 +30,8 @@ export function transcriptFromMessages(messages: readonly ChatMessage[]): Transc
   const tools = new Map<string, Extract<TranscriptItem, { kind: "tool" }>>();
   messages.forEach((message, index) => {
     if (message.role === "user") {
-      items.push({ kind: message.automatic ? "notice" : "user", key: `m${index}`, text: message.content });
+      if (message.automatic) items.push({ kind: "notice", key: `m${index}`, text: message.content });
+      else items.push({ kind: "user", key: `m${index}`, text: message.content, images: (message.images ?? []).map((image) => ({ kind: "stored", image })) });
     } else if (message.role === "assistant") {
       if (message.content || message.reasoning) {
         items.push({ kind: "assistant", key: `m${index}`, text: message.content, reasoning: message.reasoning ?? "", streaming: false });
@@ -114,6 +118,13 @@ export function resolveModel(providers: readonly AiProviderDto[], candidates: Re
     if (model) return { providerId: provider.id, modelId: model.id, effort: null };
   }
   return null;
+}
+
+/** Whether the selected model accepts images; `false` when it is not configured. */
+export function modelAcceptsImages(providers: readonly AiProviderDto[], selection: Pick<AiModelSelection, "providerId" | "modelId"> | null): boolean {
+  if (!selection) return false;
+  const model = providers.find((provider) => provider.id === selection.providerId)?.models.find((entry) => entry.id === selection.modelId);
+  return model?.vision === true;
 }
 
 /** Share of the context window the last request used, from 0 to 1, when known. */
@@ -248,7 +259,8 @@ export type ActivityStep =
 
 /** What the conversation shows: messages, replies, and folded activity. */
 export type TranscriptBlock =
-  | { kind: "user" | "notice"; key: string; text: string }
+  | { kind: "user"; key: string; text: string; images: MessageImage[] }
+  | { kind: "notice"; key: string; text: string }
   | { kind: "reply"; key: string; text: string }
   | { kind: "activity"; key: string; steps: ActivityStep[]; live: boolean };
 
@@ -270,7 +282,7 @@ export function groupTranscript(items: readonly TranscriptItem[], running: boole
   for (const item of items) {
     if (item.kind === "user" || item.kind === "notice") {
       activity = null;
-      blocks.push({ kind: item.kind, key: item.key, text: item.text });
+      blocks.push(item.kind === "user" ? { kind: "user", key: item.key, text: item.text, images: item.images } : { kind: "notice", key: item.key, text: item.text });
     } else if (item.kind === "tool") {
       step(item.key, { kind: "tool", item });
     } else {

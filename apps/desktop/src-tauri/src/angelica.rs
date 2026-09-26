@@ -20,6 +20,10 @@ use aeria_ai::conversation::{
 };
 use aeria_ai::conversation::{ProposalRecord, ProposalStatus};
 use aeria_ai::guidance::{GlossaryEntry, ProjectFile, ProjectGuide, read_project_file};
+use aeria_ai::images::{
+    ImageError, ImagePayloads, ImageRef, MAX_IMAGES_PER_MESSAGE, data_url, decode_base64, inspect,
+    message_images,
+};
 use aeria_ai::prompt::{AgentMode, EditorContext, system_prompt};
 use aeria_ai::search::search_tool_definitions;
 use aeria_ai::tools::{
@@ -143,6 +147,7 @@ impl From<ConversationError> for CommandError {
             ConversationError::Io { .. } | ConversationError::Invalid { .. } => {
                 "angelicaConversationStorage"
             }
+            ConversationError::Image(_) => "angelicaInvalidImage",
         };
         Self::new(code, error.to_string())
     }
@@ -162,7 +167,15 @@ pub(crate) fn project_key(root: &std::path::Path) -> String {
 
 /// Returns the conversation store of the active project.
 pub(crate) fn conversation_store(app: &tauri::AppHandle) -> CommandResult<ConversationStore> {
-    let key = project_key(&repository_root(app)?);
+    project_conversation_store(app, &repository_root(app)?)
+}
+
+/// Returns the conversation store of the project at `root`.
+pub(crate) fn project_conversation_store(
+    app: &tauri::AppHandle,
+    root: &std::path::Path,
+) -> CommandResult<ConversationStore> {
+    let key = project_key(root);
     let data = app.aeria_data_dir().map_err(|error| {
         CommandError::new(
             "angelicaConversationStorage",
@@ -930,6 +943,40 @@ pub async fn angelica_conversation(
 }
 
 #[tauri::command(rename_all = "camelCase")]
+/// Returns one image of a conversation as a `data:` URL for display.
+///
+/// # Errors
+///
+/// Returns `noProjectOpen`, `angelicaConversationNotFound`,
+/// `angelicaImageNotFound` for an image the conversation does not have or
+/// whose file is gone, or a storage error.
+pub async fn angelica_image(
+    app: tauri::AppHandle,
+    conversation_id: String,
+    image_id: String,
+) -> CommandResult<String> {
+    run_blocking(move || {
+        let store = conversation_store(&app)?;
+        let conversation = store.load(&conversation_id)?;
+        let not_found = || {
+            CommandError::new(
+                "angelicaImageNotFound",
+                format!("the conversation has no image {image_id:?}"),
+            )
+        };
+        let image = message_images(&conversation.messages)
+            .into_iter()
+            .find(|image| image.id == image_id)
+            .ok_or_else(not_found)?;
+        let bytes = store
+            .load_image(&conversation_id, image)?
+            .ok_or_else(not_found)?;
+        Ok(data_url(image.format, &bytes))
+    })
+    .await
+}
+
+#[tauri::command(rename_all = "camelCase")]
 /// Deletes a conversation, stopping its turn first.
 ///
 /// # Errors
@@ -983,13 +1030,32 @@ struct PreparedTurn {
 struct TurnRequest<'a> {
     conversation_id: Option<&'a str>,
     text: &'a str,
+    /// Decoded image files the user attached.
+    images: Vec<Vec<u8>>,
     /// An update from Aeria rather than from the user.
     automatic: bool,
 }
 
+/// Loads the conversation images a request can show, when the model
+/// accepts images. A missing or unreadable file is left out, and the model
+/// is told that the image is no longer available.
+pub(crate) fn load_image_payloads(
+    store: &ConversationStore,
+    conversation_id: &str,
+    images: &[&ImageRef],
+) -> ImagePayloads {
+    let mut payloads = ImagePayloads::default();
+    for image in images {
+        if let Ok(Some(bytes)) = store.load_image(conversation_id, image) {
+            payloads.insert(image, &bytes);
+        }
+    }
+    payloads
+}
+
 fn prepare_turn(
     app: &tauri::AppHandle,
-    request: &TurnRequest<'_>,
+    request: TurnRequest<'_>,
     selection: ModelSelection,
     editor: &EditorContext,
     mode: AgentMode,
@@ -1006,6 +1072,15 @@ fn prepare_turn(
         .selected_model(&selection)
         .map_err(|message| CommandError::new("aiInvalidSettings", message))?
         .clone();
+    if !request.images.is_empty() && !model.vision {
+        return Err(CommandError::new(
+            "angelicaModelWithoutImages",
+            format!(
+                "the model {} does not accept images; choose a model that does or remove the images",
+                model.id
+            ),
+        ));
+    }
     let facts = DesktopReader { app: app.clone() }.facts().ok();
     let guide = ProjectGuide::load(&repository_root(app)?);
     // The first message starts building the search index in the background.
@@ -1021,7 +1096,12 @@ fn prepare_turn(
     if request.automatic {
         conversation.push_automatic(request.text, now);
     } else {
-        conversation.push_user(request.text, now);
+        let images = request
+            .images
+            .into_iter()
+            .map(|bytes| store.save_image(&conversation.id, &bytes))
+            .collect::<Result<Vec<_>, _>>()?;
+        conversation.push_user(request.text, images, now);
     }
     let effort = selection.effort;
     conversation.model = Some(selection);
@@ -1076,6 +1156,23 @@ async fn run_prepared_turn(
     tools.extend(search_tool_definitions());
     tools.extend(web_tool_definitions());
     tools.extend(job_tool_definitions(mode != AgentMode::Chat));
+    let payloads = if model.vision {
+        let images_store = store.clone();
+        let images_id = id.clone();
+        let images: Vec<ImageRef> = message_images(&conversation.messages)
+            .into_iter()
+            .cloned()
+            .collect();
+        tauri::async_runtime::spawn_blocking(move || {
+            let images: Vec<&ImageRef> = images.iter().collect();
+            load_image_payloads(&images_store, &images_id, &images)
+        })
+        .await
+        // A failed load still sends the turn; the images count as unavailable.
+        .map_or_else(|_| Some(ImagePayloads::default()), Some)
+    } else {
+        None
+    };
     let config = TurnConfig {
         model: &model.id,
         effort,
@@ -1084,6 +1181,7 @@ async fn run_prepared_turn(
         context_tokens: model.context_window,
         session: &id,
         max_rounds: aeria_ai::agent::MAX_ROUNDS_PER_TURN,
+        images: payloads.as_ref(),
     };
     let executor = DesktopTools {
         app: app.clone(),
@@ -1141,39 +1239,65 @@ async fn run_prepared_turn(
 #[tauri::command(rename_all = "camelCase")]
 /// Adds a user message and starts Angelica's turn in the background.
 ///
-/// Without `conversationId` a new conversation is created. The returned
+/// Without `conversationId` a new conversation is created. `images` are
+/// base64 PNG or JPEG files attached to the message. The returned
 /// conversation already contains the message; progress arrives as
 /// `angelica://event` events.
 ///
 /// # Errors
 ///
 /// Returns `noProjectOpen`, `angelicaBusy` while the conversation is
-/// running, `aiInvalidSettings` for an unknown model selection, a missing
-/// key, or a storage error.
+/// running, `angelicaInvalidMessage` for a message without text or images
+/// or with too many images, `angelicaInvalidImage` for an image that is not
+/// accepted, `angelicaModelWithoutImages` for images sent to a model that
+/// does not accept them, `aiInvalidSettings` for an unknown model
+/// selection, a missing key, or a storage error.
 pub async fn angelica_send(
     app: tauri::AppHandle,
     conversation_id: Option<String>,
     text: String,
+    images: Option<Vec<String>>,
     model: ModelSelection,
     editor: Option<EditorContext>,
     mode: Option<AgentMode>,
 ) -> CommandResult<ConversationDto> {
     let text = text.trim().to_owned();
-    if text.is_empty() || text.chars().count() > MAX_MESSAGE_CHARS {
+    let images = images.unwrap_or_default();
+    if (text.is_empty() && images.is_empty()) || text.chars().count() > MAX_MESSAGE_CHARS {
         return Err(CommandError::new(
             "angelicaInvalidMessage",
-            format!("a message must have 1 to {MAX_MESSAGE_CHARS} characters"),
+            format!(
+                "a message must have text or images and at most {MAX_MESSAGE_CHARS} characters"
+            ),
         ));
     }
+    if images.len() > MAX_IMAGES_PER_MESSAGE {
+        return Err(CommandError::new(
+            "angelicaInvalidMessage",
+            format!("a message can have at most {MAX_IMAGES_PER_MESSAGE} images"),
+        ));
+    }
+    // Every image is checked before any is stored, so a refused message
+    // leaves no files behind.
+    let images = images
+        .iter()
+        .map(|image| {
+            let bytes = decode_base64(image)?;
+            inspect(&bytes)?;
+            Ok(bytes)
+        })
+        .collect::<Result<Vec<_>, ImageError>>()
+        .map_err(|error| CommandError::new("angelicaInvalidImage", error.to_string()))?;
     let endpoint = resolve_endpoint(&app, model.provider_id.clone()).await?;
     let prepare_app = app.clone();
     let prepared = run_blocking(move || {
         prepare_turn(
             &prepare_app,
-            &TurnRequest {
+            TurnRequest {
                 conversation_id: conversation_id.as_deref(),
                 text: &text,
                 automatic: false,
+                images,
             },
             model,
             &editor.unwrap_or_default(),
@@ -1223,10 +1347,11 @@ pub(crate) async fn wake_angelica(app: &tauri::AppHandle, conversation_id: &str,
     let Ok(prepared) = run_blocking(move || {
         prepare_turn(
             &prepare_app,
-            &TurnRequest {
+            TurnRequest {
                 conversation_id: Some(&id),
                 text: &text,
                 automatic: true,
+                images: Vec::new(),
             },
             selection,
             &EditorContext::default(),

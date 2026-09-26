@@ -149,6 +149,7 @@ pub async fn draft_translation(
     let mut messages = vec![ChatMessage::User {
         content: user_message(request, &tagged.text, &legend),
         automatic: false,
+        images: Vec::new(),
     }];
     let mut usage = Usage::default();
     let mut last_errors = Vec::new();
@@ -160,6 +161,7 @@ pub async fn draft_translation(
             messages: &messages,
             tools: &[],
             turn_start: messages.len(),
+            images: None,
         };
         let response = client
             .stream_chat(endpoint, request.session, &chat, &mut |_| {})
@@ -184,6 +186,7 @@ pub async fn draft_translation(
                 last_errors.join("\n- ")
             ),
             automatic: false,
+            images: Vec::new(),
         });
     }
     Err(DraftError::Rejected(last_errors))

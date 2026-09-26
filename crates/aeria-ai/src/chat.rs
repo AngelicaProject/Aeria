@@ -3,6 +3,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 
+use crate::images::{ImagePayloads, ImageRef, user_parts};
 use crate::provider::ReasoningEffort;
 
 /// One tool call requested by the model.
@@ -28,6 +29,9 @@ pub enum ChatMessage {
         /// Written by Aeria, not the user, for example a job update.
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         automatic: bool,
+        /// Images the user attached, stored beside the conversation.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        images: Vec<ImageRef>,
     },
     Assistant {
         content: String,
@@ -64,6 +68,9 @@ pub struct ChatRequest<'a> {
     /// Messages from this index on belong to the current turn; their
     /// reasoning is sent back, which some providers require while tools run.
     pub turn_start: usize,
+    /// Image data for a model that accepts images; `None` sends none and
+    /// tells the model that attached images are not shown.
+    pub images: Option<&'a ImagePayloads>,
 }
 
 impl ChatRequest<'_> {
@@ -74,7 +81,20 @@ impl ChatRequest<'_> {
         messages.push(json!({ "role": "system", "content": self.system }));
         for (index, message) in self.messages.iter().enumerate() {
             messages.push(match message {
-                ChatMessage::User { content, .. } => json!({ "role": "user", "content": content }),
+                ChatMessage::User {
+                    content, images, ..
+                } => {
+                    let (text, urls) = user_parts(content, images, self.images);
+                    if urls.is_empty() {
+                        json!({ "role": "user", "content": text })
+                    } else {
+                        let mut parts = vec![json!({ "type": "text", "text": text })];
+                        parts.extend(urls.into_iter().map(|url| {
+                            json!({ "type": "image_url", "image_url": { "url": url } })
+                        }));
+                        json!({ "role": "user", "content": parts })
+                    }
+                }
                 ChatMessage::Assistant {
                     content,
                     reasoning,
@@ -494,6 +514,7 @@ mod tests {
             ChatMessage::User {
                 content: "q1".to_owned(),
                 automatic: false,
+                images: Vec::new(),
             },
             ChatMessage::Assistant {
                 content: "a1".to_owned(),
@@ -503,6 +524,7 @@ mod tests {
             ChatMessage::User {
                 content: "q2".to_owned(),
                 automatic: false,
+                images: Vec::new(),
             },
             ChatMessage::Assistant {
                 content: String::new(),
@@ -531,6 +553,7 @@ mod tests {
             messages: &messages,
             tools: &tools,
             turn_start: 2,
+            images: None,
         }
         .body();
         let sent = body["messages"].as_array().expect("messages");
@@ -542,5 +565,46 @@ mod tests {
         assert_eq!(body["tools"][0]["function"]["name"], "list_sheets");
         assert_eq!(body["reasoning_effort"], "high");
         assert_eq!(body["stream"], true);
+    }
+
+    #[test]
+    fn user_images_become_content_parts_only_for_models_that_accept_them() {
+        let bytes = crate::images::tests::png(8, 8);
+        let image = crate::images::inspect(&bytes).expect("image");
+        let messages = vec![ChatMessage::User {
+            content: "Что на скриншоте?".to_owned(),
+            automatic: false,
+            images: vec![image.clone()],
+        }];
+        let mut payloads = ImagePayloads::default();
+        payloads.insert(&image, &bytes);
+        let request = |images| ChatRequest {
+            model: "kimi-k3",
+            effort: None,
+            system: "",
+            messages: &messages,
+            tools: &[],
+            turn_start: 0,
+            images,
+        };
+        let body = request(Some(&payloads)).body();
+        let content = &body["messages"][1]["content"];
+        assert_eq!(content[0]["type"], "text");
+        assert!(
+            content[0]["text"]
+                .as_str()
+                .expect("text")
+                .contains(&image.id)
+        );
+        assert_eq!(content[1]["type"], "image_url");
+        assert!(
+            content[1]["image_url"]["url"]
+                .as_str()
+                .expect("url")
+                .starts_with("data:image/png;base64,")
+        );
+        let body = request(None).body();
+        let content = body["messages"][1]["content"].as_str().expect("plain text");
+        assert!(content.contains("does not accept images"));
     }
 }

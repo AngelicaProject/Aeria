@@ -1,6 +1,7 @@
 //! Angelica's conversation loop: stream a response, run requested tools,
 //! and repeat until the model answers without tools.
 
+use std::fmt::Write as _;
 use std::future::Future;
 use std::pin::Pin;
 
@@ -8,6 +9,7 @@ use serde::Serialize;
 
 use crate::chat::{ChatMessage, ChatRequest, StreamDelta, ToolCall, ToolDefinition, Usage};
 use crate::client::{OpenAiCompatibleClient, ProviderEndpoint, ProviderError};
+use crate::images::ImagePayloads;
 use crate::provider::ReasoningEffort;
 use crate::tools::ToolOutput;
 
@@ -81,6 +83,8 @@ pub struct TurnConfig<'a> {
     pub session: &'a str,
     /// Most model responses in the turn.
     pub max_rounds: usize,
+    /// Image data when the model accepts images; `None` sends none.
+    pub images: Option<&'a ImagePayloads>,
 }
 
 /// How a turn ended.
@@ -132,6 +136,7 @@ pub async fn run_turn(
             messages: &context,
             tools: config.tools,
             turn_start: context_turn_start,
+            images: config.images,
         };
         let response = {
             let mut forward = |delta: StreamDelta| {
@@ -231,9 +236,9 @@ pub fn repair_dangling_tool_calls(messages: &mut Vec<ChatMessage>) {
 /// Returns the messages to send within the context budget and the index at
 /// which the current turn starts in them.
 ///
-/// Earlier turns' tool results are replaced by a short notice first, oldest
-/// first; if that is not enough, whole earlier turns are dropped. The current
-/// turn is always sent in full.
+/// Earlier turns' tool results are replaced by a short notice first, then
+/// their images; if that is not enough, whole earlier turns are dropped,
+/// oldest first. The current turn is always sent in full.
 #[must_use]
 pub fn fit_context(
     messages: &[ChatMessage],
@@ -253,6 +258,23 @@ pub fn fit_context(
             OMITTED_TOOL_RESULT.clone_into(content);
         }
     }
+    if size(&context) <= budget {
+        return (context, turn_start);
+    }
+    for message in &mut context[..turn_start] {
+        if let ChatMessage::User {
+            content, images, ..
+        } = message
+            && !images.is_empty()
+        {
+            let _ = write!(
+                content,
+                "\n\n[{} earlier image(s) omitted to save context]",
+                images.len()
+            );
+            images.clear();
+        }
+    }
     while size(&context) > budget && turn_start > 0 {
         // Drop the oldest whole turn: its user message and every reply.
         let end = context[1..turn_start]
@@ -269,7 +291,21 @@ fn size(messages: &[ChatMessage]) -> usize {
     messages
         .iter()
         .map(|message| match message {
-            ChatMessage::User { content, .. } | ChatMessage::Tool { content, .. } => content.len(),
+            ChatMessage::User {
+                content, images, ..
+            } => {
+                #[allow(
+                    clippy::cast_possible_truncation,
+                    clippy::cast_precision_loss,
+                    clippy::cast_sign_loss
+                )]
+                let image_chars = images
+                    .iter()
+                    .map(|image| (image.estimated_tokens() as f64 * CHARS_PER_TOKEN) as usize)
+                    .sum::<usize>();
+                content.len() + image_chars
+            }
+            ChatMessage::Tool { content, .. } => content.len(),
             ChatMessage::Assistant {
                 content,
                 tool_calls,
@@ -300,6 +336,7 @@ mod tests {
         ChatMessage::User {
             content: text.to_owned(),
             automatic: false,
+            images: Vec::new(),
         }
     }
 
@@ -387,6 +424,35 @@ mod tests {
         assert!(matches!(&context[0], ChatMessage::User { content, .. } if content == "second"));
     }
 
+    #[test]
+    fn earlier_images_are_omitted_before_earlier_turns_are_dropped() {
+        let image = crate::images::inspect(&crate::images::tests::png(2048, 2048)).expect("image");
+        let with_image = |text: &str| ChatMessage::User {
+            content: text.to_owned(),
+            automatic: false,
+            images: vec![image.clone()],
+        };
+        let messages = vec![
+            with_image("first"),
+            ChatMessage::Assistant {
+                content: "seen".to_owned(),
+                reasoning: None,
+                tool_calls: Vec::new(),
+            },
+            with_image("second"),
+        ];
+        // Each image is estimated at 5,350 tokens; both fit in 64,000.
+        let (context, _) = fit_context(&messages, 2, None);
+        assert_eq!(context, messages);
+        let (context, start) = fit_context(&messages, 2, Some(12_000));
+        assert_eq!(start, 2);
+        assert!(
+            matches!(&context[0], ChatMessage::User { content, images, .. }
+            if images.is_empty() && content.ends_with("[1 earlier image(s) omitted to save context]"))
+        );
+        assert!(matches!(&context[2], ChatMessage::User { images, .. } if images.len() == 1));
+    }
+
     struct Tools;
 
     impl ToolExecutor for Tools {
@@ -463,6 +529,7 @@ mod tests {
             context_tokens: None,
             session: "conversation-1",
             max_rounds: MAX_ROUNDS_PER_TURN,
+            images: None,
         };
         let mut messages = vec![user("Сколько листов?")];
         let events = Mutex::new(Vec::new());

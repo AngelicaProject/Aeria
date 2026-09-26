@@ -15,6 +15,7 @@ import {
   isToolError,
   jobProblems,
   jobProgress,
+  modelAcceptsImages,
   parseReply,
   parseSpans,
   resolveModel,
@@ -142,6 +143,24 @@ test("jobs needing attention come first, newest first within a status", () => {
   const job = (id, status, createdAtUnixMs) => ({ id, status, createdAtUnixMs });
   const sorted = sortJobs([job("a", "completed", 5), job("b", "paused", 1), job("c", "running", 2), job("d", "paused", 3)]);
   assert.deepEqual(sorted.map((entry) => entry.id), ["c", "d", "b", "a"]);
+});
+
+test("user messages keep their images and only vision models accept them", () => {
+  const image = { id: "00000000-0000-4000-8000-000000000001", format: "png", width: 640, height: 360 };
+  const items = transcriptFromMessages([
+    { role: "user", content: "Где эта строка?", images: [image] },
+    { role: "user", content: "[Aeria] Job finished", automatic: true },
+  ]);
+  assert.deepEqual(items[0].images, [{ kind: "stored", image }]);
+  const blocks = groupTranscript(items, false);
+  assert.deepEqual(blocks[0].images, [{ kind: "stored", image }]);
+  assert.equal("images" in blocks[1], false);
+
+  const providers = [{ id: "p", models: [{ id: "kimi-k3", contextWindow: null, reasoningEfforts: [], vision: true }, { id: "glm-5.3", contextWindow: null, reasoningEfforts: [] }] }];
+  assert.equal(modelAcceptsImages(providers, { providerId: "p", modelId: "kimi-k3" }), true);
+  assert.equal(modelAcceptsImages(providers, { providerId: "p", modelId: "glm-5.3" }), false);
+  assert.equal(modelAcceptsImages(providers, { providerId: "p", modelId: "gone" }), false);
+  assert.equal(modelAcceptsImages(providers, null), false);
 });
 
 test("reasoning and tool calls fold into activity between replies", () => {

@@ -8,6 +8,7 @@
 //! or when the provider keeps failing, and wakes Angelica in its
 //! conversation when it pauses or finishes.
 
+use std::fmt::Write as _;
 use std::future::Future;
 use std::path::PathBuf;
 use std::pin::Pin;
@@ -19,6 +20,7 @@ use aeria_ai::agent::{AgentEvent, ToolExecutor, TurnConfig, run_turn};
 use aeria_ai::chat::{ChatMessage, ToolCall};
 use aeria_ai::conversation::{ConversationStore, ProposalRecord, ProposalStatus};
 use aeria_ai::guidance::ProjectGuide;
+use aeria_ai::images::{ImagePayloads, ImageRef, message_images};
 use aeria_ai::jobs::{
     JobError, JobEstimate, JobEvent, JobFilter, JobLimitProposal, JobProposal, JobScope, JobSpec,
     JobStatus, JobStore, JobSummary, JobUnit, ScopedUnit, UnitStatus,
@@ -36,8 +38,9 @@ use tokio::task::JoinSet;
 
 use crate::ai::{resolve_endpoint, settings_store};
 use crate::angelica::{
-    DesktopReader, announce_proposals, binding_of, known_sheet, now_unix_ms, project_key,
-    repository_root, review_label, session_row, wake_angelica, write_assisted,
+    DesktopReader, announce_proposals, binding_of, known_sheet, load_image_payloads, now_unix_ms,
+    project_conversation_store, project_key, repository_root, review_label, session_row,
+    wake_angelica, write_assisted,
 };
 use crate::commands::run_blocking;
 use crate::error::CommandError;
@@ -219,6 +222,45 @@ pub(crate) struct DesktopJobs {
     pub(crate) conversation_id: String,
 }
 
+impl DesktopJobs {
+    /// Resolves image IDs against the images attached in this
+    /// conversation. Images are refused when the jobs model does not
+    /// accept them, since workers could not see them.
+    fn conversation_images(&self, ids: &[String]) -> Result<Vec<ImageRef>, ToolError> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let conversation = self.store.load(&self.conversation_id).map_err(tool_error)?;
+        let known = message_images(&conversation.messages);
+        let images = ids
+            .iter()
+            .map(|id| {
+                known
+                    .iter()
+                    .find(|image| image.id == *id)
+                    .map(|image| (*image).clone())
+                    .ok_or_else(|| ToolError::new(format!("this conversation has no image {id:?}")))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let settings = settings_store(&self.app)
+            .and_then(|store| Ok(store.load()?))
+            .map_err(|error| ToolError::new(error.message))?;
+        if let Some(selection) = settings
+            .worker_model
+            .as_ref()
+            .or(settings.agent_model.as_ref())
+            && let Ok(model) = settings.selected_model(selection)
+            && !model.vision
+        {
+            return Err(ToolError::new(format!(
+                "the jobs model {} does not accept images; propose the job without images, or ask the user to choose a jobs model that accepts images in Settings",
+                model.id
+            )));
+        }
+        Ok(images)
+    }
+}
+
 impl JobControl for DesktopJobs {
     fn estimate(&self, scope: &JobScope) -> Result<JobEstimate, ToolError> {
         let units = enumerate_scope(&self.app, scope)?;
@@ -233,7 +275,9 @@ impl JobControl for DesktopJobs {
         scope: JobScope,
         instructions: String,
         concurrency: Option<u8>,
+        images: &[String],
     ) -> Result<ProposalOutcome, ToolError> {
+        let images = self.conversation_images(images)?;
         let estimate = self.estimate(&scope)?;
         let concurrency = aeria_ai::jobs::job_concurrency(concurrency, estimate.chunks);
         if estimate.units == 0 {
@@ -244,17 +288,21 @@ impl JobControl for DesktopJobs {
         } else {
             scope.sheets.join(", ")
         };
-        let summary = format!(
+        let mut summary = format!(
             "Translate {} {} in {sheets}: {} chunks, about {} tokens",
             estimate.units,
             filter_label(scope.filter),
             estimate.chunks,
             estimate.estimated_tokens
         );
+        if !images.is_empty() {
+            let _ = write!(summary, ", with {} image(s) for every worker", images.len());
+        }
         let proposal = JobProposal {
             token_limit: estimate.token_limit(),
             scope,
             instructions,
+            images,
             concurrency,
             estimate,
         };
@@ -517,6 +565,7 @@ pub(crate) fn start_proposed_job(
         concurrency: proposal
             .concurrency
             .clamp(1, aeria_ai::jobs::MAX_CONCURRENCY),
+        images: proposal.images.clone(),
     };
     let job = job_store(app)?.create(conversation_id, &spec, &units)?;
     spawn_runner(app, &job.id);
@@ -991,6 +1040,10 @@ struct PreparedChunk {
     model: aeria_ai::ModelConfig,
     worker: ChunkWorker,
     system: String,
+    /// The chunk's strings with the job's images.
+    message: ChatMessage,
+    /// The images' data, loaded when the model accepts images.
+    payloads: Option<ImagePayloads>,
 }
 
 /// Loads each string's context and the job's current instructions.
@@ -1007,7 +1060,20 @@ fn prepare_chunk(
         .clone();
     let reader = JobReader { run: run.clone() };
     let facts = reader.facts().ok();
-    let instructions = run.store.summary(&run.job_id)?.spec.instructions;
+    let job = run.store.summary(&run.job_id)?;
+    let instructions = job.spec.instructions;
+    let images = job.spec.images;
+    // Images stay with the job's conversation; a deleted conversation
+    // leaves the workers a notice that they are no longer available.
+    let payloads = model.vision.then(|| {
+        project_conversation_store(&run.app, &run.root).map_or_else(
+            |_| ImagePayloads::default(),
+            |store| {
+                let images: Vec<&ImageRef> = images.iter().collect();
+                load_image_payloads(&store, &job.conversation_id, &images)
+            },
+        )
+    });
     let worker = ChunkWorker::new(
         units,
         Arc::new(DesktopJobHost { run: run.clone() }),
@@ -1018,10 +1084,17 @@ fn prepare_chunk(
     let previews = worker.unit_previews();
     run.workers
         .update(lane, |activity, _| activity.set_previews(previews));
+    let message = ChatMessage::User {
+        content: worker.chunk_message(),
+        automatic: false,
+        images,
+    };
     Ok(PreparedChunk {
         model,
         worker,
         system,
+        message,
+        payloads,
     })
 }
 
@@ -1095,6 +1168,8 @@ async fn run_chunk(run: &JobRun, spec: &JobSpec, units: Vec<JobUnit>, lane: usiz
             model,
             worker,
             system,
+            message,
+            payloads,
         },
         client,
     ) = match (prepared, client) {
@@ -1120,11 +1195,9 @@ async fn run_chunk(run: &JobRun, spec: &JobSpec, units: Vec<JobUnit>, lane: usiz
         context_tokens: model.context_window,
         session: &session,
         max_rounds: WORKER_ROUNDS,
+        images: payloads.as_ref(),
     };
-    let mut messages = vec![ChatMessage::User {
-        content: worker.chunk_message(),
-        automatic: false,
-    }];
+    let mut messages = vec![message];
     let executor = WorkerExecutor {
         worker: Arc::clone(&worker),
     };
@@ -1417,6 +1490,7 @@ mod tests {
                 },
                 token_limit: 1_000,
                 concurrency: 1,
+                images: Vec::new(),
             },
             created_at_unix_ms: 0,
             counts: aeria_ai::jobs::JobCounts::default(),

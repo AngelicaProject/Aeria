@@ -458,7 +458,28 @@
 .angelica-welcome p { font-size: var(--text-sm); }
 .angelica-suggestions { display: grid; gap: 4px; width: 100%; }
 .angelica-suggestions .button { justify-content: flex-start; height: auto; min-height: 28px; padding: 5px 10px; border: 1px solid var(--line); text-align: left; white-space: normal; }
-.angelica-user { align-self: flex-end; max-width: 88%; padding: 7px 10px; border-radius: var(--radius-md); background: var(--selected); font-size: var(--text-sm); white-space: pre-wrap; overflow-wrap: anywhere; }
+.angelica-user { display: grid; gap: 6px; justify-items: start; align-self: flex-end; max-width: 88%; padding: 7px 10px; border-radius: var(--radius-md); background: var(--selected); font-size: var(--text-sm); white-space: pre-wrap; overflow-wrap: anywhere; }
+.angelica-thumbs,
+.angelica-attachments { display: flex; flex-wrap: wrap; gap: 4px; }
+.angelica-thumb { display: inline-grid; place-items: center; width: 56px; height: 56px; padding: 0; overflow: hidden; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--panel); color: var(--fg-faint); cursor: zoom-in; }
+.angelica-thumb img { width: 100%; height: 100%; object-fit: cover; }
+.angelica-thumb:focus-visible { outline: 2px solid var(--line-focus); outline-offset: 1px; }
+.angelica-thumb.missing { cursor: default; }
+/* In a message the whole image shows at its own proportions; a wide screenshot stays readable. */
+.angelica-user .angelica-thumbs { width: 100%; }
+.angelica-user .angelica-thumb { width: auto; max-width: 100%; height: auto; }
+.angelica-user .angelica-thumb:not(:has(img)) { width: 56px; height: 56px; }
+.angelica-user .angelica-thumb img { display: block; width: auto; max-width: 100%; height: auto; max-height: 140px; object-fit: contain; }
+.angelica-attachment { position: relative; display: inline-flex; }
+.angelica-attachment .angelica-thumb { width: 48px; height: 48px; }
+.angelica-attachment-remove { position: absolute; top: -5px; right: -5px; display: grid; place-items: center; width: 16px; height: 16px; padding: 0; border: 1px solid var(--line); border-radius: 50%; background: var(--panel-raised); color: var(--fg-muted); cursor: pointer; }
+.angelica-attachment-remove:hover { color: var(--fg); }
+.angelica-image-warning { display: flex; align-items: flex-start; gap: 4px; color: var(--fg-muted); font-size: var(--text-xs); line-height: 1.4; }
+.angelica-image-warning svg { flex: none; margin-top: 2px; color: var(--warn); }
+.angelica-model-vision { display: inline-flex; margin-left: auto; padding-left: 6px; color: var(--fg-subtle); }
+.angelica-lightbox { position: fixed; inset: 0; z-index: 95; display: grid; place-items: center; padding: 32px; background: color-mix(in srgb, black 72%, transparent); cursor: zoom-out; }
+.angelica-lightbox img { max-width: 100%; max-height: 100%; border-radius: var(--radius-sm); box-shadow: 0 8px 32px rgb(0 0 0 / 40%); }
+.angelica-lightbox-close { position: absolute; top: 12px; right: 12px; color: white; }
 .angelica-assistant { display: grid; gap: 6px; font-size: var(--text-sm); }
 .angelica-reply { display: grid; gap: 6px; line-height: 1.55; overflow-wrap: anywhere; }
 .angelica-reply p { white-space: pre-wrap; }

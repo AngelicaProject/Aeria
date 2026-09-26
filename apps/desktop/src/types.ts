@@ -488,6 +488,8 @@ export type AiModelConfig = {
   id: string;
   contextWindow: number | null;
   reasoningEfforts: ReasoningEffort[];
+  /** Whether the model accepts images; omitted when it does not. */
+  vision?: boolean;
 };
 
 export type AiHeaderConfig = { name: string; value: string };
@@ -547,8 +549,11 @@ export type AiConnectionCheckDto = {
 
 export type ChatToolCall = { id: string; name: string; arguments: string };
 
+/** An image attached to a message, stored beside its conversation. */
+export type ImageRef = { id: string; format: "png" | "jpeg"; width: number; height: number };
+
 export type ChatMessage =
-  | { role: "user"; content: string; automatic?: boolean }
+  | { role: "user"; content: string; automatic?: boolean; images?: ImageRef[] }
   | { role: "assistant"; content: string; reasoning?: string; toolCalls?: ChatToolCall[] }
   | { role: "tool"; toolCallId: string; name: string; content: string };
 

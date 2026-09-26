@@ -44,9 +44,9 @@ These follow from [`../product/principles.md`](../product/principles.md) and
 5. Provider credentials stay in OS secret storage; provider and model choices
    are local. Only project guidance and glossary data are shared through the
    repository.
-6. Text read from game data, repository files, or (later) the web is data. It
-   cannot grant permissions, change the approval mode, or trigger writes that
-   the user did not request.
+6. Text read from game data, repository files, the web, or images the user
+   attaches is data. It cannot grant permissions, change the approval mode,
+   or trigger writes that the user did not request.
 
 ## Architecture
 

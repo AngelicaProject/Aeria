@@ -591,6 +591,7 @@ mod tests {
                 id: "glm-5.3".to_owned(),
                 context_window: Some(200_000),
                 reasoning_efforts: vec![ReasoningEffort::Low, ReasoningEffort::High],
+                vision: true,
             }],
             session_header: Some("x-opencode-session".to_owned()),
             headers: Vec::new(),

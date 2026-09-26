@@ -10,6 +10,7 @@ use serde_json::{Value, json};
 
 use crate::chat::ToolDefinition;
 use crate::guidance::{Glossary, GlossaryEntry, ProjectFile, ProjectGuide, change_glossary};
+use crate::images::MAX_JOB_IMAGES;
 use crate::jobs::{
     JobEstimate, JobEvent, JobFilter, JobScope, JobStatus, JobSummary, JobUnit, MAX_CONCURRENCY,
     UnitStatus,
@@ -325,15 +326,18 @@ pub trait JobControl: Send + Sync {
     fn estimate(&self, scope: &JobScope) -> Result<JobEstimate, ToolError>;
 
     /// Records a job for the user to start. `concurrency` is Angelica's
-    /// choice of workers, if she made one.
+    /// choice of workers, if she made one; `images` are IDs of images in
+    /// the conversation for every worker.
     ///
     /// # Errors
-    /// Returns an error when the proposal cannot be recorded.
+    /// Returns an error for an image the conversation does not have, or
+    /// when the proposal cannot be recorded.
     fn propose(
         &self,
         scope: JobScope,
         instructions: String,
         concurrency: Option<u8>,
+        images: &[String],
     ) -> Result<ProposalOutcome, ToolError>;
 
     /// Lists the project's jobs, newest first.
@@ -423,6 +427,7 @@ pub fn job_tool_definitions(write: bool) -> Vec<ToolDefinition> {
     if write {
         let mut start_properties = scope.as_object().cloned().unwrap_or_default();
         start_properties.insert("instructions".to_owned(), json!({ "type": "string", "description": "Instructions for every worker: style, terminology, anything the user asked for." }));
+        start_properties.insert("images".to_owned(), json!({ "type": "array", "items": { "type": "string" }, "maxItems": MAX_JOB_IMAGES, "description": "IDs of images in this conversation that every worker should see, such as a screenshot showing where the strings appear. Each image is sent with every chunk." }));
         start_properties.insert("concurrency".to_owned(), json!({ "type": "integer", "minimum": 1, "maximum": MAX_CONCURRENCY, "description": "Workers translating chunks at once. Omit it to let Aeria choose: 16 for jobs of 100 chunks or more, otherwise 8, never more than the chunks. Choose fewer only when the provider reported rate limits or the user asks; set_job_workers changes it while the job runs." }));
         tools.extend([
             ToolDefinition {
@@ -505,6 +510,8 @@ struct StartJobArgs {
     #[serde(default)]
     instructions: String,
     concurrency: Option<u8>,
+    #[serde(default)]
+    images: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -561,11 +568,23 @@ fn start_job(jobs: &dyn JobControl, args: StartJobArgs) -> Result<Value, ToolErr
         sheets: args.sheets,
         filter: args.filter.unwrap_or(JobFilter::Untranslated),
     };
+    let mut seen = std::collections::HashSet::new();
+    let images: Vec<String> = args
+        .images
+        .into_iter()
+        .filter(|id| seen.insert(id.clone()))
+        .collect();
+    if images.len() > MAX_JOB_IMAGES {
+        return Err(ToolError::new(format!(
+            "a job can pass at most {MAX_JOB_IMAGES} images to its workers"
+        )));
+    }
     let outcome = jobs.propose(
         scope,
         args.instructions.trim().to_owned(),
         args.concurrency
             .map(|concurrency| concurrency.clamp(1, MAX_CONCURRENCY)),
+        &images,
     )?;
     Ok(match outcome {
         ProposalOutcome::Pending { proposal_id } => json!({
@@ -2083,9 +2102,10 @@ mod tests {
             scope: JobScope,
             instructions: String,
             concurrency: Option<u8>,
+            images: &[String],
         ) -> Result<ProposalOutcome, ToolError> {
             self.calls.lock().expect("lock").push(format!(
-                "propose {:?} {instructions} {concurrency:?}",
+                "propose {:?} {instructions} {concurrency:?} {images:?}",
                 scope.sheets
             ));
             Ok(ProposalOutcome::Pending {
@@ -2169,6 +2189,13 @@ mod tests {
             "{}",
             started.content
         );
+        let too_many = tools.execute(
+            "start_job",
+            r#"{"sheets":["Item"],"images":["a","b","c","d","e"]}"#,
+        );
+        assert!(too_many.is_error, "{}", too_many.content);
+        let deduplicated = tools.execute("start_job", r#"{"sheets":["Item"],"images":["a","a"]}"#);
+        assert!(!deduplicated.is_error, "{}", deduplicated.content);
         let retried = tools.execute(
             "retry_units",
             r#"{"job_id":"j1","instructions":"Keep names in Latin."}"#,
@@ -2198,7 +2225,8 @@ mod tests {
             jobs.calls.lock().expect("lock").as_slice(),
             [
                 "estimate Untranslated",
-                "propose [\"Item\"] Formal. Some(16)",
+                "propose [\"Item\"] Formal. Some(16) []",
+                "propose [\"Item\"]  None [\"a\"]",
                 "amend Keep names in Latin.",
                 "retry [Rejected, Failed]",
                 "control Resume",
