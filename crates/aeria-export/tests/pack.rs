@@ -36,7 +36,6 @@ fn manifest(policy: ContentPolicy) -> PackManifest {
         content_policy: policy,
         project_commit: "a".repeat(40),
         exporter_aeria: "0.1.0".to_owned(),
-        exporter_atlas: "0.4.0".to_owned(),
         min_harmonia: "1.0.0".to_owned(),
     }
 }

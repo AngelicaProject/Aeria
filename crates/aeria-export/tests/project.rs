@@ -138,7 +138,6 @@ fn a_collected_project_writes_a_pack_for_the_games_version() {
         content_policy: ContentPolicy::All,
         project_commit: "0".repeat(40),
         exporter_aeria: "0.1.0".to_owned(),
-        exporter_atlas: "lumina-7.7.0".to_owned(),
         min_harmonia: "0.1.0".to_owned(),
     };
     let pack = write_pack(&manifest, export.sheets, None, None).expect("pack");

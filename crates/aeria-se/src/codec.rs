@@ -3,9 +3,7 @@
 //! [`decode`] prints bytes the way Lumina 7.7.0's `ToMacroString()` does, and
 //! [`encode`] parses macro text the way its `ReadOnlySeString.FromMacroString`
 //! does with default options. Both reproduce Lumina's behavior exactly,
-//! including its lossy corners, so that exported bytes stay those of the
-//! `lumina-7.7.0` dialect recorded in pack manifests. See
-//! `docs/architecture/strings.md`.
+//! including its lossy corners. See `docs/architecture/strings.md`.
 //!
 //! The formats involved:
 //!
@@ -18,10 +16,6 @@
 use std::fmt::Write as _;
 
 use crate::KnownMacro;
-
-/// The macro-text and byte dialect this codec follows, as recorded where
-/// strings were encoded (the pack manifest's `exporter.atlas`).
-pub const STRING_DIALECT: &str = "lumina-7.7.0";
 
 const STX: u8 = 0x02;
 const ETX: u8 = 0x03;

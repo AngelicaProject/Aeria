@@ -37,7 +37,7 @@ the closing `}`:
     "url": null
   },
   "license": "CC-BY-NC-SA-4.0",
-  "minHarmonia": "0.1.1.1",
+  "minHarmonia": "0.1.1.2",
   "signingKeyFingerprint": "<64 lowercase hex>"
 }
 ```

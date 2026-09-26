@@ -40,7 +40,7 @@ type Release = {
   changelog: string;
 };
 
-const DEFAULT_MIN_HARMONIA = "0.1.1.1";
+const DEFAULT_MIN_HARMONIA = "0.1.1.2";
 const emptySettings: PackSettings = { packId: "", title: "", publisherName: "", publisherUrl: null, license: null, minHarmonia: DEFAULT_MIN_HARMONIA };
 
 const TRANSLITERATION: Record<string, string> = {

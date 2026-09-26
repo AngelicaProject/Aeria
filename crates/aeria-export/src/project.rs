@@ -28,11 +28,6 @@ pub trait StringEncoder {
 #[derive(Clone, Copy, Debug, Default)]
 pub struct SeStringEncoder;
 
-impl SeStringEncoder {
-    /// The dialect recorded as the pack manifest's `exporter.atlas`.
-    pub const DIALECT: &str = aeria_se::codec::STRING_DIALECT;
-}
-
 impl StringEncoder for SeStringEncoder {
     fn encode(&mut self, macros: &[&str]) -> Result<Vec<Result<Vec<u8>, String>>, String> {
         Ok(macros

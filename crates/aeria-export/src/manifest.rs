@@ -48,10 +48,6 @@ pub struct PackManifest {
     pub content_policy: ContentPolicy,
     pub project_commit: String,
     pub exporter_aeria: String,
-    /// `exporter.atlas`: the string dialect the cells were encoded in, such
-    /// as `lumina-7.7.0`; packs from Aeria 0.x before the Rust codec hold
-    /// the Harmonia Atlas version instead.
-    pub exporter_atlas: String,
     pub min_harmonia: String,
 }
 
@@ -105,7 +101,6 @@ struct ProjectJson<'a> {
 #[derive(Serialize)]
 struct ExporterJson<'a> {
     aeria: &'a str,
-    atlas: &'a str,
 }
 
 #[derive(Serialize)]
@@ -132,7 +127,6 @@ impl PackManifest {
             ("source.language", &self.source.language),
             ("source.gameVersion", &self.source.game_version),
             ("exporter.aeria", &self.exporter_aeria),
-            ("exporter.atlas", &self.exporter_atlas),
         ] {
             if value.trim().is_empty() || value.trim() != value {
                 return Err(ExportError::Manifest(format!(
@@ -192,7 +186,6 @@ impl PackManifest {
             },
             exporter: ExporterJson {
                 aeria: &self.exporter_aeria,
-                atlas: &self.exporter_atlas,
             },
             min_harmonia: &self.min_harmonia,
             counts,

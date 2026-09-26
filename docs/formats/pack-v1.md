@@ -103,7 +103,7 @@ followed by one LF. Readers reject unknown, missing, and duplicate fields.
   "source": { "language": "en", "gameVersion": "2026.08.12.0000.0000" },
   "contentPolicy": "reviewed",
   "project": { "commit": "<40 hex>" },
-  "exporter": { "aeria": "0.9.0", "atlas": "lumina-7.7.0" },
+  "exporter": { "aeria": "0.9.0" },
   "minHarmonia": "1.4.0",
   "counts": { "sheets": 0, "rows": 0, "cells": 0, "reviewedCells": 0, "strings": 0 }
 }
@@ -121,7 +121,7 @@ followed by one LF. Readers reject unknown, missing, and duplicate fields.
 | `source.gameVersion` | the text of `game/ffxivgame.ver` of the game the pack was built from |
 | `contentPolicy` | `reviewed` or `all` (see [Cell state](#cell-state)) |
 | `project.commit` | Git commit of the exported workspace state |
-| `exporter` | producing Aeria version, and in `atlas` the string dialect the cells were encoded in, such as `lumina-7.7.0`; packs exported before Aeria encoded strings itself hold the Harmonia Atlas version that encoded them. Readers treat `atlas` as a non-empty display string |
+| `exporter.aeria` | producing Aeria version, a non-empty display string that also identifies the string encoder |
 | `minHarmonia` | lowest Harmonia version that implements this format minor |
 | `counts` | exact counts; readers verify them. `strings` is the number of distinct stored strings |
 

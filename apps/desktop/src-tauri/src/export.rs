@@ -531,7 +531,6 @@ fn build(
         },
         project_commit: commit,
         exporter_aeria: env!("CARGO_PKG_VERSION").to_owned(),
-        exporter_atlas: SeStringEncoder::DIALECT.to_owned(),
         min_harmonia: settings.min_harmonia.clone(),
     };
     let export = collect_project(

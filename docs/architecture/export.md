@@ -101,8 +101,7 @@ empty targets, and unreviewed units under the `reviewed` policy.
 The manifest takes `packId`, `title`, `publisher`, `license`, and
 `minHarmonia` from `aeria-pack.json`; `release` and `contentPolicy` from the
 export; `target.language` from the workspace; `source` from the game;
-`exporter.aeria` from the Aeria build; and `exporter.atlas` from the string
-dialect of the encoder, `lumina-7.7.0`.
+and `exporter.aeria` from the Aeria build.
 
 ## Desktop flow
 
