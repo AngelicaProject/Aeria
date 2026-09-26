@@ -95,4 +95,16 @@ mod tests {
             assert!(FEED_WORKFLOW.contains(needle), "{needle}");
         }
     }
+
+    #[test]
+    fn workflow_deploys_only_from_the_default_branch() {
+        for needle in [
+            "gh workflow run harmonia-feed.yml",
+            "--ref \"$DEFAULT_BRANCH\"",
+            "github.ref_name == github.event.repository.default_branch",
+        ] {
+            assert!(FEED_WORKFLOW.contains(needle), "{needle}");
+        }
+        assert!(FEED_WORKFLOW_PATH.ends_with("/harmonia-feed.yml"));
+    }
 }
