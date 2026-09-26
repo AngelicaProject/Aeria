@@ -37,6 +37,10 @@ Likely UI-level dependencies such as Tailwind, Radix primitives, CodeMirror, doc
 - `rusqlite` (MIT) with `bundled`: the local translation-job store. The bundled SQLite needs only a C compiler, which the Windows and Linux toolchains already provide.
 - `fs2`, `uuid`, `serde_json`, and `thiserror`, matching `aeria-projects`.
 
+`aeria-sqpack` uses `crc32fast` (MIT OR Apache-2.0) for the CRC-32 path
+hashes of SqPack indexes and `flate2` (MIT OR Apache-2.0) to inflate SqPack
+data blocks. Both are already in the desktop dependency graph through Tauri.
+
 `aeria-search` uses `rusqlite` (MIT) with `bundled`, whose SQLite includes
 FTS5 with the `unicode61` and `trigram` tokenizers.
 
