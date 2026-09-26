@@ -241,6 +241,7 @@
   box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.18);
   font-style: normal;
 }
+.preview-value.is-code { font-family: var(--font-mono); font-size: 0.88em; }
 .preview-value-gameData { box-shadow: inset 0 0 0 1px rgb(120 180 255 / 0.45); }
 .preview-value-playerName { box-shadow: inset 0 0 0 1px rgb(255 210 120 / 0.5); }
 .preview-icon {

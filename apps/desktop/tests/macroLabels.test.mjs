@@ -7,15 +7,17 @@ const en = createTranslator("en");
 const ru = createTranslator("ru");
 
 test("parameters and values read as words", () => {
-  assert.equal(parameterLabel({ prefix: "n", index: 1 }, en), "var 1");
-  assert.equal(parameterLabel({ prefix: "gs", index: 2 }, ru), "игр. текст 2");
+  assert.equal(parameterLabel({ prefix: "n", index: 1 }, en), "number parameter 1 of the string");
+  assert.equal(parameterLabel({ prefix: "gn", index: 68 }, ru), "глобальная переменная игры 68 (число)");
   const style = { color: null, edge: null, italic: false, bold: false };
-  assert.equal(valueLabel({ kind: "value", valueKind: "number", source: "num", parameter: { prefix: "n", index: 2 }, label: "$n2", style }, en), "var 2");
-  assert.equal(valueHint({ kind: "value", valueKind: "number", source: "num", parameter: { prefix: "n", index: 2 }, label: "$n2", style }, ru), "Число, которое игра передаёт в эту строку при показе: $n2");
+  assert.equal(valueLabel({ kind: "value", valueKind: "number", source: "num", parameter: { prefix: "n", index: 2 }, label: "$n2", style }, en), "$n2");
+  assert.equal(valueHint({ kind: "value", valueKind: "number", source: "num", parameter: { prefix: "n", index: 2 }, label: "$n2", style }, ru), "Числовой параметр: число, которое игра передаёт в эту строку при показе ($n2)");
   assert.equal(valueLabel({ kind: "value", valueKind: "time", source: "num2", parameter: null, label: "$min", style }, ru), "минуты");
-  assert.equal(valueLabel({ kind: "value", valueKind: "playerName", source: "player-name", parameter: { prefix: "n", index: 1 }, label: "$n1", style }, en), "player name (var 1)");
-  assert.equal(valueLabel({ kind: "value", valueKind: "gameData", source: "sheet", parameter: { prefix: "n", index: 1 }, label: "Item $n1 0", style }, en), "Item · var 1");
+  assert.equal(valueLabel({ kind: "value", valueKind: "playerName", source: "player-name", parameter: { prefix: "n", index: 1 }, label: "$n1", style }, en), "player name");
+  assert.equal(valueLabel({ kind: "value", valueKind: "gameData", source: "sheet", parameter: { prefix: "n", index: 1 }, label: "Item $n1 0", style }, en), "Item · $n1");
   assert.equal(valueLabel({ kind: "value", valueKind: "gameData", source: "platform", parameter: null, label: "41", style }, en), "41");
+  assert.equal(valueHint({ kind: "value", valueKind: "gameData", source: "sheet", parameter: { prefix: "n", index: 1 }, label: "ClassJob $n1 0", style }, ru), "Игровые данные из листа ClassJob; строку задаёт числовой параметр 1 строки ($n1)");
+  assert.equal(valueHint({ kind: "value", valueKind: "number", source: "num", parameter: { prefix: "gn", index: 72 }, label: "$gn72", style }, en), "Global game variable: a number from the current game state, such as the player’s class or level ($gn72)");
 });
 
 test("choices label every branch", () => {
@@ -41,7 +43,7 @@ test("tags describe themselves and their arguments", () => {
   assert.deepEqual(described.lines, [
     "A value from a game data sheet, such as a name.",
     "sheet: Item",
-    "row: $n1 — var 1",
+    "row: $n1 — number parameter 1 of the string",
     "Game data",
   ]);
   assert.equal(describeTag({ ...sheet, name: "i", part: "close", family: "formatting", args: [] }, ru).title, "</i>");

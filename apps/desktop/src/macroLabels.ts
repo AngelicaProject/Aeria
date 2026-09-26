@@ -12,31 +12,38 @@ function knownKey(key: string): MessageKey | null {
   return key in en ? (key as MessageKey) : null;
 }
 
-/** `$n1` → "number 1". */
+/** `$n1` as written in macro text. */
+export function parameterCode(parameter: MacroParameterDto): string {
+  return `$${parameter.prefix}${parameter.index}`;
+}
+
+/** `$n1` → "number parameter 1 of the string", for hovers. */
 export function parameterLabel(parameter: MacroParameterDto, t: Translate): string {
   return t(`preview.param.${parameter.prefix}` as MessageKey, { index: parameter.index });
 }
 
-/** The label of a runtime value in the preview. */
+/** The short label of a runtime value in the preview: the code it reads, as in the text. */
 export function valueLabel(piece: Extract<PreviewPieceDto, { kind: "value" }>, t: Translate): string {
-  if (piece.valueKind === "playerName") {
-    return piece.parameter ? `${t("preview.value.playerName")} (${parameterLabel(piece.parameter, t)})` : t("preview.value.playerName");
-  }
+  if (piece.valueKind === "playerName") return t("preview.value.playerName");
   if (piece.valueKind === "gameData") {
     const sheet = piece.label.split(" ")[0] ?? piece.label;
-    return piece.parameter ? `${sheet} · ${parameterLabel(piece.parameter, t)}` : piece.label;
+    return piece.parameter ? `${sheet} · ${parameterCode(piece.parameter)}` : piece.label;
   }
-  if (piece.parameter) return parameterLabel(piece.parameter, t);
+  if (piece.parameter) return parameterCode(piece.parameter);
   const time = piece.label.startsWith("$") ? knownKey(`preview.time.${piece.label.slice(1)}`) : null;
   return time ? t(time) : piece.label;
 }
 
-/** The tooltip of a runtime value: what fills it in, with its macro text. */
+/** The tooltip of a runtime value: what fills it in, in full words. */
 export function valueHint(piece: Extract<PreviewPieceDto, { kind: "value" }>, t: Translate): string {
-  if (piece.parameter && piece.valueKind !== "gameData") {
-    return t(`preview.paramHint.${piece.parameter.prefix}` as MessageKey, { code: `${piece.parameter.prefix}${piece.parameter.index}` });
+  const parameter = piece.parameter;
+  if (!parameter) return t("preview.valueHint", { label: piece.label });
+  const code = parameterCode(parameter);
+  if (piece.valueKind === "playerName") return t("preview.playerHint", { parameter: parameterLabel(parameter, t), code });
+  if (piece.valueKind === "gameData") {
+    return t("preview.dataHint", { sheet: piece.label.split(" ")[0] ?? piece.label, parameter: parameterLabel(parameter, t), code });
   }
-  return t("preview.valueHint", { label: piece.label });
+  return t(`preview.paramHint.${parameter.prefix}` as MessageKey, { code });
 }
 
 /** Labels for the branches of a choice, in order. */

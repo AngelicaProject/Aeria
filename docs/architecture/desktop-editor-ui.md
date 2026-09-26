@@ -188,7 +188,7 @@ an older text):
 
 - **Hovers.** Hovering a tag shows what it does and its arguments in the
   interface language, for example `<sheet>` with its sheet, row (`$n1`,
-  "var 1"), and column. Summaries, argument names, and family names come
+  "number parameter 1 of the string"), and column. Summaries, argument names, and family names come
   from the macro catalog and are localized in the renderer.
 - **Errors.** Diagnostics are underlined, and hovering one shows its message,
   such as `<colour> is not a macro; did you mean <color>?`.
@@ -196,8 +196,10 @@ an older text):
   the string as the game shows it: colors from `<color>` and the game's
   `UIColor` sheet, outlines, italics, bold, line breaks, and names read from
   game data for constant references such as `<sheet Item 4 0>`. Values
-  supplied at runtime are short labeled chips ("var 1" for `$n1`, "game var
-  68" for `$gn68`, "player name") whose tooltip says what fills them in;
+  supplied at runtime are chips that show the code as written (`$n1`,
+  `ClassJob · $n1`, or "player name"), and their tooltip says in full words
+  what fills them in: a parameter the game passes to the string, or a global
+  game variable such as the player's class;
   conditions show one branch at a time, and clicking one shows the next with
   its condition in the tooltip. Icons are shown by number until the game's
   icon textures are read.
