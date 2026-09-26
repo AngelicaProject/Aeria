@@ -1,8 +1,9 @@
-//! Lossless syntax support for Lumina's encodeable macro-string format.
+//! Aeria's macro text for game strings: lossless syntax, validation, and the
+//! byte codec.
 //!
 //! Besides the syntax layer, [`codec`] converts between `SeString` bytes and
-//! macro text exactly as Lumina 7.7.0 does. The crate does not evaluate game
-//! expressions or decide what a macro means to a translator.
+//! macro text. The crate does not evaluate game expressions or decide what a
+//! macro means to a translator.
 
 #![forbid(unsafe_code)]
 
@@ -83,7 +84,7 @@ pub enum DiagnosticKind {
     InvalidDelimiter,
     /// A backslash did not introduce a character.
     InvalidEscape,
-    /// A Lumina fallback payload or expression could not be decoded.
+    /// A fallback payload or expression could not be decoded.
     InvalidFallback,
     /// The configured parser nesting bound was reached.
     NestingLimit,
@@ -191,7 +192,7 @@ impl MacroString {
     }
 }
 
-/// Parses Lumina's encodeable macro-string representation.
+/// Parses macro text.
 #[must_use]
 pub fn parse(source: &str) -> MacroString {
     let mut parser = Parser::new(source);
@@ -239,13 +240,13 @@ pub enum SyntaxKind {
     Escape { character: char },
     /// A known macro payload and its ordered arguments.
     Macro(MacroNode),
-    /// A payload fallback that Lumina can print but Aeria does not interpret.
+    /// A payload fallback that the codec prints but Aeria does not interpret.
     Opaque(OpaquePayload),
     /// A recovery node for malformed input.
     Malformed,
 }
 
-/// A macro whose name is known to Lumina 7.7.0.
+/// A macro with a known name.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MacroNode {
     /// The native macro name.
@@ -254,7 +255,7 @@ pub struct MacroNode {
     pub arguments: Vec<Expression>,
 }
 
-/// Macro names emitted by Lumina 7.7.0's `ToMacroString()` implementation.
+/// The macro names of macro text, one per named macro code.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum KnownMacro {
     SetResetTime,
@@ -317,7 +318,7 @@ pub enum KnownMacro {
 }
 
 impl KnownMacro {
-    /// Returns the exact native spelling emitted by Lumina.
+    /// Returns the macro's name in macro text.
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -381,7 +382,7 @@ impl KnownMacro {
         }
     }
 
-    /// Returns the macro's byte code (Lumina 7.7.0 `MacroCode`).
+    /// Returns the macro's byte code.
     #[must_use]
     pub const fn code(self) -> u8 {
         match self {
@@ -445,7 +446,7 @@ impl KnownMacro {
         }
     }
 
-    /// Returns the macro with the given byte code, if Lumina 7.7.0 names it.
+    /// Returns the macro with the given byte code, if it has a name.
     #[must_use]
     pub const fn from_code(code: u8) -> Option<Self> {
         Some(match code {
@@ -578,11 +579,10 @@ impl KnownMacro {
     }
 }
 
-/// An opaque payload fallback emitted by Lumina for unsupported/raw payloads.
+/// An opaque payload fallback printed for unsupported or raw payloads.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum OpaquePayload {
-    /// A syntactically valid named macro whose semantics are not known to
-    /// this Lumina contract.
+    /// A syntactically valid named macro whose name is not known.
     NamedMacro {
         /// The exact macro name spelling between `<` and its argument list.
         name: String,
@@ -596,7 +596,7 @@ pub enum OpaquePayload {
         /// Ordered arguments, if the payload body was expression-shaped.
         arguments: Vec<Expression>,
     },
-    /// Raw bytes printed by Lumina's invalid-payload fallback.
+    /// Raw bytes printed by the invalid-payload fallback.
     Raw { bytes: Vec<u8> },
 }
 
@@ -609,7 +609,7 @@ pub struct Expression {
     pub kind: ExpressionKind,
 }
 
-/// Expression forms in Lumina's macro-string representation.
+/// Expression forms of macro text.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ExpressionKind {
     /// An unsigned integer expression. The original spelling is available via
@@ -636,7 +636,7 @@ pub enum ExpressionKind {
     Malformed { recovered: Vec<SyntaxNode> },
 }
 
-/// Native nullary expression names emitted by Lumina.
+/// Nullary expression names of macro text.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PlaceholderExpression {
     Millisecond,
@@ -651,7 +651,7 @@ pub enum PlaceholderExpression {
 }
 
 impl PlaceholderExpression {
-    /// Returns the native spelling emitted by Lumina.
+    /// Returns the expression's name in macro text.
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -683,7 +683,7 @@ impl PlaceholderExpression {
     }
 }
 
-/// Native unary expression names emitted by Lumina.
+/// Unary expression names of macro text.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum UnaryExpression {
     LocalNumber,
@@ -693,7 +693,7 @@ pub enum UnaryExpression {
 }
 
 impl UnaryExpression {
-    /// Returns the native spelling emitted by Lumina.
+    /// Returns the expression's name in macro text.
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -1038,7 +1038,7 @@ impl<'a> Parser<'a> {
         }
         if let Some((operator, prefix)) = UnaryExpression::from_prefix(&decoded) {
             let operand_text = &decoded[prefix.len()..];
-            if let Some(value) = parse_lumina_integer(operand_text) {
+            if let Some(value) = parse_macro_integer(operand_text) {
                 let operand_start = start + prefix.len();
                 return Expression {
                     span,
@@ -1052,7 +1052,7 @@ impl<'a> Parser<'a> {
                 };
             }
         }
-        if let Some(value) = parse_lumina_integer(&decoded) {
+        if let Some(value) = parse_macro_integer(&decoded) {
             return Expression {
                 span,
                 kind: ExpressionKind::UnsignedInteger { value },
@@ -1158,7 +1158,7 @@ impl<'a> Parser<'a> {
             self.diagnose(
                 Span::new(body_start, close),
                 DiagnosticKind::InvalidFallback,
-                "opaque expression fallback is not valid Lumina syntax",
+                "opaque expression fallback is not valid macro text",
             );
             return Expression {
                 span: Span::new(start, close + 1),
@@ -1213,7 +1213,7 @@ impl<'a> Parser<'a> {
                 self.diagnose(
                     Span::new(body_start, close),
                     DiagnosticKind::InvalidFallback,
-                    "raw payload fallback is not valid Lumina syntax",
+                    "raw payload fallback is not valid macro text",
                 );
                 return (Self::malformed_node(start, close + 1), close + 1);
             };
@@ -1477,9 +1477,9 @@ fn hex_digit(value: u8) -> Option<u8> {
     }
 }
 
-/// Matches Lumina's `TryParseInt` spelling rules, including digit separators,
-/// radix prefixes, signs, and wrapping conversion through `int`.
-fn parse_lumina_integer(value: &str) -> Option<u32> {
+/// Parses an integer of macro text, including digit separators, radix
+/// prefixes, signs, and wrapping conversion through `i32`.
+fn parse_macro_integer(value: &str) -> Option<u32> {
     let mut data = value.as_bytes();
     if data.is_empty() {
         return None;

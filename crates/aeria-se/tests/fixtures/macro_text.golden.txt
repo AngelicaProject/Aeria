@@ -1,5 +1,5 @@
-# Generated with Lumina 7.7.0 ReadOnlySeString.ToMacroString().
-# Format: stable vector name<TAB>canonical emitter output.
+# Macro text as codec::decode prints it, one form per vector.
+# Format: stable vector name<TAB>canonical macro text.
 plain_text	plain \< and \\slash
 escaped_text	angle \<, bracket [ and \\slash
 zero_argument_macro	<br>

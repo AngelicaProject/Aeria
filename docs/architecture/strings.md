@@ -10,28 +10,27 @@ The game provides each string as `SeString` bytes. `aeria_se::codec` prints them
 
 ## Byte codec
 
-`aeria_se::codec` converts between `SeString` bytes and macro text exactly as
-Lumina 7.7.0 does, with no dependency on Lumina or .NET:
+`aeria_se::codec` is Aeria's own converter between `SeString` bytes and
+macro text. Its behavior is defined here and by the tests in `aeria-se`:
 
-- `decode` prints bytes as `ReadOnlySeString.ToMacroString()`: text with `<`
-  and `\` escaped (inside string arguments also `>`, `[`, `]`, `(`, `)`, and
-  `,`), macros by their Lumina name or as `<payload:XX>` for an unnamed code,
-  integers in decimal, and comparisons, parameters, and placeholders by their
-  native spelling. Malformed payloads print as `<payload: XX …>`, unreadable
-  expressions as `<expr: XX …>`, and invalid UTF-8 as U+FFFD.
-- `encode` parses macro text as `ReadOnlySeString.FromMacroString` with
-  default options. It accepts what Lumina accepts, including numbers typed as
+- `decode` prints bytes as macro text: text with `<` and `\` escaped (inside
+  string arguments also `>`, `[`, `]`, `(`, `)`, and `,`), macros by their
+  name or as `<payload:XX>` for an unnamed code, integers in decimal, and
+  comparisons, parameters, and placeholders by their names. Malformed
+  payloads print as `<payload: XX …>`, unreadable expressions as
+  `<expr: XX …>`, and invalid UTF-8 as U+FFFD.
+- `encode` parses macro text into bytes. It also accepts numbers typed as
   `0x1F`, `+5`, or `1_000`, spaces around a macro name and after `)`, and
   string arguments that spell a number, parameter, or placeholder, which
-  become that expression. It rejects what Lumina rejects, including the
-  fallback forms `decode` prints.
+  become that expression. It rejects unknown macro names, missing delimiters,
+  unsupported comparisons, and the fallback forms `decode` prints.
 - `encode_checked` adds the checks a pack string needs: the bytes
   are not empty, contain no `0x00`, are at most 65,535 bytes, and encode to the
   same bytes again after decoding.
 
-The codec keeps Lumina's lossy behavior so that its output stays
-byte-identical to Lumina's: text printed from invalid UTF-8 or malformed payloads does not
-encode back to the original bytes. When a text encodes but its decoded form
+`decode` never fails, so every source string can be shown. The price is
+that text printed from invalid UTF-8 or malformed payloads does not encode
+back to the original bytes. When a text encodes but its decoded form
 cannot be parsed again, `encode_checked` reports that one string as not
 round-trippable.
 
@@ -40,19 +39,17 @@ round-trippable.
 The first `aeria-se` slice is an owned concrete syntax tree (CST), not the
 future semantic editing or preview AST. Root and nested string-expression
 nodes retain byte spans into the original source. The tree exposes ordinary
-text, escapes, known Lumina macro names, ordered expressions, unsigned integer
+text, escapes, known macro names, ordered expressions, unsigned integer
 values, nested strings, native placeholders, unary expressions, comparison
 expressions, opaque named macros, and recovery nodes for malformed input.
 
-The parser follows the encodeable representation emitted by the Lumina 7.7.0
-`ToMacroString()` implementation. It has no runtime
-dependency on Lumina or .NET. The native macro and expression name tables are
-owned by `aeria-se` and must be reviewed with the corresponding upstream
-source and conformance corpus when the supported Lumina version changes. The
-checked-in golden vectors in `crates/aeria-se/tests/fixtures/lumina_to_macro_string.golden.txt`
-are fixed output from synthetic Lumina 7.7.0 `ReadOnlySeString` values; the
-separate `parser_compatibility.txt` corpus covers accepted spellings that the
-emitter does not produce.
+The parser reads the macro text `codec::decode` prints. The macro and
+expression name tables are owned by `aeria-se`; naming a new macro code is a
+change to this contract and to its golden vectors. The golden vectors in
+`crates/aeria-se/tests/fixtures/macro_text.golden.txt` hold one canonical
+form per construct, including the fallback forms; the separate
+`parser_compatibility.txt` corpus covers accepted spellings that `decode`
+never prints.
 
 Serialization is source-preserving:
 
@@ -60,10 +57,10 @@ Serialization is source-preserving:
 parse(source).serialize() == source
 ```
 
-This invariant applies to understood syntax and to Lumina fallback forms that
+This invariant applies to understood syntax and to fallback forms that
 are opaque but losslessly preservable. Opaque payloads, expression fallbacks,
-and syntactically valid named macros that are unknown to the Lumina 7.7.0
-table are exposed as protected nodes and do not receive guessed semantic
+and syntactically valid named macros that are not in the name table are
+exposed as protected nodes and do not receive guessed semantic
 meaning. Unknown names alone do not produce diagnostics; invalid delimiters or
 arguments still do. The document retains the original source even for
 malformed input, but malformed documents are unsafe for editing/export and
@@ -152,6 +149,6 @@ is the acceptance rule for assisted translation.
 
 ## Semantic analysis
 
-`aeria-se` derives a semantic projection from the lossless CST. The CST remains the source-preserving syntax layer: semantic nodes retain CST spans and do not replace the original representation or execute expressions. Known Lumina 7.7.0 macros receive only the broad classification supported by the upstream contract; entries whose semantics are not established are intentionally classified as opaque protected constructs. Unknown named macros and fallback payloads remain opaque protected constructs as well.
+`aeria-se` derives a semantic projection from the lossless CST. The CST remains the source-preserving syntax layer: semantic nodes retain CST spans and do not replace the original representation or execute expressions. Known macros receive only a broad classification; entries whose semantics are not established are intentionally classified as opaque protected constructs. Unknown named macros and fallback payloads remain opaque protected constructs as well.
 
 Intrinsic validity is separate from source/target structure compatibility. A malformed CST is always invalid and blocks semantic editing/export. A well-formed document containing opaque constructs is valid with protected data. Strict structure comparison is a conservative safety mechanism for assisted or AI translation: it compares the ordered protected macro, expression, runtime, game-reference, and opaque structure while ignoring ordinary translatable prose. User-facing text and escapes are retained in that projection as normalized text slots, so prose may change while a protected macro cannot silently move across a text boundary. The same slots are used inside user-facing string expressions and conditional branches. Numeric identifiers in known game-data reference arguments are compared as game references alongside sheet-name and other protected lookup inputs. It does not make identical structure a general validity requirement. Manual structural editing may intentionally add, remove, or modify macros later through explicit validated operations.

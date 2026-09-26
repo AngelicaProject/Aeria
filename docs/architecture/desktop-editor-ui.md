@@ -178,7 +178,7 @@ restructuring the editor.
 
 Source and target sit side by side, with the translator note beside them (or
 below them in a narrow document). Source is read-only; target is a CodeMirror
-editor. Both highlight Lumina macro spans with a presentation-only scanner;
+editor. Both highlight macro spans with a presentation-only scanner;
 Rust remains the authority for parsing and validation, and macro text is never
 rewritten by the highlighter. Row context cells are available in a collapsible
 section under the source. **Copy source to target** replaces the target draft

@@ -1,5 +1,5 @@
 /**
- * Presentation-only scanner for Lumina macro-string spellings such as
+ * Presentation-only scanner for macro text spellings such as
  * `<num(t_day)>`, `<if([gnum77==3],<num(t_day)>,x)>`, and `</color>`.
  *
  * It only locates delimiters for highlighting. Rust (`aeria-se`) remains the

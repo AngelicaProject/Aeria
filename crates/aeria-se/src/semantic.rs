@@ -28,10 +28,10 @@ pub enum SemanticFamily {
 }
 
 impl KnownMacro {
-    /// Every macro code defined by Lumina 7.7.0, in its stable enum order.
+    /// Every named macro code, in a stable order.
     ///
     /// Keeping this list next to the exhaustive classification match makes a
-    /// newly added upstream macro a visible compile-time review point.
+    /// newly named macro a visible compile-time review point.
     pub const ALL: [Self; 57] = [
         Self::SetResetTime,
         Self::SetTime,
@@ -145,9 +145,9 @@ impl KnownMacro {
             | Self::HeadAll
             | Self::Lower
             | Self::LowerHead => SemanticFamily::TranslatableText,
-            // Lumina 7.7.0 exposes these names and/or argument shapes, but
-            // does not establish their runtime meaning. Preserve them as
-            // protected constructs until that contract is documented.
+            // The names and argument shapes are known, but their runtime
+            // meaning is not established. Preserve them as protected
+            // constructs until that contract is documented.
             Self::Key
             | Self::Scale
             | Self::Edge
@@ -176,7 +176,7 @@ pub enum SemanticNodeKind {
     Text,
     /// An escaped user-facing character.
     Escape { character: char },
-    /// A known Lumina macro with a conservative family classification.
+    /// A known macro with a conservative family classification.
     Macro(SemanticMacro),
     /// A protected construct whose meaning is not assigned by Aeria.
     Opaque(SemanticOpaque),
@@ -187,7 +187,7 @@ pub enum SemanticNodeKind {
 /// A semantically classified known macro.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SemanticMacro {
-    /// The Lumina macro code.
+    /// The macro.
     pub name: KnownMacro,
     /// The broad semantic family of the macro.
     pub family: SemanticFamily,

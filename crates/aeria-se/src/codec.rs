@@ -1,9 +1,8 @@
-//! `SeString` bytes and macro text, compatible with Lumina 7.7.0.
+//! `SeString` bytes and Aeria's macro text.
 //!
-//! [`decode`] prints bytes the way Lumina 7.7.0's `ToMacroString()` does, and
-//! [`encode`] parses macro text the way its `ReadOnlySeString.FromMacroString`
-//! does with default options. Both reproduce Lumina's behavior exactly,
-//! including its lossy corners. See `docs/architecture/strings.md`.
+//! [`decode`] prints bytes as macro text and [`encode`] parses macro text back
+//! into bytes. Every input decodes; text decoded from malformed bytes does not
+//! encode back to them. The contract is in `docs/architecture/strings.md`.
 //!
 //! The formats involved:
 //!
@@ -76,8 +75,7 @@ fn decode_uint(bytes: &[u8]) -> Option<(u32, usize)> {
     }
 }
 
-/// Reads an encoded integer as Lumina's `TryDecodeInt` does: the unsigned
-/// value reinterpreted as signed.
+/// Reads an encoded integer: the unsigned value reinterpreted as signed.
 fn decode_int(bytes: &[u8]) -> Option<(i32, usize)> {
     decode_uint(bytes).map(|(value, length)| (value.cast_signed(), length))
 }
@@ -148,8 +146,7 @@ fn decode_binary(bytes: &[u8]) -> Option<(u8, &[u8], &[u8], usize)> {
     ))
 }
 
-/// The length of the expression at the start of `bytes`, as Lumina's
-/// `TryDecodeLength`.
+/// The length of the expression at the start of `bytes`.
 fn expression_length(bytes: &[u8]) -> Option<usize> {
     if bytes.is_empty() {
         return None;
@@ -172,8 +169,7 @@ fn expression_length(bytes: &[u8]) -> Option<usize> {
 // ---------------------------------------------------------------------------
 // Decoding
 
-/// Prints `SeString` bytes as macro text, exactly as Lumina 7.7.0's
-/// `ReadOnlySeString.ToMacroString()`.
+/// Prints `SeString` bytes as macro text.
 ///
 /// Every input has a printed form. Invalid UTF-8 prints as U+FFFD, payloads
 /// that are not well formed print as `<payload: XX …>`, and expressions that
@@ -334,7 +330,7 @@ fn write_expression(out: &mut String, body: &[u8]) {
 // ---------------------------------------------------------------------------
 // Encoding
 
-/// Macro text that Lumina's parser would reject.
+/// Macro text that cannot be encoded.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct EncodeError {
     /// What was expected or not supported.
@@ -351,8 +347,7 @@ impl std::fmt::Display for EncodeError {
 
 impl std::error::Error for EncodeError {}
 
-/// Encodes macro text as `SeString` bytes, exactly as Lumina 7.7.0's
-/// `ReadOnlySeString.FromMacroString` with default options.
+/// Encodes macro text as `SeString` bytes.
 ///
 /// Encoding is not the inverse of [`decode`] for every text: numbers may be
 /// typed in other forms (`0x10`, `+5`, `1_000`), and a string argument that
@@ -361,8 +356,8 @@ impl std::error::Error for EncodeError {}
 ///
 /// # Errors
 ///
-/// Returns an error where Lumina's parser throws: an unknown macro name, a
-/// missing delimiter, or an unsupported comparison.
+/// Returns an error for an unknown macro name, a missing delimiter, or an
+/// unsupported comparison.
 pub fn encode(text: &str) -> Result<Vec<u8>, EncodeError> {
     let mut builder = Builder::new();
     let mut parser = Parser {
@@ -432,7 +427,7 @@ pub fn encode_checked(text: &str) -> Result<Vec<u8>, CheckedEncodeError> {
     }
 }
 
-/// One open scope of the byte builder, as in Lumina's `SeStringBuilder`.
+/// One open scope of the byte builder.
 enum Frame {
     /// Text and payloads; `None` is the root string.
     String(Vec<u8>),
@@ -802,7 +797,7 @@ impl Parser<'_> {
     }
 }
 
-/// Parses an integer as Lumina's macro parser: any leading `+` and `-`
+/// Parses an integer of macro text: any leading `+` and `-`
 /// signs, an optional `0x`, `0o`, `0b`, or `0d` prefix, and `_` or `'`
 /// digit separators. Overflow wraps.
 fn parse_int(text: &[u8]) -> Option<i32> {
@@ -886,7 +881,7 @@ mod tests {
     }
 
     #[test]
-    fn macros_and_expressions_decode_like_lumina() {
+    fn macros_and_expressions_decode_to_their_macro_text() {
         // <color(0xFFEE00)>: an integer with three significant bytes.
         assert_eq!(decode(&hex("021304F5FFEE03")), "<color(16772608)>");
         // if(gnum1 == gnum2, "A", ""): unary operands inside a comparison.
@@ -929,7 +924,7 @@ mod tests {
     }
 
     #[test]
-    fn encoding_rejects_what_lumina_rejects() {
+    fn encoding_rejects_malformed_macro_text() {
         assert!(encode("<nope>").is_err());
         assert!(encode("<num(1").is_err());
         assert!(encode("<if([1=2],a,b)>").is_err());

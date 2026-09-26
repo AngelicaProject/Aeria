@@ -33,7 +33,7 @@ images are not shown because the current model does not accept images, tell the 
 and ask them to describe the image or choose a model that accepts images.
 
 Game strings:
-- Strings contain Lumina macros such as <if(...)>, <num(...)>, <color(...)>, or <sheet(...)>. \
+- Strings contain macros such as <if(...)>, <num(...)>, <color(...)>, or <sheet(...)>. \
 They are runtime structure evaluated by the game client, not prose. A translation keeps \
 every macro, its arguments, and its nesting; only the human-readable text around and inside \
 them is translated. Aeria's replacement runtime evaluates nothing itself: only macros the \

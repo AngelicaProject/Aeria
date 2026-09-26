@@ -3,12 +3,12 @@ use aeria_se::{
     OpaquePayload, PlaceholderExpression, Safety, Span, SyntaxKind, UnaryExpression, parse,
 };
 
-const LUMINA_GOLDEN: &str = include_str!("fixtures/lumina_to_macro_string.golden.txt");
+const GOLDEN: &str = include_str!("fixtures/macro_text.golden.txt");
 const PARSER_COMPATIBILITY: &str = include_str!("fixtures/parser_compatibility.txt");
 
 #[test]
-fn lumina_to_macro_string_golden_vectors_round_trip_structurally() {
-    for (label, source) in vectors(LUMINA_GOLDEN) {
+fn golden_macro_text_vectors_round_trip_structurally() {
+    for (label, source) in vectors(GOLDEN) {
         let parsed = parse(source);
         assert_eq!(
             parsed.safety(),
@@ -124,7 +124,7 @@ fn exposes_nested_macro_and_expression_structure_and_spans() {
 }
 
 #[test]
-fn classifies_lumina_numeric_and_native_expression_forms() {
+fn classifies_numeric_and_native_expression_forms() {
     let source = "<num(0x1234_5678)><string(lnum1)><sec(t_min)>";
     let parsed = parse(source);
     assert_node_spans(&parsed, source);
@@ -364,15 +364,14 @@ fn assert_node_spans(parsed: &aeria_se::MacroString, source: &str) {
 }
 
 #[test]
-fn golden_lumina_output_encodes_and_decodes_back_to_itself() {
-    // Fallback forms are printed by Lumina but cannot be parsed back.
+fn golden_macro_text_encodes_and_decodes_back_to_itself() {
+    // Fallback forms are printed by decode but cannot be parsed back.
     const UNPARSEABLE: &[&str] = &[
         "unsupported_macro_payload",
         "raw_payload_fallback",
         "opaque_expression_fallback",
     ];
-    let golden = include_str!("fixtures/lumina_to_macro_string.golden.txt");
-    for line in golden.lines().filter(|line| !line.starts_with('#')) {
+    for line in GOLDEN.lines().filter(|line| !line.starts_with('#')) {
         let (name, text) = line.split_once('\t').expect("vector");
         let encoded = aeria_se::codec::encode(text);
         if UNPARSEABLE.contains(&name) {

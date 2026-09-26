@@ -141,7 +141,7 @@ instead of receiving large dumps up front.
 
 Angelica may change macro structure when the target language needs it, but
 only through a vocabulary of typed constructs that Rust checks and compiles.
-She never writes raw Lumina macro syntax.
+She never writes raw macro text.
 
 Structure is not decoration: in many target languages a faithful translation
 needs a different structure from the source. Examples:

@@ -11,7 +11,7 @@ fn has_difference(source: &str, target: &str, kind: StructureDifferenceKind) -> 
 }
 
 #[test]
-fn every_lumina_macro_has_an_exhaustive_semantic_classification() {
+fn every_known_macro_has_an_exhaustive_semantic_classification() {
     assert_eq!(KnownMacro::ALL.len(), 57);
     for macro_name in KnownMacro::ALL {
         assert!(matches!(
@@ -44,7 +44,7 @@ fn every_lumina_macro_has_an_exhaustive_semantic_classification() {
 }
 
 #[test]
-fn classifies_representative_lumina_families() {
+fn classifies_representative_macro_families() {
     assert_eq!(
         KnownMacro::If.semantic_family(),
         SemanticFamily::ConditionalSelection

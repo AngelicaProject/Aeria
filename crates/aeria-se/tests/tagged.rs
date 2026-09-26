@@ -149,7 +149,7 @@ fn malformed_sources_have_no_projection() {
 #[test]
 fn every_well_formed_conformance_vector_round_trips_through_tags() {
     let fixtures = [
-        include_str!("fixtures/lumina_to_macro_string.golden.txt"),
+        include_str!("fixtures/macro_text.golden.txt"),
         include_str!("fixtures/parser_compatibility.txt"),
     ];
     let mut checked = 0;
