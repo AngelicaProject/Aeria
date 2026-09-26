@@ -263,16 +263,10 @@
 }
 .preview-opaque { color: #9a9a9a; font-family: var(--font-mono); font-size: 0.85em; }
 .preview-choice {
-  display: inline;
-  padding: 0;
-  border: 0;
   border-bottom: 1px dashed rgb(255 255 255 / 0.35);
-  background: none;
-  color: inherit;
-  font: inherit;
-  text-align: inherit;
   cursor: default;
 }
+.preview-choice:focus-visible { outline: 1px solid var(--line-focus); outline-offset: 1px; }
 .preview-choice.is-switchable { cursor: pointer; }
 .preview-choice.is-switchable:hover { background: rgb(255 255 255 / 0.08); }
 .preview-choice-index { margin-left: 1px; color: #8fb4ff; font-size: 0.65em; }

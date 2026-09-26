@@ -52,19 +52,28 @@ function Piece({ piece, path, choices }: { piece: PreviewPieceDto; path: string;
       const selected = Math.min(choices.selected.get(path) ?? 0, count - 1);
       const labels = choiceLabels(piece.choice, count, t);
       const branch = piece.branches[selected] ?? [];
+      const next = () => choices.select(path, (selected + 1) % count);
       return (
-        <button
-          type="button"
+        // An inline span, not a button: a branch may hold line breaks, and a
+        // button would turn it into a block.
+        <span
+          role="button"
+          tabIndex={0}
           className={`preview-choice${count > 1 ? " is-switchable" : ""}`}
           title={t("preview.choice.cycle", { label: labels[selected] ?? "", index: selected + 1, count })}
           onClick={(event) => {
             event.stopPropagation();
-            choices.select(path, (selected + 1) % count);
+            next();
+          }}
+          onKeyDown={(event) => {
+            if (event.key !== "Enter" && event.key !== " ") return;
+            event.preventDefault();
+            next();
           }}
         >
           {branch.length > 0 ? <Pieces pieces={branch} path={`${path}.${selected}`} choices={choices} /> : <span className="preview-empty-branch">∅</span>}
           {count > 1 ? <sup className="preview-choice-index">{selected + 1}/{count}</sup> : null}
-        </button>
+        </span>
       );
     }
   }
