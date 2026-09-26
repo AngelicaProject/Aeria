@@ -122,6 +122,9 @@ pub struct ProposalRecord {
     /// Translations to mark reviewed; `target` holds Angelica's reason.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub review: Option<crate::tools::ReviewBatch>,
+    /// A new token limit for a job; `target` holds a one-line summary.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub job_limit: Option<crate::jobs::JobLimitProposal>,
     /// The string of a translation; `None` for a file change.
     #[serde(default)]
     pub location: Option<UnitLocation>,
@@ -427,6 +430,7 @@ mod tests {
             job: None,
             web: None,
             review: None,
+            job_limit: None,
             location: Some(UnitLocation {
                 sheet: "Item".to_owned(),
                 row: 1,

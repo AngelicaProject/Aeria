@@ -23,6 +23,22 @@ pub const CHUNK_SOURCE_CHARS: usize = 12_000;
 pub const MAX_CONCURRENCY: u8 = 16;
 /// Workers a job runs when Angelica does not choose.
 pub const DEFAULT_CONCURRENCY: u8 = 8;
+/// Chunks from which a job runs [`MAX_CONCURRENCY`] workers by default.
+pub const LARGE_JOB_CHUNKS: u64 = 100;
+
+/// Workers for a job of `chunks` chunks: `requested` or, without it,
+/// [`MAX_CONCURRENCY`] for large jobs and [`DEFAULT_CONCURRENCY`] otherwise;
+/// never more than the chunks, since each worker translates one at a time.
+#[must_use]
+pub fn job_concurrency(requested: Option<u8>, chunks: u64) -> u8 {
+    let default = if chunks >= LARGE_JOB_CHUNKS {
+        MAX_CONCURRENCY
+    } else {
+        DEFAULT_CONCURRENCY
+    };
+    let wanted = requested.unwrap_or(default).clamp(1, MAX_CONCURRENCY);
+    u8::try_from(chunks.clamp(1, u64::from(wanted))).unwrap_or(wanted)
+}
 /// Most strings one job may cover.
 pub const MAX_JOB_UNITS: usize = 1_000_000;
 
@@ -166,6 +182,31 @@ pub struct JobSummary {
     /// Chunks being translated right now, one per busy worker.
     pub active_workers: u64,
     pub usage: Usage,
+    /// Chunks of the job.
+    pub chunks: u64,
+    /// Chunks with no pending or running strings.
+    pub finished_chunks: u64,
+    /// Tokens the whole job will likely use: the tokens used so far plus
+    /// the average per finished chunk for each unfinished one. `None` until
+    /// a chunk finished.
+    pub projected_tokens: Option<u64>,
+}
+
+impl JobSummary {
+    #[must_use]
+    pub const fn used_tokens(&self) -> u64 {
+        self.usage.prompt_tokens + self.usage.completion_tokens
+    }
+}
+
+/// Tokens a job will likely use, from its average per finished chunk.
+#[must_use]
+pub fn project_tokens(used: u64, chunks: u64, finished_chunks: u64) -> Option<u64> {
+    if finished_chunks == 0 {
+        return None;
+    }
+    let remaining = chunks.saturating_sub(finished_chunks);
+    Some(used.saturating_add(used / finished_chunks * remaining))
 }
 
 /// One string of a job.
@@ -236,24 +277,49 @@ pub fn assign_chunks(units: &[ScopedUnit]) -> Vec<u64> {
 pub struct JobEstimate {
     pub units: u64,
     pub chunks: u64,
-    /// A rough token estimate: per-chunk instructions and tools plus the
-    /// source text read and written. Providers count differently.
+    /// A rough token estimate. Providers count differently.
     pub estimated_tokens: u64,
+    /// The average tokens per chunk of earlier jobs with the same model,
+    /// when the estimate is based on them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub history_chunk_tokens: Option<u64>,
 }
 
-/// Per-chunk overhead in the token estimate: instructions, tools, and turns.
+/// Per-request overhead in the token estimate: instructions, tools,
+/// guidance, and the strings' context.
 const CHUNK_OVERHEAD_TOKENS: u64 = 6000;
+/// Responses a worker typically needs for a chunk. Every request resends
+/// the whole turn, so the chunk's input is paid once per response.
+const EXPECTED_ROUNDS: u64 = 3;
+/// Finished chunks of earlier jobs needed before their average replaces
+/// the formula.
+pub const HISTORY_MIN_CHUNKS: u64 = 3;
+/// Earlier jobs the history average reads.
+const HISTORY_JOBS: usize = 20;
 
 impl JobEstimate {
+    /// Estimates a job over `units`. `history_chunk_tokens` is the average
+    /// per chunk of earlier jobs with the same model; without it the
+    /// estimate assumes [`EXPECTED_ROUNDS`] responses per chunk, each
+    /// resending the overhead and the source, plus the source written once.
     #[must_use]
-    pub fn for_units(units: &[ScopedUnit]) -> Self {
+    pub fn for_units(units: &[ScopedUnit], history_chunk_tokens: Option<u64>) -> Self {
         let chunks = assign_chunks(units).last().map_or(0, |last| last + 1);
         let characters: u64 = units.iter().map(|unit| unit.source_chars as u64).sum();
+        let formula =
+            chunks * CHUNK_OVERHEAD_TOKENS * EXPECTED_ROUNDS + characters * (EXPECTED_ROUNDS + 1);
         Self {
             units: units.len() as u64,
             chunks,
-            estimated_tokens: chunks * CHUNK_OVERHEAD_TOKENS + characters * 2,
+            estimated_tokens: history_chunk_tokens.map_or(formula, |per_chunk| chunks * per_chunk),
+            history_chunk_tokens,
         }
+    }
+
+    /// The token limit a job over this estimate starts with.
+    #[must_use]
+    pub fn token_limit(&self) -> u64 {
+        (self.estimated_tokens * 2).max(200_000)
     }
 }
 
@@ -266,6 +332,18 @@ pub struct JobProposal {
     pub concurrency: u8,
     pub estimate: JobEstimate,
     pub token_limit: u64,
+}
+
+/// A higher token limit for a job, proposed by Angelica.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct JobLimitProposal {
+    pub job_id: String,
+    pub token_limit: u64,
+    /// The job's limit, tokens used, and projection when proposed.
+    pub previous_limit: u64,
+    pub used_tokens: u64,
+    pub projected_tokens: Option<u64>,
 }
 
 /// Job storage errors.
@@ -500,6 +578,17 @@ impl JobStore {
             params![id],
             |row| row.get(0),
         )?;
+        let (chunks, unfinished_chunks): (i64, i64) = connection.query_row(
+            "SELECT COUNT(DISTINCT chunk), COUNT(DISTINCT CASE WHEN status IN ('pending', 'running') THEN chunk END) FROM job_units WHERE job_id = ?1",
+            params![id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        let chunks = to_u64(chunks);
+        let finished_chunks = chunks.saturating_sub(to_u64(unfinished_chunks));
+        let usage = Usage {
+            prompt_tokens: to_u64(row.5),
+            completion_tokens: to_u64(row.6),
+        };
         Ok(JobSummary {
             active_workers: to_u64(active_workers),
             id: id.to_owned(),
@@ -510,10 +599,14 @@ impl JobStore {
                 .map_err(|error| JobError::Invalid(error.to_string()))?,
             created_at_unix_ms: to_u64(row.4),
             counts,
-            usage: Usage {
-                prompt_tokens: to_u64(row.5),
-                completion_tokens: to_u64(row.6),
-            },
+            projected_tokens: project_tokens(
+                usage.prompt_tokens + usage.completion_tokens,
+                chunks,
+                finished_chunks,
+            ),
+            usage,
+            chunks,
+            finished_chunks,
         })
     }
 
@@ -679,6 +772,32 @@ impl JobStore {
         Ok(())
     }
 
+    /// Changes how many workers a job that was not cancelled runs. A running
+    /// job's runner follows the change: extra workers stop after their
+    /// current chunk, and new ones start.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`JobError::NotFound`], [`JobError::Invalid`] for a cancelled
+    /// job, or a storage error.
+    pub fn set_concurrency(&self, id: &str, concurrency: u8) -> Result<JobSpec, JobError> {
+        let job = self.summary(id)?;
+        if job.status == JobStatus::Cancelled {
+            return Err(JobError::Invalid("the job was cancelled".to_owned()));
+        }
+        let mut spec = job.spec;
+        spec.concurrency = concurrency.clamp(1, MAX_CONCURRENCY);
+        self.open()?.execute(
+            "UPDATE jobs SET spec = ?2 WHERE id = ?1",
+            params![
+                id,
+                serde_json::to_string(&spec)
+                    .map_err(|error| JobError::Invalid(error.to_string()))?
+            ],
+        )?;
+        Ok(spec)
+    }
+
     /// Appends instructions used by chunks that start afterwards.
     ///
     /// # Errors
@@ -699,6 +818,55 @@ impl JobStore {
             ],
         )?;
         Ok(spec)
+    }
+
+    /// Changes the token limit of a job that was not cancelled.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`JobError::NotFound`], [`JobError::Invalid`] for a cancelled
+    /// job or a limit not above the tokens already used, or a storage error.
+    pub fn set_token_limit(&self, id: &str, token_limit: u64) -> Result<JobSpec, JobError> {
+        let job = self.summary(id)?;
+        if job.status == JobStatus::Cancelled {
+            return Err(JobError::Invalid("the job was cancelled".to_owned()));
+        }
+        if token_limit <= job.used_tokens() {
+            return Err(JobError::Invalid(format!(
+                "the limit must be above the {} tokens already used",
+                job.used_tokens()
+            )));
+        }
+        let mut spec = job.spec;
+        spec.token_limit = token_limit;
+        self.open()?.execute(
+            "UPDATE jobs SET spec = ?2 WHERE id = ?1",
+            params![
+                id,
+                serde_json::to_string(&spec)
+                    .map_err(|error| JobError::Invalid(error.to_string()))?
+            ],
+        )?;
+        Ok(spec)
+    }
+
+    /// The average tokens per finished chunk of the latest jobs with the
+    /// same model and effort, once they finished at least
+    /// [`HISTORY_MIN_CHUNKS`] chunks together.
+    ///
+    /// # Errors
+    ///
+    /// Returns a storage error.
+    pub fn history_chunk_tokens(&self, model: &ModelSelection) -> Result<Option<u64>, JobError> {
+        let (tokens, chunks) = self
+            .list()?
+            .iter()
+            .filter(|job| job.spec.model == *model && job.finished_chunks > 0)
+            .take(HISTORY_JOBS)
+            .fold((0_u64, 0_u64), |(tokens, chunks), job| {
+                (tokens + job.used_tokens(), chunks + job.finished_chunks)
+            });
+        Ok((chunks >= HISTORY_MIN_CHUNKS).then(|| tokens / chunks))
     }
 
     /// Returns strings with the given final statuses to pending and returns
@@ -802,6 +970,36 @@ impl JobStore {
         }
         Ok(ids)
     }
+
+    /// Removes a job that no longer runs, with its strings and events.
+    /// Drafts it wrote stay in the project.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`JobError::NotFound`], [`JobError::Invalid`] for a running
+    /// job, or a storage error.
+    pub fn remove(&self, id: &str) -> Result<(), JobError> {
+        let mut connection = self.open()?;
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let status: String = transaction
+            .query_row(
+                "SELECT status FROM jobs WHERE id = ?1",
+                params![id],
+                |row| row.get(0),
+            )
+            .optional()?
+            .ok_or_else(|| JobError::NotFound(id.to_owned()))?;
+        if JobStatus::parse(&status) == JobStatus::Running {
+            return Err(JobError::Invalid(
+                "pause or cancel the job first".to_owned(),
+            ));
+        }
+        transaction.execute("DELETE FROM job_units WHERE job_id = ?1", params![id])?;
+        transaction.execute("DELETE FROM job_events WHERE job_id = ?1", params![id])?;
+        transaction.execute("DELETE FROM jobs WHERE id = ?1", params![id])?;
+        transaction.commit()?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -888,6 +1086,26 @@ mod tests {
     }
 
     #[test]
+    fn only_a_job_that_no_longer_runs_is_removed() {
+        let (_directory, store) = store();
+        let units: Vec<_> = (0..3).map(|row| unit("Item", row, 10)).collect();
+        let job = store.create("c", &spec(), &units).expect("job");
+        store
+            .add_event(&job.id, "issue", "note", None)
+            .expect("event");
+        assert!(matches!(store.remove(&job.id), Err(JobError::Invalid(_))));
+
+        store
+            .set_status(&job.id, JobStatus::Paused, Some("paused"))
+            .expect("pause");
+        store.remove(&job.id).expect("remove");
+        assert!(matches!(store.summary(&job.id), Err(JobError::NotFound(_))));
+        assert!(store.list().expect("list").is_empty());
+        assert!(store.events(&job.id, 0).expect("events").is_empty());
+        assert!(matches!(store.remove(&job.id), Err(JobError::NotFound(_))));
+    }
+
+    #[test]
     fn chunks_split_by_sheet_size_and_count() {
         let (_directory, store) = store();
         let items = u32::try_from(CHUNK_UNITS).expect("chunk size") + 5;
@@ -919,14 +1137,147 @@ mod tests {
     fn estimates_count_units_chunks_and_tokens() {
         let count = u32::try_from(CHUNK_UNITS).expect("chunk size") + 1;
         let units: Vec<ScopedUnit> = (0..count).map(|row| unit("Item", row, 30)).collect();
-        let estimate = JobEstimate::for_units(&units);
+        let estimate = JobEstimate::for_units(&units, None);
         assert_eq!(estimate.units, u64::from(count));
         assert_eq!(estimate.chunks, 2);
         assert_eq!(
             estimate.estimated_tokens,
-            2 * CHUNK_OVERHEAD_TOKENS + u64::from(count) * 30 * 2
+            2 * CHUNK_OVERHEAD_TOKENS * EXPECTED_ROUNDS
+                + u64::from(count) * 30 * (EXPECTED_ROUNDS + 1)
         );
-        assert_eq!(JobEstimate::for_units(&[]).chunks, 0);
+        assert_eq!(estimate.history_chunk_tokens, None);
+        assert_eq!(JobEstimate::for_units(&[], None).chunks, 0);
+
+        let history = JobEstimate::for_units(&units, Some(25_000));
+        assert_eq!(history.estimated_tokens, 50_000);
+        assert_eq!(history.history_chunk_tokens, Some(25_000));
+        assert_eq!(history.token_limit(), 200_000, "the limit has a floor");
+    }
+
+    #[test]
+    fn projection_and_history_follow_finished_chunks() {
+        assert_eq!(project_tokens(1000, 10, 0), None);
+        assert_eq!(project_tokens(1000, 10, 2), Some(5000));
+        assert_eq!(project_tokens(1000, 2, 2), Some(1000));
+
+        let (_directory, store) = store();
+        let rows = u32::try_from(CHUNK_UNITS * 4).expect("rows");
+        let units: Vec<_> = (0..rows).map(|row| unit("Item", row, 10)).collect();
+        let job = store.create("c", &spec(), &units).expect("job");
+        assert_eq!(
+            store.history_chunk_tokens(&spec().model).expect("history"),
+            None
+        );
+        for _ in 0..2 {
+            let claimed = store.claim_chunk(&job.id).expect("claim").expect("chunk");
+            let outcomes: Vec<_> = claimed
+                .iter()
+                .map(|unit| (unit.seq, UnitStatus::Drafted, None))
+                .collect();
+            store.finish_units(&job.id, &outcomes).expect("finish");
+        }
+        store
+            .add_usage(
+                &job.id,
+                Usage {
+                    prompt_tokens: 50_000,
+                    completion_tokens: 10_000,
+                },
+            )
+            .expect("usage");
+        let summary = store.summary(&job.id).expect("summary");
+        assert_eq!((summary.chunks, summary.finished_chunks), (4, 2));
+        assert_eq!(summary.projected_tokens, Some(120_000));
+        assert_eq!(
+            store.history_chunk_tokens(&spec().model).expect("history"),
+            None,
+            "two chunks are too few"
+        );
+
+        let claimed = store.claim_chunk(&job.id).expect("claim").expect("chunk");
+        let outcomes: Vec<_> = claimed
+            .iter()
+            .map(|unit| (unit.seq, UnitStatus::Failed, None))
+            .collect();
+        store.finish_units(&job.id, &outcomes).expect("finish");
+        assert_eq!(
+            store.history_chunk_tokens(&spec().model).expect("history"),
+            Some(20_000)
+        );
+        let mut other = spec().model;
+        other.effort = Some(crate::provider::ReasoningEffort::High);
+        assert_eq!(store.history_chunk_tokens(&other).expect("history"), None);
+    }
+
+    #[test]
+    fn concurrency_follows_the_job_size() {
+        assert_eq!(job_concurrency(None, 1), 1);
+        assert_eq!(job_concurrency(None, 26), DEFAULT_CONCURRENCY);
+        assert_eq!(job_concurrency(None, LARGE_JOB_CHUNKS), MAX_CONCURRENCY);
+        assert_eq!(
+            job_concurrency(Some(12), 5),
+            5,
+            "never more than the chunks"
+        );
+        assert_eq!(job_concurrency(Some(40), 500), MAX_CONCURRENCY);
+        assert_eq!(job_concurrency(Some(0), 500), 1);
+
+        let (_directory, store) = store();
+        let units: Vec<_> = (0..3).map(|row| unit("Item", row, 10)).collect();
+        let job = store.create("c", &spec(), &units).expect("job");
+        assert_eq!(
+            store.set_concurrency(&job.id, 40).expect("set").concurrency,
+            MAX_CONCURRENCY
+        );
+        assert_eq!(
+            store.summary(&job.id).expect("summary").spec.concurrency,
+            MAX_CONCURRENCY
+        );
+        store
+            .set_status(&job.id, JobStatus::Cancelled, None)
+            .expect("cancel");
+        assert!(matches!(
+            store.set_concurrency(&job.id, 4),
+            Err(JobError::Invalid(_))
+        ));
+    }
+
+    #[test]
+    fn the_token_limit_changes_above_the_tokens_used() {
+        let (_directory, store) = store();
+        let units: Vec<_> = (0..3).map(|row| unit("Item", row, 10)).collect();
+        let job = store.create("c", &spec(), &units).expect("job");
+        store
+            .add_usage(
+                &job.id,
+                Usage {
+                    prompt_tokens: 900,
+                    completion_tokens: 100,
+                },
+            )
+            .expect("usage");
+        assert!(matches!(
+            store.set_token_limit(&job.id, 1000),
+            Err(JobError::Invalid(_))
+        ));
+        assert_eq!(
+            store
+                .set_token_limit(&job.id, 5000)
+                .expect("limit")
+                .token_limit,
+            5000
+        );
+        assert_eq!(
+            store.summary(&job.id).expect("summary").spec.token_limit,
+            5000
+        );
+        store
+            .set_status(&job.id, JobStatus::Cancelled, None)
+            .expect("cancel");
+        assert!(matches!(
+            store.set_token_limit(&job.id, 9000),
+            Err(JobError::Invalid(_))
+        ));
     }
 
     #[test]

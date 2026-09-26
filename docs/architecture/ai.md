@@ -337,9 +337,10 @@ orchestrator and supervised by Angelica.
 
 Angelica has `estimate_job` in every mode and `job_status` and `job_events`
 to report on jobs. In Ask and Auto-draft modes she also has `start_job`,
-`amend_job`, `retry_units`, `pause_job`, `resume_job`, and `cancel_job`.
+`amend_job`, `retry_units`, `set_job_workers`, `raise_job_limit`, `pause_job`, `resume_job`, and
+`cancel_job`.
 `start_job` never starts anything: it records a job proposal with the scope,
-instructions, concurrency (1 to 16, 8 by default), the estimate, and a token limit of twice
+instructions, concurrency, the estimate, and a token limit of twice
 the estimate (at least 200,000). The user starts the job from the proposal.
 
 A scope is a list of sheets, or every sheet with translatable strings, and a
@@ -348,7 +349,15 @@ untranslated strings and drafts. Reviewed translations are never included.
 The string list is fixed when the job starts, together with each string's
 current target and review state. Strings are grouped in order into chunks of
 at most 30 strings and 12,000 source characters, never across sheets. The
-estimate is the number of strings and chunks and a rough token count.
+estimate is the number of strings and chunks and a token count. When
+earlier jobs of the project with the same jobs model (provider, model, and
+effort) finished at least three chunks together, the count is the chunks
+times their average tokens per finished chunk (from the latest 20 such
+jobs). Otherwise it is a formula: each chunk is assumed to take three
+responses, each resending 6,000 tokens of instructions, tools, and context
+plus the chunk's source characters, and the source is written once
+(`chunks × 18,000 + characters × 4`). The proposal says which basis was
+used.
 
 Each chunk is translated by a worker with a fresh context: fixed worker
 instructions, the project facts, guidance and matching glossary entries, the
@@ -375,7 +384,16 @@ or Angelica's default model. Settings show an effort choice for jobs even
 while they use Angelica's model; choosing an effort there stores Angelica's
 current model with that effort as the jobs model.
 
-A running job has `concurrency` lanes. Each lane claims the next chunk,
+Concurrency is 1 to 16 workers. When Angelica does not choose, a job of 100
+chunks or more gets 16 and a smaller one 8; either way a job never gets more
+workers than chunks. The proposal shows the count. The user can change it on
+the job card and Angelica with `set_job_workers` (for example after rate-limit
+errors), for a job that was not cancelled; this changes speed, not the
+strings or the token limit.
+
+A running job has `concurrency` lanes. Every two seconds the runner reads the
+job's count and starts missing lanes when it grew; a lane above a lowered
+count stops before claiming its next chunk. Each lane claims the next chunk,
 checks first that the job's project is still open, and pauses the job when
 the token limit is reached or when, after 40 finished strings, more than 30 %
 were rejected. A network, timeout, rate-limit, or unavailable failure returns
@@ -397,17 +415,48 @@ A chunk's outcomes and token usage are recorded when the chunk ends. Usage is
 summed as each response finishes, so a chunk the provider interrupts still
 records the tokens it spent.
 
-While a runner runs, each lane also reports its live activity: the chunk and
-sheet it translates, its phase (claiming a chunk, loading context, waiting
+While a runner runs, each lane also reports its live activity: the chunk,
+sheet, and first and last row it translates, its phase (claiming a chunk, loading context, waiting
 for the provider, reasoning, writing, running a tool, recording results,
 waiting to retry, or stopped), the response it is on, its strings finished
-and tokens used in the chunk, its chunks done, and when it last changed or
-received anything from the provider. Streaming reasoning, text, and tool-call
-arguments all count as activity. This state lives only in memory while the
-runner runs and is never stored. The job card polls it every second and
-marks a lane that has waited on the provider without data for 30 seconds as
-quiet and for 90 seconds as stalled; the client's read timeout ends the
-request after 180 seconds of silence, which requeues the chunk.
+and tokens used in the chunk, its chunks done, the string it is on, when it
+last changed or received anything from the provider, and the last 600
+characters of the
+reasoning the provider streamed for its current response (kept until the
+next response streams reasoning, cleared with each new chunk). The string
+it is on comes from the `"unit": N` fields of the tool-call arguments as
+they stream, so a worker writing its submission shows which string it is
+writing (its number, address, and the start of its source as plain text)
+and how many strings the response has covered so far; a starting tool call
+names the string or row it checks or reads. Strings count as finished only
+once a submission has been checked, because a worker submits the whole
+chunk at once. Streaming
+reasoning, text, and tool-call arguments all count as activity. This state
+lives only in memory while the runner runs and is never stored. An expanded
+job card polls it every second while its Workers tab is shown, and marks a
+lane that has waited on the provider without data for 30 seconds as quiet
+and for 90 seconds as stalled; the client's read timeout ends the request
+after 180 seconds of silence, which requeues the chunk.
+
+The job list in the Angelica panel shows each job as a compact card with its
+status, progress, and controls; expanding it shows the Workers (while
+running), Problems (filterable by outcome, with retry per outcome), Events,
+and Job tabs. A job that no longer runs (paused, completed, or cancelled) can
+be removed from the list, which deletes its local record, strings, and
+events; the drafts it wrote stay in the project. A running job must be
+paused or cancelled first.
+
+A job's summary includes its chunk count, its finished chunks (chunks with
+no pending or running strings), and, once a chunk finished, a projection:
+the tokens used so far plus their average per finished chunk for each
+unfinished chunk. The card shows the projection and warns when it exceeds
+the limit. The user can change the limit of a job that was not cancelled to
+any value above the tokens already used; a job paused at its limit shows a
+limit field prefilled with the projection plus a quarter (rounded up to
+10,000) and resumes with the new limit. Angelica cannot change a limit
+herself: `raise_job_limit` records a proposal with the job's use,
+projection, current and new limit, and approving it sets the limit and
+resumes a job that paused at its old one.
 
 When a job completes or pauses on its own, Aeria wakes Angelica: unless a
 turn is already running there, it adds an automatic `[Aeria]` message to the

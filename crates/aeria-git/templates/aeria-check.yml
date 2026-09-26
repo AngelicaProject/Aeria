@@ -1,0 +1,60 @@
+# Aeria merge check. Added by Aeria {{VERSION}}; Aeria offers to update it.
+#
+# GitHub merges pull requests as plain text and lets files be edited on the
+# website, while Aeria merges translations per string and validates the
+# project. This workflow runs aeria-check, built from the same readers as
+# Aeria, so a merge that would leave the project unreadable fails first.
+#
+# For a pull request it checks GitHub's test merge with the base branch, so
+# it validates the result of the merge rather than the branch alone. Make it
+# required in Settings -> Branches (or Rules) -> the main branch -> "Require
+# status checks to pass" -> "Aeria check".
+#
+# Checks that need the game data, such as tags matching the original text,
+# stay with Aeria, which runs them whenever it opens or syncs the project.
+name: Aeria check
+
+on:
+  pull_request:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: aeria-check-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: Aeria check
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      AERIA_CHECK_URL: {{URL}}
+      AERIA_CHECK_SHA256: {{SHA256}}
+      PROJECT: {{PROJECT}}
+    steps:
+      # Two commits: a pull request's test merge and the base it merges into.
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+
+      - name: Install aeria-check {{VERSION}}
+        run: |
+          curl --fail --silent --show-error --location "$AERIA_CHECK_URL" --output "$RUNNER_TEMP/aeria-check.tar.gz"
+          echo "$AERIA_CHECK_SHA256  $RUNNER_TEMP/aeria-check.tar.gz" | sha256sum --check --strict
+          tar --extract --gzip --file "$RUNNER_TEMP/aeria-check.tar.gz" --directory "$RUNNER_TEMP"
+          "$RUNNER_TEMP/aeria-check" --version
+
+      - name: "Stage 1: project integrity"
+        run: '"$RUNNER_TEMP/aeria-check" integrity --project "$PROJECT"'
+
+      - name: "Stage 2: translations"
+        run: '"$RUNNER_TEMP/aeria-check" translations --project "$PROJECT"'
+
+      - name: "Stage 3: merge into the base branch"
+        if: github.event_name == 'pull_request'
+        run: '"$RUNNER_TEMP/aeria-check" merge --project "$PROJECT" --base HEAD^1'

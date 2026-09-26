@@ -15,6 +15,7 @@ members = [
   "crates/aeria-export",
   "crates/aeria-fonts",
   "crates/aeria-publish",
+  "crates/aeria-check",
   "tools/workspace-format-evaluation",
   "apps/desktop/src-tauri",
 ]

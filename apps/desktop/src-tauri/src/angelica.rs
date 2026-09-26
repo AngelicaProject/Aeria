@@ -679,6 +679,7 @@ impl ProjectWriter for DesktopWriter {
                         job: None,
                         web: None,
                         review: None,
+                        job_limit: None,
                         location: Some(proposal.location),
                         source: proposal.source,
                         target: proposal.target,
@@ -744,6 +745,7 @@ impl ProjectWriter for DesktopWriter {
             job: None,
             web: None,
             review: None,
+            job_limit: None,
             location: None,
             source: String::new(),
             target: batch.reason.clone(),
@@ -781,6 +783,7 @@ impl ProjectWriter for DesktopWriter {
             job: None,
             web: None,
             review: None,
+            job_limit: None,
             location: None,
             source: String::new(),
             target: change.after,
@@ -1295,6 +1298,13 @@ fn apply_record(
         return Ok(settled(
             allow_domain(app, domain)
                 .map(|()| None)
+                .map_err(|error| error.message),
+        ));
+    }
+    if let Some(proposal) = &record.job_limit {
+        return Ok(settled(
+            crate::jobs::apply_limit_proposal(app, proposal)
+                .map(|_| None)
                 .map_err(|error| error.message),
         ));
     }

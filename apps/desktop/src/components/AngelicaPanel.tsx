@@ -46,6 +46,8 @@ const toolLabels: Readonly<Record<string, MessageKey>> = {
   retry_units: "angelica.tool.retryUnits",
   pause_job: "angelica.tool.pauseJob",
   resume_job: "angelica.tool.resumeJob",
+  raise_job_limit: "angelica.tool.raiseJobLimit",
+  set_job_workers: "angelica.tool.setJobWorkers",
   cancel_job: "angelica.tool.cancelJob",
 };
 

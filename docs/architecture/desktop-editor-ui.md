@@ -257,24 +257,60 @@ The Git dock is the Git view over the commands in
 follows the repository by itself (see [`git.md`](./git.md#git-in-the-desktop))
 and has no refresh button.
 
-- The summary shows the branch, a branch switcher when there are several
-  local branches, the sync state, Sync, and a button to Settings →
-  Repository (or, without a remote, a link to connect one). On the main
+- The summary shows the branch with its switcher, the sync state, and a
+  button to Settings → Repository (or, without a remote, a link to connect
+  one). With a remote, a toolbar offers Fetch, Pull (with the commits to
+  pull), Push (with the commits to push), and Sync. Pull is disabled with
+  uncommitted translations; Push is disabled on the main branch and while
+  the upstream has commits the branch lacks.
+- With a github.com `origin`, the dock offers the merge check workflow (see
+  [`git.md`](./git.md#merge-check-ci)) in a card that lists its three
+  stages, with "Add workflow" or, when the file differs, "Update workflow".
+  The card can be dismissed for the session. After adding, the dock says to
+  commit and push it and links to the branch settings on GitHub, where the
+  check is made required. Development builds and projects in a repository
+  subfolder show why the workflow cannot be added.
+- The branch switcher is a popover below the branch name, not a list over
+  it: a filter field, local branches (the current one first and checked,
+  then the main branch, then by name; each with its upstream, a main-branch
+  or merged badge, and why it is blocked), remote branches without a local
+  one (choosing one checks it out as a tracking branch), and "New branch…",
+  which creates a branch from `HEAD` and checks it out. On the main
   branch it explains that the next checkpoint starts a contribution branch.
-- It offers repository initialization, a per-string "Mine / Server" choice
-  for same-unit sync conflicts, and, on a contribution branch, its status and
-  "Finish contribution" — or, in a repository without a remote, "Merge into
-  `<main>`" with a confirmation.
+- It offers repository initialization, a per-string "Current (yours) /
+  Incoming" choice for same-unit merge conflicts, and, on a contribution
+  branch, a Pull request section with the branch's push state, its unmerged
+  commits, and "Switch to `<main>` and delete this branch" once it is merged
+  — or, in a repository without a remote, "Merge into `<main>`" with a
+  confirmation.
+- The dock uses Git's established terms in every interface language rather
+  than inventing its own: the checkpoint button is labelled Commit, the
+  identity form edits `user.name` and `user.email`, and states and results
+  speak of commits, branches, upstream, push, pull, merge, and pull
+  requests. Russian keeps the English command names where translators know
+  them (Commit, Merge, push, pull, upstream) and the common loanwords
+  («коммит», «смержить»).
 - The branch switcher disables branches that hold the project in a state the
   open session cannot load (no project, an older Workspace Format, or another
   game source) and says why; when the main branch is such a branch, the dock
   explains that the work is not merged into it yet.
-- **Changes** (collapsible) lists everything a checkpoint would commit:
+- **Changes** (collapsible; the dock remembers whether it is open while the
+  window lives) starts with the composer, which commits everything below and
+  edits the translator name and optional email. Below it are the
   translation-unit changes grouped by sheet with an A/M/D marker (clicking
   one opens the string with its checkpoint diff) and project file changes
   grouped by area, as described in
-  [`git.md`](./git.md#project-file-changes). The composer commits both and
-  edits the translator name and optional email.
+  [`git.md`](./git.md#project-file-changes).
+- The translation changes are a virtualized list of at most 480 px. With 12
+  or more changes it offers a search (sheet name or text, or an exact `row`
+  or `row:subrow`), a filter by kind with counts, and collapse or expand all
+  sheets; a search or kind filter opens every matching sheet. With more than
+  50 changes in several sheets, sheets start collapsed. The sheet whose
+  changes are at the top stays pinned above them. A row names its column
+  only when the sheet's changes span several columns, and shows what
+  changed (text, review, note) only for modified strings. Filters and open
+  sheets are kept per list (the uncommitted changes, or each commit) while
+  the window lives. Commit tabs use the same list.
 - **History** fills the rest of the dock: commits with a lane graph, branch
   and tag labels, and time, loading older commits while scrolling. Clicking
   one opens a commit tab.

@@ -1,5 +1,6 @@
 mod ai;
 mod angelica;
+mod check_workflow;
 mod commands;
 mod dto;
 mod error;
@@ -34,6 +35,9 @@ pub use angelica::{
     angelica_conversations, angelica_delete_conversation, angelica_draft, angelica_proposals,
     angelica_reject_proposal, angelica_send,
 };
+pub use check_workflow::{
+    CheckWorkflowDto, git_check_workflow, git_install_check_workflow, git_open_branch_settings,
+};
 pub use commands::{
     cancel_source_package, close_project, current_project, default_projects_directory_path,
     forget_recent_project, initialize_project, initialize_project_from_game, list_detached_units,
@@ -64,19 +68,20 @@ pub use games::{
 };
 pub use git::{
     git_branches, git_checkpoint, git_clone_repository, git_commit_changes, git_contributors,
-    git_create_branch, git_delete_branch, git_fetch_main, git_finish_contribution, git_initialize,
-    git_log, git_merge_contribution, git_overview, git_pending_changes, git_project_changes,
-    git_remote_branches, git_remove_remote, git_set_identity, git_set_main_branch, git_set_remote,
-    git_set_upstream, git_state_stamp, git_switch_branch, git_sync, git_unit_attribution,
-    git_unit_history,
+    git_create_branch, git_delete_branch, git_fetch, git_fetch_main, git_finish_contribution,
+    git_initialize, git_log, git_merge_contribution, git_overview, git_pending_changes,
+    git_project_changes, git_pull, git_push, git_remote_branches, git_remove_remote,
+    git_set_identity, git_set_main_branch, git_set_remote, git_set_upstream, git_state_stamp,
+    git_switch_branch, git_sync, git_unit_attribution, git_unit_history,
 };
 pub use guide::{
     GlossaryEntryInput, ProjectGuideDto, project_guide, save_project_glossary,
     save_project_guidance,
 };
 pub use jobs::{
-    angelica_job_control, angelica_job_events, angelica_job_retry, angelica_job_units,
-    angelica_job_workers, angelica_jobs,
+    angelica_job_control, angelica_job_events, angelica_job_remove, angelica_job_retry,
+    angelica_job_set_concurrency, angelica_job_set_limit, angelica_job_units, angelica_job_workers,
+    angelica_jobs,
 };
 pub use source_store::{
     SourceAvailabilityDto, SourcePackageEntryDto, delete_source_package, list_source_packages,
@@ -169,6 +174,12 @@ pub fn run() {
             git_unit_history,
             git_contributors,
             git_sync,
+            git_fetch,
+            git_pull,
+            git_push,
+            git_check_workflow,
+            git_install_check_workflow,
+            git_open_branch_settings,
             git_clone_repository,
             git_unit_attribution,
             git_branches,
@@ -210,6 +221,9 @@ pub fn run() {
             angelica_job_events,
             angelica_job_control,
             angelica_job_retry,
+            angelica_job_remove,
+            angelica_job_set_limit,
+            angelica_job_set_concurrency,
             angelica_job_workers,
             project_guide,
             save_project_guidance,

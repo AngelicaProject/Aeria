@@ -1,0 +1,23 @@
+[package]
+name = "aeria-check"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Validates an Aeria translation repository before a merge, for CI."
+
+[[bin]]
+name = "aeria-check"
+path = "src/main.rs"
+
+[dependencies]
+aeria-export = { path = "../aeria-export" }
+aeria-fonts = { path = "../aeria-fonts" }
+aeria-git = { path = "../aeria-git" }
+aeria-workspace = { path = "../aeria-workspace" }
+serde_json = "1.0.151"
+tempfile = "3.27.0"
+
+[lints]
+workspace = true

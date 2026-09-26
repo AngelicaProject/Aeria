@@ -20,8 +20,8 @@ use aeria_ai::chat::{ChatMessage, ToolCall};
 use aeria_ai::conversation::{ConversationStore, ProposalRecord, ProposalStatus};
 use aeria_ai::guidance::ProjectGuide;
 use aeria_ai::jobs::{
-    JobError, JobEstimate, JobEvent, JobFilter, JobProposal, JobScope, JobSpec, JobStatus,
-    JobStore, JobSummary, JobUnit, ScopedUnit, UnitStatus,
+    JobError, JobEstimate, JobEvent, JobFilter, JobLimitProposal, JobProposal, JobScope, JobSpec,
+    JobStatus, JobStore, JobSummary, JobUnit, ScopedUnit, UnitStatus,
 };
 use aeria_ai::search::ProjectSearch;
 use aeria_ai::tools::{
@@ -221,16 +221,21 @@ pub(crate) struct DesktopJobs {
 
 impl JobControl for DesktopJobs {
     fn estimate(&self, scope: &JobScope) -> Result<JobEstimate, ToolError> {
-        Ok(JobEstimate::for_units(&enumerate_scope(&self.app, scope)?))
+        let units = enumerate_scope(&self.app, scope)?;
+        Ok(JobEstimate::for_units(
+            &units,
+            history_chunk_tokens(&self.app),
+        ))
     }
 
     fn propose(
         &self,
         scope: JobScope,
         instructions: String,
-        concurrency: u8,
+        concurrency: Option<u8>,
     ) -> Result<ProposalOutcome, ToolError> {
         let estimate = self.estimate(&scope)?;
+        let concurrency = aeria_ai::jobs::job_concurrency(concurrency, estimate.chunks);
         if estimate.units == 0 {
             return Err(ToolError::new("the scope has no strings to translate"));
         }
@@ -247,7 +252,7 @@ impl JobControl for DesktopJobs {
             estimate.estimated_tokens
         );
         let proposal = JobProposal {
-            token_limit: (estimate.estimated_tokens * 2).max(200_000),
+            token_limit: estimate.token_limit(),
             scope,
             instructions,
             concurrency,
@@ -268,6 +273,7 @@ impl JobControl for DesktopJobs {
             job: Some(proposal),
             web: None,
             review: None,
+            job_limit: None,
             location: None,
             source: String::new(),
             target: summary,
@@ -322,11 +328,131 @@ impl JobControl for DesktopJobs {
         Ok(requeued)
     }
 
+    fn set_concurrency(&self, job_id: &str, concurrency: u8) -> Result<u8, ToolError> {
+        set_job_concurrency(&self.app, job_id, concurrency)
+            .map(|job| job.spec.concurrency)
+            .map_err(|error| ToolError::new(error.message))
+    }
+
+    fn propose_limit(&self, job_id: &str, token_limit: u64) -> Result<ProposalOutcome, ToolError> {
+        let job = job_store(&self.app)
+            .map_err(|error| ToolError::new(error.message))?
+            .summary(job_id)
+            .map_err(tool_error)?;
+        if job.status == JobStatus::Cancelled {
+            return Err(ToolError::new("the job was cancelled"));
+        }
+        if token_limit <= job.used_tokens() {
+            return Err(ToolError::new(format!(
+                "the limit must be above the {} tokens already used",
+                job.used_tokens()
+            )));
+        }
+        let summary = format!(
+            "Raise the token limit of job {job_id} from {} to {token_limit}",
+            job.spec.token_limit
+        );
+        let state = self.app.state::<DesktopState>();
+        let _guard = state
+            .lock_proposals()
+            .map_err(|error| ToolError::new(error.message))?;
+        let mut records = self
+            .store
+            .load_proposals(&self.conversation_id)
+            .map_err(tool_error)?;
+        let id = aeria_ai::ProviderConfig::new_id();
+        records.push(ProposalRecord {
+            id: id.clone(),
+            file: None,
+            job: None,
+            web: None,
+            review: None,
+            job_limit: Some(JobLimitProposal {
+                job_id: job_id.to_owned(),
+                token_limit,
+                previous_limit: job.spec.token_limit,
+                used_tokens: job.used_tokens(),
+                projected_tokens: job.projected_tokens,
+            }),
+            location: None,
+            source: String::new(),
+            target: summary,
+            expected: UnitState {
+                target: None,
+                review_state: None,
+            },
+            status: ProposalStatus::Pending,
+            message: None,
+            created_at_unix_ms: now_unix_ms(),
+        });
+        self.store
+            .save_proposals(&self.conversation_id, &records)
+            .map_err(tool_error)?;
+        announce_proposals(&self.app, &self.conversation_id);
+        Ok(ProposalOutcome::Pending { proposal_id: id })
+    }
+
     fn control(&self, job_id: &str, action: JobAction) -> Result<JobStatus, ToolError> {
         control_job(&self.app, job_id, action)
             .map(|job| job.status)
             .map_err(|error| ToolError::new(error.message))
     }
+}
+
+/// The model job workers use: the jobs model, or Angelica's.
+fn jobs_model(app: &tauri::AppHandle) -> CommandResult<Option<aeria_ai::ModelSelection>> {
+    let settings = settings_store(app)?.load()?;
+    Ok(settings.worker_model.or(settings.agent_model))
+}
+
+/// The average tokens per chunk of earlier jobs with the jobs model, if
+/// there are enough of them.
+fn history_chunk_tokens(app: &tauri::AppHandle) -> Option<u64> {
+    let model = jobs_model(app).ok().flatten()?;
+    job_store(app)
+        .ok()?
+        .history_chunk_tokens(&model)
+        .ok()
+        .flatten()
+}
+
+/// Changes a job's token limit and, with `resume`, resumes it when paused.
+pub(crate) fn set_job_limit(
+    app: &tauri::AppHandle,
+    job_id: &str,
+    token_limit: u64,
+    resume: bool,
+) -> CommandResult<JobSummary> {
+    let store = job_store(app)?;
+    store.set_token_limit(job_id, token_limit)?;
+    if resume && store.summary(job_id)?.status == JobStatus::Paused {
+        return control_job(app, job_id, JobAction::Resume);
+    }
+    notify(app, job_id);
+    Ok(store.summary(job_id)?)
+}
+
+/// Changes how many workers a job runs; a running job follows at once.
+pub(crate) fn set_job_concurrency(
+    app: &tauri::AppHandle,
+    job_id: &str,
+    concurrency: u8,
+) -> CommandResult<JobSummary> {
+    let store = job_store(app)?;
+    store.set_concurrency(job_id, concurrency)?;
+    notify(app, job_id);
+    Ok(store.summary(job_id)?)
+}
+
+/// Applies an approved limit proposal; a job paused at its old limit
+/// resumes.
+pub(crate) fn apply_limit_proposal(
+    app: &tauri::AppHandle,
+    proposal: &JobLimitProposal,
+) -> CommandResult<JobSummary> {
+    let job = job_store(app)?.summary(&proposal.job_id)?;
+    let at_limit = job.status == JobStatus::Paused && job.used_tokens() >= job.spec.token_limit;
+    set_job_limit(app, &proposal.job_id, proposal.token_limit, at_limit)
 }
 
 /// Pauses, resumes, or cancels a job.
@@ -445,20 +571,67 @@ pub(crate) fn spawn_runner(app: &tauri::AppHandle, job_id: &str) {
         });
 }
 
+/// How often a runner checks whether the job's worker count changed.
+const CONCURRENCY_CHECK: Duration = Duration::from_secs(2);
+
+/// The job's worker count and whether it still runs.
+async fn runner_state(run: &JobRun) -> Option<(u8, bool)> {
+    run.with_store(|store, id| {
+        let job = store.summary(id)?;
+        Ok((
+            job.spec.concurrency.max(1),
+            job.status == JobStatus::Running,
+        ))
+    })
+    .await
+    .ok()
+}
+
 /// Runs a job's lanes until none has work. Lanes run in a join set, so
-/// aborting the runner aborts them too.
+/// aborting the runner aborts them too. When the job's worker count grows,
+/// the missing lanes start; lanes above a smaller count stop by themselves
+/// after their current chunk.
 async fn run_job(run: JobRun) {
-    let concurrency = run
-        .with_store(|store, id| Ok(store.summary(id)?.spec.concurrency))
-        .await
-        .unwrap_or(1);
-    let concurrency = concurrency.max(1);
+    let mut concurrency = runner_state(&run).await.map_or(1, |(count, _)| count);
     run.workers.reset(u32::from(concurrency));
     let mut lanes = JoinSet::new();
-    for lane in 0..concurrency {
-        lanes.spawn(run_lane(run.clone(), usize::from(lane)));
+    let mut live = std::collections::BTreeSet::new();
+    for lane in 0..usize::from(concurrency) {
+        live.insert(lane);
+        let run = run.clone();
+        lanes.spawn(async move {
+            run_lane(run, lane).await;
+            lane
+        });
     }
-    while lanes.join_next().await.is_some() {}
+    while !live.is_empty() {
+        match tokio::time::timeout(CONCURRENCY_CHECK, lanes.join_next()).await {
+            Ok(Some(Ok(lane))) => {
+                live.remove(&lane);
+            }
+            // A lane that panicked or was aborted is gone too.
+            Ok(Some(Err(_)) | None) => live.clear(),
+            Err(_) => {}
+        }
+        let Some((count, running)) = runner_state(&run).await else {
+            continue;
+        };
+        if count == concurrency || !running || live.is_empty() {
+            concurrency = count;
+            continue;
+        }
+        concurrency = count;
+        run.workers.ensure(u32::from(count));
+        for lane in 0..usize::from(count) {
+            if live.insert(lane) {
+                let run = run.clone();
+                lanes.spawn(async move {
+                    run_lane(run, lane).await;
+                    lane
+                });
+            }
+        }
+    }
 
     let finished = run
         .with_store(|store, id| {
@@ -573,9 +746,10 @@ async fn lane_loop(run: &JobRun, lane: usize) {
             return;
         }
         let claimed = run
-            .with_store(|store, id| {
+            .with_store(move |store, id| {
                 let job = store.summary(id)?;
-                if job.status != JobStatus::Running {
+                // A lane above a lowered worker count stops here.
+                if job.status != JobStatus::Running || lane >= usize::from(job.spec.concurrency) {
                     return Ok(Ok(None));
                 }
                 if let Some(reason) = pause_reason(&job) {
@@ -606,10 +780,15 @@ async fn lane_loop(run: &JobRun, lane: usize) {
         notify(&run.app, &run.job_id);
         if let Some(first) = units.first() {
             let (chunk, sheet) = (first.chunk, first.location.sheet.clone());
+            let rows = units.iter().map(|unit| unit.location.row);
+            let rows = (
+                rows.clone().min().unwrap_or(first.location.row),
+                rows.max().unwrap_or(first.location.row),
+            );
             let count = u32::try_from(units.len()).unwrap_or(u32::MAX);
             let rounds = u32::try_from(WORKER_ROUNDS).unwrap_or(u32::MAX);
             run.workers.update(lane, |activity, now| {
-                activity.start_chunk(chunk, &sheet, count, rounds, now);
+                activity.start_chunk(chunk, &sheet, rows, count, rounds, now);
             });
         }
         match run_chunk(run, &spec, units, lane).await {
@@ -819,6 +998,7 @@ fn prepare_chunk(
     run: &JobRun,
     selection: &aeria_ai::ModelSelection,
     units: Vec<JobUnit>,
+    lane: usize,
 ) -> CommandResult<PreparedChunk> {
     let settings = settings_store(&run.app)?.load()?;
     let model = settings
@@ -835,6 +1015,9 @@ fn prepare_chunk(
         ProjectGuide::load(&run.root),
     );
     let system = worker.system_prompt(facts.as_ref(), &instructions);
+    let previews = worker.unit_previews();
+    run.workers
+        .update(lane, |activity, _| activity.set_previews(previews));
     Ok(PreparedChunk {
         model,
         worker,
@@ -905,7 +1088,7 @@ async fn run_chunk(run: &JobRun, spec: &JobSpec, units: Vec<JobUnit>, lane: usiz
     };
     let prepare_run = run.clone();
     let selection = spec.model.clone();
-    let prepared = run_blocking(move || prepare_chunk(&prepare_run, &selection, units)).await;
+    let prepared = run_blocking(move || prepare_chunk(&prepare_run, &selection, units, lane)).await;
     let client = run.app.state::<DesktopState>().ai_client();
     let (
         PreparedChunk {
@@ -1077,6 +1260,53 @@ pub async fn angelica_job_retry(
     .await
 }
 
+#[tauri::command(rename_all = "camelCase")]
+/// Changes how many workers a job runs at once.
+///
+/// # Errors
+///
+/// Returns `angelicaJobNotFound`, `angelicaJobInvalid` for a cancelled job,
+/// or a storage error.
+pub async fn angelica_job_set_concurrency(
+    app: tauri::AppHandle,
+    job_id: String,
+    concurrency: u8,
+) -> CommandResult<JobSummary> {
+    run_blocking(move || set_job_concurrency(&app, &job_id, concurrency)).await
+}
+
+#[tauri::command(rename_all = "camelCase")]
+/// Changes a job's token limit and, with `resume`, resumes it when paused.
+///
+/// # Errors
+///
+/// Returns `angelicaJobNotFound`, `angelicaJobInvalid` for a cancelled job
+/// or a limit not above the tokens used, or a storage error.
+pub async fn angelica_job_set_limit(
+    app: tauri::AppHandle,
+    job_id: String,
+    token_limit: u64,
+    resume: bool,
+) -> CommandResult<JobSummary> {
+    run_blocking(move || set_job_limit(&app, &job_id, token_limit, resume)).await
+}
+
+#[tauri::command(rename_all = "camelCase")]
+/// Removes a job that no longer runs from the list; its drafts stay.
+///
+/// # Errors
+///
+/// Returns `angelicaJobNotFound`, `angelicaJobInvalid` for a running job, or
+/// a storage error.
+pub async fn angelica_job_remove(app: tauri::AppHandle, job_id: String) -> CommandResult<()> {
+    run_blocking(move || {
+        job_store(&app)?.remove(&job_id)?;
+        notify(&app, &job_id);
+        Ok(())
+    })
+    .await
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
@@ -1192,6 +1422,9 @@ mod tests {
             counts: aeria_ai::jobs::JobCounts::default(),
             active_workers: 0,
             usage: aeria_ai::chat::Usage::default(),
+            chunks: 0,
+            finished_chunks: 0,
+            projected_tokens: None,
         };
         assert_eq!(pause_reason(&job), None);
         job.counts.drafted = 30;

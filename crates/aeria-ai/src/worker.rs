@@ -37,6 +37,47 @@ pub struct UnitContext {
     pub memory: Vec<MemoryMatch>,
 }
 
+/// A chunk string as shown while a worker translates it.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct UnitPreview {
+    /// `sheet:row:subrow:column`.
+    pub address: String,
+    /// The start of the source as plain text, without tags.
+    pub source: String,
+}
+
+/// Most characters of a unit preview's source.
+const PREVIEW_CHARS: usize = 80;
+
+/// Tagged text as short plain text: tags dropped, entities decoded, and
+/// whitespace collapsed.
+fn plain_preview(tagged: &str) -> String {
+    let mut plain = String::new();
+    let mut in_tag = false;
+    for character in tagged.chars() {
+        match character {
+            '<' => in_tag = true,
+            '>' if in_tag => {
+                in_tag = false;
+                plain.push(' ');
+            }
+            _ if !in_tag => plain.push(character),
+            _ => {}
+        }
+    }
+    let plain = plain
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&amp;", "&");
+    let collapsed = plain.split_whitespace().collect::<Vec<_>>().join(" ");
+    if collapsed.chars().count() <= PREVIEW_CHARS {
+        return collapsed;
+    }
+    let mut cut: String = collapsed.chars().take(PREVIEW_CHARS - 1).collect();
+    cut.push('…');
+    cut
+}
+
 /// Why a job write did not happen.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum WriteFailure {
@@ -175,6 +216,33 @@ impl ChunkWorker {
             guide,
             progress: Mutex::new(progress),
         }
+    }
+
+    /// The chunk's strings in order, numbered from 1 in the worker's
+    /// messages, for showing what the worker is on.
+    #[must_use]
+    pub fn unit_previews(&self) -> Vec<UnitPreview> {
+        self.units
+            .iter()
+            .zip(&self.contexts)
+            .map(|(unit, context)| {
+                let location = &unit.location;
+                UnitPreview {
+                    address: format!(
+                        "{}:{}:{}:{}",
+                        location.sheet,
+                        location.row,
+                        location.subrow,
+                        location.column.unwrap_or(0)
+                    ),
+                    source: context
+                        .as_ref()
+                        .and_then(|context| aeria_se::project(&context.source).ok())
+                        .map(|tagged| plain_preview(&tagged.text))
+                        .unwrap_or_default(),
+                }
+            })
+            .collect()
     }
 
     /// Whether any string is left to translate.
@@ -501,6 +569,17 @@ fn parse<T: for<'de> Deserialize<'de>>(arguments: &str) -> Result<T, ToolError> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn previews_are_short_plain_text() {
+        assert_eq!(
+            plain_preview("Deal <g id=\"1\"><b>heavy</b></g>  damage &amp; more<x id=\"2\"/>"),
+            "Deal heavy damage & more"
+        );
+        let long = plain_preview(&"слово ".repeat(40));
+        assert_eq!(long.chars().count(), PREVIEW_CHARS);
+        assert!(long.ends_with('…'));
+    }
     use crate::guidance::ProjectFile;
     use crate::tools::{ProjectFacts, ReviewLabel, RowSnapshot, RowsPage, SheetSummary};
 

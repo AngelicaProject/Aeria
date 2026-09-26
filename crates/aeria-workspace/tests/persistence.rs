@@ -138,6 +138,20 @@ fn golden_fixture_loads_and_writer_bytes_are_canonical() {
 }
 
 #[test]
+fn files_the_reader_accepts_but_aeria_would_not_write_are_not_canonical() {
+    let input = fixture_repository();
+    let store = WorkspaceStore::new(input.path());
+    assert!(store.non_canonical_files().expect("check").is_empty());
+
+    let shard = input.path().join(".aeria/units/00.jsonl");
+    let crlf = String::from_utf8(FIXTURE_00.to_vec())
+        .expect("UTF-8")
+        .replace('\n', "\r\n");
+    fs::write(&shard, crlf).expect("CRLF shard");
+    assert_eq!(store.non_canonical_files().expect("check"), [shard]);
+}
+
+#[test]
 fn unrelated_repository_files_are_ignored() {
     let repository = fixture_repository();
     fs::write(repository.path().join("README.md"), b"project-owned").expect("unrelated file");
