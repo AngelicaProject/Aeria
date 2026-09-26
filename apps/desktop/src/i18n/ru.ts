@@ -165,7 +165,7 @@ export const ru: Catalog = {
   "settings.fontSize.keywords": "шрифт редактор font editor",
   "settings.fontSize.label": "Размер текста в редакторе",
   "settings.macros.title": "Подсвечивать макросы",
-  "settings.macros.description": "Выделять цветом игровые макросы, например <num(lnum1)>, в редакторе.",
+  "settings.macros.description": "Выделять цветом игровые макросы, например <num $n1>, в редакторе.",
   "settings.macros.keywords": "макросы подсветка синтаксис sestring syntax color",
   "settings.controlChars.title": "Показывать управляющие символы",
   "settings.controlChars.description": "Отмечать невидимые управляющие символы, а не скрывать их.",

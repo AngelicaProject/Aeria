@@ -90,13 +90,13 @@ test("context fill is known only with a context window", () => {
 });
 
 test("replies render a small Markdown subset without HTML", () => {
-  const blocks = parseReply("Строка **Item:5:0:1**:\n\n- `<if(PlayerParameter(4))>` — пол\n- второй пункт\n\n```\n<num(lnum1)>\n```\nКонец");
+  const blocks = parseReply("Строка **Item:5:0:1**:\n\n- `<if-gender $n1>` — пол\n- второй пункт\n\n```\n<num $n1>\n```\nКонец");
   assert.deepEqual(blocks.map((block) => block.kind), ["paragraph", "list", "code", "paragraph"]);
   assert.deepEqual(blocks[0].spans, [{ kind: "text", text: "Строка " }, { kind: "strong", text: "Item:5:0:1" }, { kind: "text", text: ":" }]);
   assert.equal(blocks[1].items.length, 2);
-  assert.deepEqual(blocks[1].items[0][0], { kind: "code", text: "<if(PlayerParameter(4))>" });
-  assert.equal(blocks[2].text, "<num(lnum1)>");
-  assert.deepEqual(parseSpans("<color(1)>"), [{ kind: "text", text: "<color(1)>" }]);
+  assert.deepEqual(blocks[1].items[0][0], { kind: "code", text: "<if-gender $n1>" });
+  assert.equal(blocks[2].text, "<num $n1>");
+  assert.deepEqual(parseSpans("<color #FF0000FF>"), [{ kind: "text", text: "<color #FF0000FF>" }]);
 });
 
 test("search tools show their query", () => {

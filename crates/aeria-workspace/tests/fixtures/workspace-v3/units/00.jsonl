@@ -1,2 +1,2 @@
-{"id":"00000000000000000000000000000000","status":"bound","sheet":"翻訳表","row":0,"subrow":2,"column":4294967295,"layout":"0123456789abcdef","source":"<Emphasis>Bonjour</Emphasis>\n<br>","key":"TEXT_KEY_000","target":"Salut\u0007 «monde»","review":"reviewed","note":"контекст"}
+{"id":"00000000000000000000000000000000","status":"bound","sheet":"翻訳表","row":0,"subrow":2,"column":4294967295,"layout":"0123456789abcdef","source":"<i>Bonjour</i>\n<br>","key":"TEXT_KEY_000","target":"Salut\u0007 «monde»","review":"reviewed","note":"контекст"}
 {"id":"00000000000000000000000000000001","status":"row-removed","sheet":"Synthetic","row":42,"subrow":0,"column":1,"layout":"ffffffffffffffff","source":"Gone","key":null,"target":"","review":"needs-review","note":null}

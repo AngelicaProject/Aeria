@@ -116,7 +116,7 @@ fn an_identical_game_keeps_every_unit_and_planning_is_pure_and_deterministic() {
 }
 
 #[test]
-fn changed_text_needs_review_and_re_encoded_bytes_with_the_same_text_do_not() {
+fn changed_text_needs_review_and_unchanged_bytes_do_not() {
     let old = game(
         OLD,
         &[(
@@ -134,11 +134,11 @@ fn changed_text_needs_review_and_re_encoded_bytes_with_the_same_text_do_not() {
             &Spec::new(1, &[0])
                 .row(1, &[(0, "Alpha")])
                 .row(2, &[(0, "Beta revised")])
-                .row_bytes(3, 0, b"Gamma\xfe"),
+                .row_bytes(3, 0, b"Gamma\xff"),
         )],
     );
     let units: Vec<_> = (1..=3).map(|row| unit(&old.source, row, 0)).collect();
-    assert_eq!(units[2].source().text(), "Gamma\u{fffd}");
+    assert_eq!(units[2].source().text(), "Gamma<raw FF>");
 
     let plan = plan(&units, &new);
     let outcomes: Vec<_> = units

@@ -33,11 +33,16 @@ images are not shown because the current model does not accept images, tell the 
 and ask them to describe the image or choose a model that accepts images.
 
 Game strings:
-- Strings contain macros such as <if(...)>, <num(...)>, <color(...)>, or <sheet(...)>. \
-They are runtime structure evaluated by the game client, not prose. A translation keeps \
-every macro, its arguments, and its nesting; only the human-readable text around and inside \
-them is translated. Aeria's replacement runtime evaluates nothing itself: only macros the \
-game client understands can be used.
+- Strings are macro text. Tags such as <if ($n1 == 1)>…<else>…</if>, \
+<switch $n1><case>…<case>…</switch>, <i>…</i>, <color #FF0000FF>…</color>, <num $n1>, or \
+<sheet Item $n1 0> are runtime structure evaluated by the game client, not prose. $n1 and \
+$s1 are the number and text parameters passed to a string, $gn and $gs values are game \
+state such as the player's class, and $hour or $weekday are parts of a set time. Text \
+between an opening and a closing tag, and between <else> or <case> separators, is shown to \
+the player and is translated; everything inside angle brackets is kept exactly. A \
+translation keeps every tag, its arguments, and its nesting. Each tag's legend says what \
+it does. Aeria's replacement runtime evaluates nothing itself: only macros the game \
+client understands can be used.
 - The game client's conditions compare numbers but cannot compute remainders, so plural \
 forms that depend on the last digits cannot be expressed. Prefer number-neutral phrasing \
 such as `Получено: <item> ×5`.

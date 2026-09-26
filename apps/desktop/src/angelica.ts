@@ -162,7 +162,7 @@ export function parseSpans(text: string): ReplySpan[] {
 /**
  * A deliberately small Markdown subset: fenced code, bullet or numbered
  * lists, and paragraphs with inline code and bold. Nothing is rendered as
- * HTML, so game macros such as `<if(...)>` always stay visible text.
+ * HTML, so game macros such as `<if …>` always stay visible text.
  */
 export function parseReply(text: string): ReplyBlock[] {
   const blocks: ReplyBlock[] = [];

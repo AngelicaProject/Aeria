@@ -7,8 +7,10 @@ installed game. It stores project metadata and explicitly managed translation
 units, never the complete source corpus or derived indexes.
 
 Each unit carries the source text it was translated from, so a reviewer can
-see the original next to the translation, a source update can tell a changed
-text from re-encoded bytes, and a changed string shows what it was before.
+see the original next to the translation, a source update can tell whether
+the string changed, and a changed string shows what it was before. Source
+and target text are macro text as defined in
+[`../architecture/strings.md`](../architecture/strings.md#macro-text).
 
 Aeria reads no earlier format. Workspaces written in Workspace Format v1 or
 v2 are reported as unsupported.

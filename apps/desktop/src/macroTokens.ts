@@ -1,24 +1,26 @@
 /**
- * Presentation-only scanner for macro text spellings such as
- * `<num(t_day)>`, `<if([gnum77==3],<num(t_day)>,x)>`, and `</color>`.
+ * Presentation-only scanner for macro text tags such as `<num $n1>`,
+ * `<if ($gn77 == 3)>`, `<else>`, and `</color>`.
  *
- * It only locates delimiters for highlighting. Rust (`aeria-se`) remains the
+ * It only locates tags for highlighting. Rust (`aeria-se`) remains the
  * authority for parsing, validation, and safety; unterminated or ambiguous
  * input is simply left as plain text here.
  */
+
 export type MacroSpan = {
   from: number;
   to: number;
-  /** Name ranges of this macro and every nested macro, in source order. */
+  /** Name ranges of this tag and of tags nested in its quoted arguments, in source order. */
   names: Array<[number, number]>;
 };
 
 export type MacroSegment = { kind: "text" | "macro"; text: string };
 
-const NAME_CHAR = /[A-Za-z0-9_]/;
+const NAME_CHAR = /[A-Za-z0-9:-]/;
 const NAME_START = /[A-Za-z/]/;
 
-function scanMacro(text: string, start: number, names: Array<[number, number]>): number {
+/** Scans one tag at `start` (a `<`); returns its end, or -1 when it is not a complete tag. */
+function scanTag(text: string, start: number, names: Array<[number, number]>): number {
   let index = start + 1;
   const nameStart = index;
   if (text[index] === "/") index += 1;
@@ -28,22 +30,21 @@ function scanMacro(text: string, start: number, names: Array<[number, number]>):
   const nameIndex = names.length;
   names.push([nameStart, index]);
 
-  let depth = 0;
+  let quoted = false;
   while (index < text.length) {
     const character = text[index]!;
     if (character === "\\") {
       index += 2;
-    } else if (character === "(") {
-      depth += 1;
+    } else if (character === "\"") {
+      quoted = !quoted;
       index += 1;
-    } else if (character === ")") {
-      depth -= 1;
-      index += 1;
-    } else if (character === "<" && NAME_START.test(text[index + 1] ?? "")) {
-      const nestedEnd = scanMacro(text, index, names);
+    } else if (quoted && character === "<" && NAME_START.test(text[index + 1] ?? "")) {
+      const nestedEnd = scanTag(text, index, names);
       if (nestedEnd < 0) break;
       index = nestedEnd;
-    } else if (character === ">" && depth <= 0) {
+    } else if (!quoted && character === "<") {
+      break;
+    } else if (!quoted && character === ">") {
       return index + 1;
     } else {
       index += 1;
@@ -64,7 +65,7 @@ export function scanMacros(text: string): MacroSpan[] {
     }
     if (character === "<" && NAME_START.test(text[index + 1] ?? "")) {
       const names: Array<[number, number]> = [];
-      const end = scanMacro(text, index, names);
+      const end = scanTag(text, index, names);
       if (end > 0) {
         spans.push({ from: index, to: end, names });
         index = end;

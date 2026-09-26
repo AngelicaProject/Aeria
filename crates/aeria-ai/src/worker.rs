@@ -593,7 +593,7 @@ mod tests {
         fn context(&self, location: &UnitLocation) -> Result<UnitContext, ToolError> {
             match location.row {
                 1 => Ok(UnitContext {
-                    source: "Hi <pcname(lnum1)>!".to_owned(),
+                    source: "Hi <player-name $n1>!".to_owned(),
                     context: Vec::new(),
                     current_target: None,
                     note: Some("greeting".to_owned()),
@@ -604,8 +604,8 @@ mod tests {
                             subrow: 0,
                             column: Some(0),
                         },
-                        source: "Hi <pcname(lnum1)>.".to_owned(),
-                        target: "Привет, <pcname(lnum1)>.".to_owned(),
+                        source: "Hi <player-name $n1>.".to_owned(),
+                        target: "Привет, <player-name $n1>.".to_owned(),
                         review_state: ReviewLabel::Reviewed,
                         similarity: 0.9,
                     }],
@@ -725,7 +725,7 @@ mod tests {
         assert!(message.contains(r#"<source>Hi <x id="1"/>!</source>"#));
         assert!(message.contains("- translator note: greeting"));
         assert!(message.contains(
-            "- translation memory (90 % similar): Hi <pcname(lnum1)>. → Привет, <pcname(lnum1)>."
+            "- translation memory (90 % similar): Hi <player-name $n1>. → Привет, <player-name $n1>."
         ));
         assert!(message.contains("- current translation, to replace: Пока"));
         assert!(message.contains("- glossary: Aether → Эфир"));
@@ -785,7 +785,7 @@ mod tests {
         assert_eq!(worker.outcomes()[0].1, UnitStatus::Drafted);
         assert_eq!(
             host.written.lock().expect("lock")[1],
-            (1, "Привет, <pcname(lnum1)>!".to_owned())
+            (1, "Привет, <player-name $n1>!".to_owned())
         );
     }
 }

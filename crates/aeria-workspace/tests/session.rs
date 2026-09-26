@@ -343,7 +343,7 @@ fn mutations_validate_persist_once_and_skip_identical_writes() {
         ));
     }
     assert!(matches!(
-        session.set_target(&binding(1, 0), "<if("),
+        session.set_target(&binding(1, 0), "<if $n1>"),
         Err(TranslationMutationError::Workspace(
             WorkspaceError::InvalidTarget { .. }
         ))
@@ -391,7 +391,7 @@ fn mutations_validate_persist_once_and_skip_identical_writes() {
 
 #[test]
 fn assisted_targets_follow_the_structure_policy_and_compare_and_set() {
-    let bytes = aeria_se::codec::encode("Hi <pcname(lnum1)>!").expect("encode");
+    let bytes = aeria_se::codec::encode("Hi <player-name $n1>!").expect("encode");
     let game = game(
         V1,
         &[(SHEET, &TextSheet::new(1, &[0]).row_bytes(1, 0, &bytes))],
@@ -402,7 +402,7 @@ fn assisted_targets_follow_the_structure_policy_and_compare_and_set() {
     let target = binding(1, 0);
     assert_eq!(
         session.source_macro(&target).expect("source"),
-        "Hi <pcname(lnum1)>!"
+        "Hi <player-name $n1>!"
     );
     let untranslated = session.assisted_state(&target);
     assert_eq!(
@@ -417,11 +417,11 @@ fn assisted_targets_follow_the_structure_policy_and_compare_and_set() {
         Err(AssistedWriteError::Structure { .. })
     ));
     let id = session
-        .set_assisted_target(&target, "Привет, <pcname(lnum1)>!", &untranslated, false)
+        .set_assisted_target(&target, "Привет, <player-name $n1>!", &untranslated, false)
         .expect("assisted");
     let written = session.assisted_state(&target);
     assert!(matches!(
-        session.set_assisted_target(&target, "Здравствуй, <pcname(lnum1)>!", &untranslated, false),
+        session.set_assisted_target(&target, "Здравствуй, <player-name $n1>!", &untranslated, false),
         Err(AssistedWriteError::Conflict { ref current }) if current == &written
     ));
     session
@@ -429,11 +429,11 @@ fn assisted_targets_follow_the_structure_policy_and_compare_and_set() {
         .expect("review");
     let reviewed = session.assisted_state(&target);
     assert!(matches!(
-        session.set_assisted_target(&target, "Здравствуй, <pcname(lnum1)>!", &reviewed, false),
+        session.set_assisted_target(&target, "Здравствуй, <player-name $n1>!", &reviewed, false),
         Err(AssistedWriteError::Reviewed)
     ));
     session
-        .set_assisted_target(&target, "Здравствуй, <pcname(lnum1)>!", &reviewed, true)
+        .set_assisted_target(&target, "Здравствуй, <player-name $n1>!", &reviewed, true)
         .expect("approved replacement");
     assert!(matches!(
         session.source_macro(&binding(1, 9)),

@@ -102,9 +102,10 @@ After the row and column are known, the unit resolves at
 | The text differs from `source`. | `SourceChanged` |
 | The text equals `source`. | `Unchanged` |
 
-Only the printed text is compared. When a patch re-encodes a string without
-changing its text, the unit is `Unchanged`; export takes the current bytes
-from the game (see [`export.md`](./export.md)).
+Only the macro text is compared. Macro text is a lossless, canonical form of
+the bytes (see [`strings.md`](./strings.md#lossless-bytes)), so the text
+changes exactly when the bytes change; export takes the current bytes from
+the game (see [`export.md`](./export.md)).
 
 A bound outcome proposes the new binding, layout, text, and row key.
 
@@ -204,8 +205,7 @@ column.
 The `aeria-rebase` integration tests cover:
 
 - identical sources, pure and order-independent planning;
-- changed text, and re-encoded bytes with the same text, at a surviving
-  binding;
+- changed text, and unchanged bytes, at a surviving binding;
 - removed rows and sheets, and unreadable sheets, with last facts preserved;
 - row shifts that stay at their binding and require review in unkeyed
   sheets;

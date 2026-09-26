@@ -166,8 +166,10 @@ understand cannot be reasoned about at all.
 
 Rust projects each source string into tagged text. Translatable prose is plain
 text. Each protected construct becomes a tag with a stable ID and a legend
-entry derived from `aeria-se::semantic_analysis`, such as "player name",
-"integer parameter 2", "color start", or "item link":
+entry built from the macro catalog (see
+[`strings.md`](./strings.md#tagged-text)) that says what the construct does
+with its argument values, such as "the name of a player character; player =
+number parameter 1" or "a value from a game data sheet; sheet = Item, row = 5":
 
 ```text
 source:  <x id="1"/> obtained <x id="2"/> <x id="3"/>.

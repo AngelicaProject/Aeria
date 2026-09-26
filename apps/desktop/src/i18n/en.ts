@@ -160,7 +160,7 @@ export const en = {
   "settings.fontSize.keywords": "font editor",
   "settings.fontSize.label": "Editor text size",
   "settings.macros.title": "Highlight macros",
-  "settings.macros.description": "Tint game macros such as <num(lnum1)> in the editor.",
+  "settings.macros.description": "Tint game macros such as <num $n1> in the editor.",
   "settings.macros.keywords": "sestring syntax color",
   "settings.controlChars.title": "Show control characters",
   "settings.controlChars.description": "Mark invisible control characters instead of hiding them.",

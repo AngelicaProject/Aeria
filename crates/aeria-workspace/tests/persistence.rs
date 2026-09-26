@@ -114,7 +114,7 @@ fn the_golden_fixture_loads_and_writes_back_byte_for_byte() {
         first.source().layout(),
         LayoutHash::from_bytes([0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef])
     );
-    assert_eq!(first.source().text(), "<Emphasis>Bonjour</Emphasis>\n<br>");
+    assert_eq!(first.source().text(), "<i>Bonjour</i>\n<br>");
     assert_eq!(first.source().row_key(), Some("TEXT_KEY_000"));
     assert_eq!(first.target_macro(), "Salut\u{7} «monde»");
     assert_eq!(first.review_state(), ReviewState::Reviewed);
@@ -341,15 +341,15 @@ fn unit_records_are_validated_field_by_field() {
         format!("{record}\n{record}\n"),
         record.replace("0123456789abcdef", "0123456789ABCDEF"),
         record.replace("0123456789abcdef", "01234567"),
-        record.replace(
-            r#""source":"<Emphasis>Bonjour</Emphasis>\n<br>""#,
-            r#""source":"""#,
-        ),
+        record.replace(r#""source":"<i>Bonjour</i>\n<br>""#, r#""source":"""#),
         record.replace(r#""key":"TEXT_KEY_000""#, r#""key":"""#),
         record.replace(r#""sheet":"翻訳表""#, r#""sheet":"""#),
         record.replace(r#""review":"reviewed""#, r#""review":"approved""#),
         record.replace(r#""status":"bound""#, r#""status":"gone""#),
-        record.replace(r#""target":"Salut\u0007 «monde»""#, r#""target":"<if(""#),
+        record.replace(
+            r#""target":"Salut\u0007 «monde»""#,
+            r#""target":"<if $n1>""#,
+        ),
         record.replace(r#","note":"контекст""#, ""),
         record.replace(r#""note":"контекст""#, r#""note":"контекст","extra":1"#),
         record.replace(r#""row":0"#, r#""row":-1"#),

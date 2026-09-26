@@ -26,9 +26,9 @@ extend them for new cases:
   `randomized_patches_never_attach_a_translation_to_different_text`, which
   checks the core invariants over seeded random patches and requires every
   kind of outcome (including binding conflicts and reattachment) to occur.
-- `aeria-workspace` `tests/update_chains.rs` and `tests/merged_sources.rs`:
-  chains of game patches, and workspace state merged from branches on
-  different game versions.
+- `aeria-workspace` `tests/session.rs`: game updates that are previewed,
+  applied, and repeated after interruption, chains of patches, and units
+  merged from branches on an older game version.
 - `aeria-git` `merge.rs` unit tests, including an exhaustive three-way merge
   check, and `tests/collaboration.rs` for sync, conflicts, reconciliation
   commits, and per-unit history.
@@ -37,6 +37,20 @@ A new invariant check should be confirmed to fail against a deliberately
 broken implementation before it is relied on.
 
 Tests must not depend on a user's installed game, credentials, network availability, or private repository data.
+
+## Game strings
+
+`aeria-se` pins its macro text with golden vectors of bytes and text for
+every form and every catalog entry
+(`crates/aeria-se/tests/fixtures/macro_text.golden.txt`). A new catalog
+entry needs a vector; the test fails otherwise.
+
+Changes to the byte model, the printer, or the parser are also checked
+against a real game with the ignored test
+`crates/aeria-source/tests/game_corpus.rs`: every distinct string in all four
+source languages must print as macro text that encodes back to its bytes.
+Run it manually with `AERIA_GAME_PATH` set; it is not part of CI, which has
+no game installation.
 
 ## Harmonia pack interop
 
