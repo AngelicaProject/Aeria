@@ -38,14 +38,15 @@ editable Git workspace representation.
    has no `rawValueHash` are skipped and listed in the export report.
 3. **Validate.** Each target is parsed and semantically validated by
    `aeria-se`, as on save.
-4. **Encode.** Target macro strings are sent in batches of 4096 to the
-   Harmonia Atlas sidecar's `encode` command (`AtlasEncodeRunner`), which uses
-   Lumina, the same library that produced HXS `macro_text`. Atlas returns the
-   SeString bytes and confirms that decoding them and encoding the result again
-   gives the same bytes; Lumina may print numbers differently from how they
-   were typed, so the check is on bytes. A rejected string, a `0x00` byte, or a
-   string longer than 65535 bytes fails the export. `collect_project` takes the
-   encoder as a `StringEncoder` so the pipeline is testable without Atlas.
+4. **Encode.** Target macro strings are encoded in batches of 4096 by
+   `SeStringEncoder`, which uses `aeria_se::codec::encode_checked`: the same
+   Lumina 7.7.0 dialect that produced HXS `macro_text` (see
+   [`strings.md`](./strings.md#byte-codec)). It confirms that decoding the
+   bytes and encoding the result again gives the same bytes; numbers may be
+   typed differently from how they print, so the check is on bytes. A rejected
+   string, a `0x00` byte, or a string longer than 65535 bytes fails the export.
+   `collect_project` takes the encoder as a `StringEncoder` so the pipeline is
+   testable with a fake encoder.
 5. **Layout.** For every exported sheet, all String columns from the verified
    HXS sheet metadata form its layout; each unit's `columnIndex` becomes its
    string ordinal.
@@ -99,8 +100,8 @@ source has no raw-value hash.
 The manifest takes `packId`, `title`, `publisher`, `license`, and
 `minHarmonia` from `aeria-pack.json`; `release` and `contentPolicy` from the
 export; `target.language` from the workspace; `source` from the verified HXS;
-`exporter.aeria` from the Aeria build; and `exporter.atlas` from
-`harmonia-atlas --version` of the sidecar that encoded the strings.
+`exporter.aeria` from the Aeria build; and `exporter.atlas` from the string
+dialect of the encoder, `lumina-7.7.0`.
 
 ## Desktop flow
 

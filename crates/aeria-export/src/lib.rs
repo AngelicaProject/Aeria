@@ -26,7 +26,9 @@ fn hex(bytes: &[u8]) -> String {
 pub use error::ExportError;
 pub use feed::{FeedDownload, feed_entry};
 pub use manifest::{Channel, ContentPolicy, PackManifest, PackSource, Publisher};
-pub use project::{ExportReport, ProjectExport, StringEncoder, collect_project, pack_source};
+pub use project::{
+    ExportReport, ProjectExport, SeStringEncoder, StringEncoder, collect_project, pack_source,
+};
 pub use settings::{PACK_SETTINGS_FILE, PackSettings};
 pub use signing::{KeyEndorsement, PackSigner, fingerprint};
 pub use transport::{compress_for_transport, write_file_atomically};

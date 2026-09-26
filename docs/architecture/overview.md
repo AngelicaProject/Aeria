@@ -57,9 +57,8 @@ Deleting local cache must never delete a user's translation work.
 ## Crates
 
 The desktop-only aeria-atlas crate owns bounded Harmonia Atlas process
-invocation: the `package` command with JSONL protocol v1 parsing, and the
-`encode` command used by export. It does not depend on Tauri, React,
-aeria-workspace, aeria-hsp, or aeria-export.
+invocation: the `package` command with JSONL protocol v1 parsing. It does not
+depend on Tauri, React, aeria-workspace, aeria-hsp, or aeria-export.
 
 - `aeria-core`: domain types and application contracts that should not know Tauri, Git implementation details, or SQLite.
 - `aeria-hxs`: HXS reader and verifier.
@@ -70,7 +69,7 @@ aeria-workspace, aeria-hsp, or aeria-export.
 - `aeria-search`: local indexing, source search, translation memory, and query services.
 - `aeria-ai`: provider-neutral AI orchestration and validated batch jobs.
 - `aeria-git`: repository operations and semantic Git integration, including HTTPS host credentials from the Git credential helper for forge adapters, and the merge check workflow template.
-- `aeria-export`: Harmonia pack generation: unit selection, validation, the Pack Format v1 writer, signing, transport compression, and feed entries, and Pack Settings v1. String encoding is injected (`StringEncoder`), so it does not depend on aeria-atlas.
+- `aeria-export`: Harmonia pack generation: unit selection, validation, the Pack Format v1 writer, signing, transport compression, and feed entries, and Pack Settings v1. String encoding is injected (`StringEncoder`); production uses the `aeria-se` codec.
 - `aeria-fonts`: glyphs for game fonts that lack target-language characters: Font Settings v1, the supported game font sizes and their native metrics, the bundled recommended source fonts, rasterization, and the optional `FONTS` pack section. `aeria-export` writes the section into the pack.
 - `aeria-check`: the `aeria-check` command for the CI of translation repositories: the integrity, translation, and merge stages of the [merge check](./git.md#merge-check-ci), built on the same readers as the desktop. It needs no game source and does not depend on Tauri.
 - `aeria-publish`: pack publishing adapters: signing keys in the OS credential store, GitHub releases over the REST API, and the feed workflow template. It receives the GitHub credential from its caller and never stores it.

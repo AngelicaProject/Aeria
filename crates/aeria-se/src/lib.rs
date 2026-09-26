@@ -1,11 +1,12 @@
 //! Lossless syntax support for Lumina's encodeable macro-string format.
 //!
-//! This crate deliberately stops at a syntax layer. It does not evaluate game
-//! expressions, encode `SeString` bytes, or decide what a macro means to a
-//! translator.
+//! Besides the syntax layer, [`codec`] converts between `SeString` bytes and
+//! macro text exactly as Lumina 7.7.0 does. The crate does not evaluate game
+//! expressions or decide what a macro means to a translator.
 
 #![forbid(unsafe_code)]
 
+pub mod codec;
 mod semantic;
 mod tagged;
 
@@ -378,6 +379,139 @@ impl KnownMacro {
             Self::Sound => "sound",
             Self::LevelPos => "levelpos",
         }
+    }
+
+    /// Returns the macro's byte code (Lumina 7.7.0 `MacroCode`).
+    #[must_use]
+    pub const fn code(self) -> u8 {
+        match self {
+            Self::SetResetTime => 0x06,
+            Self::SetTime => 0x07,
+            Self::If => 0x08,
+            Self::Switch => 0x09,
+            Self::PcName => 0x0A,
+            Self::IfPcGender => 0x0B,
+            Self::IfPcName => 0x0C,
+            Self::Josa => 0x0D,
+            Self::Josaro => 0x0E,
+            Self::IfSelf => 0x0F,
+            Self::NewLine => 0x10,
+            Self::Wait => 0x11,
+            Self::Icon => 0x12,
+            Self::Color => 0x13,
+            Self::EdgeColor => 0x14,
+            Self::ShadowColor => 0x15,
+            Self::SoftHyphen => 0x16,
+            Self::Key => 0x17,
+            Self::Scale => 0x18,
+            Self::Bold => 0x19,
+            Self::Italic => 0x1A,
+            Self::Edge => 0x1B,
+            Self::Shadow => 0x1C,
+            Self::NonBreakingSpace => 0x1D,
+            Self::Icon2 => 0x1E,
+            Self::Hyphen => 0x1F,
+            Self::Num => 0x20,
+            Self::Hex => 0x21,
+            Self::Kilo => 0x22,
+            Self::Byte => 0x23,
+            Self::Sec => 0x24,
+            Self::Time => 0x25,
+            Self::Float => 0x26,
+            Self::Link => 0x27,
+            Self::Sheet => 0x28,
+            Self::String => 0x29,
+            Self::Caps => 0x2A,
+            Self::Head => 0x2B,
+            Self::Split => 0x2C,
+            Self::HeadAll => 0x2D,
+            Self::Fixed => 0x2E,
+            Self::Lower => 0x2F,
+            Self::JaNoun => 0x30,
+            Self::EnNoun => 0x31,
+            Self::DeNoun => 0x32,
+            Self::FrNoun => 0x33,
+            Self::ChNoun => 0x34,
+            Self::LowerHead => 0x40,
+            Self::SheetSub => 0x41,
+            Self::SwitchPlatform => 0x42,
+            Self::ColorType => 0x48,
+            Self::EdgeColorType => 0x49,
+            Self::Ruby => 0x4A,
+            Self::Digit => 0x50,
+            Self::Ordinal => 0x51,
+            Self::Sound => 0x60,
+            Self::LevelPos => 0x61,
+        }
+    }
+
+    /// Returns the macro with the given byte code, if Lumina 7.7.0 names it.
+    #[must_use]
+    pub const fn from_code(code: u8) -> Option<Self> {
+        Some(match code {
+            0x06 => Self::SetResetTime,
+            0x07 => Self::SetTime,
+            0x08 => Self::If,
+            0x09 => Self::Switch,
+            0x0A => Self::PcName,
+            0x0B => Self::IfPcGender,
+            0x0C => Self::IfPcName,
+            0x0D => Self::Josa,
+            0x0E => Self::Josaro,
+            0x0F => Self::IfSelf,
+            0x10 => Self::NewLine,
+            0x11 => Self::Wait,
+            0x12 => Self::Icon,
+            0x13 => Self::Color,
+            0x14 => Self::EdgeColor,
+            0x15 => Self::ShadowColor,
+            0x16 => Self::SoftHyphen,
+            0x17 => Self::Key,
+            0x18 => Self::Scale,
+            0x19 => Self::Bold,
+            0x1A => Self::Italic,
+            0x1B => Self::Edge,
+            0x1C => Self::Shadow,
+            0x1D => Self::NonBreakingSpace,
+            0x1E => Self::Icon2,
+            0x1F => Self::Hyphen,
+            0x20 => Self::Num,
+            0x21 => Self::Hex,
+            0x22 => Self::Kilo,
+            0x23 => Self::Byte,
+            0x24 => Self::Sec,
+            0x25 => Self::Time,
+            0x26 => Self::Float,
+            0x27 => Self::Link,
+            0x28 => Self::Sheet,
+            0x29 => Self::String,
+            0x2A => Self::Caps,
+            0x2B => Self::Head,
+            0x2C => Self::Split,
+            0x2D => Self::HeadAll,
+            0x2E => Self::Fixed,
+            0x2F => Self::Lower,
+            0x30 => Self::JaNoun,
+            0x31 => Self::EnNoun,
+            0x32 => Self::DeNoun,
+            0x33 => Self::FrNoun,
+            0x34 => Self::ChNoun,
+            0x40 => Self::LowerHead,
+            0x41 => Self::SheetSub,
+            0x42 => Self::SwitchPlatform,
+            0x48 => Self::ColorType,
+            0x49 => Self::EdgeColorType,
+            0x4A => Self::Ruby,
+            0x50 => Self::Digit,
+            0x51 => Self::Ordinal,
+            0x60 => Self::Sound,
+            0x61 => Self::LevelPos,
+            _ => return None,
+        })
+    }
+
+    pub(crate) fn from_name(value: &str) -> Option<Self> {
+        Self::from_str(value)
     }
 
     fn from_str(value: &str) -> Option<Self> {

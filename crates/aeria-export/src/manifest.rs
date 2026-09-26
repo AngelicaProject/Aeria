@@ -50,6 +50,9 @@ pub struct PackManifest {
     pub content_policy: ContentPolicy,
     pub project_commit: String,
     pub exporter_aeria: String,
+    /// `exporter.atlas`: the string dialect the cells were encoded in, such
+    /// as `lumina-7.7.0`; packs from Aeria 0.x before the Rust codec hold
+    /// the Harmonia Atlas version instead.
     pub exporter_atlas: String,
     pub min_harmonia: String,
 }
