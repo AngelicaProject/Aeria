@@ -1,11 +1,12 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { isTauri } from "@tauri-apps/api/core";
-import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
+import { currentMonitor, getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
 import { ApplicationMenu, type ApplicationMenuDefinition } from "./ApplicationMenu";
 import { UpdateTitleButton } from "./UpdateNotice";
 import { UiIcon } from "../ui/primitives/UiIcon";
 import { useI18n } from "../ui/i18n";
 import appIcon from "../assets/app-icon-20.png";
+import { fitToMonitor, usableGeometry, type SavedGeometry } from "../windowGeometry";
 
 type WindowChromeProps = {
   /** `detached` tool windows keep their own geometry. */
@@ -23,14 +24,9 @@ const launcherSize = { width: 900, height: 560 } as const;
 const workbenchMinimum = { width: 1140, height: 710 } as const;
 const geometryKey = "aeria.workbench.geometry";
 
-type SavedGeometry = { width: number; height: number; maximized: boolean };
-
 function readSavedGeometry(): SavedGeometry | null {
   try {
-    const value = JSON.parse(localStorage.getItem(geometryKey) ?? "null") as Partial<SavedGeometry> | null;
-    return value && typeof value.width === "number" && typeof value.height === "number" && typeof value.maximized === "boolean"
-      ? { width: value.width, height: value.height, maximized: value.maximized }
-      : null;
+    return usableGeometry(JSON.parse(localStorage.getItem(geometryKey) ?? "null"), workbenchMinimum);
   } catch {
     return null;
   }
@@ -63,8 +59,10 @@ async function configureWindow(mode: WindowChromeProps["mode"]): Promise<void> {
     if (saved?.maximized || (launcherSized && !saved)) {
       await window.maximize();
     } else if (saved && launcherSized) {
+      const monitor = await currentMonitor();
+      const size = fitToMonitor(saved, monitor ? monitor.size.toLogical(monitor.scaleFactor) : null);
       await window.unmaximize();
-      await window.setSize(new LogicalSize(saved.width, saved.height));
+      await window.setSize(new LogicalSize(size.width, size.height));
       await window.center();
     }
   }
@@ -87,12 +85,14 @@ export function WindowChrome({ mode, title, subtitle, center, menus = [], action
           if (!active) return;
           const isMaximized = await window.isMaximized();
           setMaximized(isMaximized);
-          if (mode !== "workbench") return;
+          // A minimized window reports a tiny size; keep the last real one.
+          if (mode !== "workbench" || await window.isMinimized()) return;
           if (isMaximized) {
             saveGeometry({ width: workbenchMinimum.width, height: workbenchMinimum.height, maximized: true });
           } else {
             const size = (await window.innerSize()).toLogical(await window.scaleFactor());
-            saveGeometry({ width: Math.round(size.width), height: Math.round(size.height), maximized: false });
+            const geometry = usableGeometry({ width: Math.round(size.width), height: Math.round(size.height), maximized: false }, workbenchMinimum);
+            if (geometry) saveGeometry(geometry);
           }
         });
         if (active) unlistenResize = cleanupResize;

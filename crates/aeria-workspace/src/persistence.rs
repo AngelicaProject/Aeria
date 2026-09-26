@@ -123,6 +123,27 @@ pub enum WorkspaceStoreError {
     Domain(#[from] super::WorkspaceError),
 }
 
+impl WorkspaceStoreError {
+    /// The file or directory the error is about, when it names one.
+    #[must_use]
+    pub fn path(&self) -> Option<&Path> {
+        match self {
+            Self::RepositoryRoot { path, .. }
+            | Self::ManagedPath { path, .. }
+            | Self::MissingPath { path }
+            | Self::AlreadyInitialized { path }
+            | Self::InvalidData { path, .. }
+            | Self::UnsupportedFormatVersion { path, .. }
+            | Self::MigrationRequired { path, .. }
+            | Self::Serialization { path, .. }
+            | Self::AtomicPublication { path, .. }
+            | Self::ExternalChange { path }
+            | Self::Io { path, .. } => Some(path),
+            Self::Domain(_) => None,
+        }
+    }
+}
+
 /// Persistence adapter bound to one repository root.
 ///
 /// The interface deliberately keeps the persistence seam small: loading and
@@ -209,6 +230,34 @@ impl WorkspaceStore {
     pub fn load(&self) -> Result<Workspace, WorkspaceStoreError> {
         let stored = self.read_stored()?;
         self.activate(stored)
+    }
+
+    /// Loads the workspace like [`Self::load`] and returns the managed files
+    /// whose bytes differ from what Aeria writes for the same content, in
+    /// path order. Aeria always writes canonical files, so a difference means
+    /// a file was edited or merged outside Aeria.
+    ///
+    /// # Errors
+    ///
+    /// Returns every error of [`Self::load`], or an I/O error.
+    pub fn non_canonical_files(&self) -> Result<Vec<PathBuf>, WorkspaceStoreError> {
+        let workspace = self.load()?;
+        let layout = self.inspect_existing_layout()?;
+        let read = |path: &Path| {
+            fs::read(path).map_err(|source| io_error("read workspace file", path, source))
+        };
+        let mut files = Vec::new();
+        if read(&layout.manifest_path)?
+            != canonical_manifest_bytes(&workspace, &layout.manifest_path)?
+        {
+            files.push(layout.manifest_path.clone());
+        }
+        for shard in &layout.shards {
+            if read(&shard.path)? != canonical_shard_bytes(&workspace, shard.shard, &shard.path)? {
+                files.push(shard.path.clone());
+            }
+        }
+        Ok(files)
     }
 
     /// Reads and validates only the manifest, in either supported format.

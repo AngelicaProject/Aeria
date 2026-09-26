@@ -164,9 +164,9 @@ impl Usage {
 pub enum StreamDelta {
     Text(String),
     Reasoning(String),
-    /// Characters of tool-call arguments received; the arguments themselves
-    /// are only usable once the response completes.
-    ToolArguments(usize),
+    /// A piece of tool-call arguments. The arguments are only valid JSON
+    /// once the response completes; the pieces serve live progress.
+    ToolArguments(String),
 }
 
 /// The complete assistant response assembled from a stream.
@@ -320,7 +320,7 @@ impl StreamAccumulator {
                         && !arguments.is_empty()
                     {
                         partial.arguments.push_str(arguments);
-                        on_delta(StreamDelta::ToolArguments(arguments.chars().count()));
+                        on_delta(StreamDelta::ToolArguments(arguments.to_owned()));
                     }
                 }
             }
@@ -446,7 +446,10 @@ mod tests {
         );
         assert_eq!(
             deltas,
-            vec![StreamDelta::ToolArguments(7), StreamDelta::ToolArguments(9)]
+            vec![
+                StreamDelta::ToolArguments("{\"sheet".to_owned()),
+                StreamDelta::ToolArguments("\":\"Item\"}".to_owned())
+            ]
         );
     }
 

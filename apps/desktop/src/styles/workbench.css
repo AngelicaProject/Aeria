@@ -566,36 +566,84 @@ button.angelica-chip:hover { background: var(--hover); color: var(--fg); }
 .angelica-job-facts { display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; margin: 0; font-size: var(--text-xs); }
 .angelica-job-facts dt { color: var(--fg-muted); }
 .angelica-job-facts dd { margin: 0; overflow-wrap: anywhere; white-space: pre-wrap; }
-.angelica-jobs { flex: none; max-height: 35%; overflow-y: auto; border-top: 1px solid var(--line); }
-.angelica-jobs > summary { position: sticky; top: 0; padding: 6px 10px; background: var(--panel); color: var(--fg-muted); font-size: var(--text-xs); font-weight: 600; cursor: pointer; }
-.angelica-jobs > ul { display: grid; gap: 6px; margin: 0; padding: 0 10px 8px; list-style: none; }
-.angelica-job { display: grid; gap: 5px; padding: 6px 8px; border: 1px solid var(--line); border-radius: var(--radius-sm); font-size: var(--text-xs); }
-.angelica-job.paused { border-color: color-mix(in srgb, var(--bad) 40%, transparent); }
-.angelica-job-head { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
-.angelica-job-scope { overflow: hidden; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
-.angelica-job-bar { height: 4px; overflow: hidden; border-radius: 2px; background: var(--line); }
-.angelica-job-bar > span { display: block; height: 100%; background: var(--accent); transition: width 0.3s ease; }
-.angelica-job-stats { display: flex; flex-wrap: wrap; gap: 4px 10px; color: var(--fg-muted); }
+.angelica-job-facts dd > .field-hint { display: block; margin-top: 2px; white-space: normal; }
+.angelica-jobs { display: flex; flex: none; flex-direction: column; min-width: 0; max-height: 50%; border-top: 1px solid var(--line); }
+.angelica-jobs-head { display: flex; flex: none; align-items: center; justify-content: space-between; gap: 8px; min-width: 0; padding: 4px 10px; }
+.angelica-jobs-head .button { height: 22px; padding: 0 8px; font-size: var(--text-2xs); }
+.angelica-jobs-toggle { display: inline-flex; align-items: center; gap: 4px; min-width: 0; padding: 2px 0; border: 0; background: transparent; color: var(--fg-muted); font-size: var(--text-xs); font-weight: 600; cursor: pointer; }
+.angelica-jobs-toggle:hover { color: var(--fg); }
+.angelica-job-list { display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; min-height: 0; margin: 0; padding: 0 10px 8px; overflow-x: hidden; overflow-y: auto; list-style: none; }
+.angelica-job { display: grid; grid-template-columns: minmax(0, 1fr); gap: 5px; min-width: 0; padding: 6px 8px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--panel-raised); font-size: var(--text-xs); }
+.angelica-job.paused { border-color: color-mix(in srgb, var(--warn) 40%, var(--line)); }
+.angelica-job.completed, .angelica-job.cancelled { background: transparent; }
+.angelica-job-head { display: flex; align-items: center; gap: 4px; min-width: 0; }
+.angelica-job-toggle { display: flex; flex: 1; align-items: center; gap: 6px; min-width: 0; padding: 2px 0; border: 0; background: transparent; color: var(--fg); font: inherit; text-align: left; cursor: pointer; }
+.angelica-job-toggle > svg { flex: none; color: var(--fg-muted); }
+.angelica-job-scope { min-width: 0; overflow: hidden; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.angelica-job-status { flex: none; padding: 0 6px; border-radius: var(--radius-sm); background: var(--hover); color: var(--fg-muted); font-size: var(--text-2xs); line-height: 18px; }
+.angelica-job-status.running { background: var(--accent-soft); color: var(--accent-text); }
+.angelica-job-status.paused { background: var(--warn-soft); color: var(--warn); }
+.angelica-job-status.completed { background: var(--ok-soft); color: var(--ok); }
+.angelica-job-percent { flex: none; margin-left: auto; color: var(--fg-muted); font-variant-numeric: tabular-nums; }
+.angelica-job-actions { display: flex; flex: none; gap: 2px; }
+.angelica-job-bar { display: flex; height: 4px; overflow: hidden; border-radius: 2px; background: var(--line); }
+.angelica-job-bar > span { flex: none; height: 100%; transition: width 0.3s ease; }
+.angelica-job-bar > .drafted { background: var(--accent); }
+.angelica-job-bar > .problems { background: var(--bad); }
+.angelica-job-bar > .running { background: color-mix(in srgb, var(--accent) 45%, transparent); }
+.angelica-job-stats { display: flex; flex-wrap: wrap; gap: 2px 10px; min-width: 0; color: var(--fg-muted); font-variant-numeric: tabular-nums; }
 .angelica-job-problems { color: var(--bad); }
-.angelica-job-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 4px; }
-.angelica-job-actions .button { height: 24px; padding: 0 8px; font-size: var(--text-2xs); }
-.angelica-job-more > summary { color: var(--fg-muted); cursor: pointer; }
-.angelica-job-details { display: grid; gap: 6px; padding-top: 4px; }
-.angelica-job-instructions { margin: 0; color: var(--fg-subtle); white-space: pre-wrap; }
-.angelica-job-units, .angelica-job-events { display: grid; gap: 3px; margin: 0; padding: 0; list-style: none; }
-.angelica-job-units li, .angelica-job-events li { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
-.angelica-job-message { color: var(--fg-subtle); overflow-wrap: anywhere; }
-.angelica-workers { display: grid; gap: 4px; margin: 0; padding: 4px 0 0; list-style: none; }
-.angelica-worker { display: grid; grid-template-columns: auto auto minmax(0, 1fr); align-items: center; gap: 1px 6px; }
-.angelica-worker-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ok); }
+.angelica-job-reason { display: flex; align-items: center; gap: 5px; min-width: 0; margin: 0; color: var(--warn); }
+.angelica-job-reason > svg { flex: none; }
+.angelica-job-reason > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.angelica-job-reason .link-button { flex: none; margin-left: auto; }
+.angelica-job-over { color: var(--warn); }
+.angelica-job-limit { display: grid; grid-template-columns: minmax(0, 1fr); gap: 5px; min-width: 0; padding: 6px; border-radius: var(--radius-sm); background: var(--warn-soft); }
+.angelica-job-limit .angelica-job-reason > span { white-space: normal; }
+.angelica-job-limit-editor { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; min-width: 0; }
+.angelica-job-limit-editor .input { flex: 1 1 110px; min-width: 0; max-width: 160px; height: 24px; font-variant-numeric: tabular-nums; }
+.angelica-job-limit-editor .input.invalid { border-color: var(--bad); }
+.angelica-job-limit-editor .button { height: 24px; padding: 0 8px; font-size: var(--text-2xs); }
+.angelica-job-details { display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; min-width: 0; padding-top: 4px; border-top: 1px solid var(--line); }
+.angelica-job-details .segmented { flex-wrap: wrap; justify-self: start; max-width: 100%; }
+.angelica-job-pane { display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; min-width: 0; }
+.angelica-job-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px; }
+.angelica-job-toolbar .button { height: 24px; padding: 0 8px; font-size: var(--text-2xs); }
+.angelica-job-empty { margin: 0; color: var(--fg-subtle); }
+.angelica-job-concurrency { display: inline-flex; align-items: center; gap: 4px; color: var(--fg-muted); }
+.angelica-job-rows { display: grid; grid-template-columns: minmax(0, 1fr); margin: 0; padding: 0; list-style: none; }
+.angelica-job-rows li { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 6px; min-width: 0; padding: 3px 0; border-bottom: 1px solid var(--line); }
+.angelica-job-rows li:last-child { border-bottom: 0; }
+.angelica-job-rows .angelica-chip { height: 18px; }
+.angelica-job-rows .angelica-chip.rejected, .angelica-job-rows .angelica-chip.failed { color: var(--bad); }
+.angelica-job-rows .angelica-chip.conflict { color: var(--warn); }
+.angelica-job-time { color: var(--fg-faint); font-variant-numeric: tabular-nums; }
+.angelica-job-message { flex: 1 1 100%; min-width: 0; color: var(--fg-subtle); overflow-wrap: anywhere; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; }
+.angelica-workers { display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; margin: 0; padding: 0; list-style: none; }
+.angelica-worker { display: grid; grid-template-columns: minmax(0, 1fr); gap: 2px; min-width: 0; padding: 5px 6px; border-radius: var(--radius-sm); background: var(--panel-sunken); }
+.angelica-worker-line { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.angelica-worker-dot { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--ok); }
 .angelica-worker.quiet .angelica-worker-dot { background: var(--warn); }
 .angelica-worker.stalled .angelica-worker-dot { background: var(--bad); }
-.angelica-worker-lane { color: var(--fg-muted); white-space: nowrap; }
-.angelica-worker-phase { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.angelica-worker-silence { grid-column: 2 / -1; color: var(--warn); }
+.angelica-worker.backoff .angelica-worker-dot { background: var(--warn); }
+.angelica-worker-lane { flex: none; color: var(--fg-muted); white-space: nowrap; }
+.angelica-worker-phase { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.angelica-worker-time { flex: none; margin-left: auto; color: var(--fg-faint); font-variant-numeric: tabular-nums; }
+.angelica-worker-silence { color: var(--warn); }
 .angelica-worker.stalled .angelica-worker-silence { color: var(--bad); }
-.angelica-worker-meta { display: flex; flex-wrap: wrap; grid-column: 2 / -1; gap: 0 8px; color: var(--fg-subtle); }
+.angelica-worker-meta { display: flex; flex-wrap: wrap; gap: 0 8px; min-width: 0; color: var(--fg-subtle); }
+.angelica-worker-target { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 6px; min-width: 0; padding-left: 13px; }
+.angelica-worker-unit { flex: none; color: var(--accent-text); font-variant-numeric: tabular-nums; }
+.angelica-worker-target .mono { flex: none; color: var(--fg-muted); font-family: var(--font-mono); font-size: var(--text-2xs); }
+.angelica-worker-source { display: -webkit-box; flex: 1 1 100%; min-width: 0; overflow: hidden; color: var(--fg); overflow-wrap: anywhere; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
 .angelica-worker-meta > span { overflow: hidden; max-width: 100%; text-overflow: ellipsis; white-space: nowrap; }
+.angelica-worker-thought { display: grid; gap: 1px; min-width: 0; margin-top: 2px; padding: 1px 0 1px 8px; border: 0; border-left: 2px solid var(--line-strong); background: transparent; color: var(--fg-muted); font: inherit; text-align: left; overflow-wrap: anywhere; cursor: pointer; }
+.angelica-worker-thought.live { border-left-color: var(--accent); }
+.angelica-worker-thought:hover { color: var(--fg); }
+.angelica-worker-thought-heading { overflow: hidden; color: var(--fg); font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+/* The newest lines stay in view: overflow is cut from the top. */
+.angelica-worker-thought-tail { display: flex; flex-direction: column-reverse; max-height: calc(3 * 1.45em); overflow: hidden; line-height: 1.45; white-space: pre-wrap; mask-image: linear-gradient(to bottom, transparent, #000 1.2em); }
+.angelica-worker-thought-full { line-height: 1.45; white-space: pre-wrap; }
 .angelica-proposal { display: grid; gap: 4px; padding: 6px 8px; border: 1px solid var(--line); border-radius: var(--radius-sm); }
 .angelica-proposal.conflict,
 .angelica-proposal.failed { border-color: color-mix(in srgb, var(--bad) 40%, transparent); }

@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
+  CheckWorkflowDto,
   UpdateChannel,
   UpdateStatusDto,
   AgentMode,
@@ -349,6 +350,30 @@ export function gitSetUpstream(remoteBranch: string): Promise<GitOverviewDto> {
   return call<GitOverviewDto>("git_set_upstream", { remoteBranch });
 }
 
+export function gitFetch(): Promise<void> {
+  return call<void>("git_fetch");
+}
+
+export function gitPull(resolutions: UnitResolutionDto[] = []): Promise<GitSyncDto> {
+  return call<GitSyncDto>("git_pull", { resolutions });
+}
+
+export function gitPush(): Promise<boolean> {
+  return call<boolean>("git_push");
+}
+
+export function gitCheckWorkflow(): Promise<CheckWorkflowDto> {
+  return call<CheckWorkflowDto>("git_check_workflow");
+}
+
+export function gitInstallCheckWorkflow(): Promise<CheckWorkflowDto> {
+  return call<CheckWorkflowDto>("git_install_check_workflow");
+}
+
+export function gitOpenBranchSettings(): Promise<void> {
+  return call<void>("git_open_branch_settings");
+}
+
 export function gitSync(resolutions: UnitResolutionDto[] = []): Promise<GitSyncDto> {
   return call<GitSyncDto>("git_sync", { resolutions });
 }
@@ -505,6 +530,18 @@ export function angelicaJobWorkers(jobId: string): Promise<WorkerActivity[]> {
 
 export function angelicaJobControl(jobId: string, action: JobAction): Promise<JobSummary> {
   return call<JobSummary>("angelica_job_control", { jobId, action });
+}
+
+export function angelicaJobSetConcurrency(jobId: string, concurrency: number): Promise<JobSummary> {
+  return call<JobSummary>("angelica_job_set_concurrency", { jobId, concurrency });
+}
+
+export function angelicaJobSetLimit(jobId: string, tokenLimit: number, resume: boolean): Promise<JobSummary> {
+  return call<JobSummary>("angelica_job_set_limit", { jobId, tokenLimit, resume });
+}
+
+export function angelicaJobRemove(jobId: string): Promise<void> {
+  return call<void>("angelica_job_remove", { jobId });
 }
 
 export function angelicaJobRetry(jobId: string, statuses: JobUnitStatus[]): Promise<JobSummary> {

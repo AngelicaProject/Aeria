@@ -291,6 +291,8 @@ conversation.
 | `job_status`, `job_events` | Progress, rejected units, and worker reports. | None. |
 | `amend_job` | Adds instructions for the job's remaining chunks. | None; shown in the conversation. |
 | `retry_units` | Requeues rejected or failed units, optionally with extra instructions. | None within the approved scope. |
+| `set_job_workers` | Changes how many workers a job runs at once. | None; shown in the conversation. |
+| `raise_job_limit` | Proposes a higher token limit for a job. | Always asks. |
 | `pause_job`, `resume_job`, `cancel_job` | Controls a job. | None. |
 
 Work larger than one row page, such as a whole sheet, several sheets, or the

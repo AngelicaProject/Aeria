@@ -401,7 +401,19 @@ export type UnitHistoryDto = {
   reviewedBy: AttributionDto | null;
 };
 
-export type ProjectArea = "glossary" | "guidance" | "packSettings" | "fontSettings" | "fontFile" | "collaboration" | "gitAttributes" | "feedWorkflow";
+export type ProjectArea = "glossary" | "guidance" | "packSettings" | "fontSettings" | "fontFile" | "collaboration" | "gitAttributes" | "feedWorkflow" | "checkWorkflow";
+
+/** The GitHub workflow that runs aeria-check on pull requests. */
+export type CheckWorkflowDto = {
+  /** The origin remote is a github.com repository. */
+  github: boolean;
+  /** The project is the repository's top folder, where GitHub reads workflows. */
+  topLevel: boolean;
+  /** This build can write the workflow (release builds only). */
+  available: boolean;
+  state: "missing" | "current" | "different";
+  branchSettingsUrl: string | null;
+};
 
 export type ProjectChangeDetailDto = {
   kind: UnitChangeKind;
@@ -582,6 +594,8 @@ export type ProposalRecord = {
   web?: string | null;
   /** Translations Angelica suggests marking reviewed; `target` holds her reason. */
   review?: { reason: string; items: { location: UnitLocationDto; source: string; target: string }[] } | null;
+  /** A new token limit for a job; `target` holds its one-line summary. */
+  jobLimit?: JobLimitProposal | null;
   location: UnitLocationDto | null;
   source: string;
   target: string;
@@ -597,7 +611,15 @@ export type JobFilter = "untranslated" | "needsReview" | "untranslatedAndDrafts"
 
 export type JobScope = { sheets: string[]; filter: JobFilter };
 
-export type JobEstimate = { units: number; chunks: number; estimatedTokens: number };
+export type JobEstimate = {
+  units: number;
+  chunks: number;
+  estimatedTokens: number;
+  /** Average tokens per chunk of earlier jobs with the same model, when the estimate uses it. */
+  historyChunkTokens?: number;
+};
+
+export type JobLimitProposal = { jobId: string; tokenLimit: number; previousLimit: number; usedTokens: number; projectedTokens: number | null };
 
 export type JobProposal = { scope: JobScope; instructions: string; concurrency: number; estimate: JobEstimate; tokenLimit: number };
 
@@ -621,6 +643,11 @@ export type JobSummary = {
   /** Chunks being translated right now, one per busy worker. */
   activeWorkers: number;
   usage: AiUsage;
+  chunks: number;
+  /** Chunks with no pending or running strings. */
+  finishedChunks: number;
+  /** Tokens the whole job will likely use; null until a chunk finished. */
+  projectedTokens: number | null;
 };
 
 export type JobUnit = {
@@ -656,6 +683,25 @@ export type WorkerActivity = {
   lastActivityUnixMs: number;
   retryAtUnixMs: number | null;
   lastError: string | null;
+  /** The end of the lane's latest streamed reasoning. */
+  thought: string | null;
+  /** The first and last source row of the current chunk. */
+  firstRow: number | null;
+  lastRow: number | null;
+  /** Strings whose translation the current response has streamed so far. */
+  streamedUnits: number;
+  /** Translations in the submission the `tool` phase checks and writes. */
+  toolUnits: number;
+  /** The string the lane is writing, checking, or reading about. */
+  target: WorkerTarget | null;
+};
+
+export type WorkerTarget = {
+  /** The string's number in the chunk, from 1; null for a context read. */
+  unit: number | null;
+  address: string;
+  /** The start of the source as plain text; empty when unknown. */
+  source: string;
 };
 
 export type GlossaryEntry = { term: string; translation: string; note?: string; forbidden?: string[] };

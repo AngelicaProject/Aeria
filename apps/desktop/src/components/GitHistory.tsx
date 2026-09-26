@@ -161,7 +161,7 @@ export const CommitView = memo(function CommitView({ commitId, onRevealBinding }
         {commit.changes.length === 0 && commit.projectChanges.length === 0 ? <p className="muted">{t(merge ? "commit.mergeNoChanges" : "commit.otherFiles")}</p> : null}
         {commit.changes.length > 0 ? <>
           <h4 className="git-subhead">{t("git.changes.translations", { count: commit.changes.length })}</h4>
-          <TranslationChangeGroups changes={commit.changes} selectedUnitId={null} onRevealBinding={onRevealBinding} />
+          <TranslationChangeGroups changes={commit.changes} selectedUnitId={null} onRevealBinding={onRevealBinding} viewKey={`commit:${commit.commit.id}`} />
         </> : null}
         {commit.projectChanges.length > 0 ? <>
           <h4 className="git-subhead">{t("git.changes.project")}</h4>

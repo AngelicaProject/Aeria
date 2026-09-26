@@ -45,8 +45,86 @@ jobs:
             echo "build=false" >> "$GITHUB_OUTPUT"
           fi
 
-  windows:
+  # aeria-check validates translation repositories in their CI. The merge
+  # check workflow Aeria offers pins this archive by URL and SHA-256, which
+  # the desktop build embeds, so the archive must never change: a stable one
+  # is a release asset, and nightly ones accumulate under unique names in the
+  # aeria-check-nightly pre-release, which the nightly job never deletes.
+  check:
     needs: gate
+    if: needs.gate.outputs.build == 'true'
+    # Built on the oldest supported runner so the binary runs on newer ones.
+    runs-on: ubuntu-22.04
+    env:
+      GH_TOKEN: ${{ github.token }}
+      COMMIT: ${{ github.event.workflow_run.head_sha || github.sha }}
+    outputs:
+      name: ${{ steps.package.outputs.name }}
+      url: ${{ steps.package.outputs.url }}
+      sha256: ${{ steps.package.outputs.sha256 }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.COMMIT }}
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.98.1
+
+      # The same version as the desktop build below.
+      - name: Determine the version
+        id: version
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = "push" ]; then
+            version=$(node tools/release/version.mjs check --tag "$GITHUB_REF_NAME")
+            echo "tag=$GITHUB_REF_NAME" >> "$GITHUB_OUTPUT"
+          else
+            version=$(node tools/release/version.mjs nightly "$GITHUB_RUN_NUMBER")
+            cargo update --workspace
+            echo "tag=aeria-check-nightly" >> "$GITHUB_OUTPUT"
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Build aeria-check
+        run: cargo build --release --locked -p aeria-check
+
+      - name: Package aeria-check
+        id: package
+        run: |
+          name="aeria-check-${{ steps.version.outputs.version }}-x86_64-unknown-linux-gnu.tar.gz"
+          mkdir -p dist
+          tar --create --gzip --file "dist/$name" --directory target/release aeria-check
+          sha256=$(sha256sum "dist/$name" | cut -d ' ' -f 1)
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+          echo "sha256=$sha256" >> "$GITHUB_OUTPUT"
+          echo "url=https://github.com/$GITHUB_REPOSITORY/releases/download/${{ steps.version.outputs.tag }}/$name" >> "$GITHUB_OUTPUT"
+          ./target/release/aeria-check --version
+
+      - name: Publish the nightly aeria-check
+        if: github.event_name == 'workflow_run'
+        run: |
+          if ! gh release view aeria-check-nightly > /dev/null 2>&1; then
+            gh release create aeria-check-nightly \
+              --prerelease --latest=false \
+              --target "$COMMIT" \
+              --title "aeria-check for nightly builds" \
+              --notes "aeria-check archives of nightly Aeria builds. Merge check workflows pin one of them by name and SHA-256, so they are kept."
+          fi
+          gh release upload aeria-check-nightly "dist/${{ steps.package.outputs.name }}"
+
+      - name: Keep the stable aeria-check for the release
+        if: github.event_name == 'push'
+        uses: actions/upload-artifact@v4
+        with:
+          name: aeria-check
+          path: dist/${{ steps.package.outputs.name }}
+          if-no-files-found: error
+
+  windows:
+    needs: [gate, check]
     if: needs.gate.outputs.build == 'true'
     # A newer nightly supersedes one that is still building; stable releases
     # never cancel each other. The group is on this job, not the workflow, so
@@ -123,6 +201,10 @@ jobs:
 
       - name: Build the application
         working-directory: apps/desktop
+        env:
+          # The aeria-check the merge check workflow pins.
+          AERIA_CHECK_URL: ${{ needs.check.outputs.url }}
+          AERIA_CHECK_SHA256: ${{ needs.check.outputs.sha256 }}
         run: pnpm tauri build --no-bundle -- --locked
 
       # Packaged before the installer so the executable carries no installer
@@ -144,6 +226,13 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: pnpm tauri bundle --bundles nsis
 
+      - name: Fetch the stable aeria-check
+        if: github.event_name == 'push'
+        uses: actions/download-artifact@v4
+        with:
+          name: aeria-check
+          path: dist
+
       - name: Collect release assets
         run: |
           version="${{ steps.version.outputs.version }}"
@@ -155,7 +244,7 @@ jobs:
             --url "https://github.com/$GITHUB_REPOSITORY/releases/download/$tag/$installer" \
             --signature "dist/$installer.sig" \
             --notes "https://github.com/$GITHUB_REPOSITORY/releases/tag/$tag" > dist/latest.json
-          (cd dist && sha256sum "$installer" "$(basename "${{ steps.portable.outputs.zip }}")" > SHA256SUMS.txt)
+          (cd dist && sha256sum "$installer" "$(basename "${{ steps.portable.outputs.zip }}")" $(ls aeria-check-*.tar.gz 2>/dev/null) > SHA256SUMS.txt)
           ls -la dist
 
       - name: Publish the stable release
@@ -166,7 +255,8 @@ jobs:
             --verify-tag --latest \
             --title "Aeria $version" \
             --generate-notes \
-            dist/Aeria_*_x64-setup.exe dist/Aeria_*_x64-setup.exe.sig dist/Aeria_*_x64-portable.zip dist/latest.json dist/SHA256SUMS.txt
+            dist/Aeria_*_x64-setup.exe dist/Aeria_*_x64-setup.exe.sig dist/Aeria_*_x64-portable.zip dist/latest.json dist/SHA256SUMS.txt \
+            dist/aeria-check-*.tar.gz
 
       - name: Publish the nightly pre-release
         if: github.event_name == 'workflow_run'

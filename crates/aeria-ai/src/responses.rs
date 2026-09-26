@@ -189,7 +189,7 @@ impl ResponsesAccumulator {
             "response.function_call_arguments.delta" => {
                 let delta = text("delta");
                 if !delta.is_empty() {
-                    on_delta(StreamDelta::ToolArguments(delta.chars().count()));
+                    on_delta(StreamDelta::ToolArguments(delta.to_owned()));
                 }
             }
             "response.reasoning_summary_part.done" => {
@@ -382,7 +382,9 @@ mod tests {
         );
         assert_eq!(model.as_deref(), Some("gpt-5.5"));
         assert_eq!(deltas[0], StreamDelta::Reasoning("plan".to_owned()));
-        assert!(deltas.contains(&StreamDelta::ToolArguments(2)));
+        assert!(deltas.iter().any(
+            |delta| matches!(delta, StreamDelta::ToolArguments(text) if text.chars().count() == 2)
+        ));
     }
 
     #[test]

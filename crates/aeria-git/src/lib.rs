@@ -17,6 +17,7 @@ mod process;
 mod repository;
 mod semantic;
 mod sync;
+mod workflow;
 
 use std::path::PathBuf;
 
@@ -39,6 +40,10 @@ pub use semantic::{
     UnitHistory, UnitRevision, summarize_changes, summarize_contributors,
 };
 pub use sync::IntegrateOutcome;
+pub use workflow::{
+    CHECK_WORKFLOW_FILE, CheckRelease, CheckWorkflowState, check_workflow_state,
+    install_check_workflow, render_check_workflow,
+};
 
 /// Errors raised by Git collaboration operations.
 #[derive(Debug, Error)]
@@ -76,11 +81,11 @@ pub enum GitError {
     IdentityMissing,
 
     /// There are no translation changes to checkpoint.
-    #[error("there are no translation changes to checkpoint")]
+    #[error("there are no translation changes to commit")]
     NothingToCommit,
 
     /// Sync requires translation changes to be checkpointed first.
-    #[error("translation changes are not checkpointed; create a checkpoint before syncing")]
+    #[error("translation changes are not committed; commit them before syncing")]
     UncommittedTranslations,
 
     /// The repository is not on a branch.

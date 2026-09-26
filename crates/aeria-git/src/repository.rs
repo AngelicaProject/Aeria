@@ -26,7 +26,7 @@ pub const GUIDANCE_FILE: &str = "aeria-guidance.md";
 /// GitHub from released packs, so it belongs to the project like its settings.
 pub const FEED_WORKFLOW_FILE: &str = ".github/workflows/harmonia-feed.yml";
 /// Every project path a checkpoint commits besides `.aeria/`.
-pub const PROJECT_PATHS: [&str; 8] = [
+pub const PROJECT_PATHS: [&str; 9] = [
     ATTRIBUTES_FILE,
     COLLABORATION_FILE,
     PACK_SETTINGS_FILE,
@@ -35,6 +35,7 @@ pub const PROJECT_PATHS: [&str; 8] = [
     GLOSSARY_FILE,
     GUIDANCE_FILE,
     FEED_WORKFLOW_FILE,
+    crate::workflow::CHECK_WORKFLOW_FILE,
 ];
 /// Workspace Format files are LF-only. This rule keeps Git from
 /// converting them on checkout (for example with `core.autocrlf=true`).
@@ -313,6 +314,13 @@ impl GitRepository {
     }
 
     pub(crate) fn prefix(&self) -> &str {
+        &self.prefix
+    }
+
+    /// The project's folder relative to the repository's top folder: empty
+    /// when they are the same, otherwise ending in `/`.
+    #[must_use]
+    pub fn project_prefix(&self) -> &str {
         &self.prefix
     }
 

@@ -758,6 +758,16 @@ pub(crate) fn git_sync_with_state(
     state: &DesktopState,
     resolutions: &[UnitResolutionDto],
 ) -> CommandResult<GitSyncDto> {
+    pull_with_state(state, resolutions, true)
+}
+
+/// Fetches and integrates the upstream like Sync (per-unit merge and project
+/// validation included) and, with `push`, pushes afterwards.
+pub(crate) fn pull_with_state(
+    state: &DesktopState,
+    resolutions: &[UnitResolutionDto],
+    push: bool,
+) -> CommandResult<GitSyncDto> {
     let resolutions = resolutions
         .iter()
         .map(|entry| {
@@ -788,7 +798,7 @@ pub(crate) fn git_sync_with_state(
         }
         Err(error) => return Err(error.into()),
     };
-    let pushed = repository.push()?;
+    let pushed = push && repository.push()?;
     let reconciled =
         integration.changed_working_tree() && repository.status()?.has_translation_changes();
     Ok(GitSyncDto {
@@ -1352,6 +1362,61 @@ pub async fn git_clone_repository(
     .await
 }
 
+#[tauri::command(rename_all = "camelCase")]
+/// Fetches the current branch's remote without changing the branch, so the
+/// dock shows how far it is behind.
+///
+/// # Errors
+///
+/// Returns a typed Git error, for example without a remote or network.
+pub async fn git_fetch(app: tauri::AppHandle) -> CommandResult<()> {
+    run_sync(app, |state| Ok(open_repository(state)?.fetch()?)).await
+}
+
+#[tauri::command(rename_all = "camelCase")]
+/// Fetches and integrates the upstream like Sync, without pushing. Same-unit
+/// conflicts are returned for explicit resolutions, as with Sync.
+///
+/// # Errors
+///
+/// Returns a typed Git error, for example with uncommitted translations.
+pub async fn git_pull(
+    app: tauri::AppHandle,
+    resolutions: Option<Vec<UnitResolutionDto>>,
+) -> CommandResult<GitSyncDto> {
+    run_sync(app, move |state| {
+        pull_with_state(state, resolutions.as_deref().unwrap_or_default(), false)
+    })
+    .await
+}
+
+#[tauri::command(rename_all = "camelCase")]
+/// Pushes the current branch's commits, publishing it when it has no
+/// upstream. Refuses while the upstream has commits this branch lacks, so a
+/// push never needs to be forced. Returns whether anything was pushed.
+///
+/// # Errors
+///
+/// Returns `gitPushBehind` when the branch must pull first, or a typed Git
+/// error.
+pub async fn git_push(app: tauri::AppHandle) -> CommandResult<bool> {
+    run_sync(app, |state| {
+        let repository = open_repository(state)?;
+        let status = repository.status()?;
+        if status.upstream.is_some() && status.behind > 0 {
+            return Err(CommandError::new(
+                "gitPushBehind",
+                format!(
+                    "the upstream has {} commits this branch lacks; pull first",
+                    status.behind
+                ),
+            ));
+        }
+        Ok(repository.push()?)
+    })
+    .await
+}
+
 /// Runs a Git operation that fetches, pushes, commits, or changes the working
 /// tree, and that an application update therefore waits for.
 async fn run_sync<T, F>(app: tauri::AppHandle, operation: F) -> CommandResult<T>
@@ -1436,7 +1501,7 @@ mod tests {
     }
 
     #[test]
-    fn sync_reloads_the_active_session_with_incoming_translations() {
+    fn pull_and_sync_reload_the_active_session_with_incoming_translations() {
         let sandbox = tempfile::tempdir().expect("sandbox");
         let git = isolated_git(sandbox.path());
         let source = sandbox.path().join("source.hsp");
@@ -1516,9 +1581,13 @@ mod tests {
         .expect("merge pull request");
         assert!(merged.success());
 
-        let result = git_sync_with_state(&grace, &[]).expect("sync");
+        // Pull integrates like Sync but never pushes.
+        let result = pull_with_state(&grace, &[], false).expect("pull");
         assert!(result.workspace_changed);
         assert!(result.conflicts.is_empty());
+        assert!(!result.pushed);
+        let again = git_sync_with_state(&grace, &[]).expect("sync");
+        assert!(matches!(again.integration, GitIntegrationDto::UpToDate));
         let project = grace.lock_project().expect("lock");
         let unit = project
             .as_ref()

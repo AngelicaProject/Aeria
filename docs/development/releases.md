@@ -57,7 +57,15 @@ Each release carries:
 | `Aeria_<version>_x64-setup.exe.sig` | Updater signature of the installer |
 | `Aeria_<version>_x64-portable.zip` | Portable build: `aeria.exe`, `harmonia-atlas.exe`, and `git/` |
 | `latest.json` | Updater feed of this release |
-| `SHA256SUMS.txt` | SHA-256 of the installer and the portable archive |
+| `aeria-check-<version>-x86_64-unknown-linux-gnu.tar.gz` | The `aeria-check` binary for the [merge check CI](../architecture/git.md#merge-check-ci) of translation repositories (stable releases) |
+| `SHA256SUMS.txt` | SHA-256 of the installer, the portable archive, and the `aeria-check` archive |
+
+The `aeria-check` archive is built on `ubuntu-22.04` before the desktop build,
+which embeds its URL and SHA-256 for the merge check workflow it offers. Such
+a workflow pins the archive, so a published archive never changes. Nightly
+archives therefore do not go into the rolling `nightly` release, which each
+build replaces: they are added under their unique names to the
+`aeria-check-nightly` pre-release, which is never deleted.
 
 Executables are not Authenticode-signed; Windows SmartScreen may warn on first
 run, and that is accepted. The installer uses Tauri's per-user NSIS mode

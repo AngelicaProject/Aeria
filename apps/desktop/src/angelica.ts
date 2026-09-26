@@ -205,6 +205,20 @@ export function jobProblems(counts: JobCounts): number {
   return counts.rejected + counts.failed + counts.conflict;
 }
 
+/** Whether a job used up its token limit. */
+export function atTokenLimit(job: JobSummary): boolean {
+  return totalTokens(job.usage) >= job.spec.tokenLimit;
+}
+
+/** A token limit for the rest of a job: its projection (or, before a chunk
+ * finished, twice what it used or its limit) with a quarter of headroom,
+ * rounded up to 10k. */
+export function suggestedTokenLimit(job: JobSummary): number {
+  const used = totalTokens(job.usage);
+  const base = job.projectedTokens ?? Math.max(used * 2, job.spec.tokenLimit);
+  return Math.ceil((Math.max(base, used) * 1.25) / 10_000) * 10_000;
+}
+
 /** Jobs that still need attention first, then the newest. */
 export function sortJobs(jobs: readonly JobSummary[]): JobSummary[] {
   const rank = (job: JobSummary) => job.status === "running" ? 0 : job.status === "paused" ? 1 : 2;

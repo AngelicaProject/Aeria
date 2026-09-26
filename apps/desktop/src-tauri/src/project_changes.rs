@@ -27,6 +27,7 @@ pub enum ProjectAreaDto {
     Collaboration,
     GitAttributes,
     FeedWorkflow,
+    CheckWorkflow,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
@@ -82,6 +83,7 @@ fn area_of(path: &str) -> Option<ProjectAreaDto> {
         COLLABORATION_FILE => ProjectAreaDto::Collaboration,
         ATTRIBUTES_FILE => ProjectAreaDto::GitAttributes,
         FEED_WORKFLOW_FILE => ProjectAreaDto::FeedWorkflow,
+        aeria_git::CHECK_WORKFLOW_FILE => ProjectAreaDto::CheckWorkflow,
         _ if path.starts_with("fonts/") => ProjectAreaDto::FontFile,
         _ => return None,
     })
@@ -105,7 +107,9 @@ pub fn compare(
     };
     let size = after.or(before).map_or(0, |bytes| bytes.len() as u64);
     let details = match area {
-        ProjectAreaDto::FontFile | ProjectAreaDto::FeedWorkflow => Some(Vec::new()),
+        ProjectAreaDto::FontFile | ProjectAreaDto::FeedWorkflow | ProjectAreaDto::CheckWorkflow => {
+            Some(Vec::new())
+        }
         ProjectAreaDto::Glossary => glossary_details(before, after),
         ProjectAreaDto::Guidance | ProjectAreaDto::GitAttributes => text_details(before, after),
         ProjectAreaDto::PackSettings
@@ -372,6 +376,7 @@ pub fn checkpoint_message(
             ProjectAreaDto::Collaboration => "collaboration policy",
             ProjectAreaDto::GitAttributes => "Git attributes",
             ProjectAreaDto::FeedWorkflow => "feed workflow",
+            ProjectAreaDto::CheckWorkflow => "merge check workflow",
         };
         if !areas.contains(&name) {
             areas.push(name);
@@ -401,6 +406,7 @@ mod tests {
         assert!(!is_project_path(".aeria/units/10.jsonl"));
         assert!(!is_project_path("fontsx"));
         assert!(is_project_path(".github/workflows/harmonia-feed.yml"));
+        assert!(is_project_path(".github/workflows/aeria-check.yml"));
         assert!(!is_project_path(".github/workflows/other.yml"));
     }
 

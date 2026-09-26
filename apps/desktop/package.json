@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite --host 127.0.0.1 --port 1420",
     "build": "tsc -b && vite build",
-    "test": "node --experimental-strip-types --test tests/recentProjectsState.test.mjs tests/pathDisplay.test.mjs tests/layout.test.mjs tests/translationOccurrences.test.mjs tests/sheetExplorer.test.mjs tests/documentTabs.test.mjs tests/commitGraph.test.mjs tests/dockLayout.test.mjs tests/iconPolicy.test.mjs tests/macroTokens.test.mjs tests/timeDisplay.test.mjs tests/themeRegistry.test.mjs tests/preferences.test.mjs tests/fuzzy.test.mjs tests/commandPalette.test.mjs tests/textDiff.test.mjs tests/i18n.test.mjs tests/sourceUpdate.test.mjs tests/aiSettings.test.mjs tests/angelica.test.mjs tests/projectGuide.test.mjs tests/tooltipPlacement.test.mjs tests/projectFolder.test.mjs tests/appUpdate.test.mjs",
+    "test": "node --experimental-strip-types --test tests/recentProjectsState.test.mjs tests/pathDisplay.test.mjs tests/layout.test.mjs tests/translationOccurrences.test.mjs tests/sheetExplorer.test.mjs tests/documentTabs.test.mjs tests/commitGraph.test.mjs tests/dockLayout.test.mjs tests/iconPolicy.test.mjs tests/macroTokens.test.mjs tests/timeDisplay.test.mjs tests/themeRegistry.test.mjs tests/preferences.test.mjs tests/fuzzy.test.mjs tests/commandPalette.test.mjs tests/textDiff.test.mjs tests/i18n.test.mjs tests/sourceUpdate.test.mjs tests/aiSettings.test.mjs tests/angelica.test.mjs tests/gitChanges.test.mjs tests/windowGeometry.test.mjs tests/projectGuide.test.mjs tests/tooltipPlacement.test.mjs tests/projectFolder.test.mjs tests/appUpdate.test.mjs",
     "typecheck": "tsc -b --pretty false",
     "tauri": "tauri"
   },

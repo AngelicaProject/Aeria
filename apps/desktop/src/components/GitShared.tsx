@@ -1,34 +1,14 @@
-import { useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import type { ProjectArea, ProjectChangeDto, SourceBinding, UnitChangeDto, UnitVersionDto } from "../types";
+import { COLLAPSE_THRESHOLD, changeBinding, flattenChanges, groupChanges, isFilterActive, kindCounts, type ChangeFilter, type ChangeGroup, type ChangeItem, type ChangeKind } from "../gitChanges";
+import { IconButton } from "../ui/primitives/IconButton";
+import { Segmented } from "../ui/primitives/Segmented";
 import { UiIcon, type UiIconName } from "../ui/primitives/UiIcon";
 import { useI18n, type Translate } from "../ui/i18n";
 import type { MessageKey } from "../i18n/translate";
 
-export type ChangeGroup = { sheetName: string; changes: UnitChangeDto[] };
-
-export function changeBinding(change: UnitChangeDto): SourceBinding | null {
-  return (change.after ?? change.before)?.sourceBinding ?? null;
-}
-
-/** Groups changes by sheet, ordered by sheet name then row coordinate. */
-export function groupChanges(changes: readonly UnitChangeDto[], unknownSheet: string): ChangeGroup[] {
-  const groups = new Map<string, UnitChangeDto[]>();
-  for (const change of changes) {
-    const sheetName = changeBinding(change)?.sheetName ?? unknownSheet;
-    groups.set(sheetName, [...(groups.get(sheetName) ?? []), change]);
-  }
-  const order = (change: UnitChangeDto) => {
-    const binding = changeBinding(change);
-    return binding ? [binding.rowId, binding.subrowId, binding.columnIndex] : [0, 0, 0];
-  };
-  return [...groups].sort(([left], [right]) => left.localeCompare(right)).map(([sheetName, entries]) => ({
-    sheetName,
-    changes: entries.sort((left, right) => {
-      const [a, b] = [order(left), order(right)];
-      return a[0]! - b[0]! || a[1]! - b[1]! || a[2]! - b[2]!;
-    }),
-  }));
-}
+export { changeBinding, groupChanges, type ChangeGroup } from "../gitChanges";
 
 const kindLetter: Record<UnitChangeDto["kind"], string> = { added: "A", modified: "M", removed: "D" };
 export const kindLabel: Record<UnitChangeDto["kind"], MessageKey> = { added: "git.kind.added", modified: "git.kind.modified", removed: "git.kind.removed" };
@@ -49,53 +29,156 @@ export function changeLabel(change: UnitChangeDto, t: Translate): string {
   return parts.join(", ") || t("git.change.changed");
 }
 
-export function ChangeRow({ change, selected, onOpen }: { change: UnitChangeDto; selected: boolean; onOpen?: (() => void) | undefined }) {
+/** Whether a change needs its own "what changed" note: additions and
+ * removals already say it with their letter and styling. */
+function changeNote(change: UnitChangeDto, t: Translate): string | null {
+  return change.kind === "modified" ? changeLabel(change, t) : null;
+}
+
+export function ChangeRow({ change, selected, showColumn = true, onOpen }: { change: UnitChangeDto; selected: boolean; showColumn?: boolean; onOpen?: (() => void) | undefined }) {
   const { t } = useI18n();
   const binding = changeBinding(change);
   const text = change.after?.targetMacro ?? change.before?.targetMacro ?? "";
+  const note = changeNote(change, t);
   const content = <>
     <span className={`git-kind git-kind-${change.kind}`} aria-label={t(kindLabel[change.kind])}>{kindLetter[change.kind]}</span>
-    <span className="git-change-coord mono">{binding ? `${binding.rowId}:${binding.subrowId}` : "?"}{binding ? <small> {t("common.column", { column: String(binding.columnIndex) })}</small> : null}</span>
+    <span className="git-change-coord mono">{binding ? `${binding.rowId}:${binding.subrowId}` : "?"}{binding && showColumn ? <small>{` · ${binding.columnIndex}`}</small> : null}</span>
     <span className={change.kind === "removed" ? "git-change-text removed" : "git-change-text"}>{text || <em>{t("git.emptyText")}</em>}</span>
-    <span className="git-change-meta">{changeLabel(change, t)}</span>
+    {note ? <span className="git-change-meta">{note}</span> : null}
   </>;
+  const title = [binding ? unitLabel(change.after ?? change.before, t) : null, t(kindLabel[change.kind]), text].filter(Boolean).join("\n");
   return onOpen
-    ? <li><button type="button" className={selected ? "git-change selected" : "git-change"} onClick={onOpen} title={binding ? t("git.openUnit", { unit: unitLabel(change.after ?? change.before, t) }) : t("git.openString")}>{content}</button></li>
-    : <li><div className={selected ? "git-change selected" : "git-change"}>{content}</div></li>;
+    ? <button type="button" className={selected ? "git-change selected" : "git-change"} onClick={onOpen} title={title}>{content}</button>
+    : <div className={selected ? "git-change selected" : "git-change"} title={title}>{content}</div>;
 }
 
-/** Translation changes grouped by sheet, each group collapsible. */
-export function TranslationChangeGroups({ changes, selectedUnitId, onRevealBinding }: { changes: readonly UnitChangeDto[]; selectedUnitId: string | null; onRevealBinding?: ((binding: SourceBinding) => void) | undefined }) {
-  const { t } = useI18n();
-  const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() => new Set());
+/** How a change list was left: kept while the window lives, so reopening
+ * the Git tab or a commit shows it the same way. */
+type ChangeViewState = { filter: ChangeFilter; toggled: ReadonlyMap<string, boolean> };
+const changeViews = new Map<string, ChangeViewState>();
+const emptyView: ChangeViewState = { filter: { query: "", kind: "all" }, toggled: new Map() };
+
+/** A value kept per key for the life of the window. */
+const stickyValues = new Map<string, unknown>();
+export function useStickyState<T>(key: string, initial: T): [T, (value: T) => void] {
+  const [value, setValue] = useState<T>(() => (stickyValues.has(key) ? stickyValues.get(key) as T : initial));
+  const update = useCallback((next: T) => {
+    stickyValues.set(key, next);
+    setValue(next);
+  }, [key]);
+  return [value, update];
+}
+
+/** Height of one line of the change list, header or change. */
+const CHANGE_ROW = 26;
+/** Changes from which the search and kind filter are offered. */
+const TOOLBAR_THRESHOLD = 12;
+
+const kindFilterLabels: Record<ChangeKind, MessageKey> = { added: "git.filter.added", modified: "git.filter.modified", removed: "git.filter.removed" };
+
+/**
+ * Translation changes grouped by sheet: searchable, filterable by kind, with
+ * sheets that collapse one by one or all together. Sheets start collapsed
+ * when there are many changes. The list is virtualized, so thousands of
+ * changes stay responsive.
+ */
+export function TranslationChangeGroups({ changes, selectedUnitId, onRevealBinding, viewKey }: { changes: readonly UnitChangeDto[]; selectedUnitId: string | null; onRevealBinding?: ((binding: SourceBinding) => void) | undefined; viewKey?: string | undefined }) {
+  const { t, formatNumber } = useI18n();
+  const [view, setViewState] = useState<ChangeViewState>(() => (viewKey ? changeViews.get(viewKey) : undefined) ?? emptyView);
+  const setView = (next: ChangeViewState) => {
+    if (viewKey) changeViews.set(viewKey, next);
+    setViewState(next);
+  };
+  const groups = useMemo(() => groupChanges(changes, t("git.unknownSheet")), [changes, t]);
+  const counts = useMemo(() => kindCounts(changes), [changes]);
+  const closedByDefault = changes.length > COLLAPSE_THRESHOLD && groups.length > 1;
+  const isClosed = (sheetName: string) => !(view.toggled.get(sheetName) ?? !closedByDefault);
+  const items = useMemo(
+    () => flattenChanges(groups, view.filter, (sheetName) => !(view.toggled.get(sheetName) ?? !closedByDefault)),
+    [groups, view, closedByDefault],
+  );
+  const filtering = isFilterActive(view.filter);
+  const anyOpen = !filtering && groups.some((group) => !isClosed(group.sheetName));
+
+  const toggle = (group: ChangeGroup) => {
+    const toggled = new Map(view.toggled);
+    toggled.set(group.sheetName, isClosed(group.sheetName));
+    setView({ ...view, toggled });
+  };
+  const setAll = (open: boolean) => setView({ ...view, toggled: new Map(groups.map((group) => [group.sheetName, open])) });
+
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const virtualizer = useVirtualizer({ count: items.length, getScrollElement: () => scrollRef.current, estimateSize: () => CHANGE_ROW, overscan: 16 });
+  const selectedIndex = selectedUnitId === null ? -1 : items.findIndex((item) => item.type === "change" && item.change.translationUnitId === selectedUnitId);
+  useEffect(() => {
+    if (selectedIndex >= 0) virtualizer.scrollToIndex(selectedIndex, { align: "auto" });
+  }, [selectedIndex, virtualizer]);
+
+  // The sheet whose changes fill the top of the list, pinned above them once
+  // its own header scrolled away.
+  const topItem = items[Math.floor((virtualizer.scrollOffset ?? 0) / CHANGE_ROW)];
+  const pinned = topItem?.type === "change" ? topItem.group : null;
+  const pinnedItem = pinned ? items.find((item): item is Extract<ChangeItem, { type: "group" }> => item.type === "group" && item.group === pinned) : undefined;
+
+  const kinds = (["added", "modified", "removed"] as const).filter((kind) => counts[kind] > 0);
+  const showToolbar = changes.length >= TOOLBAR_THRESHOLD;
+  const renderItem = (item: ChangeItem) => {
+    if (item.type === "group") {
+      const { group } = item;
+      return (
+        <button type="button" className="git-change-group-head" aria-expanded={!item.closed} disabled={filtering} onClick={() => toggle(group)}>
+          <UiIcon icon={item.closed ? "chevronRight" : "chevronDown"} size="xs" />
+          <UiIcon icon="table2" size="sm" />
+          <span className="git-change-group-name">{group.sheetName}</span>
+          <span className="git-count">{filtering ? `${formatNumber(item.shown)} / ${formatNumber(group.changes.length)}` : formatNumber(group.changes.length)}</span>
+        </button>
+      );
+    }
+    const binding = changeBinding(item.change);
+    return <ChangeRow change={item.change} selected={item.change.translationUnitId === selectedUnitId} showColumn={item.group.multiColumn} onOpen={binding && onRevealBinding && item.change.kind !== "removed" ? () => onRevealBinding(binding) : undefined} />;
+  };
+
   return (
-    <div className="git-change-groups">
-      {groupChanges(changes, t("git.unknownSheet")).map((group) => {
-        const closed = collapsed.has(group.sheetName);
-        return (
-          <div className="git-change-group" key={group.sheetName}>
-            <button type="button" className="git-change-group-head" aria-expanded={!closed} onClick={() => setCollapsed((current) => {
-              const next = new Set(current);
-              if (next.has(group.sheetName)) next.delete(group.sheetName);
-              else next.add(group.sheetName);
-              return next;
-            })}>
-              <UiIcon icon={closed ? "chevronRight" : "chevronDown"} size="xs" />
-              <UiIcon icon="table2" size="sm" />
-              <span className="git-change-group-name">{group.sheetName}</span>
-              <span className="git-count">{group.changes.length}</span>
-            </button>
-            {closed ? null : (
-              <ul className="git-change-list">
-                {group.changes.map((change) => {
-                  const binding = changeBinding(change);
-                  return <ChangeRow key={change.translationUnitId} change={change} selected={change.translationUnitId === selectedUnitId} onOpen={binding && onRevealBinding && change.kind !== "removed" ? () => onRevealBinding(binding) : undefined} />;
-                })}
-              </ul>
-            )}
+    <div className="git-changes">
+      {showToolbar ? (
+        <div className="git-change-toolbar">
+          <label className="git-change-search">
+            <UiIcon icon="search" size="xs" />
+            <input className="input" type="search" value={view.filter.query} placeholder={t("git.filter.search")} aria-label={t("git.filter.search")} onChange={(event) => setView({ ...view, filter: { ...view.filter, query: event.target.value } })} />
+          </label>
+          {groups.length > 1 ? <IconButton icon={anyOpen ? "chevronsUp" : "chevronDown"} label={t(anyOpen ? "git.collapseAll" : "git.expandAll")} disabled={filtering} onClick={() => setAll(!anyOpen)} /> : null}
+          {kinds.length > 1 ? (
+            <Segmented<ChangeKind | "all">
+              value={view.filter.kind}
+              label={t("git.filter.kind")}
+              onChange={(kind) => setView({ ...view, filter: { ...view.filter, kind } })}
+              options={[
+                { value: "all", label: `${t("git.filter.all")} ${formatNumber(changes.length)}` },
+                ...kinds.map((kind) => ({
+                  value: kind,
+                  title: t(kindFilterLabels[kind]),
+                  label: <><span className={`git-kind git-kind-${kind}`} aria-hidden="true">{kindLetter[kind]}</span>{` ${formatNumber(counts[kind])}`}</>,
+                })),
+              ]}
+            />
+          ) : null}
+        </div>
+      ) : null}
+      {items.length === 0 ? <p className="muted">{t("git.filter.nothing")}</p> : (
+        <div className="git-change-scroll" ref={scrollRef} role="list" style={{ height: Math.min(items.length * CHANGE_ROW, 480) }}>
+          {pinnedItem ? <div className="git-change-pinned">{renderItem(pinnedItem)}</div> : null}
+          <div style={{ height: virtualizer.getTotalSize(), position: "relative" }}>
+            {virtualizer.getVirtualItems().map((row) => {
+              const item = items[row.index]!;
+              return (
+                <div key={item.type === "group" ? `g:${item.group.sheetName}` : item.change.translationUnitId} role="listitem" className="git-change-slot" style={{ transform: `translateY(${row.start}px)`, height: CHANGE_ROW }}>
+                  {renderItem(item)}
+                </div>
+              );
+            })}
           </div>
-        );
-      })}
+        </div>
+      )}
     </div>
   );
 }
@@ -109,6 +192,7 @@ const areaInfo: Record<ProjectArea, { icon: UiIconName; title: MessageKey; order
   collaboration: { icon: "users", title: "git.area.collaboration", order: 4 },
   gitAttributes: { icon: "settings", title: "git.area.gitAttributes", order: 5 },
   feedWorkflow: { icon: "cloud", title: "git.area.feedWorkflow", order: 6 },
+  checkWorkflow: { icon: "circleCheck", title: "git.area.checkWorkflow", order: 7 },
 };
 
 const VISIBLE_DETAILS = 12;

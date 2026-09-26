@@ -17,6 +17,8 @@ The renderer is a full React/TypeScript application, not a thin HTML skin, but p
 
 The Tauri launcher window is 900×560 with matching minimum dimensions and is not resizable. It opens centered and recenters when returning from the workbench. The launcher is one screen: a fixed-width action column and a panel that swaps between Recent projects and the Open, Clone, New, or Update project form. Switching views never resizes the window, and only the panel content scrolls.
 
+The workbench window is at least 1140×710 and reopens maximized or at its last size, shrunk to fit the monitor. The size is saved on resize, never while the window is minimized (Windows reports about 160×28 then), and a saved size below the minimum is ignored.
+
 ## Styling and primitives
 
 Styles live in `src/styles/` by surface (`base`, `primitives`, `chrome`, `launcher`, `workbench`, `editor`, `git`, `overlays`). Component CSS uses only the semantic tokens in `src/ui/theme/tokens.css` (`--panel`, `--line`, `--fg-muted`, `--accent`, `--review-*`, and so on), never raw theme palette values, so themes and appearances stay cheap to add. Theme palettes are applied to `<html>` so portalled popovers resolve them.

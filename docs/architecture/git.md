@@ -16,6 +16,11 @@ changes, described in readable form, until the translator creates a
 checkpoint. The export requires the files it builds from to be committed and
 points to the uncommitted changes instead of committing them.
 
+"Checkpoint" and "contribution branch" name Aeria's operations in this
+documentation and in code. The interface calls them what Git users know: a
+checkpoint is a commit (the button is labelled Commit), and a contribution
+branch is a branch for a pull request.
+
 ## Git in the desktop
 
 - The **Git dock** is the whole everyday view and follows the repository on
@@ -211,6 +216,13 @@ Sync is fetch, integrate, push:
 Sync never rebases, force-pushes, or accepts incoming changes that bind the
 workspace to different source content.
 
+The steps are also available one by one, with the same rules: **Fetch** runs
+step 1 only; **Pull** runs steps 1 and 2, including the per-unit merge,
+explicit conflict resolutions, and project validation, and never pushes;
+**Push** runs step 3 and refuses while the upstream, as last fetched, has
+commits the branch lacks, so a push never needs to be forced. Pull is never
+a plain `git pull`: translations always merge per unit.
+
 Incoming translations made against an older game version, merged into a
 branch that already applied the newer version, are not rejected and are not
 trusted as current. Their units still record the old source facts, which the
@@ -333,6 +345,50 @@ on the hosting service (for example GitHub branch protection) is still
 recommended, because Git tools other than Aeria are not bound by these rules.
 Opening the pull request itself is left to the hosting service or a future
 optional adapter.
+
+## Merge check CI
+
+A Git host merges a pull request as plain text and lets files be edited on
+its website, without Aeria's per-unit merge or project validation. A text
+merge of unit shards that happens to apply can still leave a project Aeria
+cannot open, or remove translations. The merge check catches that before the
+merge.
+
+`aeria-check` (crate `aeria-check`) runs Aeria's own strict readers without
+the game source, in three stages:
+
+1. **Integrity**: no Git conflict markers in `.aeria/` or any project file;
+   the manifest reads; Collaboration, Pack, and Font Settings are valid, and
+   every font file the font settings name exists.
+2. **Translations**: the workspace loads strictly, as when Aeria opens it:
+   every unit and identity, unique bindings, and every target as a valid
+   structured string. Every managed file must also be byte for byte what
+   Aeria writes (`WorkspaceStore::non_canonical_files`), because a readable
+   but non-canonical file was edited or merged outside Aeria.
+3. **Merge**: compared with the base revision (`--base`), a change of the
+   project languages or of the game source (a source update) and units the
+   base has but the result lacks are warnings for the reviewer. Aeria never
+   removes units, so removed units point to a bad merge or a manual edit.
+
+Errors fail the check; warnings and notices do not. In GitHub Actions the
+findings become annotations on the files and each stage adds a section to
+the job summary. Checks that need the game source, such as tags matching the
+original text, stay with Aeria, which runs them whenever it opens, pulls, or
+syncs the project; a stage with the game source is not offered.
+
+For a repository whose `origin` is on github.com and whose project is the
+repository's top folder, the Git dock offers
+`.github/workflows/aeria-check.yml`. The workflow checks out GitHub's test
+merge of a pull request with its base (`fetch-depth: 2`, so `HEAD^1` is the
+base), downloads the `aeria-check` archive built with the same Aeria release,
+verifies its SHA-256, and runs the stages as separate steps; the merge stage
+runs only for pull requests. It also runs on pushes. The URL and SHA-256 come
+from the release build (`AERIA_CHECK_URL`, `AERIA_CHECK_SHA256`), so
+development builds cannot offer the workflow. Like the feed workflow it is a
+project file: installing only writes it, the next checkpoint commits it, and
+the dock offers an update when the file differs from what this Aeria writes.
+Making the check required is a branch protection setting on GitHub, which
+Aeria cannot change; the dock links to the repository's branch settings.
 
 ## Remotes and upstream
 

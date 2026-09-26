@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   activitySummary,
+  atTokenLimit,
   applyAgentEvent,
   formatElapsed,
   formatTokens,
@@ -18,6 +19,7 @@ import {
   parseSpans,
   resolveModel,
   sortJobs,
+  suggestedTokenLimit,
   toolSubject,
   transcriptFromMessages,
   workerHealth,
@@ -116,6 +118,15 @@ test("job progress counts final outcomes and problems", () => {
   assert.equal(jobProgress(counts), 0.4);
   assert.equal(jobProblems(counts), 2);
   assert.equal(jobProgress({ ...counts, total: 0 }), 1);
+});
+
+test("a job's suggested limit covers its projection with headroom", () => {
+  const job = (used, tokenLimit, projectedTokens) => ({ usage: { promptTokens: used, completionTokens: 0 }, spec: { tokenLimit }, projectedTokens });
+  assert.equal(atTokenLimit(job(500_000, 499_208, 1_000_000)), true);
+  assert.equal(atTokenLimit(job(100, 499_208, null)), false);
+  assert.equal(suggestedTokenLimit(job(500_000, 499_208, 1_000_000)), 1_250_000);
+  assert.equal(suggestedTokenLimit(job(300_000, 200_000, null)), 750_000, "twice the use before a chunk finished");
+  assert.equal(suggestedTokenLimit(job(10_000, 400_000, null)), 500_000, "never below the current limit");
 });
 
 test("a worker waiting for the provider turns quiet, then stalled", () => {

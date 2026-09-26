@@ -43,9 +43,12 @@ pub enum AgentEvent {
     ReasoningDelta {
         text: String,
     },
-    /// Characters of tool-call arguments received while a response streams.
+    /// Tool-call arguments received while a response streams. The text
+    /// serves live progress only and is not sent to the renderer.
     ToolArgumentsDelta {
         chars: usize,
+        #[serde(skip)]
+        text: String,
     },
     /// A response finished streaming.
     ResponseFinished,
@@ -135,7 +138,10 @@ pub async fn run_turn(
                 on_event(match delta {
                     StreamDelta::Text(text) => AgentEvent::TextDelta { text },
                     StreamDelta::Reasoning(text) => AgentEvent::ReasoningDelta { text },
-                    StreamDelta::ToolArguments(chars) => AgentEvent::ToolArgumentsDelta { chars },
+                    StreamDelta::ToolArguments(text) => AgentEvent::ToolArgumentsDelta {
+                        chars: text.chars().count(),
+                        text,
+                    },
                 });
             };
             client

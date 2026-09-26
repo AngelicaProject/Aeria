@@ -40,6 +40,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "aeria-check"
+version = "0.1.0"
+dependencies = [
+ "aeria-export",
+ "aeria-fonts",
+ "aeria-git",
+ "aeria-workspace",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "aeria-core"
 version = "0.1.0"
 dependencies = [

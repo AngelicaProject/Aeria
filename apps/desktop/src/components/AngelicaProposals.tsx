@@ -1,5 +1,5 @@
 import { diffWords } from "../textDiff";
-import type { JobProposal, ProposalRecord, SourceBinding } from "../types";
+import type { JobLimitProposal, JobProposal, ProposalRecord, SourceBinding } from "../types";
 import { useI18n } from "../ui/i18n";
 import { UiIcon } from "../ui/primitives/UiIcon";
 import type { MessageKey } from "../i18n/translate";
@@ -38,7 +38,7 @@ export function AngelicaProposals({ proposals, busy, onApply, onReject, onReveal
   if (shown.length === 0) return null;
   const pending = shown.filter((proposal) => proposal.status === "pending").map((proposal) => proposal.id);
   // Jobs start one by one, never with the translations in bulk.
-  const bulk = shown.filter((proposal) => proposal.status === "pending" && !proposal.job && !proposal.web && !proposal.review).map((proposal) => proposal.id);
+  const bulk = shown.filter((proposal) => proposal.status === "pending" && !proposal.job && !proposal.jobLimit && !proposal.web && !proposal.review).map((proposal) => proposal.id);
 
   return (
     <details className="angelica-proposals" open>
@@ -55,6 +55,7 @@ export function AngelicaProposals({ proposals, busy, onApply, onReject, onReveal
         {shown.map((proposal) => {
           if (proposal.review) return <ReviewProposalCard key={proposal.id} proposal={proposal} review={proposal.review} busy={busy} onApply={onApply} onReject={onReject} onReveal={onReveal} />;
           if (proposal.web) return <WebProposalCard key={proposal.id} proposal={proposal} domain={proposal.web} busy={busy} onApply={onApply} onReject={onReject} />;
+          if (proposal.jobLimit) return <LimitProposalCard key={proposal.id} proposal={proposal} limit={proposal.jobLimit} busy={busy} onApply={onApply} onReject={onReject} />;
           if (proposal.job) return <JobProposalCard key={proposal.id} proposal={proposal} job={proposal.job} busy={busy} onApply={onApply} onReject={onReject} />;
           const binding = bindingOf(proposal);
           const location = binding ? `${binding.sheetName}:${binding.rowId}:${binding.subrowId}:${binding.columnIndex}` : null;
@@ -102,7 +103,12 @@ function JobProposalCard({ proposal, job, busy, onApply, onReject }: { proposal:
       <dl className="angelica-job-facts">
         <dt>{t("angelica.job.sheets")}</dt><dd>{sheets}</dd>
         <dt>{t("angelica.job.strings")}</dt><dd>{t(jobFilterLabels[job.scope.filter])}: {job.estimate.units}</dd>
-        <dt>{t("angelica.job.estimate")}</dt><dd>{t("angelica.job.estimateValue", { chunks: job.estimate.chunks, tokens: job.estimate.estimatedTokens, limit: job.tokenLimit })}</dd>
+        <dt>{t("angelica.job.estimate")}</dt>
+        <dd>
+          {t("angelica.job.estimateValue", { chunks: job.estimate.chunks, tokens: job.estimate.estimatedTokens, limit: job.tokenLimit })}
+          <span className="field-hint">{job.estimate.historyChunkTokens ? t("angelica.job.estimateHistory", { tokens: job.estimate.historyChunkTokens }) : t("angelica.job.estimateFormula")}</span>
+        </dd>
+        <dt>{t("angelica.job.concurrency")}</dt><dd>{job.concurrency}</dd>
         {job.instructions ? <><dt>{t("angelica.job.instructions")}</dt><dd>{job.instructions}</dd></> : null}
       </dl>
       <p className="field-hint">{t("angelica.job.proposalHint")}</p>
@@ -111,6 +117,33 @@ function JobProposalCard({ proposal, job, busy, onApply, onReject }: { proposal:
         <div className="angelica-proposal-actions">
           <button className="button button-ghost" type="button" disabled={busy} onClick={() => onReject([proposal.id])}>{t("angelica.proposal.reject")}</button>
           <button className="button button-primary" type="button" disabled={busy} onClick={() => onApply([proposal.id])}><UiIcon icon="play" size="sm" />{t("angelica.job.start")}</button>
+        </div>
+      ) : null}
+    </li>
+  );
+}
+
+function LimitProposalCard({ proposal, limit, busy, onApply, onReject }: { proposal: ProposalRecord; limit: JobLimitProposal; busy: boolean; onApply: (ids: string[]) => void; onReject: (ids: string[]) => void }) {
+  const { t, formatNumber } = useI18n();
+  return (
+    <li className={`angelica-proposal angelica-job-proposal ${proposal.status}`}>
+      <div className="angelica-proposal-head">
+        <UiIcon icon="sparkles" size="xs" />
+        <strong>{t("angelica.limit.title")}</strong>
+        {proposal.status !== "pending" ? <span className="angelica-chip">{t(statusLabels[proposal.status])}</span> : null}
+      </div>
+      <dl className="angelica-job-facts">
+        <dt>{t("angelica.job.tokenUse")}</dt><dd>{formatNumber(limit.usedTokens)}</dd>
+        {limit.projectedTokens !== null ? <><dt>{t("angelica.job.projectionLabel")}</dt><dd>{formatNumber(limit.projectedTokens)}</dd></> : null}
+        <dt>{t("angelica.limit.current")}</dt><dd>{formatNumber(limit.previousLimit)}</dd>
+        <dt>{t("angelica.limit.new")}</dt><dd><strong>{formatNumber(limit.tokenLimit)}</strong></dd>
+      </dl>
+      <p className="field-hint">{t("angelica.limit.hint")}</p>
+      {proposal.message ? <p className="ai-test-result failed"><UiIcon icon="circleAlert" size="xs" />{proposal.message}</p> : null}
+      {proposal.status === "pending" ? (
+        <div className="angelica-proposal-actions">
+          <button className="button button-ghost" type="button" disabled={busy} onClick={() => onReject([proposal.id])}>{t("angelica.proposal.reject")}</button>
+          <button className="button button-primary" type="button" disabled={busy} onClick={() => onApply([proposal.id])}>{t("angelica.limit.apply")}</button>
         </div>
       ) : null}
     </li>
