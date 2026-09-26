@@ -9,3 +9,6 @@ description = "Lossless structured game-string parsing, validation, and renderin
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+rusqlite = { version = "0.40.2", features = ["bundled"] }

@@ -1,5 +1,4 @@
 use std::env;
-use std::fmt::Write as _;
 use std::fs;
 use std::thread;
 use std::time::Duration;
@@ -8,14 +7,6 @@ use serde_json::json;
 
 fn main() {
     let args = env::args().collect::<Vec<_>>();
-    if args.get(1).map(String::as_str) == Some("--version") {
-        println!("0.4.0-fake");
-        return;
-    }
-    if args.get(1).map(String::as_str) == Some("encode") {
-        encode(&args);
-        return;
-    }
     let game_path = args
         .windows(2)
         .find(|pair| pair[0] == "--game-path")
@@ -82,48 +73,4 @@ fn main() {
 
 fn emit(value: &serde_json::Value) {
     println!("{value}");
-}
-
-// Encodes plain text as its UTF-8 bytes. Special inputs select failures:
-// "reject" is refused, "crash" exits non-zero, "short" drops a result line.
-fn encode(args: &[String]) {
-    let value = |flag: &str| {
-        args.windows(2)
-            .find(|pair| pair[0] == flag)
-            .map(|pair| pair[1].clone())
-            .expect("flag present")
-    };
-    let requests = fs::read_to_string(value("--input")).expect("read requests");
-    let mut results = Vec::new();
-    for line in requests.lines() {
-        let request: serde_json::Value = serde_json::from_str(line).expect("request json");
-        let text = request["macro"].as_str().expect("macro").to_owned();
-        match text.as_str() {
-            "crash" => {
-                eprintln!("fake encoder crashed");
-                std::process::exit(1);
-            }
-            "short" => {}
-            "reject" => {
-                results.push(json!({"error": "invalidMacro", "message": "rejected"}).to_string());
-            }
-            _ => {
-                let hex = text.bytes().fold(String::new(), |mut out, b| {
-                    let _ = write!(out, "{b:02x}");
-                    out
-                });
-                results.push(json!({ "hex": hex }).to_string());
-            }
-        }
-    }
-    fs::write(
-        value("--output"),
-        results.join(
-            "
-",
-        ) + "
-",
-    )
-    .expect("write results");
-    println!("{}", json!({"encoded": results.len(), "failed": 0}));
 }

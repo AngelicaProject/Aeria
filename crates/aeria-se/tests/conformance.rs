@@ -362,3 +362,25 @@ fn assert_node_spans(parsed: &aeria_se::MacroString, source: &str) {
         );
     }
 }
+
+#[test]
+fn golden_lumina_output_encodes_and_decodes_back_to_itself() {
+    // Fallback forms are printed by Lumina but cannot be parsed back.
+    const UNPARSEABLE: &[&str] = &[
+        "unsupported_macro_payload",
+        "raw_payload_fallback",
+        "opaque_expression_fallback",
+    ];
+    let golden = include_str!("fixtures/lumina_to_macro_string.golden.txt");
+    for line in golden.lines().filter(|line| !line.starts_with('#')) {
+        let (name, text) = line.split_once('\t').expect("vector");
+        let encoded = aeria_se::codec::encode(text);
+        if UNPARSEABLE.contains(&name) {
+            assert!(encoded.is_err(), "{name}");
+            continue;
+        }
+        let bytes = encoded.unwrap_or_else(|error| panic!("{name}: {error}"));
+        assert_eq!(aeria_se::codec::decode(&bytes), text, "{name}");
+        assert_eq!(aeria_se::codec::encode_checked(text), Ok(bytes), "{name}");
+    }
+}

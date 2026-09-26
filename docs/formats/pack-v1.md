@@ -126,7 +126,7 @@ followed by one LF. Readers reject unknown, missing, and duplicate fields.
 | `source.*` | copied from the verified HXS the pack was built from |
 | `contentPolicy` | `reviewed` or `all` (see [Cell state](#cell-state)) |
 | `project.commit` | Git commit of the exported workspace state |
-| `exporter` | producing Aeria version and the Atlas version that encoded the strings |
+| `exporter` | producing Aeria version, and in `atlas` the string dialect the cells were encoded in, such as `lumina-7.7.0`; packs exported before Aeria encoded strings itself hold the Harmonia Atlas version that encoded them. Readers treat `atlas` as a non-empty display string |
 | `minHarmonia` | lowest Harmonia version that implements this format minor |
 | `counts` | exact counts; readers verify them. `strings` is the number of distinct stored strings |
 
@@ -202,9 +202,10 @@ strings are stored once, in order of first reference when cells are visited in
 canonical `(sheet, rowId, subrowId, ordinal)` order. The stored strings and
 their terminators cover the section exactly; there are no unreferenced bytes.
 
-The bytes are produced by Harmonia Atlas encoding the validated target macro
-text (see [`../architecture/export.md`](../architecture/export.md)). Harmonia
-writes them into the game row buffer unchanged.
+The bytes are produced by encoding the validated target macro text in the
+Lumina 7.7.0 dialect of the HXS source (see
+[`../architecture/export.md`](../architecture/export.md)). Harmonia writes
+them into the game row buffer unchanged.
 
 ## `FONTS` section
 

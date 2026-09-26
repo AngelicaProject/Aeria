@@ -12,8 +12,7 @@ use crate::writer::{CellState, LayoutColumn, PackCell, PackSheet, SheetVariant, 
 const ENCODE_BATCH: usize = 4096;
 
 /// Turns validated target macro text into the exact `SeString` bytes the game
-/// reads. Production uses the pinned Atlas sidecar (Lumina), the same library
-/// that produced the HXS macro text.
+/// reads. Production uses [`SeStringEncoder`].
 pub trait StringEncoder {
     /// Encodes `macros` in order. Per-string failures are returned in place;
     /// `Err` means the encoder itself failed.
@@ -21,6 +20,25 @@ pub trait StringEncoder {
     /// # Errors
     /// Returns a description of an encoder failure (process, protocol, I/O).
     fn encode(&mut self, macros: &[&str]) -> Result<Vec<Result<Vec<u8>, String>>, String>;
+}
+
+/// Encodes with `aeria_se::codec::encode_checked`, which follows the Lumina
+/// 7.7.0 dialect that produced the HXS macro text.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct SeStringEncoder;
+
+impl SeStringEncoder {
+    /// The dialect recorded as the pack manifest's `exporter.atlas`.
+    pub const DIALECT: &str = aeria_se::codec::STRING_DIALECT;
+}
+
+impl StringEncoder for SeStringEncoder {
+    fn encode(&mut self, macros: &[&str]) -> Result<Vec<Result<Vec<u8>, String>>, String> {
+        Ok(macros
+            .iter()
+            .map(|text| aeria_se::codec::encode_checked(text).map_err(|error| error.to_string()))
+            .collect())
+    }
 }
 
 /// What the export left out and why. Nothing here is an error; the report is

@@ -203,6 +203,9 @@ dependencies = [
 [[package]]
 name = "aeria-se"
 version = "0.1.0"
+dependencies = [
+ "rusqlite",
+]
 
 [[package]]
 name = "aeria-search"

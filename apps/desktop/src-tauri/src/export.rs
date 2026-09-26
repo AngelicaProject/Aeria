@@ -7,11 +7,10 @@
 
 use std::path::{Path, PathBuf};
 
-use aeria_atlas::{AtlasEncodeRunner, CancellationToken};
 use aeria_export::{
     BuiltPack, Channel, ContentPolicy, ExportError, ExportReport, FeedDownload, PACK_SETTINGS_FILE,
-    PackManifest, PackSettings, Publisher, StringEncoder, collect_project, compress_for_transport,
-    feed_entry, pack_source, write_file_atomically, write_pack_with_fonts,
+    PackManifest, PackSettings, Publisher, SeStringEncoder, collect_project,
+    compress_for_transport, feed_entry, pack_source, write_file_atomically, write_pack_with_fonts,
 };
 use aeria_fonts::{FontSection, FontSettings};
 use aeria_git::{GitExecutable, GitRepository, HostCredential};
@@ -24,9 +23,8 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tauri::Manager;
 
-use crate::commands::{resolve_atlas_executable, run_blocking};
+use crate::commands::run_blocking;
 use crate::error::CommandError;
-use crate::paths::AeriaPaths;
 use crate::state::{Activity, DesktopState};
 
 type CommandResult<T> = Result<T, CommandError>;
@@ -472,26 +470,6 @@ fn project_signer(
     Ok(secret)
 }
 
-struct AtlasEncoder {
-    runner: AtlasEncodeRunner,
-    cancellation: CancellationToken,
-}
-
-impl StringEncoder for AtlasEncoder {
-    fn encode(&mut self, macros: &[&str]) -> Result<Vec<Result<Vec<u8>, String>>, String> {
-        let results = self
-            .runner
-            .encode(macros, &self.cancellation)
-            .map_err(|error| error.to_string())?;
-        Ok(results
-            .into_iter()
-            .map(|result| {
-                result.map_err(|rejection| format!("{}: {}", rejection.code, rejection.message))
-            })
-            .collect())
-    }
-}
-
 struct BuiltRelease {
     manifest: PackManifest,
     fonts: Option<FontSection>,
@@ -508,13 +486,6 @@ fn build(
     signer: Option<&SigningSecret>,
 ) -> CommandResult<BuiltRelease> {
     let version = release.version.trim();
-    let atlas = AtlasEncodeRunner::new(
-        resolve_atlas_executable(app)?,
-        app.aeria_cache_dir()
-            .map_err(|error| CommandError::internal_state(error.to_string()))?
-            .join("atlas-encode"),
-    );
-    let exporter_atlas = atlas.version()?;
     let state = app.state::<DesktopState>();
     // The project stays locked so the workspace cannot change between the
     // commit check and the end of collection.
@@ -549,18 +520,14 @@ fn build(
         },
         project_commit: commit,
         exporter_aeria: env!("CARGO_PKG_VERSION").to_owned(),
-        exporter_atlas,
+        exporter_atlas: SeStringEncoder::DIALECT.to_owned(),
         min_harmonia: settings.min_harmonia.clone(),
-    };
-    let mut encoder = AtlasEncoder {
-        runner: atlas,
-        cancellation: CancellationToken::default(),
     };
     let export = collect_project(
         session.workspace(),
         session.source(),
         manifest.content_policy,
-        &mut encoder,
+        &mut SeStringEncoder,
     )?;
     let root = session.repository_root().to_owned();
     drop(project);
