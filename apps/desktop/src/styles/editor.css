@@ -188,3 +188,87 @@
 .checkpoint-diff-text del { border-radius: 2px; background: color-mix(in srgb, var(--bad) 20%, transparent); color: var(--fg-subtle); text-decoration: line-through; }
 .git-mark-added { color: var(--ok) !important; }
 .git-mark-modified { color: var(--accent-text) !important; }
+
+/* Macro errors and hovers from the Rust view of the text. */
+.cm-macro-error {
+  text-decoration: wavy underline var(--bad);
+  text-decoration-skip-ink: none;
+  text-underline-offset: 3px;
+}
+.macro-editor .cm-tooltip {
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: var(--popover);
+  box-shadow: var(--shadow-pop);
+  color: var(--fg);
+}
+.macro-hover {
+  display: grid;
+  gap: 2px;
+  max-width: 420px;
+  padding: 6px 9px;
+  font-size: var(--text-xs);
+  line-height: 1.4;
+}
+.macro-hover-title { color: var(--macro); font-family: var(--font-mono); font-weight: 600; }
+.macro-hover.is-error .macro-hover-title { color: var(--bad); }
+
+/* The string as the game shows it: light text on the dark game window. */
+.editor-preview {
+  display: grid;
+  flex: none;
+  gap: 4px;
+  padding: 8px 12px 10px;
+  border-top: 1px solid var(--line);
+}
+.game-preview {
+  max-height: 180px;
+  overflow: auto;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  background: #1b1b1f;
+  color: #eeeeee;
+  font-size: var(--text-sm);
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.game-preview .preview-nothing { color: #8c8c8c; font-style: italic; }
+.preview-value {
+  padding: 0 4px;
+  border-radius: 3px;
+  background: rgb(255 255 255 / 0.1);
+  box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.18);
+  font-style: normal;
+}
+.preview-value-gameData { box-shadow: inset 0 0 0 1px rgb(120 180 255 / 0.45); }
+.preview-value-playerName { box-shadow: inset 0 0 0 1px rgb(255 210 120 / 0.5); }
+.preview-icon {
+  display: inline-grid;
+  min-width: 1.3em;
+  height: 1.3em;
+  place-items: center;
+  margin: 0 1px;
+  padding: 0 2px;
+  border-radius: 50%;
+  background: rgb(255 255 255 / 0.16);
+  color: #cfcfcf;
+  font-size: 0.7em;
+  vertical-align: middle;
+}
+.preview-opaque { color: #9a9a9a; font-family: var(--font-mono); font-size: 0.85em; }
+.preview-choice {
+  display: inline;
+  padding: 0;
+  border: 0;
+  border-bottom: 1px dashed rgb(255 255 255 / 0.35);
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: inherit;
+  cursor: default;
+}
+.preview-choice.is-switchable { cursor: pointer; }
+.preview-choice.is-switchable:hover { background: rgb(255 255 255 / 0.08); }
+.preview-choice-index { margin-left: 1px; color: #8fb4ff; font-size: 0.65em; }
+.preview-empty-branch { color: #777777; }

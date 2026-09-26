@@ -95,6 +95,23 @@ fn block_content_spans_cover_exactly_the_branch_text() {
         document.slice(document.nodes()[1].span),
         Some("<if ($n1 == 1)>a <b>b</b><else>c</if>")
     );
+    let tags: Vec<_> = syntax
+        .tags
+        .iter()
+        .map(|span| document.slice(*span).expect("tag"))
+        .collect();
+    assert_eq!(tags, ["<if ($n1 == 1)>", "<else>", "</if>"]);
+
+    let switch = parse("<switch $n1><case>{1}<case>b</switch>");
+    let SyntaxKind::Macro(syntax) = &switch.nodes()[0].kind else {
+        panic!("a macro");
+    };
+    let tags: Vec<_> = syntax
+        .tags
+        .iter()
+        .map(|span| switch.slice(*span).expect("tag"))
+        .collect();
+    assert_eq!(tags, ["<switch $n1>", "<case>", "<case>", "</switch>"]);
 }
 
 fn first_error(text: &str) -> (DiagnosticKind, String) {
@@ -184,4 +201,11 @@ fn nesting_is_bounded() {
     );
     let fine = "<upper>".repeat(60) + "x" + &"</upper>".repeat(60);
     assert!(parse(&fine).diagnostics().is_empty());
+}
+
+#[test]
+fn an_unfinished_closing_tag_reports_its_missing_bracket() {
+    let (kind, message) = first_error("a</color");
+    assert_eq!(kind, DiagnosticKind::UnexpectedEof);
+    assert!(message.contains("missing its >"), "{message}");
 }

@@ -14,6 +14,7 @@
 pub mod bytes;
 pub mod catalog;
 pub mod codec;
+pub mod preview;
 mod semantic;
 mod syntax;
 mod tagged;

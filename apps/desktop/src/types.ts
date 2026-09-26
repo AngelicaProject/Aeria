@@ -818,3 +818,49 @@ export type UpdateStatusDto = {
   error: CommandError | null;
   runningActivities: RunningActivity[];
 };
+
+/** A problem in macro text, in UTF-16 offsets. */
+export type MacroDiagnosticDto = { from: number; to: number; message: string };
+
+export type MacroParameterDto = { prefix: "n" | "s" | "gn" | "gs"; index: number };
+
+export type MacroTagPart = "inline" | "open" | "close" | "separator" | "generic" | "raw";
+
+export type MacroFamily = "translatableText" | "formatting" | "condition" | "runtimeValue" | "gameData" | "layout" | "opaque";
+
+export type MacroArgDto = { name: string; role: string; value: string; parameter: MacroParameterDto | null };
+
+/** One tag of macro text: an opening, closing, separator, or inline tag. */
+export type MacroTagDto = {
+  from: number;
+  to: number;
+  name: string;
+  part: MacroTagPart;
+  family: MacroFamily | null;
+  args: MacroArgDto[];
+};
+
+export type PreviewStyleDto = { color: string | null; edge: string | null; italic: boolean; bold: boolean };
+
+export type PreviewChoiceDto =
+  | { type: "if"; condition: string }
+  | { type: "switch"; value: string }
+  | { type: "gender" | "myself" | "name" | "josa" };
+
+export type PreviewValueKind = "number" | "text" | "playerName" | "gameData" | "time" | "other";
+
+/** One piece of a string as the game shows it. */
+export type PreviewPieceDto =
+  | { kind: "text"; text: string; style: PreviewStyleDto }
+  | { kind: "break" }
+  | { kind: "value"; valueKind: PreviewValueKind; source: string; parameter: MacroParameterDto | null; label: string; style: PreviewStyleDto }
+  | { kind: "icon"; icon: number; device: boolean }
+  | { kind: "choice"; choice: PreviewChoiceDto; branches: PreviewPieceDto[][] }
+  | { kind: "ruby"; base: PreviewPieceDto[]; reading: PreviewPieceDto[] }
+  | { kind: "opaque"; spelling: string };
+
+export type MacroViewDto = {
+  diagnostics: MacroDiagnosticDto[];
+  tags: MacroTagDto[];
+  preview: PreviewPieceDto[];
+};

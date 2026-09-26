@@ -1,19 +1,24 @@
 import { useEffect, useRef } from "react";
-import { Annotation, Compartment, EditorState, Prec, type Extension, type Range } from "@codemirror/state";
+import { Annotation, Compartment, EditorState, Prec, StateEffect, StateField, type Extension, type Range } from "@codemirror/state";
 import {
   Decoration,
   EditorView,
   ViewPlugin,
   drawSelection,
   highlightSpecialChars,
+  hoverTooltip,
   keymap,
   placeholder as placeholderExtension,
   type DecorationSet,
   type ViewUpdate,
 } from "@codemirror/view";
 import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
+import { describeTag, tagAt } from "../macroLabels";
 import { scanMacros } from "../macroTokens";
+import type { Translate } from "../i18n/translate";
+import { useI18n } from "../ui/i18n";
 import { usePreferences } from "../ui/preferences";
+import type { MacroViewState } from "../ui/useMacroView";
 
 type MacroEditorProps = {
   value: string;
@@ -27,6 +32,8 @@ type MacroEditorProps = {
   onSaveAndNext?: () => void;
   onApproveAndNext?: () => void;
   onNavigate?: (direction: 1 | -1) => void;
+  /** The Rust description of the text, for hovers and error marks. */
+  view?: MacroViewState | null;
 };
 
 const externalChange = Annotation.define<boolean>();
@@ -42,6 +49,65 @@ function macroDecorations(view: EditorView): DecorationSet {
   return Decoration.set(ranges, true);
 }
 
+const setDiagnostics = StateEffect.define<DecorationSet>();
+
+/** Error marks from the latest Rust view, mapped through later edits. */
+const diagnosticsField = StateField.define<DecorationSet>({
+  create: () => Decoration.none,
+  update(value, transaction) {
+    let next = value.map(transaction.changes);
+    for (const effect of transaction.effects) if (effect.is(setDiagnostics)) next = effect.value;
+    return next;
+  },
+  provide: (field) => EditorView.decorations.from(field),
+});
+
+function diagnosticMarks(state: MacroViewState, length: number): DecorationSet {
+  const ranges: Range<Decoration>[] = [];
+  for (const diagnostic of state.view.diagnostics) {
+    let from = Math.min(diagnostic.from, length);
+    let to = Math.min(diagnostic.to, length);
+    if (from === to) {
+      if (length === 0) continue;
+      from = Math.max(0, from - 1);
+      to = Math.max(to, from + 1);
+    }
+    ranges.push(Decoration.mark({ class: "cm-macro-error", attributes: { title: diagnostic.message } }).range(from, to));
+  }
+  return Decoration.set(ranges, true);
+}
+
+function hoverDom(title: string, lines: readonly string[], error: boolean): HTMLElement {
+  const dom = document.createElement("div");
+  dom.className = `macro-hover${error ? " is-error" : ""}`;
+  const heading = document.createElement("div");
+  heading.className = "macro-hover-title";
+  heading.textContent = title;
+  dom.append(heading);
+  for (const line of lines) {
+    const row = document.createElement("div");
+    row.textContent = line;
+    dom.append(row);
+  }
+  return dom;
+}
+
+/** Describes the tag or error under the pointer, from the latest Rust view. */
+function macroHover(source: { current: { view: MacroViewState | null; t: Translate } }): Extension {
+  return hoverTooltip((editor, position) => {
+    const { view, t } = source.current;
+    if (!view || view.text !== editor.state.doc.toString()) return null;
+    const diagnostic = view.view.diagnostics.find((candidate) => candidate.from <= position && position <= Math.max(candidate.to, candidate.from + 1));
+    if (diagnostic) {
+      return { pos: diagnostic.from, end: Math.max(diagnostic.to, diagnostic.from), above: true, create: () => ({ dom: hoverDom("⚠", [diagnostic.message], true) }) };
+    }
+    const tag = tagAt(view.view.tags, position);
+    if (!tag) return null;
+    const { title, lines } = describeTag(tag, t);
+    return { pos: tag.from, end: tag.to, above: true, create: () => ({ dom: hoverDom(title, lines, false) }) };
+  });
+}
+
 /** Presentation-only highlighting; Rust validates macro structure on save. */
 const macroHighlighter = ViewPlugin.fromClass(class {
   decorations: DecorationSet;
@@ -53,11 +119,14 @@ const macroHighlighter = ViewPlugin.fromClass(class {
   }
 }, { decorations: (plugin) => plugin.decorations });
 
-export function MacroEditor({ value, ariaLabel, onChange, readOnly = false, disabled = false, placeholder = "", className, onSave, onSaveAndNext, onApproveAndNext, onNavigate }: MacroEditorProps) {
+export function MacroEditor({ value, ariaLabel, onChange, readOnly = false, disabled = false, placeholder = "", className, onSave, onSaveAndNext, onApproveAndNext, onNavigate, view: macroView }: MacroEditorProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
+  const { t } = useI18n();
   const handlers = useRef({ onChange, onSave, onSaveAndNext, onApproveAndNext, onNavigate });
   handlers.current = { onChange, onSave, onSaveAndNext, onApproveAndNext, onNavigate };
+  const hoverSource = useRef<{ view: MacroViewState | null; t: Translate }>({ view: macroView ?? null, t });
+  hoverSource.current = { view: macroView ?? null, t };
   const compartments = useRef({ editable: new Compartment(), placeholder: new Compartment(), label: new Compartment(), highlight: new Compartment(), specialChars: new Compartment() });
   const { preferences } = usePreferences();
 
@@ -83,6 +152,8 @@ export function MacroEditor({ value, ariaLabel, onChange, readOnly = false, disa
           drawSelection(),
           specialChars.of(preferences.showControlCharacters ? highlightSpecialChars() : []),
           EditorView.lineWrapping,
+          diagnosticsField,
+          macroHover(hoverSource),
           highlight.of(preferences.highlightMacros ? macroHighlighter : []),
           editable.of(editableExtensions(readOnly, disabled)),
           placeholderCompartment.of(placeholder ? placeholderExtension(placeholder) : []),
@@ -114,6 +185,17 @@ export function MacroEditor({ value, ariaLabel, onChange, readOnly = false, disa
   useEffect(() => {
     viewRef.current?.dispatch({ effects: compartments.current.editable.reconfigure(editableExtensions(readOnly, disabled)) });
   }, [disabled, readOnly]);
+
+  useEffect(() => {
+    const view = viewRef.current;
+    if (!view) return;
+    if (!macroView) {
+      view.dispatch({ effects: setDiagnostics.of(Decoration.none) });
+      return;
+    }
+    if (macroView.text !== view.state.doc.toString()) return;
+    view.dispatch({ effects: setDiagnostics.of(diagnosticMarks(macroView, view.state.doc.length)) });
+  }, [macroView]);
 
   useEffect(() => {
     viewRef.current?.dispatch({ effects: [

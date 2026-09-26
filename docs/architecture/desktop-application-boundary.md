@@ -183,6 +183,14 @@ renderer re-reads it after each committed translation mutation or workspace
 reload and never derives sheet-wide progress from loaded row pages.
 `app_info` returns the application name and version for display.
 
+`macro_view(text)` describes macro text for the editor: its diagnostics, its
+tags (opening, separator, closing, or inline, with their catalog arguments),
+and a game preview from `aeria_se::preview`, all with UTF-16 offsets. It
+reads `UIColor` rows and constant sheet references from the open project's
+`GameSource` (`GameSource::ui_color` and `GameSource::cell_text`); without a
+project, references are shown as values. It changes nothing and needs no
+project.
+
 Filesystem, game reading, SQLite, workspace loading, row paging, and ordinary
 translation mutations run inside Tauri blocking workers. The async command
 handlers do not hold `DesktopState` or the project mutex across an await;

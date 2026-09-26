@@ -1,11 +1,13 @@
 import { forwardRef, memo, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
 import { bindingKey, domKey, rowKey } from "../binding";
-import type { ReviewState, SourceBinding, TranslationCellDto, TranslationRowDto, UnitChangeKind } from "../types";
+import type { PreviewPieceDto, ReviewState, SourceBinding, TranslationCellDto, TranslationRowDto, UnitChangeKind } from "../types";
 import { diffWords } from "../textDiff";
 import { IconButton } from "../ui/primitives/IconButton";
 import { Segmented } from "../ui/primitives/Segmented";
 import { UiIcon } from "../ui/primitives/UiIcon";
+import { GamePreview } from "./GamePreview";
 import { MacroEditor, focusMacroEditor } from "./MacroEditor";
+import { useMacroView } from "../ui/useMacroView";
 import { ReviewDot, reviewLabel } from "./ReviewDot";
 import { StringHistory } from "./StringHistory";
 import { useI18n } from "../ui/i18n";
@@ -124,6 +126,17 @@ function hasOtherDirtyDraft(row: TranslationRowDto, targetCell: TranslationCellD
   });
 }
 
+/** The string as the game shows it, under an editor. */
+function PreviewBlock({ pieces }: { pieces: PreviewPieceDto[] }) {
+  const { t } = useI18n();
+  return (
+    <div className="editor-preview">
+      <span className="eyebrow">{t("preview.title")}</span>
+      <GamePreview pieces={pieces} />
+    </div>
+  );
+}
+
 function Kbd({ keys }: { keys: string[] }) {
   return <span className="kbd-combo">{keys.map((key) => <kbd key={key}>{key}</kbd>)}</span>;
 }
@@ -183,6 +196,8 @@ const TranslationEditorImpl = forwardRef<TranslationEditorHandle, TranslationEdi
   const cellBusy = mutation !== null;
   const targetCanSave = selectedCell !== null && !cellBusy && !targetIsBlank && (selectedCell.translation === null || targetDirty);
   const noteCanSave = selectedCell?.translation != null && !cellBusy && noteDirty;
+  const sourceView = useMacroView(selectedCell?.sourceMacro ?? null);
+  const targetView = useMacroView(draft === null ? null : draft.target);
 
   const updateDraft = useCallback((cell: TranslationCellDto, field: keyof CellDraft, value: string) => {
     const key = bindingKey(cell.sourceBinding);
@@ -335,7 +350,8 @@ const TranslationEditorImpl = forwardRef<TranslationEditorHandle, TranslationEdi
             {onDraftWithAngelica ? <IconButton icon="sparkles" label={drafting ? t("editor.drafting") : t("editor.draftWithAngelica")} disabled={cellBusy || drafting} onClick={() => void draftWithAngelica()} /> : null}
             <IconButton icon="copyPlus" label={t("editor.copySource")} disabled={cellBusy} onClick={copySource} />
           </div>
-          <MacroEditor className="editor-surface" value={selectedCell.sourceMacro} readOnly ariaLabel={t("editor.sourceText", { column: String(selectedCell.sourceBinding.columnIndex) })} placeholder={t("editor.emptySource")} onNavigate={onNavigate} />
+          <MacroEditor className="editor-surface" value={selectedCell.sourceMacro} readOnly view={sourceView} ariaLabel={t("editor.sourceText", { column: String(selectedCell.sourceBinding.columnIndex) })} placeholder={t("editor.emptySource")} onNavigate={onNavigate} />
+          {sourceView && sourceView.text === selectedCell.sourceMacro ? <PreviewBlock pieces={sourceView.view.preview} /> : null}
           {row.context.length > 0 ? (
             <details className="context-block">
               <summary><UiIcon icon="chevronRight" size="xs" />{t("editor.context")} <span className="count">{row.context.length}</span></summary>
@@ -365,7 +381,9 @@ const TranslationEditorImpl = forwardRef<TranslationEditorHandle, TranslationEdi
             onSaveAndNext={() => saveTarget(true)}
             onApproveAndNext={approve}
             onNavigate={onNavigate}
+            view={targetView}
           />
+          {targetView && draft.target.length > 0 ? <PreviewBlock pieces={targetView.view.preview} /> : null}
           <div className="editor-pane-foot">
             <span className="editor-hint">
               {targetIsBlank ? t("editor.enterTranslation") : targetDirty ? t("common.unsaved") : null}

@@ -141,6 +141,7 @@ pub struct GameSource {
     sheet_names: Vec<String>,
     cache: Mutex<VecDeque<(String, Arc<SourceSheet>)>>,
     catalog: std::sync::OnceLock<Arc<Vec<SheetSummary>>>,
+    ui_colors: std::sync::OnceLock<Vec<(u32, u32)>>,
 }
 
 impl fmt::Debug for GameSource {
@@ -179,6 +180,7 @@ impl GameSource {
             sheet_names,
             cache: Mutex::new(VecDeque::new()),
             catalog: std::sync::OnceLock::new(),
+            ui_colors: std::sync::OnceLock::new(),
         })
     }
 
@@ -348,6 +350,35 @@ impl GameSource {
         let _ = self.catalog.set(catalog);
     }
 
+    /// The text color of a `UIColor` row in the default (dark) interface
+    /// theme, as `0xRRGGBBAA`. The sheet is read once.
+    #[must_use]
+    pub fn ui_color(&self, row: u32) -> Option<u32> {
+        let colors = self.ui_colors.get_or_init(|| read_ui_colors(&self.game));
+        colors
+            .binary_search_by_key(&row, |(id, _)| *id)
+            .ok()
+            .map(|index| colors[index].1)
+    }
+
+    /// The macro text of a String cell of any sheet in the source language,
+    /// such as an item name.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when a game file cannot be read.
+    pub fn cell_text(
+        &self,
+        sheet: &str,
+        row: u32,
+        column: u32,
+    ) -> Result<Option<String>, SourceError> {
+        Ok(match self.sheet(sheet)? {
+            SheetLookup::Present(sheet) => sheet.cell(row, 0, column).map(|cell| cell.text()),
+            SheetLookup::Missing | SheetLookup::Unavailable(_) => None,
+        })
+    }
+
     /// Reads a sheet without keeping it in memory, for scans over many
     /// sheets.
     ///
@@ -367,6 +398,26 @@ impl GameSource {
             Err(unavailable) => SheetLookup::Unavailable(unavailable),
         })
     }
+}
+
+/// The first color column of every `UIColor` row, sorted by row ID. A sheet
+/// that cannot be read has no colors.
+fn read_ui_colors(game: &GameData) -> Vec<(u32, u32)> {
+    let Ok(sheet) = excel::read_sheet(game, "UIColor", excel::Language::None) else {
+        return Vec::new();
+    };
+    let mut colors: Vec<(u32, u32)> = sheet
+        .rows()
+        .iter()
+        .filter_map(|row| {
+            let value = row.value(0).ok()?;
+            let bytes: [u8; 4] = value.as_slice().try_into().ok()?;
+            Some((row.row_id, u32::from_le_bytes(bytes)))
+        })
+        .collect();
+    colors.sort_unstable_by_key(|(id, _)| *id);
+    colors.dedup_by_key(|(id, _)| *id);
+    colors
 }
 
 fn read_version(game_path: &Path) -> Result<GameVersion, SourceError> {

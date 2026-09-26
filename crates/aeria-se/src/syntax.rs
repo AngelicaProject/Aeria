@@ -124,6 +124,10 @@ pub struct MacroSyntax {
     pub written: Written,
     /// The arguments in byte order.
     pub args: Vec<ExprSyntax>,
+    /// The spans of the tags that make up the macro: one tag for an inline
+    /// macro or a pair tag; for a block, the opening tag, each separator,
+    /// and the closing tag.
+    pub tags: Vec<Span>,
 }
 
 /// A parsed expression. For a block argument, the span is the block's
@@ -818,11 +822,20 @@ impl<'a> Parser<'a> {
             return None;
         };
         if self.peek() != Some('>') {
+            let at_end = self.peek().is_none();
             self.recover();
             self.diagnose(
                 Span::new(start, self.position),
-                DiagnosticKind::InvalidDelimiter,
-                format!("</{}> takes no arguments", spec.name),
+                if at_end {
+                    DiagnosticKind::UnexpectedEof
+                } else {
+                    DiagnosticKind::InvalidDelimiter
+                },
+                if at_end {
+                    format!("</{}> is missing its >", spec.name)
+                } else {
+                    format!("</{}> takes no arguments", spec.name)
+                },
             );
             return None;
         }
@@ -842,6 +855,7 @@ impl<'a> Parser<'a> {
                 spec: Some(spec),
                 written: Written::Close,
                 args: vec![arg],
+                tags: vec![span],
             }),
         })
     }
@@ -900,6 +914,7 @@ impl<'a> Parser<'a> {
                 spec: None,
                 written: Written::Generic,
                 args,
+                tags: vec![Span::new(start, self.position)],
             }),
         })
     }
@@ -950,6 +965,7 @@ impl<'a> Parser<'a> {
 
     fn named(&mut self, start: usize, spec: &'static MacroSpec) -> Option<SyntaxNode> {
         let role = |index: usize| spec.arg(index).map_or(Role::Other, |arg| arg.role);
+        let mut tags = Vec::new();
         let (written, args) = match spec.form {
             Form::Inline => (Written::Inline, self.inline_args(start, &role)?),
             Form::Pair { implied, .. } => {
@@ -986,11 +1002,15 @@ impl<'a> Parser<'a> {
                         ),
                     );
                 }
-                let blocks = self.blocks(spec, separator, leading)?;
+                tags.push(Span::new(start, self.position));
+                let blocks = self.blocks(spec, separator, leading, &mut tags)?;
                 (Written::Block, self.assemble(start, spec, inline, blocks)?)
             }
         };
         let span = Span::new(start, self.position);
+        if tags.is_empty() {
+            tags.push(span);
+        }
         if !spec.accepts_count(args.len()) {
             self.diagnose(
                 span,
@@ -1010,6 +1030,7 @@ impl<'a> Parser<'a> {
                 spec: Some(spec),
                 written,
                 args,
+                tags,
             }),
         })
     }
@@ -1020,6 +1041,7 @@ impl<'a> Parser<'a> {
         spec: &'static MacroSpec,
         separator: Option<&'static str>,
         leading: bool,
+        tags: &mut Vec<Span>,
     ) -> Option<Vec<ExprSyntax>> {
         let stop = Stop::Block {
             name: spec.name,
@@ -1043,6 +1065,9 @@ impl<'a> Parser<'a> {
                     ),
                 );
             }
+            if matches!(ended, Ended::Separator | Ended::Close) {
+                tags.push(Span::new(self.content_end(&ended), self.position));
+            }
             match ended {
                 Ended::Separator => {}
                 Ended::Close => return Some(blocks),
@@ -1052,35 +1077,18 @@ impl<'a> Parser<'a> {
         loop {
             let content_start = self.position;
             let expr = if self.peek() == Some('{') {
-                self.position += 1;
-                self.skip_spaces();
-                let role = spec
-                    .args
-                    .iter()
-                    .find(|arg| arg.place == Place::Block)
-                    .map_or(Role::Other, |arg| arg.role);
-                let inner = self.expr(role);
-                self.skip_spaces();
-                if self.peek() == Some('}') {
-                    self.position += 1;
-                } else {
-                    self.diagnose(
-                        self.here(),
-                        DiagnosticKind::InvalidDelimiter,
-                        "a { value } is missing its }",
-                    );
-                }
-                ExprSyntax {
-                    span: Span::new(content_start, self.position),
-                    kind: inner.kind,
-                }
+                self.brace_value(spec)
             } else {
                 let (nodes, ended) = self.content(&stop);
+                let content_end = self.content_end(&ended);
                 let expr = ExprSyntax {
-                    span: Span::new(content_start, self.content_end(&ended)),
+                    span: Span::new(content_start, content_end),
                     kind: ExprKind::Str(nodes),
                 };
                 blocks.push(expr);
+                if matches!(ended, Ended::Separator | Ended::Close) {
+                    tags.push(Span::new(content_end, self.position));
+                }
                 match ended {
                     Ended::Separator => continue,
                     Ended::Close => return Some(blocks),
@@ -1088,11 +1096,15 @@ impl<'a> Parser<'a> {
                 }
             };
             blocks.push(expr);
+            let tag_start = self.position;
             let after = if self.peek() == Some('<') {
                 self.structure_tag(&stop)
             } else {
                 Structure::None
             };
+            if matches!(after, Structure::Ended(_)) {
+                tags.push(Span::new(tag_start, self.position));
+            }
             match after {
                 Structure::Ended(Ended::Separator) => {}
                 Structure::Ended(Ended::Close) => return Some(blocks),
@@ -1106,6 +1118,9 @@ impl<'a> Parser<'a> {
                         ),
                     );
                     let (_, ended) = self.content(&stop);
+                    if matches!(ended, Ended::Separator | Ended::Close) {
+                        tags.push(Span::new(self.content_end(&ended), self.position));
+                    }
                     match ended {
                         Ended::Separator => {}
                         Ended::Close => return Some(blocks),
@@ -1113,6 +1128,33 @@ impl<'a> Parser<'a> {
                     }
                 }
             }
+        }
+    }
+
+    /// Reads a whole-part `{ value }` of a block at `{`.
+    fn brace_value(&mut self, spec: &'static MacroSpec) -> ExprSyntax {
+        let start = self.position;
+        self.position += 1;
+        self.skip_spaces();
+        let role = spec
+            .args
+            .iter()
+            .find(|arg| arg.place == Place::Block)
+            .map_or(Role::Other, |arg| arg.role);
+        let inner = self.expr(role);
+        self.skip_spaces();
+        if self.peek() == Some('}') {
+            self.position += 1;
+        } else {
+            self.diagnose(
+                self.here(),
+                DiagnosticKind::InvalidDelimiter,
+                "a { value } is missing its }",
+            );
+        }
+        ExprSyntax {
+            span: Span::new(start, self.position),
+            kind: inner.kind,
         }
     }
 

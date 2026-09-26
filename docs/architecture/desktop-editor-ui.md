@@ -180,8 +180,28 @@ Source and target sit side by side, with the translator note beside them (or
 below them in a narrow document). Source is read-only; target is a CodeMirror
 editor. Both highlight macro spans with a presentation-only scanner;
 Rust remains the authority for parsing and validation, and macro text is never
-rewritten by the highlighter. Row context cells are available in a collapsible
-section under the source. **Copy source to target** replaces the target draft
+rewritten by the highlighter.
+
+The editors also show what Rust reads from the text, through the
+`macro_view` command (debounced while typing, and ignored when it describes
+an older text):
+
+- **Hovers.** Hovering a tag shows what it does and its arguments in the
+  interface language, for example `<sheet>` with its sheet, row (`$n1`,
+  "number 1"), and column. Summaries, argument names, and family names come
+  from the macro catalog and are localized in the renderer.
+- **Errors.** Diagnostics are underlined, and hovering one shows its message,
+  such as `<colour> is not a macro; did you mean <color>?`.
+- **In game.** Under the source and under a non-empty target, a preview shows
+  the string as the game shows it: colors from `<color>` and the game's
+  `UIColor` sheet, outlines, italics, bold, line breaks, and names read from
+  game data for constant references such as `<sheet Item 4 0>`. Values
+  supplied at runtime are labeled chips ("number 1", "player name");
+  conditions show one branch at a time, and clicking one shows the next with
+  its condition in the tooltip. Icons are shown by number until the game's
+  icon textures are read.
+
+Row context cells are available in a collapsible section under the source. **Copy source to target** replaces the target draft
 with the source macro text.
 
 Each cell has an independent target draft, note draft, translation-unit ID,

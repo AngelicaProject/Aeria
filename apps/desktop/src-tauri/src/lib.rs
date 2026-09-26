@@ -11,6 +11,7 @@ mod git;
 mod guide;
 mod job_workers;
 mod jobs;
+mod macros;
 mod paths;
 mod project_changes;
 mod search;
@@ -187,6 +188,7 @@ pub fn run() {
             set_translation_note,
             set_translation_review_state,
             translation_progress,
+            macros::macro_view,
             git_overview,
             git_initialize,
             git_set_identity,
