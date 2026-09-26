@@ -218,7 +218,40 @@
   overflow: hidden;
   padding: 2px 12px 12px;
 }
+.pane-preview .game-preview-frame { display: flex; flex: 1; flex-direction: column; min-height: 0; }
 .pane-preview .game-preview { flex: 1; }
+.preview-conditions {
+  display: flex;
+  flex: none;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 12px;
+  padding: 0 0 6px;
+  color: var(--fg-muted);
+  font-size: var(--text-xs);
+}
+.preview-conditions-label { color: var(--fg-subtle); font-weight: 600; }
+.preview-var { display: inline-flex; align-items: center; gap: 5px; }
+.preview-var code { color: var(--macro); font-family: var(--font-mono); }
+.preview-var input {
+  height: 22px;
+  padding: 0 4px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--field);
+  color: var(--fg);
+  font: inherit;
+}
+.preview-var input { width: 8ch; }
+.preview-conditions-reset {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent-text);
+  font: inherit;
+  cursor: pointer;
+}
+.preview-cond { text-decoration: underline dotted rgb(255 255 255 / 0.3); text-underline-offset: 3px; }
 .pane-preview .lens-empty { padding: 8px 0; }
 .game-preview {
   min-height: 0;

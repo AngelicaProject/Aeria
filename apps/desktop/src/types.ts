@@ -842,9 +842,22 @@ export type MacroTagDto = {
 
 export type PreviewStyleDto = { color: string | null; edge: string | null; italic: boolean; bold: boolean };
 
+/** A value a condition reads, when the preview can evaluate it. */
+export type PreviewOperandDto =
+  | { type: "int"; value: number }
+  | { type: "parameter"; prefix: MacroParameterDto["prefix"]; index: number }
+  | { type: "gameValue"; name: string }
+  | { type: "other" };
+
+/** A condition, when the preview can evaluate it. */
+export type PreviewTestDto =
+  | { type: "value"; operand: PreviewOperandDto }
+  | { type: "compare"; operator: "==" | "!=" | "<" | "<=" | ">" | ">="; left: PreviewOperandDto; right: PreviewOperandDto }
+  | { type: "other" };
+
 export type PreviewChoiceDto =
-  | { type: "if"; condition: string }
-  | { type: "switch"; value: string }
+  | { type: "if"; condition: string; test: PreviewTestDto }
+  | { type: "switch"; value: string; selector: PreviewOperandDto }
   | { type: "gender" | "myself" | "name" | "josa" };
 
 export type PreviewValueKind = "number" | "text" | "playerName" | "gameData" | "time" | "other";

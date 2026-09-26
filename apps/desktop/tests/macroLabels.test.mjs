@@ -21,8 +21,8 @@ test("parameters and values read as words", () => {
 });
 
 test("choices label every branch", () => {
-  assert.deepEqual(choiceLabels({ type: "if", condition: "($n1 == 1)" }, 2, en), ["when ($n1 == 1)", "otherwise"]);
-  assert.deepEqual(choiceLabels({ type: "switch", value: "$weekday" }, 2, en), ["when $weekday is 1", "when $weekday is 2"]);
+  assert.deepEqual(choiceLabels({ type: "if", condition: "($n1 == 1)", test: { type: "other" } }, 2, en), ["when ($n1 == 1)", "otherwise: ($n1 == 1) does not hold"]);
+  assert.deepEqual(choiceLabels({ type: "switch", value: "$weekday", selector: { type: "other" } }, 2, en), ["when $weekday is 1", "when $weekday is 2"]);
   assert.deepEqual(choiceLabels({ type: "gender" }, 2, ru), ["мужской персонаж", "женский персонаж"]);
 });
 

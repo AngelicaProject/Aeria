@@ -51,7 +51,7 @@ export function choiceLabels(choice: PreviewChoiceDto, count: number, t: Transla
   const labels = (first: MessageKey, second: MessageKey) => Array.from({ length: count }, (_, index) => t(index === 0 ? first : second));
   switch (choice.type) {
     case "if":
-      return Array.from({ length: count }, (_, index) => index === 0 ? t("preview.choice.when", { condition: choice.condition }) : t("preview.choice.otherwise"));
+      return Array.from({ length: count }, (_, index) => index === 0 ? t("preview.choice.when", { condition: choice.condition }) : t("preview.choice.otherwiseOf", { condition: choice.condition }));
     case "switch":
       return Array.from({ length: count }, (_, index) => t("preview.choice.case", { value: choice.value, n: index + 1 }));
     case "gender":

@@ -71,13 +71,39 @@ pub struct Parameter {
     pub index: u32,
 }
 
+/// A value a condition reads, when the preview can evaluate it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Operand {
+    Int(u32),
+    Parameter(Parameter),
+    /// A game value such as `hour`.
+    GameValue(&'static str),
+    /// A value the preview cannot evaluate, such as text.
+    Other,
+}
+
+/// A condition, when the preview can evaluate it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Test {
+    /// True when the value is not zero.
+    Value(Operand),
+    Compare {
+        operator: &'static str,
+        left: Operand,
+        right: Operand,
+    },
+    Other,
+}
+
 /// What decides between the branches of a choice.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ChoiceKind {
-    /// `<if>`: the condition as macro text; the second branch is "otherwise".
-    If { condition: String },
-    /// `<switch>`: the value as macro text; branch `n` is for value `n + 1`.
-    Switch { value: String },
+    /// `<if>`: the condition as macro text and as a test; the second branch
+    /// is "otherwise".
+    If { condition: String, test: Test },
+    /// `<switch>`: the value as macro text and as an operand; branch `n` is
+    /// for value `n + 1`.
+    Switch { value: String, selector: Operand },
     /// `<if-gender>`: male, then female.
     Gender,
     /// `<if-self>`: the reading player, then another character.
@@ -258,9 +284,11 @@ impl Renderer<'_> {
                 let kind = match spec.name {
                     "if" => ChoiceKind::If {
                         condition: arg(0).map(|expr| self.expr_text(expr)).unwrap_or_default(),
+                        test: arg(0).map_or(Test::Other, test_of),
                     },
                     "switch" => ChoiceKind::Switch {
                         value: arg(0).map(|expr| self.expr_text(expr)).unwrap_or_default(),
+                        selector: arg(0).map_or(Operand::Other, operand_of),
                     },
                     "if-gender" => ChoiceKind::Gender,
                     "if-self" => ChoiceKind::Myself,
@@ -487,6 +515,35 @@ fn push_text(pieces: &mut Vec<Piece>, text: &str, style: Style) {
     });
 }
 
+fn operand_of(expr: &ExprSyntax) -> Operand {
+    match &expr.kind {
+        ExprKind::Int(value) => Operand::Int(*value),
+        ExprKind::Nullary(code) => crate::catalog::NULLARY
+            .iter()
+            .find(|spec| spec.code == *code)
+            .map_or(Operand::Other, |spec| Operand::GameValue(spec.name)),
+        ExprKind::Param(..) => parameter_of(expr).map_or(Operand::Other, Operand::Parameter),
+        _ => Operand::Other,
+    }
+}
+
+fn test_of(expr: &ExprSyntax) -> Test {
+    match &expr.kind {
+        ExprKind::Compare(code, left, right) => catalog::COMPARISONS
+            .iter()
+            .find(|spec| spec.code == *code)
+            .map_or(Test::Other, |spec| Test::Compare {
+                operator: spec.operator,
+                left: operand_of(left),
+                right: operand_of(right),
+            }),
+        _ => match operand_of(expr) {
+            Operand::Other => Test::Other,
+            operand => Test::Value(operand),
+        },
+    }
+}
+
 fn parameter_of(expr: &ExprSyntax) -> Option<Parameter> {
     let ExprKind::Param(code, operand) = &expr.kind else {
         return None;
@@ -636,7 +693,11 @@ mod tests {
             preview("<if $gn1>{320}<else>{240}</if>", &NoData),
             [Piece::Choice {
                 kind: ChoiceKind::If {
-                    condition: "$gn1".to_owned()
+                    condition: "$gn1".to_owned(),
+                    test: Test::Value(Operand::Parameter(Parameter {
+                        prefix: "gn",
+                        index: 1
+                    })),
                 },
                 branches: vec![
                     vec![text("320", Style::default())],
@@ -652,7 +713,15 @@ mod tests {
             pieces[0],
             Piece::Choice {
                 kind: ChoiceKind::If {
-                    condition: "($n1 == 1)".to_owned()
+                    condition: "($n1 == 1)".to_owned(),
+                    test: Test::Compare {
+                        operator: "==",
+                        left: Operand::Parameter(Parameter {
+                            prefix: "n",
+                            index: 1
+                        }),
+                        right: Operand::Int(1),
+                    },
                 },
                 branches: vec![
                     vec![text("him", Style::default())],

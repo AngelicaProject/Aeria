@@ -6,7 +6,9 @@
 use std::sync::Arc;
 
 use aeria_se::catalog::{Form, Place, Role};
-use aeria_se::preview::{ChoiceKind, Parameter, Piece, PreviewData, Style, ValueKind};
+use aeria_se::preview::{
+    ChoiceKind, Operand, Parameter, Piece, PreviewData, Style, Test, ValueKind,
+};
 use aeria_se::{
     ExprKind, ExprSyntax, MacroString, MacroSyntax, SemanticFamily, SyntaxKind, SyntaxNode,
     Written, parse,
@@ -88,11 +90,36 @@ pub struct StyleDto {
     pub bold: bool,
 }
 
+/// A value a condition reads, when the preview can evaluate it.
+#[derive(Debug, Serialize)]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum OperandDto {
+    Int { value: u32 },
+    Parameter { prefix: &'static str, index: u32 },
+    GameValue { name: &'static str },
+    Other,
+}
+
+/// A condition, when the preview can evaluate it.
+#[derive(Debug, Serialize)]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum TestDto {
+    Value {
+        operand: OperandDto,
+    },
+    Compare {
+        operator: &'static str,
+        left: OperandDto,
+        right: OperandDto,
+    },
+    Other,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum ChoiceDto {
-    If { condition: String },
-    Switch { value: String },
+    If { condition: String, test: TestDto },
+    Switch { value: String, selector: OperandDto },
     Gender,
     Myself,
     Name,
@@ -412,6 +439,36 @@ const fn value_kind(kind: ValueKind) -> &'static str {
     }
 }
 
+fn operand_dto(operand: Operand) -> OperandDto {
+    match operand {
+        Operand::Int(value) => OperandDto::Int { value },
+        Operand::Parameter(parameter) => OperandDto::Parameter {
+            prefix: parameter.prefix,
+            index: parameter.index,
+        },
+        Operand::GameValue(name) => OperandDto::GameValue { name },
+        Operand::Other => OperandDto::Other,
+    }
+}
+
+fn test_dto(test: Test) -> TestDto {
+    match test {
+        Test::Value(operand) => TestDto::Value {
+            operand: operand_dto(operand),
+        },
+        Test::Compare {
+            operator,
+            left,
+            right,
+        } => TestDto::Compare {
+            operator,
+            left: operand_dto(left),
+            right: operand_dto(right),
+        },
+        Test::Other => TestDto::Other,
+    }
+}
+
 fn piece_dto(piece: Piece) -> PreviewPieceDto {
     match piece {
         Piece::Text { text, style } => PreviewPieceDto::Text {
@@ -435,8 +492,14 @@ fn piece_dto(piece: Piece) -> PreviewPieceDto {
         Piece::Icon { icon, device } => PreviewPieceDto::Icon { icon, device },
         Piece::Choice { kind, branches } => PreviewPieceDto::Choice {
             choice: match kind {
-                ChoiceKind::If { condition } => ChoiceDto::If { condition },
-                ChoiceKind::Switch { value } => ChoiceDto::Switch { value },
+                ChoiceKind::If { condition, test } => ChoiceDto::If {
+                    condition,
+                    test: test_dto(test),
+                },
+                ChoiceKind::Switch { value, selector } => ChoiceDto::Switch {
+                    value,
+                    selector: operand_dto(selector),
+                },
                 ChoiceKind::Gender => ChoiceDto::Gender,
                 ChoiceKind::Myself => ChoiceDto::Myself,
                 ChoiceKind::Name => ChoiceDto::Name,
@@ -494,6 +557,10 @@ mod tests {
         let json = serde_json::to_value(&view.preview).expect("json");
         assert_eq!(json[1]["kind"], "choice");
         assert_eq!(json[1]["choice"]["type"], "if");
+        assert_eq!(json[1]["choice"]["test"]["type"], "compare");
+        assert_eq!(json[1]["choice"]["test"]["operator"], "==");
+        assert_eq!(json[1]["choice"]["test"]["left"]["prefix"], "n");
+        assert_eq!(json[1]["choice"]["test"]["right"]["value"], 1);
         assert_eq!(json[1]["branches"][0][0]["style"]["italic"], true);
         assert_eq!(json[3]["kind"], "value");
         assert_eq!(json[3]["valueKind"], "gameData");

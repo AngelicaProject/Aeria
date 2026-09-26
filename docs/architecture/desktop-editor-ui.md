@@ -202,9 +202,19 @@ an older text):
   runtime are chips that show the code as written (`$n1`, `ClassJob · $n1`,
   or "player name"), and their tooltip says in full words what fills them
   in: a parameter the game passes to the string, or a global game variable
-  such as the player's class. Conditions show one branch at a time, and
-  clicking one shows the next with its condition in the tooltip; another
-  string starts at the first branches. Switching strings keeps the previous
+  such as the player's class. Conditions are evaluated as the game does,
+  from a **Conditions** bar above the text that lists every variable the
+  string's conditions read: parameters and global game variables such as
+  `$gn68` (class) and `$gn72` (level) as numbers, time values, and the
+  character's gender, whether it is the reading player, its name, and a
+  Korean word ending as choices. Each variable starts at the value that
+  shows the first branch of the first condition reading it; values set by
+  the user are shared by every string and kept locally, so setting a class
+  and level once shows every tooltip of that class, and **Reset** returns
+  the string's variables to their defaults. Nested conditions follow from
+  the values; a conditional fragment is underlined with the reason it is
+  shown in its tooltip. Only a condition the preview cannot evaluate, such as
+  one comparing text, is switched by clicking through its branches. Switching strings keeps the previous
   view until the new one arrives, requests it without delay (only typing is
   debounced), and shows strings seen before at once from a cache. Icons are
   shown by number until the game's icon textures are read.
