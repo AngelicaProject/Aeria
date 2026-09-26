@@ -54,11 +54,7 @@ UTF-8 JSON without BOM.
       "version": "2026.09.25",
       "channel": "stable",
       "packHash": "sha256:<hex>",
-      "source": {
-        "language": "en",
-        "gameVersion": "2026.08.12.0000.0000",
-        "contentId": "sha256:<hex>"
-      },
+      "source": { "language": "en", "gameVersion": "2026.08.12.0000.0000" },
       "target": { "language": "ru" },
       "contentPolicy": "reviewed",
       "minHarmonia": "1.4.0",

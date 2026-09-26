@@ -8,13 +8,13 @@ Start with [`overview.md`](./overview.md). It defines the major runtime boundari
 | Desktop application boundary | [`desktop-application-boundary.md`](./desktop-application-boundary.md) | `apps/desktop/src-tauri` |
 | Desktop translation editor UI | [`desktop-editor-ui.md`](./desktop-editor-ui.md) | `apps/desktop/src` |
 | Open project session ownership | [`project-session.md`](./project-session.md) | `aeria-workspace` |
-| Bounded translation reads | [`translation-read.md`](./translation-read.md) | `aeria-workspace`, `aeria-hxs` |
+| Bounded translation reads | [`translation-read.md`](./translation-read.md) | `aeria-workspace`, `aeria-source` |
 | Transactional translation mutations | [`translation-mutations.md`](./translation-mutations.md) | `aeria-workspace` |
-| HXS source snapshots and Atlas integration | [`source.md`](./source.md) | `aeria-hxs`, desktop source management |
+| The installed game as source: sheets, permission, row keys | [`source.md`](./source.md) | `aeria-sqpack`, `aeria-source` |
 | Structured strings and macros | [`strings.md`](./strings.md) | `aeria-se` |
 | Translation unit identity | [`identity.md`](./identity.md) | `aeria-core`, `aeria-workspace`, `aeria-rebase` |
 | Workspace state and persistence | [`workspace.md`](./workspace.md) | `aeria-workspace` |
-| Source updates after game patches | [`rebase.md`](./rebase.md), [`rebase-safety.md`](./rebase-safety.md), [`rebase-candidates.md`](./rebase-candidates.md) | `aeria-rebase`, `aeria-workspace` |
+| Source updates after game patches | [`rebase.md`](./rebase.md), [`rebase-safety.md`](./rebase-safety.md) | `aeria-rebase`, `aeria-workspace` |
 | Git-backed collaboration | [`git.md`](./git.md) | `aeria-git` |
 | Search and translation memory | [`search.md`](./search.md) | `aeria-search` |
 | Translation assistance | [`ai.md`](./ai.md) | `aeria-ai` |

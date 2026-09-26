@@ -57,9 +57,6 @@ import type {
   ReviewState,
   SheetProgressDto,
   SourceBinding,
-  SourceAvailability,
-  SourcePackageEntryDto,
-  SourcePackageJobDto,
   SourceUpdateReportDto,
   TranslationRowCursorDto,
   TranslationRowPageDto,
@@ -135,29 +132,17 @@ export function translationProgress(): Promise<SheetProgressDto[]> {
   return call<SheetProgressDto[]>("translation_progress");
 }
 
-/**
- * Opens a project. A workspace that is not current for the package fails with
- * `sourceUpdateRequired` unless `acceptSourceUpdate` is set.
- */
-export function openProject(
-  repositoryRoot: string,
-  sourcePackagePath: string,
-  acceptSourceUpdate = false,
-): Promise<ProjectOpenResultDto> {
-  return call<ProjectOpenResultDto>("open_project", { repositoryRoot, sourcePackagePath, acceptSourceUpdate });
-}
-
 /** Plans the source update opening would apply, without writing anything. */
-export function previewSourceUpdate(repositoryRoot: string, sourcePackagePath: string): Promise<SourceUpdateReportDto> {
-  return call<SourceUpdateReportDto>("preview_source_update", { repositoryRoot, sourcePackagePath });
+export function previewSourceUpdate(repositoryRoot: string): Promise<SourceUpdateReportDto> {
+  return call<SourceUpdateReportDto>("preview_source_update", { repositoryRoot });
 }
 
 /**
- * Opens a project with a local source package matching its workspace, or
- * builds one from the configured game installation under `jobId`.
+ * Opens a project with the configured game installation. When the project
+ * needs a source update, nothing is written and the plan is returned.
  */
-export function openProjectFromGame(jobId: string, repositoryRoot: string): Promise<GameOpenResultDto> {
-  return call<GameOpenResultDto>("open_project_from_game", { jobId, repositoryRoot });
+export function openProjectFromGame(repositoryRoot: string): Promise<GameOpenResultDto> {
+  return call<GameOpenResultDto>("open_project_from_game", { repositoryRoot });
 }
 
 /** The game installation setting, what it resolves to, and detected installations. */
@@ -170,82 +155,42 @@ export function setGamePath(path: string | null): Promise<GameSettingsDto> {
   return call<GameSettingsDto>("set_game_path", { path });
 }
 
-/** Packages in Aeria's source-package store, newest first. */
-export function listSourcePackages(): Promise<SourcePackageEntryDto[]> {
-  return call<SourcePackageEntryDto[]>("list_source_packages");
-}
-
-/** Deletes a package Aeria no longer needs and returns the updated list. */
-export function deleteSourcePackage(packageId: string): Promise<SourcePackageEntryDto[]> {
-  return call<SourcePackageEntryDto[]>("delete_source_package", { packageId });
-}
-
-/**
- * Whether opening (`opening`) or updating the project at `repositoryRoot`, or
- * creating one in `sourceLanguage`, finds a package without running Atlas.
- */
-export function sourceAvailability(repositoryRoot: string | null, sourceLanguage: string | null, opening: boolean): Promise<SourceAvailability> {
-  return call<SourceAvailability>("source_availability", { repositoryRoot, sourceLanguage, opening });
-}
-
-/** Opens the source-package store folder in the file manager. */
-export function revealSourcePackages(): Promise<void> {
-  return call<void>("reveal_source_packages");
-}
-
-/** Builds a source package from the configured game and updates the project to it. */
-export function updateProjectFromGame(jobId: string, repositoryRoot: string): Promise<ProjectOpenResultDto> {
-  return call<ProjectOpenResultDto>("update_project_from_game", { jobId, repositoryRoot });
+/** Opens the project with the configured game and applies a required source update. */
+export function updateProjectFromGame(repositoryRoot: string): Promise<ProjectOpenResultDto> {
+  return call<ProjectOpenResultDto>("update_project_from_game", { repositoryRoot });
 }
 
 export function listDetachedUnits(): Promise<DetachedUnitDto[]> {
   return call<DetachedUnitDto[]>("list_detached_units");
 }
 
-export function initializeProject(
-  repositoryRoot: string,
-  sourcePackagePath: string,
-  targetLanguage: string,
-): Promise<ProjectOpenResultDto> {
-  return call<ProjectOpenResultDto>("initialize_project", {
-    repositoryRoot,
-    sourcePackagePath,
-    targetLanguage,
-  });
-}
-
+/** Creates a project for the configured game installation. */
 export function initializeProjectFromGame(
-  jobId: string,
   repositoryRoot: string,
   sourceLanguage: string,
   targetLanguage: string,
 ): Promise<ProjectOpenResultDto> {
   return call<ProjectOpenResultDto>("initialize_project_from_game", {
-    jobId,
     repositoryRoot,
     sourceLanguage,
     targetLanguage,
   });
 }
 
-export function startSourcePackage(): Promise<SourcePackageJobDto> {
-  return call<SourcePackageJobDto>("start_source_package");
-}
-
 export function listRecentProjects(): Promise<RecentProjectDto[]> {
   return call<RecentProjectDto[]>("list_recent_projects");
 }
 
-export function openRecentProject(projectId: string, acceptSourceUpdate = false): Promise<ProjectOpenResultDto> {
-  return call<ProjectOpenResultDto>("open_recent_project", { projectId, acceptSourceUpdate });
+/**
+ * Opens a recent project with the configured game. Without
+ * `acceptSourceUpdate`, a required update returns its plan instead.
+ */
+export function openRecentProject(projectId: string, acceptSourceUpdate = false): Promise<GameOpenResultDto> {
+  return call<GameOpenResultDto>("open_recent_project", { projectId, acceptSourceUpdate });
 }
 
 export function forgetRecentProject(projectId: string): Promise<void> {
   return call<void>("forget_recent_project", { projectId });
-}
-
-export function cancelSourcePackage(jobId: string): Promise<void> {
-  return call<void>("cancel_source_package", { jobId });
 }
 
 export function closeProject(): Promise<void> {

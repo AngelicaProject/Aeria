@@ -1,4 +1,4 @@
-import type { MessageKey, Translate } from "./i18n/translate";
+import type { MessageKey } from "./i18n/translate";
 import type { CommandError } from "./types";
 
 export type LauncherErrorOperation = "open" | "clone" | "create" | "update" | "recentOpen";
@@ -23,6 +23,3 @@ export function launcherErrorTitle(operation: LauncherErrorOperation): MessageKe
   }
 }
 
-export function sourcePackageListenerError(t: Translate): CommandError {
-  return { code: "sourcePackageListener", message: t("launcher.error.listener") };
-}

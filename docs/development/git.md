@@ -25,7 +25,7 @@ Common types are `feat`, `fix`, `refactor`, `test`, `docs`, `build`, `ci`, and `
 Examples:
 
 ```text
-feat(hxs): add verified HXS v1 reader
+feat(sqpack): read Excel sheets from the installed game
 fix(rebase): preserve ambiguous source matches
 
 docs: organize contributor guidance

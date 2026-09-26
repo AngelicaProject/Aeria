@@ -1,67 +1,67 @@
 # Translation identity
 
-Aeria distinguishes snapshot coordinates from durable translation identity.
+Aeria distinguishes source coordinates from durable translation identity.
 
 ## Source coordinate
 
-Within an HXS snapshot, a string occurrence is addressed by:
+A String cell of the game is addressed by:
 
 - sheet
 - row
 - subrow
-- column
+- column index
 
-This binding is also the runtime lookup shape expected by the in-game consumer.
+This is also the runtime lookup shape Harmonia uses. A column index is a
+position in one sheet layout (see [`source.md`](./source.md#layout)), and a
+row ID is a position in one version of a sheet, so a coordinate alone is not
+durable across game versions.
 
 ## Translation unit identity
 
-A translation unit has an Aeria-owned stable identity that can survive a coordinate change across game versions. The current source coordinate is a binding of that unit, not the durable identity itself.
+A translation unit has an Aeria-owned identity that survives a coordinate
+change across game versions. The current coordinate is a binding of that
+unit, not its identity.
 
-New identities are generated deterministically from source facts so that independent branches encountering the same new source occurrence do not invent incompatible random IDs.
+New identities are derived deterministically from source facts, so
+independent branches that translate the same new source cell create the same
+ID.
 
-### TranslationUnitId v1
+### TranslationUnitId
 
-Newly created units use the canonical textual form:
+The ID is 16 bytes, written as 32 lowercase hexadecimal characters. It is the
+first 16 bytes of SHA-256 over, in order:
 
-```text
-tu1:<64 lowercase hexadecimal characters>
-```
+1. the UTF-8 bytes of the domain separator `aeria.translation-unit.v2`;
+2. the sheet name, framed as a little-endian `u32` byte length followed by
+   its UTF-8 bytes;
+3. the row ID as a little-endian `u32`;
+4. the subrow ID as a little-endian `u16`;
+5. the column index as a little-endian `u32`;
+6. the source text, framed like the sheet name.
 
-The digest is SHA-256 over these bytes, in order:
+The target, review state, note, layout, row key, game version, and languages
+do not take part.
 
-1. the unframed UTF-8 bytes of the domain separator `aeria.translation-unit.v1`;
-2. a source-language string framed as a little-endian `u32` byte length followed by UTF-8 bytes;
-3. the sheet-name string with the same framing;
-4. the row ID as a little-endian `u32`;
-5. the subrow ID as a little-endian `u16`;
-6. the column index as a little-endian `u32`;
-7. the raw 32-byte source macro-text hash.
-
-The raw-value hash, row technical hash, target language, target macro string, review state, game version, `contentId`, and `snapshotId` do not participate in the digest. This keeps equivalent source occurrences independent of a particular snapshot or project target.
-
-`TranslationUnitId` is derived only when a unit is first created. A source update retains the existing ID even when the column moves, the source text changes, any source fingerprint or layout field changes, or the unit is detached. It updates the source facts in place and never recomputes an existing unit ID. The source layout does not participate in the digest.
+The ID is derived only when a unit is created. A source update keeps the
+existing ID when the row or column moves, the source text changes, or the unit
+is detached; it updates the unit's source facts in place and never derives
+the ID again.
 
 ## Source occurrence rule
 
-One managed String cell is one translation unit. A binding is interpreted in
-the sheet schema generation recorded by the unit's `SourceLayout`, because an
-HXS column index is only a position within one schema.
+One String cell is one translation unit. A unit's binding is interpreted in
+the layout recorded with the unit. During a source update:
 
-During a source update:
+- in an unchanged layout, the previous column index is kept; in a keyed sheet
+  the row is found by the unit's row key, and a removed key detaches the
+  unit;
+- in a changed layout, the sheet, row, and subrow are kept as above and only
+  the column is reinterpreted through a deterministic sheet-level column
+  mapping established by exact text evidence;
+- a different text at the resolved cell marks the unit for review;
+- a unit without an established cell is detached, not guessed.
 
-- in an unchanged schema generation, the previous `SourceBinding` is the
-  continuity key, except that in a keyed sheet the row is found by the
-  persisted row key, and a removed key detaches the unit;
-- in a changed generation, the sheet, row, and subrow are kept and only the
-  column is reinterpreted through a deterministic sheet-level column mapping
-  established by exact content evidence or an unchanged column position;
-- `macroTextHash` classifies the resolved occurrence as `SourceChanged`; a
-  change of `rawValueHash` alone is `EncodingChanged`; otherwise it is
-  `Unchanged`; `rowTechnicalHash` is context only;
-- a unit without an established occurrence is detached, not guessed.
-
-Similarity, partial hashes, coordinate proximity, and a unique candidate at
-another row never establish identity. A row key is an exact,
-language-invariant source value, not a similarity measure. The existing `TranslationUnitId` is
-kept in every case and is never recomputed. See
-[`rebase-safety.md`](./rebase-safety.md) for the complete rules.
+Similarity, coordinate proximity, and a unique candidate at another row never
+establish identity. A row key is an exact, language-invariant source value,
+not a similarity measure. See [`rebase-safety.md`](./rebase-safety.md) for
+the complete rules.

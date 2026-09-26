@@ -6,26 +6,27 @@ and it is never written to a repository.
 
 ## Source index
 
-`SourceIndex` is one SQLite file per source package, stored by the desktop in
-`<app-data>/search/<key>.sqlite3`, where the key is derived from a SHA-256
-hash of the package ID. It holds every non-empty String cell that HSG grants
-for translation, with its coordinate, macro text, and plain text, and an FTS5
-index over the plain text.
+`SourceIndex` is one SQLite file per source language and game version,
+stored by the desktop in `<app-data>/search/<key>.sqlite3`, where the key is
+derived from a SHA-256 hash of `<language>/<game version>`. It holds every
+translatable String cell of the game (see
+[`source.md`](./source.md#translation-permission)), with its coordinate, macro
+text, and plain text, and an FTS5 index over the plain text.
 
 The plain text of a macro string is its text ranges from `aeria-se` semantic
 analysis, in order, with a space where a macro separates two ranges; escapes
 contribute their character. Searches therefore match what players read, not
 macro names or arguments.
 
-The tokenizer follows the package's source language: three-character
+The tokenizer follows the source language: three-character
 substrings (`trigram`) for Japanese, Chinese, and Korean, which are written
 without spaces, and case- and diacritic-insensitive words (`unicode61` with
 `remove_diacritics 2`) otherwise.
 
-The index is built from a verified HXS handle and the HSG guidance index,
-written to a `.partial` file, and published by rename only when complete. A
-file is used only when its recorded format (`1`) and package ID match; any
-other file is rebuilt. A cancelled or failed build leaves no index.
+The index is built by reading every sheet of the game once, written to a
+`.partial` file, and published by rename only when complete. A file is used
+only when its recorded format (`2`) and source key match; any other file is
+rebuilt. A cancelled or failed build leaves no index.
 
 ## Queries
 
@@ -46,14 +47,14 @@ other file is rebuilt. A cancelled or failed build leaves no index.
 
 ## Desktop use
 
-The desktop builds the active package's index in a background worker the
+The desktop builds the active project's index in a background worker the
 first time Angelica needs it or a message is sent to her; requests made
 meanwhile report that the index is being built. A failed build is reported
-once and retried on the next request. Building opens its own HXS handle, so it
-never holds the project lock; searches take the lock only to add workspace
-translations, and are refused when the project changed in the meantime.
-Indexes of source packages no longer in use stay on disk until the user
-clears application data.
+once and retried on the next request. Building uses the session's shared game
+source, so it never holds the project lock; searches take the lock only to
+add workspace translations, and are refused when the project changed in the
+meantime. Indexes of game versions no longer in use stay on disk until the
+user clears application data.
 
 Translation memory is the similar sources that have a non-empty bound
 translation in the workspace, with the translation and its review state.

@@ -100,15 +100,10 @@ followed by one LF. Readers reject unknown, missing, and duplicate fields.
   "license": "CC-BY-NC-SA-4.0",
   "release": { "sequence": 42, "version": "2026.09.25", "channel": "stable" },
   "target": { "language": "ru" },
-  "source": {
-    "language": "en",
-    "gameVersion": "2026.08.12.0000.0000",
-    "contentId": "sha256:<hex>",
-    "snapshotId": "sha256:<hex>"
-  },
+  "source": { "language": "en", "gameVersion": "2026.08.12.0000.0000" },
   "contentPolicy": "reviewed",
   "project": { "commit": "<40 hex>" },
-  "exporter": { "aeria": "0.9.0", "atlas": "0.4.0" },
+  "exporter": { "aeria": "0.9.0", "atlas": "lumina-7.7.0" },
   "minHarmonia": "1.4.0",
   "counts": { "sheets": 0, "rows": 0, "cells": 0, "reviewedCells": 0, "strings": 0 }
 }
@@ -122,8 +117,8 @@ followed by one LF. Readers reject unknown, missing, and duplicate fields.
 | `release.sequence` | positive integer, strictly increasing across releases of one `packId` |
 | `release.version` | display string; never compared |
 | `release.channel` | `stable` or `testing` |
-| `target.language`, `source.language` | BCP 47 language tags; `source.language` is the HXS source language |
-| `source.*` | copied from the verified HXS the pack was built from |
+| `target.language`, `source.language` | BCP 47 language tags; `source.language` is the game language the project translates from |
+| `source.gameVersion` | the text of `game/ffxivgame.ver` of the game the pack was built from |
 | `contentPolicy` | `reviewed` or `all` (see [Cell state](#cell-state)) |
 | `project.commit` | Git commit of the exported workspace state |
 | `exporter` | producing Aeria version, and in `atlas` the string dialect the cells were encoded in, such as `lumina-7.7.0`; packs exported before Aeria encoded strings itself hold the Harmonia Atlas version that encoded them. Readers treat `atlas` as a non-empty display string |
@@ -144,7 +139,7 @@ Concatenated UTF-8 sheet names without separators. Referenced only by `SHEETS`.
 | --- | --- |
 | `u32` | nameOffset into `NAMES` |
 | `u32` | nameLength |
-| `u8` | variant: `0` default rows, `1` subrows (HXS `SheetVariant`) |
+| `u8` | variant: `0` default rows, `1` subrows |
 | `u8[3]` | reserved, zero |
 | `u32` | layoutStart (index of the first `LAYOUT` record) |
 | `u32` | layoutCount (≥ 1) |
@@ -162,8 +157,8 @@ in ascending column index order, whether or not it has translations:
 
 | Type | Field |
 | --- | --- |
-| `u32` | columnIndex (HXS `columns.index`) |
-| `u32` | offset (HXS `columns.offset`, ≤ 65535) |
+| `u32` | columnIndex, the column's position in the sheet header |
+| `u32` | offset, the column's byte offset in the row (≤ 65535) |
 
 The position of a record within its sheet's layout is the **string ordinal**,
 the index Harmonia uses when it enumerates String column definitions in order.
@@ -202,8 +197,8 @@ strings are stored once, in order of first reference when cells are visited in
 canonical `(sheet, rowId, subrowId, ordinal)` order. The stored strings and
 their terminators cover the section exactly; there are no unreferenced bytes.
 
-The bytes are produced by encoding the validated target macro text in the
-Lumina 7.7.0 dialect of the HXS source (see
+The bytes are produced by encoding the validated target macro text with
+`aeria_se::codec` (see
 [`../architecture/export.md`](../architecture/export.md)). Harmonia writes
 them into the game row buffer unchanged.
 
@@ -331,23 +326,18 @@ The exact packing and file rules are Harmonia's; they are described in its
 
 ## Source guard
 
-`sourceGuard` is the first 8 bytes of the HXS `raw_hash` of the source string
-the translation was made for:
+`sourceGuard` is computed from the bytes of the source string the translation
+was made for:
 
 ```text
 SHA-256("HARMONIA-HXS-V1-RAW-STRING" || u32le(len(raw)) || raw)[0..8]
 ```
 
 `raw` is the source string's bytes as stored in the EXD row, without the
-terminating `0x00`. Harmonia computes the same value from the string it is
-about to replace and writes the translation only on an exact match.
-
-A translation unit whose source occurrence has no `raw_hash` is not exported.
-
-> Open item: an in-game check must confirm that HXS `raw_value`
-> (`ReadOnlySeString.Data`) equals the in-memory row string without its
-> terminator for every String column. Until then a mismatch is safe but shows
-> up as untranslated text and as source-changed counts in Harmonia diagnostics.
+terminating `0x00`; Aeria reads them from the game at export. Harmonia
+computes the same value from the string it is about to replace and writes the
+translation only on an exact match. The domain string keeps its historical
+spelling.
 
 ## Cell state
 
@@ -428,6 +418,6 @@ offsets are at most 65535.
 
 ## Open decisions
 
-- Whether HXS `gameVersion` (the text of `ffxivgame.ver`) and the client's
+- Whether `source.gameVersion` (the text of `ffxivgame.ver`) and the client's
   `GameVersionString` always use the same representation. A difference only
   makes Harmonia report every pack as built for another game version.

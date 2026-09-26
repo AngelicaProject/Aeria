@@ -323,8 +323,8 @@ export const ExportDialog = memo(function ExportDialog({ open, onOpenChange, onO
             {result.report.fontTargets > 0 ? <span>{t("export.result.fonts", { glyphs: result.report.fontGlyphs, sizes: result.report.fontTargets })}</span> : null}
             <span>{result.report.signedBy ? t("export.result.signed", { fingerprint: shortFingerprint(result.report.signedBy) }) : t("export.result.unsigned")}</span>
           </p>
-          {result.report.skippedUnreviewed + result.report.skippedDetached + result.report.skippedWithoutRawHash > 0 ? (
-            <p className="field-hint">{t("export.result.skipped", { unreviewed: result.report.skippedUnreviewed, detached: result.report.skippedDetached, unverifiable: result.report.skippedWithoutRawHash })}</p>
+          {result.report.skippedUnreviewed + result.report.skippedDetached > 0 ? (
+            <p className="field-hint">{t("export.result.skipped", { unreviewed: result.report.skippedUnreviewed, detached: result.report.skippedDetached })}</p>
           ) : null}
           {result.path ? <code className="export-selectable">{result.path}</code> : null}
           {result.releaseUrl ? <code className="export-selectable">{result.releaseUrl}</code> : null}

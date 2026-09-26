@@ -55,7 +55,7 @@ Each release carries:
 | --- | --- |
 | `Aeria_<version>_x64-setup.exe` | NSIS installer; installs for the current user without administrator rights |
 | `Aeria_<version>_x64-setup.exe.sig` | Updater signature of the installer |
-| `Aeria_<version>_x64-portable.zip` | Portable build: `aeria.exe`, `harmonia-atlas.exe`, and `git/` |
+| `Aeria_<version>_x64-portable.zip` | Portable build: `aeria.exe` and `git/` |
 | `latest.json` | Updater feed of this release |
 | `aeria-check-<version>-x86_64-unknown-linux-gnu.tar.gz` | The `aeria-check` binary for the [merge check CI](../architecture/git.md#merge-check-ci) of translation repositories (stable releases) |
 | `SHA256SUMS.txt` | SHA-256 of the installer, the portable archive, and the `aeria-check` archive |
@@ -95,8 +95,8 @@ permissions and calls the `update_*` commands.
   installed without the user's request.
 - **Never interrupting.** Installing waits while the editor holds an unsaved
   draft or a save is in flight, and while Angelica translates, a Git
-  synchronization, commit, or branch change runs, a pack is exported or
-  published, or a source package is built. The backend enforces the same
+  synchronization, commit, or branch change runs, or a pack is exported or
+  published. The backend enforces the same
   rule for its own work (`updateBusy`) and keeps new synchronization and
   export from starting while the installer launches. When the user asked to
   install during such work, Aeria installs and restarts once it finishes.
@@ -123,7 +123,7 @@ permissions and calls the `update_*` commands.
 2. It checks or computes the version with `tools/release/version.mjs`; a
    nightly writes its version into the declarations and the lockfile before
    building.
-3. It stages the pinned Harmonia Atlas sidecar and MinGit, runs
+3. It stages the pinned MinGit runtime, runs
    `tauri build --no-bundle`, packages the portable archive, and then runs
    `tauri bundle --bundles nsis` with the signing secrets.
 4. It writes `latest.json` and `SHA256SUMS.txt` and publishes the stable

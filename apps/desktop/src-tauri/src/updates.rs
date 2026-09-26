@@ -532,9 +532,8 @@ pub async fn update_download(app: tauri::AppHandle) -> CommandResult<UpdateStatu
 ///
 /// # Errors
 ///
-/// Returns `updateBusy` while synchronization, export, translation, or a
-/// source package build runs; `updateNotDownloaded` before the download
-/// finished; or `updateInstall` when the installer cannot start.
+/// Returns `updateBusy` while synchronization, export, or translation runs;
+/// `updateNotDownloaded` before the download finished; or `updateInstall` when the installer cannot start.
 pub async fn update_install(app: tauri::AppHandle) -> CommandResult<()> {
     if !can_install() {
         return Err(not_installable());

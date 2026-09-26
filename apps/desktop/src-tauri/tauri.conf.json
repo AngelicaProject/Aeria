@@ -28,9 +28,6 @@
   "bundle": {
     "active": true,
     "targets": "all",
-    "externalBin": [
-      "binaries/harmonia-atlas"
-    ],
     "linux": {
       "deb": {
         "depends": ["git"]

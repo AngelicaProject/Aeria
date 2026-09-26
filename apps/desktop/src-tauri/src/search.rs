@@ -40,13 +40,13 @@ fn source_key(source: &GameSource) -> String {
     format!("{}/{}", source.language(), source.version())
 }
 
-fn index_path(app: &tauri::AppHandle, package_id: &str) -> Result<PathBuf, ToolError> {
+fn index_path(app: &tauri::AppHandle, key: &str) -> Result<PathBuf, ToolError> {
     let data = app.aeria_data_dir().map_err(|error| {
         ToolError::new(format!(
             "could not resolve the Aeria app-data directory: {error}"
         ))
     })?;
-    let digest = Sha256::digest(package_id.as_bytes());
+    let digest = Sha256::digest(key.as_bytes());
     let key = digest[..16]
         .iter()
         .fold(String::with_capacity(32), |mut key, byte| {
@@ -58,12 +58,12 @@ fn index_path(app: &tauri::AppHandle, package_id: &str) -> Result<PathBuf, ToolE
 
 /// What building an index needs, read under the project lock.
 struct BuildInput {
-    package_id: String,
+    key: String,
     source: Arc<GameSource>,
     tokenizer: Tokenizer,
 }
 
-fn active_package(app: &tauri::AppHandle) -> Result<String, ToolError> {
+fn active_source_key(app: &tauri::AppHandle) -> Result<String, ToolError> {
     let state = app.state::<DesktopState>();
     let project = state
         .lock_project()
@@ -84,55 +84,49 @@ fn build_input(app: &tauri::AppHandle) -> Result<BuildInput, ToolError> {
         .ok_or_else(|| ToolError::new("no project is open"))?;
     let source = session.source_handle();
     Ok(BuildInput {
-        package_id: source_key(&source),
+        key: source_key(&source),
         tokenizer: Tokenizer::for_language(source.language().code()),
         source,
     })
 }
 
 fn build(app: &tauri::AppHandle, input: &BuildInput) -> Result<SourceIndex, SearchError> {
-    let path = index_path(app, &input.package_id)
+    let path = index_path(app, &input.key)
         .map_err(|error| SearchError::Io(std::io::Error::other(error.0)))?;
-    SourceIndex::build(
-        path,
-        &input.package_id,
-        input.tokenizer,
-        &input.source,
-        &|| true,
-    )
+    SourceIndex::build(path, &input.key, input.tokenizer, &input.source, &|| true)
 }
 
 /// Returns the active game data's key and index, or starts building the
 /// index and reports that it is not ready yet. A failed build is retried on
 /// the next request.
 pub(crate) fn source_index(app: &tauri::AppHandle) -> Result<(String, SourceIndex), ToolError> {
-    let package_id = active_package(app)?;
+    let key = active_source_key(app)?;
     let state = app.state::<DesktopState>();
-    match state.search_index(&package_id) {
-        Some(IndexState::Ready(index)) => return Ok((package_id, index)),
+    match state.search_index(&key) {
+        Some(IndexState::Ready(index)) => return Ok((key, index)),
         Some(IndexState::Building) => {
             return Err(ToolError::new(
                 "the search index is still being built; try again in a minute",
             ));
         }
         Some(IndexState::Failed(message)) => {
-            state.forget_search_index(&package_id);
+            state.forget_search_index(&key);
             return Err(ToolError::new(format!(
                 "the search index could not be built: {message}"
             )));
         }
         None => {}
     }
-    let path = index_path(app, &package_id)?;
-    if let Some(index) = SourceIndex::open(&path, &package_id).ok().flatten() {
-        state.set_search_index(&package_id, IndexState::Ready(index.clone()));
-        return Ok((package_id, index));
+    let path = index_path(app, &key)?;
+    if let Some(index) = SourceIndex::open(&path, &key).ok().flatten() {
+        state.set_search_index(&key, IndexState::Ready(index.clone()));
+        return Ok((key, index));
     }
-    if state.claim_search_build(&package_id) {
+    if state.claim_search_build(&key) {
         let input = match build_input(app) {
-            Ok(input) if input.package_id == package_id => input,
+            Ok(input) if input.key == key => input,
             Ok(_) | Err(_) => {
-                state.forget_search_index(&package_id);
+                state.forget_search_index(&key);
                 return Err(ToolError::new("the project changed; try again"));
             }
         };
@@ -140,7 +134,7 @@ pub(crate) fn source_index(app: &tauri::AppHandle) -> Result<(String, SourceInde
         tauri::async_runtime::spawn_blocking(move || {
             let result = build(&task_app, &input);
             task_app.state::<DesktopState>().set_search_index(
-                &input.package_id,
+                &input.key,
                 match result {
                     Ok(index) => IndexState::Ready(index),
                     Err(error) => IndexState::Failed(error.to_string()),
@@ -177,10 +171,10 @@ pub(crate) struct DesktopSearch {
 }
 
 impl DesktopSearch {
-    /// Runs `read` on the session of the index's source package.
+    /// Runs `read` on the session of the index's game source.
     fn with_session<T>(
         &self,
-        package_id: Option<&str>,
+        key: Option<&str>,
         read: impl FnOnce(&ProjectSession) -> Result<T, ToolError>,
     ) -> Result<T, ToolError> {
         let state = self.app.state::<DesktopState>();
@@ -190,7 +184,7 @@ impl DesktopSearch {
         let session = project
             .as_ref()
             .ok_or_else(|| ToolError::new("no project is open"))?;
-        if package_id.is_some_and(|id| id != source_key(session.source())) {
+        if key.is_some_and(|id| id != source_key(session.source())) {
             return Err(ToolError::new("the project changed during the search"));
         }
         read(session)
@@ -199,7 +193,7 @@ impl DesktopSearch {
 
 impl ProjectSearch for DesktopSearch {
     fn search_source(&self, query: &SearchQuery) -> Result<SearchMatches, ToolError> {
-        let (package_id, index) = source_index(&self.app)?;
+        let (key, index) = source_index(&self.app)?;
         let page = index
             .search(&SourceQuery {
                 text: &query.text,
@@ -208,7 +202,7 @@ impl ProjectSearch for DesktopSearch {
                 limit: query.limit,
             })
             .map_err(|error| ToolError::new(error.to_string()))?;
-        self.with_session(Some(&package_id), |session| {
+        self.with_session(Some(&key), |session| {
             Ok(SearchMatches {
                 matches: page
                     .hits
@@ -239,7 +233,7 @@ impl ProjectSearch for DesktopSearch {
         exclude: Option<&UnitLocation>,
         limit: usize,
     ) -> Result<Vec<MemoryMatch>, ToolError> {
-        let (package_id, index) = source_index(&self.app)?;
+        let (key, index) = source_index(&self.app)?;
         let exclude = exclude.map(|location| {
             (
                 location.sheet.as_str(),
@@ -251,7 +245,7 @@ impl ProjectSearch for DesktopSearch {
         let candidates = index
             .similar(source, exclude, MEMORY_CANDIDATES)
             .map_err(|error| ToolError::new(error.to_string()))?;
-        self.with_session(Some(&package_id), |session| {
+        self.with_session(Some(&key), |session| {
             Ok(memory_matches(session, candidates, limit))
         })
     }

@@ -38,8 +38,8 @@ These follow from [`../product/principles.md`](../product/principles.md) and
    rejected result is reported as a failure, never persisted as a successful
    translation. A permitted structural change is never applied without a
    person's approval.
-3. Writes go through `ProjectSession` mutation APIs and the HSG permission
-   gate. Angelica has no filesystem, shell, SQL, or raw workspace access.
+3. Writes go through `ProjectSession` mutation APIs and the translation
+   permission gate. Angelica has no filesystem, shell, SQL, or raw workspace access.
 4. Identity, rebase, merge, migration, and export never consult Angelica.
 5. Provider credentials stay in OS secret storage; provider and model choices
    are local. Only project guidance and glossary data are shared through the

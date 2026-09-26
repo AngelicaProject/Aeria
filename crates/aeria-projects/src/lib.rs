@@ -188,12 +188,12 @@ impl ProjectRegistry {
 
     /// Upserts a successful project and publishes the bounded registry.
     ///
-    /// Both paths are canonicalized here, and only here, so merely loading
+    /// The repository path is canonicalized here, and only here, so merely loading
     /// stale entries never makes them disappear or changes their display data.
     ///
     /// # Errors
     ///
-    /// Returns a typed error when either project path cannot be canonicalized,
+    /// Returns a typed error when the repository path cannot be canonicalized,
     /// the existing registry is invalid, or the new document cannot be
     /// published.
     pub fn upsert(

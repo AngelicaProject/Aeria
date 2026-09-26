@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { open as openNativeDialog } from "@tauri-apps/plugin-dialog";
-import { deleteSourcePackage, gameSettings, listSourcePackages, normalizeCommandError, revealSourcePackages, setGamePath } from "../ipc";
-import type { CommandError, GameInstallationDto, GameOrigin, GameSettingsDto, SourcePackageEntryDto } from "../types";
+import { gameSettings, normalizeCommandError, setGamePath } from "../ipc";
+import type { CommandError, GameInstallationDto, GameOrigin, GameSettingsDto } from "../types";
 import { formatRelativeTime } from "../timeDisplay";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { ErrorBanner } from "./ErrorBanner";
@@ -24,98 +24,6 @@ export function gameInstallationFacts(installation: GameInstallationDto, t: Tran
   return t("game.versionOrigin", { version: installation.gameVersion, origin: t(originLabels[installation.origin]) });
 }
 
-const languageLabels: Readonly<Record<string, MessageKey>> = {
-  en: "language.en",
-  ja: "language.ja",
-  de: "language.de",
-  fr: "language.fr",
-};
-
-/** The packages in Aeria's source-package store, with deletion of unused ones. */
-export function SourcePackages() {
-  const { t, locale } = useI18n();
-  const [packages, setPackages] = useState<readonly SourcePackageEntryDto[] | null>(null);
-  const [error, setError] = useState<CommandError | null>(null);
-  const [pendingDelete, setPendingDelete] = useState<SourcePackageEntryDto | null>(null);
-  const [deleting, setDeleting] = useState(false);
-
-  useEffect(() => {
-    let active = true;
-    listSourcePackages()
-      .then((next) => { if (active) setPackages(next); })
-      .catch((reason: unknown) => { if (active) setError(normalizeCommandError(reason)); });
-    return () => { active = false; };
-  }, []);
-
-  async function confirmDelete() {
-    const entry = pendingDelete;
-    setPendingDelete(null);
-    if (!entry) return;
-    setDeleting(true);
-    setError(null);
-    try { setPackages(await deleteSourcePackage(entry.packageId)); }
-    catch (reason) { setError(normalizeCommandError(reason)); }
-    finally { setDeleting(false); }
-  }
-
-  const now = Date.now();
-  const size = new Intl.NumberFormat(locale, { style: "unit", unit: "megabyte", maximumFractionDigits: 0 });
-  const languageName = (entry: SourcePackageEntryDto) => {
-    const label = languageLabels[entry.sourceLanguage];
-    return label ? t(label) : entry.sourceLanguage.toUpperCase();
-  };
-  const sizeOf = (entry: SourcePackageEntryDto) => size.format(entry.sizeBytes / 1_000_000);
-  return (
-    <div className="game-settings">
-      {error ? <ErrorBanner title={t("settings.sources.title")} error={error} onDismiss={() => setError(null)} /> : null}
-      {packages === null ? (
-        error ? null : <p className="muted">{t("sources.loading")}</p>
-      ) : packages.length === 0 ? (
-        <p className="field-hint">{t("sources.empty")}</p>
-      ) : (
-        <ul className="source-packages">
-          {packages.map((entry) => (
-            <li key={entry.path} title={entry.path}>
-              <span className="game-active-text">
-                <strong>{languageName(entry)}</strong>
-                <small>{t("sources.facts", {
-                  version: entry.gameVersion,
-                  size: sizeOf(entry),
-                  time: entry.builtAtUnixMs === null ? "—" : formatRelativeTime(entry.builtAtUnixMs, now, locale, t("time.justNow")),
-                })}</small>
-              </span>
-              <span className="source-package-state">
-                {entry.current ? <span className="chip chip-added" title={t("sources.currentHint")}>{t("sources.current")}</span> : null}
-                {entry.usedBy.length > 0 ? (
-                  <span className="chip" title={entry.usedBy.map(displayPath).join("\n")}>{t("sources.usedBy", { count: entry.usedBy.length })}</span>
-                ) : null}
-                {entry.removable ? (
-                  <IconButton icon="trash" label={t("sources.deleteLabel", { version: entry.gameVersion })} disabled={deleting} onClick={() => setPendingDelete(entry)} />
-                ) : null}
-              </span>
-            </li>
-          ))}
-        </ul>
-      )}
-      <div className="game-actions">
-        <button className="button button-secondary" type="button" onClick={() => void revealSourcePackages().catch((reason: unknown) => setError(normalizeCommandError(reason)))}>
-          <UiIcon icon="folderOpen" size="sm" /> {t("sources.reveal")}
-        </button>
-      </div>
-      <ConfirmDialog
-        open={pendingDelete !== null}
-        title={t("sources.deleteTitle")}
-        message={pendingDelete ? t("sources.deleteMessage", { language: languageName(pendingDelete), version: pendingDelete.gameVersion, size: sizeOf(pendingDelete) }) : ""}
-        confirmLabel={t("sources.delete")}
-        cancelLabel={t("common.cancel")}
-        onKeepEditing={() => setPendingDelete(null)}
-        onDiscard={() => void confirmDelete()}
-      />
-    </div>
-  );
-}
-
-/** The one game installation this Aeria instance builds source packages from. */
 export function GameSettings() {
   const { t } = useI18n();
   const [settings, setSettings] = useState<GameSettingsDto | null>(null);

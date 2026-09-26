@@ -6,7 +6,7 @@ Aeria must never treat these constructs as disposable decoration.
 
 ## Source representation
 
-HXS provides an encodeable macro-string representation and raw source bytes. `aeria-se` parses the macro representation into a lossless syntax representation suitable for editing and validation.
+The game provides each string as `SeString` bytes. `aeria_se::codec` prints them as macro text, and `aeria-se` parses the macro text into a lossless syntax representation suitable for editing and validation.
 
 ## Byte codec
 
@@ -29,8 +29,8 @@ Lumina 7.7.0 does, with no dependency on Lumina or .NET:
   are not empty, contain no `0x00`, are at most 65,535 bytes, and encode to the
   same bytes again after decoding.
 
-The codec keeps Lumina's lossy behavior so that existing snapshots stay
-byte-identical: text printed from invalid UTF-8 or malformed payloads does not
+The codec keeps Lumina's lossy behavior so that its output stays
+byte-identical to Lumina's: text printed from invalid UTF-8 or malformed payloads does not
 encode back to the original bytes. Two ignored tests check it against real
 data: `tests/hxs_corpus.rs` decodes every `raw_value` of an HXS snapshot and
 compares the result with its `macro_text`, and `tests/atlas_encode.rs`
@@ -55,10 +55,10 @@ values, nested strings, native placeholders, unary expressions, comparison
 expressions, opaque named macros, and recovery nodes for malformed input.
 
 The parser follows the encodeable representation emitted by the Lumina 7.7.0
-`ToMacroString()` implementation used by Harmonia Atlas. It has no runtime
+`ToMacroString()` implementation. It has no runtime
 dependency on Lumina or .NET. The native macro and expression name tables are
 owned by `aeria-se` and must be reviewed with the corresponding upstream
-source and conformance corpus when Atlas changes its Lumina version. The
+source and conformance corpus when the supported Lumina version changes. The
 checked-in golden vectors in `crates/aeria-se/tests/fixtures/lumina_to_macro_string.golden.txt`
 are fixed output from synthetic Lumina 7.7.0 `ReadOnlySeString` values; the
 separate `parser_compatibility.txt` corpus covers accepted spellings that the

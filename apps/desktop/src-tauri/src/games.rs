@@ -432,7 +432,7 @@ mod tests {
     }
 
     #[test]
-    fn only_the_atlas_layout_is_an_installation() {
+    fn only_the_installation_layout_is_an_installation() {
         let directory = tempfile::tempdir().expect("temp dir");
         let game = directory.path().join("ffxiv");
         fake_installation(&game, "2026.09.01.0000.0000\r\n");

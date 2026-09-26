@@ -5,7 +5,7 @@ The renderer is a full React/TypeScript application, not a thin HTML skin, but p
 ## Rules
 
 - TypeScript runs in strict mode.
-- Domain filesystem/Git/HXS/SQLite operations go through typed Tauri capabilities.
+- Domain filesystem/Git/game/SQLite operations go through typed Tauri capabilities.
 - Keep UI state close to the feature that owns it. Avoid a single global application store.
 - Large source lists must be virtualized; never render the entire corpus into the DOM.
 - Keyboard-first workflows are first-class.

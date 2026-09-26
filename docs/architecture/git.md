@@ -185,9 +185,9 @@ Attribution records who authored repository changes. It never sets or
 infers review state; review remains an explicit workspace operation.
 
 All shard and record decoding goes through the workspace reader in
-`aeria-workspace`; Git history never bypasses format validation. History may
-predate [Workspace Format v2](../formats/workspace-v2.md), so historical
-records are accepted in either the v2 or the v1 record shape.
+`aeria-workspace`; Git history never bypasses format validation. History is read
+in the [Workspace Format v3](../formats/workspace-v3.md) record shape only;
+an older record in history is shown as invalid rather than reinterpreted.
 
 ### Sync
 
@@ -305,7 +305,7 @@ A Git host never runs a repository's merge drivers.
 
 The Git dock switches between local branches. A switch requires checkpointed
 translations, reloads the project, and is undone when the reloaded project is
-not valid for the active source package.
+not valid against the open game source.
 
 The **main branch** is the one set in
 [`aeria-collaboration.json`](../formats/collaboration-v1.md); without a

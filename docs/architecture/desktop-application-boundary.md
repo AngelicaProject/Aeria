@@ -33,32 +33,32 @@ through `paths::AeriaPaths`, never Tauri's identifier-named directories. The
 bundle identifier `org.angelicaproject.aeria` still names the WebView profile
 and installer registration.
 
-Earlier versions stored data and caches under the identifier-named folders.
-At startup Aeria renames the legacy data folder to `<app-data>` when
-`<app-data>` does not exist yet, moves the `hxs` and `hsp-verification`
-caches the same way, and rewrites recent-project entries whose source package
-lay in the legacy `source-packages/` folder with
-`ProjectRegistry::relocate_source_packages`. A failed move is reported and
-leaves the legacy folder in use, so no data is lost; when both folders exist,
-the legacy one is left untouched.
+Earlier versions stored data under the identifier-named folder. At startup
+Aeria renames the legacy data folder to `<app-data>` when `<app-data>` does
+not exist yet. A failed move is reported and leaves the legacy folder in use,
+so no data is lost; when both folders exist, the legacy one is left
+untouched.
+
+`<app-cache>` holds the sheet catalog per source language and game version
+(`sheet-catalog/`), and `<app-data>/search/` the source search indexes. Both
+are disposable data derived from the game: a missing or unreadable file is
+built again.
 
 ## Local project registry
 
 The desktop keeps a bounded convenience registry at
-`<app-data>/projects-v1.json`. It is application-local state, not workspace
-data, and is never written to `.aeria/`, a translation repository, an
-HSP, or the disposable HXS cache. The existing `<app-data>/source-packages/`
-and `<app-cache>/` locations retain their existing roles.
+`<app-data>/projects-v2.json`. It is application-local state, not workspace
+data, and is never written to `.aeria/`, a translation repository, or the
+cache. Registries of earlier versions (`projects-v1.json`) are not read.
 
-The registry stores an opaque UUID-like local ID, canonical repository and HSP
-paths, the exact validated HSP `sourcePackageId`, cached source/target language
-and game-version display metadata, and the last-opened Unix timestamp. A
-successful open or create canonicalizes both paths and upserts by canonical
-repository path, preserving the local ID for that repository. The registry is
+The registry stores an opaque UUID-like local ID, the canonical repository
+path, cached source/target language and game-version display metadata, and
+the last-opened Unix timestamp. A successful open or create canonicalizes the
+repository path and upserts by it, preserving the local ID for that repository. The registry is
 ordered newest first with the local ID as a deterministic tie-breaker and is
 bounded to 50 entries. Missing paths remain visible until explicitly removed.
 
-Registry v1 loading validates the version, IDs, paths, package identity, and
+Registry loading validates the version, IDs, paths, and
 metadata without canonicalizing stale paths. It rejects documents with more
 than 50 projects and files larger than 256 KiB before full JSON
 deserialization. Malformed, oversized, or newer registries produce
@@ -72,22 +72,23 @@ followed by atomic rename where supported; Windows uses an owned previous-file
 recovery path. A valid final file wins over recovery state, and an owned
 previous file is recovered only when the final file is missing.
 
-The launcher can list recents using filesystem presence only, without opening
-HSP/HXS data or creating a `ProjectSession`. Ready entries can be opened by
+The launcher can list recents using filesystem presence only, without reading
+the game or creating a `ProjectSession`. Ready entries can be opened by
 opaque ID through this sequence:
 
 ```text
-filesystem existence checks
-→ SourcePackage::open on the remembered HSP path
-→ exact sourcePackageId comparison
-→ ProjectSession::open_from_source_package with that validated package
+repository existence check
+→ GameSource::open on the configured installation in the remembered
+   source language
+→ ProjectSession::open with that game
    (or open_with_source_update when the caller accepted a source update)
 → active-project replacement
 → best-effort registry refresh
 ```
 
-The exact remembered HSP association is therefore checked before workspace
-compatibility can reject a replacement package. `Remove from recents`
+The workspace manifest, not the registry, decides whether the game fits the
+project; the registry's language and game version are display data, and the
+language selects which language the game is opened in. `Remove from recents`
 removes only registry state. Manual Open project and Create project remain
 fully usable when the registry is corrupt, stale, or unavailable, and closing
 an active project does not remove its entry.
@@ -113,8 +114,7 @@ defaults.
 commands (checkpoint, commit, sync, branch switch, finishing or merging a
 contribution, clone) hold a `Sync` activity guard and pack export and
 publication an `Export` guard for their whole run; Angelica turns,
-translation-job runners, and the Atlas job are read from their own
-registries. `update_install` runs through `DesktopState::while_idle`, which
+and translation-job runners are read from their own registries. `update_install` runs through `DesktopState::while_idle`, which
 fails with `updateBusy` while any of them runs and holds the activity lock
 while the installer starts, so no guarded operation begins in between. The
 renderer additionally reports unsaved editor drafts and saves in flight to
@@ -122,16 +122,7 @@ the update store and does not request installation while one exists.
 
 ## Source updates
 
-`open_project` and `open_recent_project` take an optional
-`acceptSourceUpdate` flag. Without it, a workspace that is not current for
-the package fails with the stable code `sourceUpdateRequired` and nothing is
-written. `preview_source_update(repositoryRoot, sourcePackagePath)` returns
-the `SourceUpdateReportDto` of the plan without writing or changing the
-active project, so the renderer can ask for confirmation. With the flag set,
-the command opens through `ProjectSession::open_with_source_update` and
-returns the applied report in `ProjectOpenResultDto.sourceUpdate`.
-
-Commands that run Atlas take no game path. They resolve the installation in
+Project commands take no game path. They resolve the installation in
 the worker from the application setting: the folder chosen with
 `set_game_path`, otherwise the first detected installation. A missing
 installation fails with `gameInstallationRequired`; a chosen folder that is
@@ -142,29 +133,28 @@ or with `null` returns to detection. The setting is local application state
 in `game-settings.json`; a malformed file fails with `gameSettings` and is
 never replaced with defaults.
 
-`update_project_from_game(jobId, repositoryRoot)` reads the source language
-from the existing workspace manifest, builds and publishes a source package
-with Harmonia Atlas exactly like project creation, and opens the project with
-the update applied. It is the path for an installed game after a patch.
+`open_project_from_game(repositoryRoot)` reads the source language from the
+workspace manifest and opens the configured game in that language. It
+returns `GameOpenResultDto`: `opened` with the `ProjectOpenResultDto`, or
+`sourceUpdateRequired` with the `SourceUpdateReportDto` of the plan, written
+nowhere. `open_recent_project(projectId, acceptSourceUpdate?)` returns the
+same DTO for a registry entry. After confirmation the renderer calls
+`update_project_from_game(repositoryRoot)`, or `open_recent_project` with
+`acceptSourceUpdate`; both open through
+`ProjectSession::open_with_source_update` and return the applied report in
+`ProjectOpenResultDto.sourceUpdate`. `update_project_from_game` is also the
+path for an installed game after a patch. `preview_source_update(repositoryRoot)`
+returns the plan without writing or changing the active project. A game
+older than the project's game version is refused; see
+[`rebase.md`](./rebase.md).
 
-`open_project_from_game(jobId, repositoryRoot)` opens a project without a
-user-chosen HSP. It reads the source language and content ID from the
-workspace manifest, previews the manifests in Aeria's source-package store
-with `aeria_hsp::read_manifest`, and fully opens only a matching package;
-unreadable store files are skipped. With no match it builds a package from
-the game installation like `update_project_from_game`. It returns
-`GameOpenResultDto`: `opened` with the `ProjectOpenResultDto`, or
-`sourceUpdateRequired` with the package path and the plan, written nowhere;
-after confirmation the renderer calls `open_project` with that path and
-`acceptSourceUpdate`. `list_source_packages` returns the store's packages
-(language, game version, size, publication time, whether a build record
-makes them reusable, whether they are the current build, and which projects
-use them; see [`source.md`](./source.md)), and `reveal_source_packages` opens
-the store folder in the file manager. `delete_source_package(packageId)`
-deletes a package only when it is removable, and runs as an Atlas job so no
-build reuses it meanwhile. `source_availability(repositoryRoot,
-sourceLanguage, opening)` previews, without verifying, whether a job would
-find a package (`ready`), run Atlas (`build`), or cannot tell (`unknown`).
+`initialize_project_from_game(repositoryRoot, sourceLanguage,
+targetLanguage)` creates the folder when needed, opens the game in the source
+language, and initializes the workspace; when it fails, a folder it created
+is removed again if it is still empty. Opening, updating, and creating read
+the cached sheet catalog, building it when needed, before the session is
+installed.
+
 `default_projects_directory_path` returns
 `Documents/Aeria`, the folder for new projects and for clones without a
 parent.
@@ -176,15 +166,15 @@ Planning and applying remain in `aeria-rebase` and `aeria-workspace`; the
 IPC layer only chooses whether to call the preview or the applying
 constructor.
 
-The HSP path remains local runtime state held by `ProjectSession`; its
-materialized HXS cache path is also local runtime state. Neither is added to
-Workspace Format. Public commands derive the application cache directory
+The game installation path is local runtime state held by the session's
+`GameSource`; it is never added to Workspace Format. Public commands derive
+the application cache directory
 through Tauri's path API; React cannot choose an arbitrary cache root.
 Translation browsing delegates to the bounded
 `ProjectSession::page_translation_rows` API, so page size remains governed by
 the backend contract. The DTO is row-centric, while each contained cell keeps
 its existing `SourceBinding` and overlay. Tauri performs DTO and error mapping,
-not business logic, and does not access HXS or SQLite directly.
+not business logic, and does not read the game or SQLite directly.
 
 `translation_progress` returns per-sheet `SheetProgressDto` coverage for the
 active project from `ProjectSession::translation_progress` (see
@@ -193,7 +183,7 @@ renderer re-reads it after each committed translation mutation or workspace
 reload and never derives sheet-wide progress from loaded row pages.
 `app_info` returns the application name and version for display.
 
-Filesystem, HSP/HXS, SQLite, workspace loading, row paging, and ordinary
+Filesystem, game reading, SQLite, workspace loading, row paging, and ordinary
 translation mutations run inside Tauri blocking workers. The async command
 handlers do not hold `DesktopState` or the project mutex across an await;
 worker-side access still goes through the single `ProjectSession` mutex, so
@@ -304,9 +294,10 @@ completes or pauses on its own, the runner starts an automatic Angelica turn
 in the job's conversation unless one is running.
 
 Angelica's search tools and job workers' translation memory use
-`DesktopSearch`. The source index of the active package is built by a
+`DesktopSearch`. The source index of the active game source is built by a
 background blocking task registered in `DesktopState` (building, ready, or
-failed per package ID), from its own verified HXS handle; see
+failed per source language and game version), from the session's shared
+`GameSource`; see
 [`search.md`](./search.md#desktop-use).
 
 `project_guide`, `save_project_guidance`, and `save_project_glossary` read
@@ -334,29 +325,6 @@ server. React has no direct filesystem or SQLite access. Translation-unit IDs
 cross IPC only in their canonical textual form, and review states use an
 explicit camelCase protocol enum.
 
-Source-package creation is the one desktop process workflow that owns an Atlas
-child job. The renderer first starts the desktop job and receives its opaque
-job ID before the Atlas worker starts; the long-running initialization command
-uses that ID to claim the active cancellation token. Progress events report
-Atlas state only and are not the source of job identity, so cancellation is
-available even before the first external-process event arrives. The build
-stages the v0.4.0 sidecar with Tauri's target-triple
-filename convention, while packaged runtime lookup resolves
-`harmonia-atlas[.exe]` beside the Aeria executable. Rust first honors the
-explicit `AERIA_ATLAS_PATH` development/test override, then the packaged
-executable sibling, and finally resource-directory compatibility fallbacks.
-It supplies the stable app-data staging path, forwards typed
-`source-package-event` payloads containing an opaque job ID, validates the
-staging HSP before immutable publication, and publishes a project only after
-the completed package has been validated.
-Desktop state permits one active package job. Cancellation signals that job,
-terminates and awaits Atlas, and remains authoritative through validation and
-workspace initialization: the final publication boundary serializes
-cancellation acceptance with workspace creation or source update and
-active-project replacement, leaving no newly initialized or updated project
-successful when cancellation has been accepted.
-
-After that final Atlas publication boundary and after the Atlas job finishes,
-the desktop attempts the recent-project upsert using the final immutable HSP
-path from the active `ProjectSession`; registry I/O is not performed inside
-the cancellation/publication critical section.
+Opening, updating, and creating a project run no child process and cannot be
+cancelled. After the new session is installed, the desktop attempts the
+recent-project upsert under the registry lock only.

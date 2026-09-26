@@ -1,6 +1,6 @@
 # Translation workspace
 
-A translation repository is a sparse overlay over immutable HXS source data.
+A translation repository is a sparse overlay over the installed game's text.
 
 ## Sparse overlay
 
@@ -11,15 +11,14 @@ string.
 A translation entry contains enough information for stable identity, current
 binding verification, target content, review state, notes, and safe source
 updates without duplicating the complete source corpus. A unit stores its
-source binding, the verified macro/raw/row-technical hashes, the source
-layout (sheet schema hash and String column offset) of that binding, and the
-row key of its row when the sheet is keyed, but never the full source macro
-text.
+source facts: the binding, the layout hash of its sheet, the source text it
+was translated from, and the row key of its row when the sheet is keyed (see
+[`../formats/workspace-v3.md`](../formats/workspace-v3.md)).
 
 The workspace is sparse in memory as well as on disk: creating a workspace
-from a verified HXS snapshot does not enumerate source cells. A unit is
-created only when a caller requests one verified String cell, and source data
-is read on demand through `aeria-hxs`.
+does not enumerate source cells. A unit is created only when a caller
+requests one String cell, and source data is read on demand through
+`aeria-source`.
 
 The in-memory workspace keeps a deterministic ordered index by
 `TranslationUnitId` and a secondary deterministic index from `SourceBinding`
@@ -30,7 +29,7 @@ is inserted; ordinary mutations do not change source facts.
 
 Every unit has a `SourceStatus`:
 
-- **Bound**: its binding, fingerprint, and layout describe the current source.
+- **Bound**: its source facts describe the game at the project's version.
   Only bound units appear at a source cell, count toward translation
   progress, can be edited, and will be exported.
 - **Detached**: a source update found no current occurrence for it. The
@@ -48,22 +47,13 @@ workspace exposes them through `Workspace::detached_units` and
 ## Project/source binding
 
 Workspace metadata records one source language, one target language, and the
-verified HXS `contentId` of the source the bound units describe. Exactly one
-target language is canonical per workspace; target-language selection is not
-repeated on individual units.
+game version the bound units describe. Exactly one target language is
+canonical per workspace; target-language selection is not repeated on
+individual units.
 
-The source is identified by content only. The HXS `snapshotId` and game
-version are properties of the opened source package, not of the project, so a
-game version with identical extracted content opens the project unchanged.
-
-The workspace source adapter accepts an already verified `HxsSnapshot`. It
-checks that the requested sheet, row, subrow, and String column exist, copies
-the verified cell and row hashes into a `SourceFingerprint`, copies the sheet
-schema hash and column offset into a `SourceLayout`, and derives a new v1
-`TranslationUnitId`. It does not reopen or independently verify SQLite
-internals. `ProjectSession` also records the row key when the sheet has a row
-key column; it detects the column once per sheet with the session's guidance
-and caches it for the immutable source.
+A unit is created from `SourceSheet::facts`, which reads the cell's text,
+the sheet's layout hash, and the row key from the game; the unit's
+`TranslationUnitId` is derived from the binding and the text.
 
 Source facts change only through a source update, described in
 [`rebase.md`](./rebase.md).
@@ -92,7 +82,7 @@ Project-shared data may include:
 Machine/user-local data includes:
 
 - secondary source-language preferences
-- source-package paths and disposable HXS cache
+- the game installation path and the disposable sheet catalog cache
 - AI credentials/model preferences
 - local UI layout
 - local search/index databases
@@ -115,20 +105,19 @@ Git commits, approvals, or other repository state.
 
 ## Persistence
 
-`aeria-workspace` provides the Workspace Format persistence adapter. It writes
-[Workspace Format v2](../formats/workspace-v2.md) and reads
-[Workspace Format v1](../formats/workspace-v1.md) only to migrate it.
+`aeria-workspace` provides the Workspace Format persistence adapter. It reads
+and writes [Workspace Format v3](../formats/workspace-v3.md); earlier formats
+are reported as unsupported.
 
 `WorkspaceStore` binds to a repository root and offers:
 
-- `read_stored` (crate-internal): read and validate every managed file in
-  either format, counting bound units whose binding another bound unit
-  already claims (a merge or interrupted-update state that a source update
-  resolves);
-- `load`: read, require the current format and unique bound bindings, and
-  activate the workspace for editing;
+- `read_stored` (crate-internal): read and validate every managed file,
+  counting bound units whose binding another bound unit already claims (a
+  merge or interrupted-update state that a source update resolves);
+- `load`: read, require unique bound bindings, and activate the workspace for
+  editing;
 - `read_metadata`: read only the manifest, for example to learn the source
-  language before building a source package;
+  language before opening the game;
 - `initialize`: publish a new `.aeria/` directory;
 - `persist_unit`: rewrite the one shard selected by a changed unit;
 - `publish_source_update` (crate-internal): rewrite the given shards and then
@@ -148,8 +137,8 @@ snapshot using path metadata and content hashes for the manifest and target
 shard. If an external change is detected, the mutation fails closed; the
 caller must reload, so an external unit is never silently discarded.
 
-On the ordinary target/note/review path, an existing unit's status, binding,
-fingerprint, layout, and row key are immutable. A new unit must be bound and use a
+On the ordinary target/note/review path, an existing unit's status and source
+facts are immutable. A new unit must be bound and use a
 binding not owned by another bound unit.
 
 Canonical file replacements are written to a temporary file outside the
@@ -157,12 +146,12 @@ managed `.aeria/` namespace and published with a cross-platform atomic file
 replacement. Initialization stages the complete directory and publishes it
 only after serialization succeeds. The atomicity guarantee is per file. A
 source update publishes the manifest last, so an interruption leaves the
-previous content ID in place and the update is planned again on the next
+previous game version in place and the update is planned again on the next
 open; see [`rebase.md`](./rebase.md#applying).
 
 ## Compatibility
 
-The workspace has an explicit `formatVersion`. New Aeria versions either open
-an older workspace directly or migrate it without data loss. Workspace Format
-v1 is migrated by the source update workflow; unsupported versions are
-reported and never reinterpreted.
+The workspace has an explicit `formatVersion`. Future Aeria versions either
+open an older workspace directly or migrate it without data loss.
+Unsupported versions, including Workspace Format v1 and v2, are reported and
+never reinterpreted.

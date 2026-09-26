@@ -9,7 +9,7 @@ Prioritize deterministic fixtures and regression cases around the highest-risk b
 - Unit tests for pure domain rules and parsers.
 - Golden/round-trip tests for structured strings and serialization.
 - Property/fuzz tests for parsers and invariants.
-- Integration tests over synthetic HXS/workspace repositories.
+- Integration tests over synthetic SqPack game folders and workspace repositories.
 - Desktop IPC tests for capability contracts.
 - Frontend component/workflow tests for high-value user flows.
 - Packaging smoke tests on supported release targets.
@@ -63,7 +63,7 @@ Every operation that takes or produces a path must work with non-ASCII
 characters and spaces, as under a Russian Windows user profile
 (`C:\Users\Анна Иванова\...`) or a game in `Program Files (x86)`:
 
-- Pass paths to the filesystem and to child processes (Git, Atlas) as
+- Pass paths to the filesystem and to child processes (Git) as
   `Path`/`OsStr` arguments, never through a shell or a lossy conversion.
 - Code that treats a path as a string (parsing, prefix stripping, joining,
   display, URL validation) needs a unit test with a Cyrillic case and a

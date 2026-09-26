@@ -1,16 +1,16 @@
 # Transactional translation mutations
 
 `ProjectSession` owns the application-level mutation API for ordinary editor
-changes. The session keeps the verified HXS snapshot, sparse `Workspace`, and
+changes. The session keeps the game source, sparse `Workspace`, and
 `WorkspaceStore` together so a successful mutation commits the same state to
 memory and to the workspace files.
 
 ```text
 ProjectSession mutation
         ↓
-exact HSG allowlist check
+translation permission of the game cell
         ↓
-verify exact current HXS source
+verify the unit against the game cell
         ↓
 Workspace domain mutation
         ↓
@@ -22,17 +22,17 @@ committed live session state
 ## Target mutations
 
 `ProjectSession::set_target` is the create-or-update application operation.
-Before any Workspace operation, it requires the exact `SourceBinding` to be
-present in the compatible HSG allowlist. A blocked binding returns the typed
-`SourceNotTranslatable` mutation error and cannot create or modify a
+Before any Workspace operation, it requires the exact `SourceBinding` to be a
+translatable String cell of the game (see
+[`source.md`](./source.md#translation-permission)). Any other binding returns
+the typed `SourceNotTranslatable` mutation error and cannot create or modify a
 translation unit or write a shard.
 
-When no unit owns the supplied binding, the session verifies that the current
-HXS coordinate is a String occurrence, derives its source fingerprint, layout,
-and stable `TranslationUnitId` through the existing workspace/domain rules,
-records the row key when the sheet is keyed, and creates the sparse unit. When a unit already exists, its durable ID, binding,
-and source fingerprint are preserved while the existing workspace target
-semantics apply.
+When no unit owns the supplied binding, the session reads the cell's source
+facts (binding, layout hash, text, and row key) from the game, derives the
+stable `TranslationUnitId`, and creates the sparse unit. When a unit already
+exists, its durable ID and source facts are preserved while the existing
+workspace target semantics apply.
 
 `set_target` rejects empty or whitespace-only targets before changing the
 in-memory workspace or writing a shard. Existing records with an empty target
@@ -56,7 +56,7 @@ no-op and does not rewrite the canonical shard.
 replace_reviewed)` writes a target produced by assisted translation. In
 addition to every `set_target` check, it:
 
-- reads the verified source macro of the binding (`source_macro`) and
+- reads the source macro of the binding (`source_macro`) and
   requires the target to satisfy the assisted structure policy in
   [`strings.md`](./strings.md#assisted-structure-policy);
 - compares the unit's current target and review state with `expected`, the
@@ -79,16 +79,14 @@ requests are successful no-ops and do not rewrite canonical files.
 
 ## Source integrity
 
-Before an ordinary mutation of an existing unit, the session resolves the
-unit's current `SourceBinding` against its verified HXS snapshot and compares
-the resulting `SourceFingerprint` and `SourceLayout` with the persisted unit
-facts. A mismatch is a typed source-integrity error containing the unit ID,
-binding, persisted facts, and verified facts. The mutation does not repair,
-update source facts, change review state, or write files.
+Before an ordinary mutation of an existing unit, the session reads the source
+facts of the unit's `SourceBinding` from the game and compares them with the
+persisted facts. A mismatch is a typed source-integrity error containing the
+unit ID, binding, persisted facts, and the game's facts. The mutation does not
+repair, update source facts, change review state, or write files.
 
-First-unit creation performs the same verified source lookup through the
-existing `Workspace::create_unit_from_hxs` domain seam. Callers do not supply
-or control source hashes or durable IDs.
+First-unit creation reads the same facts through `Workspace::create_unit`.
+Callers do not supply or control source facts or durable IDs.
 
 ## Transaction and persistence behavior
 
@@ -103,7 +101,7 @@ atomic shard publication.
 
 The session does not clone the full workspace, materialize the source corpus,
 enumerate all units, rebuild indexes, or rewrite every shard. Normal work is
-bounded to one verified source lookup, one sparse-unit lookup, and one shard
+bounded to one source lookup, one sparse-unit lookup, and one shard
 persistence operation. The store may perform its existing global binding
 check when inserting a new durable unit.
 
@@ -113,7 +111,7 @@ same session. The desktop command returns the resulting overlay for the
 changed unit, allowing the renderer to patch one loaded cell without
 reloading pages. The persisted format, canonical JSON/JSONL encoding, identity
 derivation, source-binding contract, and target validation rules are
-unchanged. HSG adds only the permission gate for target mutations.
+unchanged. Translation permission adds only the gate for target mutations.
 
 Deletion/reset-to-untranslated, bulk or multi-shard transactions, source
 updates, export, Git, AI, Tauri commands, and UI state are outside this

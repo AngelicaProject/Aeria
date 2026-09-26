@@ -1390,7 +1390,7 @@ export function EditorShell({
         loading={sheetLoading}
         repositoryRoot={project.repositoryRoot}
         sourceLanguage={project.sourceLanguage}
-        sourceSnapshotId={project.sourceSnapshotId}
+        gameVersion={project.gameVersion}
         selectedBinding={selectedBinding}
         dirty={dirty}
         projectProgress={projectProgress}

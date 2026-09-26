@@ -336,37 +336,37 @@ impl DesktopState {
             .map(|runner| Arc::clone(&runner.workers))
     }
 
-    pub(crate) fn search_index(&self, package_id: &str) -> Option<IndexState> {
+    pub(crate) fn search_index(&self, source_key: &str) -> Option<IndexState> {
         let indexes = self.search_indexes.lock().ok()?;
         indexes
             .iter()
-            .find(|(id, _)| id == package_id)
+            .find(|(id, _)| id == source_key)
             .map(|(_, state)| state.clone())
     }
 
-    pub(crate) fn set_search_index(&self, package_id: &str, state: IndexState) {
+    pub(crate) fn set_search_index(&self, source_key: &str, state: IndexState) {
         if let Ok(mut indexes) = self.search_indexes.lock() {
-            indexes.retain(|(id, _)| id != package_id);
-            indexes.push((package_id.to_owned(), state));
+            indexes.retain(|(id, _)| id != source_key);
+            indexes.push((source_key.to_owned(), state));
         }
     }
 
-    pub(crate) fn forget_search_index(&self, package_id: &str) {
+    pub(crate) fn forget_search_index(&self, source_key: &str) {
         if let Ok(mut indexes) = self.search_indexes.lock() {
-            indexes.retain(|(id, _)| id != package_id);
+            indexes.retain(|(id, _)| id != source_key);
         }
     }
 
-    /// Marks a package's index as building. Returns `false` when it already
+    /// Marks a source's index as building. Returns `false` when it already
     /// has a state, so only one build starts.
-    pub(crate) fn claim_search_build(&self, package_id: &str) -> bool {
+    pub(crate) fn claim_search_build(&self, source_key: &str) -> bool {
         let Ok(mut indexes) = self.search_indexes.lock() else {
             return false;
         };
-        if indexes.iter().any(|(id, _)| id == package_id) {
+        if indexes.iter().any(|(id, _)| id == source_key) {
             return false;
         }
-        indexes.push((package_id.to_owned(), IndexState::Building));
+        indexes.push((source_key.to_owned(), IndexState::Building));
         true
     }
 

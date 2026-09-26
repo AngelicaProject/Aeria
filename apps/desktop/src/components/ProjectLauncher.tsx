@@ -1,11 +1,9 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent } from "react";
 import { flushSync } from "react-dom";
-import { listen } from "@tauri-apps/api/event";
 import { open as openNativeDialog } from "@tauri-apps/plugin-dialog";
 import { DropdownMenu } from "radix-ui";
 import {
   appInfo,
-  cancelSourcePackage,
   defaultProjectsDirectory,
   forgetRecentProject,
   gameSettings,
@@ -13,23 +11,16 @@ import {
   initializeProjectFromGame,
   listRecentProjects,
   normalizeCommandError,
-  openProject,
   openProjectFromGame,
   openRecentProject,
-  previewSourceUpdate,
-  sourceAvailability,
-  startSourcePackage,
   updateProjectFromGame,
 } from "../ipc";
 import type {
-  AtlasEvent,
   CommandError,
   GameSettingsDto,
   ProjectOpenResultDto,
   RecentProjectAvailability,
   RecentProjectDto,
-  SourceAvailability,
-  SourcePackageEventPayload,
   SourceUpdateReportDto,
 } from "../types";
 import { ErrorBanner } from "./ErrorBanner";
@@ -47,7 +38,6 @@ import {
 } from "../recentProjectsState";
 import {
   launcherErrorTitle,
-  sourcePackageListenerError,
   type LauncherError,
   type LauncherErrorOperation,
 } from "../launcherErrorState";
@@ -67,12 +57,8 @@ type PendingSourceUpdate = {
   apply: () => Promise<ProjectOpenResultDto>;
 };
 
-/**
- * Jobs that run Harmonia Atlas and report source-package progress. Opening
- * builds a package only when no local one matches; a clone continues as an
- * open once Git finishes.
- */
-function runsAtlas(job: LauncherJob | null): boolean {
+/** Jobs that read the game; a clone continues as an open once Git finishes. */
+function readsGame(job: LauncherJob | null): boolean {
   return job === "open" || job === "create" || job === "update";
 }
 
@@ -90,36 +76,10 @@ const sourceLanguages = [
 
 type SourceLanguage = (typeof sourceLanguages)[number]["value"];
 
-const phaseLabels: Readonly<Record<string, MessageKey>> = {
-  inspectInstallation: "launcher.phase.inspectInstallation",
-  extractSource: "launcher.phase.extractSource",
-  verifySource: "launcher.phase.verifySource",
-  scanEvidence: "launcher.phase.scanEvidence",
-  writePackage: "launcher.phase.buildPackage",
-  buildPackage: "launcher.phase.buildPackage",
-  validatePackage: "launcher.phase.validatePackage",
-};
-
-function phaseLabel(event: AtlasEvent | null, t: Translate): string {
-  if (!event) return t("launcher.phase.preparing");
-  if (event.type === "started") return t("launcher.phase.started");
-  if (event.type === "completed") return t("launcher.phase.completed");
-  if (event.type === "failed") return t("launcher.phase.failed");
-  const label = phaseLabels[event.phase];
-  return label ? t(label) : event.phase;
-}
-
-function progressFraction(event: AtlasEvent | null): number | null {
-  if (!event || event.type !== "progress" || event.sheetIndex === null || !event.sheetCount) return null;
-  return Math.min(1, Math.max(0, (event.sheetIndex + (event.sheetCompleted ? 1 : 0)) / event.sheetCount));
-}
-
 function availabilityLabel(availability: RecentProjectAvailability): MessageKey {
   switch (availability) {
     case "ready": return "launcher.availability.ready";
     case "repositoryMissing": return "launcher.availability.repositoryMissing";
-    case "sourcePackageMissing": return "launcher.availability.sourcePackageMissing";
-    case "repositoryAndSourceMissing": return "launcher.availability.repositoryAndSourceMissing";
   }
 }
 
@@ -215,7 +175,7 @@ function RecentProjectRow({ project, disabled, opening, now, onOpen, onUpdate, o
         <DropdownMenu.Portal>
           <DropdownMenu.Content className="menu-content" align="end" sideOffset={4}>
             <DropdownMenu.Item className="menu-item" disabled={!ready} onSelect={onOpen}><span className="menu-item-label">{t("common.open")}</span></DropdownMenu.Item>
-            <DropdownMenu.Item className="menu-item" disabled={project.availability === "repositoryMissing" || project.availability === "repositoryAndSourceMissing"} onSelect={onUpdate}><span className="menu-item-label">{t("launcher.updateFromGame")}</span></DropdownMenu.Item>
+            <DropdownMenu.Item className="menu-item" disabled={!ready} onSelect={onUpdate}><span className="menu-item-label">{t("launcher.updateFromGame")}</span></DropdownMenu.Item>
             <DropdownMenu.Separator className="menu-separator" />
             <DropdownMenu.Item className="menu-item danger" onSelect={onRemove}><span className="menu-item-label">{t("launcher.removeRecent")}</span></DropdownMenu.Item>
           </DropdownMenu.Content>
@@ -226,7 +186,7 @@ function RecentProjectRow({ project, disabled, opening, now, onOpen, onUpdate, o
 }
 
 /** The game installation launcher jobs use, with a shortcut to change it. */
-function GameStatus({ settings, sources, disabled, onChange }: { settings: GameSettingsDto | null; sources: SourceAvailability | null; disabled: boolean; onChange: () => void }) {
+function GameStatus({ settings, disabled, onChange }: { settings: GameSettingsDto | null; disabled: boolean; onChange: () => void }) {
   const { t } = useI18n();
   const active = settings?.active ?? null;
   const detail = settings === null
@@ -240,8 +200,6 @@ function GameStatus({ settings, sources, disabled, onChange }: { settings: GameS
         {active ? <span className="mono launcher-game-path" title={active.path}>{displayPath(active.path)}</span> : null}
         <small className="launcher-game-facts">
           <span className="launcher-game-detail">{detail}</span>
-          {active && sources === "ready" ? <span className="chip chip-added" title={t("launcher.sourcesReadyHint")}>{t("launcher.sourcesReady")}</span> : null}
-          {active && sources === "build" ? <span className="chip chip-warn" title={t("launcher.sourcesBuildHint")}>{t("launcher.sourcesBuild")}</span> : null}
         </small>
       </span>
       <button className="button button-secondary" type="button" disabled={disabled} onClick={onChange}>{t(active ? "launcher.gameChange" : "launcher.gameChoose")}</button>
@@ -264,7 +222,6 @@ export function ProjectLauncher({ initialError, onProjectReady }: ProjectLaunche
   const [view, setView] = useState<LauncherView>("recent");
   const [repositoryRoot, setRepositoryRoot] = useState("");
   const [game, setGame] = useState<GameSettingsDto | null>(null);
-  const [sources, setSources] = useState<SourceAvailability | null>(null);
   const [cloneUrl, setCloneUrl] = useState("");
   const [cloneParent, setCloneParent] = useState("");
   const [projectName, setProjectName] = useState("");
@@ -272,9 +229,6 @@ export function ProjectLauncher({ initialError, onProjectReady }: ProjectLaunche
   const [defaultDirectory, setDefaultDirectory] = useState<string | null>(null);
   const [sourceLanguage, setSourceLanguage] = useState<SourceLanguage>("en");
   const [busy, setBusy] = useState<LauncherJob | null>(null);
-  const [jobId, setJobId] = useState<string | null>(null);
-  const [cancelRequested, setCancelRequested] = useState(false);
-  const [progress, setProgress] = useState<AtlasEvent | null>(null);
   const [error, setError] = useState<LauncherError | null>(initialError ? { operation: "open", error: initialError } : null);
   const [recentState, setRecentState] = useState<RecentProjectsState>(initialRecentProjectsState);
   const [recentActionError, setRecentActionError] = useState<CommandError | null>(null);
@@ -286,26 +240,9 @@ export function ProjectLauncher({ initialError, onProjectReady }: ProjectLaunche
   const [pendingUpdate, setPendingUpdate] = useState<PendingSourceUpdate | null>(null);
   const [applyingUpdate, setApplyingUpdate] = useState(false);
   const busyRef = useRef<LauncherJob | null>(null);
-  const jobIdRef = useRef<string | null>(null);
   const now = useMemo(() => Date.now(), [recentState]);
 
   useEffect(() => setError(initialError ? { operation: "open", error: initialError } : null), [initialError]);
-
-  // Tells whether the job in the current form finds a package or builds one.
-  // Clones are unknown until the repository exists.
-  useEffect(() => {
-    setSources(null);
-    if (busy !== null || !game?.active || (view !== "open" && view !== "update" && view !== "create")) return;
-    const root = repositoryRoot.trim();
-    if (view !== "create" && !root) return;
-    let active = true;
-    const timer = window.setTimeout(() => {
-      sourceAvailability(view === "create" ? null : root, view === "create" ? sourceLanguage : null, view === "open")
-        .then((next) => { if (active) setSources(next); })
-        .catch(() => undefined);
-    }, 300);
-    return () => { active = false; window.clearTimeout(timer); };
-  }, [view, repositoryRoot, sourceLanguage, game, busy]);
 
   useEffect(() => {
     let disposed = false;
@@ -316,26 +253,6 @@ export function ProjectLauncher({ initialError, onProjectReady }: ProjectLaunche
     void defaultProjectsDirectory().then((path) => { if (!disposed) setDefaultDirectory(path); }).catch(() => undefined);
     void refreshGame(() => disposed);
     return () => { disposed = true; };
-  }, []);
-
-  useEffect(() => {
-    let disposed = false;
-    let unlisten: (() => void) | undefined;
-    void listen<SourcePackageEventPayload>("source-package-event", ({ payload }) => {
-      if (!runsAtlas(busyRef.current) || (jobIdRef.current !== null && payload.jobId !== jobIdRef.current)) return;
-      jobIdRef.current = payload.jobId;
-      setJobId(payload.jobId);
-      setProgress(payload.event);
-    }).then((cleanup) => {
-      if (disposed) cleanup();
-      else { unlisten = cleanup; }
-    }).catch((caughtError: unknown) => {
-      if (disposed) return;
-      if (import.meta.env.DEV) console.error("failed to register source-package-event listener", caughtError);
-      setError({ operation: "create", error: sourcePackageListenerError(t) });
-    });
-    return () => { disposed = true; unlisten?.(); };
-    // The listener registers once; `t` only formats a failure reported at registration.
   }, []);
 
   /** Re-reads the game setting; a failure shows as a missing installation. */
@@ -368,22 +285,12 @@ export function ProjectLauncher({ initialError, onProjectReady }: ProjectLaunche
       return;
     }
     busyRef.current = job;
-    jobIdRef.current = null;
     flushSync(() => {
       setBusy(job);
       setError(null);
-      setProgress(null);
-      setJobId(null);
-      setCancelRequested(false);
     });
     let operation: LauncherErrorOperation = job;
     try {
-      const startAtlasJob = async () => {
-        const started = await startSourcePackage();
-        jobIdRef.current = started.jobId;
-        setJobId(started.jobId);
-        return started.jobId;
-      };
       let root = repositoryRoot;
       if (job === "clone") {
         root = await gitCloneRepository(cloneUrl.trim(), cloneParent.trim() || null);
@@ -397,59 +304,47 @@ export function ProjectLauncher({ initialError, onProjectReady }: ProjectLaunche
         });
       }
       if (job === "open" || job === "clone") {
-        const opened = await openProjectFromGame(await startAtlasJob(), root);
+        const opened = await openProjectFromGame(root);
         if (opened.status === "opened") {
           onProjectReady(opened.result);
         } else {
-          const packagePath = opened.sourcePackagePath;
-          setPendingUpdate({ report: opened.report, operation, apply: () => openProject(root, packagePath, true) });
+          setPendingUpdate({ report: opened.report, operation, apply: () => updateProjectFromGame(root) });
         }
         return;
       }
       const result = job === "update"
-        ? await updateProjectFromGame(await startAtlasJob(), repositoryRoot)
-        : await initializeProjectFromGame(await startAtlasJob(), newProjectRoot!, sourceLanguage, "und");
+        ? await updateProjectFromGame(repositoryRoot)
+        : await initializeProjectFromGame(newProjectRoot!, sourceLanguage, "und");
       onProjectReady(result);
     } catch (caughtError) {
       setError({ operation, error: normalizeCommandError(caughtError) });
     } finally {
       busyRef.current = null;
-      jobIdRef.current = null;
       setBusy(null);
-      setCancelRequested(false);
     }
   }
 
   async function handleRecentOpen(project: RecentProjectDto) {
     if (project.availability !== "ready" || busy !== null || recentBusyId !== null) return;
     flushSync(() => { setRecentBusyId(project.id); setError(null); });
-    try { onProjectReady(await openRecentProject(project.id)); }
-    catch (caughtError) {
-      const error = normalizeCommandError(caughtError);
-      if (error.code === "sourceUpdateRequired") {
-        await offerSourceUpdate(
-          "recentOpen",
-          () => previewSourceUpdate(project.repositoryRoot, project.sourcePackagePath),
-          () => openRecentProject(project.id, true),
-        );
-      } else {
-        setError({ operation: "recentOpen", error });
-      }
-    }
-    finally { setRecentBusyId(null); }
-  }
-
-  /** Previews a required source update and asks before applying it. */
-  async function offerSourceUpdate(
-    operation: LauncherErrorOperation,
-    preview: () => Promise<SourceUpdateReportDto>,
-    apply: () => Promise<ProjectOpenResultDto>,
-  ) {
     try {
-      setPendingUpdate({ report: await preview(), operation, apply });
+      const opened = await openRecentProject(project.id);
+      if (opened.status === "opened") {
+        onProjectReady(opened.result);
+      } else {
+        setPendingUpdate({
+          report: opened.report,
+          operation: "recentOpen",
+          apply: async () => {
+            const updated = await openRecentProject(project.id, true);
+            if (updated.status !== "opened") throw { code: "sourceUpdateRequired", message: t("launcher.error.updateNotApplied") };
+            return updated.result;
+          },
+        });
+      }
     } catch (caughtError) {
-      setError({ operation, error: normalizeCommandError(caughtError) });
-    }
+      setError({ operation: "recentOpen", error: normalizeCommandError(caughtError) });
+    } finally { setRecentBusyId(null); }
   }
 
   async function handleApplySourceUpdate() {
@@ -485,16 +380,6 @@ export function ProjectLauncher({ initialError, onProjectReady }: ProjectLaunche
     finally { setRecentBusyId(null); }
   }
 
-  async function handleCancel() {
-    if (!jobId || cancelRequested) return;
-    flushSync(() => setCancelRequested(true));
-    try { await cancelSourcePackage(jobId); }
-    catch (caughtError) {
-      setCancelRequested(false);
-      setError({ operation: "create", error: normalizeCommandError(caughtError) });
-    }
-  }
-
   const launcherDisabled = busy !== null || recentBusyId !== null || applyingUpdate;
   const pickerOperation: LauncherErrorOperation = view === "open" ? "open" : view === "clone" ? "clone" : view === "update" ? "update" : "create";
   const handlePickerError = (message: string) => setError({ operation: pickerOperation, error: { code: "pathPicker", message } });
@@ -509,13 +394,12 @@ export function ProjectLauncher({ initialError, onProjectReady }: ProjectLaunche
       : busy === "update"
         ? "launcher.updating"
         : view === "open" ? "launcher.openProject" : view === "clone" ? "launcher.cloneProject" : view === "update" ? "launcher.updateProject" : "launcher.createProject";
-  const fraction = progressFraction(progress);
   const recentProjects = recentState.status === "loaded" ? recentState.projects : [];
   const normalizedQuery = recentQuery.trim().toLocaleLowerCase();
   const visibleProjects = normalizedQuery
     ? recentProjects.filter((project) => displayPath(project.repositoryRoot).toLocaleLowerCase().includes(normalizedQuery))
     : recentProjects;
-  const gameStatus = <GameStatus settings={game} sources={sources} disabled={launcherDisabled} onChange={() => openSettings("game")} />;
+  const gameStatus = <GameStatus settings={game} disabled={launcherDisabled} onChange={() => openSettings("game")} />;
   const showView = (next: LauncherView) => { if (!launcherDisabled) setView((current) => current === next ? "recent" : next); };
 
   return (
@@ -612,30 +496,17 @@ export function ProjectLauncher({ initialError, onProjectReady }: ProjectLaunche
                 ) : (
                   <PathField id="repository-root" label={t("launcher.repository")} value={repositoryRoot} onChange={setRepositoryRoot} onError={handlePickerError} placeholder="C:\Projects\my-translation" disabled={launcherDisabled} />
                 )}
-                {runsAtlas(busy) ? null : gameStatus}
-                {runsAtlas(busy) ? (
+                {readsGame(busy) ? (
                   <section className="job-progress" aria-label={t("launcher.progressLabel")}>
                     <div className="job-progress-head">
                       <span className="spinner" aria-hidden="true" />
-                      <strong>{phaseLabel(progress, t)}</strong>
-                      {fraction !== null ? <span className="job-progress-percent">{Math.round(fraction * 100)}%</span> : null}
+                      <strong>{t("launcher.phase.readingGame")}</strong>
                     </div>
-                    <div className={fraction === null ? "progress-track indeterminate" : "progress-track"}><span style={{ width: `${(fraction ?? 0.3) * 100}%` }} /></div>
-                    {progress?.type === "progress" ? (
-                      <div className="job-progress-facts">
-                        <span>{progress.sheet ?? "—"}</span>
-                        {progress.language ? <span>{progress.language}</span> : null}
-                        {progress.rowsProcessed !== null ? <span>{t("launcher.progressRows", { count: progress.rowsProcessed })}</span> : null}
-                      </div>
-                    ) : null}
+                    <div className="progress-track indeterminate"><span style={{ width: "30%" }} /></div>
                   </section>
-                ) : null}
+                ) : gameStatus}
                 <div className="launcher-form-actions">
-                  {runsAtlas(busy) ? (
-                    <button className="button button-secondary" type="button" onClick={() => void handleCancel()} disabled={jobId === null || cancelRequested}>{t(cancelRequested ? "launcher.cancelling" : "common.cancel")}</button>
-                  ) : (
-                    <button className="button button-ghost" type="button" disabled={launcherDisabled} onClick={() => setView("recent")}>{t("common.back")}</button>
-                  )}
+                  <button className="button button-ghost" type="button" disabled={launcherDisabled} onClick={() => setView("recent")}>{t("common.back")}</button>
                   <button className="button button-primary" type="submit" disabled={launcherDisabled}>
                     {t(submitLabel)}
                   </button>

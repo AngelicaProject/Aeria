@@ -218,10 +218,6 @@
 .game-detected ul { display: grid; gap: 4px; margin: 0; padding: 0; list-style: none; }
 .game-detected li { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 6px 0; border-bottom: 1px solid var(--line); }
 .game-detected li:last-child { border-bottom: 0; }
-.source-packages { display: grid; margin: 0; padding: 0; list-style: none; }
-.source-packages li { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 6px 0; border-bottom: 1px solid var(--line); }
-.source-packages li:last-child { border-bottom: 0; }
-.source-package-state { display: flex; flex: none; align-items: center; gap: 6px; }
 
 /* AI provider settings */
 .ai-settings { display: grid; gap: 16px; }

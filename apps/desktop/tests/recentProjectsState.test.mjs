@@ -8,17 +8,15 @@ import {
 import { createTranslator } from "../src/i18n/translate.ts";
 import {
   launcherErrorTitle,
-  sourcePackageListenerError,
 } from "../src/launcherErrorState.ts";
 
 const project = {
   id: "local-project",
   repositoryRoot: "C:\\Projects\\aeria",
   sourcePackagePath: "C:\\Sources\\source.hsp",
-  sourcePackageId: "sha256:0000000000000000000000000000000000000000000000000000000000000000",
   sourceLanguage: "en",
   targetLanguage: "fr",
-  gameVersion: "test",
+  gameVersion: "2026.09.15.0000.0000",
   lastOpenedAtUnixMs: 1,
   availability: "ready",
 };
@@ -50,11 +48,4 @@ test("recent-project open errors use a recent-project-specific title", () => {
   const t = createTranslator("en");
   assert.equal(t(launcherErrorTitle("recentOpen")), "Could not reopen recent project");
   assert.equal(t(launcherErrorTitle("create")), "Could not create project");
-});
-
-test("source-package listener failures use a typed user-facing error", () => {
-  const error = sourcePackageListenerError(createTranslator("en"));
-
-  assert.equal(error.code, "sourcePackageListener");
-  assert.match(error.message, /progress updates/i);
 });

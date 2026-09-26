@@ -12,7 +12,6 @@ const blockerLabels: Record<UpdateBlocker, MessageKey> = {
   translation: "update.blocker.translation",
   sync: "update.blocker.sync",
   export: "update.blocker.export",
-  sourcePackage: "update.blocker.sourcePackage",
 };
 
 /** Running work is re-read this often while it holds back a requested install. */

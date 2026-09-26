@@ -1156,7 +1156,7 @@ pub async fn git_contributors(app: tauri::AppHandle) -> CommandResult<Vec<Contri
 /// Shards are merged per translation unit. Same-unit conflicts are returned
 /// in the result without changing the repository; the renderer syncs again
 /// with a resolution for each. Integration is rolled back when the resulting
-/// workspace does not reload against the active source package.
+/// workspace does not reload against the open game source.
 ///
 /// # Errors
 ///
@@ -1227,7 +1227,7 @@ pub async fn git_create_branch(app: tauri::AppHandle, name: String) -> CommandRe
 
 #[tauri::command(rename_all = "camelCase")]
 /// Switches to a branch and reloads the project; the switch is undone when
-/// the branch does not reload against the active source package.
+/// the branch does not reload against the open game source.
 ///
 /// # Errors
 ///

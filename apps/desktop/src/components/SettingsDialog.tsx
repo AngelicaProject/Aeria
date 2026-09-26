@@ -2,7 +2,7 @@ import { memo, useEffect, useState, type CSSProperties, type ReactNode } from "r
 import { Dialog } from "radix-ui";
 import { appInfo } from "../ipc";
 import { AiProvidersSettings } from "./AiProvidersSettings";
-import { GameSettings, SourcePackages } from "./GameSettings";
+import { GameSettings } from "./GameSettings";
 import { keyboardShortcuts, shortcutGroupLabels } from "../shortcuts";
 import { Segmented } from "../ui/primitives/Segmented";
 import { UiIcon, type UiIconName } from "../ui/primitives/UiIcon";
@@ -184,10 +184,6 @@ export const SettingsDialog = memo(function SettingsDialog({ open, onOpenChange,
     {
       id: "game-installation", section: "game", title: t("settings.game.title"), description: t("settings.game.description"), keywords: t("settings.game.keywords"), wide: true,
       control: <GameSettings />,
-    },
-    {
-      id: "source-packages", section: "game", title: t("settings.sources.title"), description: t("settings.sources.description"), keywords: t("settings.sources.keywords"), wide: true,
-      control: <SourcePackages />,
     },
     {
       id: "ai-providers", section: "ai", title: t("settings.ai.title"), description: t("settings.ai.description"), keywords: t("settings.ai.keywords"), wide: true,
