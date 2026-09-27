@@ -220,6 +220,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "aeria-sqpack"
+version = "0.1.0"
+dependencies = [
+ "crc32fast",
+ "flate2",
+ "rusqlite",
+ "thiserror 2.0.20",
+]
+
+[[package]]
 name = "aeria-workspace"
 version = "0.1.0"
 dependencies = [
