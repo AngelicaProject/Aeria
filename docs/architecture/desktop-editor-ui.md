@@ -192,7 +192,11 @@ validation, and macro text is never rewritten by the presentation.
   is a single chip listing its distinct values, such as `10 / 5`; its
   tooltip gives the branches in words (`class = monk → (level ≥ 72 → 10,
   otherwise 5), otherwise 5`), and Code mode edits them. Lines start only
-  where the text has `<br>`, so what reads as one line is one line. Formatting pairs vanish
+  where the text has `<br>`, so what reads as one line is one line. When a
+  branch begins with `<br>`, as in `<if …><br>Combo bonus: …</if>`, the
+  whole line depends on the condition: its line starts before the condition
+  chips, and a cursor before them stays at the end of the line above, where
+  typed text belongs. Formatting pairs vanish
   into the text they format: text inside `<ui-color 504>…</ui-color>` is
   drawn in that color, italics and bold as such, and a color with its
   outline (`<ui-color 504><ui-edge-color 505>`) is one thin marker in the

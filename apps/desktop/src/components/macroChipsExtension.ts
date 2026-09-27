@@ -131,8 +131,8 @@ type Chips = {
   decorations: DecorationSet;
   atoms: DecorationSet;
   specs: readonly ChipSpec[];
-  /** Positions right after a line break, where a cursor belongs on the new line. */
-  breaks: ReadonlySet<number>;
+  /** Where a cursor belongs at each line break: 1 on the new line, -1 before it. */
+  breaks: ReadonlyMap<number, -1 | 1>;
 };
 
 const lookup = {
@@ -145,7 +145,7 @@ function build(doc: string, context: ChipContext): Chips {
   const hasError = (from: number, to: number) => errors.some(([start, end]) => start < to && end > from);
   const ranges: Range<Decoration>[] = [];
   const atoms: Range<Decoration>[] = [];
-  const breaks = new Set<number>();
+  const breaks = new Map<number, -1 | 1>();
   const specs = chipSpecs(doc, lookup, context.t);
   for (const spec of specs) {
     switch (spec.kind) {
@@ -159,8 +159,10 @@ function build(doc: string, context: ChipContext): Chips {
         break;
       }
       case "break":
-        ranges.push(Decoration.widget({ widget: new BreakWidget(), side: -1 }).range(spec.at));
-        breaks.add(spec.at);
+        // The break sits on the side of `at` where the cursor does not, so
+        // the cursor is drawn on the line it belongs to.
+        ranges.push(Decoration.widget({ widget: new BreakWidget(), side: spec.assoc === 1 ? -1 : 1 }).range(spec.at));
+        breaks.set(spec.at, spec.assoc);
         break;
       default: {
         const widget = spec.kind === "chip"
@@ -186,16 +188,19 @@ export function macroChips(context: ChipContext): Extension {
     ],
   });
 
-  // A cursor right after a `<br>` sits on the new line, where typing puts text.
+  // A cursor at a line break sits where typing puts text: on the new line
+  // after a `<br>`, and at the end of the line above before a condition
+  // whose branch begins with `<br>`.
   const cursorAtBreaks = EditorState.transactionFilter.of((transaction) => {
     const selection = transaction.selection;
     if (!selection) return transaction;
     const breaks = transaction.state.field(field).breaks;
     let changed = false;
     const ranges = selection.ranges.map((range) => {
-      if (!range.empty || range.assoc === 1 || !breaks.has(range.head)) return range;
+      const assoc = range.empty ? breaks.get(range.head) : undefined;
+      if (assoc === undefined || range.assoc === assoc) return range;
       changed = true;
-      return EditorSelection.cursor(range.head, 1);
+      return EditorSelection.cursor(range.head, assoc);
     });
     if (!changed) return transaction;
     return [transaction, { selection: EditorSelection.create(ranges, selection.mainIndex), sequential: true }];

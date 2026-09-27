@@ -22,13 +22,16 @@ export type ChipSpec =
    * A tag, a `{value}`, or a condition of values drawn as one chip; `insert`
    * is what picking it adds to a translation, and `title` explains it.
    */
-  | { kind: "chip"; from: number; to: number; label: string; tone: ChipTone; icon?: number; insert: string; title?: string }
+  | { kind: "chip"; from: number; to: number; label: string; tone: ChipTone; icon?: number; insert: string; title?: string; startsBranch?: boolean }
   /** Adjacent opening or closing formatting tags, drawn as one thin marker; picking it wraps text in the pair. */
   | { kind: "marker"; from: number; to: number; side: "open" | "close"; color: string | null; wrap: readonly [string, string] | null }
   /** Text inside formatting pairs, drawn with their style. */
   | { kind: "style"; from: number; to: number; color: string | null; italic: boolean; bold: boolean }
-  /** A new visual line at `at`, after a `<br>`; a cursor at `at` belongs on it. */
-  | { kind: "break"; at: number };
+  /**
+   * A new visual line at `at` for a `<br>`. `assoc` says where a cursor at
+   * `at` belongs: 1 on the new line, -1 at the end of the line before it.
+   */
+  | { kind: "break"; at: number; assoc: -1 | 1 };
 
 /** What chips read from the latest Rust views of macro text. */
 export type ChipLookup = {
@@ -346,13 +349,24 @@ export function chipSpecs(text: string, lookup: ChipLookup, t: Translate): ChipS
       } else {
         label = t(`chip.${tag.name}` as "chip.else");
       }
-      specs.push({ kind: "chip", from: tag.from, to: tag.to, label, tone: "condition", insert });
+      specs.push({ kind: "chip", from: tag.from, to: tag.to, label, tone: "condition", insert, startsBranch: !tag.closing });
       continue;
     }
     if (!FORMATTING.has(tag.name)) {
       specs.push({ kind: "chip", from: tag.from, to: tag.to, ...chipOf(tag, t), insert: tag.text });
-      // The cursor after a line break needs its line, even at the end of the text.
-      if (tag.name === "br") specs.push({ kind: "break", at: tag.to });
+      if (tag.name === "br") {
+        // A branch that begins with <br>, such as "<if …><br>Combo bonus:",
+        // puts the whole line under the condition: the line starts before
+        // the condition, and text typed before it stays on the line above.
+        let at = tag.from;
+        for (let back = specs.length - 2; back >= 0; back -= 1) {
+          const previous = specs[back]!;
+          if (previous.kind !== "chip" || !previous.startsBranch || previous.to !== at) break;
+          at = previous.from;
+        }
+        // The cursor after a line break needs its line, even at the end of the text.
+        specs.push(at === tag.from ? { kind: "break", at: tag.to, assoc: 1 } : { kind: "break", at, assoc: -1 });
+      }
       continue;
     }
     const side = tag.closing ? "close" : "open";

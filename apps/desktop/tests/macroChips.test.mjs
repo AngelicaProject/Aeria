@@ -32,7 +32,13 @@ test("a color and its outline read as one styled span between two markers", () =
 
 test("a line break at the end still starts a line for the cursor", () => {
   assert.deepEqual(view("a<br>"), ["[↵]", "⏎"]);
-  assert.deepEqual(chipSpecs("a<br>", lookup, ru).find((spec) => spec.kind === "break"), { kind: "break", at: 5 });
+  assert.deepEqual(chipSpecs("a<br>", lookup, ru).find((spec) => spec.kind === "break"), { kind: "break", at: 5, assoc: 1 });
+});
+
+test("a branch that begins with a line break starts its line before the condition", () => {
+  const text = "a <if ($gn68 == 21)><if ($gn72 >= 94)><br>Bonus</if></if>";
+  assert.deepEqual(view(text), ["[если класс = monk]", "[если уровень ≥ 94]", "[↵]", "⏎", "[конец]", "[конец]"]);
+  assert.deepEqual(chipSpecs(text, lookup, ru).find((spec) => spec.kind === "break"), { kind: "break", at: 2, assoc: -1 });
 });
 
 test("nested formatting keeps the innermost color and adds italics", () => {
