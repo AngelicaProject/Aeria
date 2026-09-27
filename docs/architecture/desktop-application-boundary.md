@@ -183,16 +183,12 @@ renderer re-reads it after each committed translation mutation or workspace
 reload and never derives sheet-wide progress from loaded row pages.
 `app_info` returns the application name and version for display.
 
-`macro_view(text, values)` describes macro text for the editor: its
-diagnostics, its tags (opening, separator, closing, or inline, with their
-catalog arguments and, on an opening color tag, the color it sets), a game preview from `aeria_se::preview` evaluated with
-`values` (the renderer's chosen values of preview variables, numbers or
-texts by key such as `gn68`), and the variables the preview read with their
-defaults, meanings, and row names, all with UTF-16 offsets. It reads
-`UIColor` rows, sheet rows, and row ids from the open project's
-`GameSource` (`GameSource::ui_color`, `GameSource::cell_text`, and
-`GameSource::row_ids`); without a project, references are shown as values.
-It changes nothing and needs no project.
+`macro_view(text)` describes macro text for the editor: its diagnostics and
+its tags (opening, separator, closing, or inline, with their catalog
+arguments and, on an opening color tag, the color it sets), with UTF-16
+offsets. `<ui-color>` colors are read from the open project's `GameSource`
+(`GameSource::ui_color`); without a project they are unknown. It changes
+nothing and needs no project.
 
 `game_glyph_font()` returns, as raw bytes, a TrueType font of the private use
 glyphs of the open project's game font (`GameSource::private_glyphs`, drawn

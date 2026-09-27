@@ -1,4 +1,5 @@
-//! Macro text for the editor: diagnostics, tags, and the game preview.
+//! Macro text for the editor: diagnostics and tags, and the game glyphs
+//! and icons the editor draws.
 //!
 //! The renderer highlights and edits macro text; this command tells it what
 //! the text means. Offsets are UTF-16 code units, as the editor counts them.
@@ -6,18 +7,12 @@
 use std::sync::Arc;
 
 use aeria_se::catalog::{Form, Place, Role};
-use std::collections::BTreeMap;
-
-use aeria_se::preview::{
-    ChoiceKind, Parameter, Piece, PreviewData, Style, Value, ValueKind, Values, Variable,
-    VariableKind,
-};
 use aeria_se::{
     ExprKind, ExprSyntax, MacroString, MacroSyntax, SemanticFamily, SyntaxKind, SyntaxNode,
     Written, parse,
 };
 use aeria_source::GameSource;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use tauri::Manager;
 
 use crate::commands::run_blocking;
@@ -31,43 +26,6 @@ type CommandResult<T> = Result<T, CommandError>;
 pub struct MacroViewDto {
     pub diagnostics: Vec<MacroDiagnosticDto>,
     pub tags: Vec<MacroTagDto>,
-    pub preview: Vec<PreviewPieceDto>,
-    /// Every variable the preview read, in order of first use.
-    pub variables: Vec<PreviewVariableDto>,
-}
-
-/// A variable value: a number or a text.
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(untagged)]
-pub enum PreviewValueDto {
-    Int(u32),
-    Text(String),
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct PreviewOptionDto {
-    pub value: u32,
-    pub label: String,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct PreviewVariableDto {
-    /// `n1`, `gn68`, `gs1`, `hour`, or a character property such as `gender`.
-    pub key: String,
-    /// `number`, `text`, `time`, or `character`.
-    pub kind: &'static str,
-    pub parameter: Option<ParameterDto>,
-    /// The established meaning of a global parameter, such as `class-job`.
-    pub global: Option<&'static str>,
-    /// The sheet the value names a row of.
-    pub sheet: Option<String>,
-    pub default: PreviewValueDto,
-    pub value: PreviewValueDto,
-    /// The text of the row the value names.
-    pub value_name: Option<String>,
-    pub options: Vec<PreviewOptionDto>,
 }
 
 #[derive(Debug, Serialize)]
@@ -121,109 +79,20 @@ pub struct ParameterDto {
     pub index: u32,
 }
 
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct StyleDto {
-    /// `#rrggbbaa`.
-    pub color: Option<String>,
-    pub edge: Option<String>,
-    pub italic: bool,
-    pub bold: bool,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(tag = "type", rename_all = "camelCase")]
-pub enum ChoiceDto {
-    If { condition: String },
-    Switch { value: String },
-    Gender,
-    Myself,
-    Name,
-    Josa,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(tag = "kind", rename_all = "camelCase")]
-pub enum PreviewPieceDto {
-    Text {
-        text: String,
-        style: StyleDto,
-    },
-    Break,
-    #[serde(rename_all = "camelCase")]
-    Value {
-        value_kind: &'static str,
-        source: &'static str,
-        parameter: Option<ParameterDto>,
-        label: String,
-        style: StyleDto,
-        /// The value filled in from the variables; empty when unknown.
-        shown: Vec<PreviewPieceDto>,
-    },
-    Icon {
-        icon: u32,
-        device: bool,
-    },
-    /// When the variables select a branch, `selected` names it and only
-    /// that branch holds pieces.
-    Choice {
-        choice: ChoiceDto,
-        selected: Option<usize>,
-        branches: Vec<Vec<PreviewPieceDto>>,
-    },
-    Ruby {
-        base: Vec<PreviewPieceDto>,
-        reading: Vec<PreviewPieceDto>,
-    },
-    Opaque {
-        spelling: String,
-    },
-}
-
-/// Game data for previews, from the open project's game when there is one.
-struct GameData(Option<Arc<GameSource>>);
-
-impl PreviewData for GameData {
-    fn ui_color(&self, row: u32) -> Option<u32> {
-        self.0.as_ref()?.ui_color(row)
-    }
-
-    fn sheet_text(&self, sheet: &str, row: u32, column: u32) -> Option<String> {
-        self.0
-            .as_ref()?
-            .cell_text(sheet, row, column)
-            .ok()
-            .flatten()
-    }
-
-    fn sheet_rows(&self, sheet: &str) -> Vec<u32> {
-        self.0
-            .as_ref()
-            .and_then(|source| source.row_ids(sheet).ok())
-            .unwrap_or_default()
-    }
-}
-
 #[tauri::command(rename_all = "camelCase")]
-/// Describes macro text for the editor: its diagnostics, its tags with
-/// their arguments, and a preview as the game shows it. Game data is read
-/// from the open project's game; without a project, references are shown
-/// as values. `values` holds the values chosen for the preview's variables.
+/// Describes macro text for the editor: its diagnostics and its tags with
+/// their arguments. The colors of `<ui-color>` tags are read from the open
+/// project's game; without a project they are unknown.
 ///
 /// # Errors
 ///
 /// Returns a typed command error when the desktop worker fails.
-pub async fn macro_view(
-    app: tauri::AppHandle,
-    text: String,
-    values: Option<BTreeMap<String, PreviewValueDto>>,
-) -> CommandResult<MacroViewDto> {
-    let values: Values = values
-        .unwrap_or_default()
-        .into_iter()
-        .map(|(key, value)| (key, value_of(value)))
-        .collect();
-    run_blocking(move || Ok(view(&text, &GameData(project_source(&app)), &values))).await
+pub async fn macro_view(app: tauri::AppHandle, text: String) -> CommandResult<MacroViewDto> {
+    run_blocking(move || {
+        let source = project_source(&app);
+        Ok(view(&text, &|row| source.as_ref()?.ui_color(row)))
+    })
+    .await
 }
 
 /// The open project's game, when a project is open.
@@ -303,15 +172,17 @@ pub async fn game_icon(app: tauri::AppHandle, id: u32) -> CommandResult<tauri::i
     .await
 }
 
-fn view(text: &str, data: &dyn PreviewData, values: &Values) -> MacroViewDto {
+/// The foreground color of a `UIColor` row as `0xRRGGBBAA`.
+type UiColors<'a> = &'a dyn Fn(u32) -> Option<u32>;
+
+fn view(text: &str, ui_colors: UiColors<'_>) -> MacroViewDto {
     let document = parse(text);
     let offsets = Utf16Offsets::new(text);
     let mut tags = Vec::new();
     collect_tags(&document, document.nodes(), &offsets, &mut tags);
     for tag in &mut tags {
-        tag.color = tag_color(tag, data);
+        tag.color = tag_color(tag, ui_colors);
     }
-    let preview = aeria_se::preview::preview(text, data, values);
     MacroViewDto {
         diagnostics: document
             .diagnostics()
@@ -323,8 +194,6 @@ fn view(text: &str, data: &dyn PreviewData, values: &Values) -> MacroViewDto {
             })
             .collect(),
         tags,
-        preview: preview.pieces.into_iter().map(piece_dto).collect(),
-        variables: preview.variables.into_iter().map(variable_dto).collect(),
     }
 }
 
@@ -519,7 +388,7 @@ fn macro_tags(
 
 /// The color an opening `<color>`, `<edge-color>`, `<ui-color>`, or
 /// `<ui-edge-color>` tag sets: its `#AARRGGBB` value, or the `UIColor` row.
-fn tag_color(tag: &MacroTagDto, data: &dyn PreviewData) -> Option<String> {
+fn tag_color(tag: &MacroTagDto, ui_colors: UiColors<'_>) -> Option<String> {
     if !matches!(tag.part, MacroTagPart::Open) {
         return None;
     }
@@ -529,7 +398,7 @@ fn tag_color(tag: &MacroTagDto, data: &dyn PreviewData) -> Option<String> {
             let argb = u32::from_str_radix(value.strip_prefix('#')?, 16).ok()?;
             color(Some(argb.rotate_left(8)))
         }
-        "ui-color" | "ui-edge-color" => color(data.ui_color(value.parse().ok()?)),
+        "ui-color" | "ui-edge-color" => color(ui_colors(value.parse().ok()?)),
         _ => None,
     }
 }
@@ -538,142 +407,19 @@ fn color(value: Option<u32>) -> Option<String> {
     value.map(|rgba| format!("#{rgba:08x}"))
 }
 
-fn style_dto(style: Style) -> StyleDto {
-    StyleDto {
-        color: color(style.color),
-        edge: color(style.edge),
-        italic: style.italic,
-        bold: style.bold,
-    }
-}
-
-fn parameter_dto(parameter: Parameter) -> ParameterDto {
-    ParameterDto {
-        prefix: parameter.prefix,
-        index: parameter.index,
-    }
-}
-
-const fn value_kind(kind: ValueKind) -> &'static str {
-    match kind {
-        ValueKind::Number => "number",
-        ValueKind::Text => "text",
-        ValueKind::PlayerName => "playerName",
-        ValueKind::GameData => "gameData",
-        ValueKind::Time => "time",
-        ValueKind::Other => "other",
-    }
-}
-
-fn value_of(value: PreviewValueDto) -> Value {
-    match value {
-        PreviewValueDto::Int(value) => Value::Int(value),
-        PreviewValueDto::Text(text) => Value::Text(text),
-    }
-}
-
-fn value_dto(value: Value) -> PreviewValueDto {
-    match value {
-        Value::Int(value) => PreviewValueDto::Int(value),
-        Value::Text(text) => PreviewValueDto::Text(text),
-    }
-}
-
-fn variable_dto(variable: Variable) -> PreviewVariableDto {
-    PreviewVariableDto {
-        key: variable.key,
-        kind: match variable.kind {
-            VariableKind::Number => "number",
-            VariableKind::Text => "text",
-            VariableKind::Time => "time",
-            VariableKind::Character => "character",
-        },
-        parameter: variable.parameter.map(parameter_dto),
-        global: variable.global.map(|global| global.name),
-        sheet: variable.sheet.map(|(sheet, _)| sheet),
-        default: value_dto(variable.default),
-        value: value_dto(variable.value),
-        value_name: variable.value_name,
-        options: variable
-            .options
-            .into_iter()
-            .map(|(value, label)| PreviewOptionDto { value, label })
-            .collect(),
-    }
-}
-
-fn piece_dto(piece: Piece) -> PreviewPieceDto {
-    match piece {
-        Piece::Text { text, style } => PreviewPieceDto::Text {
-            text,
-            style: style_dto(style),
-        },
-        Piece::Break => PreviewPieceDto::Break,
-        Piece::Value {
-            kind,
-            source,
-            parameter,
-            label,
-            style,
-            shown,
-        } => PreviewPieceDto::Value {
-            value_kind: value_kind(kind),
-            source,
-            parameter: parameter.map(parameter_dto),
-            label,
-            style: style_dto(style),
-            shown: shown.into_iter().map(piece_dto).collect(),
-        },
-        Piece::Icon { icon, device } => PreviewPieceDto::Icon { icon, device },
-        Piece::Choice {
-            kind,
-            selected,
-            branches,
-        } => PreviewPieceDto::Choice {
-            choice: match kind {
-                ChoiceKind::If { condition } => ChoiceDto::If { condition },
-                ChoiceKind::Switch { value } => ChoiceDto::Switch { value },
-                ChoiceKind::Gender => ChoiceDto::Gender,
-                ChoiceKind::Myself => ChoiceDto::Myself,
-                ChoiceKind::Name => ChoiceDto::Name,
-                ChoiceKind::Josa => ChoiceDto::Josa,
-            },
-            selected,
-            branches: branches
-                .into_iter()
-                .map(|branch| branch.into_iter().map(piece_dto).collect())
-                .collect(),
-        },
-        Piece::Ruby { base, reading } => PreviewPieceDto::Ruby {
-            base: base.into_iter().map(piece_dto).collect(),
-            reading: reading.into_iter().map(piece_dto).collect(),
-        },
-        Piece::Opaque { spelling } => PreviewPieceDto::Opaque { spelling },
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    struct Colors;
-
-    impl PreviewData for Colors {
-        fn ui_color(&self, row: u32) -> Option<u32> {
-            (row == 504).then_some(0x00CC_22FF)
-        }
-
-        fn sheet_text(&self, _sheet: &str, _row: u32, _column: u32) -> Option<String> {
-            None
-        }
+    fn no_colors(_row: u32) -> Option<u32> {
+        None
     }
 
     #[test]
     fn opening_color_tags_carry_their_color() {
         let view = view(
             "<color #FF13212F>x</color><ui-color 504>y</ui-color><ui-color 9>z</ui-color>",
-            &Colors,
-            &Values::new(),
+            &|row| (row == 504).then_some(0x00CC_22FF),
         );
         let colors: Vec<Option<&str>> = view.tags.iter().map(|tag| tag.color.as_deref()).collect();
         assert_eq!(
@@ -683,9 +429,9 @@ mod tests {
     }
 
     #[test]
-    fn a_view_reports_tags_diagnostics_and_a_preview_in_utf16_offsets() {
+    fn a_view_reports_tags_and_diagnostics_in_utf16_offsets() {
         let text = "Ф<if ($n1 == 1)><i>a</i><else>b</if> <sheet Item $n1 0><nope>";
-        let view = view(text, &aeria_se::preview::NoData, &Values::new());
+        let view = view(text, &no_colors);
         let spans: Vec<(&str, usize, usize)> = view
             .tags
             .iter()
@@ -714,17 +460,5 @@ mod tests {
         assert_eq!(row.parameter.map(|parameter| parameter.index), Some(1));
         assert_eq!(view.diagnostics.len(), 1);
         assert_eq!(view.diagnostics[0].from, 55);
-        let json = serde_json::to_value(&view.preview).expect("json");
-        assert_eq!(json[1]["kind"], "choice");
-        assert_eq!(json[1]["choice"]["type"], "if");
-        assert_eq!(json[1]["choice"]["condition"], "($n1 == 1)");
-        assert_eq!(json[1]["selected"], 0);
-        assert_eq!(json[1]["branches"][0][0]["style"]["italic"], true);
-        assert_eq!(json[3]["kind"], "value");
-        assert_eq!(json[3]["valueKind"], "gameData");
-        let variables = serde_json::to_value(&view.variables).expect("json");
-        assert_eq!(variables[0]["key"], "n1");
-        assert_eq!(variables[0]["default"], 1);
-        assert_eq!(variables[0]["sheet"], "Item");
     }
 }

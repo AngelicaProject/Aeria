@@ -1,4 +1,3 @@
-import { useEffect, useState } from "react";
 import { gameGlyphFont, gameIcon } from "../ipc";
 
 /**
@@ -69,19 +68,4 @@ export function loadIcon(id: number): Promise<string | null> {
     icons.set(id, icon);
   }
   return icon;
-}
-
-/** The image of an inline game icon, or null while it loads or when the game has none. */
-export function useGameIcon(id: number): string | null {
-  const [state, setState] = useState<{ id: number; url: string | null }>({ id, url: null });
-  useEffect(() => {
-    let active = true;
-    void loadIcon(id).then((url) => {
-      if (active) setState({ id, url });
-    });
-    return () => {
-      active = false;
-    };
-  }, [id]);
-  return state.id === id ? state.url : null;
 }

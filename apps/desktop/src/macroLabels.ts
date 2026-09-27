@@ -1,68 +1,20 @@
 import type { MessageKey, Translate } from "./i18n/translate";
 import { en } from "./i18n/en.ts";
-import type { MacroParameterDto, MacroTagDto, PreviewChoiceDto, PreviewPieceDto } from "./types";
+import type { MacroParameterDto, MacroTagDto } from "./types";
 
 /**
- * Localized labels for macro text: tag descriptions for editor hovers and
- * labels for values and branches in the game preview. Rust describes the
- * macros; this module only words them for the interface language.
+ * Localized labels for macro text: tag descriptions for editor hovers.
+ * Rust describes the macros; this module only words them for the interface
+ * language.
  */
 
 function knownKey(key: string): MessageKey | null {
   return key in en ? (key as MessageKey) : null;
 }
 
-/** `$n1` as written in macro text. */
-export function parameterCode(parameter: MacroParameterDto): string {
-  return `$${parameter.prefix}${parameter.index}`;
-}
-
 /** `$n1` → "number parameter 1 of the string", for hovers. */
 export function parameterLabel(parameter: MacroParameterDto, t: Translate): string {
   return t(`preview.param.${parameter.prefix}` as MessageKey, { index: parameter.index });
-}
-
-/** The short label of a runtime value in the preview: the code it reads, as in the text. */
-export function valueLabel(piece: Extract<PreviewPieceDto, { kind: "value" }>, t: Translate): string {
-  if (piece.valueKind === "playerName") return t("preview.value.playerName");
-  if (piece.valueKind === "gameData") {
-    const sheet = piece.label.split(" ")[0] ?? piece.label;
-    return piece.parameter ? `${sheet} · ${parameterCode(piece.parameter)}` : piece.label;
-  }
-  if (piece.parameter) return parameterCode(piece.parameter);
-  const time = piece.label.startsWith("$") ? knownKey(`preview.time.${piece.label.slice(1)}`) : null;
-  return time ? t(time) : piece.label;
-}
-
-/** The tooltip of a runtime value: what fills it in, in full words. */
-export function valueHint(piece: Extract<PreviewPieceDto, { kind: "value" }>, t: Translate): string {
-  const parameter = piece.parameter;
-  if (!parameter) return t("preview.valueHint", { label: piece.label });
-  const code = parameterCode(parameter);
-  if (piece.valueKind === "playerName") return t("preview.playerHint", { parameter: parameterLabel(parameter, t), code });
-  if (piece.valueKind === "gameData") {
-    return t("preview.dataHint", { sheet: piece.label.split(" ")[0] ?? piece.label, parameter: parameterLabel(parameter, t), code });
-  }
-  return t(`preview.paramHint.${parameter.prefix}` as MessageKey, { code });
-}
-
-/** Labels for the branches of a choice, in order. */
-export function choiceLabels(choice: PreviewChoiceDto, count: number, t: Translate): string[] {
-  const labels = (first: MessageKey, second: MessageKey) => Array.from({ length: count }, (_, index) => t(index === 0 ? first : second));
-  switch (choice.type) {
-    case "if":
-      return Array.from({ length: count }, (_, index) => index === 0 ? t("preview.choice.when", { condition: choice.condition }) : t("preview.choice.otherwiseOf", { condition: choice.condition }));
-    case "switch":
-      return Array.from({ length: count }, (_, index) => t("preview.choice.case", { value: choice.value, n: index + 1 }));
-    case "gender":
-      return labels("preview.choice.male", "preview.choice.female");
-    case "myself":
-      return labels("preview.choice.self", "preview.choice.other");
-    case "name":
-      return labels("preview.choice.nameMatches", "preview.choice.otherwise");
-    case "josa":
-      return labels("preview.choice.consonant", "preview.choice.vowel");
-  }
 }
 
 /** A tag's description for an editor hover: a title and lines of detail. */

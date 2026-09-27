@@ -172,7 +172,7 @@ derived from `git_pending_changes`.
 The editor sits below the list and edits one occurrence at a time. Its bar shows
 the occurrence's review state and coordinate, field tabs for multi-cell rows,
 the review-state control, and Revert. The source and target panes each have
-their own In game / Text / Code switch (see below).
+their own Text / Code switch (see below).
 
 Source and target sit side by side, with the translator note beside them (or
 below them in a narrow document). Source is read-only; target is a CodeMirror
@@ -206,49 +206,17 @@ an older text):
   from the macro catalog and are localized in the renderer.
 - **Errors.** Diagnostics are underlined, and hovering one shows its message,
   such as `<colour> is not a macro; did you mean <color>?`.
-- **In game.** Each of the source and target panes switches between
-  **In game**, **Text**, and **Code**, and the chosen mode fills the pane.
-  The source opens in game, since it is only read; the target opens as text
-  for editing, and its editor keeps its state while the pane shows the game
-  view. Both modes are local preferences (`sourcePaneMode`,
-  `targetPaneMode`). The game view shows the string as the game shows it,
-  on the pane itself and set like the text editor, so switching modes keeps
-  the text in place: colors from `<color>` and the game's `UIColor` sheet,
-  outlines, italics, bold, line breaks, and names read from game data, at
-  the editor's font size.
-- **Variables.** Strings read variables: parameters the game passes to the
-  string (`$n1`), global game variables (`$gn68`), time values, and
-  properties of a character. A single **Variables** bar above the source
-  and target panes lists every variable the shown strings read, each once,
-  and Rust evaluates both previews with its values
-  (`macro_view(text, values)`), as the game does: conditions, nested ones
-  included, show the branch the values select; numbers, texts, and rows
-  named by a variable are filled in, so `<sheet Item $n1 0>` with `$n1` = 4
-  reads "wind shard". Variables with an established meaning are named in
-  words (**Class** chosen from the `ClassJob` sheet, **Level**, **Race**,
-  **Player name**, male or female player), with the code in the tooltip;
-  others show their code, and a row variable shows the name of its row next
-  to the number. Each variable starts at the value that shows the first
-  branch of the first condition reading it. Values set by the user are
-  shared by every string and kept locally, so setting a class and level
-  once shows every tooltip of that class; **Reset** returns the shown
-  variables to their defaults. A filled-in value is underlined, and
-  clicking it moves to its variable; a selected branch is underlined with a
-  dotted line and the reason it is shown in its tooltip. A value no
-  variable gives stays a chip with its code, and only a condition the
-  preview cannot evaluate, such as a test of game data text, is switched by
-  clicking through its branches. Switching strings keeps the previous
+- **Modes.** Each of the source and target panes switches between
+  **Text** and **Code**; both open as text. The modes are local preferences
+  (`sourcePaneMode`, `targetPaneMode`). Switching strings keeps the previous
   view until the new one arrives, requests it without delay (only typing is
-  debounced), and shows strings seen before at once from a cache. `<icon>`
-  and `<icon2>` show the game's inline icons, as the game draws them with a
-  keyboard or an Xbox controller; an id the game has no icon for shows its
-  number.
+  debounced), and shows strings seen before at once from a cache.
 - **Game symbols.** Game text writes some symbols as private use characters
   that only the game font draws, such as `U+E03C`, the high-quality mark.
   When a project opens, the renderer loads a font of these glyphs made from
   the project's game (`game_glyph_font`) and names it first in every font
-  stack, limited to the private use area, so the string list, the editors,
-  and the preview show the symbols instead of empty boxes, and every other
+  stack, limited to the private use area, so the string list and the
+  editors show the symbols instead of empty boxes, and every other
   character keeps the interface fonts.
 
 Row context cells are available in a collapsible section under the source. **Copy source to target** replaces the target draft

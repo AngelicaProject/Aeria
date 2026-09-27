@@ -118,7 +118,7 @@ as changed.
 A game patch can add macro codes or change the arguments of a known one. The
 byte layer needs no catalog, so such a macro still reads, prints generically
 as `<code:XX …>`, encodes back to the same bytes, and is opaque to the
-editor, the preview, and the translation agent. Strings that contain it stay
+editor and the translation agent. Strings that contain it stay
 translatable. A new kind of expression inside a macro is different: its bytes
 stay raw, and those strings cannot be translated until the byte model learns
 it.
@@ -179,25 +179,17 @@ not opaque. The content of `<split>`, for example, is preserved.
 
 ## Editor modes
 
-The product grows three complementary views:
+The desktop editor shows macro text in two ways (see
+[`desktop-editor-ui.md`](./desktop-editor-ui.md)):
 
-- Visual editor with structured macro tokens and controls.
-- Raw macro text editor, always parsed and validated before save.
-- Preview that shows each tag as it looks in the game: colors, italics,
-  line breaks, icons, and game data names, evaluated with values of the
-  variables the string reads.
+- **Text**: tags as compact chips, formatting pairs as styled text, and
+  `<br>` as a line break, for translating.
+- **Code**: the macro text with every tag written out.
 
-### Preview variables
+The document is always the exact macro text, parsed and validated by Rust
+before save. The editor does not evaluate conditions or fill in values.
 
-`aeria_se::preview` lists every variable a string reads (parameters, global
-parameters, time values, and character properties) and evaluates the string
-with one set of values, as the game does: conditions select their branches,
-numbers and texts are filled in, and rows named by a variable are read from
-game data. A variable without a value takes the value that shows the first
-branch of the first condition reading it. A condition the values cannot
-decide, such as a test of game data text, keeps every branch; a value no
-variable gives is shown by its code. Game data text reads its own
-parameters, so it is rendered without the string's values.
+### Known global parameters
 
 `catalog::GLOBALS` names the global parameters whose meaning game strings
 establish, each with the usage that shows it: `$gs1` is the player's name
@@ -206,7 +198,7 @@ establish, each with the usage that shows it: `$gs1` is the player's name
 Company ranks, `$gn68` is the class or job as a `ClassJob` row (`($gn68 ==
 17)` beside "class is changed to botanist"), `$gn71` is the race as a `Race`
 row, and `$gn72` is the level (compared with trait levels). Other globals
-are shown by their code until strings establish their meaning.
+have no name until strings establish their meaning.
 
 ## AI boundary
 

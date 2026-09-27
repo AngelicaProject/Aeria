@@ -6,8 +6,8 @@ import { languagePreferences, type LanguagePreference } from "../i18n/translate.
  */
 export type ListDensity = "compact" | "comfortable";
 /** What a source or target pane shows: the macro text, or the string as the game shows it. */
-/** A pane shows the string as the game shows it, as editable text with tag chips, or as its macro code. */
-export type PaneMode = "text" | "game" | "code";
+/** A pane shows the string as text with tag chips, or as its macro code. */
+export type PaneMode = "text" | "code";
 
 export type Preferences = {
   language: LanguagePreference;
@@ -30,7 +30,7 @@ export const defaultPreferences: Preferences = {
   editorFontSize: 14,
   highlightMacros: true,
   showControlCharacters: true,
-  sourcePaneMode: "game",
+  sourcePaneMode: "text",
   targetPaneMode: "text",
   listDensity: "comfortable",
   focusTargetOnNext: true,
@@ -56,8 +56,8 @@ export function parsePreferences(raw: string | null): Preferences {
     editorFontSize: pick(stored.editorFontSize, editorFontSizes, defaultPreferences.editorFontSize),
     highlightMacros: boolean("highlightMacros"),
     showControlCharacters: boolean("showControlCharacters"),
-    sourcePaneMode: pick(stored.sourcePaneMode, ["text", "game", "code"] as const, defaultPreferences.sourcePaneMode),
-    targetPaneMode: pick(stored.targetPaneMode, ["text", "game", "code"] as const, defaultPreferences.targetPaneMode),
+    sourcePaneMode: pick(stored.sourcePaneMode, ["text", "code"] as const, defaultPreferences.sourcePaneMode),
+    targetPaneMode: pick(stored.targetPaneMode, ["text", "code"] as const, defaultPreferences.targetPaneMode),
     listDensity: pick(stored.listDensity, ["compact", "comfortable"] as const, defaultPreferences.listDensity),
     focusTargetOnNext: boolean("focusTargetOnNext"),
   };

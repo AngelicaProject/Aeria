@@ -1,14 +1,10 @@
 import { forwardRef, memo, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
 import { bindingKey, domKey, rowKey } from "../binding";
-import type { PreviewPieceDto, ReviewState, SourceBinding, TranslationCellDto, TranslationRowDto, UnitChangeKind } from "../types";
+import type { ReviewState, SourceBinding, TranslationCellDto, TranslationRowDto, UnitChangeKind } from "../types";
 import { diffWords } from "../textDiff";
 import { IconButton } from "../ui/primitives/IconButton";
 import { Segmented } from "../ui/primitives/Segmented";
 import { UiIcon } from "../ui/primitives/UiIcon";
-import { GamePreview } from "./GamePreview";
-import { PreviewVariables } from "./PreviewVariables";
-import { mergeVariables } from "../previewVariables";
-import { usePreviewValues } from "../ui/previewValues";
 import { MacroEditor, focusMacroEditor } from "./MacroEditor";
 import { useMacroView } from "../ui/useMacroView";
 import { ReviewDot, reviewLabel } from "./ReviewDot";
@@ -131,7 +127,7 @@ function hasOtherDirtyDraft(row: TranslationRowDto, targetCell: TranslationCellD
   });
 }
 
-/** Switches a pane between its macro text and the string as the game shows it. */
+/** Switches a pane between text with tag chips and the macro code. */
 function PaneModeSwitch({ value, onChange }: { value: PaneMode; onChange: (mode: PaneMode) => void }) {
   const { t } = useI18n();
   return (
@@ -140,20 +136,10 @@ function PaneModeSwitch({ value, onChange }: { value: PaneMode; onChange: (mode:
       value={value}
       onChange={onChange}
       options={[
-        { value: "game", label: t("preview.mode.game"), title: t("preview.mode.gameHint") },
         { value: "text", label: t("preview.mode.text"), title: t("preview.mode.textHint") },
         { value: "code", label: t("preview.mode.code"), title: t("preview.mode.codeHint") },
       ]}
     />
-  );
-}
-
-/** The string as the game shows it, filling a pane. */
-function PanePreview({ pieces, empty }: { pieces: readonly PreviewPieceDto[] | null; empty: string }) {
-  return (
-    <div className="editor-surface pane-preview">
-      {pieces === null ? null : pieces.length === 0 ? <span className="lens-empty">{empty}</span> : <GamePreview pieces={pieces} />}
-    </div>
   );
 }
 
@@ -219,14 +205,8 @@ const TranslationEditorImpl = forwardRef<TranslationEditorHandle, TranslationEdi
   const { preferences, setPreference } = usePreferences();
   const sourceMode = preferences.sourcePaneMode;
   const targetMode = preferences.targetPaneMode;
-  const previewValues = usePreviewValues();
-  const sourceView = useMacroView(selectedCell?.sourceMacro ?? null, previewValues);
-  const targetView = useMacroView(draft === null ? null : draft.target, previewValues);
-  // One set of variables for both panes: the values apply to both strings.
-  const previewVariables = useMemo(() => mergeVariables(
-    sourceMode === "game" ? sourceView?.view.variables : null,
-    targetMode === "game" && draft !== null && draft.target.length > 0 ? targetView?.view.variables : null,
-  ), [sourceMode, targetMode, sourceView, targetView, draft]);
+  const sourceView = useMacroView(selectedCell?.sourceMacro ?? null);
+  const targetView = useMacroView(draft === null ? null : draft.target);
 
   const updateDraft = useCallback((cell: TranslationCellDto, field: keyof CellDraft, value: string) => {
     const key = bindingKey(cell.sourceBinding);
@@ -358,8 +338,7 @@ const TranslationEditorImpl = forwardRef<TranslationEditorHandle, TranslationEdi
         </div>
       </header>
 
-      <div className={`editor-grid${previewVariables.length > 0 ? " has-variables" : ""}`}>
-        <PreviewVariables variables={previewVariables} />
+      <div className="editor-grid">
         <div className="editor-pane editor-source">
           <div className="editor-pane-head">
             <span className="eyebrow">{t("editor.source")}</span>
@@ -370,9 +349,7 @@ const TranslationEditorImpl = forwardRef<TranslationEditorHandle, TranslationEdi
             <IconButton icon="copyPlus" label={t("editor.copySource")} disabled={cellBusy} onClick={copySource} />
             <PaneModeSwitch value={sourceMode} onChange={(mode) => setPreference("sourcePaneMode", mode)} />
           </div>
-          {sourceMode === "game"
-            ? <PanePreview pieces={sourceView ? sourceView.view.preview : null} empty={t("editor.emptySource")} />
-            : <MacroEditor className="editor-surface" value={selectedCell.sourceMacro} readOnly view={sourceView} presentation={sourceMode === "code" ? "code" : "chips"} ariaLabel={t("editor.sourceText", { column: String(selectedCell.sourceBinding.columnIndex) })} placeholder={t("editor.emptySource")} onNavigate={onNavigate} />}
+          <MacroEditor className="editor-surface" value={selectedCell.sourceMacro} readOnly view={sourceView} presentation={sourceMode === "code" ? "code" : "chips"} ariaLabel={t("editor.sourceText", { column: String(selectedCell.sourceBinding.columnIndex) })} placeholder={t("editor.emptySource")} onNavigate={onNavigate} />
           {row.context.length > 0 ? (
             <details className="context-block">
               <summary><UiIcon icon="chevronRight" size="xs" />{t("editor.context")} <span className="count">{row.context.length}</span></summary>
@@ -391,10 +368,9 @@ const TranslationEditorImpl = forwardRef<TranslationEditorHandle, TranslationEdi
             <PaneModeSwitch value={targetMode} onChange={(mode) => setPreference("targetPaneMode", mode)} />
           </div>
           {checkpoint && showDiff ? <CheckpointDiff baseline={checkpoint} current={draft.target} /> : null}
-          {targetMode === "game" ? <PanePreview pieces={draft.target.length === 0 ? [] : targetView ? targetView.view.preview : null} empty={t("editor.enterTranslation")} /> : null}
           <MacroEditor
             key={bindingKey(selectedCell.sourceBinding)}
-            className={`editor-surface${targetMode === "game" ? " is-hidden" : ""}`}
+            className="editor-surface"
             value={draft.target}
             ariaLabel={t("editor.targetText", { column: String(selectedCell.sourceBinding.columnIndex) })}
             placeholder={t("editor.targetPlaceholder")}

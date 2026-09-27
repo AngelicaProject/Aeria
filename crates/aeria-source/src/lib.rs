@@ -365,24 +365,6 @@ impl GameSource {
             .map(|index| colors[index].1)
     }
 
-    /// The macro text of a String cell of any sheet in the source language,
-    /// such as an item name.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when a game file cannot be read.
-    pub fn cell_text(
-        &self,
-        sheet: &str,
-        row: u32,
-        column: u32,
-    ) -> Result<Option<String>, SourceError> {
-        Ok(match self.sheet(sheet)? {
-            SheetLookup::Present(sheet) => sheet.cell(row, 0, column).map(|cell| cell.text()),
-            SheetLookup::Missing | SheetLookup::Unavailable(_) => None,
-        })
-    }
-
     /// The private use glyphs of the game font, such as `U+E03C`, the
     /// high-quality mark: symbols game text writes as characters that only
     /// the game font draws. `None` when the font cannot be read.
@@ -422,23 +404,6 @@ impl GameSource {
         });
         let (table, texture) = files.as_ref()?;
         glyphs::icon(table, texture, id)
-    }
-
-    /// The row ids of a sheet in order, without subrows repeated; empty
-    /// when the sheet is missing or unavailable.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when a game file cannot be read.
-    pub fn row_ids(&self, sheet: &str) -> Result<Vec<u32>, SourceError> {
-        Ok(match self.sheet(sheet)? {
-            SheetLookup::Present(sheet) => {
-                let mut ids: Vec<u32> = sheet.rows().iter().map(|row| row.row_id).collect();
-                ids.dedup();
-                ids
-            }
-            SheetLookup::Missing | SheetLookup::Unavailable(_) => Vec::new(),
-        })
     }
 
     /// Reads a sheet without keeping it in memory, for scans over many

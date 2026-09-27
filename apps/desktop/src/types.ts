@@ -842,51 +842,7 @@ export type MacroTagDto = {
   color: string | null;
 };
 
-export type PreviewStyleDto = { color: string | null; edge: string | null; italic: boolean; bold: boolean };
-
-export type PreviewChoiceDto =
-  | { type: "if"; condition: string }
-  | { type: "switch"; value: string }
-  | { type: "gender" | "myself" | "name" | "josa" };
-
-export type PreviewValueKind = "number" | "text" | "playerName" | "gameData" | "time" | "other";
-
-/** One piece of a string as the game shows it. */
-export type PreviewPieceDto =
-  | { kind: "text"; text: string; style: PreviewStyleDto }
-  | { kind: "break" }
-  /** `shown` is the value filled in from the variables; empty when unknown, and `label` is shown. */
-  | { kind: "value"; valueKind: PreviewValueKind; source: string; parameter: MacroParameterDto | null; label: string; style: PreviewStyleDto; shown: PreviewPieceDto[] }
-  | { kind: "icon"; icon: number; device: boolean }
-  /** When the variables select a branch, `selected` names it and only that branch holds pieces. */
-  | { kind: "choice"; choice: PreviewChoiceDto; selected: number | null; branches: PreviewPieceDto[][] }
-  | { kind: "ruby"; base: PreviewPieceDto[]; reading: PreviewPieceDto[] }
-  | { kind: "opaque"; spelling: string };
-
 export type MacroViewDto = {
   diagnostics: MacroDiagnosticDto[];
   tags: MacroTagDto[];
-  preview: PreviewPieceDto[];
-  /** Every variable the preview read, in order of first use. */
-  variables: PreviewVariableDto[];
-};
-
-/** A variable value: a number or a text. */
-export type PreviewValue = number | string;
-
-/** A variable a string reads: a parameter, a time value, or a character property. */
-export type PreviewVariableDto = {
-  /** `n1`, `gn68`, `gs1`, `hour`, or `gender`, `self`, `name`, `josa`. */
-  key: string;
-  kind: "number" | "text" | "time" | "character";
-  parameter: MacroParameterDto | null;
-  /** The established meaning of a global parameter, such as `class-job`. */
-  global: string | null;
-  /** The sheet the value names a row of. */
-  sheet: string | null;
-  default: PreviewValue;
-  value: PreviewValue;
-  /** The text of the row the value names. */
-  valueName: string | null;
-  options: { value: number; label: string }[];
 };

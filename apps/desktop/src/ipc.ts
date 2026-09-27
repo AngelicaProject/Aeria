@@ -2,7 +2,6 @@ import { invoke } from "@tauri-apps/api/core";
 import type {
   CheckWorkflowDto,
   MacroViewDto,
-  PreviewValue,
   UpdateChannel,
   UpdateStatusDto,
   AgentMode,
@@ -130,12 +129,9 @@ export function currentProject(): Promise<ProjectSummaryDto | null> {
   return call<ProjectSummaryDto | null>("current_project");
 }
 
-/**
- * Describes macro text: its diagnostics, tags, and a preview as the game
- * shows it with `values` for the variables it reads.
- */
-export function macroView(text: string, values: Readonly<Record<string, PreviewValue>>): Promise<MacroViewDto> {
-  return call<MacroViewDto>("macro_view", { text, values });
+/** Describes macro text: its diagnostics and tags. */
+export function macroView(text: string): Promise<MacroViewDto> {
+  return call<MacroViewDto>("macro_view", { text });
 }
 
 /** A TrueType font of the game font's private use glyphs; empty without a project. */
