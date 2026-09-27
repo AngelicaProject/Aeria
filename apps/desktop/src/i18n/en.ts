@@ -463,6 +463,7 @@ export const en = {
   "angelica.tool.listSheets": "List sheets",
   "angelica.tool.readRows": "Read rows",
   "angelica.tool.getUnit": "Read string",
+  "angelica.tool.otherLanguages": "Read string in other languages",
   "angelica.tool.pendingChanges": "Uncommitted changes",
   "angelica.tool.unitHistory": "String history",
   "ai.settings.workerModel": "Model for translation jobs",

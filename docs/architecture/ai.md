@@ -230,6 +230,7 @@ returned to the model as `{"error": …}` results instead of ending the turn.
 | `list_sheets` | Sheets with translatable strings and their progress, filtered by a name substring or by untranslated strings, paged up to 200. |
 | `read_rows` | One `page_translation_rows` page of at most 50 scanned source rows, optionally filtered by state, with the `nextAfter` cursor. |
 | `get_unit` | One source row, or one column of it, with translations, review states, notes, unit IDs, and context cells. |
+| `other_languages` | The same row's translatable strings, or one column, in the game's other client languages as macro text, each bounded like other cell text; `null` where a language has no such string. Context for wording and tag placement; the translation is still made from the source language. |
 | `pending_changes` | Uncommitted translation changes from `aeria-git`, up to 200. |
 | `unit_history` | Committed history of one unit, up to 50 entries. |
 | `navigate_to` | Opens an occurrence in the editor; changes nothing in the project. |
@@ -403,7 +404,8 @@ tagged form with their legends, context cells, current translations,
 notes, and up to three translation-memory matches, followed by the job's
 images when the worker model accepts images. Images come from the job's
 conversation; after the conversation is deleted, workers are told they are no
-longer available. Its tools are `get_unit` and `read_rows` for context, `get_guidance`,
+longer available. Its tools are `get_unit`, `other_languages`, and `read_rows` for
+context, `get_guidance`,
 `validate_target`, `submit_translations` for the strings of its own chunk
 only, and `report_issue`, which records an event for Angelica. A worker has at
 most 8 responses. A submitted translation is rebuilt and written as a draft

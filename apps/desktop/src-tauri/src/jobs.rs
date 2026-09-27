@@ -990,6 +990,16 @@ impl ProjectReader for JobReader {
         self.reader()?.row(sheet, row, subrow)
     }
 
+    fn other_languages(
+        &self,
+        sheet: &str,
+        row: u32,
+        subrow: u16,
+        column: u32,
+    ) -> Result<Vec<(String, Option<String>)>, ToolError> {
+        self.reader()?.other_languages(sheet, row, subrow, column)
+    }
+
     fn pending_changes(&self) -> Result<serde_json::Value, ToolError> {
         self.reader()?.pending_changes()
     }

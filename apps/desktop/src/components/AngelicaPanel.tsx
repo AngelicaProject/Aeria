@@ -26,6 +26,7 @@ const toolLabels: Readonly<Record<string, MessageKey>> = {
   list_sheets: "angelica.tool.listSheets",
   read_rows: "angelica.tool.readRows",
   get_unit: "angelica.tool.getUnit",
+  other_languages: "angelica.tool.otherLanguages",
   propose_translation: "angelica.tool.proposeTranslation",
   get_guidance: "angelica.tool.getGuidance",
   propose_glossary_change: "angelica.tool.proposeGlossaryChange",

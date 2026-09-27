@@ -267,6 +267,16 @@ mod tests {
         fn facts(&self) -> Result<ProjectFacts, ToolError> {
             Err(ToolError::new("unused"))
         }
+
+        fn other_languages(
+            &self,
+            _: &str,
+            _: u32,
+            _: u16,
+            _: u32,
+        ) -> Result<Vec<(String, Option<String>)>, ToolError> {
+            Err(ToolError::new("unused"))
+        }
         fn sheets(&self) -> Result<Vec<SheetSummary>, ToolError> {
             Ok(Vec::new())
         }
