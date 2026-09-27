@@ -28,3 +28,6 @@ Thumbs.db
 
 # Logs
 *.log
+
+# Website release snapshot, written by the Pages workflow
+site/releases.json

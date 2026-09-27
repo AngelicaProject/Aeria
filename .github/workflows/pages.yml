@@ -1,0 +1,56 @@
+name: Pages
+
+# Publishes the static landing page in site/ to GitHub Pages. The site is
+# described in docs/development/website.md.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "site/**"
+      - ".github/workflows/pages.yml"
+  # Redeploy after each release so the download links name the new builds.
+  workflow_run:
+    workflows: [Release]
+    types: [completed]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      # The page reads the current stable and nightly releases from this
+      # snapshot. A channel without a release is recorded as null; any API
+      # failure fails the deploy instead of publishing wrong links.
+      - name: Snapshot releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100" --jq '
+            def pick: if . then {tag_name, published_at, html_url, assets: [.assets[] | {name, size, browser_download_url}]} else null end;
+            {
+              stable: (map(select((.draft | not) and (.prerelease | not))) | .[0] | pick),
+              nightly: (map(select(.tag_name == "nightly")) | .[0] | pick)
+            }' > site/releases.json
+          cat site/releases.json
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+      - id: deployment
+        uses: actions/deploy-pages@v4

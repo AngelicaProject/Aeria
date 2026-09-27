@@ -22,5 +22,6 @@ This section defines how changes are implemented, validated, reviewed, and shipp
 - [`testing.md`](./testing.md) — test strategy, fixtures, regression coverage, and fuzz/property testing.
 - [`documentation.md`](./documentation.md) — documentation ownership, structure, and writing standards.
 - [`releases.md`](./releases.md) — versions, release channels, packaging, the release workflow, and application updates.
+- [`website.md`](./website.md) — the English and Russian GitHub Pages landing page in `site/` and its deployment workflow.
 
 For product or architecture decisions, use the corresponding indexes under [`../product/`](../product/README.md) and [`../architecture/`](../architecture/README.md) instead of adding development-only rules here.
