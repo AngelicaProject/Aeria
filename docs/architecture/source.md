@@ -149,3 +149,10 @@ version or newer.
 
 Additional official languages are local context for a translator. They are
 read from the same installation and are never recorded in the project.
+
+`GameSource::cell_in_other_languages(sheet, row, subrow, column)` returns
+one cell's macro text in every evidence language other than the source
+language. A language has no text when the sheet cannot be read in it, when
+it has another variant or other String columns there, or when it lacks the
+row. The other-language sheets of the last two sheets asked about are kept
+in memory.

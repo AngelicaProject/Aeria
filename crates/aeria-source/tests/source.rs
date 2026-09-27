@@ -179,6 +179,61 @@ fn unreadable_sheets_are_unavailable_and_a_patch_shows_in_the_version() {
 }
 
 #[test]
+fn a_cell_reads_in_the_other_client_languages() {
+    let folder = tempfile::tempdir().expect("folder");
+    let english_and_german = FakeSheet::new(vec![ColumnKind::String])
+        .with_rows(
+            Language::English,
+            vec![
+                FakeRow::new(1, vec![FakeValue::from("Hello")]),
+                FakeRow::new(2, vec![FakeValue::from("Bye")]),
+            ],
+        )
+        .with_rows(
+            Language::German,
+            vec![FakeRow::new(1, vec![FakeValue::from("Hallo")])],
+        );
+    FakeGame::new(VERSION)
+        .with_sheet("Quest", dialogue())
+        .with_sheet("Partial", english_and_german)
+        .write(folder.path())
+        .expect("game");
+    let source = GameSource::open(folder.path(), SourceLanguage::English).expect("source");
+
+    let texts = |sheet: &str, row: u32, column: u32| {
+        source
+            .cell_in_other_languages(sheet, row, 0, column)
+            .expect("readable game")
+            .into_iter()
+            .map(|(language, text)| (language.code(), text))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        texts("Quest", 1, 1),
+        [
+            ("ja", Some("Hello ja".to_owned())),
+            ("de", Some("Hello de".to_owned())),
+            ("fr", Some("Hello fr".to_owned())),
+        ]
+    );
+    assert_eq!(
+        texts("Partial", 1, 0),
+        [("ja", None), ("de", Some("Hallo".to_owned())), ("fr", None)],
+        "a language the sheet lacks has no text"
+    );
+    assert_eq!(
+        texts("Partial", 2, 0),
+        [("ja", None), ("de", None), ("fr", None)],
+        "a row one language lacks has no text there"
+    );
+    assert_eq!(
+        texts("Missing", 1, 0),
+        [("ja", None), ("de", None), ("fr", None)]
+    );
+    assert!(texts("Quest", 1, 2).iter().all(|(_, text)| text.is_none()));
+}
+
+#[test]
 fn a_folder_without_the_game_is_rejected() {
     let folder = tempfile::tempdir().expect("folder");
     assert!(GameSource::open(folder.path(), SourceLanguage::English).is_err());

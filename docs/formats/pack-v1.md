@@ -117,7 +117,7 @@ followed by one LF. Readers reject unknown, missing, and duplicate fields.
 | `release.sequence` | positive integer, strictly increasing across releases of one `packId` |
 | `release.version` | display string; never compared |
 | `release.channel` | `stable` or `testing` |
-| `target.language`, `source.language` | BCP 47 language tags; `source.language` is the game language the project translates from |
+| `target.language`, `source.language` | BCP 47 language tags; `source.language` is the game language the project translates from. `target.language` is never `und`: Aeria refuses to export a project without a target language |
 | `source.gameVersion` | the text of `game/ffxivgame.ver` of the game the pack was built from |
 | `contentPolicy` | `reviewed` or `all` (see [Cell state](#cell-state)) |
 | `project.commit` | Git commit of the exported workspace state |

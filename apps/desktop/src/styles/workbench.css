@@ -236,6 +236,7 @@
 }
 .sheet-filter input { flex: 1; min-width: 0; height: 100%; border: 0; background: transparent; color: var(--fg); font-size: var(--text-sm); }
 .sheet-filter input::placeholder { color: var(--fg-faint); }
+.sheet-filter input:focus-visible { outline: none; }
 .sheet-filter .icon-button { width: 22px; height: 22px; }
 
 .sheet-tree { position: relative; flex: 1; min-height: 0; overflow-y: auto; padding: 4px 0 8px; }

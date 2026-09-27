@@ -53,6 +53,14 @@ creates workspace metadata from the game's source language and version and
 atomically publishes a new `.aeria/` directory in Workspace Format v3.
 Existing `.aeria/` state is never replaced.
 
+## Changing the target language
+
+`ProjectSession::set_target_language(tag)` publishes the manifest with
+another target language. The tag must be a target language as defined in
+[`workspace.md`](./workspace.md#project-scope); otherwise
+`InvalidTargetLanguage` is returned and nothing is written. Units, targets,
+and IDs are unchanged, and setting the current language writes nothing.
+
 ## Reloading after repository changes
 
 `ProjectSession::reload_workspace()` reloads the workspace from disk after

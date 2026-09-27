@@ -70,6 +70,14 @@ structure policy in [`strings.md`](./strings.md#assisted-structure-policy).
 
 Exactly one target language is canonical per project.
 
+A target language is a BCP 47 tag in the form Aeria accepts: a language of
+2–3 letters, then optional subtags of 1–8 letters or digits, such as `ru`,
+`pt-BR`, or `zh-Hant` (`aeria_core::is_target_language`). `und`
+(undetermined) is not a target language. Projects created before the
+language could be chosen carry `und`; the format still reads it, but such a
+project cannot export a pack until its language is set. New projects and
+language changes accept only target languages.
+
 Project-shared data may include:
 
 - workspace manifest and source identity

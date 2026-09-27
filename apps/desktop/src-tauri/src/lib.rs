@@ -45,15 +45,16 @@ pub use commands::{
     close_project, current_project, default_projects_directory_path, forget_recent_project,
     initialize_project_from_game, list_detached_units, list_recent_projects,
     open_project_from_game, open_recent_project, page_translation_rows, preview_source_update,
-    set_translation_note, set_translation_review_state, set_translation_target,
-    translation_progress, update_project_from_game,
+    set_project_target_language, set_translation_note, set_translation_review_state,
+    set_translation_target, source_in_other_languages, translation_progress,
+    update_project_from_game,
 };
 pub use dto::{
-    DetachReasonDto, DetachedUnitDto, GameOpenResultDto, ProjectOpenResultDto, ProjectSheetDto,
-    ProjectSummaryDto, RecentProjectAvailability, RecentProjectDto, ReviewStateDto,
-    SheetLayoutUpdateDto, SheetProgressDto, SourceBindingDto, SourceUpdateReportDto,
-    TranslationCellDto, TranslationContextCellDto, TranslationOverlayDto, TranslationRowCursorDto,
-    TranslationRowDto, TranslationRowPageDto, TranslationUnitIdDto,
+    DetachReasonDto, DetachedUnitDto, GameOpenResultDto, OtherLanguageTextDto,
+    ProjectOpenResultDto, ProjectSheetDto, ProjectSummaryDto, RecentProjectAvailability,
+    RecentProjectDto, ReviewStateDto, SheetLayoutUpdateDto, SheetProgressDto, SourceBindingDto,
+    SourceUpdateReportDto, TranslationCellDto, TranslationContextCellDto, TranslationOverlayDto,
+    TranslationRowCursorDto, TranslationRowDto, TranslationRowPageDto, TranslationUnitIdDto,
 };
 pub use error::CommandError;
 pub use export::{
@@ -184,10 +185,12 @@ pub fn run() {
             open_recent_project,
             forget_recent_project,
             page_translation_rows,
+            source_in_other_languages,
             set_translation_target,
             set_translation_note,
             set_translation_review_state,
             translation_progress,
+            set_project_target_language,
             macros::macro_view,
             macros::game_glyph_font,
             macros::game_icon,

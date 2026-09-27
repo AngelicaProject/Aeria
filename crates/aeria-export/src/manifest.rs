@@ -147,6 +147,11 @@ impl PackManifest {
                 )));
             }
         }
+        if !aeria_core::is_target_language(&self.target_language) {
+            return fail(
+                "target.language must be a BCP 47 language tag other than und; choose the project's target language",
+            );
+        }
         if self.sequence == 0 || self.sequence > i64::MAX as u64 {
             return fail("release.sequence must be positive");
         }

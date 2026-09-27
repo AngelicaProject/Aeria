@@ -8,6 +8,9 @@ export type ListDensity = "compact" | "comfortable";
 /** What a source or target pane shows: the macro text, or the string as the game shows it. */
 /** A pane shows the string as text with tag chips, or as its macro code. */
 export type PaneMode = "text" | "code";
+/** The tab the translation editor's side pane shows. */
+export type SidePaneTab = "note" | "languages" | "history";
+export const sidePaneTabs = ["note", "languages", "history"] as const;
 
 export type Preferences = {
   language: LanguagePreference;
@@ -17,6 +20,7 @@ export type Preferences = {
   showControlCharacters: boolean;
   sourcePaneMode: PaneMode;
   targetPaneMode: PaneMode;
+  sidePaneTab: SidePaneTab;
   listDensity: ListDensity;
   focusTargetOnNext: boolean;
 };
@@ -32,6 +36,7 @@ export const defaultPreferences: Preferences = {
   showControlCharacters: true,
   sourcePaneMode: "text",
   targetPaneMode: "text",
+  sidePaneTab: "note",
   listDensity: "comfortable",
   focusTargetOnNext: true,
 };
@@ -58,6 +63,7 @@ export function parsePreferences(raw: string | null): Preferences {
     showControlCharacters: boolean("showControlCharacters"),
     sourcePaneMode: pick(stored.sourcePaneMode, ["text", "code"] as const, defaultPreferences.sourcePaneMode),
     targetPaneMode: pick(stored.targetPaneMode, ["text", "code"] as const, defaultPreferences.targetPaneMode),
+    sidePaneTab: pick(stored.sidePaneTab, sidePaneTabs, defaultPreferences.sidePaneTab),
     listDensity: pick(stored.listDensity, ["compact", "comfortable"] as const, defaultPreferences.listDensity),
     focusTargetOnNext: boolean("focusTargetOnNext"),
   };

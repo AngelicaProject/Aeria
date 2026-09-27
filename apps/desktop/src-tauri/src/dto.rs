@@ -14,6 +14,16 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::CommandError;
 
+/// The text of one source cell in another client language, for comparison.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OtherLanguageTextDto {
+    /// The language code, such as `de`.
+    pub language: String,
+    /// The cell's macro text; `None` when that language has no such cell.
+    pub text: Option<String>,
+}
+
 /// A source occurrence coordinate accepted and returned by desktop commands.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]

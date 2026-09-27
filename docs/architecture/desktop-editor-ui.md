@@ -54,10 +54,10 @@ name, an optional location, and one of the supported source languages
 (`en`, `ja`, `de`, or `fr`). The project folder and any missing parents are
 created before the game is read, so an unusable path fails at once; when
 creation then fails or is cancelled, the folder is removed again if it is
-still empty. Until project settings can choose a real target
-language, creation uses the explicit neutral compatibility tag
-`und`; it is never displayed as a user translation target and does not
-reinterpret existing overlays. While the game is read, the form shows a
+still empty. New project also takes the target language: a common language
+from a list or any BCP 47 tag typed after *Other…*; `und` is not accepted.
+The interface language is suggested when it is not the source language, and
+creation is refused until a language is chosen. While the game is read, the form shows a
 *Reading the game* state; the operation cannot be cancelled.
 
 ### Game installation
@@ -369,9 +369,14 @@ progress.
 
 ## String history
 
-The translation editor's side pane has two tabs, Note and History. History
-shows who translated and reviewed the selected string and every committed
-change to it; "Use this text" puts a historical text into the editor as an
+The translation editor's side pane has three tabs: Note, Languages, and
+History. The open tab is a local preference (`sidePaneTab`), so it stays
+when another string is selected and after a restart. Languages shows the selected source text in the game's other client
+languages, stacked in the source pane's chip or code view, so a translator
+can compare how each language uses tags such as conditions; a tag clicked
+there is added to the translation as from the source pane. A language
+without the string says so. History shows who translated and reviewed the
+selected string and every committed change to it; "Use this text" puts a historical text into the editor as an
 unsaved draft.
 
 ## Angelica panel
@@ -498,13 +503,21 @@ Monokai Pro, Night Owl, Rosé Pine, Ayu, Solarized, Palenight, Kanagawa, and
 Everforest) mapped onto Aeria's layered tokens; Catppuccin, Aeria's own themes,
 and High Contrast Dark are also available.
 
-Settings open as a dialog with Appearance, Editor, Workflow, AI, Keyboard
-shortcuts, and About sections and a search across all settings. Theme, accent,
+Settings open as a dialog with Appearance, Editor, Workflow, Game, AI,
+Project, Repository, Keyboard shortcuts, and About sections and a search across all settings. Theme, accent,
 Reduce transparency, interface zoom (webview zoom), editor text size, macro
 highlighting, control-character display, strings list density, and focusing the
 next target after Save & next are per-machine renderer preferences kept in local
 storage; they are never project data. Components consume semantic tokens from `ui/theme/tokens.css`, which
 derive surfaces, lines, and state colors from each theme's palette.
+
+The Project section changes the open project's target language with the
+same picker as New project. A listed language is saved when chosen; a typed
+tag on Enter or when the field loses focus. Saving rewrites only the
+workspace manifest, which collaborators receive through Git; units, targets,
+and IDs are unchanged. Projects created before the language could be chosen
+carry `und`, which the section shows as no language with a warning that
+export needs one.
 
 The AI section manages the providers described in
 [`ai.md`](./ai.md#provider-boundary). It picks Angelica's default model and,

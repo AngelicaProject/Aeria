@@ -13,9 +13,9 @@ use aeria_workspace::{ProjectSession, ProjectSessionError, WorkspaceStore};
 use tauri::{Manager, State};
 
 use crate::dto::{
-    DetachedUnitDto, GameOpenResultDto, ProjectOpenResultDto, ProjectSummaryDto, RecentProjectDto,
-    ReviewStateDto, SheetProgressDto, SourceBindingDto, SourceUpdateReportDto,
-    TranslationOverlayDto, TranslationRowCursorDto, TranslationRowPageDto,
+    DetachedUnitDto, GameOpenResultDto, OtherLanguageTextDto, ProjectOpenResultDto,
+    ProjectSummaryDto, RecentProjectDto, ReviewStateDto, SheetProgressDto, SourceBindingDto,
+    SourceUpdateReportDto, TranslationOverlayDto, TranslationRowCursorDto, TranslationRowPageDto,
 };
 use crate::error::CommandError;
 use crate::paths::AeriaPaths;
@@ -316,10 +316,46 @@ pub(crate) fn initialize_with_game(
     cache_root: &Path,
     target_language: String,
 ) -> CommandResult<ProjectSummaryDto> {
+    if !aeria_core::is_target_language(&target_language) {
+        return Err(ProjectSessionError::InvalidTargetLanguage {
+            tag: target_language,
+        }
+        .into());
+    }
     load_catalog_with_cache(cache_root, &source)?;
     let session = ProjectSession::initialize(repository_root, source, target_language)
         .map_err(CommandError::from)?;
     replace_project(state, session)
+}
+
+/// Sets the open project's target language, the language it translates
+/// into, and records it for Recent projects.
+///
+/// # Errors
+///
+/// Returns `invalidTargetLanguage` for a value that is not a BCP 47 language
+/// tag or is `und`, `noProjectOpen` without a project, and a store error
+/// when the manifest cannot be written. A failed Recent projects update is
+/// returned as the result's warning.
+#[tauri::command(rename_all = "camelCase")]
+pub async fn set_project_target_language(
+    app: tauri::AppHandle,
+    target_language: String,
+) -> CommandResult<ProjectOpenResultDto> {
+    let registry_path = app_registry_path(&app);
+    run_blocking(move || {
+        let state = app.state::<DesktopState>();
+        let summary = {
+            let mut project = state.lock_project()?;
+            let project = project.as_mut().ok_or_else(CommandError::no_project)?;
+            project
+                .set_target_language(target_language.trim())
+                .map_err(CommandError::from)?;
+            ProjectSummaryDto::from_session(project)
+        };
+        Ok(remember_project(&state, summary, registry_path, None))
+    })
+    .await
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -607,6 +643,44 @@ pub(crate) fn page_translation_rows_with_state(
         .page_translation_rows(sheet_name, after.as_ref(), limit)
         .map(Into::into)
         .map_err(CommandError::from)
+}
+
+#[tauri::command(rename_all = "camelCase")]
+/// Reads one source cell in the game's other client languages, so a
+/// translator can compare its text and tags. Nothing is recorded.
+///
+/// # Errors
+///
+/// Returns a typed command error when no project is open or a game file
+/// cannot be read.
+pub async fn source_in_other_languages(
+    app: tauri::AppHandle,
+    source_binding: SourceBindingDto,
+) -> CommandResult<Vec<OtherLanguageTextDto>> {
+    run_blocking(move || {
+        let source = {
+            let state = app.state::<DesktopState>();
+            let project = state.lock_project()?;
+            project
+                .as_ref()
+                .ok_or_else(CommandError::no_project)?
+                .source_handle()
+        };
+        let texts = source.cell_in_other_languages(
+            &source_binding.sheet_name,
+            source_binding.row_id,
+            source_binding.subrow_id,
+            source_binding.column_index,
+        )?;
+        Ok(texts
+            .into_iter()
+            .map(|(language, text)| OtherLanguageTextDto {
+                language: language.code().to_owned(),
+                text,
+            })
+            .collect())
+    })
+    .await
 }
 
 #[tauri::command(rename_all = "camelCase")]

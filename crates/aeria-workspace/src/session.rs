@@ -71,6 +71,11 @@ pub enum ProjectSessionError {
         requirement: SourceUpdateRequirement,
     },
 
+    /// The language is not a BCP 47 language tag a project can translate
+    /// into.
+    #[error("{tag:?} is not a target language; use a BCP 47 tag such as ru or pt-BR")]
+    InvalidTargetLanguage { tag: String },
+
     /// A source update could not be planned.
     #[error("could not plan the source update for workspace at {repository_root}: {source}")]
     SourceUpdate {
@@ -238,6 +243,40 @@ impl ProjectSession {
             workspace,
             source,
         })
+    }
+
+    /// Sets the project's target language, the language it translates into.
+    ///
+    /// Only the manifest changes; units, targets, and IDs stay as they are.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProjectSessionError::InvalidTargetLanguage`] for a value
+    /// that is not a language tag or is `und`, and a store error when the
+    /// manifest cannot be published.
+    pub fn set_target_language(&mut self, tag: &str) -> Result<(), ProjectSessionError> {
+        if !aeria_core::is_target_language(tag) {
+            return Err(ProjectSessionError::InvalidTargetLanguage {
+                tag: tag.to_owned(),
+            });
+        }
+        if self.workspace.metadata().target_language() == tag {
+            return Ok(());
+        }
+        let metadata = self
+            .workspace
+            .metadata()
+            .with_target_language(tag)
+            .map_err(|source| ProjectSessionError::Workspace {
+                repository_root: self.repository_root.clone(),
+                source: source.into(),
+            })?;
+        let next = self.workspace.with_metadata(metadata);
+        self.workspace = self
+            .store
+            .publish_metadata(&next)
+            .map_err(|source| store_error(&self.repository_root, source))?;
+        Ok(())
     }
 
     /// Reloads the workspace from disk after the repository changed outside

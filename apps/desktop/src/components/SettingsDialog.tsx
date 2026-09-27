@@ -3,6 +3,8 @@ import { Dialog } from "radix-ui";
 import { appInfo } from "../ipc";
 import { AiProvidersSettings } from "./AiProvidersSettings";
 import { GameSettings } from "./GameSettings";
+import { TargetLanguageSetting } from "./ProjectSettings";
+import type { ProjectSummaryDto } from "../types";
 import { keyboardShortcuts, shortcutGroupLabels } from "../shortcuts";
 import { Segmented } from "../ui/primitives/Segmented";
 import { UiIcon, type UiIconName } from "../ui/primitives/UiIcon";
@@ -24,7 +26,7 @@ export const accentPresets: readonly { value: string; label: MessageKey }[] = [
   { value: "#98c379", label: "settings.accent.green" },
 ];
 
-export type SettingsSection = "appearance" | "editor" | "workflow" | "game" | "ai" | "repository" | "keyboard" | "about";
+export type SettingsSection = "appearance" | "editor" | "workflow" | "game" | "ai" | "project" | "repository" | "keyboard" | "about";
 
 const sections: ReadonlyArray<{ id: SettingsSection; label: MessageKey; icon: UiIconName }> = [
   { id: "appearance", label: "settings.section.appearance", icon: "palette" },
@@ -32,6 +34,7 @@ const sections: ReadonlyArray<{ id: SettingsSection; label: MessageKey; icon: Ui
   { id: "workflow", label: "settings.section.workflow", icon: "arrowRight" },
   { id: "game", label: "settings.section.game", icon: "gamepad" },
   { id: "ai", label: "settings.section.ai", icon: "sparkles" },
+  { id: "project", label: "settings.section.project", icon: "languages" },
   { id: "repository", label: "settings.section.repository", icon: "gitBranch" },
   { id: "keyboard", label: "settings.section.keyboard", icon: "listFilter" },
   { id: "about", label: "settings.section.about", icon: "info" },
@@ -43,6 +46,9 @@ type SettingsDialogProps = {
   initialSection?: SettingsSection;
   /** Repository settings need an open project. */
   projectOpen?: boolean;
+  /** The open project, for its settings, and how to report a change to it. */
+  project?: ProjectSummaryDto;
+  onProjectChanged?: (project: ProjectSummaryDto) => void;
 };
 
 type SettingEntry = {
@@ -116,7 +122,7 @@ function ThemePicker() {
 }
 
 /** Memoized so the closed dialog does not re-render with the workbench. */
-export const SettingsDialog = memo(function SettingsDialog({ open, onOpenChange, initialSection = "appearance", projectOpen = false }: SettingsDialogProps) {
+export const SettingsDialog = memo(function SettingsDialog({ open, onOpenChange, initialSection = "appearance", projectOpen = false, project, onProjectChanged }: SettingsDialogProps) {
   const { theme, accentOverride, setAccentOverride, reduceTransparency, setReduceTransparency } = useTheme();
   const { preferences, setPreference, resetPreferences } = usePreferences();
   const { t } = useI18n();
@@ -213,6 +219,11 @@ export const SettingsDialog = memo(function SettingsDialog({ open, onOpenChange,
       id: "update-channel", section: "about", title: t("settings.channel.title"), description: t("settings.channel.description"), keywords: t("settings.channel.keywords"),
       control: <UpdateChannelSetting />,
     },
+    ...(project && onProjectChanged ? [
+      { id: "target-language", section: "project" as const, title: t("targetLanguage.label"), description: t("project.targetLanguageHint"), keywords: t("project.keywords"), wide: true, control: <TargetLanguageSetting project={project} onProjectChanged={onProjectChanged} /> },
+    ] : [
+      { id: "project-closed", section: "project" as const, title: t("repository.noProject"), description: t("project.noProjectHint"), control: null },
+    ]),
     ...(projectOpen ? [
       { id: "remotes", section: "repository" as const, title: t("repository.remotes"), description: t("repository.remotesHint"), keywords: t("repository.keywords"), wide: true, control: <RemotesSetting /> },
       { id: "upstream", section: "repository" as const, title: t("repository.upstream"), description: t("repository.upstreamHint"), keywords: t("repository.keywords"), wide: true, control: <UpstreamSetting /> },

@@ -120,6 +120,14 @@ impl Workspace {
         Ok(Self::new(metadata))
     }
 
+    /// Returns the workspace with other metadata and the same units.
+    pub(crate) fn with_metadata(&self, metadata: WorkspaceMetadata) -> Self {
+        Self {
+            metadata,
+            ..self.clone()
+        }
+    }
+
     /// Returns project/source metadata without exposing persistence concerns.
     #[must_use]
     pub const fn metadata(&self) -> &WorkspaceMetadata {

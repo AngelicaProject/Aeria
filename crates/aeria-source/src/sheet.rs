@@ -191,6 +191,53 @@ impl SourceSheet {
         self.row_keys.as_ref()
     }
 
+    /// Reads the String cells of this sheet in another client language, in
+    /// this sheet's column order. `None` when that language cannot be read
+    /// or has another variant or other String columns, so its cells cannot
+    /// be matched to this sheet's.
+    pub(crate) fn strings_in(
+        &self,
+        game: &GameData,
+        language: SourceLanguage,
+    ) -> Result<Option<StringRows>, SourceError> {
+        let Ok(sheet) = read_excel(game, &self.name, language)? else {
+            return Ok(None);
+        };
+        let same_columns = sheet
+            .columns
+            .iter()
+            .enumerate()
+            .filter(|(_, column)| column.kind == ColumnKind::String)
+            .map(|(index, column)| (index, column.offset))
+            .eq(self
+                .columns
+                .iter()
+                .map(|column| (column.index as usize, column.offset)));
+        if sheet.variant != self.variant || !same_columns {
+            return Ok(None);
+        }
+        Ok(string_rows(&sheet, &self.columns).ok())
+    }
+
+    /// The macro text of one cell of `strings`, rows this sheet read in
+    /// another language with [`Self::strings_in`].
+    pub(crate) fn text_in(
+        &self,
+        strings: &StringRows,
+        row_id: u32,
+        subrow_id: u16,
+        column: u32,
+    ) -> Option<String> {
+        let position = self
+            .columns
+            .binary_search_by_key(&column, |string_column| string_column.index)
+            .ok()?;
+        let row = strings
+            .binary_search_by_key(&(row_id, subrow_id), |(coordinate, _)| *coordinate)
+            .ok()?;
+        Some(aeria_se::codec::decode(&strings[row].1[position]))
+    }
+
     /// Reads a listed sheet, its translation permission, and its row keys.
     pub(crate) fn read(
         game: &GameData,
@@ -259,7 +306,7 @@ fn read_excel(
     }
 }
 
-type StringRows = Vec<((u32, u16), Box<[Box<[u8]>]>)>;
+pub(crate) type StringRows = Vec<((u32, u16), Box<[Box<[u8]>]>)>;
 
 /// Reads the String cells of every row, sorted by `(row, subrow)`.
 fn string_rows(sheet: &excel::Sheet, columns: &[StringColumn]) -> Result<StringRows, Unavailable> {

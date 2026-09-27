@@ -12,6 +12,12 @@ export type SourceBinding = {
   columnIndex: number;
 };
 
+/** One source cell in another client language; `text` is null when that language has no such cell. */
+export type OtherLanguageTextDto = {
+  language: string;
+  text: string | null;
+};
+
 export type ProjectSheetDto = {
   name: string;
   rowCount: number;

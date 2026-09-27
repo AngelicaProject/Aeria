@@ -8,10 +8,11 @@ import { UiIcon } from "../ui/primitives/UiIcon";
 import { MacroEditor, focusMacroEditor, type MacroEditorApi } from "./MacroEditor";
 import { useMacroView } from "../ui/useMacroView";
 import { ReviewDot, reviewLabel } from "./ReviewDot";
+import { OtherLanguages } from "./OtherLanguages";
 import { StringHistory } from "./StringHistory";
 import { useI18n } from "../ui/i18n";
 import { usePreferences } from "../ui/preferences";
-import type { PaneMode } from "../ui/preferencesModel";
+import type { PaneMode, SidePaneTab } from "../ui/preferencesModel";
 import type { MessageKey } from "../i18n/translate";
 
 export type CellDraft = {
@@ -166,7 +167,6 @@ const TranslationEditorImpl = forwardRef<TranslationEditorHandle, TranslationEdi
 }, ref) {
   const { t } = useI18n();
   const [showDiff, setShowDiff] = useState(true);
-  const [sideTab, setSideTab] = useState<"note" | "history">("note");
   const [drafts, setDrafts] = useState<Record<string, CellDraft>>({});
   const draftsRef = useRef(drafts);
   const rowRef = useRef(row);
@@ -205,6 +205,8 @@ const TranslationEditorImpl = forwardRef<TranslationEditorHandle, TranslationEdi
   const { preferences, setPreference } = usePreferences();
   const sourceMode = preferences.sourcePaneMode;
   const targetMode = preferences.targetPaneMode;
+  // Kept across rows: the editor is created anew for every row.
+  const sideTab = preferences.sidePaneTab;
   const sourceView = useMacroView(selectedCell?.sourceMacro ?? null);
   // Clicking a tag of the source adds it to the translation at its cursor.
   const targetApi = useRef<MacroEditorApi | null>(null);
@@ -404,17 +406,26 @@ const TranslationEditorImpl = forwardRef<TranslationEditorHandle, TranslationEdi
 
         <aside className="editor-pane editor-note">
           <div className="editor-pane-head">
-            <Segmented<"note" | "history">
+            <Segmented<SidePaneTab>
               label={t("editor.sidePane")}
               value={sideTab}
-              onChange={setSideTab}
+              onChange={(tab) => setPreference("sidePaneTab", tab)}
               options={[
                 { value: "note", label: <>{t("editor.note")}{noteDirty ? <span className="dirty-mark" aria-label={t("common.edited")} /> : null}</> },
+                { value: "languages", label: t("editor.languages") },
                 { value: "history", label: t("editor.history") },
               ]}
             />
           </div>
-          {sideTab === "history" ? (
+          {sideTab === "languages" ? (
+            <div className="editor-languages">
+              <OtherLanguages
+                binding={selectedCell.sourceBinding}
+                presentation={sourceMode === "code" ? "code" : "chips"}
+                onPick={cellBusy ? undefined : (pick) => targetApi.current?.apply(pick)}
+              />
+            </div>
+          ) : sideTab === "history" ? (
             <div className="editor-history">
               <StringHistory
                 unitId={translation?.translationUnitId ?? null}

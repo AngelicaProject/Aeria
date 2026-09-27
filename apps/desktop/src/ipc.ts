@@ -62,6 +62,7 @@ import type {
   TranslationRowCursorDto,
   TranslationRowPageDto,
   TranslationOverlayDto,
+  OtherLanguageTextDto,
 } from "./types";
 
 export function normalizeCommandError(error: unknown): CommandError {
@@ -193,6 +194,11 @@ export function initializeProjectFromGame(
   });
 }
 
+/** Sets the open project's target language, a BCP 47 tag other than `und`. */
+export function setProjectTargetLanguage(targetLanguage: string): Promise<ProjectOpenResultDto> {
+  return call<ProjectOpenResultDto>("set_project_target_language", { targetLanguage });
+}
+
 export function listRecentProjects(): Promise<RecentProjectDto[]> {
   return call<RecentProjectDto[]>("list_recent_projects");
 }
@@ -223,6 +229,11 @@ export function pageTranslationRows(
     after,
     limit,
   });
+}
+
+/** One source cell in the game's other client languages, for comparison. */
+export function sourceInOtherLanguages(sourceBinding: SourceBinding): Promise<OtherLanguageTextDto[]> {
+  return call<OtherLanguageTextDto[]>("source_in_other_languages", { sourceBinding });
 }
 
 export function setTranslationTarget(

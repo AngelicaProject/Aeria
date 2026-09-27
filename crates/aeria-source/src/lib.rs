@@ -31,6 +31,14 @@ pub use sheet::{
 /// How many recently read sheets a source keeps in memory.
 const CACHED_SHEETS: usize = 16;
 
+/// How many sheets read in another language a source keeps in memory: the
+/// other three client languages of the last two sheets.
+const CACHED_OTHER_LANGUAGE_SHEETS: usize = 6;
+
+/// A sheet read in another client language; `None` when it cannot be
+/// matched to the source sheet.
+type OtherLanguageSheet = Arc<Option<sheet::StringRows>>;
+
 /// A source language: one of the global client languages.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum SourceLanguage {
@@ -142,6 +150,7 @@ pub struct GameSource {
     version: GameVersion,
     sheet_names: Vec<String>,
     cache: Mutex<VecDeque<(String, Arc<SourceSheet>)>>,
+    other_languages: Mutex<VecDeque<((String, SourceLanguage), OtherLanguageSheet)>>,
     catalog: std::sync::OnceLock<Arc<Vec<SheetSummary>>>,
     ui_colors: std::sync::OnceLock<Vec<(u32, u32)>>,
     icons: std::sync::OnceLock<Option<(Vec<u8>, Vec<u8>)>>,
@@ -182,6 +191,7 @@ impl GameSource {
             version,
             sheet_names,
             cache: Mutex::new(VecDeque::new()),
+            other_languages: Mutex::new(VecDeque::new()),
             catalog: std::sync::OnceLock::new(),
             ui_colors: std::sync::OnceLock::new(),
             icons: std::sync::OnceLock::new(),
@@ -381,6 +391,79 @@ impl GameSource {
             SheetLookup::Present(sheet) => sheet.cell(row, 0, column).map(|cell| cell.text()),
             SheetLookup::Missing | SheetLookup::Unavailable(_) => None,
         })
+    }
+
+    /// The text of one String cell in every client language other than the
+    /// source language, in [`SourceLanguage::ALL`] order: context for a
+    /// translator, never a source fact. A language's text is `None` when
+    /// the sheet cannot be read in it, has other String columns there, or
+    /// lacks the row; every text is `None` when the sheet itself cannot be
+    /// read.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when a game file cannot be read.
+    pub fn cell_in_other_languages(
+        &self,
+        sheet: &str,
+        row: u32,
+        subrow: u16,
+        column: u32,
+    ) -> Result<Vec<(SourceLanguage, Option<String>)>, SourceError> {
+        let own = match self.sheet(sheet)? {
+            SheetLookup::Present(own) => Some(own),
+            SheetLookup::Missing | SheetLookup::Unavailable(_) => None,
+        };
+        let mut texts = Vec::new();
+        for language in SourceLanguage::ALL {
+            if language == self.language {
+                continue;
+            }
+            let text = match &own {
+                Some(own) => {
+                    let strings = self.other_language_sheet(own, language)?;
+                    strings
+                        .as_ref()
+                        .as_ref()
+                        .and_then(|strings| own.text_in(strings, row, subrow, column))
+                }
+                None => None,
+            };
+            texts.push((language, text));
+        }
+        Ok(texts)
+    }
+
+    /// Reads `own` in another language, or takes it from memory.
+    fn other_language_sheet(
+        &self,
+        own: &SourceSheet,
+        language: SourceLanguage,
+    ) -> Result<OtherLanguageSheet, SourceError> {
+        let key = (own.name().to_owned(), language);
+        {
+            let mut cache = self
+                .other_languages
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            if let Some(entry) = cache
+                .iter()
+                .position(|(cached, _)| *cached == key)
+                .and_then(|position| cache.remove(position))
+            {
+                let strings = Arc::clone(&entry.1);
+                cache.push_front(entry);
+                return Ok(strings);
+            }
+        }
+        let strings = Arc::new(own.strings_in(&self.game, language)?);
+        let mut cache = self
+            .other_languages
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        cache.push_front((key, Arc::clone(&strings)));
+        cache.truncate(CACHED_OTHER_LANGUAGE_SHEETS);
+        Ok(strings)
     }
 
     /// The private use glyphs of the game font, such as `U+E03C`, the

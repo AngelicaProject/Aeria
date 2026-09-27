@@ -135,6 +135,7 @@ impl From<ProjectSessionError> for CommandError {
             ProjectSessionError::SourceUpdateRequired { .. } => "sourceUpdateRequired",
             ProjectSessionError::SourceUpdate { .. } => "sourceUpdate",
             ProjectSessionError::Workspace { .. } => "projectWorkspace",
+            ProjectSessionError::InvalidTargetLanguage { .. } => "invalidTargetLanguage",
         };
         Self::new(code, error.to_string())
     }

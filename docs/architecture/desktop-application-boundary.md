@@ -155,6 +155,13 @@ is removed again if it is still empty. Opening, updating, and creating read
 the cached sheet catalog, building it when needed, before the session is
 installed.
 
+`initialize_project_from_game` refuses a `targetLanguage` that is not a
+target language as defined in [`workspace.md`](./workspace.md#project-scope).
+`set_project_target_language(targetLanguage)` changes the open project's
+target language through `ProjectSession::set_target_language` and updates
+the Recent projects entry; a failed registry update is returned as the
+result's warning.
+
 `default_projects_directory_path` returns
 `Documents/Aeria`, the folder for new projects and for clones without a
 parent.
@@ -175,6 +182,12 @@ Translation browsing delegates to the bounded
 the backend contract. The DTO is row-centric, while each contained cell keeps
 its existing `SourceBinding` and overlay. Tauri performs DTO and error mapping,
 not business logic, and does not read the game or SQLite directly.
+
+`source_in_other_languages(sourceBinding)` returns the source cell's
+macro text in each client language other than the project's source
+language, from `GameSource::cell_in_other_languages` (see
+[`source.md`](./source.md#additional-source-languages)); a language without
+the cell has `null` text. It is display context and is never recorded.
 
 `translation_progress` returns per-sheet `SheetProgressDto` coverage for the
 active project from `ProjectSession::translation_progress` (see

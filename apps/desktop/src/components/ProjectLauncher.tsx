@@ -26,6 +26,8 @@ import type {
 import { ErrorBanner } from "./ErrorBanner";
 import { gameInstallationFacts } from "./GameSettings";
 import { SettingsDialog, type SettingsSection } from "./SettingsDialog";
+import { TargetLanguagePicker } from "./TargetLanguagePicker";
+import { suggestedTargetLanguage } from "../targetLanguages";
 import { SourceUpdateDialog } from "./SourceUpdateDialog";
 import { WindowChrome } from "./WindowChrome";
 import { displayPath, displayPathName } from "../pathDisplay";
@@ -218,7 +220,7 @@ function LauncherAction({ icon, title, description, active, disabled, onClick }:
 }
 
 export function ProjectLauncher({ initialError, onProjectReady }: ProjectLauncherProps) {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const [view, setView] = useState<LauncherView>("recent");
   const [repositoryRoot, setRepositoryRoot] = useState("");
   const [game, setGame] = useState<GameSettingsDto | null>(null);
@@ -228,6 +230,7 @@ export function ProjectLauncher({ initialError, onProjectReady }: ProjectLaunche
   const [projectParent, setProjectParent] = useState("");
   const [defaultDirectory, setDefaultDirectory] = useState<string | null>(null);
   const [sourceLanguage, setSourceLanguage] = useState<SourceLanguage>("en");
+  const [targetLanguage, setTargetLanguage] = useState<string | null>(() => suggestedTargetLanguage(locale, "en"));
   const [busy, setBusy] = useState<LauncherJob | null>(null);
   const [error, setError] = useState<LauncherError | null>(initialError ? { operation: "open", error: initialError } : null);
   const [recentState, setRecentState] = useState<RecentProjectsState>(initialRecentProjectsState);
@@ -284,6 +287,10 @@ export function ProjectLauncher({ initialError, onProjectReady }: ProjectLaunche
       setError({ operation: "create", error: { code: "invalidInput", message: t("launcher.projectNameInvalid") } });
       return;
     }
+    if (job === "create" && targetLanguage === null) {
+      setError({ operation: "create", error: { code: "invalidTargetLanguage", message: t("launcher.targetLanguageMissing") } });
+      return;
+    }
     busyRef.current = job;
     flushSync(() => {
       setBusy(job);
@@ -314,7 +321,7 @@ export function ProjectLauncher({ initialError, onProjectReady }: ProjectLaunche
       }
       const result = job === "update"
         ? await updateProjectFromGame(repositoryRoot)
-        : await initializeProjectFromGame(newProjectRoot!, sourceLanguage, "und");
+        : await initializeProjectFromGame(newProjectRoot!, sourceLanguage, targetLanguage!);
       onProjectReady(result);
     } catch (caughtError) {
       setError({ operation, error: normalizeCommandError(caughtError) });
@@ -491,6 +498,11 @@ export function ProjectLauncher({ initialError, onProjectReady }: ProjectLaunche
                     <div className="field">
                       <span className="field-label" id="source-language-label">{t("launcher.sourceLanguage")}</span>
                       <Segmented size="md" label={t("launcher.sourceLanguage")} value={sourceLanguage} onChange={setSourceLanguage} disabled={launcherDisabled} options={sourceLanguages.map((language) => ({ value: language.value, label: t(language.label) }))} />
+                    </div>
+                    <div className="field">
+                      <label className="field-label" htmlFor="target-language">{t("targetLanguage.label")}</label>
+                      <TargetLanguagePicker id="target-language" value={targetLanguage} onChange={setTargetLanguage} disabled={launcherDisabled} />
+                      <small className="field-hint">{t("launcher.targetLanguageHint")}</small>
                     </div>
                   </>
                 ) : (

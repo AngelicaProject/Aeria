@@ -393,6 +393,16 @@ impl WorkspaceStore {
         Ok(reloaded)
     }
 
+    /// Publishes a workspace whose units are unchanged and whose metadata
+    /// changed, such as a new target language: the manifest is replaced
+    /// atomically, and the published state must reload as `workspace`.
+    pub(crate) fn publish_metadata(
+        &self,
+        workspace: &Workspace,
+    ) -> Result<Workspace, WorkspaceStoreError> {
+        self.publish_source_update(workspace, &BTreeSet::new())
+    }
+
     /// Initializes a new `.aeria/` directory from an in-memory workspace.
     ///
     /// The complete directory is serialized under the repository root and is

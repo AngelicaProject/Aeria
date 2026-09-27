@@ -81,6 +81,7 @@ function MainWindow() {
         applicationWarning={projectWarning}
         onDismissApplicationWarning={() => setProjectWarning(null)}
         onShowDetachedUnits={() => setSourceUpdateView({ report: null })}
+        onProjectChanged={setProject}
         onClosed={() => {
           setProject(null);
           setProjectWarning(null);

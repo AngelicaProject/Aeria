@@ -480,3 +480,16 @@ fn fonts_interop_fixture_is_stable() {
         .expect("fixture exists; run with AERIA_UPDATE_FIXTURES=1 to create it");
     assert_eq!(committed, pack.bytes);
 }
+
+#[test]
+fn a_pack_needs_a_chosen_target_language() {
+    for language in ["und", "russian", "ru_RU"] {
+        let mut manifest = manifest(ContentPolicy::Reviewed);
+        manifest.target_language = language.to_owned();
+        let result = write_pack(&manifest, sheets(), None, None);
+        assert!(
+            matches!(result, Err(ExportError::Manifest(_))),
+            "{language}"
+        );
+    }
+}

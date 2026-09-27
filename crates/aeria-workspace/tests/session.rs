@@ -331,6 +331,47 @@ fn pages_compose_game_rows_with_the_sparse_overlay() {
 }
 
 #[test]
+fn the_target_language_is_set_in_the_manifest_and_keeps_every_unit() {
+    let game = game(V1, &[(SHEET, &texts(&[(1, "Hello")]))]);
+    let repository = tempfile::tempdir().expect("repository");
+    let mut session =
+        ProjectSession::initialize(repository.path(), game.handle(), "und").expect("initialize");
+    let id = session
+        .set_target(&binding(1, 0), "Привет")
+        .expect("target");
+    let shards_before: Vec<_> = managed_files(repository.path())
+        .into_iter()
+        .filter(|(path, _)| !path.ends_with("manifest.json"))
+        .collect();
+    for invalid in ["", "und", "russian", "ru_RU"] {
+        assert!(matches!(
+            session.set_target_language(invalid),
+            Err(ProjectSessionError::InvalidTargetLanguage { .. })
+        ));
+    }
+    session.set_target_language("ru").expect("language");
+    assert_eq!(session.workspace().metadata().target_language(), "ru");
+    let manifest =
+        fs::read_to_string(repository.path().join(".aeria/manifest.json")).expect("manifest");
+    assert!(manifest.contains("\"targetLanguage\": \"ru\""));
+    let shards_after: Vec<_> = managed_files(repository.path())
+        .into_iter()
+        .filter(|(path, _)| !path.ends_with("manifest.json"))
+        .collect();
+    assert_eq!(shards_after, shards_before, "units are not rewritten");
+    // Edits continue against the new manifest, and a reopen sees the language.
+    session
+        .set_target(&binding(1, 0), "Здравствуй")
+        .expect("edit after the change");
+    let reopened = ProjectSession::open(repository.path(), game.handle()).expect("reopen");
+    assert_eq!(reopened.workspace().metadata().target_language(), "ru");
+    assert_eq!(
+        reopened.workspace().unit(id).expect("unit").target_macro(),
+        "Здравствуй"
+    );
+}
+
+#[test]
 fn mutations_validate_persist_once_and_skip_identical_writes() {
     let game = game(V1, &[(SHEET, &texts(&[(1, "Hello"), (2, "World")]))]);
     let repository = tempfile::tempdir().expect("repository");

@@ -372,6 +372,32 @@ impl FromStr for TranslationUnitId {
     }
 }
 
+/// The target language of a project created before its language was chosen:
+/// BCP 47 "undetermined". Such a project has no translation language yet.
+pub const UNDETERMINED_LANGUAGE: &str = "und";
+
+/// Whether `tag` is a BCP 47 language tag in the form Aeria accepts: a
+/// language of 2–3 letters, then optional subtags of 1–8 letters or digits,
+/// such as `ru`, `pt-BR`, or `zh-Hant`.
+#[must_use]
+pub fn is_language_tag(tag: &str) -> bool {
+    let mut subtags = tag.split('-');
+    let language = subtags.next().unwrap_or_default();
+    (2..=3).contains(&language.len())
+        && language.bytes().all(|byte| byte.is_ascii_alphabetic())
+        && subtags.all(|subtag| {
+            (1..=8).contains(&subtag.len())
+                && subtag.bytes().all(|byte| byte.is_ascii_alphanumeric())
+        })
+}
+
+/// Whether `tag` names a language a project can translate into: a language
+/// tag other than [`UNDETERMINED_LANGUAGE`].
+#[must_use]
+pub fn is_target_language(tag: &str) -> bool {
+    is_language_tag(tag) && !tag.eq_ignore_ascii_case(UNDETERMINED_LANGUAGE)
+}
+
 /// Project metadata held once by a workspace: one source language, one
 /// target language, and the game version the bound units describe.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -407,6 +433,22 @@ impl WorkspaceMetadata {
             target_language,
             game_version,
         })
+    }
+
+    /// Returns the metadata with another target language.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the language is empty or whitespace-only.
+    pub fn with_target_language(
+        &self,
+        target_language: impl Into<String>,
+    ) -> Result<Self, DomainValueError> {
+        Self::new(
+            self.source_language.clone(),
+            target_language,
+            self.game_version.clone(),
+        )
     }
 
     /// Returns the metadata with another game version.
@@ -692,7 +734,31 @@ mod tests {
         assert!(WorkspaceMetadata::new("en", " ", version.clone()).is_err());
         let metadata = WorkspaceMetadata::new("en", "ru", version).expect("metadata");
         let updated = metadata.with_game_version(self::version("2026.10.01.0000.0000"));
+        let retargeted = updated.with_target_language("uk").expect("language");
+        assert_eq!(retargeted.target_language(), "uk");
+        assert_eq!(retargeted.game_version(), updated.game_version());
         assert_eq!(updated.game_version().as_str(), "2026.10.01.0000.0000");
         assert_eq!(updated.target_language(), "ru");
+    }
+
+    #[test]
+    fn language_tags_follow_bcp_47_and_und_is_no_target() {
+        for tag in ["ru", "uk", "pt-BR", "zh-Hant", "es-419", "haw"] {
+            assert!(is_target_language(tag), "{tag}");
+        }
+        for tag in [
+            "",
+            "r",
+            "russian",
+            "ru_RU",
+            "ru-",
+            "-ru",
+            "ru-toolongsubtag",
+            "und",
+            "UND",
+        ] {
+            assert!(!is_target_language(tag), "{tag}");
+        }
+        assert!(is_language_tag("und"));
     }
 }
