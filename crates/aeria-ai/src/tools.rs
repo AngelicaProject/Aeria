@@ -171,6 +171,20 @@ pub trait ProjectReader: Send + Sync {
     /// Returns an error for an unknown sheet or a read failure.
     fn row(&self, sheet: &str, row: u32, subrow: u16) -> Result<Option<RowSnapshot>, ToolError>;
 
+    /// One source cell's macro text in the game's other client languages,
+    /// as `(language code, text)` pairs; the text is `None` where a
+    /// language lacks the cell.
+    ///
+    /// # Errors
+    /// Returns an error when no project is open or the game cannot be read.
+    fn other_languages(
+        &self,
+        sheet: &str,
+        row: u32,
+        subrow: u16,
+        column: u32,
+    ) -> Result<Vec<(String, Option<String>)>, ToolError>;
+
     /// Uncommitted translation changes as JSON.
     ///
     /// # Errors
@@ -872,6 +886,11 @@ pub fn read_tool_definitions() -> Vec<ToolDefinition> {
             parameters: location("Only this column; omit for all cells of the row."),
         },
         ToolDefinition {
+            name: "other_languages",
+            description: "The source text of a row's translatable strings as the game's other client languages (Japanese, English, German, French) write it, to see how each language words a string and places its tags. Context only: translate from the project's source language and keep its tags; null means that language has no such string.",
+            parameters: location("Only this column; omit for all cells of the row."),
+        },
+        ToolDefinition {
             name: "get_guidance",
             description: "The project's translation guidance and glossary: entries matching the given terms, or the start of the glossary, with any problems in those files.",
             parameters: json!({
@@ -1108,6 +1127,7 @@ impl<'a> ReadTools<'a> {
             "list_sheets" => self.list_sheets(parse(arguments)?),
             "read_rows" => self.read_rows(&parse(arguments)?),
             "get_unit" => self.get_unit(&parse(arguments)?),
+            "other_languages" => self.other_languages(&parse(arguments)?),
             "pending_changes" => {
                 let args: PendingArgs = parse(arguments)?;
                 let limit = args.limit.unwrap_or(50).clamp(1, 200);
@@ -1420,6 +1440,47 @@ impl<'a> ReadTools<'a> {
         let guide = self.guide();
         Ok(json!({ "sheet": args.sheet, "row": bound_row(row, guide.glossary.as_ref()) }))
     }
+
+    fn other_languages(&self, args: &LocationArgs) -> Result<Value, ToolError> {
+        let subrow = args.subrow.unwrap_or(0);
+        let Some(row) = self.reader.row(&args.sheet, args.row, subrow)? else {
+            return Err(ToolError::new(format!(
+                "{}:{}:{} has no translatable string",
+                args.sheet, args.row, subrow
+            )));
+        };
+        let mut cells = Vec::new();
+        for cell in row
+            .cells
+            .into_iter()
+            .filter(|cell| args.column.is_none_or(|column| column == cell.column))
+        {
+            let languages: serde_json::Map<String, Value> = self
+                .reader
+                .other_languages(&args.sheet, args.row, subrow, cell.column)?
+                .into_iter()
+                .map(|(language, text)| {
+                    let text = text.map_or(Value::Null, |mut text| {
+                        bound_text(&mut text);
+                        Value::String(text)
+                    });
+                    (language, text)
+                })
+                .collect();
+            let mut source = cell.source;
+            bound_text(&mut source);
+            cells.push(json!({ "column": cell.column, "source": source, "languages": languages }));
+        }
+        if cells.is_empty() {
+            return Err(ToolError::new(format!(
+                "column {} of {}:{}:{subrow} is not a translatable string",
+                args.column.unwrap_or_default(),
+                args.sheet,
+                args.row
+            )));
+        }
+        Ok(json!({ "sheet": args.sheet, "row": args.row, "subrow": subrow, "cells": cells }))
+    }
 }
 
 impl ReadTools<'_> {
@@ -1705,6 +1766,20 @@ mod tests {
             }))
         }
 
+        fn other_languages(
+            &self,
+            _sheet: &str,
+            _row: u32,
+            _subrow: u16,
+            column: u32,
+        ) -> Result<Vec<(String, Option<String>)>, ToolError> {
+            Ok(vec![
+                ("ja".to_owned(), Some(format!("ソース {column}"))),
+                ("de".to_owned(), Some("q".repeat(3000))),
+                ("fr".to_owned(), None),
+            ])
+        }
+
         fn pending_changes(&self) -> Result<Value, ToolError> {
             Ok(json!([{ "id": 1 }, { "id": 2 }, { "id": 3 }]))
         }
@@ -1783,6 +1858,39 @@ mod tests {
         assert_eq!(cells[0]["column"], 1);
         assert!(cells[0].get("target").is_none());
         assert_eq!(value["nextAfter"], json!({ "row": 5, "subrow": 0 }));
+    }
+
+    #[test]
+    fn other_languages_lists_each_cell_in_the_other_client_languages() {
+        let reader = reader();
+        let (value, error) = run(&reader, "other_languages", r#"{"sheet":"Item","row":5}"#);
+        assert!(!error);
+        let cells = value["cells"].as_array().expect("cells");
+        assert_eq!(cells.len(), 2);
+        assert_eq!(cells[1]["column"], 1);
+        assert_eq!(cells[1]["languages"]["ja"], "ソース 1");
+        assert!(cells[1]["languages"]["fr"].is_null());
+        assert!(
+            cells[0]["languages"]["de"]
+                .as_str()
+                .expect("text")
+                .ends_with("…[truncated]")
+        );
+        let (value, _) = run(
+            &reader,
+            "other_languages",
+            r#"{"sheet":"Item","row":5,"column":1}"#,
+        );
+        assert_eq!(value["cells"].as_array().expect("cells").len(), 1);
+        assert!(
+            run(
+                &reader,
+                "other_languages",
+                r#"{"sheet":"Item","row":5,"column":9}"#
+            )
+            .1
+        );
+        assert!(run(&reader, "other_languages", r#"{"sheet":"Item","row":6}"#).1);
     }
 
     #[test]

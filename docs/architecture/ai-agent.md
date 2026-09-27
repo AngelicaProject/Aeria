@@ -272,6 +272,7 @@ conversation.
 | `list_sheets` | Sheets with translatable-cell counts and progress, optionally filtered by name. |
 | `read_rows` | One bounded page of `page_translation_rows` for a sheet, optionally filtered by review state. |
 | `get_unit` | One occurrence: source, target, note, review state, row context cells, protected-structure legend. |
+| `other_languages` | A row's translatable strings, or one of them, as the game's other client languages write them (`GameSource::cell_in_other_languages`); context only, never recorded. |
 | `validate_target` | A dry-run of the write validation for a proposed target, without writing. |
 | `unit_history` | Git history of one unit's target (read-only `aeria-git`). |
 | `pending_changes` | Uncommitted translation changes, grouped by sheet. |
@@ -376,6 +377,7 @@ instructions, project guidance, glossary entries matching the chunk, and the
 chunk's units in tagged-text form. Its tools are restricted to:
 
 - `get_unit` and neighbouring rows of its own sheet, for context;
+- `other_languages`, for the same string in the game's other client languages;
 - `get_guidance`, for glossary lookups;
 - `validate_target`, to check itself before submitting;
 - `submit_translations`, for units in its chunk only;

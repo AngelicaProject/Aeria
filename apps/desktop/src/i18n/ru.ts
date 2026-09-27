@@ -468,6 +468,7 @@ export const ru: Catalog = {
   "angelica.tool.listSheets": "Список листов",
   "angelica.tool.readRows": "Чтение записей",
   "angelica.tool.getUnit": "Чтение строки",
+  "angelica.tool.otherLanguages": "Чтение строки на других языках",
   "angelica.tool.pendingChanges": "Незафиксированные изменения",
   "angelica.tool.unitHistory": "История строки",
   "ai.settings.workerModel": "Модель для задач перевода",

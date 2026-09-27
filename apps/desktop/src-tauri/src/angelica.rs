@@ -399,6 +399,23 @@ impl ProjectReader for DesktopReader {
         self.with_session(|session| session_row(session, sheet, row, subrow))
     }
 
+    fn other_languages(
+        &self,
+        sheet: &str,
+        row: u32,
+        subrow: u16,
+        column: u32,
+    ) -> Result<Vec<(String, Option<String>)>, ToolError> {
+        let source = self.with_session(|session| Ok(session.source_handle()))?;
+        let texts = source
+            .cell_in_other_languages(sheet, row, subrow, column)
+            .map_err(|error| ToolError::new(error.to_string()))?;
+        Ok(texts
+            .into_iter()
+            .map(|(language, text)| (language.code().to_owned(), text))
+            .collect())
+    }
+
     fn pending_changes(&self) -> Result<Value, ToolError> {
         let state = self.app.state::<DesktopState>();
         let repository = open_repository(&state).map_err(|error| ToolError::new(error.message))?;

@@ -52,6 +52,7 @@ const toolLabels: Readonly<Partial<Record<string, MessageKey>>> = {
   submit_translations: "angelica.worker.tool.submit",
   validate_target: "angelica.worker.tool.validate",
   get_unit: "angelica.worker.tool.context",
+  other_languages: "angelica.worker.tool.context",
   read_rows: "angelica.worker.tool.context",
   get_guidance: "angelica.worker.tool.guidance",
   report_issue: "angelica.worker.tool.report",
