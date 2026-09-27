@@ -5,10 +5,14 @@ import { diffWords } from "../textDiff";
 import { IconButton } from "../ui/primitives/IconButton";
 import { Segmented } from "../ui/primitives/Segmented";
 import { UiIcon } from "../ui/primitives/UiIcon";
-import { MacroEditor, focusMacroEditor } from "./MacroEditor";
+import { MacroEditor, focusMacroEditor, type MacroEditorApi } from "./MacroEditor";
+import { useMacroView } from "../ui/useMacroView";
 import { ReviewDot, reviewLabel } from "./ReviewDot";
+import { OtherLanguages } from "./OtherLanguages";
 import { StringHistory } from "./StringHistory";
 import { useI18n } from "../ui/i18n";
+import { usePreferences } from "../ui/preferences";
+import type { PaneMode, SidePaneTab } from "../ui/preferencesModel";
 import type { MessageKey } from "../i18n/translate";
 
 export type CellDraft = {
@@ -124,6 +128,22 @@ function hasOtherDirtyDraft(row: TranslationRowDto, targetCell: TranslationCellD
   });
 }
 
+/** Switches a pane between text with tag chips and the macro code. */
+function PaneModeSwitch({ value, onChange }: { value: PaneMode; onChange: (mode: PaneMode) => void }) {
+  const { t } = useI18n();
+  return (
+    <Segmented<PaneMode>
+      label={t("preview.mode")}
+      value={value}
+      onChange={onChange}
+      options={[
+        { value: "text", label: t("preview.mode.text"), title: t("preview.mode.textHint") },
+        { value: "code", label: t("preview.mode.code"), title: t("preview.mode.codeHint") },
+      ]}
+    />
+  );
+}
+
 function Kbd({ keys }: { keys: string[] }) {
   return <span className="kbd-combo">{keys.map((key) => <kbd key={key}>{key}</kbd>)}</span>;
 }
@@ -147,7 +167,6 @@ const TranslationEditorImpl = forwardRef<TranslationEditorHandle, TranslationEdi
 }, ref) {
   const { t } = useI18n();
   const [showDiff, setShowDiff] = useState(true);
-  const [sideTab, setSideTab] = useState<"note" | "history">("note");
   const [drafts, setDrafts] = useState<Record<string, CellDraft>>({});
   const draftsRef = useRef(drafts);
   const rowRef = useRef(row);
@@ -183,6 +202,15 @@ const TranslationEditorImpl = forwardRef<TranslationEditorHandle, TranslationEdi
   const cellBusy = mutation !== null;
   const targetCanSave = selectedCell !== null && !cellBusy && !targetIsBlank && (selectedCell.translation === null || targetDirty);
   const noteCanSave = selectedCell?.translation != null && !cellBusy && noteDirty;
+  const { preferences, setPreference } = usePreferences();
+  const sourceMode = preferences.sourcePaneMode;
+  const targetMode = preferences.targetPaneMode;
+  // Kept across rows: the editor is created anew for every row.
+  const sideTab = preferences.sidePaneTab;
+  const sourceView = useMacroView(selectedCell?.sourceMacro ?? null);
+  // Clicking a tag of the source adds it to the translation at its cursor.
+  const targetApi = useRef<MacroEditorApi | null>(null);
+  const targetView = useMacroView(draft === null ? null : draft.target);
 
   const updateDraft = useCallback((cell: TranslationCellDto, field: keyof CellDraft, value: string) => {
     const key = bindingKey(cell.sourceBinding);
@@ -299,17 +327,6 @@ const TranslationEditorImpl = forwardRef<TranslationEditorHandle, TranslationEdi
             </div>
           ) : <span className="editor-field mono">{t("common.column", { column: String(selectedCell.sourceBinding.columnIndex) })}</span>}
         </div>
-        <div className="editor-view-switch">
-        <Segmented
-          label={t("editor.view")}
-          value="text"
-          onChange={() => undefined}
-          options={[
-            { value: "text", label: t("editor.viewText") },
-            { value: "preview", label: <><UiIcon icon="gamepad" size="xs" /> {t("editor.viewInGame")}</>, disabled: true, title: t("editor.inGameUnavailable") },
-          ]}
-        />
-        </div>
         <div className="editor-bar-end">
           {rowDirty ? <span className="pill pill-warn">{t("common.unsaved")}</span> : null}
           <div className="review-control" title={translation ? undefined : t("editor.saveTargetFirst")}>
@@ -334,8 +351,9 @@ const TranslationEditorImpl = forwardRef<TranslationEditorHandle, TranslationEdi
             <span className="spacer" />
             {onDraftWithAngelica ? <IconButton icon="sparkles" label={drafting ? t("editor.drafting") : t("editor.draftWithAngelica")} disabled={cellBusy || drafting} onClick={() => void draftWithAngelica()} /> : null}
             <IconButton icon="copyPlus" label={t("editor.copySource")} disabled={cellBusy} onClick={copySource} />
+            <PaneModeSwitch value={sourceMode} onChange={(mode) => setPreference("sourcePaneMode", mode)} />
           </div>
-          <MacroEditor className="editor-surface" value={selectedCell.sourceMacro} readOnly ariaLabel={t("editor.sourceText", { column: String(selectedCell.sourceBinding.columnIndex) })} placeholder={t("editor.emptySource")} onNavigate={onNavigate} />
+          <MacroEditor className="editor-surface" value={selectedCell.sourceMacro} readOnly view={sourceView} presentation={sourceMode === "code" ? "code" : "chips"} onPick={cellBusy ? undefined : (pick) => targetApi.current?.apply(pick)} ariaLabel={t("editor.sourceText", { column: String(selectedCell.sourceBinding.columnIndex) })} placeholder={t("editor.emptySource")} onNavigate={onNavigate} />
           {row.context.length > 0 ? (
             <details className="context-block">
               <summary><UiIcon icon="chevronRight" size="xs" />{t("editor.context")} <span className="count">{row.context.length}</span></summary>
@@ -351,6 +369,7 @@ const TranslationEditorImpl = forwardRef<TranslationEditorHandle, TranslationEdi
             {mutation === "target" ? <span className="saving-label"><span className="spinner spinner-xs" />{t("editor.savingInline")}</span> : null}
             <span className="spacer" />
             {checkpoint ? <IconButton icon="gitCompareArrows" label={t(showDiff ? "editor.hideDiff" : "editor.showDiff")} pressed={showDiff} onClick={() => setShowDiff((current) => !current)} className={`git-mark git-mark-${checkpoint.kind}`} /> : null}
+            <PaneModeSwitch value={targetMode} onChange={(mode) => setPreference("targetPaneMode", mode)} />
           </div>
           {checkpoint && showDiff ? <CheckpointDiff baseline={checkpoint} current={draft.target} /> : null}
           <MacroEditor
@@ -365,6 +384,9 @@ const TranslationEditorImpl = forwardRef<TranslationEditorHandle, TranslationEdi
             onSaveAndNext={() => saveTarget(true)}
             onApproveAndNext={approve}
             onNavigate={onNavigate}
+            view={targetView}
+            presentation={targetMode === "code" ? "code" : "chips"}
+            apiRef={targetApi}
           />
           <div className="editor-pane-foot">
             <span className="editor-hint">
@@ -384,17 +406,26 @@ const TranslationEditorImpl = forwardRef<TranslationEditorHandle, TranslationEdi
 
         <aside className="editor-pane editor-note">
           <div className="editor-pane-head">
-            <Segmented<"note" | "history">
+            <Segmented<SidePaneTab>
               label={t("editor.sidePane")}
               value={sideTab}
-              onChange={setSideTab}
+              onChange={(tab) => setPreference("sidePaneTab", tab)}
               options={[
                 { value: "note", label: <>{t("editor.note")}{noteDirty ? <span className="dirty-mark" aria-label={t("common.edited")} /> : null}</> },
+                { value: "languages", label: t("editor.languages") },
                 { value: "history", label: t("editor.history") },
               ]}
             />
           </div>
-          {sideTab === "history" ? (
+          {sideTab === "languages" ? (
+            <div className="editor-languages">
+              <OtherLanguages
+                binding={selectedCell.sourceBinding}
+                presentation={sourceMode === "code" ? "code" : "chips"}
+                onPick={cellBusy ? undefined : (pick) => targetApi.current?.apply(pick)}
+              />
+            </div>
+          ) : sideTab === "history" ? (
             <div className="editor-history">
               <StringHistory
                 unitId={translation?.translationUnitId ?? null}

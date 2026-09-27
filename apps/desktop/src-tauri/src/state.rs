@@ -4,7 +4,6 @@ use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
 use aeria_ai::OpenAiCompatibleClient;
 use aeria_ai::chatgpt::AccessToken;
-use aeria_atlas::{CancellationHandle, CancellationToken};
 use aeria_git::{GitExecutable, UnitAttribution};
 use aeria_workspace::ProjectSession;
 
@@ -16,8 +15,6 @@ use crate::search::IndexState;
 pub struct DesktopState {
     project: Mutex<Option<ProjectSession>>,
     registry: Mutex<()>,
-    atlas_job: Mutex<Option<AtlasJob>>,
-    next_atlas_job_id: AtomicU64,
     git: OnceLock<GitExecutable>,
     attribution: Mutex<Option<AttributionCache>>,
     ai_client: OnceLock<OpenAiCompatibleClient>,
@@ -33,7 +30,7 @@ pub struct DesktopState {
     job_runners: Mutex<Vec<JobRunner>>,
     /// Job stores opened in this process; interrupted jobs are paused once.
     job_stores: Mutex<Vec<PathBuf>>,
-    /// Source search indexes by source package ID.
+    /// Source search indexes by game data key.
     search_indexes: Mutex<Vec<(String, IndexState)>>,
     /// Running synchronization and export operations, which an application
     /// update must not interrupt.
@@ -51,8 +48,6 @@ pub enum Activity {
     Sync,
     /// Pack export and publication.
     Export,
-    /// Building a source package from the game.
-    SourcePackage,
 }
 
 /// Marks an activity as running until dropped.
@@ -83,17 +78,6 @@ struct JobRunner {
     workers: Arc<WorkerBoard>,
 }
 
-struct AtlasJob {
-    id: String,
-    cancellation: CancellationHandle,
-    token: CancellationToken,
-}
-
-#[derive(Debug)]
-pub(crate) struct StartedAtlasJob {
-    pub id: String,
-}
-
 impl DesktopState {
     /// Creates an application state with no project open.
     #[must_use]
@@ -101,8 +85,6 @@ impl DesktopState {
         Self {
             project: Mutex::new(None),
             registry: Mutex::new(()),
-            atlas_job: Mutex::new(None),
-            next_atlas_job_id: AtomicU64::new(1),
             git: OnceLock::new(),
             attribution: Mutex::new(None),
             ai_client: OnceLock::new(),
@@ -171,12 +153,10 @@ impl DesktopState {
                 .job_runners
                 .lock()
                 .is_ok_and(|runners| !runners.is_empty());
-        let building = self.atlas_job.lock().is_ok_and(|job| job.is_some());
         [
             (Activity::Translation, translating),
             (Activity::Sync, tracks(Activity::Sync)),
             (Activity::Export, tracks(Activity::Export)),
-            (Activity::SourcePackage, building),
         ]
         .into_iter()
         .filter_map(|(activity, running)| running.then_some(activity))
@@ -356,37 +336,37 @@ impl DesktopState {
             .map(|runner| Arc::clone(&runner.workers))
     }
 
-    pub(crate) fn search_index(&self, package_id: &str) -> Option<IndexState> {
+    pub(crate) fn search_index(&self, source_key: &str) -> Option<IndexState> {
         let indexes = self.search_indexes.lock().ok()?;
         indexes
             .iter()
-            .find(|(id, _)| id == package_id)
+            .find(|(id, _)| id == source_key)
             .map(|(_, state)| state.clone())
     }
 
-    pub(crate) fn set_search_index(&self, package_id: &str, state: IndexState) {
+    pub(crate) fn set_search_index(&self, source_key: &str, state: IndexState) {
         if let Ok(mut indexes) = self.search_indexes.lock() {
-            indexes.retain(|(id, _)| id != package_id);
-            indexes.push((package_id.to_owned(), state));
+            indexes.retain(|(id, _)| id != source_key);
+            indexes.push((source_key.to_owned(), state));
         }
     }
 
-    pub(crate) fn forget_search_index(&self, package_id: &str) {
+    pub(crate) fn forget_search_index(&self, source_key: &str) {
         if let Ok(mut indexes) = self.search_indexes.lock() {
-            indexes.retain(|(id, _)| id != package_id);
+            indexes.retain(|(id, _)| id != source_key);
         }
     }
 
-    /// Marks a package's index as building. Returns `false` when it already
+    /// Marks a source's index as building. Returns `false` when it already
     /// has a state, so only one build starts.
-    pub(crate) fn claim_search_build(&self, package_id: &str) -> bool {
+    pub(crate) fn claim_search_build(&self, source_key: &str) -> bool {
         let Ok(mut indexes) = self.search_indexes.lock() else {
             return false;
         };
-        if indexes.iter().any(|(id, _)| id == package_id) {
+        if indexes.iter().any(|(id, _)| id == source_key) {
             return false;
         }
-        indexes.push((package_id.to_owned(), IndexState::Building));
+        indexes.push((source_key.to_owned(), IndexState::Building));
         true
     }
 
@@ -427,96 +407,6 @@ impl DesktopState {
             .lock()
             .map_err(|_| CommandError::internal_state("desktop project registry lock is poisoned"))
     }
-
-    pub(crate) fn start_atlas_job(&self) -> Result<StartedAtlasJob, CommandError> {
-        let mut active = self.atlas_job.lock().map_err(|_| {
-            CommandError::internal_state("desktop Atlas job state lock is poisoned")
-        })?;
-        if active.is_some() {
-            return Err(CommandError::new(
-                "atlasBusy",
-                "another source-package generation job is already active",
-            ));
-        }
-        let sequence = self.next_atlas_job_id.fetch_add(1, Ordering::Relaxed);
-        let id = format!("atlas-{sequence:016x}");
-        let (token, cancellation) = CancellationToken::new();
-        *active = Some(AtlasJob {
-            id: id.clone(),
-            cancellation,
-            token,
-        });
-        Ok(StartedAtlasJob { id })
-    }
-
-    pub(crate) fn cancel_atlas_job(&self, id: &str) -> Result<(), CommandError> {
-        let active = self.atlas_job.lock().map_err(|_| {
-            CommandError::internal_state("desktop Atlas job state lock is poisoned")
-        })?;
-        let job = active.as_ref().filter(|job| job.id == id).ok_or_else(|| {
-            CommandError::new("atlasCancelled", "the requested Atlas job is not active")
-        })?;
-        job.cancellation.cancel();
-        Ok(())
-    }
-
-    pub(crate) fn atlas_job_token(&self, id: &str) -> Result<CancellationToken, CommandError> {
-        let active = self.atlas_job.lock().map_err(|_| {
-            CommandError::internal_state("desktop Atlas job state lock is poisoned")
-        })?;
-        active
-            .as_ref()
-            .filter(|job| job.id == id)
-            .map(|job| job.token.clone())
-            .ok_or_else(|| {
-                CommandError::new("atlasCancelled", "the requested Atlas job is not active")
-            })
-    }
-
-    pub(crate) fn finish_atlas_job(&self, id: &str) -> Result<(), CommandError> {
-        let mut active = self.atlas_job.lock().map_err(|_| {
-            CommandError::internal_state("desktop Atlas job state lock is poisoned")
-        })?;
-        if active.as_ref().is_some_and(|job| job.id == id) {
-            *active = None;
-        }
-        Ok(())
-    }
-
-    /// Runs the final Atlas project-publication boundary while holding the
-    /// Atlas job slot. Cancellation requests cannot be accepted between the
-    /// final cancellation check and the operation's project publication.
-    pub(crate) fn with_atlas_publication<T, F>(
-        &self,
-        id: &str,
-        token: &CancellationToken,
-        operation: F,
-    ) -> Result<T, CommandError>
-    where
-        F: FnOnce(&Self) -> Result<T, CommandError>,
-    {
-        let mut active = self.atlas_job.lock().map_err(|_| {
-            CommandError::internal_state("desktop Atlas job state lock is poisoned")
-        })?;
-        if active.as_ref().is_none_or(|job| job.id != id) {
-            return Err(CommandError::new(
-                "atlasCancelled",
-                "the requested Atlas job is not active",
-            ));
-        }
-        if token.is_cancelled() {
-            return Err(CommandError::new(
-                "atlasCancelled",
-                "Atlas project creation was cancelled",
-            ));
-        }
-
-        let result = operation(self);
-        if result.is_ok() {
-            *active = None;
-        }
-        result
-    }
 }
 
 impl Default for DesktopState {
@@ -545,10 +435,6 @@ mod tests {
         assert_eq!(state.running_activities(), [Activity::Sync]);
         drop(sync);
         assert!(state.running_activities().is_empty());
-        let job = state.start_atlas_job().expect("Atlas job");
-        assert_eq!(state.running_activities(), [Activity::SourcePackage]);
-        state.finish_atlas_job(&job.id).expect("finish Atlas job");
-        assert!(state.running_activities().is_empty());
     }
 
     #[test]
@@ -559,43 +445,5 @@ mod tests {
         assert_eq!(refused.expect_err("busy").code, "updateBusy");
         drop(export);
         assert_eq!(state.while_idle(|| 7).expect("idle"), 7);
-    }
-
-    #[test]
-    fn desktop_state_allows_one_atlas_job_and_cancels_by_opaque_id() {
-        let state = DesktopState::new();
-        let first = state.start_atlas_job().expect("first Atlas job");
-        let busy = state
-            .start_atlas_job()
-            .expect_err("second Atlas job is rejected");
-        assert_eq!(busy.code, "atlasBusy");
-
-        state
-            .cancel_atlas_job(&first.id)
-            .expect("active Atlas job cancels");
-        assert!(
-            state
-                .atlas_job_token(&first.id)
-                .expect("active Atlas job token")
-                .is_cancelled()
-        );
-        state.finish_atlas_job(&first.id).expect("finish Atlas job");
-        state
-            .start_atlas_job()
-            .expect("a later Atlas job can start");
-    }
-
-    #[test]
-    fn atlas_job_token_is_only_available_for_the_active_job() {
-        let state = DesktopState::new();
-        let started = state.start_atlas_job().expect("Atlas job");
-
-        assert!(state.atlas_job_token(&started.id).is_ok());
-        assert_eq!(
-            state
-                .atlas_job_token("atlas-0000000000000002")
-                .expect_err("stale job ID"),
-            CommandError::new("atlasCancelled", "the requested Atlas job is not active")
-        );
     }
 }

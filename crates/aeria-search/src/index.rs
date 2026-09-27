@@ -1,21 +1,20 @@
-//! The local full-text index of a source package's translatable strings.
+//! The local full-text index of the game's translatable strings.
 //!
-//! One SQLite file per source package holds every translatable String cell
-//! with its macro text and plain text, and an FTS5 index over the plain text.
-//! It is built from the verified HXS snapshot and HSG guidance, is never
-//! project data, and can be deleted and rebuilt at any time.
+//! One SQLite file per game version and source language holds every
+//! translatable String cell with its macro text and plain text, and an FTS5
+//! index over the plain text. It is built from the game, is never project
+//! data, and can be deleted and rebuilt at any time.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-use aeria_hsp::GuidanceIndex;
-use aeria_hxs::{HxsError, HxsSnapshot, MAX_STRING_OCCURRENCE_PAGE_SIZE};
+use aeria_source::{GameSource, SheetLookup, SourceError};
 use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 
 use crate::text::{plain_text, similarity};
 
 /// The index file layout version.
-pub const INDEX_FORMAT: &str = "1";
+pub const INDEX_FORMAT: &str = "2";
 /// Most hits one search returns.
 pub const MAX_SEARCH_LIMIT: u32 = 200;
 /// Candidates read from the full-text index before similarity ranking.
@@ -32,8 +31,8 @@ pub enum SearchError {
     Storage(#[from] rusqlite::Error),
     #[error("search index file operation failed: {0}")]
     Io(#[from] std::io::Error),
-    #[error("the source could not be read: {0}")]
-    Source(#[from] HxsError),
+    #[error("the game could not be read: {0}")]
+    Source(#[from] SourceError),
     #[error("building the search index was cancelled")]
     Cancelled,
 }
@@ -175,21 +174,21 @@ fn words(text: &str) -> Vec<String> {
 }
 
 impl SourceIndex {
-    /// Opens a complete index built for `package_id`, or returns `None` when
-    /// the file is missing, incomplete, of another format, or for another
-    /// package.
+    /// Opens a complete index built for `source_key`, or returns `None` when
+    /// the file is missing, incomplete, of another format, or for other game
+    /// data.
     ///
     /// # Errors
     ///
     /// Returns a storage error for an unreadable file.
-    pub fn open(path: impl Into<PathBuf>, package_id: &str) -> Result<Option<Self>, SearchError> {
+    pub fn open(path: impl Into<PathBuf>, source_key: &str) -> Result<Option<Self>, SearchError> {
         let path = path.into();
         if !path.is_file() {
             return Ok(None);
         }
         let connection = Connection::open_with_flags(&path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
         let valid = read_meta(&connection, "format")?.as_deref() == Some(INDEX_FORMAT)
-            && read_meta(&connection, "package")?.as_deref() == Some(package_id);
+            && read_meta(&connection, "source")?.as_deref() == Some(source_key);
         let tokenizer = read_meta(&connection, "tokenizer")?
             .as_deref()
             .and_then(Tokenizer::parse);
@@ -199,9 +198,10 @@ impl SourceIndex {
         })
     }
 
-    /// Builds the index of every translatable, non-empty String cell and
-    /// publishes it at `path` only when complete. `keep_going` is asked
-    /// between pages; returning `false` cancels the build.
+    /// Builds the index of every translatable String cell of the game and
+    /// publishes it at `path` only when complete. `source_key` identifies the
+    /// game data, such as its language and version. `keep_going` is asked
+    /// between sheets; returning `false` cancels the build.
     ///
     /// # Errors
     ///
@@ -209,10 +209,9 @@ impl SourceIndex {
     /// error. A failed build leaves no index behind.
     pub fn build(
         path: impl Into<PathBuf>,
-        package_id: &str,
+        source_key: &str,
         tokenizer: Tokenizer,
-        source: &HxsSnapshot,
-        guidance: &GuidanceIndex,
+        source: &GameSource,
         keep_going: &dyn Fn() -> bool,
     ) -> Result<Self, SearchError> {
         let path = path.into();
@@ -221,10 +220,8 @@ impl SourceIndex {
         }
         let partial = partial_path(&path);
         let _ = std::fs::remove_file(&partial);
-        let result = Self::write(
-            &partial, package_id, tokenizer, source, guidance, keep_going,
-        )
-        .and_then(|()| Ok(std::fs::rename(&partial, &path)?));
+        let result = Self::write(&partial, source_key, tokenizer, source, keep_going)
+            .and_then(|()| Ok(std::fs::rename(&partial, &path)?));
         if let Err(error) = result {
             let _ = std::fs::remove_file(&partial);
             return Err(error);
@@ -234,10 +231,9 @@ impl SourceIndex {
 
     fn write(
         path: &Path,
-        package_id: &str,
+        source_key: &str,
         tokenizer: Tokenizer,
-        source: &HxsSnapshot,
-        guidance: &GuidanceIndex,
+        source: &GameSource,
         keep_going: &dyn Fn() -> bool,
     ) -> Result<(), SearchError> {
         let mut connection = Connection::open(path)?;
@@ -252,44 +248,24 @@ impl SourceIndex {
             let mut insert = transaction.prepare(
                 "INSERT INTO cells (sheet, row_id, subrow_id, column_index, macro, plain) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
             )?;
-            for sheet in source.sheets() {
-                if guidance.translatable_cell_count(&sheet.name) == 0 {
-                    continue;
+            for name in source.sheet_names() {
+                if !keep_going() {
+                    return Err(SearchError::Cancelled);
                 }
-                let mut after = None;
-                loop {
-                    if !keep_going() {
-                        return Err(SearchError::Cancelled);
-                    }
-                    let page = source.page_string_occurrence_records(
-                        &sheet.name,
-                        after.as_ref(),
-                        MAX_STRING_OCCURRENCE_PAGE_SIZE,
-                    )?;
-                    for record in &page.occurrences {
-                        let at = &record.fingerprint.coordinate;
-                        if record.macro_text.is_empty()
-                            || !guidance.is_translatable(
-                                &at.sheet_name,
-                                at.row_id,
-                                at.subrow_id,
-                                at.column_index,
-                            )
-                        {
-                            continue;
-                        }
+                let SheetLookup::Present(sheet) = source.read_sheet(name)? else {
+                    continue;
+                };
+                for row in sheet.rows() {
+                    for cell in sheet.cells(row).filter(|cell| cell.translatable) {
+                        let text = cell.text();
                         insert.execute(params![
-                            at.sheet_name,
-                            at.row_id,
-                            at.subrow_id,
-                            at.column_index,
-                            record.macro_text,
-                            plain_text(&record.macro_text),
+                            name,
+                            row.row_id,
+                            row.subrow_id,
+                            cell.column,
+                            text,
+                            plain_text(&text),
                         ])?;
-                    }
-                    match page.next_after {
-                        Some(next) => after = Some(next),
-                        None => break,
                     }
                 }
             }
@@ -300,8 +276,8 @@ impl SourceIndex {
              CREATE INDEX cells_by_location ON cells (sheet, row_id, subrow_id, column_index);",
         )?;
         transaction.execute(
-            "INSERT INTO meta (key, value) VALUES ('format', ?1), ('package', ?2), ('tokenizer', ?3)",
-            params![INDEX_FORMAT, package_id, tokenizer.name()],
+            "INSERT INTO meta (key, value) VALUES ('format', ?1), ('source', ?2), ('tokenizer', ?3)",
+            params![INDEX_FORMAT, source_key, tokenizer.name()],
         )?;
         transaction.commit()?;
         drop(connection);

@@ -24,6 +24,8 @@ pub enum ExportError {
     Encoder(String),
     #[error(transparent)]
     Fonts(#[from] aeria_fonts::FontError),
+    #[error("could not read the game: {0}")]
+    Source(#[from] aeria_source::SourceError),
     #[error("invalid signing key")]
     SigningKey,
     #[error(transparent)]

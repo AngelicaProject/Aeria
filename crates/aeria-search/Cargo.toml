@@ -11,11 +11,11 @@ description = "Local source search, indexes, translation memory, and query servi
 workspace = true
 
 [dependencies]
-aeria-hsp = { path = "../aeria-hsp" }
-aeria-hxs = { path = "../aeria-hxs" }
 aeria-se = { path = "../aeria-se" }
+aeria-source = { path = "../aeria-source" }
 rusqlite = { version = "0.40.2", features = ["bundled"] }
 thiserror = "2.0.20"
 
 [dev-dependencies]
+aeria-sqpack = { path = "../aeria-sqpack", features = ["testing"] }
 tempfile = "3.27.0"

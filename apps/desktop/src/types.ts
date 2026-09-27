@@ -3,43 +3,6 @@ export type CommandError = {
   message: string;
 };
 
-export type AtlasEvent =
-  | { type: "started"; protocolVersion: number; language: string | null }
-  | { type: "phase"; protocolVersion: number; phase: string }
-  | {
-      type: "progress";
-      protocolVersion: number;
-      phase: string;
-      sheet: string | null;
-      language: string | null;
-      sheetIndex: number | null;
-      sheetCount: number | null;
-      rowsProcessed: number | null;
-      sheetCompleted: boolean | null;
-    }
-  | {
-      type: "completed";
-      protocolVersion: number;
-      packageId: string;
-      outputPath: string | null;
-      metadata: Record<string, unknown>;
-    }
-  | {
-      type: "failed";
-      protocolVersion: number;
-      code: string | null;
-      message: string | null;
-    };
-
-export type SourcePackageEventPayload = {
-  jobId: string;
-  event: AtlasEvent;
-};
-
-export type SourcePackageJobDto = {
-  jobId: string;
-};
-
 export type ReviewState = "draft" | "reviewed" | "needsReview";
 
 export type SourceBinding = {
@@ -49,23 +12,28 @@ export type SourceBinding = {
   columnIndex: number;
 };
 
+/** One source cell in another client language; `text` is null when that language has no such cell. */
+export type OtherLanguageTextDto = {
+  language: string;
+  text: string | null;
+};
+
 export type ProjectSheetDto = {
   name: string;
-  effectiveLanguage: string;
   rowCount: number;
   translatableCellCount: number;
+  /** The sheet is listed by the game but cannot be read. */
+  unavailable: boolean;
 };
 
 export type ProjectSummaryDto = {
   repositoryRoot: string;
-  sourcePackagePath: string;
-  sourcePackageId: string;
   sourceLanguage: string;
   targetLanguage: string;
-  sourceContentId: string;
-  sourceSnapshotId: string;
+  /** The game version the project describes. */
   gameVersion: string;
-  scope: string;
+  /** The game installation the project reads. */
+  gamePath: string;
   sheets: ProjectSheetDto[];
   /** Translations preserved without a current source occurrence. */
   detachedUnitCount: number;
@@ -96,10 +64,10 @@ export type DetachReason =
   | "notTranslatable"
   | "bindingConflict";
 
-export type SheetSchemaUpdateDto = {
+export type SheetLayoutUpdateDto = {
   sheetName: string;
   removed: boolean;
-  /** The sheet still exists in the game but the source could not read it. */
+  /** The sheet still exists in the game but cannot be read. */
   unavailable: boolean;
   mappedColumns: number;
   unresolvedColumns: number;
@@ -107,12 +75,9 @@ export type SheetSchemaUpdateDto = {
 
 /** Counts of a previewed or applied deterministic source update. */
 export type SourceUpdateReportDto = {
-  previousContentId: string;
-  contentId: string;
+  previousGameVersion: string;
   gameVersion: string;
-  previousFormatVersion: number;
   unchanged: number;
-  encodingChanged: number;
   sourceChanged: number;
   detached: number;
   newlyDetached: number;
@@ -120,31 +85,28 @@ export type SourceUpdateReportDto = {
   columnMapped: number;
   rowMoved: number;
   changedUnits: number;
-  sheetSchemaUpdates: SheetSchemaUpdateDto[];
+  sheetLayoutUpdates: SheetLayoutUpdateDto[];
 };
 
 export type DetachedUnitDto = {
   translationUnitId: string;
   lastSourceBinding: SourceBinding;
+  /** The source text the translation was last bound to. */
+  lastSourceText: string;
   reason: DetachReason;
   targetMacro: string;
   reviewState: ReviewState;
   translatorNote: string | null;
 };
 
-export type RecentProjectAvailability =
-  | "ready"
-  | "repositoryMissing"
-  | "sourcePackageMissing"
-  | "repositoryAndSourceMissing";
+export type RecentProjectAvailability = "ready" | "repositoryMissing";
 
 /** Outcome of opening a project from a game installation. */
 export type GameOpenResultDto =
   | { status: "opened"; result: ProjectOpenResultDto }
   | {
-    /** Nothing was written; confirm, then open with this package and `acceptSourceUpdate`. */
+    /** Nothing was written; confirm, then update the project from the game. */
     status: "sourceUpdateRequired";
-    sourcePackagePath: string;
     report: SourceUpdateReportDto;
   };
 
@@ -156,27 +118,6 @@ export type GameInstallationDto = {
   gameVersion: string;
   origin: GameOrigin;
 };
-
-/** One package in Aeria's source-package store. */
-export type SourcePackageEntryDto = {
-  path: string;
-  packageId: string;
-  sourceLanguage: string;
-  gameVersion: string;
-  sizeBytes: number;
-  builtAtUnixMs: number | null;
-  /** Whether a build record allows reusing it instead of running Atlas. */
-  reusable: boolean;
-  /** Built from the installed game with the current Atlas. */
-  current: boolean;
-  /** Repository roots of recent projects, and the open project, that use it. */
-  usedBy: string[];
-  /** Nothing uses it and it is not current, so it can be deleted. */
-  removable: boolean;
-};
-
-/** Whether a job finds a package without running Atlas. */
-export type SourceAvailability = "ready" | "build" | "unknown";
 
 /** The game installation setting and what it resolves to. */
 export type GameSettingsDto = {
@@ -190,8 +131,6 @@ export type GameSettingsDto = {
 export type RecentProjectDto = {
   id: string;
   repositoryRoot: string;
-  sourcePackagePath: string;
-  sourcePackageId: string;
   sourceLanguage: string;
   targetLanguage: string;
   gameVersion: string;
@@ -779,7 +718,6 @@ export type ExportReportDto = {
   skippedDetached: number;
   skippedUntranslated: number;
   skippedUnreviewed: number;
-  skippedWithoutRawHash: number;
   sheets: number;
   strings: number;
   packHash: string;
@@ -861,7 +799,7 @@ export type FontPreviewSizeDto = {
 export type UpdateChannel = "stable" | "nightly";
 
 /** Work an application update waits for instead of interrupting. */
-export type RunningActivity = "translation" | "sync" | "export" | "sourcePackage";
+export type RunningActivity = "translation" | "sync" | "export";
 
 export type AvailableUpdateDto = {
   version: string;
@@ -885,4 +823,48 @@ export type UpdateStatusDto = {
   installing: boolean;
   error: CommandError | null;
   runningActivities: RunningActivity[];
+};
+
+/** A problem in macro text, in UTF-16 offsets. */
+export type MacroDiagnosticDto = { from: number; to: number; message: string };
+
+export type MacroParameterDto = { prefix: "n" | "s" | "gn" | "gs"; index: number };
+
+export type MacroTagPart = "inline" | "open" | "close" | "separator" | "generic" | "raw";
+
+export type MacroFamily = "translatableText" | "formatting" | "condition" | "runtimeValue" | "gameData" | "layout" | "opaque";
+
+export type MacroArgDto = { name: string; role: string; value: string; parameter: MacroParameterDto | null };
+
+/** One tag of macro text: an opening, closing, separator, or inline tag. */
+export type MacroTagDto = {
+  from: number;
+  to: number;
+  name: string;
+  part: MacroTagPart;
+  family: MacroFamily | null;
+  args: MacroArgDto[];
+  /** The color an opening color tag sets, `#rrggbbaa`, when it is known. */
+  color: string | null;
+  /** What an opening `<if>` or `<switch>` tests, part by part. */
+  condition: MacroConditionDto | null;
+};
+
+/** A number (named by its row when compared with a row global such as a class), a parameter, a time value, or other text. */
+export type MacroOperandDto =
+  | { kind: "int"; value: number; name: string | null }
+  | { kind: "parameter"; code: string; meaning: string | null }
+  | { kind: "time"; name: string }
+  | { kind: "other"; text: string };
+
+/** A condition of an `<if>` or the value of a `<switch>`; `left` alone tests for not zero or empty. */
+export type MacroConditionDto = {
+  left: MacroOperandDto;
+  operator: "==" | "!=" | "<" | "<=" | ">" | ">=" | null;
+  right: MacroOperandDto | null;
+};
+
+export type MacroViewDto = {
+  diagnostics: MacroDiagnosticDto[];
+  tags: MacroTagDto[];
 };

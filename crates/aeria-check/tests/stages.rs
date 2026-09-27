@@ -5,7 +5,7 @@ use std::process::Command;
 use aeria_check::{Severity, Stage, run_stage};
 
 fn fixture() -> std::path::PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../aeria-workspace/tests/fixtures/workspace-v2")
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../aeria-workspace/tests/fixtures/workspace-v3")
 }
 
 fn git(root: &Path, args: &[&str]) {
@@ -88,7 +88,7 @@ fn command_line_git_merges_adjacent_units_with_the_driver() {
     assert!(lines.len() > 1, "the fixture shard has several units");
     let edit = |line: &str, target: &str| {
         let mut record: serde_json::Value = serde_json::from_str(line).expect("record");
-        record["targetMacro"] = serde_json::Value::from(target);
+        record["target"] = serde_json::Value::from(target);
         serde_json::to_string(&record).expect("record")
     };
     let write = |first: &str, second: &str| {
@@ -116,8 +116,8 @@ fn command_line_git_merges_adjacent_units_with_the_driver() {
     git(root, &["merge", "--quiet", "--no-edit", "other"]);
 
     let merged = fs::read_to_string(&shard).expect("merged");
-    assert!(merged.contains("\"targetMacro\":\"left\""));
-    assert!(merged.contains("\"targetMacro\":\"right\""));
+    assert!(merged.contains("\"target\":\"left\""));
+    assert!(merged.contains("\"target\":\"right\""));
     for stage in [Stage::Integrity, Stage::Translations] {
         let report = run_stage(stage, &project, None);
         assert!(!report.failed(), "{stage:?}: {:?}", report.findings);

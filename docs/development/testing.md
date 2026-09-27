@@ -9,7 +9,7 @@ Prioritize deterministic fixtures and regression cases around the highest-risk b
 - Unit tests for pure domain rules and parsers.
 - Golden/round-trip tests for structured strings and serialization.
 - Property/fuzz tests for parsers and invariants.
-- Integration tests over synthetic HXS/workspace repositories.
+- Integration tests over synthetic SqPack game folders and workspace repositories.
 - Desktop IPC tests for capability contracts.
 - Frontend component/workflow tests for high-value user flows.
 - Packaging smoke tests on supported release targets.
@@ -26,9 +26,9 @@ extend them for new cases:
   `randomized_patches_never_attach_a_translation_to_different_text`, which
   checks the core invariants over seeded random patches and requires every
   kind of outcome (including binding conflicts and reattachment) to occur.
-- `aeria-workspace` `tests/update_chains.rs` and `tests/merged_sources.rs`:
-  chains of game patches, and workspace state merged from branches on
-  different game versions.
+- `aeria-workspace` `tests/session.rs`: game updates that are previewed,
+  applied, and repeated after interruption, chains of patches, and units
+  merged from branches on an older game version.
 - `aeria-git` `merge.rs` unit tests, including an exhaustive three-way merge
   check, and `tests/collaboration.rs` for sync, conflicts, reconciliation
   commits, and per-unit history.
@@ -37,6 +37,27 @@ A new invariant check should be confirmed to fail against a deliberately
 broken implementation before it is relied on.
 
 Tests must not depend on a user's installed game, credentials, network availability, or private repository data.
+
+## Game strings
+
+`aeria-se` pins its macro text with golden vectors of bytes and text for
+every form and every catalog entry
+(`crates/aeria-se/tests/fixtures/macro_text.golden.txt`). A new catalog
+entry needs a vector; the test fails otherwise.
+
+The well-formed string rule of the pack format has its own vectors
+(`crates/aeria-se/tests/fixtures/well_formed.vectors.txt`): every golden
+vector must appear there as accepted, and Harmonia runs a copy of the file
+against its pack reader. Change both copies in the same change.
+
+Changes to the byte model, the printer, or the parser are also checked
+against a real game with the ignored test
+`crates/aeria-source/tests/game_corpus.rs`: every distinct string in all four
+source languages must print as macro text that encodes back to its bytes, and
+every string without raw bytes must be well-formed. The test prints the macro
+codes the catalog does not name, so run it after a game patch to see which
+new macros need a catalog entry. Run it manually with `AERIA_GAME_PATH` set;
+it is not part of CI, which has no game installation.
 
 ## Harmonia pack interop
 
@@ -63,7 +84,7 @@ Every operation that takes or produces a path must work with non-ASCII
 characters and spaces, as under a Russian Windows user profile
 (`C:\Users\Анна Иванова\...`) or a game in `Program Files (x86)`:
 
-- Pass paths to the filesystem and to child processes (Git, Atlas) as
+- Pass paths to the filesystem and to child processes (Git) as
   `Path`/`OsStr` arguments, never through a shell or a lossy conversion.
 - Code that treats a path as a string (parsing, prefix stripping, joining,
   display, URL validation) needs a unit test with a Cyrillic case and a

@@ -17,10 +17,10 @@ Then load the canonical project documentation for the affected area:
 
 - Product behavior and invariants: `docs/product/README.md`
 - Architecture and subsystem ownership: `docs/architecture/README.md`
-- Source snapshots / HXS: `docs/architecture/source.md`
+- Game source (reading the installed game): `docs/architecture/source.md`
 - Structured strings / SeString macros: `docs/architecture/strings.md`
 - Translation identity: `docs/architecture/identity.md`
-- Workspace persistence: `docs/architecture/workspace.md` and `docs/formats/workspace-v2.md`
+- Workspace persistence: `docs/architecture/workspace.md` and `docs/formats/workspace-v3.md`
 - Source update / rebase: `docs/architecture/rebase.md` and `docs/architecture/rebase-safety.md`
 - Git collaboration inside Aeria: `docs/architecture/git.md` and `docs/formats/collaboration-v1.md`
 - Search and translation memory: `docs/architecture/search.md`
@@ -40,7 +40,7 @@ Start from `docs/README.md` when the correct document is not obvious.
 - Make the smallest coherent change that solves the requested problem.
 - Do not expand a milestone into adjacent subsystems unless the extra work is required for correctness.
 - Preserve the product invariants in `docs/product/principles.md` and the ownership boundaries in `docs/architecture/overview.md`.
-- Treat HXS and released persisted formats as contracts. Do not invent consumer-only compatibility rules or silently reinterpret unknown data.
+- Treat the game's data layout and released persisted formats as contracts. Do not invent consumer-only compatibility rules or silently reinterpret unknown data.
 - Deterministic identity, rebase, migration, merge, and export behavior must not depend on AI judgment.
 - Invalid or structurally unsafe translated strings must never be persisted as successful translations.
 - Do not introduce first-party `unsafe` Rust without a narrowly scoped documented justification and review.

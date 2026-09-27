@@ -9,10 +9,9 @@ description = "Sparse translation workspace domain operations, Workspace Format 
 
 [dependencies]
 aeria-core = { path = "../aeria-core" }
-aeria-hsp = { path = "../aeria-hsp" }
-aeria-hxs = { path = "../aeria-hxs" }
 aeria-rebase = { path = "../aeria-rebase" }
 aeria-se = { path = "../aeria-se" }
+aeria-source = { path = "../aeria-source" }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 sha2 = "0.11.0"
@@ -23,6 +22,5 @@ thiserror = "2.0.20"
 workspace = true
 
 [dev-dependencies]
-rusqlite = { version = "0.40.2", features = ["bundled"] }
-sha2 = "0.11.0"
-zip = { version = "6.0.0", default-features = false, features = ["deflate"] }
+aeria-sqpack = { path = "../aeria-sqpack", features = ["testing"] }
+tempfile = "3.27.0"

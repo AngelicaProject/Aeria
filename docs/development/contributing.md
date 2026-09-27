@@ -18,7 +18,7 @@ If a change affects a documented contract, update the canonical document with th
 
 Run the smallest relevant test set while iterating, then run the broader checks appropriate to the affected area before review. See [`testing.md`](./testing.md) and [`ci.md`](./ci.md).
 
-Changes to correctness-sensitive areas require regression coverage. These include structured string parsing, HXS compatibility, workspace persistence and migration, rebase, semantic merge, and export.
+Changes to correctness-sensitive areas require regression coverage. These include structured string parsing, game source reading, workspace persistence, rebase, semantic merge, and export.
 
 ## Prepare the change for review
 

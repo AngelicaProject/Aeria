@@ -1,46 +1,32 @@
 //! Owned application-layer state for one opened Aeria project.
 
-use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
-use std::time::Instant;
+use std::sync::Arc;
 
-use aeria_core::TranslationUnit;
-use aeria_hsp::{HspError, SourcePackage};
-use aeria_hxs::{ColumnType, HxsError, HxsSnapshot, MAX_STRING_OCCURRENCE_PAGE_SIZE};
-use aeria_rebase::{RowKeys, SourceUpdateError, plan_source_update};
+use aeria_core::{GameVersion, TranslationUnit};
+use aeria_rebase::{SourceUpdateError, SourceUpdatePlan, plan_source_update};
+use aeria_source::GameSource;
 use thiserror::Error;
 
-use crate::persistence::{FORMAT_VERSION, StoredWorkspace};
+use crate::persistence::StoredWorkspace;
 use crate::update::{SourceUpdateReport, apply_plan};
-use crate::{
-    Workspace, WorkspaceError, WorkspaceStore, WorkspaceStoreError, source_fingerprint_from_hashes,
-    source_layout_from_hashes,
-};
+use crate::{Workspace, WorkspaceError, WorkspaceStore, WorkspaceStoreError};
 
 /// The owned runtime representation of one opened Aeria project.
 ///
-/// A session keeps the local source-package path alongside the validated
-/// package, verified immutable HXS handle, loaded sparse workspace,
-/// persistence adapter, and repository root. Package and cache paths are
-/// runtime configuration and are not part of Workspace Format state.
+/// A session keeps the opened game source alongside the loaded sparse
+/// workspace, its persistence adapter, and the repository root. The game path
+/// is runtime configuration and is not part of Workspace Format state.
 pub struct ProjectSession {
     repository_root: PathBuf,
-    source_package_path: PathBuf,
     pub(crate) store: WorkspaceStore,
     pub(crate) workspace: Workspace,
-    pub(crate) source_package: SourcePackage,
-    /// Row key columns detected per sheet of the immutable source, filled
-    /// on first use when a unit is created in that sheet.
-    pub(crate) row_keys: BTreeMap<String, Option<RowKeys>>,
+    pub(crate) source: Arc<GameSource>,
 }
 
 /// Errors raised while opening or initializing a project session.
 #[derive(Debug, Error)]
 pub enum ProjectSessionError {
-    /// The local HSP file could not be opened or fully verified.
-    #[error("failed to open and verify HSP source package {path}: {source}")]
-    Source { path: PathBuf, source: HspError },
-
     /// The workspace could not be loaded, initialized, or published.
     #[error("failed to load or initialize workspace at {repository_root}: {source}")]
     Store {
@@ -49,39 +35,46 @@ pub enum ProjectSessionError {
         source: WorkspaceStoreError,
     },
 
-    /// The workspace and source package use different source languages. A
-    /// source update cannot change the source language.
-    #[error(
-        "workspace at {repository_root} is incompatible with HSP source package {source_package_path}: {source}"
-    )]
+    /// The workspace and the game use different source languages. A source
+    /// update cannot change the source language.
+    #[error("workspace at {repository_root} is incompatible with the game: {source}")]
     Compatibility {
         repository_root: PathBuf,
-        source_package_path: PathBuf,
         #[source]
         source: WorkspaceError,
     },
 
-    /// The requested target language could not be used to construct workspace metadata.
-    #[error(
-        "could not create workspace metadata for {repository_root} from HSP source package {source_package_path}: {source}"
-    )]
+    /// Workspace metadata could not be constructed.
+    #[error("could not create workspace metadata for {repository_root}: {source}")]
     Workspace {
         repository_root: PathBuf,
-        source_package_path: PathBuf,
         #[source]
         source: WorkspaceError,
     },
 
-    /// The workspace must be moved onto the package source by a source
-    /// update before it can be edited.
+    /// The game is older than the version the project describes. The
+    /// project cannot be edited until the game is updated.
     #[error(
-        "workspace at {repository_root} requires a source update for HSP source package {source_package_path}: {requirement}"
+        "the game version {game} is older than the version {project} of the project at {repository_root}; update the game"
     )]
+    GameOutdated {
+        repository_root: PathBuf,
+        project: GameVersion,
+        game: GameVersion,
+    },
+
+    /// The workspace must be moved onto the game by a source update before
+    /// it can be edited.
+    #[error("workspace at {repository_root} requires a source update: {requirement}")]
     SourceUpdateRequired {
         repository_root: PathBuf,
-        source_package_path: PathBuf,
         requirement: SourceUpdateRequirement,
     },
+
+    /// The language is not a BCP 47 language tag a project can translate
+    /// into.
+    #[error("{tag:?} is not a target language; use a BCP 47 tag such as ru or pt-BR")]
+    InvalidTargetLanguage { tag: String },
 
     /// A source update could not be planned.
     #[error("could not plan the source update for workspace at {repository_root}: {source}")]
@@ -92,328 +85,269 @@ pub enum ProjectSessionError {
     },
 }
 
-/// Why a workspace cannot be edited against a source package as stored.
+/// Why a workspace cannot be edited against the game as stored.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SourceUpdateRequirement {
-    /// The workspace uses an older Workspace Format version.
-    FormatMigration { version: u8 },
-    /// The workspace is bound to different verified source content.
-    ContentChanged {
-        workspace_content_id: String,
-        source_content_id: String,
+    /// The game is newer than the version the project describes.
+    GameUpdated {
+        project: GameVersion,
+        game: GameVersion,
     },
-    /// The workspace records the package's source content, but this many
-    /// bound units do not describe it: their occurrence, fingerprint, or
-    /// layout differs, or another bound unit claims the same occurrence.
-    /// Ordinary editing never produces this state; a Git merge of work done
-    /// against different game versions does.
+    /// The project describes the game's version, but this many units do not
+    /// describe the game: their cell or text differs, another bound unit
+    /// claims the same cell, the cell is no longer translatable, or a
+    /// detached unit can be attached again. Ordinary editing never produces
+    /// this state; a Git merge of work done on different game versions does.
     SourceFactsMismatch { units: usize },
-    /// The source content is unchanged, but the package's guidance no longer
-    /// permits this many bound units.
-    PermissionChanged { blocked_units: usize },
 }
 
 impl std::fmt::Display for SourceUpdateRequirement {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::FormatMigration { version } => {
-                write!(
-                    formatter,
-                    "Workspace Format version {version} must be migrated"
-                )
+            Self::GameUpdated { project, game } => write!(
+                formatter,
+                "the project describes game version {project}, the game is {game}"
+            ),
+            Self::SourceFactsMismatch { units } => {
+                write!(formatter, "{units} translation units do not match the game")
             }
-            Self::ContentChanged {
-                workspace_content_id,
-                source_content_id,
-            } => write!(
-                formatter,
-                "workspace content {workspace_content_id} differs from source content {source_content_id}"
-            ),
-            Self::SourceFactsMismatch { units } => write!(
-                formatter,
-                "{units} bound translation units do not match the current source"
-            ),
-            Self::PermissionChanged { blocked_units } => write!(
-                formatter,
-                "{blocked_units} bound translation units are no longer permitted by source guidance"
-            ),
         }
     }
 }
 
 impl ProjectSession {
-    /// Opens an existing project against its currently bound, verified HXS source.
+    /// Opens an existing project against the game.
     ///
-    /// Opening verifies the source, loads the complete sparse workspace state,
-    /// checks that it is current for the source, and only then constructs the
-    /// session. It never updates either input; a workspace that needs a source
+    /// Opening loads the complete sparse workspace and checks that it
+    /// describes the game. It never writes; a workspace that needs a source
     /// update is reported as [`ProjectSessionError::SourceUpdateRequired`].
     ///
     /// # Errors
     ///
-    /// Returns a typed error when source verification, workspace loading, or
-    /// source compatibility fails, or a source update is required.
+    /// Returns a typed error when the workspace cannot be loaded, uses
+    /// another source language or a newer game version, or needs a source
+    /// update.
     pub fn open(
         repository_root: impl Into<PathBuf>,
-        source_package_path: impl Into<PathBuf>,
-        cache_root: impl Into<PathBuf>,
+        source: Arc<GameSource>,
     ) -> Result<Self, ProjectSessionError> {
         let repository_root = repository_root.into();
-        let source_package_path = source_package_path.into();
-        let source_package =
-            SourcePackage::open(&source_package_path, cache_root.into()).map_err(|source| {
-                ProjectSessionError::Source {
-                    path: source_package_path.clone(),
-                    source,
-                }
-            })?;
-        Self::open_from_source_package(repository_root, source_package)
-    }
-
-    /// Opens an existing project from an HSP that has already been fully
-    /// validated by [`SourcePackage::open`]. The package is consumed and
-    /// becomes the package owned by the session, so callers can validate an
-    /// association before workspace compatibility is checked without
-    /// reopening the archive.
-    ///
-    /// # Errors
-    ///
-    /// Returns a typed error when workspace loading or source compatibility
-    /// fails, or when the workspace requires a source update.
-    pub fn open_from_source_package(
-        repository_root: impl Into<PathBuf>,
-        source_package: SourcePackage,
-    ) -> Result<Self, ProjectSessionError> {
-        let trace = PerfTrace::new();
-        let repository_root = repository_root.into();
-        let source_package_path = source_package.package_path().to_owned();
         let store = WorkspaceStore::new(repository_root.clone());
-        let workspace = load_compatible_workspace(&repository_root, &store, &source_package)?;
-        trace.mark("workspace.guidance");
-
+        let stored = read_stored(&repository_root, &store)?;
+        let plan = plan_for(&repository_root, &stored, &source)?;
+        if let Some(requirement) = requirement(&stored, &plan) {
+            return Err(ProjectSessionError::SourceUpdateRequired {
+                repository_root,
+                requirement,
+            });
+        }
+        let workspace = store
+            .activate(stored)
+            .map_err(|source| store_error(&repository_root, source))?;
         Ok(Self {
             repository_root,
-            source_package_path,
             store,
             workspace,
-            source_package,
-            row_keys: BTreeMap::new(),
+            source,
         })
     }
 
-    /// Plans the source update that would move the workspace onto the
-    /// package source, without writing anything.
+    /// Plans the source update that would move the workspace onto the game,
+    /// without writing anything.
     ///
     /// # Errors
     ///
     /// Returns a typed error when the workspace cannot be read, uses another
-    /// source language, or the plan cannot be built.
+    /// source language or a newer game version, or the plan cannot be built.
     pub fn preview_source_update(
         repository_root: impl Into<PathBuf>,
-        source_package: &SourcePackage,
+        source: &GameSource,
     ) -> Result<SourceUpdateReport, ProjectSessionError> {
         let repository_root = repository_root.into();
         let store = WorkspaceStore::new(repository_root.clone());
         let stored = read_stored(&repository_root, &store)?;
-        require_source_language(&repository_root, &stored, source_package)?;
-        plan_update(&repository_root, &stored, source_package)
+        let plan = plan_for(&repository_root, &stored, source)?;
+        Ok(SourceUpdateReport { plan })
     }
 
     /// Opens a project and, when required, first applies the deterministic
-    /// source update that moves it onto the package source.
+    /// source update that moves it onto the game.
     ///
-    /// The update keeps every unit, target, note, and translation-unit ID. It
-    /// rebinds units whose occurrence is established deterministically,
-    /// marks changed source text for review, and detaches units without a
-    /// current occurrence. Changed shards are published first and the
-    /// manifest last, so an interrupted update is planned again on the next
-    /// open. The report is `None` when no update was required.
+    /// The update keeps every unit, target, note, and ID. It rebinds units
+    /// whose cell is established deterministically, marks changed source
+    /// text for review, and detaches units without a current cell. Changed
+    /// shards are published first and the manifest last, so an interrupted
+    /// update is planned again on the next open. The report is `None` when
+    /// no update was required.
     ///
     /// # Errors
     ///
     /// Returns a typed error when the workspace cannot be read, uses another
-    /// source language, or the update cannot be planned or published.
+    /// source language or a newer game version, or the update cannot be
+    /// planned or published.
     pub fn open_with_source_update(
         repository_root: impl Into<PathBuf>,
-        source_package: SourcePackage,
+        source: Arc<GameSource>,
     ) -> Result<(Self, Option<SourceUpdateReport>), ProjectSessionError> {
         let repository_root = repository_root.into();
-        let source_package_path = source_package.package_path().to_owned();
         let store = WorkspaceStore::new(repository_root.clone());
         let stored = read_stored(&repository_root, &store)?;
-        require_source_language(&repository_root, &stored, &source_package)?;
-
-        let (workspace, report) =
-            if source_update_requirement(&repository_root, &stored, &source_package)?.is_none() {
-                let workspace = store
-                    .activate(stored)
-                    .map_err(|source| store_error(&repository_root, source))?;
-                (workspace, None)
-            } else {
-                let (workspace, report) =
-                    apply_source_update(&repository_root, &store, &stored, &source_package)?;
-                (workspace, Some(report))
-            };
-
+        let plan = plan_for(&repository_root, &stored, &source)?;
+        let (workspace, report) = if plan.changes_workspace() {
+            let workspace = apply_update(&repository_root, &store, &stored, &plan)?;
+            (workspace, Some(SourceUpdateReport { plan }))
+        } else {
+            let workspace = store
+                .activate(stored)
+                .map_err(|source| store_error(&repository_root, source))?;
+            (workspace, None)
+        };
         Ok((
             Self {
                 repository_root,
-                source_package_path,
                 store,
                 workspace,
-                source_package,
-                row_keys: BTreeMap::new(),
+                source,
             },
             report,
         ))
     }
 
-    /// Initializes a new project from a verified HXS source and target language.
+    /// Initializes a new project for the game and a target language.
     ///
-    /// Source verification and workspace construction happen before
-    /// [`WorkspaceStore::initialize`] publishes the new `.aeria/` directory.
-    /// Existing project state is never replaced.
+    /// Existing `.aeria/` state is never replaced.
     ///
     /// # Errors
     ///
-    /// Returns a typed error when source verification, workspace construction,
-    /// or atomic workspace initialization fails.
+    /// Returns a typed error when workspace construction or atomic workspace
+    /// initialization fails.
     pub fn initialize(
         repository_root: impl Into<PathBuf>,
-        source_package_path: impl Into<PathBuf>,
-        cache_root: impl Into<PathBuf>,
+        source: Arc<GameSource>,
         target_language: impl Into<String>,
     ) -> Result<Self, ProjectSessionError> {
         let repository_root = repository_root.into();
-        let source_package_path = source_package_path.into();
-        let source_package =
-            SourcePackage::open(&source_package_path, cache_root.into()).map_err(|source| {
-                ProjectSessionError::Source {
-                    path: source_package_path.clone(),
-                    source,
-                }
-            })?;
-        Self::initialize_from_source_package(repository_root, source_package, target_language)
-    }
-
-    /// Initializes a project from a package that has already been fully
-    /// validated by [`SourcePackage::open`]. This constructor is used by the
-    /// Atlas creation flow so the package is not reopened and source evidence
-    /// is not scanned twice.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when workspace construction or atomic workspace
-    /// initialization fails.
-    pub fn initialize_from_source_package(
-        repository_root: impl Into<PathBuf>,
-        source_package: SourcePackage,
-        target_language: impl Into<String>,
-    ) -> Result<Self, ProjectSessionError> {
-        let repository_root = repository_root.into();
-        let source_package_path = source_package.package_path().to_owned();
-        let workspace =
-            Workspace::from_verified_snapshot(source_package.source(), target_language.into())
-                .map_err(|source| ProjectSessionError::Workspace {
-                    repository_root: repository_root.clone(),
-                    source_package_path: source_package_path.clone(),
-                    source,
-                })?;
+        let workspace = Workspace::for_source(&source, target_language).map_err(|source| {
+            ProjectSessionError::Workspace {
+                repository_root: repository_root.clone(),
+                source,
+            }
+        })?;
         let store = WorkspaceStore::new(repository_root.clone());
         store
             .initialize(&workspace)
-            .map_err(|source| ProjectSessionError::Store {
-                repository_root: repository_root.clone(),
-                source,
-            })?;
-
+            .map_err(|source| store_error(&repository_root, source))?;
         Ok(Self {
             repository_root,
-            source_package_path,
             store,
             workspace,
-            source_package,
-            row_keys: BTreeMap::new(),
+            source,
         })
+    }
+
+    /// Sets the project's target language, the language it translates into.
+    ///
+    /// Only the manifest changes; units, targets, and IDs stay as they are.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProjectSessionError::InvalidTargetLanguage`] for a value
+    /// that is not a language tag or is `und`, and a store error when the
+    /// manifest cannot be published.
+    pub fn set_target_language(&mut self, tag: &str) -> Result<(), ProjectSessionError> {
+        if !aeria_core::is_target_language(tag) {
+            return Err(ProjectSessionError::InvalidTargetLanguage {
+                tag: tag.to_owned(),
+            });
+        }
+        if self.workspace.metadata().target_language() == tag {
+            return Ok(());
+        }
+        let metadata = self
+            .workspace
+            .metadata()
+            .with_target_language(tag)
+            .map_err(|source| ProjectSessionError::Workspace {
+                repository_root: self.repository_root.clone(),
+                source: source.into(),
+            })?;
+        let next = self.workspace.with_metadata(metadata);
+        self.workspace = self
+            .store
+            .publish_metadata(&next)
+            .map_err(|source| store_error(&self.repository_root, source))?;
+        Ok(())
     }
 
     /// Reloads the workspace from disk after the repository changed outside
     /// the ordinary mutation path, for example after a Git merge.
     ///
-    /// The reloaded state passes the same validation, source compatibility,
-    /// and source-guidance checks as [`ProjectSession::open_from_source_package`].
+    /// The reloaded state passes the same checks as [`ProjectSession::open`].
     /// On failure the session keeps its previous in-memory state, whose store
     /// cache fails closed on the next mutation.
     ///
     /// # Errors
     ///
-    /// Returns a typed error when the on-disk workspace is invalid,
-    /// incompatible with the session source, or requires a source update.
+    /// Returns a typed error when the on-disk workspace is invalid, does not
+    /// describe the game, or requires a source update.
     pub fn reload_workspace(&mut self) -> Result<(), ProjectSessionError> {
         let store = WorkspaceStore::new(self.repository_root.clone());
-        let workspace =
-            load_compatible_workspace(&self.repository_root, &store, &self.source_package)?;
+        let stored = read_stored(&self.repository_root, &store)?;
+        let plan = plan_for(&self.repository_root, &stored, &self.source)?;
+        if let Some(requirement) = requirement(&stored, &plan) {
+            return Err(ProjectSessionError::SourceUpdateRequired {
+                repository_root: self.repository_root.clone(),
+                requirement,
+            });
+        }
+        self.workspace = store
+            .activate(stored)
+            .map_err(|source| store_error(&self.repository_root, source))?;
         self.store = store;
-        self.workspace = workspace;
         Ok(())
     }
 
     /// Reloads the workspace after a Git operation and reconciles it with the
-    /// session source when the merged state requires it.
+    /// game when the merged state requires it.
     ///
-    /// A merge can combine units bound against different game versions, for
+    /// A merge can combine units bound on different game versions, for
     /// example translations made on a branch that had not applied the latest
-    /// source update. Their stored source facts then no longer describe the
-    /// session source. Such state is moved onto the source by the same
-    /// deterministic update used for game patches: a changed occurrence is
-    /// marked for review, a binding claimed twice keeps one deterministic
-    /// owner, and no unit, target, note, or ID is removed. The report is
-    /// `None` when the reloaded state was already current.
+    /// source update. Such state is moved onto the game by the same
+    /// deterministic update used for game patches: a changed cell is marked
+    /// for review, a cell claimed twice keeps one deterministic owner, and no
+    /// unit, target, note, or ID is removed. The report is `None` when the
+    /// reloaded state was already current.
     ///
-    /// Only state that records this session's source content is reconciled.
-    /// A workspace bound to other source content, or in an older format,
-    /// still fails with [`ProjectSessionError::SourceUpdateRequired`]; it
-    /// needs that source's package. On failure the session keeps its
-    /// previous in-memory state.
+    /// Only state that records the session's game version is reconciled. A
+    /// workspace that records an older version still fails with
+    /// [`ProjectSessionError::SourceUpdateRequired`]. On failure the session
+    /// keeps its previous in-memory state.
     ///
     /// # Errors
     ///
     /// Returns a typed error when the on-disk workspace is invalid, uses
-    /// another source language or source content, or the update cannot be
+    /// another source language or game version, or the update cannot be
     /// planned or published.
     pub fn reload_and_reconcile_workspace(
         &mut self,
     ) -> Result<Option<SourceUpdateReport>, ProjectSessionError> {
         let store = WorkspaceStore::new(self.repository_root.clone());
         let stored = read_stored(&self.repository_root, &store)?;
-        require_source_language(&self.repository_root, &stored, &self.source_package)?;
-        let (workspace, report) = match source_update_requirement(
-            &self.repository_root,
-            &stored,
-            &self.source_package,
-        )? {
+        let plan = plan_for(&self.repository_root, &stored, &self.source)?;
+        let (workspace, report) = match requirement(&stored, &plan) {
             None => (
                 store
                     .activate(stored)
                     .map_err(|source| store_error(&self.repository_root, source))?,
                 None,
             ),
-            Some(
-                SourceUpdateRequirement::SourceFactsMismatch { .. }
-                | SourceUpdateRequirement::PermissionChanged { .. },
-            ) => {
-                let (workspace, report) = apply_source_update(
-                    &self.repository_root,
-                    &store,
-                    &stored,
-                    &self.source_package,
-                )?;
-                (workspace, Some(report))
+            Some(SourceUpdateRequirement::SourceFactsMismatch { .. }) => {
+                let workspace = apply_update(&self.repository_root, &store, &stored, &plan)?;
+                (workspace, Some(SourceUpdateReport { plan }))
             }
             Some(requirement) => {
                 return Err(ProjectSessionError::SourceUpdateRequired {
                     repository_root: self.repository_root.clone(),
-                    source_package_path: self.source_package_path.clone(),
                     requirement,
                 });
             }
@@ -429,28 +363,22 @@ impl ProjectSession {
         &self.repository_root
     }
 
-    /// Returns the local HSP path used by this session.
-    #[must_use]
-    pub fn source_package_path(&self) -> &Path {
-        &self.source_package_path
-    }
-
     /// Returns the loaded sparse workspace.
     #[must_use]
     pub fn workspace(&self) -> &Workspace {
         &self.workspace
     }
 
-    /// Returns the verified immutable HXS source handle.
+    /// Returns the game source.
     #[must_use]
-    pub fn source(&self) -> &HxsSnapshot {
-        self.source_package.source()
+    pub fn source(&self) -> &GameSource {
+        &self.source
     }
 
-    /// Returns the validated source package owned by this session.
+    /// Returns a shared handle to the game source.
     #[must_use]
-    pub fn source_package(&self) -> &SourcePackage {
-        &self.source_package
+    pub fn source_handle(&self) -> Arc<GameSource> {
+        Arc::clone(&self.source)
     }
 
     /// Returns detached units in deterministic translation-unit ID order.
@@ -475,252 +403,64 @@ fn read_stored(
         .map_err(|source| store_error(repository_root, source))
 }
 
-fn require_source_language(
+/// Plans the update of `stored` onto the game, mapping the planner's
+/// language and version errors to session errors.
+fn plan_for(
     repository_root: &Path,
     stored: &StoredWorkspace,
-    source_package: &SourcePackage,
-) -> Result<(), ProjectSessionError> {
-    let found = source_package.source().metadata().source_language;
-    if found == stored.metadata.source_language() {
-        return Ok(());
-    }
-    Err(ProjectSessionError::Compatibility {
-        repository_root: repository_root.to_owned(),
-        source_package_path: source_package.package_path().to_owned(),
-        source: WorkspaceError::SourceLanguageMismatch {
-            expected: stored.metadata.source_language().to_owned(),
-            found,
+    source: &GameSource,
+) -> Result<SourceUpdatePlan, ProjectSessionError> {
+    plan_source_update(&stored.metadata, stored.units.values(), source).map_err(|error| match error
+    {
+        SourceUpdateError::SourceLanguageMismatch { expected, found } => {
+            ProjectSessionError::Compatibility {
+                repository_root: repository_root.to_owned(),
+                source: WorkspaceError::SourceLanguageMismatch { expected, found },
+            }
+        }
+        SourceUpdateError::GameOutdated { project, game } => ProjectSessionError::GameOutdated {
+            repository_root: repository_root.to_owned(),
+            project,
+            game,
+        },
+        source => ProjectSessionError::SourceUpdate {
+            repository_root: repository_root.to_owned(),
+            source,
         },
     })
 }
 
-/// Returns why stored state cannot be edited against the package as is.
-fn source_update_requirement(
-    repository_root: &Path,
+/// Returns why stored state cannot be edited against the game as is.
+fn requirement(
     stored: &StoredWorkspace,
-    source_package: &SourcePackage,
-) -> Result<Option<SourceUpdateRequirement>, ProjectSessionError> {
-    if stored.format_version != FORMAT_VERSION {
-        return Ok(Some(SourceUpdateRequirement::FormatMigration {
-            version: stored.format_version,
-        }));
+    plan: &SourceUpdatePlan,
+) -> Option<SourceUpdateRequirement> {
+    if plan.changes_game_version() {
+        return Some(SourceUpdateRequirement::GameUpdated {
+            project: stored.metadata.game_version().clone(),
+            game: plan.game_version.clone(),
+        });
     }
-    let source_content_id = source_package.source().metadata().content_id;
-    if source_content_id != stored.metadata.source_content_id() {
-        return Ok(Some(SourceUpdateRequirement::ContentChanged {
-            workspace_content_id: stored.metadata.source_content_id().to_owned(),
-            source_content_id,
-        }));
-    }
-    let mismatched = stored.duplicate_bound_bindings
-        + count_mismatched_bound_units(stored, source_package.source()).map_err(|source| {
-            ProjectSessionError::SourceUpdate {
+    (plan.summary.changed_units > 0).then_some(SourceUpdateRequirement::SourceFactsMismatch {
+        units: plan.summary.changed_units,
+    })
+}
+
+/// Applies and publishes a plan.
+fn apply_update(
+    repository_root: &Path,
+    store: &WorkspaceStore,
+    stored: &StoredWorkspace,
+    plan: &SourceUpdatePlan,
+) -> Result<Workspace, ProjectSessionError> {
+    let (planned, shards) =
+        apply_plan(&stored.metadata, &stored.units, plan).map_err(|source| {
+            ProjectSessionError::Workspace {
                 repository_root: repository_root.to_owned(),
-                source: SourceUpdateError::SourceRead(source),
+                source,
             }
         })?;
-    if mismatched > 0 {
-        return Ok(Some(SourceUpdateRequirement::SourceFactsMismatch {
-            units: mismatched,
-        }));
-    }
-    let guidance = source_package.guidance_index();
-    let blocked_units = stored
-        .units
-        .values()
-        .filter(|unit| unit.is_bound())
-        .filter(|unit| {
-            let binding = unit.source_binding();
-            !guidance.is_translatable(
-                binding.sheet_name(),
-                binding.row_id(),
-                binding.subrow_id(),
-                binding.column_index(),
-            )
-        })
-        .count();
-    Ok((blocked_units > 0).then_some(SourceUpdateRequirement::PermissionChanged { blocked_units }))
-}
-
-/// Counts bound units whose stored source facts do not describe `source`:
-/// the sheet, String column, or row is missing, the layout differs, or the
-/// fingerprint differs. Only sheets that hold bound units are read, one
-/// bounded hash-only page at a time.
-fn count_mismatched_bound_units(
-    stored: &StoredWorkspace,
-    source: &HxsSnapshot,
-) -> Result<usize, HxsError> {
-    let mut by_sheet: BTreeMap<&str, HashMap<(u32, u16, u32), &TranslationUnit>> = BTreeMap::new();
-    for unit in stored.units.values().filter(|unit| unit.is_bound()) {
-        let binding = unit.source_binding();
-        by_sheet.entry(binding.sheet_name()).or_default().insert(
-            (
-                binding.row_id(),
-                binding.subrow_id(),
-                binding.column_index(),
-            ),
-            unit,
-        );
-    }
-
-    let mut mismatched = 0;
-    for (sheet_name, mut pending) in by_sheet {
-        let Some(sheet) = source.sheet(sheet_name) else {
-            mismatched += pending.len();
-            continue;
-        };
-        let string_offsets: HashMap<u32, u32> = sheet
-            .columns
-            .iter()
-            .filter(|column| column.column_type == ColumnType::String)
-            .map(|column| (column.index, column.offset))
-            .collect();
-        pending.retain(|&(_, _, column_index), unit| {
-            let current = string_offsets
-                .get(&column_index)
-                .map(|offset| source_layout_from_hashes(&sheet.hashes.schema, *offset));
-            let matches = current.is_some() && unit.source_layout() == current;
-            if !matches {
-                mismatched += 1;
-            }
-            matches
-        });
-
-        let mut after = None;
-        while !pending.is_empty() {
-            let page = source.page_string_occurrences(
-                sheet_name,
-                after.as_ref(),
-                MAX_STRING_OCCURRENCE_PAGE_SIZE,
-            )?;
-            for occurrence in &page.occurrences {
-                let coordinate = &occurrence.coordinate;
-                let key = (
-                    coordinate.row_id,
-                    coordinate.subrow_id,
-                    coordinate.column_index,
-                );
-                if let Some(unit) = pending.remove(&key) {
-                    let fingerprint = source_fingerprint_from_hashes(
-                        &occurrence.macro_text_hash,
-                        occurrence.raw_value_hash.as_ref(),
-                        &occurrence.row_technical_hash,
-                    );
-                    if unit.source_fingerprint() != &fingerprint {
-                        mismatched += 1;
-                    }
-                }
-            }
-            match page.next_after {
-                Some(next) => after = Some(next),
-                None => break,
-            }
-        }
-        // Units whose row/subrow no longer holds a String cell.
-        mismatched += pending.len();
-    }
-    Ok(mismatched)
-}
-
-/// Plans, applies, and publishes the update that moves `stored` onto the
-/// package source.
-fn apply_source_update(
-    repository_root: &Path,
-    store: &WorkspaceStore,
-    stored: &StoredWorkspace,
-    source_package: &SourcePackage,
-) -> Result<(Workspace, SourceUpdateReport), ProjectSessionError> {
-    let report = plan_update(repository_root, stored, source_package)?;
-    let (planned, shards) = apply_plan(
-        &stored.metadata,
-        &stored.units,
-        &report.plan,
-        stored.format_version != FORMAT_VERSION,
-    )
-    .map_err(|source| ProjectSessionError::Workspace {
-        repository_root: repository_root.to_owned(),
-        source_package_path: source_package.package_path().to_owned(),
-        source,
-    })?;
-    let workspace = store
-        .publish_source_update(&planned, &shards)
-        .map_err(|source| store_error(repository_root, source))?;
-    Ok((workspace, report))
-}
-
-fn plan_update(
-    repository_root: &Path,
-    stored: &StoredWorkspace,
-    source_package: &SourcePackage,
-) -> Result<SourceUpdateReport, ProjectSessionError> {
-    let guidance = source_package.guidance_index();
-    let plan = plan_source_update(
-        &stored.metadata,
-        stored.units.values(),
-        source_package.source(),
-        |binding| {
-            guidance.is_translatable(
-                binding.sheet_name(),
-                binding.row_id(),
-                binding.subrow_id(),
-                binding.column_index(),
-            )
-        },
-    )
-    .map_err(|source| ProjectSessionError::SourceUpdate {
-        repository_root: repository_root.to_owned(),
-        source,
-    })?;
-    Ok(SourceUpdateReport {
-        plan,
-        previous_format_version: stored.format_version,
-    })
-}
-
-fn load_compatible_workspace(
-    repository_root: &Path,
-    store: &WorkspaceStore,
-    source_package: &SourcePackage,
-) -> Result<Workspace, ProjectSessionError> {
-    let stored = read_stored(repository_root, store)?;
-    require_source_language(repository_root, &stored, source_package)?;
-    if let Some(requirement) = source_update_requirement(repository_root, &stored, source_package)?
-    {
-        return Err(ProjectSessionError::SourceUpdateRequired {
-            repository_root: repository_root.to_owned(),
-            source_package_path: source_package.package_path().to_owned(),
-            requirement,
-        });
-    }
     store
-        .activate(stored)
+        .publish_source_update(&planned, &shards)
         .map_err(|source| store_error(repository_root, source))
-}
-
-struct PerfTrace {
-    enabled: bool,
-    started: Instant,
-    last: std::cell::Cell<Instant>,
-}
-
-impl PerfTrace {
-    fn new() -> Self {
-        Self {
-            enabled: std::env::var("AERIA_PERF_TRACE").as_deref() == Ok("1"),
-            started: Instant::now(),
-            last: std::cell::Cell::new(Instant::now()),
-        }
-    }
-
-    fn mark(&self, phase: &str) {
-        if self.enabled {
-            let now = Instant::now();
-            let duration = now.duration_since(self.last.get()).as_secs_f64() * 1_000.0;
-            self.last.set(now);
-            eprintln!(
-                "[aeria-perf] {phase}: duration_ms={duration:.3} total_ms={:.3}",
-                self.started.elapsed().as_secs_f64() * 1_000.0
-            );
-        }
-    }
 }

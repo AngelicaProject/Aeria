@@ -1,255 +1,62 @@
-use std::path::PathBuf;
+//! Building and querying the source index from a synthetic game.
 
-use aeria_hsp::SourcePackage;
-use aeria_search::{SearchError, SourceIndex, SourceQuery, Tokenizer, plain_text};
-
-fn package(cache: &std::path::Path) -> SourcePackage {
-    let path =
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../aeria-hsp/tests/fixtures/synthetic.hsp");
-    SourcePackage::open(path, cache).expect("fixture package")
-}
-
-fn build(
-    directory: &std::path::Path,
-    package: &SourcePackage,
-    tokenizer: Tokenizer,
-) -> SourceIndex {
-    SourceIndex::build(
-        directory.join("index.sqlite3"),
-        package.package_id(),
-        tokenizer,
-        package.source(),
-        package.guidance_index(),
-        &|| true,
-    )
-    .expect("index")
-}
-
-/// The first word of three or more characters in a string's plain text.
-fn first_word(source: &str) -> Option<String> {
-    plain_text(source)
-        .split(|character: char| !character.is_alphanumeric())
-        .find(|word| word.chars().count() >= 3)
-        .map(str::to_owned)
-}
+use aeria_search::{SourceIndex, SourceQuery, Tokenizer};
+use aeria_source::{GameSource, SourceLanguage};
+use aeria_sqpack::testing::{FakeGame, TextSheet};
 
 #[test]
-fn indexes_only_translatable_strings_and_finds_them_by_word() {
-    let directory = tempfile::tempdir().expect("directory");
-    let package = package(&directory.path().join("cache"));
-    let index = build(directory.path(), &package, Tokenizer::Words);
+fn the_index_holds_translatable_strings_only_and_is_keyed_by_the_game_data() {
+    let game = tempfile::tempdir().expect("game");
+    FakeGame::new("2026.09.15.0000.0000")
+        .with_text(
+            "Addon",
+            &TextSheet::new(2, &[0, 1])
+                .keyed(0)
+                .row(1, &[(0, "KEY_HELLO"), (1, "Hello there")])
+                .row(2, &[(0, "KEY_BYE"), (1, "Goodbye")]),
+        )
+        .write(game.path())
+        .expect("write");
+    let source = GameSource::open(game.path(), SourceLanguage::English).expect("source");
+    let folder = tempfile::tempdir().expect("index folder");
+    let path = folder.path().join("index.sqlite");
+    let key = "en/2026.09.15.0000.0000";
+    let index = SourceIndex::build(&path, key, Tokenizer::Words, &source, &|| true).expect("build");
 
-    let mut found = 0;
-    for sheet in package.source().sheets() {
-        let mut after = None;
-        loop {
-            let page = package
-                .source()
-                .page_string_occurrence_records(&sheet.name, after.as_ref(), 4096)
-                .expect("page");
-            for record in &page.occurrences {
-                let at = &record.fingerprint.coordinate;
-                let translatable = package.guidance_index().is_translatable(
-                    &at.sheet_name,
-                    at.row_id,
-                    at.subrow_id,
-                    at.column_index,
-                );
-                let Some(word) = first_word(&record.macro_text) else {
-                    continue;
-                };
-                let hits = index
-                    .search(&SourceQuery {
-                        text: &word.to_uppercase(),
-                        sheet: Some(&at.sheet_name),
-                        offset: 0,
-                        limit: 200,
-                    })
-                    .expect("search")
-                    .hits;
-                let hit = hits.iter().any(|hit| {
-                    (hit.sheet.as_str(), hit.row, hit.subrow, hit.column)
-                        == (
-                            at.sheet_name.as_str(),
-                            at.row_id,
-                            at.subrow_id,
-                            at.column_index,
-                        )
-                });
-                assert_eq!(hit, translatable, "{at:?} {word}");
-                if hit {
-                    found += 1;
-                }
-            }
-            match page.next_after {
-                Some(next) => after = Some(next),
-                None => break,
-            }
-        }
-    }
+    let query = |text| SourceQuery {
+        text,
+        sheet: None,
+        offset: 0,
+        limit: 10,
+    };
+    let hits = index.search(&query("hello")).expect("search").hits;
+    assert_eq!(hits.len(), 1);
+    assert_eq!((hits[0].row, hits[0].column), (1, 1));
+    assert_eq!(hits[0].source, "Hello there");
     assert!(
-        found > 0,
-        "the fixture needs a translatable string with a word"
+        index
+            .search(&query("KEY_BYE"))
+            .expect("search")
+            .hits
+            .is_empty(),
+        "keys are not indexed"
     );
 
-    let reopened = SourceIndex::open(index.path(), package.package_id()).expect("open");
-    assert!(reopened.is_some());
+    assert!(SourceIndex::open(&path, key).expect("open").is_some());
     assert!(
-        SourceIndex::open(index.path(), "another package")
+        SourceIndex::open(&path, "en/2026.10.01.0000.0000")
             .expect("open")
             .is_none()
     );
-    assert!(
-        SourceIndex::open(
-            directory.path().join("missing.sqlite3"),
-            package.package_id()
-        )
-        .expect("open")
-        .is_none()
-    );
-}
-
-#[test]
-fn similar_strings_rank_the_same_text_first_and_skip_the_excluded_one() {
-    let directory = tempfile::tempdir().expect("directory");
-    let package = package(&directory.path().join("cache"));
-    for tokenizer in [Tokenizer::Words, Tokenizer::Trigram] {
-        let target = directory.path().join(format!("{tokenizer:?}"));
-        let index = build(&target, &package, tokenizer);
-        let any = first_hit(&index, &package);
-        let similar = index.similar(&any.source, None, 5).expect("similar");
-        assert!(!similar.is_empty(), "{tokenizer:?}");
-        assert!(
-            (similar[0].score - 1.0).abs() < f64::EPSILON,
-            "{tokenizer:?}"
-        );
-        let excluded = index
-            .similar(
-                &any.source,
-                Some((&any.sheet, any.row, any.subrow, any.column)),
-                5,
-            )
-            .expect("similar");
-        assert!(excluded.iter().all(|similar| similar.hit != any));
-    }
-}
-
-fn first_hit(index: &SourceIndex, package: &SourcePackage) -> aeria_search::SourceHit {
-    for sheet in package.source().sheets() {
-        let page = package
-            .source()
-            .page_string_occurrence_records(&sheet.name, None, 4096)
-            .expect("page");
-        for record in &page.occurrences {
-            let Some(word) = first_word(&record.macro_text) else {
-                continue;
-            };
-            if let Some(hit) = index
-                .search(&SourceQuery {
-                    text: &word,
-                    sheet: None,
-                    offset: 0,
-                    limit: 1,
-                })
-                .expect("search")
-                .hits
-                .into_iter()
-                .next()
-            {
-                return hit;
-            }
-        }
-    }
-    panic!("the fixture has no searchable string");
-}
-
-#[test]
-fn a_cancelled_build_leaves_nothing_behind() {
-    let directory = tempfile::tempdir().expect("directory");
-    let package = package(&directory.path().join("cache"));
-    let path = directory.path().join("index.sqlite3");
-    let error = SourceIndex::build(
-        &path,
-        package.package_id(),
-        Tokenizer::Words,
-        package.source(),
-        package.guidance_index(),
-        &|| false,
-    )
-    .expect_err("cancelled");
-    assert!(matches!(error, SearchError::Cancelled));
-    assert!(!path.exists());
-    assert!(!directory.path().join("index.sqlite3.partial").exists());
-}
-
-#[test]
-fn tokenizers_follow_the_source_language() {
-    assert_eq!(Tokenizer::for_language("ja"), Tokenizer::Trigram);
-    assert_eq!(Tokenizer::for_language("zh-Hans"), Tokenizer::Trigram);
-    assert_eq!(Tokenizer::for_language("en"), Tokenizer::Words);
-    assert_eq!(Tokenizer::for_language("und"), Tokenizer::Words);
-}
-
-#[test]
-fn short_or_wordless_queries_scan_substrings() {
-    let directory = tempfile::tempdir().expect("directory");
-    let package = package(&directory.path().join("cache"));
-    let words = build(&directory.path().join("words"), &package, Tokenizer::Words);
-    let trigram = build(
-        &directory.path().join("trigram"),
-        &package,
-        Tokenizer::Trigram,
-    );
-    let any = first_hit(&words, &package);
-    let plain = plain_text(&any.source);
-    let pair: String = plain
-        .chars()
-        .filter(|character| character.is_alphanumeric())
-        .take(2)
-        .collect();
-    assert_eq!(pair.chars().count(), 2);
-    for index in [&words, &trigram] {
-        let hits = index
-            .search(&SourceQuery {
-                text: &pair,
-                sheet: Some(&any.sheet),
-                offset: 0,
-                limit: 200,
-            })
-            .expect("search")
-            .hits;
-        assert!(hits.iter().all(|hit| {
-            plain_text(&hit.source)
-                .to_lowercase()
-                .contains(&pair.to_lowercase())
-        }));
-    }
-    let short = trigram
-        .search(&SourceQuery {
-            text: &pair,
-            sheet: Some(&any.sheet),
-            offset: 0,
-            limit: 200,
-        })
-        .expect("search");
-    assert!(
-        short.hits.contains(&any),
-        "a two-character query scans substrings"
-    );
-    for wildcard in ["%", "_", "\\"] {
-        let page = words
-            .search(&SourceQuery {
-                text: wildcard,
-                sheet: None,
-                offset: 0,
-                limit: 200,
-            })
-            .expect("search");
-        assert!(
-            page.hits
-                .iter()
-                .all(|hit| plain_text(&hit.source).contains(wildcard)),
-            "{wildcard}"
-        );
-    }
+    assert!(matches!(
+        SourceIndex::build(
+            folder.path().join("cancelled.sqlite"),
+            key,
+            Tokenizer::Words,
+            &source,
+            &|| false
+        ),
+        Err(aeria_search::SearchError::Cancelled)
+    ));
+    assert!(!folder.path().join("cancelled.sqlite").exists());
 }

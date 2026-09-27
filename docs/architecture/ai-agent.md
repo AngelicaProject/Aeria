@@ -38,8 +38,8 @@ These follow from [`../product/principles.md`](../product/principles.md) and
    rejected result is reported as a failure, never persisted as a successful
    translation. A permitted structural change is never applied without a
    person's approval.
-3. Writes go through `ProjectSession` mutation APIs and the HSG permission
-   gate. Angelica has no filesystem, shell, SQL, or raw workspace access.
+3. Writes go through `ProjectSession` mutation APIs and the translation
+   permission gate. Angelica has no filesystem, shell, SQL, or raw workspace access.
 4. Identity, rebase, merge, migration, and export never consult Angelica.
 5. Provider credentials stay in OS secret storage; provider and model choices
    are local. Only project guidance and glossary data are shared through the
@@ -141,7 +141,7 @@ instead of receiving large dumps up front.
 
 Angelica may change macro structure when the target language needs it, but
 only through a vocabulary of typed constructs that Rust checks and compiles.
-She never writes raw Lumina macro syntax.
+She never writes raw macro text.
 
 Structure is not decoration: in many target languages a faithful translation
 needs a different structure from the source. Examples:
@@ -166,8 +166,10 @@ understand cannot be reasoned about at all.
 
 Rust projects each source string into tagged text. Translatable prose is plain
 text. Each protected construct becomes a tag with a stable ID and a legend
-entry derived from `aeria-se::semantic_analysis`, such as "player name",
-"integer parameter 2", "color start", or "item link":
+entry built from the macro catalog (see
+[`strings.md`](./strings.md#tagged-text)) that says what the construct does
+with its argument values, such as "the name of a player character; player =
+number parameter 1" or "a value from a game data sheet; sheet = Item, row = 5":
 
 ```text
 source:  <x id="1"/> obtained <x id="2"/> <x id="3"/>.

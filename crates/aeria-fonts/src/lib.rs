@@ -6,6 +6,7 @@
 //! `docs/formats/font-settings-v1.md` and the `FONTS` part of
 //! `docs/formats/pack-v1.md`.
 
+mod bitmap_font;
 mod error;
 mod import;
 mod preset;
@@ -15,6 +16,7 @@ mod section;
 mod settings;
 mod targets;
 
+pub use bitmap_font::{BitmapGlyph, bitmap_font};
 pub use error::FontError;
 pub use import::{FontDescription, describe_font, import_project_file};
 pub use preset::{DEFAULT_CHARACTERS, install_recommended_files, recommended_settings};

@@ -20,10 +20,10 @@ bindings, workspace state, validation, classification, and mutation semantics.
 
 ## Launcher
 
-The interface never shows internal names such as source package, HSP,
-snapshot, or Atlas. It calls a source package the *game text* (in Russian
-«тексты игры»), which Aeria *extracts* from the game and keeps; "source text"
-is used only for the original of a single string.
+The interface never shows internal names of the game data such as SqPack,
+Excel, or sheet layout hashes. It calls the project's source the *game* and
+its version the *game version*; "source text" is used only for the original
+of a single string.
 
 The launcher is a single screen. The left column holds the product name, the
 **Open project**, **Clone project**, **New project**, and **Update project**
@@ -34,34 +34,31 @@ open in a dialog from the titlebar.
 
 Recent projects load from the local registry. Loading is presentation-only: the
 renderer receives typed recent-project DTOs and cheap filesystem availability
-states (`ready`, `repositoryMissing`, `sourcePackageMissing`, or
-`repositoryAndSourceMissing`). It does not read `projects-v1.json` or inspect
+states (`ready` or `repositoryMissing`). It does not read `projects-v2.json` or inspect
 app-data paths directly. Each row shows the repository name and path, source
 language, game version, and when it was last opened. Missing entries remain
 visible with their availability state and offer **Remove from recent projects**;
 ready entries open on click. A name filter appears once more than three
 projects are listed.
 
-Open project takes only a repository root; the user never chooses an HSP
-file. Aeria reads the source language and content ID from the workspace
-manifest and uses a verified package from its own source-package store with
-that identity (the newest game version first). Only when none matches does it
-build one from the game installation with Atlas. When the only package it has
-needs a source update, nothing is written and the launcher asks for
-confirmation with the planned counts, as for Update project.
+Open project takes only a repository root. Aeria reads the source language
+from the workspace manifest and opens the configured game installation in that
+language. When the installed game is newer than the project's game version,
+nothing is written and the launcher asks for confirmation with the planned
+counts, as for Update project; a game older than the project is refused.
+Opening a recent project follows the same rule.
 
 New and cloned projects go to `Documents/Aeria` unless another location is
 chosen. New project takes a project name, which becomes the repository folder
-name, an optional location, and one of Atlas's supported source languages
+name, an optional location, and one of the supported source languages
 (`en`, `ja`, `de`, or `fr`). The project folder and any missing parents are
-created before extraction starts, so an unusable path fails at once; when
+created before the game is read, so an unusable path fails at once; when
 creation then fails or is cancelled, the folder is removed again if it is
-still empty. Until project settings can choose a real target
-language, creation uses the explicit neutral compatibility tag
-`und`; it is never displayed as a user translation target and does not
-reinterpret existing overlays. While Atlas runs, the form shows the current
-phase, per-sheet progress when Atlas reports a sheet index and count, and a
-cancel action.
+still empty. New project also takes the target language: a common language
+from a list or any BCP 47 tag typed after *Other…*; `und` is not accepted.
+The interface language is suggested when it is not the source language, and
+creation is refused until a language is chosen. While the game is read, the form shows a
+*Reading the game* state; the operation cannot be cancelled.
 
 ### Game installation
 
@@ -74,23 +71,11 @@ without one, Aeria uses the first detected installation. Detection checks the
 Square Enix launcher's installation record, Steam libraries, XIVLauncher's
 configured game path, and the default installation folders on Windows, and
 XIVLauncher.Core and Steam on Linux. A folder counts as an installation only
-when it has `game/sqpack` and a non-empty `game/ffxivgame.ver`; Atlas still
-validates the game data. Launcher forms show the installation in use with a
+when it has `game/sqpack` and a non-empty `game/ffxivgame.ver`; the game data
+itself is validated when it is read (see [`source.md`](./source.md)). Launcher forms show the installation in use with a
 shortcut to this setting, and jobs fail with `gameInstallationRequired` or
 `gameInstallationInvalid` when none is usable. While a job runs, its progress
 takes the place of that row so the form does not grow.
-
-A chip after the game version says whether the job will use source text
-Aeria already has ("Game text ready") or extract it from the game
-("Extraction needed"), with the details in its tooltip, so a multi-minute build is never
-a surprise. It stays on the version line so the row never grows, and is left
-out when this cannot be told, as for a clone.
-
-Settings → Game also lists the source packages Aeria keeps, newest first,
-with language, game version, size, and age. The current build and the
-number of projects using a package are marked; packages Aeria no longer
-needs (see [`source.md`](./source.md)) have a delete action with
-confirmation. The folder can be opened from there.
 
 Registry load failures show a dismissible, non-blocking launcher warning while
 manual Open project and New project remain available. After dismissal, the
@@ -186,17 +171,75 @@ derived from `git_pending_changes`.
 
 The editor sits below the list and edits one occurrence at a time. Its bar shows
 the occurrence's review state and coordinate, field tabs for multi-cell rows,
-a Text / In-game view switch, the review-state control, and Revert. The In-game
-view is disabled with a truthful unavailable state until a semantic preview
-exists; the layout reserves it so a preview can replace the text panes without
-restructuring the editor.
+the review-state control, and Revert. The source and target panes each have
+their own Text / Code switch (see below).
 
 Source and target sit side by side, with the translator note beside them (or
 below them in a narrow document). Source is read-only; target is a CodeMirror
-editor. Both highlight Lumina macro spans with a presentation-only scanner;
-Rust remains the authority for parsing and validation, and macro text is never
-rewritten by the highlighter. Row context cells are available in a collapsible
-section under the source. **Copy source to target** replaces the target draft
+editor. The document of both is always the exact macro text; how tags are
+drawn is presentation only, Rust remains the authority for parsing and
+validation, and macro text is never rewritten by the presentation.
+
+- **Text** is for translating. Tags are drawn as compact chips a translator
+  reads past: conditions, values (`Item · $n1`), and game icons as their
+  images. Conditions read in words from what `macro_view` reports: `if
+  class = monk` for `<if ($gn68 == 20)>` with the class named from the
+  game's `ClassJob` sheet, `if level ≥ 94`, `if player is female`; other
+  parameters keep their code. `<else>` is `otherwise`, `<case>` is
+  `case 1`, `case 2`, and a closing tag is `end`. A value branch such as
+  `{240}` reads as the value, marked as not translatable. A condition whose
+  branches hold no text to translate, only values and text without letters,
+  is a single chip listing its distinct values, such as `10 / 5`; its
+  tooltip gives the branches in words (`class = monk → (level ≥ 72 → 10,
+  otherwise 5), otherwise 5`), and Code mode edits them. Lines start only
+  where the text has `<br>`, so what reads as one line is one line. When a
+  branch begins with `<br>`, as in `<if …><br>Combo bonus: …</if>`, the
+  whole line depends on the condition: its line starts before the condition
+  chips, and a cursor before them stays at the end of the line above, where
+  typed text belongs. Formatting pairs vanish
+  into the text they format: text inside `<ui-color 504>…</ui-color>` is
+  drawn in that color, italics and bold as such, and a color with its
+  outline (`<ui-color 504><ui-edge-color 505>`) is one thin marker in the
+  color at each edge. `<br>` is a small `↵` followed by a real line break,
+  and the cursor after it sits on the new line. Chips and markers are
+  atomic: the cursor steps over them, Backspace deletes a whole tag, and a
+  tag with an error is outlined in red. Colors of `<ui-color>` come from the
+  game through `macro_view`.
+- **Picking tags from the source.** Clicking a chip of the source inserts
+  its tag into the translation at the cursor: a value, an icon, or a line
+  break as its tag, and an opening condition chip as the whole condition
+  block with the source branches, for the translator to translate. Clicking
+  either marker of a formatting pair wraps the translation's selection in
+  the whole pair, or inserts the empty pair with the cursor inside.
+- **Code** shows the macro text with every tag written out and highlighted,
+  for editing tag arguments.
+
+In every mode Enter inserts `<br>`, the game's line break.
+
+The editors also show what Rust reads from the text, through the
+`macro_view` command (debounced while typing, and ignored when it describes
+an older text):
+
+- **Hovers.** Hovering a tag shows what it does and its arguments in the
+  interface language, for example `<sheet>` with its sheet, row (`$n1`,
+  "number parameter 1 of the string"), and column. Summaries, argument names, and family names come
+  from the macro catalog and are localized in the renderer.
+- **Errors.** Diagnostics are underlined, and hovering one shows its message,
+  such as `<colour> is not a macro; did you mean <color>?`.
+- **Modes.** Each of the source and target panes switches between
+  **Text** and **Code**; both open as text. The modes are local preferences
+  (`sourcePaneMode`, `targetPaneMode`). Switching strings keeps the previous
+  view until the new one arrives, requests it without delay (only typing is
+  debounced), and shows strings seen before at once from a cache.
+- **Game symbols.** Game text writes some symbols as private use characters
+  that only the game font draws, such as `U+E03C`, the high-quality mark.
+  When a project opens, the renderer loads a font of these glyphs made from
+  the project's game (`game_glyph_font`) and names it first in every font
+  stack, limited to the private use area, so the string list and the
+  editors show the symbols instead of empty boxes, and every other
+  character keeps the interface fonts.
+
+Row context cells are available in a collapsible section under the source. **Copy source to target** replaces the target draft
 with the source macro text.
 
 Each cell has an independent target draft, note draft, translation-unit ID,
@@ -236,7 +279,8 @@ explicitly empty.
 The Sheets tool presents the already-loaded `ProjectSheetDto[]`: slash-separated
 names form collapsible folders for display only, while the canonical sheet name
 is passed unchanged to Rust. Its per-sheet translatable-cell count comes from the
-validated HSG permission index, not the HXS physical row count, and each sheet
+game's translation permission (see [`source.md`](./source.md)), not the
+sheet's physical row count, and each sheet
 with translations shows a coverage bar from `translation_progress`. Sheets with
 no permitted source strings are hidden by default. Hovering or focusing the
 Sheets dock reveals icon actions to show empty sheets, open the name filter,
@@ -325,9 +369,14 @@ progress.
 
 ## String history
 
-The translation editor's side pane has two tabs, Note and History. History
-shows who translated and reviewed the selected string and every committed
-change to it; "Use this text" puts a historical text into the editor as an
+The translation editor's side pane has three tabs: Note, Languages, and
+History. The open tab is a local preference (`sidePaneTab`), so it stays
+when another string is selected and after a restart. Languages shows the selected source text in the game's other client
+languages, stacked in the source pane's chip or code view, so a translator
+can compare how each language uses tags such as conditions; a tag clicked
+there is added to the translation as from the source pane. A language
+without the string says so. History shows who translated and reviewed the
+selected string and every committed change to it; "Use this text" puts a historical text into the editor as an
 unsaved draft.
 
 ## Angelica panel
@@ -454,13 +503,21 @@ Monokai Pro, Night Owl, Rosé Pine, Ayu, Solarized, Palenight, Kanagawa, and
 Everforest) mapped onto Aeria's layered tokens; Catppuccin, Aeria's own themes,
 and High Contrast Dark are also available.
 
-Settings open as a dialog with Appearance, Editor, Workflow, AI, Keyboard
-shortcuts, and About sections and a search across all settings. Theme, accent,
+Settings open as a dialog with Appearance, Editor, Workflow, Game, AI,
+Project, Repository, Keyboard shortcuts, and About sections and a search across all settings. Theme, accent,
 Reduce transparency, interface zoom (webview zoom), editor text size, macro
 highlighting, control-character display, strings list density, and focusing the
 next target after Save & next are per-machine renderer preferences kept in local
 storage; they are never project data. Components consume semantic tokens from `ui/theme/tokens.css`, which
 derive surfaces, lines, and state colors from each theme's palette.
+
+The Project section changes the open project's target language with the
+same picker as New project. A listed language is saved when chosen; a typed
+tag on Enter or when the field loses focus. Saving rewrites only the
+workspace manifest, which collaborators receive through Git; units, targets,
+and IDs are unchanged. Projects created before the language could be chosen
+carry `und`, which the section shows as no language with a warning that
+export needs one.
 
 The AI section manages the providers described in
 [`ai.md`](./ai.md#provider-boundary). It picks Angelica's default model and,

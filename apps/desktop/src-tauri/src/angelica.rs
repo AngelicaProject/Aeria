@@ -271,12 +271,13 @@ fn row_snapshot(row: TranslationRowView) -> RowSnapshot {
 }
 
 pub(crate) fn known_sheet(session: &ProjectSession, sheet: &str) -> Result<(), ToolError> {
-    if session
-        .source_package()
-        .guidance_index()
-        .translatable_cell_count(sheet)
-        == 0
-    {
+    let translatable = session.source().catalog().and_then(|catalog| {
+        catalog
+            .iter()
+            .find(|summary| summary.name == sheet)
+            .map(|summary| summary.translatable)
+    });
+    if translatable.unwrap_or(0) == 0 {
         return Err(ToolError::new(format!(
             "sheet {sheet:?} does not exist or has no translatable strings; use list_sheets"
         )));
@@ -1715,25 +1716,19 @@ pub async fn angelica_draft(
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
 
     use aeria_ai::tools::ReviewItem;
 
     use super::*;
 
-    fn session() -> (tempfile::TempDir, ProjectSession) {
+    fn session() -> (
+        (tempfile::TempDir, crate::test_support::TestGame),
+        ProjectSession,
+    ) {
         let directory = tempfile::tempdir().expect("directory");
-        std::fs::create_dir(directory.path().join("repository")).expect("repository");
-        let package = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../../crates/aeria-hsp/tests/fixtures/synthetic.hsp");
-        let session = ProjectSession::initialize(
-            directory.path().join("repository"),
-            package,
-            directory.path().join("cache"),
-            "ru".to_owned(),
-        )
-        .expect("session");
-        (directory, session)
+        let game = crate::test_support::test_game();
+        let session = crate::test_support::test_session(directory.path(), &game);
+        ((directory, game), session)
     }
 
     #[test]

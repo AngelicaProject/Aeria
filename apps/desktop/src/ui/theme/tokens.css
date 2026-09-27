@@ -8,10 +8,10 @@
 :root {
   color-scheme: dark;
 
-  --font-ui: "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+  --font-ui: "Aeria Game Glyphs", "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
   --font-display: "Segoe UI Variable Display", "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
-  --font-content: "Segoe UI Variable Text", "Segoe UI", "Yu Gothic UI", "Meiryo", "Microsoft YaHei UI", "Malgun Gothic", sans-serif;
-  --font-mono: "Cascadia Mono", "Cascadia Code", Consolas, monospace;
+  --font-content: "Aeria Game Glyphs", "Segoe UI Variable Text", "Segoe UI", "Yu Gothic UI", "Meiryo", "Microsoft YaHei UI", "Malgun Gothic", sans-serif;
+  --font-mono: "Aeria Game Glyphs", "Cascadia Mono", "Cascadia Code", Consolas, monospace;
 
   --text-2xs: 10.5px;
   --text-xs: 11px;

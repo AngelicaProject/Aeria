@@ -1,33 +1,33 @@
 //! Tagged text for assisted translation.
 //!
-//! A source macro string is projected into text in which prose is plain text
-//! and every protected construct is inline markup: `<x id="N"/>` for a
-//! construct without translatable content, and `<g id="N"><b>…</b>…</g>`
-//! for a construct whose user-facing string arguments (such as the branches
-//! of `<if(…)>`) are translated in place. A translation written in this form
-//! is rebuilt into a macro string by splicing the translated text back into
-//! the source syntax, so protected constructs keep their exact spelling.
+//! A source string is projected into text in which prose is plain text and
+//! every protected construct is inline markup: `<x id="N"/>` for a construct
+//! without translatable content, and `<g id="N"><b>…</b>…</g>` for a
+//! construct whose user-facing content (such as the branches of `<if>`) is
+//! translated in place. A translation written in this form is rebuilt into
+//! macro text by splicing the translated text back into the source, so
+//! protected constructs keep their exact spelling.
 //!
 //! [`rebuild`] checks the tags against the structure policy and
-//! [`check_assisted_structure`] checks the rebuilt syntax tree again,
-//! independently of the tags:
+//! [`check_assisted_structure`] checks the rebuilt text again, independently
+//! of the tags:
 //!
 //! - every construct is kept; none is dropped;
 //! - a construct stays in its container (the root or one branch);
 //! - constructs may move within their container, except that formatting
-//!   constructs keep their relative order so start and end pairs cannot cross;
-//! - only runtime values without branches (such as the player's name) may
-//!   repeat;
-//! - branch constructs keep their number of branches, and changed game
-//!   references, parameters, or opaque constructs are new constructs, which
-//!   are rejected.
+//!   constructs keep their relative order so start and end tags cannot cross;
+//! - only runtime values without branches (such as a number) may repeat;
+//! - a construct with branches keeps its number of branches, and a changed
+//!   game reference, parameter, or opaque construct is a new construct, which
+//!   is rejected.
 
 use std::fmt::Write as _;
 
-use crate::semantic::is_user_facing_argument;
-use crate::{
-    ExpressionKind, MacroString, ProtectedExpression, ProtectedExpressionKind, ProtectedNode,
-    ProtectedNodeKind, SemanticFamily, Span, SyntaxKind, SyntaxNode, parse,
+use crate::bytes::Expr;
+use crate::catalog::{self, MacroSpec, NULLARY, PARAMETERS, Role, SemanticFamily};
+use crate::semantic::family;
+use crate::syntax::{
+    ExprKind, ExprSyntax, MacroString, MacroSyntax, Span, SyntaxKind, SyntaxNode, Written, parse,
 };
 
 /// Longest construct spelling shown in a tag legend.
@@ -50,6 +50,8 @@ pub struct Tag {
     pub family: Option<SemanticFamily>,
     /// The exact source spelling of the construct.
     pub spelling: String,
+    /// What the construct does, for the model.
+    pub description: String,
     /// Number of translatable branches; zero for an `<x/>` tag.
     pub branches: usize,
     /// The construct may appear more than once in the translation.
@@ -69,9 +71,7 @@ impl Tag {
             Some(SemanticFamily::GameDataReference) => "game data reference",
             Some(SemanticFamily::LayoutTextualControl) => "layout control",
             Some(SemanticFamily::TranslatableText) => "text transform",
-            Some(SemanticFamily::Expression | SemanticFamily::OpaqueProtected) | None => {
-                "protected construct"
-            }
+            Some(SemanticFamily::OpaqueProtected) | None => "protected construct",
         };
         let mut spelling: String = self.spelling.chars().take(LEGEND_SPELLING_CHARS).collect();
         if spelling.len() < self.spelling.len() {
@@ -84,7 +84,10 @@ impl Tag {
         } else {
             String::new()
         };
-        format!("{}: {spelling} ({role}{shape})", self.id)
+        format!(
+            "{}: {spelling} — {} ({role}{shape})",
+            self.id, self.description
+        )
     }
 }
 
@@ -130,6 +133,23 @@ struct SourceModel {
     constructs: Vec<Construct>,
 }
 
+/// The translatable branches of a macro: their content spans and nodes.
+fn branches(syntax: &MacroSyntax) -> Vec<(Span, &[SyntaxNode])> {
+    let Some(spec) = syntax.spec else {
+        return Vec::new();
+    };
+    syntax
+        .args
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| spec.is_translatable_arg(*index))
+        .filter_map(|(_, arg)| match &arg.kind {
+            ExprKind::Str(nodes) => Some((arg.span, nodes.as_slice())),
+            _ => None,
+        })
+        .collect()
+}
+
 impl SourceModel {
     fn build(source: &str) -> Result<(Self, String), TaggedError> {
         let document = parse(source);
@@ -138,87 +158,22 @@ impl SourceModel {
                 "the source string is malformed and cannot be translated with tags",
             ));
         }
-        let mut model = Self {
-            document,
-            constructs: Vec::new(),
-        };
+        let mut constructs = Vec::new();
         let mut text = String::new();
-        let nodes = model.document.nodes().to_vec();
-        model.walk(&nodes, Container::Root, &mut text);
-        Ok((model, text))
-    }
-
-    fn walk(&mut self, nodes: &[SyntaxNode], container: Container, text: &mut String) {
-        for node in nodes {
-            match &node.kind {
-                SyntaxKind::Text => {
-                    let raw = self
-                        .document
-                        .slice(node.span)
-                        .unwrap_or_default()
-                        .to_owned();
-                    push_entities(text, &raw);
-                }
-                SyntaxKind::Escape { character } => {
-                    push_entities(text, &character.to_string());
-                }
-                SyntaxKind::Macro(macro_node) => {
-                    let branches: Vec<(Span, Vec<SyntaxNode>)> = macro_node
-                        .arguments
-                        .iter()
-                        .enumerate()
-                        .filter(|(index, _)| is_user_facing_argument(macro_node.name, *index))
-                        .filter_map(|(_, argument)| match &argument.kind {
-                            ExpressionKind::String { parts } => {
-                                Some((argument.span, parts.clone()))
-                            }
-                            _ => None,
-                        })
-                        .collect();
-                    let family = macro_node.name.semantic_family();
-                    let id = self.push(node.span, container, Some(family), &branches);
-                    if branches.is_empty() {
-                        let _ = write!(text, "<x id=\"{id}\"/>");
-                    } else {
-                        let _ = write!(text, "<g id=\"{id}\">");
-                        for (index, (_, parts)) in branches.iter().enumerate() {
-                            text.push_str("<b>");
-                            self.walk(parts, Container::Branch { group: id, index }, text);
-                            text.push_str("</b>");
-                        }
-                        text.push_str("</g>");
-                    }
-                }
-                SyntaxKind::Opaque(_) | SyntaxKind::Malformed => {
-                    let id = self.push(node.span, container, None, &[]);
-                    let _ = write!(text, "<x id=\"{id}\"/>");
-                }
-            }
-        }
-    }
-
-    fn push(
-        &mut self,
-        span: Span,
-        container: Container,
-        family: Option<SemanticFamily>,
-        branches: &[(Span, Vec<SyntaxNode>)],
-    ) -> u32 {
-        let id = u32::try_from(self.constructs.len() + 1).unwrap_or(u32::MAX);
-        self.constructs.push(Construct {
-            span,
-            container,
-            branch_spans: branches.iter().map(|(span, _)| *span).collect(),
-            tag: Tag {
-                id,
-                family,
-                spelling: self.document.slice(span).unwrap_or_default().to_owned(),
-                branches: branches.len(),
-                repeatable: branches.is_empty()
-                    && family == Some(SemanticFamily::RuntimeContextValue),
+        walk(
+            &document,
+            document.nodes(),
+            Container::Root,
+            &mut constructs,
+            &mut text,
+        );
+        Ok((
+            Self {
+                document,
+                constructs,
             },
-        });
-        id
+            text,
+        ))
     }
 
     fn construct(&self, id: u32) -> Option<&Construct> {
@@ -226,6 +181,161 @@ impl SourceModel {
             .ok()
             .and_then(|id| id.checked_sub(1))
             .and_then(|index| self.constructs.get(index))
+    }
+}
+
+fn walk(
+    document: &MacroString,
+    nodes: &[SyntaxNode],
+    container: Container,
+    constructs: &mut Vec<Construct>,
+    text: &mut String,
+) {
+    for node in nodes {
+        match &node.kind {
+            SyntaxKind::Text(value) => push_entities(text, value),
+            SyntaxKind::Macro(syntax) => {
+                let branches = branches(syntax);
+                let node_family = family(node);
+                let id = u32::try_from(constructs.len() + 1).unwrap_or(u32::MAX);
+                constructs.push(Construct {
+                    span: node.span,
+                    container,
+                    branch_spans: branches.iter().map(|(span, _)| *span).collect(),
+                    tag: Tag {
+                        id,
+                        family: node_family,
+                        spelling: document.slice(node.span).unwrap_or_default().to_owned(),
+                        description: describe(syntax),
+                        branches: branches.len(),
+                        repeatable: branches.is_empty()
+                            && node_family == Some(SemanticFamily::RuntimeContextValue),
+                    },
+                });
+                if branches.is_empty() {
+                    let _ = write!(text, "<x id=\"{id}\"/>");
+                } else {
+                    let _ = write!(text, "<g id=\"{id}\">");
+                    for (index, (_, nodes)) in branches.iter().enumerate() {
+                        text.push_str("<b>");
+                        walk(
+                            document,
+                            nodes,
+                            Container::Branch { group: id, index },
+                            constructs,
+                            text,
+                        );
+                        text.push_str("</b>");
+                    }
+                    text.push_str("</g>");
+                }
+            }
+            SyntaxKind::Raw(_) | SyntaxKind::Error => {
+                let id = u32::try_from(constructs.len() + 1).unwrap_or(u32::MAX);
+                constructs.push(Construct {
+                    span: node.span,
+                    container,
+                    branch_spans: Vec::new(),
+                    tag: Tag {
+                        id,
+                        family: None,
+                        spelling: document.slice(node.span).unwrap_or_default().to_owned(),
+                        description: "bytes that are not a valid game string".to_owned(),
+                        branches: 0,
+                        repeatable: false,
+                    },
+                });
+                let _ = write!(text, "<x id=\"{id}\"/>");
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Descriptions
+
+/// What a macro does, with its argument values, for people and the model.
+#[must_use]
+pub fn describe(syntax: &MacroSyntax) -> String {
+    let Some(spec) = syntax.spec else {
+        return format!(
+            "macro code {:#04X}, which Aeria does not know; keep it exactly",
+            syntax.code
+        );
+    };
+    if syntax.written == Written::Close {
+        return format!("end of: {}", spec.summary);
+    }
+    let details: Vec<String> = syntax
+        .args
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| !spec.is_translatable_arg(*index))
+        .filter(|_| syntax.written != Written::Open || !is_implied(spec, &syntax.args))
+        .filter_map(|(index, arg)| {
+            let described = spec.arg(index)?;
+            Some(format!(
+                "{} = {}",
+                described.name,
+                describe_value(arg, described.role)
+            ))
+        })
+        .collect();
+    if details.is_empty() {
+        spec.summary.to_owned()
+    } else {
+        format!("{}; {}", spec.summary, details.join(", "))
+    }
+}
+
+fn is_implied(spec: &MacroSpec, args: &[ExprSyntax]) -> bool {
+    matches!(
+        (spec.form, args),
+        (catalog::Form::Pair { implied: Some(value), .. }, [ExprSyntax { kind: ExprKind::Int(actual), .. }])
+            if *actual == value
+    )
+}
+
+fn describe_value(expr: &ExprSyntax, role: Role) -> String {
+    match &expr.kind {
+        ExprKind::Int(value) if role == Role::Color => format!("#{value:08X}"),
+        ExprKind::Int(value) => value.to_string(),
+        ExprKind::Str(nodes) => match nodes.as_slice() {
+            [] => "empty text".to_owned(),
+            [
+                SyntaxNode {
+                    kind: SyntaxKind::Text(text),
+                    ..
+                },
+            ] => text.clone(),
+            _ => "text with macros".to_owned(),
+        },
+        ExprKind::Nullary(kind) => NULLARY
+            .iter()
+            .find(|spec| spec.code == *kind)
+            .map_or_else(|| "a game value".to_owned(), |spec| spec.summary.to_owned()),
+        ExprKind::Param(kind, operand) => {
+            let summary = PARAMETERS
+                .iter()
+                .find(|spec| spec.code == *kind)
+                .map_or("parameter", |spec| spec.summary);
+            match operand.kind {
+                ExprKind::Int(number) => format!("{summary} {number}"),
+                _ => format!("{summary} ({})", describe_value(operand, Role::Other)),
+            }
+        }
+        ExprKind::Compare(kind, left, right) => {
+            let operator = catalog::COMPARISONS
+                .iter()
+                .find(|spec| spec.code == *kind)
+                .map_or("?", |spec| spec.operator);
+            format!(
+                "{} {operator} {}",
+                describe_value(left, Role::Other),
+                describe_value(right, Role::Other)
+            )
+        }
+        ExprKind::Raw(_) | ExprKind::Error => "an invalid value".to_owned(),
     }
 }
 
@@ -256,6 +366,9 @@ pub fn project(source: &str) -> Result<TaggedText, TaggedError> {
             .collect(),
     })
 }
+
+// ---------------------------------------------------------------------------
+// Reading tagged text
 
 #[derive(Debug)]
 enum Item {
@@ -514,21 +627,20 @@ fn check_container(
     }
 }
 
-fn escape_macro_text(text: &str, in_argument: bool, output: &mut String) {
+/// Escapes translated prose as macro text.
+fn escape_macro_text(text: &str, output: &mut String) {
     for character in text.chars() {
-        let special = matches!(character, '\\' | '<')
-            || (in_argument && matches!(character, '[' | ']' | '(' | ')' | ',' | '>'));
-        if special {
+        if matches!(character, '\\' | '<' | '{') {
             output.push('\\');
         }
         output.push(character);
     }
 }
 
-fn emit(model: &SourceModel, items: &[Item], in_argument: bool, output: &mut String) {
+fn emit(model: &SourceModel, items: &[Item], output: &mut String) {
     for item in items {
         match item {
-            Item::Text(text) => escape_macro_text(text, in_argument, output),
+            Item::Text(text) => escape_macro_text(text, output),
             Item::Atom(id) => {
                 if let Some(construct) = model.construct(*id) {
                     output.push_str(&construct.tag.spelling);
@@ -546,7 +658,7 @@ fn emit(model: &SourceModel, items: &[Item], in_argument: bool, output: &mut Str
                             .slice(Span::new(cursor, span.start()))
                             .unwrap_or_default(),
                     );
-                    emit(model, branch, true, output);
+                    emit(model, branch, output);
                     cursor = span.end();
                 }
                 output.push_str(
@@ -560,13 +672,13 @@ fn emit(model: &SourceModel, items: &[Item], in_argument: bool, output: &mut Str
     }
 }
 
-/// Rebuilds a target macro string from a tagged translation of `source`.
+/// Rebuilds target macro text from a tagged translation of `source`.
 ///
 /// # Errors
 ///
 /// Returns every violated rule, written for the model that produced the
-/// translation. Nothing is rebuilt unless the tags and the rebuilt syntax
-/// both satisfy the structure policy.
+/// translation. Nothing is rebuilt unless the tags and the rebuilt text both
+/// satisfy the structure policy.
 pub fn rebuild(source: &str, tagged: &str) -> Result<String, Vec<TaggedError>> {
     let (model, _) = SourceModel::build(source).map_err(|error| vec![error])?;
     let items = tokenize(tagged)
@@ -578,33 +690,116 @@ pub fn rebuild(source: &str, tagged: &str) -> Result<String, Vec<TaggedError>> {
         return Err(errors);
     }
     let mut target = String::new();
-    emit(&model, &items, false, &mut target);
+    emit(&model, &items, &mut target);
     check_assisted_structure(source, &target)?;
     Ok(target)
 }
 
-/// Checks a target macro string against the structure policy for assisted
-/// translation, on the syntax trees alone.
+// ---------------------------------------------------------------------------
+// Structure policy on macro text
+
+/// The comparable identity of a construct: its code and arguments, with the
+/// content of translatable branches masked.
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum Shape {
+    Macro { code: u8, args: Vec<Option<Expr>> },
+    Raw(Vec<u8>),
+}
+
+struct Protected<'a> {
+    shape: Shape,
+    family: Option<SemanticFamily>,
+    name: String,
+    spelling: &'a str,
+    branches: Vec<&'a [SyntaxNode]>,
+}
+
+fn protected<'a>(document: &'a MacroString, nodes: &'a [SyntaxNode]) -> Vec<Protected<'a>> {
+    nodes
+        .iter()
+        .filter_map(|node| {
+            let spelling = document.slice(node.span).unwrap_or_default();
+            match &node.kind {
+                SyntaxKind::Text(_) | SyntaxKind::Error => None,
+                SyntaxKind::Raw(bytes) => Some(Protected {
+                    shape: Shape::Raw(bytes.clone()),
+                    family: None,
+                    name: "raw".to_owned(),
+                    spelling,
+                    branches: Vec::new(),
+                }),
+                SyntaxKind::Macro(syntax) => {
+                    let args = syntax
+                        .args
+                        .iter()
+                        .enumerate()
+                        .map(|(index, arg)| {
+                            let translatable = syntax
+                                .spec
+                                .is_some_and(|spec| spec.is_translatable_arg(index));
+                            if translatable && matches!(arg.kind, ExprKind::Str(_)) {
+                                None
+                            } else {
+                                crate::syntax::expr_to_model(arg)
+                            }
+                        })
+                        .collect();
+                    Some(Protected {
+                        shape: Shape::Macro {
+                            code: syntax.code,
+                            args,
+                        },
+                        family: family(node),
+                        name: syntax.spec.map_or_else(
+                            || format!("code:{:02X}", syntax.code),
+                            |spec| spec.name.to_owned(),
+                        ),
+                        spelling,
+                        branches: branches(syntax)
+                            .into_iter()
+                            .map(|(_, nodes)| nodes)
+                            .collect(),
+                    })
+                }
+            }
+        })
+        .collect()
+}
+
+fn is_repeatable(construct: &Protected<'_>) -> bool {
+    construct.family == Some(SemanticFamily::RuntimeContextValue) && construct.branches.is_empty()
+}
+
+/// Checks target macro text against the structure policy for assisted
+/// translation, on the parsed texts alone.
 ///
 /// # Errors
 ///
 /// Returns every violated rule.
 pub fn check_assisted_structure(source: &str, target: &str) -> Result<(), Vec<TaggedError>> {
-    let source_analysis = parse(source).semantic_analysis();
+    let source_document = parse(source);
     let target_document = parse(target);
     if !target_document.is_well_formed() {
-        return Err(vec![TaggedError::new(
-            "the translation is not a well-formed macro string",
-        )]);
+        let mut errors = vec![TaggedError::new(
+            "the translation is not well-formed macro text",
+        )];
+        errors.extend(
+            target_document
+                .diagnostics()
+                .iter()
+                .map(|diagnostic| TaggedError::new(diagnostic.message.clone())),
+        );
+        return Err(errors);
     }
-    if !source_analysis.structure().is_comparable() {
+    if !source_document.is_well_formed() {
         return Err(vec![TaggedError::new("the source string is malformed")]);
     }
-    let target_analysis = target_document.semantic_analysis();
     let mut errors = Vec::new();
     check_nodes(
-        source_analysis.structure().nodes(),
-        target_analysis.structure().nodes(),
+        &protected(&source_document, source_document.nodes()),
+        &protected(&target_document, target_document.nodes()),
+        &source_document,
+        &target_document,
         "the top level",
         &mut errors,
     );
@@ -616,213 +811,99 @@ pub fn check_assisted_structure(source: &str, target: &str) -> Result<(), Vec<Ta
 }
 
 fn check_nodes(
-    source: &[ProtectedNode],
-    target: &[ProtectedNode],
+    source: &[Protected<'_>],
+    target: &[Protected<'_>],
+    source_document: &MacroString,
+    target_document: &MacroString,
     place: &str,
     errors: &mut Vec<TaggedError>,
 ) {
-    let source: Vec<&ProtectedNode> = source.iter().filter(|node| !is_text(node)).collect();
-    let target: Vec<&ProtectedNode> = target.iter().filter(|node| !is_text(node)).collect();
-    let source_shapes: Vec<ProtectedNodeKind> =
-        source.iter().map(|node| shape(&node.kind)).collect();
-    let target_shapes: Vec<ProtectedNodeKind> =
-        target.iter().map(|node| shape(&node.kind)).collect();
-
     let before = errors.len();
-    for (index, shape) in source_shapes.iter().enumerate() {
-        if source_shapes[..index].contains(shape) {
+    for (index, construct) in source.iter().enumerate() {
+        if source[..index]
+            .iter()
+            .any(|earlier| earlier.shape == construct.shape)
+        {
             continue;
         }
-        let source_count = source_shapes
+        let source_count = source
             .iter()
-            .filter(|candidate| *candidate == shape)
+            .filter(|candidate| candidate.shape == construct.shape)
             .count();
-        let target_count = target_shapes
+        let target_count = target
             .iter()
-            .filter(|candidate| *candidate == shape)
+            .filter(|candidate| candidate.shape == construct.shape)
             .count();
         if target_count < source_count {
             errors.push(TaggedError::new(format!(
                 "a construct of {place} is missing: {}",
-                describe(source[index])
+                construct.spelling
             )));
-        } else if target_count > source_count && !is_repeatable(shape) {
+        } else if target_count > source_count && !is_repeatable(construct) {
             errors.push(TaggedError::new(format!(
                 "a construct of {place} appears more often than in the source: {}",
-                describe(source[index])
+                construct.spelling
             )));
         }
     }
-    for (index, shape) in target_shapes.iter().enumerate() {
-        if !source_shapes.contains(shape) && !target_shapes[..index].contains(shape) {
+    for (index, construct) in target.iter().enumerate() {
+        if !source
+            .iter()
+            .any(|candidate| candidate.shape == construct.shape)
+            && !target[..index]
+                .iter()
+                .any(|earlier| earlier.shape == construct.shape)
+        {
             errors.push(TaggedError::new(format!(
                 "{place} contains a construct that is not in the source: {}",
-                describe(target[index])
+                construct.spelling
             )));
         }
     }
     if errors.len() > before {
         return;
     }
-    let formatting = |shapes: &[ProtectedNodeKind]| -> Vec<ProtectedNodeKind> {
-        shapes
+    let formatting = |constructs: &[Protected<'_>]| -> Vec<Shape> {
+        constructs
             .iter()
-            .filter(|shape| family(shape) == Some(SemanticFamily::FormattingPresentation))
-            .cloned()
+            .filter(|construct| construct.family == Some(SemanticFamily::FormattingPresentation))
+            .map(|construct| construct.shape.clone())
             .collect()
     };
-    if formatting(&source_shapes) != formatting(&target_shapes) {
+    if formatting(source) != formatting(target) {
         errors.push(TaggedError::new(format!(
             "formatting constructs of {place} must keep their source order"
         )));
     }
-    check_branches(&source, &target, &source_shapes, &target_shapes, errors);
-}
-
-/// Compares branch contents between the n-th occurrences of each construct
-/// with branches.
-fn check_branches(
-    source: &[&ProtectedNode],
-    target: &[&ProtectedNode],
-    source_shapes: &[ProtectedNodeKind],
-    target_shapes: &[ProtectedNodeKind],
-    errors: &mut Vec<TaggedError>,
-) {
-    for (index, node) in source.iter().enumerate() {
-        let ProtectedNodeKind::Macro {
-            name, arguments, ..
-        } = &node.kind
-        else {
-            continue;
-        };
-        if !arguments.iter().any(is_branch) {
+    for (index, construct) in source.iter().enumerate() {
+        if construct.branches.is_empty() {
             continue;
         }
-        let occurrence = source_shapes[..index]
+        let occurrence = source[..index]
             .iter()
-            .filter(|candidate| **candidate == source_shapes[index])
+            .filter(|earlier| earlier.shape == construct.shape)
             .count();
-        let Some(target_node) = target_shapes
+        let Some(counterpart) = target
             .iter()
-            .enumerate()
-            .filter(|(_, candidate)| **candidate == source_shapes[index])
+            .filter(|candidate| candidate.shape == construct.shape)
             .nth(occurrence)
-            .map(|(position, _)| target[position])
         else {
             continue;
         };
-        let ProtectedNodeKind::Macro {
-            arguments: target_arguments,
-            ..
-        } = &target_node.kind
-        else {
-            continue;
-        };
-        for (branch, (source_argument, target_argument)) in
-            arguments.iter().zip(target_arguments).enumerate()
+        for (branch, (source_nodes, target_nodes)) in construct
+            .branches
+            .iter()
+            .zip(&counterpart.branches)
+            .enumerate()
         {
-            if let (
-                ProtectedExpressionKind::String {
-                    nodes: source_nodes,
-                },
-                ProtectedExpressionKind::String {
-                    nodes: target_nodes,
-                },
-            ) = (&source_argument.kind, &target_argument.kind)
-            {
-                check_nodes(
-                    source_nodes,
-                    target_nodes,
-                    &format!("argument {} of <{}>", branch + 1, name.as_str()),
-                    errors,
-                );
-            }
+            check_nodes(
+                &protected(source_document, source_nodes),
+                &protected(target_document, target_nodes),
+                source_document,
+                target_document,
+                &format!("branch {} of <{}>", branch + 1, construct.name),
+                errors,
+            );
         }
-    }
-}
-
-fn is_text(node: &ProtectedNode) -> bool {
-    matches!(node.kind, ProtectedNodeKind::TextSlot)
-}
-
-fn is_branch(argument: &ProtectedExpression) -> bool {
-    matches!(argument.kind, ProtectedExpressionKind::String { .. })
-}
-
-fn family(shape: &ProtectedNodeKind) -> Option<SemanticFamily> {
-    match shape {
-        ProtectedNodeKind::Macro { family, .. } => Some(*family),
-        _ => None,
-    }
-}
-
-fn is_repeatable(shape: &ProtectedNodeKind) -> bool {
-    matches!(shape, ProtectedNodeKind::Macro { family: SemanticFamily::RuntimeContextValue, arguments, .. } if !arguments.iter().any(is_branch))
-}
-
-fn describe(node: &ProtectedNode) -> String {
-    match &node.kind {
-        ProtectedNodeKind::Macro { name, .. } => format!("<{}>", name.as_str()),
-        ProtectedNodeKind::Opaque { .. } => "a protected construct".to_owned(),
-        ProtectedNodeKind::Malformed { spelling } => format!("malformed `{spelling}`"),
-        ProtectedNodeKind::TextSlot => "text".to_owned(),
-    }
-}
-
-/// The comparable identity of a construct: spans are dropped and the content
-/// of translatable branches is masked.
-fn shape(kind: &ProtectedNodeKind) -> ProtectedNodeKind {
-    match kind {
-        ProtectedNodeKind::Macro {
-            name,
-            family,
-            arguments,
-        } => ProtectedNodeKind::Macro {
-            name: *name,
-            family: *family,
-            arguments: arguments
-                .iter()
-                .map(|argument| shape_expression(argument, true))
-                .collect(),
-        },
-        other => other.clone(),
-    }
-}
-
-fn shape_expression(expression: &ProtectedExpression, mask_strings: bool) -> ProtectedExpression {
-    let kind = match &expression.kind {
-        ProtectedExpressionKind::String { .. } if mask_strings => {
-            ProtectedExpressionKind::String { nodes: Vec::new() }
-        }
-        ProtectedExpressionKind::String { nodes } => ProtectedExpressionKind::String {
-            nodes: nodes
-                .iter()
-                .filter(|node| !is_text(node))
-                .map(|node| ProtectedNode {
-                    span: Span::new(0, 0),
-                    kind: shape(&node.kind),
-                })
-                .collect(),
-        },
-        ProtectedExpressionKind::RuntimeParameter { operator, operand } => {
-            ProtectedExpressionKind::RuntimeParameter {
-                operator: *operator,
-                operand: Box::new(shape_expression(operand, false)),
-            }
-        }
-        ProtectedExpressionKind::Comparison {
-            operator,
-            left,
-            right,
-        } => ProtectedExpressionKind::Comparison {
-            operator: *operator,
-            left: Box::new(shape_expression(left, false)),
-            right: Box::new(shape_expression(right, false)),
-        },
-        other => other.clone(),
-    };
-    ProtectedExpression {
-        span: Span::new(0, 0),
-        kind,
     }
 }

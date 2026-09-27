@@ -1,0 +1,22 @@
+[package]
+name = "aeria-source"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "The installed game as Aeria's translation source: sheets, layouts, permission, and row keys."
+
+[dependencies]
+aeria-core = { path = "../aeria-core" }
+aeria-se = { path = "../aeria-se" }
+aeria-sqpack = { path = "../aeria-sqpack" }
+sha2 = "0.11.0"
+thiserror = "2.0.20"
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+aeria-sqpack = { path = "../aeria-sqpack", features = ["testing"] }
+tempfile = "3.27.0"

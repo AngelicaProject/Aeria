@@ -9,13 +9,13 @@ Write a human-readable, imperative title that describes the outcome of the pull 
 
 Good:
 
-- `Add verified HXS v1 source reader`
+- `Read the translation source from the installed game`
 - `Preserve ambiguous matches during source rebase`
 - `Organize contributor and agent guidance`
 
 Avoid:
 
-- `feat(hxs): reader`
+- `feat(source): reader`
 - `Milestone 1`
 - `Various fixes`
 - `Update files`

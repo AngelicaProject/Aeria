@@ -193,8 +193,6 @@ jobs:
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "Building Aeria $version"
 
-      - name: Stage pinned Harmonia Atlas sidecar
-        run: pwsh -NoProfile -File tools/atlas/stage-sidecar.ps1 -Target win-x64
       - name: Stage pinned MinGit runtime
         run: pwsh -NoProfile -File tools/git/stage-mingit.ps1 -Target win-x64
       - run: pnpm install --frozen-lockfile
@@ -214,7 +212,7 @@ jobs:
         run: |
           name="Aeria_${{ steps.version.outputs.version }}_x64-portable"
           mkdir -p "dist/$name"
-          cp target/release/aeria.exe target/release/harmonia-atlas.exe "dist/$name/"
+          cp target/release/aeria.exe "dist/$name/"
           cp -r target/release/git "dist/$name/git"
           (cd dist && 7z a -tzip -mx=9 "$name.zip" "$name" > /dev/null)
           echo "zip=dist/$name.zip" >> "$GITHUB_OUTPUT"

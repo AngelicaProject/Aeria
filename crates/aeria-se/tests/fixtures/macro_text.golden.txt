@@ -1,0 +1,58 @@
+# Macro text vectors: stable name<TAB>SeString bytes in hex<TAB>canonical macro text.
+# codec::decode(bytes) prints the text and codec::encode(text) writes the bytes.
+plain_text	706C61696E2074657874	plain text
+escaped_text	61203C20622C207B637D20616E64205C736C617368	a \< b, \{c} and \\slash
+line_break	6F6E650210010374776F	one<br>two
+soft_hyphen_and_nbsp	4D756E021F0103547579206C6F6E6702160103776F7264021D010378	Mun<hyphen>Tuy long<shy>word<nbsp>x
+italic_pair	74686520021A0202034F6D6E696C6578021A020103	the <i>Omnilex</i>
+bold_pair	0219020203626F6C640219020103	<b>bold</b>
+bold_explicit_value	0219020603	<b 5>
+color_pair	021306FEFF13212F0353656C65637420612050617468021302EC03	<color #FF13212F>Select a Path</color>
+color_from_parameter	021303E9110378021302EC03	<color $gn16>x</color>
+edge_color_pair	021406FEFFB1BACD0378021402EC03	<edge-color #FFB1BACD>x</edge-color>
+shadow_color_pair	021503F7FF0378021502EC03	<shadow-color #FF000000>x</shadow-color>
+ui_color_pairs	024804F201F803024904F201F9034475726174696F6E3A0249020103024802010320323073	<ui-color 504><ui-edge-color 505>Duration:</ui-edge-color></ui-color> 20s
+edge_and_shadow	021B020103021C02020348656C6C6F2E021C020103021B020203	<edge 0><shadow 1>Hello.<shadow 0><edge 1>
+if_else	020820E4E80202FF0C4865206973207265616479FF0D53686520697320726561647903	<if ($n1 == 1)>He is ready<else>She is ready</if>
+if_without_else	02080DE95FFF07200242022A03FF0103	<if $gn94> <platform 41></if>
+if_empty_then	020808E95FFF01FF027803	<if $gn94><else>x</if>
+if_numeric_branches	020808E4E94514F0DC9703	<if ($gn68 == 19)>{220}<else>{150}</if>
+if_parameter_branch	02080DE5E80201FF0574657874EB0203	<if ($n1 != 0)>text<else>{$gs1}</if>
+nested_if	020829E3E90C0DFF1A020816E3E90C05FF0873756E72697365FF076D696464617903FF0873756E646F776E03	<if ($gn11 < 12)><if ($gn11 < 4)>sunrise<else>midday</if><else>sundown</if>
+all_comparisons	02080AE0E80202FF0261FF010302080AE1E80202FF0261FF010302080AE2E80202FF0261FF010302080AE3E80202FF0261FF010302080AE5E80202FF0261FF0103	<if ($n1 >= 1)>a</if><if ($n1 > 1)>a</if><if ($n1 <= 1)>a</if><if ($n1 < 1)>a</if><if ($n1 != 1)>a</if>
+switch_cases	02091BDDFF0753756E646179FF074D6F6E646179FF085475657364617903	<switch $weekday><case>Sunday<case>Monday<case>Tuesday</switch>
+switch_numeric_cases	020905DB02030D03	<switch $hour><case>{1}<case>{2}<case>{12}</switch>
+if_gender	020B0DE802FF04686973FF0468657203	<if-gender $n1>his<else>her</if-gender>
+if_name	020C1FE802FF0A416C7068696E617564FF0862726F74686572FF07667269656E6403	<if-name $n1 Alphinaud>brother<else>friend</if-name>
+if_self	020F1DE802FF08596F7520617265FF10022B09FF07020A03E802030320697303206C6174652E	<if-self $n1>You are<else><capitalize><player-name $n1></capitalize> is</if-self> late.
+josa	020D0DEA02FF04EC9D80FF04EB8A9403	<josa $s1>은<else>는</josa>
+josa_ro	020E10EA02FF07EC9CBCEBA19CFF04EBA19C03	<josa-ro $s1>으로<else>로</josa-ro>
+player_name	4C6F6F6B73206C696B6520020A03E8020320776F6E2E	Looks like <player-name $n1> won.
+wait_and_key	610211020B036202170103630217020803	a<wait 10>b<key>c<key 7>
+icons	0212023F03021E020B03	<icon 62><icon2 10>
+scale	0218020303	<scale 2>
+numbers	022003E8020320022103E8030320022206E802FF022C0320022303E8020320022402DA0320025004E802030320025103E80303	<num $n1> <hex $n2> <kilo $n1 ","> <byte $n1> <num2 $min> <digit $n1 2> <ordinal $n2>
+float	022607E8020BFF022E0320022608E80265FF022C0103	<float $n1 10 "."> <float $n1 100 "," 0>
+time_values	020603130603020703E80203020905DDFF02610320022503E80203	<reset-time 18 5><set-time $n1><switch $weekday><case>a</switch> <time $n1>
+placeholders	022002D803022002D903022002DA03022002DB03022002DC03022002DD03022002DE03022002DF03	<num $msec><num $sec><num $min><num $hour><num $day><num $weekday><num $month><num $year>
+sheet_reference	02280AFF054974656DE8020103	<sheet Item $n1 0>
+sheet_two_arguments	022809FF064164646F6E0A03	<sheet Addon 9>
+sheet_parameters	02280FFF065175657374E80203E803E80403	<sheet Quest $n1 2 $n2 $n3>
+sheet_quoted_name	022811FF0D437573746F6D2F5368656574020103	<sheet "Custom/Sheet" 1 0>
+sheet_sub	02410DFF0557617270E8020102030403	<sheet-sub Warp $n1 0 1 2 3>
+nouns	02310CFF054974656D03E80202020302320DFF054974656D06E8020205020302330CFF054974656D02E80202020302300AFF054974656D02E8020302340CFF054974656D02E802020203	<noun-en Item 2 $n1 1 1><noun-de Item 5 $n1 1 4 1><noun-fr Item 1 $n1 1 1><noun-ja Item 1 $n1><noun-zh Item 1 $n1 1 1>
+string_parameter	41636365707420526562697274682066726F6D20022903EA02033F	Accept Rebirth from <string $s1>?
+text_transforms	022A04FF026103022B1BFF19022815FF10496E7374616E6365436F6E74656E74E802040303022D04FF026203022F04FF026303024004FF026403	<upper>a</upper><capitalize><sheet InstanceContent $n1 3></capitalize><title-case>b</title-case><lower>c</lower><lower-first>d</lower-first>
+text_transform_parameter	022B03EA0203	<capitalize>{$s1}</capitalize>
+split	022C0DFF07022903EB0203FF02200203	<split " " 1><string $gs1></split>
+fixed	022E0507F2026A03	<fixed 6 618>
+link	02270B02030405FF056974656D03	<link 1 2 3 4>item</link>
+ruby	024A14FF07E6BCA2E5AD97FF0AE3818BE38293E3819803	<ruby>漢字<rt>かんじ</ruby>
+sound_and_level	026003026103026103E80203	<sound 1 96><level-pos $n1>
+quoted_string_with_macro	02220AE802FF06024202020303	<kilo $n1 "<platform 1>">
+quoted_string_escapes	02FA0EFF0C6120226222205C203C207B03	<code:FA "a \"b\" \\ \< \{">
+empty_quoted_string	02FA03FF0103	<code:FA "">
+parameter_expression_operand	022004E8E80203	<num $n($n1)>
+nested_comparison	02080DE4E4E80202E803FF0261FF0103	<if (($n1 == 1) == $n2)>a</if>
+unknown_code	02350A02E802FF054974656D03	<code:35 1 $n1 Item>
+unknown_code_without_arguments	02350103	<code:35>

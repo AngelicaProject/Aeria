@@ -60,6 +60,7 @@
 }
 .palette-input input { flex: 1; min-width: 0; height: 32px; border: 0; background: transparent; color: var(--fg); font-size: var(--text-md); }
 .palette-input input::placeholder { color: var(--fg-faint); }
+.palette-input input:focus-visible { outline: none; }
 .palette-section { padding: 2px 16px 4px; color: var(--fg-faint); font-size: var(--text-2xs); font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; }
 .palette-list { flex: 1; min-height: 0; padding: 0 6px 6px; overflow-y: auto; }
 .palette-item {
@@ -218,10 +219,6 @@
 .game-detected ul { display: grid; gap: 4px; margin: 0; padding: 0; list-style: none; }
 .game-detected li { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 6px 0; border-bottom: 1px solid var(--line); }
 .game-detected li:last-child { border-bottom: 0; }
-.source-packages { display: grid; margin: 0; padding: 0; list-style: none; }
-.source-packages li { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 6px 0; border-bottom: 1px solid var(--line); }
-.source-packages li:last-child { border-bottom: 0; }
-.source-package-state { display: flex; flex: none; align-items: center; gap: 6px; }
 
 /* AI provider settings */
 .ai-settings { display: grid; gap: 16px; }
@@ -398,3 +395,11 @@
 .update-setting-summary { display: flex; align-items: flex-start; gap: 6px; font-size: var(--text-sm); }
 .update-setting-summary svg { flex: none; margin-top: 3px; }
 .update-setting-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+
+/* The target language: a list of common languages, then a typed tag after "Other…". */
+.target-language-picker { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.target-language-picker .input { width: 14ch; }
+.target-language-picker .input.is-invalid { border-color: var(--bad); }
+.setting-stack { display: grid; gap: 6px; }
+.field-hint.is-warning { color: var(--warn); }
+.field-hint.is-error { color: var(--bad); }

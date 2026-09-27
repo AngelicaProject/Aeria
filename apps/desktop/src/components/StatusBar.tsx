@@ -9,18 +9,13 @@ type StatusBarProps = {
   loading: boolean;
   repositoryRoot: string;
   sourceLanguage: string;
-  sourceSnapshotId: string;
+  gameVersion: string;
   selectedBinding: SourceBinding | null;
   dirty: boolean;
   projectProgress: { translated: number; total: number } | null;
   detachedCount: number;
   onShowDetached: () => void;
 };
-
-function shortenSnapshot(snapshotId: string): string {
-  const value = snapshotId.replace(/^sha256:/, "");
-  return value.length > 12 ? value.slice(0, 12) : value;
-}
 
 function shortenPath(path: string): string {
   const display = displayPath(path);
@@ -33,7 +28,7 @@ function formatPercent(share: number, locale: string): string {
   return (share * 100).toLocaleString(locale, { minimumFractionDigits: digits, maximumFractionDigits: digits });
 }
 
-export function StatusBar({ sheetName, rowCount, loading, repositoryRoot, sourceLanguage, sourceSnapshotId, selectedBinding, dirty, projectProgress, detachedCount, onShowDetached }: StatusBarProps) {
+export function StatusBar({ sheetName, rowCount, loading, repositoryRoot, sourceLanguage, gameVersion, selectedBinding, dirty, projectProgress, detachedCount, onShowDetached }: StatusBarProps) {
   const { t, locale } = useI18n();
   const selection = selectedBinding
     ? t("common.cellLocation", { sheet: selectedBinding.sheetName, row: String(selectedBinding.rowId), subrow: String(selectedBinding.subrowId), column: String(selectedBinding.columnIndex) })
@@ -58,7 +53,7 @@ export function StatusBar({ sheetName, rowCount, loading, repositoryRoot, source
         </button>
       ) : null}
       <span className="status-item" title={t("status.sourceLanguage")}><UiIcon icon="languages" size="xs" />{sourceLanguage.toUpperCase()}</span>
-      <span className="status-item mono" title={t("status.sourceSnapshot", { id: sourceSnapshotId })}>{shortenSnapshot(sourceSnapshotId)}</span>
+      <span className="status-item mono" title={t("status.gameVersion", { version: gameVersion })}>{gameVersion}</span>
       <span className="status-item status-path" title={displayPath(repositoryRoot)}><UiIcon icon="folder" size="xs" />{shortenPath(repositoryRoot)}</span>
     </footer>
   );

@@ -2,10 +2,7 @@
 
 This section owns Aeria-defined persisted and exported contracts.
 
-- [`workspace-v2.md`](./workspace-v2.md) — current translation workspace format version 2.
-- [`workspace-v1.md`](./workspace-v1.md) — superseded workspace format version 1, read only for migration.
-- [`workspace-v1-evaluation.md`](./workspace-v1-evaluation.md) — Git diff/merge evidence supporting the workspace layout decision, unchanged in version 2.
-- [`workspace-v2-workload-evaluation.md`](./workspace-v2-workload-evaluation.md) — measurements of version 2 under realistic AI-job and parallel-translator workloads, with two alternatives for future format work.
+- [`workspace-v3.md`](./workspace-v3.md) — current translation workspace format version 3. Earlier versions are not read.
 - [`glossary-v1.md`](./glossary-v1.md) — project-shared glossary (`aeria-glossary.csv`).
 - [`collaboration-v1.md`](./collaboration-v1.md) — project-shared collaboration policy (`aeria-collaboration.json`).
 - [`pack-settings-v1.md`](./pack-settings-v1.md) — project-shared pack identity and signing key fingerprint (`aeria-pack.json`).
@@ -13,6 +10,6 @@ This section owns Aeria-defined persisted and exported contracts.
 - [`pack-v1.md`](./pack-v1.md) — compiled translation pack format version 1 for Harmonia (proposal).
 - [`feed-v1.md`](./feed-v1.md) — pack update feed and publisher trust rules for Harmonia (proposal).
 
-HXS is produced by Harmonia Atlas and is an external source contract; Aeria's HXS behavior is documented in [`../architecture/source.md`](../architecture/source.md).
+The source is the installed game; how Aeria reads it is documented in [`../architecture/source.md`](../architecture/source.md).
 
 Once an Aeria format is released, incompatible changes require a new format version or an explicit lossless migration path. Do not silently reinterpret older data.

@@ -4,8 +4,8 @@ Aeria exports a versioned translation pack consumed by the in-game Harmonia
 plugin.
 
 Status: **implemented**. `aeria-export` collects, validates, writes, signs and
-compresses packs and produces feed entries; `aeria-atlas` runs the Atlas
-`encode` command; `aeria-publish` stores signing keys, creates GitHub releases,
+compresses packs and produces feed entries; `aeria-se` encodes the strings;
+`aeria-publish` stores signing keys, creates GitHub releases,
 and supplies the feed workflow; the desktop Export dialog drives them. The
 contracts are [`../formats/pack-v1.md`](../formats/pack-v1.md),
 [`../formats/feed-v1.md`](../formats/feed-v1.md), and
@@ -26,30 +26,32 @@ editable Git workspace representation.
 
 ## Pipeline
 
-1. **Preconditions.** The project has a verified source whose `contentId`
-   matches the workspace, and `aeria-pack.json` is valid. Translation data and
+1. **Preconditions.** The project is open with the game at its game
+   version, the game has not been patched since the project was opened (its
+   version file is read again), and `aeria-pack.json` is valid. Translation data and
    `aeria-pack.json` have no uncommitted changes, because the manifest records
    `HEAD` as `project.commit`; the project stays locked from this check until
    collection ends. Export is unavailable in a degraded workspace.
 2. **Select units.** Bound units with a target, filtered by the content
    policy: `reviewed` exports only `reviewed` units; `all` also exports
    `draft` and `needs-review` units as unreviewed cells. The policy is chosen
-   per export and recorded in the pack manifest. Units whose source occurrence
-   has no `rawValueHash` are skipped and listed in the export report.
+   per export and recorded in the pack manifest.
 3. **Validate.** Each target is parsed and semantically validated by
-   `aeria-se`, as on save.
+   `aeria-se`, as on save. Each unit's source facts are compared with the
+   game's cell once more; a unit that does not describe the game fails the
+   export. Its source guard is computed from the cell's current bytes.
 4. **Encode.** Target macro strings are encoded in batches of 4096 by
-   `SeStringEncoder`, which uses `aeria_se::codec::encode_checked`: the same
-   Lumina 7.7.0 dialect that produced HXS `macro_text` (see
+   `SeStringEncoder`, which uses `aeria_se::codec::encode_checked`, the
+   inverse of the decoder that prints source text (see
    [`strings.md`](./strings.md#byte-codec)). It confirms that decoding the
    bytes and encoding the result again gives the same bytes; numbers may be
    typed differently from how they print, so the check is on bytes. A rejected
    string, a `0x00` byte, or a string longer than 65535 bytes fails the export.
    `collect_project` takes the encoder as a `StringEncoder` so the pipeline is
    testable with a fake encoder.
-5. **Layout.** For every exported sheet, all String columns from the verified
-   HXS sheet metadata form its layout; each unit's `columnIndex` becomes its
-   string ordinal.
+5. **Layout.** For every exported sheet, all String columns of the game's
+   sheet header form its layout; each unit's `columnIndex` becomes its string
+   ordinal.
 6. **Fonts.** When `aeria-fonts.json` exists, `aeria-fonts` renders the
    configured characters for every size of every listed game font (below) and
    the result becomes the pack's `FONTS` section.
@@ -94,14 +96,13 @@ line box, baseline, and capital height. The preview renders from the unsaved
 settings; export uses the committed ones.
 
 The export report (`ExportReport`) lists what was left out: detached units,
-empty targets, unreviewed units under the `reviewed` policy, and units whose
-source has no raw-value hash.
+empty targets, and unreviewed units under the `reviewed` policy.
 
 The manifest takes `packId`, `title`, `publisher`, `license`, and
 `minHarmonia` from `aeria-pack.json`; `release` and `contentPolicy` from the
-export; `target.language` from the workspace; `source` from the verified HXS;
-`exporter.aeria` from the Aeria build; and `exporter.atlas` from the string
-dialect of the encoder, `lumina-7.7.0`.
+export; `target.language` from the workspace, which must be a target
+language (a project still on `und` cannot export); `source` from the game;
+and `exporter.aeria` from the Aeria build.
 
 ## Desktop flow
 

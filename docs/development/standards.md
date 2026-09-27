@@ -30,7 +30,7 @@ Expected data/user failures are typed errors and user-visible diagnostics, not p
 
 Highest-value regression coverage:
 
-- HXS verification/compatibility fixtures
+- SqPack and Excel reading fixtures and game source facts
 - structured string parsing/serialization golden tests
 - unknown/opaque macro preservation
 - parser fuzz/property tests

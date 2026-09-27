@@ -11,11 +11,14 @@ mod git;
 mod guide;
 mod job_workers;
 mod jobs;
+mod macros;
 mod paths;
 mod project_changes;
 mod search;
-mod source_store;
+mod source;
 mod state;
+#[cfg(test)]
+mod test_support;
 mod updates;
 mod web;
 
@@ -39,17 +42,17 @@ pub use check_workflow::{
     CheckWorkflowDto, git_check_workflow, git_install_check_workflow, git_open_branch_settings,
 };
 pub use commands::{
-    cancel_source_package, close_project, current_project, default_projects_directory_path,
-    forget_recent_project, initialize_project, initialize_project_from_game, list_detached_units,
-    list_recent_projects, open_project, open_project_from_game, open_recent_project,
-    page_translation_rows, preview_source_update, set_translation_note,
-    set_translation_review_state, set_translation_target, start_source_package,
-    translation_progress, update_project_from_game,
+    close_project, current_project, default_projects_directory_path, forget_recent_project,
+    initialize_project_from_game, list_detached_units, list_recent_projects,
+    open_project_from_game, open_recent_project, page_translation_rows, preview_source_update,
+    set_project_target_language, set_translation_note, set_translation_review_state,
+    set_translation_target, source_in_other_languages, translation_progress,
+    update_project_from_game,
 };
 pub use dto::{
-    DetachReasonDto, DetachedUnitDto, GameOpenResultDto, ProjectOpenResultDto, ProjectSheetDto,
-    ProjectSummaryDto, RecentProjectAvailability, RecentProjectDto, ReviewStateDto,
-    SheetProgressDto, SheetSchemaUpdateDto, SourceBindingDto, SourcePackageJobDto,
+    DetachReasonDto, DetachedUnitDto, GameOpenResultDto, OtherLanguageTextDto,
+    ProjectOpenResultDto, ProjectSheetDto, ProjectSummaryDto, RecentProjectAvailability,
+    RecentProjectDto, ReviewStateDto, SheetLayoutUpdateDto, SheetProgressDto, SourceBindingDto,
     SourceUpdateReportDto, TranslationCellDto, TranslationContextCellDto, TranslationOverlayDto,
     TranslationRowCursorDto, TranslationRowDto, TranslationRowPageDto, TranslationUnitIdDto,
 };
@@ -83,10 +86,6 @@ pub use jobs::{
     angelica_job_control, angelica_job_events, angelica_job_remove, angelica_job_retry,
     angelica_job_set_concurrency, angelica_job_set_limit, angelica_job_units, angelica_job_workers,
     angelica_jobs,
-};
-pub use source_store::{
-    SourceAvailabilityDto, SourcePackageEntryDto, delete_source_package, list_source_packages,
-    reveal_source_packages, source_availability,
 };
 pub use state::{Activity, DesktopState};
 pub use updates::{
@@ -172,32 +171,29 @@ pub fn run() {
             update_download,
             update_install,
             update_open_release,
-            open_project,
             open_project_from_game,
             game_settings,
             set_game_path,
-            list_source_packages,
-            reveal_source_packages,
-            delete_source_package,
-            source_availability,
             default_projects_directory_path,
-            initialize_project,
-            start_source_package,
             initialize_project_from_game,
             update_project_from_game,
             preview_source_update,
             list_detached_units,
-            cancel_source_package,
             current_project,
             close_project,
             list_recent_projects,
             open_recent_project,
             forget_recent_project,
             page_translation_rows,
+            source_in_other_languages,
             set_translation_target,
             set_translation_note,
             set_translation_review_state,
             translation_progress,
+            set_project_target_language,
+            macros::macro_view,
+            macros::game_glyph_font,
+            macros::game_icon,
             git_overview,
             git_initialize,
             git_set_identity,

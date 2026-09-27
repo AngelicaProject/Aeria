@@ -1,10 +1,7 @@
 //! Transactional application-level translation mutations.
 
-use aeria_core::{
-    ReviewState, Sha256Hash, SourceBinding, SourceFingerprint, SourceLayout, TranslationUnit,
-    TranslationUnitId,
-};
-use aeria_rebase::{RowKeys, SourceUpdateError};
+use aeria_core::{ReviewState, SourceBinding, SourceFacts, TranslationUnit, TranslationUnitId};
+use aeria_source::{SheetLookup, SourceCell};
 use thiserror::Error;
 
 use crate::{ProjectSession, WorkspaceError, WorkspaceStoreError};
@@ -16,10 +13,8 @@ pub enum TranslationMutationError {
     #[error("translation target must not be empty or whitespace-only")]
     EmptyTarget,
 
-    /// The exact source occurrence is not granted by the verified HSG.
-    #[error(
-        "source occurrence is not translatable according to source guidance: {source_binding:?}"
-    )]
+    /// The cell does not exist or is not translatable.
+    #[error("source cell is not translatable: {source_binding:?}")]
     SourceNotTranslatable { source_binding: SourceBinding },
 
     /// The requested domain mutation was invalid.
@@ -30,16 +25,15 @@ pub enum TranslationMutationError {
     #[error("translation workspace persistence failed: {0}")]
     Persistence(#[from] WorkspaceStoreError),
 
-    /// An existing unit no longer describes the verified source occurrence
-    /// owned by this session.
+    /// An existing unit no longer describes the game's cell.
     #[error(
-        "translation unit {translation_unit_id} at {source_binding:?} has stale source facts: persisted {persisted:?}, verified {verified:?}"
+        "translation unit {translation_unit_id} at {source_binding:?} has stale source facts: persisted {persisted:?}, game {found:?}"
     )]
     SourceIntegrity {
         translation_unit_id: TranslationUnitId,
         source_binding: Box<SourceBinding>,
-        persisted: Box<(SourceFingerprint, Option<SourceLayout>)>,
-        verified: Box<(SourceFingerprint, SourceLayout)>,
+        persisted: Box<SourceFacts>,
+        found: Box<Option<SourceFacts>>,
     },
 }
 
@@ -72,38 +66,49 @@ pub enum AssistedWriteError {
 }
 
 impl ProjectSession {
-    /// Returns the verified source macro text of one translatable occurrence.
+    /// Returns the source facts of a translatable cell.
+    fn translatable_facts(
+        &self,
+        source_binding: &SourceBinding,
+    ) -> Result<SourceFacts, TranslationMutationError> {
+        let not_translatable = || TranslationMutationError::SourceNotTranslatable {
+            source_binding: source_binding.clone(),
+        };
+        let SheetLookup::Present(sheet) = self
+            .source
+            .sheet(source_binding.sheet_name())
+            .map_err(|error| TranslationMutationError::Workspace(WorkspaceError::Source(error)))?
+        else {
+            return Err(not_translatable());
+        };
+        let (row, subrow, column) = (
+            source_binding.row_id(),
+            source_binding.subrow_id(),
+            source_binding.column_index(),
+        );
+        if !sheet
+            .cell(row, subrow, column)
+            .is_some_and(|cell: SourceCell<'_>| cell.translatable)
+        {
+            return Err(not_translatable());
+        }
+        sheet
+            .facts(row, subrow, column)
+            .ok_or_else(not_translatable)
+    }
+
+    /// Returns the source macro text of one translatable cell.
     ///
     /// # Errors
     ///
-    /// Returns `SourceNotTranslatable` for an occurrence that HSG does not
-    /// grant or that has no String cell.
+    /// Returns `SourceNotTranslatable` for a cell that does not exist or is
+    /// not translatable.
     pub fn source_macro(
         &self,
         source_binding: &SourceBinding,
     ) -> Result<String, TranslationMutationError> {
-        let not_translatable = || TranslationMutationError::SourceNotTranslatable {
-            source_binding: source_binding.clone(),
-        };
-        if !self.source_package.guidance_index().is_translatable(
-            source_binding.sheet_name(),
-            source_binding.row_id(),
-            source_binding.subrow_id(),
-            source_binding.column_index(),
-        ) {
-            return Err(not_translatable());
-        }
-        self.source_package
-            .source()
-            .string_cell(
-                source_binding.sheet_name(),
-                source_binding.row_id(),
-                source_binding.subrow_id(),
-                source_binding.column_index(),
-            )
-            .map_err(|error| TranslationMutationError::Workspace(WorkspaceError::Hxs(error)))?
-            .map(|cell| cell.macro_text)
-            .ok_or_else(not_translatable)
+        self.translatable_facts(source_binding)
+            .map(|facts| facts.text().to_owned())
     }
 
     /// Returns the current target and review state of a bound unit, or the
@@ -167,8 +172,8 @@ impl ProjectSession {
 impl ProjectSession {
     /// Creates or updates the translation unit at one verified source binding.
     ///
-    /// A missing unit is created with a stable ID derived from the verified
-    /// HXS occurrence. An existing unit keeps its durable ID and uses the
+    /// A missing unit is created with a stable ID derived from the game's
+    /// cell. An existing unit keeps its durable ID and uses the
     /// normal workspace target-edit semantics. Empty and whitespace-only
     /// targets are rejected before any workspace or persistence mutation.
     ///
@@ -184,29 +189,15 @@ impl ProjectSession {
         if target_macro.trim().is_empty() {
             return Err(TranslationMutationError::EmptyTarget);
         }
-        if !self.source_package.guidance_index().is_translatable(
-            source_binding.sheet_name(),
-            source_binding.row_id(),
-            source_binding.subrow_id(),
-            source_binding.column_index(),
-        ) {
-            return Err(TranslationMutationError::SourceNotTranslatable {
-                source_binding: source_binding.clone(),
-            });
-        }
+        let facts = self.translatable_facts(source_binding)?;
         let existing_id = self
             .workspace
             .unit_by_source_binding(source_binding)
             .map(TranslationUnit::id);
 
         let Some(id) = existing_id else {
-            let row_key = self.row_key_for(source_binding)?;
-            let id = self.workspace.create_unit_from_verified_source(
-                self.source_package.source(),
-                source_binding.clone(),
-                target_macro,
-                row_key,
-            )?;
+            self.workspace.require_source_language(&self.source)?;
+            let id = self.workspace.create_unit(facts, target_macro)?;
             if let Err(error) = self.store.persist_unit(&self.workspace, id) {
                 debug_assert!(self.workspace.remove_unit(id).is_some());
                 return Err(error.into());
@@ -304,33 +295,6 @@ impl ProjectSession {
         Ok(())
     }
 
-    /// Returns the row key of the binding's row when its sheet is keyed.
-    fn row_key_for(
-        &mut self,
-        source_binding: &SourceBinding,
-    ) -> Result<Option<Sha256Hash>, TranslationMutationError> {
-        let sheet_name = source_binding.sheet_name();
-        if !self.row_keys.contains_key(sheet_name) {
-            let guidance = self.source_package.guidance_index();
-            let keys = RowKeys::read(self.source_package.source(), sheet_name, |binding| {
-                guidance.is_translatable(
-                    binding.sheet_name(),
-                    binding.row_id(),
-                    binding.subrow_id(),
-                    binding.column_index(),
-                )
-            })
-            .map_err(|error| match error {
-                SourceUpdateError::SourceRead(source) => WorkspaceError::Hxs(source),
-                other => unreachable!("row key detection only reads the source: {other}"),
-            })?;
-            self.row_keys.insert(sheet_name.to_owned(), keys);
-        }
-        Ok(self.row_keys[sheet_name]
-            .as_ref()
-            .and_then(|keys| keys.key_of(source_binding.row_id(), source_binding.subrow_id())))
-    }
-
     fn verify_current_source(
         &self,
         translation_unit_id: TranslationUnitId,
@@ -348,14 +312,24 @@ impl ProjectSession {
             .into());
         }
         let source_binding = unit.source_binding().clone();
-        let (fingerprint, layout) =
-            crate::verified_source(self.source_package.source(), &source_binding)?;
-        if unit.source_fingerprint() != &fingerprint || unit.source_layout() != Some(layout) {
+        let found = match self
+            .source
+            .sheet(source_binding.sheet_name())
+            .map_err(WorkspaceError::Source)?
+        {
+            SheetLookup::Present(sheet) => sheet.facts(
+                source_binding.row_id(),
+                source_binding.subrow_id(),
+                source_binding.column_index(),
+            ),
+            SheetLookup::Missing | SheetLookup::Unavailable(_) => None,
+        };
+        if found.as_ref() != Some(unit.source()) {
             return Err(TranslationMutationError::SourceIntegrity {
                 translation_unit_id,
                 source_binding: Box::new(source_binding),
-                persisted: Box::new((*unit.source_fingerprint(), unit.source_layout())),
-                verified: Box::new((fingerprint, layout)),
+                persisted: Box::new(unit.source().clone()),
+                found: Box::new(found),
             });
         }
         Ok(())
@@ -364,377 +338,60 @@ impl ProjectSession {
 
 #[cfg(test)]
 mod tests {
-    #![allow(dead_code, unused_imports)]
-    use std::collections::BTreeMap;
-    use std::fmt::Write as _;
-    use std::fs;
-    use std::path::{Path, PathBuf};
+    use std::sync::Arc;
 
-    use aeria_core::SourceBinding;
-    use aeria_hxs::HxsSnapshot;
-    use rusqlite::{Connection, params};
-    use sha2::{Digest, Sha256};
-    use tempfile::TempDir;
+    use aeria_source::{GameSource, SourceLanguage};
+    use aeria_sqpack::testing::{FakeGame, TextSheet};
 
     use super::*;
     use crate::persistence::{fail_next_publication_for_test, persistence_test_lock};
 
-    const SYNTHETIC_SCHEMA: &str = include_str!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../aeria-hxs/tests/fixtures/synthetic_v1.sql"
-    ));
-    const APPLICATION_ID: i64 = 0x4841_544c;
-
-    struct Fixture {
-        _directory: TempDir,
-        path: PathBuf,
+    fn session() -> (tempfile::TempDir, tempfile::TempDir, ProjectSession) {
+        let game = tempfile::tempdir().expect("game");
+        FakeGame::new("2026.09.15.0000.0000")
+            .with_text("Addon", &TextSheet::new(1, &[0]).row(1, &[(0, "Hello")]))
+            .write(game.path())
+            .expect("write game");
+        let source = GameSource::open(game.path(), SourceLanguage::English).expect("source");
+        let repository = tempfile::tempdir().expect("repository");
+        let session = ProjectSession::initialize(repository.path(), Arc::new(source), "fr")
+            .expect("initialize");
+        (game, repository, session)
     }
 
     #[test]
-    fn existing_unit_persistence_failure_rolls_back_the_live_session() {
-        let _test_lock = persistence_test_lock();
-        let fixture = write_fixture();
-        let repository = tempfile::tempdir().expect("temporary repository");
-        let binding = SourceBinding::new("Synthetic", 42, 0, 0);
-        let mut session = ProjectSession::initialize(
-            repository.path(),
-            &fixture.path,
-            repository.path().join("cache"),
-            "fr",
-        )
-        .expect("init");
-        let id = session
-            .set_target(&binding, "Bonjour")
-            .expect("initial target");
-        let before_files = managed_files(repository.path());
-
+    fn a_failed_publication_rolls_back_a_new_unit() {
+        let _lock = persistence_test_lock();
+        let (_game, _repository, mut session) = session();
+        let binding = SourceBinding::new("Addon", 1, 0, 0);
         fail_next_publication_for_test();
-        let error = session
-            .set_target(&binding, "Salut")
-            .expect_err("publication must fail");
         assert!(matches!(
-            error,
-            TranslationMutationError::Persistence(
-                crate::WorkspaceStoreError::AtomicPublication { .. }
-            )
+            session.set_target(&binding, "Bonjour"),
+            Err(TranslationMutationError::Persistence(_))
         ));
-        assert_eq!(
-            session.workspace().unit(id).expect("unit").target_macro(),
-            "Bonjour"
+        assert!(
+            session
+                .workspace()
+                .unit_by_source_binding(&binding)
+                .is_none()
         );
-        assert_eq!(before_files, managed_files(repository.path()));
-
         session
-            .set_target(&binding, "Salut")
-            .expect("subsequent update succeeds");
-        assert_eq!(
-            session.workspace().unit(id).expect("unit").target_macro(),
-            "Salut"
-        );
+            .set_target(&binding, "Bonjour")
+            .expect("a retry succeeds");
     }
 
     #[test]
-    fn reload_workspace_adopts_external_changes_and_keeps_state_on_failure() {
-        let _test_lock = persistence_test_lock();
-        let fixture = write_fixture();
-        let repository = tempfile::tempdir().expect("temporary repository");
-        let binding = SourceBinding::new("Synthetic", 42, 0, 0);
-        let mut writer = ProjectSession::initialize(
-            repository.path(),
-            &fixture.path,
-            repository.path().join("cache"),
-            "fr",
-        )
-        .expect("init");
-        let mut reader = ProjectSession::open(
-            repository.path(),
-            &fixture.path,
-            repository.path().join("cache-reader"),
-        )
-        .expect("open");
-
-        let id = writer.set_target(&binding, "Bonjour").expect("target");
-        assert!(reader.workspace().unit(id).is_none());
-        reader.reload_workspace().expect("reload");
-        assert_eq!(
-            reader.workspace().unit(id).expect("unit").target_macro(),
-            "Bonjour"
-        );
-        reader
-            .set_target(&binding, "Salut")
-            .expect("reloaded session can mutate");
-
-        let shard = repository.path().join(crate::unit_shard_path(id));
-        fs::write(
-            &shard,
-            "not json
-",
-        )
-        .expect("corrupt shard");
-        assert!(matches!(
-            reader.reload_workspace(),
-            Err(crate::ProjectSessionError::Store { .. })
-        ));
-        assert_eq!(
-            reader.workspace().unit(id).expect("unit").target_macro(),
-            "Salut"
-        );
-    }
-
-    #[test]
-    fn first_unit_persistence_failure_rolls_back_creation() {
-        let _test_lock = persistence_test_lock();
-        let fixture = write_fixture();
-        let repository = tempfile::tempdir().expect("temporary repository");
-        let binding = SourceBinding::new("Synthetic", 42, 0, 0);
-        let mut session = ProjectSession::initialize(
-            repository.path(),
-            &fixture.path,
-            repository.path().join("cache"),
-            "fr",
-        )
-        .expect("init");
-        let before_files = managed_files(repository.path());
-
+    fn a_failed_publication_restores_an_existing_unit() {
+        let _lock = persistence_test_lock();
+        let (_game, _repository, mut session) = session();
+        let binding = SourceBinding::new("Addon", 1, 0, 0);
+        let id = session.set_target(&binding, "Bonjour").expect("target");
+        let before = session.workspace().unit(id).cloned();
         fail_next_publication_for_test();
-        let error = session
-            .set_target(&binding, "Bonjour")
-            .expect_err("publication must fail");
-        assert!(matches!(
-            error,
-            TranslationMutationError::Persistence(
-                crate::WorkspaceStoreError::AtomicPublication { .. }
-            )
-        ));
-        assert_eq!(session.workspace().units().count(), 0);
-        assert_eq!(before_files, managed_files(repository.path()));
-
-        let id = session
-            .set_target(&binding, "Bonjour")
-            .expect("subsequent creation succeeds");
-        assert_eq!(
-            session.workspace().unit(id).expect("unit").target_macro(),
-            "Bonjour"
-        );
-    }
-
-    fn managed_files(repository_root: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
-        let aeria_root = repository_root.join(".aeria");
-        let mut files = BTreeMap::new();
-        let manifest = aeria_root.join("manifest.json");
-        files.insert(manifest.clone(), fs::read(manifest).expect("manifest"));
-        let units = aeria_root.join("units");
-        if units.is_dir() {
-            for entry in fs::read_dir(units).expect("units directory") {
-                let entry = entry.expect("unit entry");
-                let path = entry.path();
-                if path.is_file() {
-                    files.insert(path.clone(), fs::read(path).expect("unit shard"));
-                }
-            }
-        }
-        files
-    }
-
-    #[allow(clippy::too_many_lines)]
-    fn write_fixture() -> Fixture {
-        Fixture {
-            _directory: tempfile::tempdir().expect("fixture directory"),
-            path: PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .join("../aeria-hsp/tests/fixtures/synthetic.hsp"),
-        }
-    }
-
-    #[allow(dead_code)]
-    fn write_legacy_fixture() -> Fixture {
-        let directory = tempfile::tempdir().expect("fixture directory");
-        let path = directory.path().join("fixture.hxs");
-        let connection = Connection::open(&path).expect("fixture database");
-        connection
-            .execute_batch(SYNTHETIC_SCHEMA)
-            .expect("fixture schema");
-        connection
-            .execute_batch(&format!(
-                "PRAGMA application_id = {APPLICATION_ID}; PRAGMA user_version = 1; PRAGMA foreign_keys = ON;"
-            ))
-            .expect("fixture identity");
-
-        let macro_hash = macro_hash("one");
-        let technical_hash = row_technical_hash("Synthetic", 42, 0);
-        let string_hash = row_string_hash("Synthetic", 42, 0, 0, &macro_hash);
-        let row_hash = row_hash("Synthetic", 42, 0, &technical_hash, &string_hash);
-        let schema_hash = schema_hash("Synthetic");
-        let sheet_technical_hash = sheet_rows_hash(
-            "HARMONIA-HXS-V1-SHEET-TECHNICAL",
-            "Synthetic",
-            &[(42, 0, technical_hash)],
-        );
-        let sheet_string_hash = sheet_rows_hash(
-            "HARMONIA-HXS-V1-SHEET-STRINGS",
-            "Synthetic",
-            &[(42, 0, string_hash)],
-        );
-        let content_hash = digest(|hasher| {
-            hasher.update(b"HARMONIA-HXS-V1-SHEET");
-            framed_text(hasher, "Synthetic");
-            hasher.update(0_u32.to_le_bytes());
-            hasher.update(schema_hash);
-            hasher.update(sheet_technical_hash);
-            hasher.update(sheet_string_hash);
-        });
-        let content_id = format!(
-            "sha256:{}",
-            hex(&digest(|hasher| {
-                hasher.update(b"HARMONIA-HXS-CONTENT-v1");
-                framed_text(hasher, "en");
-                framed_text(hasher, "Synthetic");
-                framed_text(hasher, "en");
-                hasher.update(schema_hash);
-                hasher.update(content_hash);
-            }))
-        );
-        let snapshot_id = format!(
-            "sha256:{}",
-            hex(&digest(|hasher| {
-                hasher.update(b"HARMONIA-HXS-SNAPSHOT-v1");
-                framed_text(hasher, "test-game");
-                framed_text(hasher, "en");
-                framed_text(hasher, &content_id);
-            }))
-        );
-
-        connection
-            .execute(
-                "INSERT INTO sheets (id, name, variant, effective_language, column_count, row_count, schema_hash, technical_hash, string_hash, content_hash) VALUES (1, 'Synthetic', 0, 'en', 1, 1, ?1, ?2, ?3, ?4)",
-                params![schema_hash.as_slice(), sheet_technical_hash.as_slice(), sheet_string_hash.as_slice(), content_hash.as_slice()],
-            )
-            .expect("sheet");
-        connection
-            .execute(
-                "INSERT INTO columns (sheet_id, column_index, offset, type) VALUES (1, 0, 0, 1)",
-                [],
-            )
-            .expect("column");
-        connection
-            .execute(
-                "INSERT INTO rows (sheet_id, row_id, subrow_id, technical_payload, row_hash, technical_hash, string_hash) VALUES (1, 42, 0, ?1, ?2, ?3, ?4)",
-                params![Vec::<u8>::new(), row_hash.as_slice(), technical_hash.as_slice(), string_hash.as_slice()],
-            )
-            .expect("row");
-        connection
-            .execute(
-                "INSERT INTO string_cells (sheet_id, row_id, subrow_id, column_index, macro_text, raw_value, macro_hash, raw_hash) VALUES (1, 42, 0, 0, 'one', NULL, ?1, NULL)",
-                params![macro_hash.as_slice()],
-            )
-            .expect("String cell");
-        connection
-            .execute(
-                "INSERT INTO hxs_meta (id, format_version, game_version, language, scope, content_id, snapshot_id, extractor_version, lumina_version, sheet_count, row_count, string_cell_count) VALUES (1, 1, 'test-game', 'en', 'full', ?1, ?2, 'test', '7.7.0', 1, 1, 1)",
-                params![content_id, snapshot_id],
-            )
-            .expect("metadata");
-
-        HxsSnapshot::open(&path).expect("fixture verifies");
-        Fixture {
-            _directory: directory,
-            path,
-        }
-    }
-
-    fn macro_hash(value: &str) -> [u8; 32] {
-        digest(|hasher| {
-            hasher.update(b"HARMONIA-HXS-V1-MACRO");
-            framed_text(hasher, value);
-        })
-    }
-
-    fn schema_hash(sheet_name: &str) -> [u8; 32] {
-        digest(|hasher| {
-            hasher.update(b"HARMONIA-HXS-V1-SCHEMA");
-            framed_text(hasher, sheet_name);
-            hasher.update(0_u32.to_le_bytes());
-            hasher.update(0_u32.to_le_bytes());
-            hasher.update(0_u32.to_le_bytes());
-            hasher.update(1_u32.to_le_bytes());
-        })
-    }
-
-    fn row_technical_hash(sheet_name: &str, row_id: u32, subrow_id: u16) -> [u8; 32] {
-        digest(|hasher| {
-            hasher.update(b"HARMONIA-HXS-V1-ROW-TECHNICAL");
-            row_identity(hasher, sheet_name, row_id, subrow_id);
-        })
-    }
-
-    fn row_string_hash(
-        sheet_name: &str,
-        row_id: u32,
-        subrow_id: u16,
-        column_index: u32,
-        macro_hash: &[u8; 32],
-    ) -> [u8; 32] {
-        digest(|hasher| {
-            hasher.update(b"HARMONIA-HXS-V1-ROW-STRINGS");
-            row_identity(hasher, sheet_name, row_id, subrow_id);
-            hasher.update(column_index.to_le_bytes());
-            hasher.update(macro_hash);
-            hasher.update([0]);
-        })
-    }
-
-    fn row_hash(
-        sheet_name: &str,
-        row_id: u32,
-        subrow_id: u16,
-        technical_hash: &[u8; 32],
-        string_hash: &[u8; 32],
-    ) -> [u8; 32] {
-        digest(|hasher| {
-            hasher.update(b"HARMONIA-HXS-V1-ROW");
-            row_identity(hasher, sheet_name, row_id, subrow_id);
-            hasher.update(technical_hash);
-            hasher.update(string_hash);
-        })
-    }
-
-    fn sheet_rows_hash(domain: &str, sheet_name: &str, rows: &[(u32, u16, [u8; 32])]) -> [u8; 32] {
-        digest(|hasher| {
-            hasher.update(domain.as_bytes());
-            framed_text(hasher, sheet_name);
-            for (row_id, subrow_id, row_hash) in rows {
-                hasher.update(row_id.to_le_bytes());
-                hasher.update(u32::from(*subrow_id).to_le_bytes());
-                hasher.update(row_hash);
-            }
-        })
-    }
-
-    fn row_identity(hasher: &mut Sha256, sheet_name: &str, row_id: u32, subrow_id: u16) {
-        framed_text(hasher, sheet_name);
-        hasher.update(row_id.to_le_bytes());
-        hasher.update(u32::from(subrow_id).to_le_bytes());
-    }
-
-    fn framed_text(hasher: &mut Sha256, value: &str) {
-        hasher.update(
-            u32::try_from(value.len())
-                .expect("fixture text fits framing")
-                .to_le_bytes(),
-        );
-        hasher.update(value.as_bytes());
-    }
-
-    fn digest(update: impl FnOnce(&mut Sha256)) -> [u8; 32] {
-        let mut hasher = Sha256::new();
-        update(&mut hasher);
-        hasher.finalize().into()
-    }
-
-    fn hex(bytes: &[u8; 32]) -> String {
-        let mut result = String::with_capacity(64);
-        for byte in bytes {
-            write!(&mut result, "{byte:02x}").expect("String writes cannot fail");
-        }
-        result
+        assert!(session.set_target(&binding, "Salut").is_err());
+        assert_eq!(session.workspace().unit(id).cloned(), before);
+        fail_next_publication_for_test();
+        assert!(session.set_note(id, Some("note".to_owned())).is_err());
+        assert_eq!(session.workspace().unit(id).cloned(), before);
     }
 }

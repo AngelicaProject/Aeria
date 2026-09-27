@@ -1896,7 +1896,7 @@ mod tests {
         ) -> Result<TranslatableUnit, ToolError> {
             match location.row {
                 1 => Ok(TranslatableUnit {
-                    source: "Hi <pcname(lnum1)>!".to_owned(),
+                    source: "Hi <player-name $n1>!".to_owned(),
                     state: UnitState {
                         target: None,
                         review_state: None,
@@ -1976,7 +1976,7 @@ mod tests {
                 .contains("tag 1")
         );
         let submitted = writer.submitted.lock().expect("lock");
-        assert_eq!(submitted[0].target, "Привет, <pcname(lnum1)>!");
+        assert_eq!(submitted[0].target, "Привет, <player-name $n1>!");
         assert_eq!(submitted[1].expected.target.as_deref(), Some("Пока"));
     }
 
@@ -2001,7 +2001,7 @@ mod tests {
         );
         let value: Value = serde_json::from_str(&output.content).expect("json");
         assert_eq!(value["valid"], true);
-        assert_eq!(value["target"], "Привет, <pcname(lnum1)>");
+        assert_eq!(value["target"], "Привет, <player-name $n1>");
         assert!(writer.submitted.lock().expect("lock").is_empty());
     }
 
@@ -2013,7 +2013,7 @@ mod tests {
                 subrow: 0,
                 cells: vec![
                     CellSnapshot {
-                        source: "Hi <pcname(lnum1)>".to_owned(),
+                        source: "Hi <player-name $n1>".to_owned(),
                         ..cell(0, None, None)
                     },
                     CellSnapshot {
@@ -2021,7 +2021,7 @@ mod tests {
                         ..cell(1, None, None)
                     },
                     CellSnapshot {
-                        source: "<if(".to_owned(),
+                        source: "<if $n1>".to_owned(),
                         ..cell(2, None, None)
                     },
                 ],
@@ -2030,7 +2030,7 @@ mod tests {
             None,
         );
         assert_eq!(row.cells[0].tagged.as_deref(), Some(r#"Hi <x id="1"/>"#));
-        assert!(row.cells[0].tags[0].starts_with("1: <pcname(lnum1)>"));
+        assert!(row.cells[0].tags[0].starts_with("1: <player-name $n1>"));
         assert!(row.cells[1].tagged.is_none());
         assert!(row.cells[2].untaggable);
     }

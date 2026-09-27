@@ -92,7 +92,15 @@
 }
 .editor-hint { display: flex; flex: 1; flex-wrap: wrap; align-items: center; gap: 3px; min-width: 0; padding-left: 6px; color: var(--fg-faint); font-size: var(--text-2xs); }
 
-.editor-surface { flex: 1; min-height: 0; }
+.editor-surface { flex: 1; min-height: 72px; }
+
+/* The source in the other client languages, stacked to compare tags. */
+.editor-languages { flex: 1; min-height: 0; overflow-y: auto; padding: 4px 10px 10px; }
+.other-languages { display: grid; gap: 10px; }
+.other-languages li { display: grid; gap: 4px; justify-items: start; }
+.other-languages li > .muted { font-size: var(--text-xs); }
+.other-language-text { justify-self: stretch; }
+.other-languages-empty { padding: 10px; font-size: var(--text-xs); }
 .button-kbd { height: 16px; border-color: color-mix(in srgb, currentColor 30%, transparent); border-bottom-width: 1px; color: inherit; opacity: 0.7; }
 
 .note-input {
@@ -157,10 +165,56 @@
 }
 .cm-macro-name { color: var(--macro); font-weight: 600; }
 
-/* Narrow documents: stack the note under source and target. */
-@container (max-width: 700px) {
-  .editor-view-switch { display: none; }
+/* The chip view: tags as compact chips a translator reads past, formatting as
+   styled text between thin markers, and line breaks as line breaks. */
+.cm-chip {
+  display: inline-block;
+  margin: 0 2px;
+  padding: 0 5px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--macro) 14%, transparent);
+  color: var(--macro);
+  font-family: var(--font-ui);
+  font-size: 0.78em;
+  font-style: normal;
+  font-weight: 500;
+  line-height: 1.5;
+  vertical-align: 0.08em;
+  white-space: nowrap;
+  cursor: default;
+  user-select: none;
 }
+.cm-chip-condition { background: color-mix(in srgb, var(--warn) 16%, transparent); color: var(--warn); }
+.cm-chip-break,
+.cm-chip-space { padding: 0 3px; background: transparent; color: var(--fg-faint); }
+.cm-chip-unknown { background: color-mix(in srgb, var(--bad) 14%, transparent); color: var(--bad); font-family: var(--font-mono); }
+.cm-chip.has-image { padding: 0; background: transparent; line-height: 0; vertical-align: -0.28em; }
+.cm-chip.has-image img { height: 1.35em; }
+.cm-chip.is-error,
+.cm-chip-marker.is-error { box-shadow: 0 0 0 1px var(--bad); }
+.cm-chip-marker {
+  display: inline-block;
+  width: 3px;
+  height: 1.05em;
+  margin: 0 2px;
+  border-radius: 2px;
+  background: var(--marker-color, var(--fg-faint));
+  vertical-align: -0.15em;
+  opacity: 0.85;
+}
+.cm-chip-marker.is-close { opacity: 0.45; }
+/* A value branch such as {240}: the value itself, marked as not translatable. */
+.cm-chip-number { margin: 0 1px; padding: 0 2px; background: transparent; color: var(--macro); font-family: inherit; font-size: 1em; font-weight: 600; }
+/* The start of the line after a <br>, a box for the cursor at the end of the text. */
+.cm-chip-line-start { display: inline-block; width: 0; height: 1em; vertical-align: text-bottom; }
+/* A condition whose branches are values only, such as 10 / 5. */
+.cm-chip-choice { background: transparent; color: var(--macro); font-family: inherit; font-size: 1em; font-weight: 600; box-shadow: inset 0 -1px 0 color-mix(in srgb, var(--macro) 60%, transparent); border-radius: 0; padding: 0 2px; cursor: help; }
+/* Source chips can be picked into the translation. */
+.macro-editor .is-pickable .cm-chip,
+.macro-editor .is-pickable .cm-chip-marker { cursor: copy; }
+.macro-editor .is-pickable .cm-chip:hover { filter: brightness(1.25); box-shadow: 0 0 0 1px currentColor; }
+
+/* Narrow documents: stack the note under source and target. */
 @container (max-width: 860px) {
   .editor-grid { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) auto; }
   .editor-note { grid-column: 1 / -1; flex-direction: row; align-items: stretch; height: 64px; }
@@ -188,3 +242,27 @@
 .checkpoint-diff-text del { border-radius: 2px; background: color-mix(in srgb, var(--bad) 20%, transparent); color: var(--fg-subtle); text-decoration: line-through; }
 .git-mark-added { color: var(--ok) !important; }
 .git-mark-modified { color: var(--accent-text) !important; }
+
+/* Macro errors and hovers from the Rust view of the text. */
+.cm-macro-error {
+  text-decoration: wavy underline var(--bad);
+  text-decoration-skip-ink: none;
+  text-underline-offset: 3px;
+}
+.macro-editor .cm-tooltip {
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: var(--popover);
+  box-shadow: var(--shadow-pop);
+  color: var(--fg);
+}
+.macro-hover {
+  display: grid;
+  gap: 2px;
+  max-width: 420px;
+  padding: 6px 9px;
+  font-size: var(--text-xs);
+  line-height: 1.4;
+}
+.macro-hover-title { color: var(--macro); font-family: var(--font-mono); font-weight: 600; }
+.macro-hover.is-error .macro-hover-title { color: var(--bad); }

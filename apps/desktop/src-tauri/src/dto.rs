@@ -4,7 +4,7 @@ use aeria_core::{
     DetachReason, ReviewState, SourceBinding, SourceStatus, TranslationUnit, TranslationUnitId,
 };
 use aeria_projects::RegistryEntry;
-use aeria_rebase::SheetSchemaUpdate;
+use aeria_rebase::SheetLayoutUpdate;
 use aeria_workspace::{
     ProjectSession, SheetTranslationProgress, SourceUpdateReport, TranslationCellView,
     TranslationContextCellView, TranslationOverlayView, TranslationRowCursor, TranslationRowPage,
@@ -14,11 +14,14 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::CommandError;
 
-/// Opaque identity for an active source-package generation job.
+/// The text of one source cell in another client language, for comparison.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct SourcePackageJobDto {
-    pub job_id: String,
+pub struct OtherLanguageTextDto {
+    /// The language code, such as `de`.
+    pub language: String,
+    /// The cell's macro text; `None` when that language has no such cell.
+    pub text: Option<String>,
 }
 
 /// A source occurrence coordinate accepted and returned by desktop commands.
@@ -82,14 +85,15 @@ impl From<ReviewStateDto> for ReviewState {
     }
 }
 
-/// Metadata for one verified HXS sheet.
+/// One sheet of the game with its size.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProjectSheetDto {
     pub name: String,
-    pub effective_language: String,
-    pub row_count: u64,
+    pub row_count: usize,
     pub translatable_cell_count: usize,
+    /// The sheet is listed by the game but cannot be read.
+    pub unavailable: bool,
 }
 
 /// Owned metadata for the currently active project.
@@ -97,51 +101,36 @@ pub struct ProjectSheetDto {
 #[serde(rename_all = "camelCase")]
 pub struct ProjectSummaryDto {
     pub repository_root: String,
-    pub source_package_path: String,
-    pub source_package_id: String,
     pub source_language: String,
     pub target_language: String,
-    pub source_content_id: String,
-    pub source_snapshot_id: String,
+    /// The game version the project describes, which is the installed
+    /// game's version while the project is open.
     pub game_version: String,
-    pub scope: String,
+    /// The game installation the project reads.
+    pub game_path: String,
     pub sheets: Vec<ProjectSheetDto>,
     pub detached_unit_count: usize,
 }
 
 impl ProjectSummaryDto {
     pub(crate) fn from_session(session: &ProjectSession) -> Self {
-        let source_metadata = session.source().metadata();
         let workspace_metadata = session.workspace().metadata();
-        let sheets = session
-            .source()
-            .sheets()
-            .into_iter()
-            .map(|sheet| {
-                let translatable_cell_count = session
-                    .source_package()
-                    .guidance_index()
-                    .translatable_cell_count(&sheet.name);
-                ProjectSheetDto {
-                    name: sheet.name,
-                    effective_language: sheet.effective_language,
-                    row_count: sheet.row_count,
-                    translatable_cell_count,
-                }
-            })
-            .collect();
-
+        let catalog = session.source().catalog().unwrap_or_default();
         Self {
             repository_root: session.repository_root().to_string_lossy().into_owned(),
-            source_package_path: session.source_package_path().to_string_lossy().into_owned(),
-            source_package_id: session.source_package().package_id().to_owned(),
             source_language: workspace_metadata.source_language().to_owned(),
             target_language: workspace_metadata.target_language().to_owned(),
-            source_content_id: workspace_metadata.source_content_id().to_owned(),
-            source_snapshot_id: source_metadata.snapshot_id,
-            game_version: source_metadata.game_version,
-            scope: source_metadata.scope,
-            sheets,
+            game_version: workspace_metadata.game_version().to_string(),
+            game_path: session.source().game_path().to_string_lossy().into_owned(),
+            sheets: catalog
+                .iter()
+                .map(|sheet| ProjectSheetDto {
+                    name: sheet.name.clone(),
+                    row_count: sheet.rows,
+                    translatable_cell_count: sheet.translatable,
+                    unavailable: sheet.unavailable,
+                })
+                .collect(),
             detached_unit_count: session.detached_units().count(),
         }
     }
@@ -185,16 +174,11 @@ pub struct ProjectOpenResultDto {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "status", rename_all = "camelCase")]
 pub enum GameOpenResultDto {
-    /// The project is open with a source package matching its workspace.
+    /// The project is open and describes the game.
     Opened { result: Box<ProjectOpenResultDto> },
-    /// The only available package needs a source update first. Nothing was
-    /// written; after confirmation the renderer opens the project with this
-    /// package and `acceptSourceUpdate`.
-    #[serde(rename_all = "camelCase")]
-    SourceUpdateRequired {
-        source_package_path: String,
-        report: SourceUpdateReportDto,
-    },
+    /// The project needs a source update first. Nothing was written; after
+    /// confirmation the renderer updates the project from the game.
+    SourceUpdateRequired { report: SourceUpdateReportDto },
 }
 
 /// Why a translation unit is detached from the current source.
@@ -224,20 +208,20 @@ impl From<DetachReason> for DetachReasonDto {
     }
 }
 
-/// A sheet whose managed units were bound in another schema generation.
+/// A sheet whose units were bound in another layout, or that is gone.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct SheetSchemaUpdateDto {
+pub struct SheetLayoutUpdateDto {
     pub sheet_name: String,
     pub removed: bool,
-    /// The sheet still exists in the game but the source could not read it.
+    /// The sheet still exists in the game but cannot be read.
     pub unavailable: bool,
     pub mapped_columns: usize,
     pub unresolved_columns: usize,
 }
 
-impl From<&SheetSchemaUpdate> for SheetSchemaUpdateDto {
-    fn from(update: &SheetSchemaUpdate) -> Self {
+impl From<&SheetLayoutUpdate> for SheetLayoutUpdateDto {
+    fn from(update: &SheetLayoutUpdate) -> Self {
         let mapped_columns = update
             .columns
             .iter()
@@ -245,7 +229,7 @@ impl From<&SheetSchemaUpdate> for SheetSchemaUpdateDto {
             .count();
         Self {
             sheet_name: update.sheet_name.clone(),
-            removed: update.schema_hash.is_none() && !update.unavailable,
+            removed: update.layout.is_none() && !update.unavailable,
             unavailable: update.unavailable,
             mapped_columns,
             unresolved_columns: update.columns.len() - mapped_columns,
@@ -253,16 +237,13 @@ impl From<&SheetSchemaUpdate> for SheetSchemaUpdateDto {
     }
 }
 
-/// Counts and schema changes of a previewed or applied source update.
+/// Counts and layout changes of a previewed or applied source update.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SourceUpdateReportDto {
-    pub previous_content_id: String,
-    pub content_id: String,
+    pub previous_game_version: String,
     pub game_version: String,
-    pub previous_format_version: u8,
     pub unchanged: usize,
-    pub encoding_changed: usize,
     pub source_changed: usize,
     pub detached: usize,
     pub newly_detached: usize,
@@ -270,7 +251,7 @@ pub struct SourceUpdateReportDto {
     pub column_mapped: usize,
     pub row_moved: usize,
     pub changed_units: usize,
-    pub sheet_schema_updates: Vec<SheetSchemaUpdateDto>,
+    pub sheet_layout_updates: Vec<SheetLayoutUpdateDto>,
 }
 
 impl From<&SourceUpdateReport> for SourceUpdateReportDto {
@@ -278,12 +259,9 @@ impl From<&SourceUpdateReport> for SourceUpdateReportDto {
         let plan = &report.plan;
         let summary = plan.summary;
         Self {
-            previous_content_id: plan.previous_content_id.clone(),
-            content_id: plan.source_snapshot.content_id.clone(),
-            game_version: plan.source_snapshot.game_version.clone(),
-            previous_format_version: report.previous_format_version,
+            previous_game_version: plan.previous_game_version.to_string(),
+            game_version: plan.game_version.to_string(),
             unchanged: summary.unchanged,
-            encoding_changed: summary.encoding_changed,
             source_changed: summary.source_changed,
             detached: summary.detached,
             newly_detached: summary.newly_detached,
@@ -291,7 +269,7 @@ impl From<&SourceUpdateReport> for SourceUpdateReportDto {
             column_mapped: summary.column_mapped,
             row_moved: summary.row_moved,
             changed_units: summary.changed_units,
-            sheet_schema_updates: plan.sheet_schema_updates.iter().map(Into::into).collect(),
+            sheet_layout_updates: plan.sheet_layout_updates.iter().map(Into::into).collect(),
         }
     }
 }
@@ -302,6 +280,8 @@ impl From<&SourceUpdateReport> for SourceUpdateReportDto {
 pub struct DetachedUnitDto {
     pub translation_unit_id: String,
     pub last_source_binding: SourceBindingDto,
+    /// The source text the unit was last bound to.
+    pub last_source_text: String,
     pub reason: DetachReasonDto,
     pub target_macro: String,
     pub review_state: ReviewStateDto,
@@ -316,6 +296,7 @@ impl DetachedUnitDto {
         Some(Self {
             translation_unit_id: unit.id().to_string(),
             last_source_binding: unit.source_binding().into(),
+            last_source_text: unit.source().text().to_owned(),
             reason: reason.into(),
             target_macro: unit.target_macro().to_owned(),
             review_state: unit.review_state().into(),
@@ -330,8 +311,6 @@ impl DetachedUnitDto {
 pub enum RecentProjectAvailability {
     Ready,
     RepositoryMissing,
-    SourcePackageMissing,
-    RepositoryAndSourceMissing,
 }
 
 /// Frontend-facing metadata for a local recent project.
@@ -340,8 +319,6 @@ pub enum RecentProjectAvailability {
 pub struct RecentProjectDto {
     pub id: String,
     pub repository_root: String,
-    pub source_package_path: String,
-    pub source_package_id: String,
     pub source_language: String,
     pub target_language: String,
     pub game_version: String,
@@ -351,19 +328,14 @@ pub struct RecentProjectDto {
 
 impl RecentProjectDto {
     pub(crate) fn from_registry_entry(entry: RegistryEntry) -> Self {
-        let repository_exists = Path::new(&entry.repository_root).is_dir();
-        let source_exists = Path::new(&entry.source_package_path).is_file();
-        let availability = match (repository_exists, source_exists) {
-            (true, true) => RecentProjectAvailability::Ready,
-            (false, true) => RecentProjectAvailability::RepositoryMissing,
-            (true, false) => RecentProjectAvailability::SourcePackageMissing,
-            (false, false) => RecentProjectAvailability::RepositoryAndSourceMissing,
+        let availability = if Path::new(&entry.repository_root).is_dir() {
+            RecentProjectAvailability::Ready
+        } else {
+            RecentProjectAvailability::RepositoryMissing
         };
         Self {
             id: entry.id,
             repository_root: entry.repository_root,
-            source_package_path: entry.source_package_path,
-            source_package_id: entry.source_package_id,
             source_language: entry.source_language,
             target_language: entry.target_language,
             game_version: entry.game_version,
@@ -530,7 +502,7 @@ mod tests {
 
     #[test]
     fn translation_row_mapping_preserves_context_cells_and_explicit_empty_overlays() {
-        let translated_id = TranslationUnitId::from_bytes([0xab; 32]);
+        let translated_id = TranslationUnitId::from_bytes([0xab; 16]);
         let translated_binding = SourceBinding::new("Synthetic", 42, 0, 0);
         let empty_binding = SourceBinding::new("Synthetic", 7, 0, 0);
         let page = TranslationRowPage {
@@ -574,7 +546,7 @@ mod tests {
             .expect("explicit empty target remains an overlay");
         assert_eq!(
             overlay.translation_unit_id,
-            "tu1:abababababababababababababababababababababababababababababababab"
+            "abababababababababababababababab"
         );
         assert_eq!(overlay.target_macro, "");
         assert_eq!(overlay.review_state, ReviewStateDto::NeedsReview);
@@ -588,12 +560,12 @@ mod tests {
     #[test]
     fn only_detached_units_map_to_detached_dtos() {
         let unit = TranslationUnit::new(
-            TranslationUnitId::from_bytes([0xcd; 32]),
-            SourceBinding::new("Addon", 4021, 0, 2),
-            aeria_core::SourceFingerprint::new(
-                aeria_core::Sha256Hash::from_bytes([1; 32]),
+            TranslationUnitId::from_bytes([0xcd; 16]),
+            aeria_core::SourceFacts::new(
+                SourceBinding::new("Addon", 4021, 0, 2),
+                aeria_core::LayoutHash::from_bytes([1; 8]),
+                "Done",
                 None,
-                aeria_core::Sha256Hash::from_bytes([2; 32]),
             ),
             "Готово",
         );
@@ -606,6 +578,7 @@ mod tests {
         assert_eq!(dto.reason, DetachReasonDto::ColumnUnresolved);
         assert_eq!(dto.last_source_binding.row_id, 4021);
         assert_eq!(dto.last_source_binding.column_index, 2);
+        assert_eq!(dto.last_source_text, "Done");
         assert_eq!(dto.target_macro, "Готово");
         assert_eq!(dto.review_state, ReviewStateDto::Reviewed);
     }
@@ -627,57 +600,28 @@ mod tests {
     }
 
     #[test]
-    fn recent_availability_checks_only_filesystem_presence() {
+    fn recent_availability_checks_only_the_repository_folder() {
         let repository = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        let source = repository.join("test-fixtures/synthetic.hxs");
         let base = RegistryEntry {
             id: "local-id".to_owned(),
             repository_root: repository.to_string_lossy().into_owned(),
-            source_package_path: source.to_string_lossy().into_owned(),
-            source_package_id:
-                "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".to_owned(),
             source_language: "en".to_owned(),
             target_language: "fr".to_owned(),
-            game_version: "test".to_owned(),
+            game_version: "2026.09.15.0000.0000".to_owned(),
             last_opened_at_unix_ms: 1,
         };
         assert_eq!(
             RecentProjectDto::from_registry_entry(base.clone()).availability,
             RecentProjectAvailability::Ready
         );
-
-        let mut missing_repository = base.clone();
-        missing_repository.repository_root = repository
+        let mut missing = base;
+        missing.repository_root = repository
             .join("missing-repository")
             .to_string_lossy()
             .into_owned();
         assert_eq!(
-            RecentProjectDto::from_registry_entry(missing_repository).availability,
+            RecentProjectDto::from_registry_entry(missing).availability,
             RecentProjectAvailability::RepositoryMissing
-        );
-
-        let mut missing_source = base.clone();
-        missing_source.source_package_path = repository
-            .join("missing-source.hsp")
-            .to_string_lossy()
-            .into_owned();
-        assert_eq!(
-            RecentProjectDto::from_registry_entry(missing_source).availability,
-            RecentProjectAvailability::SourcePackageMissing
-        );
-
-        let mut both_missing = base;
-        both_missing.repository_root = repository
-            .join("missing-repository")
-            .to_string_lossy()
-            .into_owned();
-        both_missing.source_package_path = repository
-            .join("missing-source.hsp")
-            .to_string_lossy()
-            .into_owned();
-        assert_eq!(
-            RecentProjectDto::from_registry_entry(both_missing).availability,
-            RecentProjectAvailability::RepositoryAndSourceMissing
         );
     }
 }

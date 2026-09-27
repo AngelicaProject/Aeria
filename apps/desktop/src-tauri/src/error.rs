@@ -1,8 +1,8 @@
 use aeria_ai::{AiSettingsError, ProviderError, SecretStoreError};
-use aeria_atlas::AtlasError;
 use aeria_core::TranslationUnitIdParseError;
 use aeria_git::GitError;
 use aeria_projects::RegistryError;
+use aeria_source::SourceError;
 use aeria_workspace::{
     ProjectSessionError, TranslationMutationError, TranslationReadError, WorkspaceError,
     WorkspaceStoreError,
@@ -114,16 +114,9 @@ impl From<ProviderError> for CommandError {
     }
 }
 
-impl From<AtlasError> for CommandError {
-    fn from(error: AtlasError) -> Self {
-        let code = match &error {
-            AtlasError::Spawn { .. } => "atlasSpawn",
-            AtlasError::Protocol { .. } => "atlasProtocol",
-            AtlasError::Failed { .. } | AtlasError::Exit { .. } => "atlasFailed",
-            AtlasError::Package { .. } => "atlasPackage",
-            AtlasError::Cancelled { .. } => "atlasCancelled",
-        };
-        Self::new(code, error.to_string())
+impl From<SourceError> for CommandError {
+    fn from(error: SourceError) -> Self {
+        Self::new("gameRead", error.to_string())
     }
 }
 
@@ -136,12 +129,13 @@ impl From<TranslationUnitIdParseError> for CommandError {
 impl From<ProjectSessionError> for CommandError {
     fn from(error: ProjectSessionError) -> Self {
         let code = match &error {
-            ProjectSessionError::Source { .. } => "projectSource",
             ProjectSessionError::Store { .. } => "projectStore",
+            ProjectSessionError::GameOutdated { .. } => "gameOutdated",
             ProjectSessionError::Compatibility { .. } => "projectCompatibility",
             ProjectSessionError::SourceUpdateRequired { .. } => "sourceUpdateRequired",
             ProjectSessionError::SourceUpdate { .. } => "sourceUpdate",
             ProjectSessionError::Workspace { .. } => "projectWorkspace",
+            ProjectSessionError::InvalidTargetLanguage { .. } => "invalidTargetLanguage",
         };
         Self::new(code, error.to_string())
     }
@@ -174,7 +168,7 @@ impl From<TranslationMutationError> for CommandError {
 
 fn workspace_error_code(error: &WorkspaceError) -> &'static str {
     match error {
-        WorkspaceError::Hxs(_) | WorkspaceError::SourceCellNotFound { .. } => "translationRead",
+        WorkspaceError::Source(_) | WorkspaceError::SourceCellNotFound { .. } => "translationRead",
         WorkspaceError::InvalidTarget { .. }
         | WorkspaceError::UnitNotFound { .. }
         | WorkspaceError::DuplicateUnitId { .. }
@@ -182,7 +176,6 @@ fn workspace_error_code(error: &WorkspaceError) -> &'static str {
         | WorkspaceError::DetachedUnit { .. }
         | WorkspaceError::InvalidMetadata(_)
         | WorkspaceError::SourceLanguageMismatch { .. }
-        | WorkspaceError::SourceContentMismatch { .. }
         | WorkspaceError::Identity(_) => "translationWorkspace",
     }
 }
@@ -226,21 +219,24 @@ mod tests {
     use std::path::PathBuf;
 
     use aeria_core::TranslationUnitId;
-    use aeria_workspace::{ProjectSession, TranslationReadError, WorkspaceError};
+    use aeria_workspace::{TranslationReadError, WorkspaceError};
 
     use super::*;
 
     #[test]
-    fn project_source_failures_use_a_stable_code() {
-        let error = ProjectSession::open(
-            PathBuf::from("missing-repository"),
-            PathBuf::from("missing-source.hsp"),
-            PathBuf::from("missing-cache"),
+    fn game_failures_use_stable_codes() {
+        let missing = aeria_source::GameSource::open(
+            PathBuf::from("missing-game"),
+            aeria_source::SourceLanguage::English,
         )
-        .err()
-        .expect("missing source");
-
-        assert_eq!(CommandError::from(error).code, "projectSource");
+        .expect_err("missing game");
+        assert_eq!(CommandError::from(missing).code, "gameRead");
+        let outdated = CommandError::from(ProjectSessionError::GameOutdated {
+            repository_root: PathBuf::from("repository"),
+            project: "2026.10.01.0000.0000".parse().expect("version"),
+            game: "2026.09.15.0000.0000".parse().expect("version"),
+        });
+        assert_eq!(outdated.code, "gameOutdated");
     }
 
     #[test]
@@ -254,7 +250,7 @@ mod tests {
 
         let mutation_error = CommandError::from(TranslationMutationError::Workspace(
             WorkspaceError::UnitNotFound {
-                id: TranslationUnitId::from_bytes([0; 32]),
+                id: TranslationUnitId::from_bytes([0; 16]),
             },
         ));
         assert_eq!(mutation_error.code, "translationWorkspace");
@@ -269,31 +265,15 @@ mod tests {
     fn source_update_errors_use_stable_codes() {
         let required = CommandError::from(ProjectSessionError::SourceUpdateRequired {
             repository_root: PathBuf::from("repository"),
-            source_package_path: PathBuf::from("source.hsp"),
-            requirement: aeria_workspace::SourceUpdateRequirement::FormatMigration { version: 1 },
+            requirement: aeria_workspace::SourceUpdateRequirement::SourceFactsMismatch { units: 1 },
         });
         assert_eq!(required.code, "sourceUpdateRequired");
 
         let detached = CommandError::from(TranslationMutationError::Workspace(
             WorkspaceError::DetachedUnit {
-                id: TranslationUnitId::from_bytes([0; 32]),
+                id: TranslationUnitId::from_bytes([0; 16]),
             },
         ));
         assert_eq!(detached.code, "translationWorkspace");
-    }
-
-    #[test]
-    fn atlas_failures_keep_stable_desktop_codes() {
-        let protocol = CommandError::from(AtlasError::Protocol {
-            message: "bad event".to_owned(),
-            line: None,
-            stderr_tail: String::new(),
-        });
-        assert_eq!(protocol.code, "atlasProtocol");
-
-        let cancelled = CommandError::from(AtlasError::Cancelled {
-            stderr_tail: String::new(),
-        });
-        assert_eq!(cancelled.code, "atlasCancelled");
     }
 }

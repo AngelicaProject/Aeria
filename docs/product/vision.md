@@ -12,7 +12,7 @@ FINAL FANTASY XIV has a very large text corpus, its strings contain game-specifi
 
 Aeria is built around three problems:
 
-1. **Game updates** — move translation work between source snapshots conservatively and deterministically.
+1. **Game updates** — move translation work between game versions conservatively and deterministically.
 2. **Structured strings** — edit, validate, and preview nested macros and runtime constructs without treating them as plain text.
 3. **Large-scale translation** — use AI to produce useful drafts quickly while keeping structural validation and human review in control.
 
@@ -29,11 +29,11 @@ Aeria is built around three problems:
 A user should be able to:
 
 1. Open or clone a translation project.
-2. Generate a source snapshot from an installed game, or import an existing HXS snapshot.
+2. Point Aeria at the installed game, which is the source of every project.
 3. Search the full source corpus and edit translations with game constructs represented safely and clearly.
 4. Translate selected new or untranslated content with AI and receive only structurally valid drafts.
 5. Review changes, stage and commit selected work, synchronize with others, and use either a simple or advanced Git workflow.
-6. Detect a new game version, generate a new snapshot, migrate the project deterministically, resolve ambiguous cases, and continue translating.
+6. Detect a new game version, update the project deterministically, review changed and detached translations, and continue translating.
 7. Export a versioned pack consumed by the in-game Harmonia plugin.
 
 ## Non-goals

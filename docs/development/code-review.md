@@ -26,4 +26,4 @@ Any unresolved blocker means request changes. Improvements and nitpicks can be r
 
 Review the current head commit and its complete diff. When CI matters to the verdict, verify the successful run belongs to that exact head.
 
-For compatibility boundaries such as HXS, workspace formats, or exported packs, do not accept tests that only compare one implementation against another copy of the same logic. Prefer fixed golden vectors or independent producer/consumer fixtures when practical.
+For compatibility boundaries such as the game's SqPack and Excel layout, workspace formats, or exported packs, do not accept tests that only compare one implementation against another copy of the same logic. Prefer fixed golden vectors or independent producer/consumer fixtures when practical.

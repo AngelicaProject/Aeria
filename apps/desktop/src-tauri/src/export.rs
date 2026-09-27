@@ -157,7 +157,6 @@ pub struct ExportReportDto {
     pub skipped_detached: u64,
     pub skipped_untranslated: u64,
     pub skipped_unreviewed: u64,
-    pub skipped_without_raw_hash: u64,
     pub sheets: u64,
     pub strings: u64,
     pub pack_hash: String,
@@ -270,13 +269,15 @@ fn github_target(repository: &GitRepository) -> Option<GitHubRepository> {
 }
 
 fn overview(state: &DesktopState, store: &dyn SigningKeyStore) -> CommandResult<ExportOverviewDto> {
-    let (root, source, target_language) = {
+    let (root, source_language, game_version, target_language) = {
         let project = state.lock_project()?;
         let session = project.as_ref().ok_or_else(CommandError::no_project)?;
+        let metadata = session.workspace().metadata();
         (
             session.repository_root().to_owned(),
-            session.source().metadata(),
-            session.workspace().metadata().target_language().to_owned(),
+            metadata.source_language().to_owned(),
+            metadata.game_version().to_string(),
+            metadata.target_language().to_owned(),
         )
     };
     let (settings, settings_error) = match PackSettings::load(&root) {
@@ -305,9 +306,9 @@ fn overview(state: &DesktopState, store: &dyn SigningKeyStore) -> CommandResult<
         .as_ref()
         .and_then(|repository| repository.status().ok());
     let project = ExportProjectDto {
-        source_language: source.source_language,
+        source_language,
         target_language,
-        game_version: source.game_version,
+        game_version,
         commit: status.as_ref().and_then(|status| status.head.clone()),
         uncommitted: status.as_ref().is_some_and(has_export_changes),
         uncommitted_parts: status.as_ref().map_or_else(Vec::new, uncommitted_parts),
@@ -501,6 +502,16 @@ fn build(
     let commit = status
         .head
         .ok_or_else(|| export_error("exportNoCommit", "the project has no commits yet"))?;
+    let game_version = session
+        .source()
+        .current_version()
+        .map_err(|error| export_error("gameRead", error.to_string()))?;
+    if &game_version != session.source().version() {
+        return Err(export_error(
+            "gameChanged",
+            "the game was updated while the project was open; open the project again",
+        ));
+    }
     let manifest = PackManifest {
         pack_id: settings.pack_id.clone(),
         title: settings.title.clone(),
@@ -520,7 +531,6 @@ fn build(
         },
         project_commit: commit,
         exporter_aeria: env!("CARGO_PKG_VERSION").to_owned(),
-        exporter_atlas: SeStringEncoder::DIALECT.to_owned(),
         min_harmonia: settings.min_harmonia.clone(),
     };
     let export = collect_project(
@@ -564,7 +574,6 @@ fn report_dto(built: &BuiltRelease) -> ExportReportDto {
         skipped_detached: report.skipped_detached,
         skipped_untranslated: report.skipped_untranslated,
         skipped_unreviewed: report.skipped_unreviewed,
-        skipped_without_raw_hash: report.skipped_without_raw_hash.len() as u64,
         sheets: built.pack.counts.sheets,
         strings: built.pack.counts.strings,
         pack_hash: built.pack.pack_hash_text(),

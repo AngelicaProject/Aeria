@@ -26,4 +26,4 @@ Any unresolved blocker means the verdict is request changes. Nitpicks alone do n
 - Review the current pull request head, not a stale commit.
 - Verify CI against that exact head when CI status affects the verdict.
 - Prefer concrete file/behavior references over speculative concerns.
-- If correctness depends on an external contract such as HXS, compare the implementation against the authoritative contract rather than against its own tests alone.
+- If correctness depends on an external contract such as the game's SqPack and Excel layout, compare the implementation against the authoritative contract rather than against its own tests alone.

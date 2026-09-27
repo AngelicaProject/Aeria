@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Dialog } from "radix-ui";
 import { listDetachedUnits, normalizeCommandError } from "../ipc";
-import { detachReasonLabels, migratesWorkspaceFormat, sourceUpdateFacts } from "../sourceUpdate";
+import { detachReasonLabels, sourceUpdateFacts } from "../sourceUpdate";
 import type { CommandError, DetachedUnitDto, SourceUpdateReportDto } from "../types";
 import { useI18n } from "../ui/i18n";
 import { ErrorBanner } from "./ErrorBanner";
@@ -65,13 +65,12 @@ export function SourceUpdateDialog({ open, mode, report, busy = false, onConfirm
                     {t(fact.key, { count: fact.count })}
                   </li>
                 ))}
-                {migratesWorkspaceFormat(report) ? <li>{t("sourceUpdate.fact.formatMigration")}</li> : null}
               </ul>
-              {report.sheetSchemaUpdates.length > 0 ? (
+              {report.sheetLayoutUpdates.length > 0 ? (
                 <div className="source-update-section">
                   <strong>{t("sourceUpdate.schemaTitle")}</strong>
                   <ul className="source-update-list">
-                    {report.sheetSchemaUpdates.map((sheet, index) => (
+                    {report.sheetLayoutUpdates.map((sheet, index) => (
                       <li key={`${sheet.sheetName}-${index}`}>
                         <span className="mono">{sheet.sheetName}</span>
                         <span className="muted">
@@ -108,6 +107,7 @@ export function SourceUpdateDialog({ open, mode, report, busy = false, onConfirm
                         })}
                       </span>
                       <span className="muted">{t(detachReasonLabels[unit.reason])}</span>
+                      <span className="source-update-source" title={t("sourceUpdate.lastSource")}>{unit.lastSourceText}</span>
                       <span className="source-update-target">{unit.targetMacro || t("common.empty")}</span>
                     </li>
                   ))}

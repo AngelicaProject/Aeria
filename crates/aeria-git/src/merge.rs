@@ -232,15 +232,7 @@ pub(crate) fn merge_unit(
     }
     let (base, ours, theirs) = (base?, ours?, theirs?);
 
-    let source = |unit: &TranslationUnit| {
-        (
-            unit.source_status(),
-            unit.source_binding().clone(),
-            *unit.source_fingerprint(),
-            unit.source_layout(),
-            unit.source_row_key(),
-        )
-    };
+    let source = |unit: &TranslationUnit| (unit.source_status(), unit.source().clone());
     if source(ours) != source(theirs) {
         return None;
     }
@@ -284,20 +276,18 @@ fn three_way<T: PartialEq + Clone>(base: &T, ours: &T, theirs: &T) -> Option<T> 
 
 #[cfg(test)]
 mod tests {
-    use aeria_core::{
-        DetachReason, ReviewState, Sha256Hash, SourceBinding, SourceFingerprint, SourceLayout,
-    };
+    use aeria_core::{DetachReason, LayoutHash, ReviewState, SourceBinding, SourceFacts};
 
     use super::*;
 
     fn unit(target: &str, review: ReviewState, note: Option<&str>) -> TranslationUnit {
         let mut unit = TranslationUnit::new(
-            TranslationUnitId::from_bytes([7; 32]),
-            SourceBinding::new("Addon", 1, 0, 0),
-            SourceFingerprint::new(
-                Sha256Hash::from_bytes([1; 32]),
+            TranslationUnitId::from_bytes([7; 16]),
+            SourceFacts::new(
+                SourceBinding::new("Addon", 1, 0, 0),
+                LayoutHash::from_bytes([3; 8]),
+                "Source",
                 None,
-                Sha256Hash::from_bytes([2; 32]),
             ),
             target,
         );
@@ -314,41 +304,43 @@ mod tests {
         encode_unit_shard(units, Path::new(SHARD)).expect("encode")
     }
 
-    fn with_id(mut unit: TranslationUnit, last: u8) -> TranslationUnit {
-        let mut bytes = [7; 32];
-        bytes[31] = last;
-        unit = TranslationUnit::new(
+    fn with_id(unit: &TranslationUnit, last: u8) -> TranslationUnit {
+        let mut bytes = [7; 16];
+        bytes[15] = last;
+        TranslationUnit::new(
             TranslationUnitId::from_bytes(bytes),
-            SourceBinding::new("Addon", u32::from(last), 0, 0),
-            *unit.source_fingerprint(),
+            SourceFacts::new(
+                SourceBinding::new("Addon", u32::from(last), 0, 0),
+                unit.source().layout(),
+                unit.source().text(),
+                None,
+            ),
             unit.target_macro(),
         )
-        .with_source_layout(SourceLayout::new(Sha256Hash::from_bytes([3; 32]), 0));
-        unit
     }
 
     #[test]
     fn the_driver_merges_adjacent_units_and_marks_real_conflicts() {
-        let first = with_id(unit("a", Draft, None), 1);
-        let second = with_id(unit("b", Draft, None), 2);
+        let first = with_id(&unit("a", Draft, None), 1);
+        let second = with_id(&unit("b", Draft, None), 2);
         let base = shard(&[first.clone(), second.clone()]);
 
         // Adjacent lines change on both sides: Git's text merge conflicts,
         // the driver does not.
-        let ours = shard(&[with_id(unit("A", Draft, None), 1), second.clone()]);
-        let theirs = shard(&[first.clone(), with_id(unit("B", Draft, None), 2)]);
+        let ours = shard(&[with_id(&unit("A", Draft, None), 1), second.clone()]);
+        let theirs = shard(&[first.clone(), with_id(&unit("B", Draft, None), 2)]);
         let merged = merge_shard_for_driver(SHARD, &base, &ours, &theirs).expect("merge");
         assert_eq!(merged.conflicts, 0);
         assert_eq!(
             merged.bytes,
             shard(&[
-                with_id(unit("A", Draft, None), 1),
-                with_id(unit("B", Draft, None), 2)
+                with_id(&unit("A", Draft, None), 1),
+                with_id(&unit("B", Draft, None), 2)
             ])
         );
 
         // The same unit changes differently: only that unit is marked.
-        let theirs = shard(&[with_id(unit("X", Draft, None), 1), second.clone()]);
+        let theirs = shard(&[with_id(&unit("X", Draft, None), 1), second.clone()]);
         let merged = merge_shard_for_driver(SHARD, &base, &ours, &theirs).expect("merge");
         assert_eq!(merged.conflicts, 1);
         let text = String::from_utf8(merged.bytes).expect("UTF-8");
@@ -358,7 +350,7 @@ mod tests {
         assert_eq!(lines[4], "=======");
         assert_eq!(lines[6], ">>>>>>> theirs");
         assert!(
-            lines[7].contains("\"targetMacro\":\"b\""),
+            lines[7].contains("\"target\":\"b\""),
             "the other unit follows"
         );
 
@@ -412,14 +404,12 @@ mod tests {
     fn updated(unit: &TranslationUnit) -> TranslationUnit {
         let mut updated = unit.clone();
         updated.bind_after_source_update(
-            SourceBinding::new("Addon", 1, 0, 2),
-            SourceFingerprint::new(
-                Sha256Hash::from_bytes([3; 32]),
+            SourceFacts::new(
+                SourceBinding::new("Addon", 1, 0, 2),
+                LayoutHash::from_bytes([4; 8]),
+                "Source, revised",
                 None,
-                Sha256Hash::from_bytes([2; 32]),
             ),
-            SourceLayout::new(Sha256Hash::from_bytes([4; 32]), 8),
-            None,
             true,
         );
         updated
@@ -493,14 +483,7 @@ mod tests {
         let options: Vec<Option<&TranslationUnit>> = std::iter::once(None)
             .chain(states.iter().map(Some))
             .collect();
-        let source = |unit: &TranslationUnit| {
-            (
-                unit.source_status(),
-                unit.source_binding().clone(),
-                *unit.source_fingerprint(),
-                unit.source_layout(),
-            )
-        };
+        let source = |unit: &TranslationUnit| (unit.source_status(), unit.source().clone());
         let mut checked = 0;
         for base in &options {
             for ours in &options {

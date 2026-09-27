@@ -29,7 +29,7 @@ const KIND_ROWS: u32 = 5;
 const KIND_CELLS: u32 = 6;
 const KIND_STRINGS: u32 = 7;
 
-/// HXS sheet variant, with the same codes.
+/// Sheet variant: default rows or subrows.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SheetVariant {
     DefaultRows,
@@ -42,7 +42,7 @@ pub enum CellState {
     Unreviewed,
 }
 
-/// One String column of the source sheet (HXS `columns.index`, `columns.offset`).
+/// One String column of the source sheet: its column index and row offset.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct LayoutColumn {
     pub column_index: u32,
@@ -95,12 +95,21 @@ impl BuiltPack {
     }
 }
 
-/// The source guard stored with a cell: the first 8 bytes of the HXS
-/// `raw_hash` of the source string the translation was made for.
+/// The domain of the source guard hash; Harmonia computes the same value.
+const SOURCE_GUARD_DOMAIN: &[u8] = b"HARMONIA-HXS-V1-RAW-STRING";
+
+/// The source guard stored with a cell: the first 8 bytes of
+/// `SHA-256(domain || u32le(len) || raw)` over the source string's bytes
+/// without the terminator. Harmonia replaces a string only when the string
+/// it is about to replace has the same guard.
 #[must_use]
-pub fn source_guard(raw_value_hash: &[u8; 32]) -> [u8; 8] {
+pub fn source_guard(raw: &[u8]) -> [u8; 8] {
+    let mut hasher = Sha256::new();
+    hasher.update(SOURCE_GUARD_DOMAIN);
+    hasher.update(u32::try_from(raw.len()).unwrap_or(u32::MAX).to_le_bytes());
+    hasher.update(raw);
     let mut guard = [0u8; 8];
-    guard.copy_from_slice(&raw_value_hash[..8]);
+    guard.copy_from_slice(&hasher.finalize()[..8]);
     guard
 }
 
@@ -386,6 +395,9 @@ fn canonical_cells<'a>(
         }
         if cell.text.contains(&0) {
             return Err(cell_error("encoded string contains a NUL byte"));
+        }
+        if !aeria_se::bytes::is_well_formed(&cell.text) {
+            return Err(cell_error("encoded string is not a well-formed SeString"));
         }
         if manifest.content_policy == ContentPolicy::Reviewed && cell.state != CellState::Reviewed {
             return Err(cell_error("unreviewed cell in a reviewed-only pack"));

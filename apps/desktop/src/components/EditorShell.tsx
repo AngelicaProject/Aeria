@@ -127,6 +127,8 @@ type EditorShellProps = {
   onDismissApplicationWarning: () => void;
   onShowDetachedUnits: () => void;
   onClosed: () => void;
+  /** Reports project metadata changed in settings, such as the target language. */
+  onProjectChanged: (project: ProjectSummaryDto) => void;
 };
 
 const bottomPanelIds = new Set(["tasks", "gitChanges", "diagnostics"]);
@@ -205,6 +207,7 @@ export function EditorShell({
   onDismissApplicationWarning,
   onShowDetachedUnits,
   onClosed,
+  onProjectChanged,
 }: EditorShellProps) {
   const firstSheetName = project.sheets.find((sheet) => sheet.translatableCellCount > 0)?.name ?? project.sheets[0]?.name ?? null;
   const sheetsByName = useMemo(() => {
@@ -1390,7 +1393,7 @@ export function EditorShell({
         loading={sheetLoading}
         repositoryRoot={project.repositoryRoot}
         sourceLanguage={project.sourceLanguage}
-        sourceSnapshotId={project.sourceSnapshotId}
+        gameVersion={project.gameVersion}
         selectedBinding={selectedBinding}
         dirty={dirty}
         projectProgress={projectProgress}
@@ -1403,7 +1406,7 @@ export function EditorShell({
         onKeepEditing={() => resolveDiscardConfirmation(false)}
         onDiscard={() => resolveDiscardConfirmation(true)}
       />
-      <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} initialSection={settingsSection} projectOpen />
+      <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} initialSection={settingsSection} projectOpen project={project} onProjectChanged={onProjectChanged} />
       <ProjectGuideDialog open={guide.open} initialTab={guide.tab} onOpenChange={setGuideOpen} />
       <ExportDialog open={exportOpen} onOpenChange={setExportOpen} onOpenChanges={() => { setExportOpen(false); showPanel("git", "right", false); }} />
       {palette.open ? (

@@ -1,17 +1,18 @@
-use aeria_core::{ReviewState, SourceBinding};
+//! Collecting a project's translations from a synthetic game.
+
+use std::sync::Arc;
+
+use aeria_core::ReviewState;
 use aeria_export::{
     Channel, ContentPolicy, ExportError, PackManifest, Publisher, StringEncoder, collect_project,
-    pack_source, write_pack,
+    pack_source, source_guard, write_pack,
 };
-use aeria_hxs::HxsSnapshot;
+use aeria_source::{GameSource, SheetLookup, SourceLanguage};
+use aeria_sqpack::testing::{FakeGame, TextSheet};
 use aeria_workspace::Workspace;
+use tempfile::TempDir;
 
-#[path = "../../aeria-workspace/tests/support/fixture.rs"]
-mod fixture;
-
-use fixture::{raw_hash, write_fixture};
-
-// Stands in for Atlas: plain text encodes to its UTF-8 bytes.
+// Plain text encodes to its UTF-8 bytes.
 struct FakeEncoder {
     calls: usize,
     reject: Option<&'static str>,
@@ -40,76 +41,87 @@ fn encoder() -> FakeEncoder {
     }
 }
 
-// Row 42 has no raw-value hash in the fixture; row 7 has one.
-fn workspace(snapshot: &HxsSnapshot, review_seven: bool) -> Workspace {
-    let mut workspace = Workspace::from_verified_snapshot(snapshot, "ru").unwrap();
+struct Game {
+    _folder: TempDir,
+    source: Arc<GameSource>,
+}
+
+fn game(sheet: &TextSheet) -> Game {
+    let folder = tempfile::tempdir().expect("game");
+    FakeGame::new("2026.09.15.0000.0000")
+        .with_text("Synthetic", sheet)
+        .write(folder.path())
+        .expect("write");
+    let source = GameSource::open(folder.path(), SourceLanguage::English).expect("source");
+    Game {
+        _folder: folder,
+        source: Arc::new(source),
+    }
+}
+
+/// Two String columns at 0 and 2; rows 7 and 42.
+fn sheet() -> TextSheet {
+    TextSheet::new(3, &[0, 2])
+        .row(7, &[(0, "Two"), (2, "Other")])
+        .row(42, &[(0, "One")])
+}
+
+fn workspace(source: &GameSource, review_seven: bool) -> Workspace {
+    let SheetLookup::Present(sheet) = source.sheet("Synthetic").expect("sheet") else {
+        panic!("sheet");
+    };
+    let mut workspace = Workspace::for_source(source, "ru").expect("workspace");
     workspace
-        .create_unit_from_hxs(snapshot, "Synthetic", 42, 0, 0, "Раз")
-        .unwrap();
+        .create_unit(sheet.facts(42, 0, 0).expect("facts"), "Раз")
+        .expect("unit");
     let seven = workspace
-        .create_unit_from_hxs(snapshot, "Synthetic", 7, 0, 0, "Два")
-        .unwrap();
+        .create_unit(sheet.facts(7, 0, 0).expect("facts"), "Два")
+        .expect("unit");
     if review_seven {
         workspace
             .update_review_state(seven, ReviewState::Reviewed)
-            .unwrap();
+            .expect("review");
     }
     workspace
 }
 
 #[test]
-fn reviewed_policy_exports_only_reviewed_units_with_a_source_guard() {
-    let fixture = write_fixture();
-    let snapshot = HxsSnapshot::open(&fixture.path).unwrap();
-    let workspace = workspace(&snapshot, true);
-
+fn the_reviewed_policy_exports_reviewed_units_with_the_games_layout_and_guard() {
+    let game = game(&sheet());
+    let workspace = workspace(&game.source, true);
     let export = collect_project(
         &workspace,
-        &snapshot,
+        &game.source,
         ContentPolicy::Reviewed,
         &mut encoder(),
     )
-    .unwrap();
-
+    .expect("export");
     assert_eq!(export.report.exported, 1);
     assert_eq!(export.report.skipped_unreviewed, 1);
-    assert!(export.report.skipped_without_raw_hash.is_empty());
     let sheet = &export.sheets[0];
     assert_eq!(sheet.name, "Synthetic");
-    assert_eq!(sheet.layout.len(), 1);
+    let layout: Vec<_> = sheet
+        .layout
+        .iter()
+        .map(|column| (column.column_index, column.offset))
+        .collect();
+    assert_eq!(layout, [(0, 0), (2, 8)], "every String column of the game");
     assert_eq!(sheet.cells.len(), 1);
     assert_eq!(sheet.cells[0].row_id, 7);
     assert_eq!(sheet.cells[0].text, "Два".as_bytes());
-    assert_eq!(sheet.cells[0].source_guard, raw_hash(b"raw")[..8]);
+    assert_eq!(sheet.cells[0].source_guard, source_guard(b"Two"));
 }
 
 #[test]
-fn units_without_a_raw_hash_are_reported_not_exported() {
-    let fixture = write_fixture();
-    let snapshot = HxsSnapshot::open(&fixture.path).unwrap();
-    let workspace = workspace(&snapshot, false);
-
-    let export =
-        collect_project(&workspace, &snapshot, ContentPolicy::All, &mut encoder()).unwrap();
-
-    assert_eq!(export.report.exported, 1);
-    assert_eq!(
-        export.report.skipped_without_raw_hash,
-        vec![SourceBinding::new("Synthetic", 42, 0, 0)]
-    );
-}
-
-#[test]
-fn collected_project_writes_a_pack_with_the_snapshot_identity() {
-    let fixture = write_fixture();
-    let snapshot = HxsSnapshot::open(&fixture.path).unwrap();
-    let workspace = workspace(&snapshot, false);
-    let export =
-        collect_project(&workspace, &snapshot, ContentPolicy::All, &mut encoder()).unwrap();
-
-    let source = pack_source(&snapshot);
+fn a_collected_project_writes_a_pack_for_the_games_version() {
+    let game = game(&sheet());
+    let workspace = workspace(&game.source, false);
+    let export = collect_project(&workspace, &game.source, ContentPolicy::All, &mut encoder())
+        .expect("export");
+    assert_eq!(export.report.exported, 2);
+    let source = pack_source(&game.source);
     assert_eq!(source.language, "en");
-    assert_eq!(source.game_version, "test-game");
+    assert_eq!(source.game_version, "2026.09.15.0000.0000");
     let manifest = PackManifest {
         pack_id: "synthetic".to_owned(),
         title: "Synthetic".to_owned(),
@@ -126,42 +138,50 @@ fn collected_project_writes_a_pack_with_the_snapshot_identity() {
         content_policy: ContentPolicy::All,
         project_commit: "0".repeat(40),
         exporter_aeria: "0.1.0".to_owned(),
-        exporter_atlas: "0.4.0".to_owned(),
-        min_harmonia: "1.0.0".to_owned(),
+        min_harmonia: "0.1.0".to_owned(),
     };
-    let pack = write_pack(&manifest, export.sheets, None, None).unwrap();
-    assert_eq!(pack.counts.cells, 1);
+    let pack = write_pack(&manifest, export.sheets, None, None).expect("pack");
+    assert_eq!(pack.counts.cells, 2);
     assert_eq!(pack.counts.reviewed_cells, 0);
 }
 
 #[test]
-fn a_failed_encoding_fails_the_export() {
-    let fixture = write_fixture();
-    let snapshot = HxsSnapshot::open(&fixture.path).unwrap();
-    let workspace = workspace(&snapshot, true);
-    let mut encoder = FakeEncoder {
-        calls: 0,
-        reject: Some("Два"),
-    };
-
-    let result = collect_project(&workspace, &snapshot, ContentPolicy::All, &mut encoder);
-
+fn a_unit_that_no_longer_describes_the_game_fails_the_export() {
+    let old = game(&sheet());
+    let workspace = workspace(&old.source, true);
+    let patched = game(
+        &TextSheet::new(3, &[0, 2])
+            .row(7, &[(0, "Two, revised"), (2, "Other")])
+            .row(42, &[(0, "One")]),
+    );
+    let result = collect_project(
+        &workspace,
+        &patched.source,
+        ContentPolicy::All,
+        &mut encoder(),
+    );
     assert!(matches!(result, Err(ExportError::Cell { row_id: 7, .. })));
-    assert_eq!(encoder.calls, 1);
 }
 
 #[test]
-fn an_encoder_returning_the_wrong_count_is_rejected() {
+fn a_failed_encoding_or_a_short_encoder_fails_the_export() {
     struct Short;
     impl StringEncoder for Short {
         fn encode(&mut self, _: &[&str]) -> Result<Vec<Result<Vec<u8>, String>>, String> {
             Ok(Vec::new())
         }
     }
-    let fixture = write_fixture();
-    let snapshot = HxsSnapshot::open(&fixture.path).unwrap();
-    let workspace = workspace(&snapshot, true);
 
-    let result = collect_project(&workspace, &snapshot, ContentPolicy::All, &mut Short);
+    let game = game(&sheet());
+    let workspace = workspace(&game.source, true);
+    let mut rejecting = FakeEncoder {
+        calls: 0,
+        reject: Some("Два"),
+    };
+    let result = collect_project(&workspace, &game.source, ContentPolicy::All, &mut rejecting);
+    assert!(matches!(result, Err(ExportError::Cell { row_id: 7, .. })));
+    assert_eq!(rejecting.calls, 1);
+
+    let result = collect_project(&workspace, &game.source, ContentPolicy::All, &mut Short);
     assert!(matches!(result, Err(ExportError::Encoder(_))));
 }

@@ -221,7 +221,7 @@ mod tests {
             session: "s",
             facts: None,
             location: "Item:5:0:0",
-            source: "Hi <pcname(lnum1)>",
+            source: "Hi <player-name $n1>",
             context: &context,
             current_target: Some("Привет"),
             note: Some("informal"),
@@ -237,7 +237,7 @@ mod tests {
         let legend: Vec<String> = tagged.tags.iter().map(aeria_se::Tag::legend).collect();
         let message = user_message(&request, &tagged.text, &legend);
         assert!(message.contains(r#"<source>Hi <x id="1"/></source>"#));
-        assert!(message.contains("1: <pcname(lnum1)>"));
+        assert!(message.contains("1: <player-name $n1>"));
         assert!(message.contains("column 1: Description"));
         assert!(message.contains("Current translation, to improve: Привет"));
         assert!(message.contains("Translator note: informal"));
