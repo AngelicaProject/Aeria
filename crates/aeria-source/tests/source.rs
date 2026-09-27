@@ -1,6 +1,8 @@
 //! `GameSource` over synthetic installations.
 
-use aeria_source::{GameSource, SheetLookup, SourceLanguage, SourceSheet};
+use aeria_source::{
+    DialogueKind, GameSource, LineRole, RowAddress, SheetLookup, SourceLanguage, SourceSheet,
+};
 use aeria_sqpack::excel::{ColumnKind, Language};
 use aeria_sqpack::testing::{FakeGame, FakeRow, FakeSheet, FakeValue};
 
@@ -237,4 +239,160 @@ fn a_cell_reads_in_the_other_client_languages() {
 fn a_folder_without_the_game_is_rejected() {
     let folder = tempfile::tempdir().expect("folder");
     assert!(GameSource::open(folder.path(), SourceLanguage::English).is_err());
+}
+
+/// A keyed two-column sheet whose texts differ by language, except that a
+/// text of `-` is empty in every language.
+fn keyed(rows: &[(u32, &str, &str)]) -> FakeSheet {
+    let mut sheet = FakeSheet::new(vec![ColumnKind::String, ColumnKind::String]);
+    for language in LANGUAGES {
+        let suffix = language.suffix();
+        let rows = rows
+            .iter()
+            .map(|(row, key, text)| {
+                let text = if *text == "-" {
+                    String::new()
+                } else {
+                    format!("{text} {suffix}")
+                };
+                FakeRow::new(*row, vec![(*key).into(), text.as_str().into()])
+            })
+            .collect();
+        sheet.rows.insert(language, rows);
+    }
+    sheet
+}
+
+/// A game with a quest sheet, a quest whose ID two `Quest` rows hold, a
+/// cutscene sheet, and `Quest`.
+fn dialogue_game(folder: &std::path::Path) -> GameSource {
+    let quest = keyed(&[
+        (0, "TEXT_MANFST004_00124_SEQ_00", "Miounne has tasks."),
+        (1, "TEXT_MANFST004_00124_SEQ_01", "-"),
+        (2, "TEXT_MANFST004_00124_TODO_00", "Visit the guild."),
+        (3, "TEXT_MANFST004_00124_MIOUNNE_000_1", "Let us begin."),
+        (4, "TEXT_MANFST004_00124_QIB_BATTLETALK_05", "Hah!"),
+        (5, "TEXT_MANFST004_00124_URIANGER_000_2", "Well met."),
+    ]);
+    let cutscene = keyed(&[
+        (0, "TEXT_VOICEMAN_02400_000010_URIANGER", "Thou art come."),
+        (1, "TEXT_VOICEMAN_02400_000020_ILBERD", "Hail."),
+    ]);
+    let mut names = FakeSheet::new(vec![ColumnKind::String, ColumnKind::String]);
+    for language in LANGUAGES {
+        let suffix = language.suffix();
+        names.rows.insert(
+            language,
+            vec![
+                FakeRow::new(
+                    7,
+                    vec![
+                        format!("Close to Home {suffix}").as_str().into(),
+                        "ManFst004_00124".into(),
+                    ],
+                ),
+                FakeRow::new(
+                    8,
+                    vec![
+                        format!("Twice {suffix}").as_str().into(),
+                        "Twice_00001".into(),
+                    ],
+                ),
+                FakeRow::new(
+                    9,
+                    vec![
+                        format!("Again {suffix}").as_str().into(),
+                        "Twice_00001".into(),
+                    ],
+                ),
+            ],
+        );
+    }
+    FakeGame::new(VERSION)
+        .with_sheet("quest/001/ManFst004_00124", quest)
+        .with_sheet(
+            "quest/000/Twice_00001",
+            keyed(&[(0, "K0", "a"), (1, "K1", "b")]),
+        )
+        .with_sheet("cut_scene/024/VoiceMan_02400", cutscene)
+        .with_sheet("Quest", names)
+        .write(folder)
+        .expect("game");
+    GameSource::open(folder, SourceLanguage::English).expect("source")
+}
+
+#[test]
+fn quest_keys_describe_journal_objectives_and_speech() {
+    let folder = tempfile::tempdir().expect("folder");
+    let source = dialogue_game(folder.path());
+    let dialogue = source
+        .dialogue("quest/001/ManFst004_00124")
+        .expect("readable")
+        .expect("dialogue");
+    assert_eq!(dialogue.kind, DialogueKind::Quest);
+    let roles: Vec<(u32, LineRole)> = dialogue
+        .lines
+        .iter()
+        .map(|line| (line.row_id, line.role.clone()))
+        .collect();
+    let speech = |speaker: &str| LineRole::Speech {
+        speaker: speaker.to_owned(),
+    };
+    assert_eq!(
+        roles,
+        [
+            (0, LineRole::Journal),
+            (2, LineRole::Objective),
+            (3, speech("MIOUNNE")),
+            (4, LineRole::Other),
+            (5, speech("URIANGER")),
+        ],
+        "a row without text is left out"
+    );
+    let line = &dialogue.lines[2];
+    assert_eq!((line.column, line.text.as_str()), (1, "Let us begin. en"));
+    assert!(source.dialogue("Quest").expect("readable").is_none());
+}
+
+#[test]
+fn quests_and_speakers_are_found_across_sheets() {
+    let folder = tempfile::tempdir().expect("folder");
+    let source = dialogue_game(folder.path());
+    assert_eq!(
+        source
+            .quest_row("quest/001/ManFst004_00124")
+            .expect("readable"),
+        Some((7, 0))
+    );
+    assert_eq!(
+        source.quest_row("quest/000/Twice_00001").expect("readable"),
+        None,
+        "an ID held by two rows names no quest"
+    );
+    assert_eq!(
+        source
+            .quest_row("cut_scene/024/VoiceMan_02400")
+            .expect("readable"),
+        None
+    );
+
+    assert_eq!(
+        source.speakers("ri", 2).expect("readable"),
+        [("URIANGER".to_owned(), 2)]
+    );
+    let (total, lines) = source.speaker_lines("URIANGER", 1, 5, 2).expect("readable");
+    assert_eq!(total, 2);
+    assert_eq!(
+        lines,
+        [RowAddress {
+            sheet: "quest/001/ManFst004_00124".to_owned(),
+            row_id: 5,
+            subrow_id: 0,
+        }],
+        "lines follow sheet-name order, so the cutscene comes first"
+    );
+    assert_eq!(
+        source.speaker_lines("NOBODY", 0, 5, 2).expect("readable").0,
+        0
+    );
 }
