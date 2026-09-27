@@ -10,8 +10,8 @@ use serde_json::{Value, json};
 
 use crate::chat::ToolDefinition;
 use crate::dialogue::{
-    SheetDialogue, dialogue_context, dialogue_tool_definitions, get_voices, propose_voice_profile,
-    speaker_lines, voice_change_definition,
+    SheetDialogue, dialogue_context, dialogue_tool_definitions, get_voices, list_speakers,
+    propose_voice_profile, speaker_lines, voice_change_definition,
 };
 use crate::guidance::{Glossary, GlossaryEntry, ProjectFile, ProjectGuide, change_glossary};
 use crate::images::MAX_JOB_IMAGES;
@@ -1198,6 +1198,7 @@ impl<'a> ReadTools<'a> {
             "get_guidance" => Ok(self.get_guidance(&parse(arguments)?)),
             "dialogue_context" => dialogue_context(self.reader, &self.guide(), &parse(arguments)?),
             "speaker_lines" => speaker_lines(self.reader, &self.guide(), &parse(arguments)?),
+            "list_speakers" => list_speakers(self.reader, &self.guide(), &parse(arguments)?),
             "get_voices" => Ok(get_voices(&self.guide(), &parse(arguments)?)),
             "search_source" | "search_translations" | "similar_translations" => {
                 let Some(search) = self.search else {

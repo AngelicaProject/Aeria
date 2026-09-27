@@ -232,7 +232,8 @@ returned to the model as `{"error": …}` results instead of ending the turn.
 | `get_unit` | One source row, or one column of it, with translations, review states, notes, unit IDs, and context cells. |
 | `other_languages` | The same row's translatable strings, or one column, in the game's other client languages as macro text, each bounded like other cell text; `null` where a language has no such string. Context for wording and tag placement; the translation is still made from the source language. |
 | `dialogue_context` | For a line of a quest or cutscene sheet (see [Dialogue context](#dialogue-context)): the quest's name and translation, its journal entries and objectives (up to 24 each), up to 40 spoken lines before and after the line (8 and 4 by default), each with its key, speaker label, source, translation, and review state, the voice profiles of their speakers and the speakers without one, and optionally the line in the other client languages. |
-| `speaker_lines` | One speaker label's lines across every quest and cutscene, up to 30 per page, with translations and the speaker's voice profile. An unknown label returns up to 20 labels that contain it: those that start with it first, then those with the most lines. |
+| `list_speakers` | Speaker labels of quest and cutscene speech, optionally containing a query or only those without a voice profile, the most lines first, up to 200 per page, each with its number of lines and whether it has a profile. |
+| `speaker_lines` | One speaker label's lines across every quest and cutscene with translations, each with its position among the speaker's lines, and the speaker's voice profile: a page of up to 30 lines, or with `spread` up to 30 lines sampled evenly across all of them (line `i × total / count`). An unknown label returns up to 20 labels that contain it: those that start with it first, then those with the most lines. |
 | `get_voices` | The voice profiles of given speaker labels, or every speaker label with a profile. |
 | `pending_changes` | Uncommitted translation changes from `aeria-git`, up to 200. |
 | `unit_history` | Committed history of one unit, up to 50 entries. |
@@ -286,7 +287,7 @@ instruction and may be wrong.
 | --- | --- |
 | `validate_target` | Rebuilds a tagged translation of one string without writing, and returns the target or the rule violations. |
 | `propose_translation` | Accepts 1 to 20 tagged translations. Each is rebuilt and checked; rejected ones return what to fix; valid ones are submitted and reported as `applied`, `awaitingApproval` (with a proposal ID), `conflict`, or `failed`. |
-| `propose_voice_profile` | Sets one character's voice profile or removes speaker labels from profiles; always waits for approval (see [Voice profiles](#voice-profiles)). |
+| `propose_voice_profile` | Sets up to 50 characters' voice profiles and removes speaker labels from profiles, as one change that always waits for approval (see [Voice profiles](#voice-profiles)). |
 
 A valid translation records the string's target and review state at the time
 it was produced. Every write, immediate or approved, goes through
@@ -363,13 +364,26 @@ with Angelica receives the profile of the string's speaker. Each profile's
 text is cut at 2,000 characters in requests. Ignored profiles are reported as
 project file problems.
 
-`propose_voice_profile` is offered in Ask and Auto-draft modes. It replaces
-the one profile that names any of the given labels, or adds a profile, and
-can remove labels; the result is written in canonical form. Labels that
-belong to different profiles, and files with ignored profiles, are refused.
-The change always waits for approval and is applied like a glossary change:
-only if the file still has the content it was proposed against, and only if
-every profile of the new file is usable.
+`propose_voice_profile` is offered in Ask and Auto-draft modes. It takes up
+to 50 profiles, each with its speaker labels and text, and labels to remove,
+and records them as one file change: removals apply first, then each profile
+replaces the one profile that names any of its labels or is added, and the
+result is written in canonical form. A change is refused when one profile's
+labels belong to different profiles, when a label is named twice, or when the
+file has ignored profiles. The change always waits for approval and is applied
+like a glossary change: only if the file still has the content it was proposed
+against, and only if every profile of the new file is usable. A second change
+proposed before the first is applied would therefore conflict, so the result
+tells Angelica to wait, and her instructions tell her to put every profile of
+a turn in one call.
+
+Angelica can write the profiles herself. Her instructions for many characters
+are: take speakers from `list_speakers` without a profile, the most lines
+first, skipping `SYSTEM`, choice labels, and labels with a number; read each
+one's lines with `speaker_lines` and `spread`; group labels that belong to one
+character; write rules with short examples in the target language; and
+propose the turn's profiles in one change, then continue after the user
+applied it.
 
 ### Dialogue context
 
@@ -386,8 +400,8 @@ addressee is unclear, to say when she inferred who is addressed, and to
 compare the other client languages when the source is ambiguous and say which
 settled it, while still translating from the source language.
 
-The first `speaker_lines` call builds the speaker index (see
-[`source.md`](./source.md#dialogue)) outside the project lock.
+The first `list_speakers` or `speaker_lines` call builds the speaker index
+(see [`source.md`](./source.md#dialogue)) outside the project lock.
 
 ### Proposals
 

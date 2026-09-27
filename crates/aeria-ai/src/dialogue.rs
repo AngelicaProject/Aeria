@@ -16,7 +16,7 @@ use crate::guidance::{ProjectFile, ProjectGuide};
 use crate::tools::{
     ProjectReader, ProjectWriter, ProposalOutcome, ReviewLabel, ToolError, bound_text,
 };
-use crate::voices::{MAX_PROFILE_SPEAKERS, VoiceProfile, change_voices};
+use crate::voices::{MAX_PROFILE_SPEAKERS, MAX_PROFILES_PER_CHANGE, VoiceProfile, change_voices};
 
 /// Most lines `dialogue_context` returns on each side of a line.
 pub const MAX_NEIGHBOUR_LINES: usize = 40;
@@ -24,6 +24,8 @@ pub const MAX_NEIGHBOUR_LINES: usize = 40;
 pub const MAX_QUEST_ENTRIES: usize = 24;
 /// Most lines one `speaker_lines` call returns.
 pub const MAX_SPEAKER_LINES: usize = 30;
+/// Most speakers one `list_speakers` call returns.
+pub const MAX_LISTED_SPEAKERS: usize = 200;
 /// Longest line text in a scene summary.
 const BRIEF_LINE_CHARS: usize = 300;
 /// Most journal entries or objectives in a scene summary.
@@ -141,14 +143,29 @@ pub fn dialogue_tool_definitions() -> Vec<ToolDefinition> {
             }),
         },
         ToolDefinition {
+            name: "list_speakers",
+            description: "Speaker labels of quest and cutscene speech, the most lines first, with whether each has a voice profile: to find the characters that matter most, for example to write voice profiles. Labels are the game's internal names; SYSTEM, Q1, A1, and labels with a number are rarely characters. The first call reads every dialogue sheet and can take a few seconds.",
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "query": { "type": "string", "description": "Only labels that contain this text." },
+                    "without_profile": { "type": "boolean", "description": "Only speakers without a voice profile." },
+                    "offset": { "type": "integer", "minimum": 0 },
+                    "limit": { "type": "integer", "minimum": 1, "maximum": MAX_LISTED_SPEAKERS, "description": "Defaults to 50." },
+                },
+                "additionalProperties": false,
+            }),
+        },
+        ToolDefinition {
             name: "speaker_lines",
-            description: "Lines of one speaker label across every quest and cutscene, in sheet order, with their translations and the speaker's voice profile: to learn how a character speaks and how the project has translated them. An unknown label returns similar labels. The first call reads every dialogue sheet and can take a few seconds.",
+            description: "Lines of one speaker label across every quest and cutscene, in sheet order, with their translations and the speaker's voice profile: to learn how a character speaks and how the project has translated them. Set spread to sample lines evenly across the whole game instead of reading a page, since a character's voice can change over the story. An unknown label returns similar labels. The first call reads every dialogue sheet and can take a few seconds.",
             parameters: json!({
                 "type": "object",
                 "properties": {
                     "speaker": { "type": "string", "description": "A speaker label, such as URIANGER." },
-                    "offset": { "type": "integer", "minimum": 0 },
+                    "offset": { "type": "integer", "minimum": 0, "description": "Not used with spread." },
                     "limit": { "type": "integer", "minimum": 1, "maximum": MAX_SPEAKER_LINES, "description": "Defaults to 15." },
+                    "spread": { "type": "boolean", "description": "Sample lines evenly across all of the speaker's lines." },
                 },
                 "required": ["speaker"],
                 "additionalProperties": false,
@@ -171,12 +188,23 @@ pub fn dialogue_tool_definitions() -> Vec<ToolDefinition> {
 pub fn voice_change_definition() -> ToolDefinition {
     ToolDefinition {
         name: "propose_voice_profile",
-        description: "Proposes a character voice profile in aeria-voices.md, or removes speakers from profiles. A profile names a character by the speaker labels of the game's dialogue keys and says in Markdown how the character speaks in the target language: register, forms of address, pronouns, archaisms, verbal tics, with short examples. Setting replaces the one profile that names any of the speakers, or adds one. The user always approves voice profile changes. Base a profile on the character's lines (speaker_lines) and existing translations.",
+        description: "Proposes character voice profiles in aeria-voices.md as one change, and can remove speakers from profiles. A profile names a character by the speaker labels of the game's dialogue keys and says in Markdown how the character speaks in the target language: register, forms of address, pronouns, archaisms, verbal tics, with short examples. Each profile replaces the one profile that names any of its speakers, or is added. The user always approves voice profile changes, and a change applies only to the file it was proposed against: put every profile of a turn in one call, and wait for the user to apply it before proposing more. Base a profile on the character's lines (speaker_lines with spread) and existing translations.",
         parameters: json!({
             "type": "object",
             "properties": {
-                "speakers": { "type": "array", "maxItems": MAX_PROFILE_SPEAKERS, "items": { "type": "string" }, "description": "Speaker labels of one character, such as [\"URIANGER\"]." },
-                "profile": { "type": "string", "description": "The complete profile text in Markdown." },
+                "profiles": {
+                    "type": "array",
+                    "maxItems": MAX_PROFILES_PER_CHANGE,
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "speakers": { "type": "array", "minItems": 1, "maxItems": MAX_PROFILE_SPEAKERS, "items": { "type": "string" }, "description": "Speaker labels of one character, such as [\"URIANGER\"]." },
+                            "profile": { "type": "string", "description": "The complete profile text in Markdown." },
+                        },
+                        "required": ["speakers", "profile"],
+                        "additionalProperties": false,
+                    },
+                },
                 "remove": { "type": "array", "maxItems": MAX_PROFILE_SPEAKERS, "items": { "type": "string" }, "description": "Speaker labels to remove from their profiles." },
             },
             "additionalProperties": false,
@@ -393,6 +421,14 @@ pub(crate) struct SpeakerLinesArgs {
     #[serde(default)]
     offset: usize,
     limit: Option<usize>,
+    #[serde(default)]
+    spread: bool,
+}
+
+/// Positions of `count` lines spread evenly over `total`, first included.
+fn spread_positions(total: usize, count: usize) -> Vec<usize> {
+    let count = count.min(total);
+    (0..count).map(|index| index * total / count).collect()
 }
 
 /// `speaker_lines`: one speaker's lines across quests and cutscenes.
@@ -406,7 +442,23 @@ pub(crate) fn speaker_lines(
         return Err(ToolError::new("name a speaker label, such as URIANGER"));
     }
     let limit = args.limit.unwrap_or(15).clamp(1, MAX_SPEAKER_LINES);
-    let (total, locations) = reader.speaker_lines(&speaker, args.offset, limit)?;
+    let (total, located) = if args.spread {
+        let total = reader.speaker_lines(&speaker, 0, 0)?.0;
+        let mut located = Vec::new();
+        for position in spread_positions(total, limit) {
+            located.extend(
+                reader
+                    .speaker_lines(&speaker, position, 1)?
+                    .1
+                    .into_iter()
+                    .map(|location| (position, location)),
+            );
+        }
+        (total, located)
+    } else {
+        let (total, page) = reader.speaker_lines(&speaker, args.offset, limit)?;
+        (total, (args.offset..).zip(page).collect())
+    };
     if total == 0 {
         // Labels that start with the query first, then the most lines.
         let mut similar = reader.speakers(&speaker)?;
@@ -424,9 +476,9 @@ pub(crate) fn speaker_lines(
             .collect();
         return Ok(json!({ "speaker": speaker, "total": 0, "similar": similar }));
     }
-    let mut lines = Vec::with_capacity(locations.len());
+    let mut lines = Vec::with_capacity(located.len());
     let mut current: Option<(String, Option<SheetDialogue>)> = None;
-    for location in locations {
+    for (position, location) in located {
         if current
             .as_ref()
             .is_none_or(|(sheet, _)| *sheet != location.sheet)
@@ -441,15 +493,14 @@ pub(crate) fn speaker_lines(
         };
         let mut value = line_value(reader, sheet, &dialogue.lines[index])?;
         value["sheet"] = json!(sheet);
+        value["index"] = json!(position);
         lines.push(value);
     }
+    let mut result = json!({ "speaker": speaker, "total": total, "lines": lines });
     let next = args.offset + limit;
-    let mut result = json!({
-        "speaker": speaker,
-        "total": total,
-        "lines": lines,
-        "nextOffset": (next < total).then_some(next),
-    });
+    if !args.spread && next < total {
+        result["nextOffset"] = json!(next);
+    }
     if let Some(profile) = guide
         .voices
         .as_ref()
@@ -458,6 +509,54 @@ pub(crate) fn speaker_lines(
         result["voice"] = profile_value(profile);
     }
     Ok(result)
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ListSpeakersArgs {
+    #[serde(default)]
+    query: String,
+    #[serde(default)]
+    without_profile: bool,
+    #[serde(default)]
+    offset: usize,
+    limit: Option<usize>,
+}
+
+/// `list_speakers`: speaker labels, the most lines first.
+pub(crate) fn list_speakers(
+    reader: &dyn ProjectReader,
+    guide: &ProjectGuide,
+    args: &ListSpeakersArgs,
+) -> Result<Value, ToolError> {
+    let profiled = |speaker: &str| {
+        guide
+            .voices
+            .as_ref()
+            .is_some_and(|voices| voices.find(speaker).is_some())
+    };
+    let mut speakers: Vec<(String, usize)> = reader
+        .speakers(args.query.trim())?
+        .into_iter()
+        .filter(|(speaker, _)| !args.without_profile || !profiled(speaker))
+        .collect();
+    speakers.sort_by(|(a, a_lines), (b, b_lines)| b_lines.cmp(a_lines).then_with(|| a.cmp(b)));
+    let limit = args.limit.unwrap_or(50).clamp(1, MAX_LISTED_SPEAKERS);
+    let total = speakers.len();
+    let page: Vec<Value> = speakers
+        .into_iter()
+        .skip(args.offset)
+        .take(limit)
+        .map(|(speaker, lines)| {
+            json!({ "speaker": speaker, "lines": lines, "hasProfile": profiled(&speaker) })
+        })
+        .collect();
+    let next = args.offset + page.len();
+    Ok(json!({
+        "total": total,
+        "speakers": page,
+        "nextOffset": (next < total).then_some(next),
+    }))
 }
 
 #[derive(Deserialize)]
@@ -488,38 +587,52 @@ pub(crate) fn get_voices(guide: &ProjectGuide, args: &VoicesArgs) -> Value {
 #[serde(deny_unknown_fields)]
 pub(crate) struct VoiceChangeArgs {
     #[serde(default)]
-    speakers: Vec<String>,
-    profile: Option<String>,
+    profiles: Vec<ProfileArgs>,
     #[serde(default)]
     remove: Vec<String>,
 }
 
-/// `propose_voice_profile`: sets one profile or removes speakers, for the
-/// user's approval.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ProfileArgs {
+    speakers: Vec<String>,
+    profile: String,
+}
+
+/// `propose_voice_profile`: sets profiles and removes speakers as one
+/// change, for the user's approval.
 pub(crate) fn propose_voice_profile(
     reader: &dyn ProjectReader,
     writer: &dyn ProjectWriter,
     args: &VoiceChangeArgs,
 ) -> Result<Value, ToolError> {
-    let set = match (&args.profile, args.speakers.is_empty()) {
-        (Some(profile), false) => Some((args.speakers.as_slice(), profile.as_str())),
-        (None, true) => None,
-        _ => {
-            return Err(ToolError::new(
-                "give both speakers and profile to set a profile",
-            ));
-        }
-    };
-    if set.is_none() && args.remove.is_empty() {
-        return Err(ToolError::new("set a profile or remove speakers"));
+    if args.profiles.is_empty() && args.remove.is_empty() {
+        return Err(ToolError::new("set profiles or remove speakers"));
     }
-    if args.speakers.len() > MAX_PROFILE_SPEAKERS || args.remove.len() > MAX_PROFILE_SPEAKERS {
+    if args.profiles.len() > MAX_PROFILES_PER_CHANGE {
         return Err(ToolError::new(format!(
-            "name at most {MAX_PROFILE_SPEAKERS} speakers"
+            "propose at most {MAX_PROFILES_PER_CHANGE} profiles at once"
         )));
     }
+    if args.remove.len() > MAX_PROFILE_SPEAKERS {
+        return Err(ToolError::new(format!(
+            "remove at most {MAX_PROFILE_SPEAKERS} speakers at once"
+        )));
+    }
+    if args
+        .profiles
+        .iter()
+        .any(|profile| profile.speakers.is_empty())
+    {
+        return Err(ToolError::new("each profile names at least one speaker"));
+    }
+    let set: Vec<(Vec<String>, String)> = args
+        .profiles
+        .iter()
+        .map(|profile| (profile.speakers.clone(), profile.profile.clone()))
+        .collect();
     let before = reader.project_file(ProjectFile::Voices)?;
-    let after = change_voices(before.as_deref(), set, &args.remove).map_err(ToolError::new)?;
+    let after = change_voices(before.as_deref(), &set, &args.remove).map_err(ToolError::new)?;
     if after.len() as u64 > ProjectFile::Voices.max_bytes() {
         return Err(ToolError::new("the voice profiles would be too long"));
     }
@@ -533,9 +646,13 @@ pub(crate) fn propose_voice_profile(
             before,
             after,
         })? {
-            ProposalOutcome::Pending { proposal_id } => {
-                json!({ "status": "awaitingApproval", "proposalId": proposal_id, "file": file })
-            }
+            ProposalOutcome::Pending { proposal_id } => json!({
+                "status": "awaitingApproval",
+                "proposalId": proposal_id,
+                "file": file,
+                "profiles": set.len(),
+                "note": "Wait until the user applies this change before proposing more voice profiles; a later change made before then would conflict with it.",
+            }),
             ProposalOutcome::Applied => json!({ "status": "applied", "file": file }),
             ProposalOutcome::Conflict { message } | ProposalOutcome::Failed { message } => {
                 json!({ "status": "failed", "errors": [message] })
@@ -797,6 +914,7 @@ mod tests {
         ) -> Result<(usize, Vec<UnitLocation>), ToolError> {
             let rows: &[u32] = match speaker {
                 "MIOUNNE" => &[48, 52],
+                "URIANGER" => &[51; 10],
                 _ => &[],
             };
             Ok((
@@ -929,6 +1047,42 @@ mod tests {
             .collect();
         assert_eq!(similar, ["URIANGER", "URIBOY", "AURIAUNE"]);
 
+        let spread = run(
+            &tools,
+            "speaker_lines",
+            &json!({ "speaker": "URIANGER", "limit": 3, "spread": true }),
+        );
+        let positions: Vec<u64> = spread["lines"]
+            .as_array()
+            .expect("lines")
+            .iter()
+            .map(|line| line["index"].as_u64().expect("index"))
+            .collect();
+        assert_eq!(positions, [0, 3, 6]);
+        assert!(spread.get("nextOffset").is_none());
+        assert_eq!(spread_positions(2, 30), [0, 1]);
+
+        let listed = run(&tools, "list_speakers", &json!({ "limit": 2 }));
+        assert_eq!(listed["total"], 4);
+        assert_eq!(
+            listed["speakers"][0],
+            json!({ "speaker": "URIANGER", "lines": 2077, "hasProfile": true })
+        );
+        assert_eq!(listed["speakers"][1]["speaker"], "AURIAUNE");
+        assert_eq!(listed["nextOffset"], 2);
+        let missing = run(
+            &tools,
+            "list_speakers",
+            &json!({ "without_profile": true, "query": "URI" }),
+        );
+        let labels: Vec<&str> = missing["speakers"]
+            .as_array()
+            .expect("speakers")
+            .iter()
+            .map(|speaker| speaker["speaker"].as_str().expect("label"))
+            .collect();
+        assert_eq!(labels, ["AURIAUNE", "URIBOY"]);
+
         let all = run(&tools, "get_voices", &json!({}));
         assert_eq!(all["speakers"], json!(["URIANGER", "MIOUNNE"]));
     }
@@ -940,23 +1094,36 @@ mod tests {
         let proposed = run(
             &tools,
             "propose_voice_profile",
-            &json!({ "speakers": ["thancred"], "profile": "Ироничный, на «ты»." }),
+            &json!({ "profiles": [
+                { "speakers": ["thancred"], "profile": "Ироничный, на «ты»." },
+                { "speakers": ["URIANGER"], "profile": "Высокий стиль." },
+            ] }),
         );
         assert_eq!(proposed["status"], "awaitingApproval");
+        assert_eq!(proposed["profiles"], 2);
         let changes = reader.changes.lock().expect("lock");
+        assert_eq!(changes.len(), 1, "one change for every profile");
         assert_eq!(changes[0].file, ProjectFile::Voices);
         assert_eq!(changes[0].before.as_deref(), Some(VOICES));
+        assert!(
+            changes[0]
+                .after
+                .starts_with("## URIANGER\n\nВысокий стиль.\n")
+        );
         assert!(
             changes[0]
                 .after
                 .ends_with("## THANCRED\n\nИроничный, на «ты».\n")
         );
         drop(changes);
-        let output = tools.execute(
-            "propose_voice_profile",
-            &json!({ "speakers": ["URIANGER"] }).to_string(),
-        );
-        assert!(output.is_error, "a profile needs text");
+        for arguments in [
+            json!({ "profiles": [{ "speakers": ["URIANGER"], "profile": " " }] }),
+            json!({ "profiles": [{ "speakers": [], "profile": "Text." }] }),
+            json!({}),
+        ] {
+            let output = tools.execute("propose_voice_profile", &arguments.to_string());
+            assert!(output.is_error, "{arguments}");
+        }
         let chat = ReadTools::new(&reader).execute(
             "propose_voice_profile",
             &json!({ "remove": ["URIANGER"] }).to_string(),

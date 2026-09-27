@@ -18,6 +18,8 @@ pub const MAX_VOICES_BYTES: u64 = 256 * 1024;
 pub const MAX_VOICE_PROMPT_CHARS: usize = 2000;
 /// Most speaker labels one profile heading may name.
 pub const MAX_PROFILE_SPEAKERS: usize = 20;
+/// Most profiles one change sets.
+pub const MAX_PROFILES_PER_CHANGE: usize = 50;
 
 /// One character's profile.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -217,9 +219,10 @@ impl VoiceProfile {
     }
 }
 
-/// Sets one character's profile, or removes speaker labels, and returns
-/// the new file. Setting replaces the heading and text of the one profile
-/// that names any of the labels, in place, or appends a new profile. The
+/// Sets characters' profiles, given as speaker labels and text, and removes
+/// speaker labels, and returns the new file. Removals apply first. Each set
+/// replaces the heading and text of the one profile that names any of its
+/// labels, in place, or appends a new profile. The
 /// file is written in canonical form: the text before the first profile and
 /// each profile's text are kept, trimmed, and headings list labels in upper
 /// case.
@@ -227,11 +230,12 @@ impl VoiceProfile {
 /// # Errors
 ///
 /// Returns a description when the current file has ignored parts, which
-/// must be fixed by hand first, when a label is invalid, when the labels
-/// belong to more than one profile, or when a removed label has no profile.
+/// must be fixed by hand first, when a label is invalid, when one set's
+/// labels belong to more than one profile, when two sets or a set and a
+/// removal share a label, or when a removed label has no profile.
 pub fn change_voices(
     current: Option<&str>,
-    set: Option<(&[String], &str)>,
+    set: &[(Vec<String>, String)],
     remove: &[String],
 ) -> Result<String, String> {
     let current = current.unwrap_or_default().trim_start_matches('\u{feff}');
@@ -264,15 +268,19 @@ pub fn change_voices(
         profile.0.retain(|speaker| *speaker != label);
         removals.push(label);
     }
-    if let Some((speakers, text)) = set {
+    let mut claimed = removals;
+    for (speakers, text) in set {
         let text = text.trim();
-        if text.is_empty() {
-            return Err("a voice profile needs text".to_owned());
-        }
         let labels = heading_labels(&speakers.join(","))?;
-        if labels.iter().any(|label| removals.contains(label)) {
-            return Err("a speaker label cannot be set and removed at once".to_owned());
+        if text.is_empty() {
+            return Err(format!("the profile of {} needs text", labels.join(", ")));
         }
+        if let Some(label) = labels.iter().find(|label| claimed.contains(label)) {
+            return Err(format!(
+                "{label} is named twice in one change; name each speaker once"
+            ));
+        }
+        claimed.extend(labels.iter().cloned());
         let owners: Vec<usize> = profiles
             .iter()
             .enumerate()
@@ -283,10 +291,10 @@ pub fn change_voices(
             [] => profiles.push((labels, text.to_owned())),
             [index] => profiles[*index] = (labels, text.to_owned()),
             _ => {
-                return Err(
-                    "those speaker labels belong to different profiles; change them one profile at a time"
-                        .to_owned(),
-                );
+                return Err(format!(
+                    "{} belong to different profiles; remove labels from one of them first",
+                    labels.join(", ")
+                ));
             }
         }
     }
@@ -351,37 +359,57 @@ mod tests {
         assert_eq!(voices.find("NERO").expect("nero").text, "Two.");
     }
 
+    fn set(speakers: &[&str], text: &str) -> (Vec<String>, String) {
+        (labels(speakers), text.to_owned())
+    }
+
     #[test]
-    fn a_change_replaces_one_profile_in_place_and_keeps_the_rest() {
-        let set = labels(&["urianger"]);
-        let changed =
-            change_voices(Some(FILE), Some((&set, "Высокий стиль.")), &[]).expect("changed");
+    fn a_change_replaces_profiles_in_place_and_keeps_the_rest() {
+        let changed = change_voices(Some(FILE), &[set(&["urianger"], "Высокий стиль.")], &[])
+            .expect("changed");
         assert_eq!(
             changed,
             "# Voices\n\nNotes for people.\n\n## URIANGER\n\nВысокий стиль.\n\n## ALPHINAUD, ALPHINAUD_YOUNG\n\nВежливый, книжный.\n"
         );
-        let added = change_voices(None, Some((&labels(&["THANCRED"]), " Ироничный. ")), &[])
-            .expect("added");
-        assert_eq!(added, "## THANCRED\n\nИроничный.\n");
+        let added = change_voices(
+            None,
+            &[
+                set(&["THANCRED"], " Ироничный. "),
+                set(&["Y_SHTOLA", "YSHTOLA"], "Сдержанная."),
+            ],
+            &[],
+        )
+        .expect("added");
+        assert_eq!(
+            added,
+            "## THANCRED\n\nИроничный.\n\n## Y_SHTOLA, YSHTOLA\n\nСдержанная.\n"
+        );
         let removed = change_voices(
             Some(&changed),
-            None,
+            &[set(&["THANCRED"], "Ироничный.")],
             &labels(&["ALPHINAUD", "ALPHINAUD_YOUNG"]),
         )
         .expect("removed");
         assert!(!removed.contains("ALPHINAUD"));
-        assert_eq!(parse_voices(&removed).speakers(), ["URIANGER"]);
+        assert_eq!(parse_voices(&removed).speakers(), ["URIANGER", "THANCRED"]);
     }
 
     #[test]
     fn unsafe_changes_are_refused() {
-        let across = labels(&["URIANGER", "ALPHINAUD"]);
-        assert!(change_voices(Some(FILE), Some((&across, "Text.")), &[]).is_err());
-        assert!(change_voices(Some(FILE), Some((&labels(&["URIANGER"]), " ")), &[]).is_err());
-        assert!(change_voices(Some(FILE), None, &labels(&["NOBODY"])).is_err());
-        assert!(change_voices(Some(FILE), Some((&labels(&["Y'SHTOLA"]), "Text.")), &[]).is_err());
+        let refused = |sets: &[(Vec<String>, String)], remove: &[&str]| {
+            change_voices(Some(FILE), sets, &labels(remove)).is_err()
+        };
+        assert!(refused(&[set(&["URIANGER", "ALPHINAUD"], "Text.")], &[]));
+        assert!(refused(&[set(&["URIANGER"], " ")], &[]));
+        assert!(refused(&[], &["NOBODY"]));
+        assert!(refused(&[set(&["Y'SHTOLA"], "Text.")], &[]));
         assert!(
-            change_voices(Some("## bad label\nText.\n"), None, &[]).is_err(),
+            refused(&[set(&["CID"], "One."), set(&["cid"], "Two.")], &[]),
+            "a speaker named twice"
+        );
+        assert!(refused(&[set(&["URIANGER"], "Text.")], &["URIANGER"]));
+        assert!(
+            change_voices(Some("## bad label\nText.\n"), &[], &[]).is_err(),
             "a file with ignored parts is not rewritten"
         );
     }
