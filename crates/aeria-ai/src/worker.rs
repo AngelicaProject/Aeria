@@ -19,6 +19,7 @@ use crate::dialogue::{SheetDialogue, scene_brief};
 use crate::guidance::ProjectGuide;
 use crate::jobs::{JobUnit, UnitStatus};
 use crate::search::MemoryMatch;
+use crate::style::{ORIGINAL_TEXT, TRANSLATION_STYLE};
 use crate::tools::{
     ContextCell, ProjectFacts, ProjectReader, ReadTools, ToolError, ToolOutput, UnitLocation,
     UnitState, read_tool_definitions,
@@ -28,6 +29,8 @@ use crate::tools::{
 pub const WORKER_ROUNDS: usize = 8;
 /// Spoken lines before a dialogue chunk shown with its scene.
 const SCENE_LINES_BEFORE: usize = 4;
+/// Spoken lines after a dialogue chunk shown with its scene.
+const SCENE_LINES_AFTER: usize = 4;
 
 /// What a worker needs to translate one string.
 #[derive(Clone, Debug, PartialEq)]
@@ -130,14 +133,14 @@ repeat\" may repeat. Never write raw macro syntax.
 language needs and never using a forbidden variant.
 - Translation memory lists existing translations of similar sources; keep their wording \
 where the source is the same, and stay consistent with them otherwise.
-- Use get_unit, read_rows, or get_guidance only when a string needs more context. \
-other_languages shows a string as the game's other client languages write it, which helps \
-with unclear meaning or tag placement; translate from the source language all the same.
-- Quest and cutscene strings come with their scene: the quest, the lines before the chunk, \
-and each string's speaker label from its key. Keep each character's voice: follow their \
-voice profile for register, forms of address, and pronouns, and keep how characters \
-address each other consistent within the scene. dialogue_context shows more of a scene, \
-and get_voices reads other profiles. A speaker without a profile is worth a report_issue \
+- Use get_unit, read_rows, or get_guidance when a string needs more context, and \
+other_languages when its meaning, joke, or tone is unclear.
+- Quest and cutscene strings come with their scene: the quest, the lines before, between, \
+and after the chunk's strings, and each string's speaker label from its key. Translate \
+them as one conversation, so that each line answers the one before it. Keep each \
+character's voice: follow their voice profile for register, forms of address, and \
+pronouns, and keep how characters address each other consistent within the scene. \
+dialogue_context shows more of a scene, and get_voices reads other profiles. A speaker without a profile is worth a report_issue \
 when their voice is distinctive.
 - Use report_issue for an ambiguity, missing context, or glossary gap Angelica should know \
 about; still submit your best translation.
@@ -244,6 +247,7 @@ impl ChunkWorker {
                     dialogue,
                     &rows,
                     SCENE_LINES_BEFORE,
+                    SCENE_LINES_AFTER,
                 )
                 .ok()
             });
@@ -307,6 +311,10 @@ impl ChunkWorker {
     #[must_use]
     pub fn system_prompt(&self, facts: Option<&ProjectFacts>, instructions: &str) -> String {
         let mut prompt = String::from(WORKER_INSTRUCTIONS);
+        for section in [ORIGINAL_TEXT, TRANSLATION_STYLE] {
+            prompt.push_str("\n\n");
+            prompt.push_str(section);
+        }
         if let Some(facts) = facts {
             let target = facts
                 .target_language
@@ -324,7 +332,8 @@ impl ChunkWorker {
         if let Some(guidance) = self.guide.guidance_for_prompt() {
             let _ = write!(
                 prompt,
-                "\n\nProject guidance:\n<guidance>\n{guidance}\n</guidance>"
+                "\n\nProject guidance, which takes precedence over the style defaults above:\n\
+                 <guidance>\n{guidance}\n</guidance>"
             );
         }
         prompt
@@ -853,6 +862,7 @@ Lines before, in sheet order:
         let prompt = worker.system_prompt(None, "Use formal address.");
         assert!(prompt.contains("Job instructions:\nUse formal address."));
         assert!(prompt.contains("<guidance>\nBe brief.\n</guidance>"));
+        assert!(prompt.contains(TRANSLATION_STYLE));
 
         let output = worker.execute(
             "submit_translations",

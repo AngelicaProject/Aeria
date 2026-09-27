@@ -4,6 +4,7 @@ use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
 use aeria_ai::OpenAiCompatibleClient;
 use aeria_ai::chatgpt::AccessToken;
+use aeria_ai::search::GlossaryCandidate;
 use aeria_git::{GitExecutable, UnitAttribution};
 use aeria_workspace::ProjectSession;
 
@@ -32,6 +33,8 @@ pub struct DesktopState {
     job_stores: Mutex<Vec<PathBuf>>,
     /// Source search indexes by game data key.
     search_indexes: Mutex<Vec<(String, IndexState)>>,
+    /// Glossary candidates of the last source they were found for.
+    glossary_candidates: Mutex<Option<(String, Arc<[GlossaryCandidate]>)>>,
     /// Running synchronization and export operations, which an application
     /// update must not interrupt.
     activities: Mutex<Vec<(u64, Activity)>>,
@@ -96,6 +99,7 @@ impl DesktopState {
             job_runners: Mutex::new(Vec::new()),
             job_stores: Mutex::new(Vec::new()),
             search_indexes: Mutex::new(Vec::new()),
+            glossary_candidates: Mutex::new(None),
             activities: Mutex::new(Vec::new()),
             next_activity_id: AtomicU64::new(1),
         }
@@ -368,6 +372,24 @@ impl DesktopState {
         }
         indexes.push((source_key.to_owned(), IndexState::Building));
         true
+    }
+
+    pub(crate) fn glossary_candidates(&self, source_key: &str) -> Option<Arc<[GlossaryCandidate]>> {
+        let cache = self.glossary_candidates.lock().ok()?;
+        cache
+            .as_ref()
+            .filter(|(key, _)| key == source_key)
+            .map(|(_, candidates)| Arc::clone(candidates))
+    }
+
+    pub(crate) fn set_glossary_candidates(
+        &self,
+        source_key: &str,
+        candidates: Arc<[GlossaryCandidate]>,
+    ) {
+        if let Ok(mut cache) = self.glossary_candidates.lock() {
+            *cache = Some((source_key.to_owned(), candidates));
+        }
     }
 
     pub(crate) fn cached_attribution(

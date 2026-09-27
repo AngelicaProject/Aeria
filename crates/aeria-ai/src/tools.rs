@@ -13,7 +13,9 @@ use crate::dialogue::{
     SheetDialogue, dialogue_context, dialogue_tool_definitions, get_voices, list_speakers,
     propose_voice_profile, speaker_lines, voice_change_definition,
 };
-use crate::guidance::{Glossary, GlossaryEntry, ProjectFile, ProjectGuide, change_glossary};
+use crate::guidance::{
+    GLOSSARY_FILE, Glossary, GlossaryEntry, ProjectFile, ProjectGuide, change_glossary,
+};
 use crate::images::MAX_JOB_IMAGES;
 use crate::jobs::{
     JobEstimate, JobEvent, JobFilter, JobScope, JobStatus, JobSummary, JobUnit, MAX_CONCURRENCY,
@@ -254,6 +256,18 @@ pub struct FileChange {
     /// The file as read when the change was made; `None` when absent.
     pub before: Option<String>,
     pub after: String,
+    /// A pending proposal of the same conversation this change was built
+    /// on and replaces.
+    pub replaces: Option<String>,
+}
+
+/// A pending change to a project-shared file in the same conversation,
+/// made against the file as it is now.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PendingFileChange {
+    pub proposal_id: String,
+    /// The file content the change would write.
+    pub after: String,
 }
 
 /// The current state of one string, as a translation's expectation.
@@ -343,6 +357,19 @@ pub trait ProjectWriter: Send + Sync {
     /// # Errors
     /// Returns an error when the proposal cannot be recorded.
     fn propose_file_change(&self, change: FileChange) -> Result<ProposalOutcome, ToolError>;
+
+    /// The latest pending change to `file` in this conversation that was
+    /// made against the file as it is now, so a new change can build on it.
+    ///
+    /// # Errors
+    /// Returns an error when the proposals cannot be read.
+    fn pending_file_change(
+        &self,
+        file: ProjectFile,
+    ) -> Result<Option<PendingFileChange>, ToolError> {
+        let _ = file;
+        Ok(None)
+    }
 
     /// Records translations to mark reviewed. It always waits for the
     /// user's approval, in every mode.
@@ -926,7 +953,7 @@ fn project_read_definitions() -> Vec<ToolDefinition> {
         },
         ToolDefinition {
             name: "other_languages",
-            description: "The source text of a row's translatable strings as the game's other client languages (Japanese, English, German, French) write it, to see how each language words a string and places its tags. Context only: translate from the project's source language and keep its tags; null means that language has no such string.",
+            description: "The source text of a row's translatable strings as the game's other client languages (Japanese, the original, and the English, German, and French localizations) write it, to see what the writers meant and how each language words a string and places its tags. Context only: translate from the project's source language and keep its tags; null means that language has no such string.",
             parameters: location("Only this column; omit for all cells of the row."),
         },
         ToolDefinition {
@@ -1200,7 +1227,10 @@ impl<'a> ReadTools<'a> {
             "speaker_lines" => speaker_lines(self.reader, &self.guide(), &parse(arguments)?),
             "list_speakers" => list_speakers(self.reader, &self.guide(), &parse(arguments)?),
             "get_voices" => Ok(get_voices(&self.guide(), &parse(arguments)?)),
-            "search_source" | "search_translations" | "similar_translations" => {
+            "search_source"
+            | "search_translations"
+            | "similar_translations"
+            | "glossary_candidates" => {
                 let Some(search) = self.search else {
                     return Err(ToolError::new("search is not available here"));
                 };
@@ -1378,6 +1408,10 @@ impl<'a> ReadTools<'a> {
             )));
         }
         let before = self.reader.project_file(ProjectFile::Glossary)?;
+        let pending = writer.pending_file_change(ProjectFile::Glossary)?;
+        let base = pending
+            .as_ref()
+            .map_or(before.as_deref(), |pending| Some(pending.after.as_str()));
         let add = args
             .add
             .into_iter()
@@ -1388,9 +1422,17 @@ impl<'a> ReadTools<'a> {
                 forbidden: entry.forbidden,
             })
             .collect();
-        let after =
-            change_glossary(before.as_deref(), add, &args.remove).map_err(ToolError::new)?;
-        Self::submit_file_change(writer, ProjectFile::Glossary, before, after)
+        let after = change_glossary(base, add, &args.remove).map_err(ToolError::new)?;
+        if base == Some(after.as_str()) {
+            return Err(ToolError::new(format!("{GLOSSARY_FILE} would not change")));
+        }
+        Self::submit_file_change(
+            writer,
+            ProjectFile::Glossary,
+            before,
+            after,
+            pending.map(|pending| pending.proposal_id),
+        )
     }
 
     fn propose_guidance_change(
@@ -1407,7 +1449,7 @@ impl<'a> ReadTools<'a> {
             return Err(ToolError::new("the guidance is too long"));
         }
         let before = self.reader.project_file(ProjectFile::Guidance)?;
-        Self::submit_file_change(writer, ProjectFile::Guidance, before, after)
+        Self::submit_file_change(writer, ProjectFile::Guidance, before, after, None)
     }
 
     fn submit_file_change(
@@ -1415,7 +1457,16 @@ impl<'a> ReadTools<'a> {
         file: ProjectFile,
         before: Option<String>,
         after: String,
+        replaces: Option<String>,
     ) -> Result<Value, ToolError> {
+        // Glossary changes build on a pending change of the conversation;
+        // guidance is replaced as a whole text.
+        let note = if file == ProjectFile::Guidance {
+            "Wait until the user applies or rejects this change before proposing another guidance change; a change made before then would conflict with it."
+        } else {
+            "You may propose more changes to this file before the user decides: a new change starts from this one, includes it, and replaces it, so the user approves a single change."
+        };
+        let replaced_proposal = replaces.clone();
         if before.as_deref() == Some(after.as_str()) {
             return Err(ToolError::new(format!(
                 "{} would not change",
@@ -1427,9 +1478,16 @@ impl<'a> ReadTools<'a> {
                 file,
                 before,
                 after,
+                replaces,
             })? {
                 ProposalOutcome::Pending { proposal_id } => {
-                    json!({ "status": "awaitingApproval", "proposalId": proposal_id, "file": file.file_name() })
+                    json!({
+                        "status": "awaitingApproval",
+                        "proposalId": proposal_id,
+                        "file": file.file_name(),
+                        "replaced": replaced_proposal,
+                        "note": note,
+                    })
                 }
                 ProposalOutcome::Applied => {
                     json!({ "status": "applied", "file": file.file_name() })
@@ -2088,10 +2146,28 @@ mod tests {
         }
 
         fn propose_file_change(&self, change: FileChange) -> Result<ProposalOutcome, ToolError> {
-            self.files.lock().expect("lock").push(change);
+            let mut files = self.files.lock().expect("lock");
+            files.push(change);
             Ok(ProposalOutcome::Pending {
-                proposal_id: "f-1".to_owned(),
+                proposal_id: format!("f-{}", files.len()),
             })
+        }
+
+        /// Every recorded glossary change stays pending.
+        fn pending_file_change(
+            &self,
+            file: ProjectFile,
+        ) -> Result<Option<PendingFileChange>, ToolError> {
+            let files = self.files.lock().expect("lock");
+            Ok(files
+                .iter()
+                .enumerate()
+                .rev()
+                .find(|(_, change)| change.file == file && file == ProjectFile::Glossary)
+                .map(|(index, change)| PendingFileChange {
+                    proposal_id: format!("f-{}", index + 1),
+                    after: change.after.clone(),
+                }))
         }
 
         fn propose_review(&self, batch: ReviewBatch) -> Result<ProposalOutcome, ToolError> {
@@ -2245,6 +2321,13 @@ mod tests {
             r#"{"text":"  Use formal address. "}"#,
         );
         assert!(!output.is_error, "{}", output.content);
+        assert!(output.content.contains("Wait until the user applies"));
+        let output = tools.execute(
+            "propose_glossary_change",
+            r#"{"add":[{"term":"Ishgard","translation":"Ишгард"}]}"#,
+        );
+        assert!(!output.is_error, "{}", output.content);
+        assert!(output.content.contains("\"replaced\":\"f-1\""));
         let files = writer.files.lock().expect("lock");
         assert_eq!(
             files[0].after,
@@ -2252,6 +2335,12 @@ mod tests {
         );
         assert_eq!(files[1].before.as_deref(), Some("Use informal address."));
         assert_eq!(files[1].after, "Use formal address.\n");
+        assert_eq!(
+            files[2].after, "term,translation,note,forbidden\nAether,Эфир,,\nIshgard,Ишгард,,\n",
+            "a new glossary change builds on the pending one"
+        );
+        assert_eq!(files[2].before, files[0].before);
+        assert_eq!(files[2].replaces.as_deref(), Some("f-1"));
     }
 
     struct FakeJobs {

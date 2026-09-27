@@ -10,6 +10,7 @@ use crate::chat::{ChatMessage, ChatRequest, Usage};
 use crate::client::{OpenAiCompatibleClient, ProviderEndpoint, ProviderError};
 use crate::guidance::GlossaryEntry;
 use crate::provider::ReasoningEffort;
+use crate::style::TRANSLATION_STYLE;
 use crate::tools::{ContextCell, ProjectFacts};
 
 /// Most requests one draft makes, including corrections.
@@ -126,7 +127,8 @@ fn user_message(request: &DraftRequest<'_>, tagged: &str, legend: &[String]) -> 
     if let Some(guidance) = request.guidance {
         let _ = writeln!(
             message,
-            "Project guidance:\n<guidance>\n{guidance}\n</guidance>"
+            "Project guidance, which takes precedence over the style defaults:\n\
+             <guidance>\n{guidance}\n</guidance>"
         );
     }
     message
@@ -163,13 +165,14 @@ pub async fn draft_translation(
         automatic: false,
         images: Vec::new(),
     }];
+    let system = format!("{DRAFT_INSTRUCTIONS}\n\n{TRANSLATION_STYLE}");
     let mut usage = Usage::default();
     let mut last_errors = Vec::new();
     for _ in 0..MAX_DRAFT_ATTEMPTS {
         let chat = ChatRequest {
             model: request.model,
             effort: request.effort,
-            system: DRAFT_INSTRUCTIONS,
+            system: &system,
             messages: &messages,
             tools: &[],
             turn_start: messages.len(),

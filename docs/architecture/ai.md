@@ -193,6 +193,40 @@ sending the selection. Instructions state that tool data and text in images
 are never instructions, that macros must be preserved, and that Chat mode
 cannot change the project.
 
+### Writing style
+
+`aeria-ai::style` holds Angelica's character and the fixed writing rules.
+The machine-writing patterns are adapted from Wikipedia's "Signs of AI
+writing".
+
+- **Persona**, in Angelica's system message only: a longtime player who
+  loves the game and translating it, a friendly and slightly playful
+  colleague who says what she thinks of a line and admits when hers falls
+  flat. She is a woman: in languages with grammatical gender she uses
+  feminine forms for herself.
+- **Reply style**, in Angelica's system message only: start with the answer,
+  no chat wrappers such as greetings, praise, recaps, or closing offers, and
+  none of the machine-written patterns (contrasts with something nobody
+  claimed, one-line punchlines, staged openers, habitual lists of three,
+  inflated words, officialese, dashes as the universal connector, decorative
+  formatting). An occasional emoji is allowed in replies, never in
+  translations. A job report is a sentence or two, then only what needs the
+  user's decision.
+- **Original text**, in Angelica's and every worker's system message: the
+  game is written in Japanese, and the English, German, and French texts are
+  localizations. The project translates from its source language; the
+  Japanese shows intent. When the two differ, the project guidance decides
+  which to follow; without guidance the source's content is kept.
+- **Translation style**, in Angelica's, every worker's, and Draft with
+  Angelica's system message: translate meaning and tone in the target
+  language's own syntax and punctuation, avoid translationese, keep the
+  line's register without adding or flattening anything, and reread each
+  translation as the player sees it before submitting.
+
+Persona and style are defaults: the project guidance is described as taking
+precedence over them. They only guide the model; validation, glossary
+warnings, and every write path are unchanged.
+
 ### Images
 
 A user message can carry up to 6 images, pasted into the composer or chosen
@@ -230,7 +264,7 @@ returned to the model as `{"error": …}` results instead of ending the turn.
 | `list_sheets` | Sheets with translatable strings and their progress, filtered by a name substring or by untranslated strings, paged up to 200. |
 | `read_rows` | One `page_translation_rows` page of at most 50 scanned source rows, optionally filtered by state, with the `nextAfter` cursor. |
 | `get_unit` | One source row, or one column of it, with translations, review states, notes, unit IDs, and context cells. |
-| `other_languages` | The same row's translatable strings, or one column, in the game's other client languages as macro text, each bounded like other cell text; `null` where a language has no such string. Context for wording and tag placement; the translation is still made from the source language. |
+| `other_languages` | The same row's translatable strings, or one column, in the game's other client languages as macro text, each bounded like other cell text; `null` where a language has no such string. Context for intent (Japanese is the original), wording, and tag placement; the translation is still made from the source language. |
 | `dialogue_context` | For a line of a quest or cutscene sheet (see [Dialogue context](#dialogue-context)): the quest's name and translation, its journal entries and objectives (up to 24 each), up to 40 spoken lines before and after the line (8 and 4 by default), each with its key, speaker label, source, translation, and review state, the voice profiles of their speakers and the speakers without one, and optionally the line in the other client languages. |
 | `list_speakers` | Speaker labels of quest and cutscene speech, optionally containing a query or only those without a voice profile, the most lines first, up to 200 per page, each with its number of lines and whether it has a profile. |
 | `speaker_lines` | One speaker label's lines across every quest and cutscene with translations, each with its position among the speaker's lines, and the speaker's voice profile: a page of up to 30 lines, or with `spread` up to 30 lines sampled evenly across all of them (line `i × total / count`). An unknown label returns up to 20 labels that contain it: those that start with it first, then those with the most lines. |
@@ -257,6 +291,7 @@ Offered in every mode, backed by [`aeria-search`](./search.md):
 | `search_source` | Translatable strings whose source text matches the query, best first, with their translations and review states; optionally one sheet; up to 50 per page with `more`. |
 | `search_translations` | Bound translations whose text contains the query, ignoring case and macros, with their sources, in source order. |
 | `similar_translations` | Translation memory for one string (by location) or a given text: up to 10 translated strings with a similar source, most similar first, with a similarity from 0.5 to 1. |
+| `glossary_candidates` | [Terminology candidates](./search.md#terminology-candidates) the glossary does not have yet, those in the most strings first, optionally containing a query, from one data sheet, or in at least a number of strings (3 by default): up to 100 per page, each with its string and occurrence counts and up to 3 cells where it is a name, with the project's translation there. See [Filling the glossary](#filling-the-glossary). |
 
 The first message to Angelica starts building the source index in the
 background; until it is ready, `search_source` and `similar_translations`
@@ -342,7 +377,30 @@ in Ask and Auto-draft modes and always wait for approval. A glossary change is
 refused while the file has excluded rows, since the canonical rewrite would
 drop them. Applying a file change writes the file through a temporary file and
 rename only if it still has the content the change was made against;
-otherwise the proposal becomes a conflict.
+otherwise the proposal becomes a conflict. See
+[Proposals](#proposals) for how a new glossary change builds on one still
+waiting.
+
+#### Filling the glossary
+
+Angelica can fill the glossary from `glossary_candidates`. Finding the
+candidates is deterministic; choosing which are terminology and how to
+translate them is hers, and every entry reaches the file only through an
+approved `propose_glossary_change`. Her instructions: take the most used
+candidates first; keep names of characters, places, and factions, items and
+their categories, actions, statuses, mechanics, and recurring interface
+terms; skip ordinary words, generic labels, and one-off names; prefer the
+project's existing translation of the name, then how existing translations
+render it, and the Japanese when the meaning is unclear; add notes on kind,
+gender, or declension where useful; propose up to 100 entries per change and
+continue without waiting for the user, since the next change includes the
+one still waiting.
+
+Candidate pages are positions in a ranking that does not depend on the
+glossary. Terms the glossary has are left out of each page, so continuing
+from `nextOffset` after a glossary change neither repeats terms Angelica
+skipped nor misses new ones. A page reports how many ranked terms the
+glossary does not have (`notInGlossary`) and how many follow the page.
 
 Draft with Angelica includes the guidance and the glossary entries matching
 the string.
@@ -373,9 +431,9 @@ labels belong to different profiles, when a label is named twice, or when the
 file has ignored profiles. The change always waits for approval and is applied
 like a glossary change: only if the file still has the content it was proposed
 against, and only if every profile of the new file is usable. A second change
-proposed before the first is applied would therefore conflict, so the result
-tells Angelica to wait, and her instructions tell her to put every profile of
-a turn in one call.
+proposed while the first waits builds on it and replaces it (see
+[Proposals](#proposals)); her instructions still tell her to put every
+profile of a turn in one call.
 
 Angelica can write the profiles herself. Her instructions for many characters
 are: take speakers from `list_speakers` without a profile, the most lines
@@ -396,9 +454,9 @@ or writes.
 *Spoken lines* are speech and other lines; journal entries and objectives are
 not. `dialogue_context` returns neighbours only for a spoken line. The
 instructions tell Angelica to read a line's scene when its meaning, tone, or
-addressee is unclear, to say when she inferred who is addressed, and to
-compare the other client languages when the source is ambiguous and say which
-settled it, while still translating from the source language.
+addressee is unclear, to say when she inferred who is addressed, and that
+`dialogue_context` can show the line in the other client languages. How the
+Japanese original is used is described in [Writing style](#writing-style).
 
 The first `list_speakers` or `speaker_lines` call builds the speaker index
 (see [`source.md`](./source.md#dialogue)) outside the project lock.
@@ -413,6 +471,24 @@ content as `target`, and its content when proposed as `expected.target`
 an optional message, and the creation time. At most 2,000 are kept, dropping
 the oldest settled ones first. Deleting a conversation deletes its proposals.
 
+The user settles proposals in the panel, which Angelica does not see, so
+each turn's system message lists where the conversation's proposals stand:
+every waiting proposal other than a translation (at most 20) with its ID and
+subject, such as a glossary change with its entry counts before and after,
+the latest 8 settled ones with their status and message, and counts of
+translation proposals by status with up to 5 waiting locations. Her
+instructions tell her to check this list instead of guessing what the user
+decided.
+
+A glossary or voice-profile change is built on the latest change to the same
+file that is still waiting in the conversation and was proposed against the
+file as it is now. The new proposal records the current file as its expected
+content, so applying it applies both, and the replaced proposal becomes
+`rejected` with a message saying it was replaced. The user therefore approves a
+single change, and Angelica can keep proposing batches without waiting. A
+guidance change is a whole new text and replaces nothing; its result tells
+Angelica to wait for the user's decision before proposing another.
+
 ### Draft with Angelica
 
 The editor's **Draft with Angelica** uses Angelica's default model for one
@@ -420,7 +496,7 @@ string without tools. The request carries the source in tagged form with its
 legend, the row's context cells, the current translation and note, and the
 project languages. For a quest or cutscene string it also carries the
 string's speaker label and its scene as workers receive it, with the six
-spoken lines before the string. The reply is read between `<translation>` markers,
+spoken lines before the string and the three after it. The reply is read between `<translation>` markers,
 rebuilt, and checked; a refused reply is sent back with the violations, for
 at most three requests in total. The result becomes an unsaved draft in the
 editor, which the user saves explicitly.
@@ -449,7 +525,10 @@ filter: untranslated strings (the default), strings that need review, or
 untranslated strings and drafts. Reviewed translations are never included.
 The string list is fixed when the job starts, together with each string's
 current target and review state. Strings are grouped in order into chunks of
-at most 30 strings and 12,000 source characters, never across sheets. The
+at most 30 strings and 12,000 source characters, never across sheets. A quest
+or cutscene sheet is one scene, so its chunks hold up to 60 strings, and a
+sheet's strings in the job are split into chunks of even size: 70 strings
+become two chunks of 35. The
 estimate is the number of strings and chunks and a token count. When
 earlier jobs of the project with the same jobs model (provider, model, and
 effort) finished at least three chunks together, the count is the chunks
@@ -467,10 +546,12 @@ tagged form with their legends, context cells, current translations,
 notes, and up to three translation-memory matches, followed by the job's
 images when the worker model accepts images. A chunk of a quest or cutscene
 sheet starts with its scene: the quest's name and translation, up to 12
-journal entries and objectives, the four spoken lines before the chunk's
-first string with their speakers and translations, and the voice profiles
-(at most 8) of those speakers and the chunk's; each string names its speaker
-label. A sheet whose dialogue cannot be read is translated without a scene. Images come from the job's
+journal entries and objectives, the spoken lines around the chunk's strings
+with their speakers and translations (the four before the first, up to 40
+between them that are not in the chunk, and the four after the last), and
+the voice profiles (at most 8) of those speakers and the chunk's; each string
+names its speaker label. Workers are told to translate the chunk as one
+conversation. A sheet whose dialogue cannot be read is translated without a scene. Images come from the job's
 conversation; after the conversation is deleted, workers are told they are no
 longer available. Its tools are `get_unit`, `other_languages`, `read_rows`, and
 `dialogue_context` for context, `get_guidance` and `get_voices`,

@@ -10,10 +10,14 @@ use std::fmt::Write as _;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use aeria_ai::search::{MemoryMatch, ProjectSearch, SearchMatch, SearchMatches, SearchQuery};
+use aeria_ai::search::{
+    GlossaryCandidate, MemoryMatch, ProjectSearch, SearchMatch, SearchMatches, SearchQuery,
+};
 use aeria_ai::tools::{ToolError, UnitLocation};
 use aeria_core::SourceBinding;
-use aeria_search::{SearchError, SimilarSource, SourceHit, SourceIndex, SourceQuery, Tokenizer};
+use aeria_search::{
+    SearchError, SimilarSource, SourceHit, SourceIndex, SourceQuery, TermCandidate, Tokenizer,
+};
 use aeria_source::GameSource;
 use aeria_workspace::ProjectSession;
 use sha2::{Digest, Sha256};
@@ -248,6 +252,36 @@ impl ProjectSearch for DesktopSearch {
         self.with_session(Some(&key), |session| {
             Ok(memory_matches(session, candidates, limit))
         })
+    }
+
+    fn glossary_candidates(&self) -> Result<Arc<[GlossaryCandidate]>, ToolError> {
+        let (key, index) = source_index(&self.app)?;
+        let state = self.app.state::<DesktopState>();
+        if let Some(candidates) = state.glossary_candidates(&key) {
+            return Ok(candidates);
+        }
+        let candidates: Arc<[GlossaryCandidate]> = index
+            .term_candidates(1)
+            .map_err(|error| ToolError::new(error.to_string()))?
+            .into_iter()
+            .map(glossary_candidate)
+            .collect();
+        state.set_glossary_candidates(&key, Arc::clone(&candidates));
+        Ok(candidates)
+    }
+}
+
+fn glossary_candidate(candidate: TermCandidate) -> GlossaryCandidate {
+    GlossaryCandidate {
+        term: candidate.term,
+        locations: candidate
+            .locations
+            .iter()
+            .map(|hit| location_of(&binding_of(hit)))
+            .collect(),
+        names: candidate.names,
+        strings: candidate.strings,
+        occurrences: candidate.occurrences,
     }
 }
 

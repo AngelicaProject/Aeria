@@ -28,10 +28,10 @@ use aeria_ai::images::{
 use aeria_ai::prompt::{AgentMode, EditorContext, system_prompt};
 use aeria_ai::search::search_tool_definitions;
 use aeria_ai::tools::{
-    CellSnapshot, ContextCell, FileChange, ProjectFacts, ProjectReader, ProjectWriter, Proposal,
-    ProposalOutcome, ReadTools, ReviewBatch, ReviewLabel, RowSnapshot, RowsPage, SheetSummary,
-    ToolError, ToolOutput, TranslatableUnit, UnitLocation, UnitState, job_tool_definitions,
-    read_tool_definitions, write_tool_definitions,
+    CellSnapshot, ContextCell, FileChange, PendingFileChange, ProjectFacts, ProjectReader,
+    ProjectWriter, Proposal, ProposalOutcome, ReadTools, ReviewBatch, ReviewLabel, RowSnapshot,
+    RowsPage, SheetSummary, ToolError, ToolOutput, TranslatableUnit, UnitLocation, UnitState,
+    job_tool_definitions, read_tool_definitions, write_tool_definitions,
 };
 use aeria_ai::web::web_tool_definitions;
 use aeria_core::ReviewState;
@@ -900,6 +900,16 @@ impl ProjectWriter for DesktopWriter {
             .load_proposals(&self.conversation_id)
             .map_err(|error| ToolError::new(error.to_string()))?;
         let id = aeria_ai::ProviderConfig::new_id();
+        // The new change was built on this pending one and includes it.
+        if let Some(replaced) = records.iter_mut().find(|record| {
+            change.replaces.as_deref() == Some(record.id.as_str())
+                && record.file == Some(change.file)
+                && record.status == ProposalStatus::Pending
+        }) {
+            replaced.status = ProposalStatus::Rejected;
+            replaced.message =
+                Some("Replaced by a newer proposal that includes this change.".to_owned());
+        }
         records.push(ProposalRecord {
             id: id.clone(),
             file: Some(change.file),
@@ -924,6 +934,39 @@ impl ProjectWriter for DesktopWriter {
         announce_proposals(&self.app, &self.conversation_id);
         Ok(ProposalOutcome::Pending { proposal_id: id })
     }
+
+    fn pending_file_change(
+        &self,
+        file: ProjectFile,
+    ) -> Result<Option<PendingFileChange>, ToolError> {
+        let root = repository_root(&self.app).map_err(|error| ToolError::new(error.message))?;
+        let current = read_project_file(&root, file).map_err(ToolError::new)?;
+        let records = self
+            .store
+            .load_proposals(&self.conversation_id)
+            .map_err(|error| ToolError::new(error.to_string()))?;
+        Ok(latest_pending_change(&records, file, current.as_deref()))
+    }
+}
+
+/// The latest pending change to `file` made against its `current` content.
+fn latest_pending_change(
+    records: &[ProposalRecord],
+    file: ProjectFile,
+    current: Option<&str>,
+) -> Option<PendingFileChange> {
+    records
+        .iter()
+        .rev()
+        .find(|record| {
+            record.file == Some(file)
+                && record.status == ProposalStatus::Pending
+                && record.expected.target.as_deref() == current
+        })
+        .map(|record| PendingFileChange {
+            proposal_id: record.id.clone(),
+            after: record.target.clone(),
+        })
 }
 
 /// Runs Angelica's tools in blocking workers. Chat mode gets no writer.
@@ -1195,9 +1238,13 @@ fn prepare_turn(
     let guide = ProjectGuide::load(&repository_root(app)?);
     // The first message starts building the search index in the background.
     prepare_source_index(app);
-    let system = system_prompt(facts.as_ref(), editor, mode, &guide);
 
     let store = conversation_store(app)?;
+    let proposals = match request.conversation_id {
+        Some(id) => store.load_proposals(id)?,
+        None => Vec::new(),
+    };
+    let system = system_prompt(facts.as_ref(), editor, mode, &guide, &proposals);
     let now = now_unix_ms();
     let mut conversation = match request.conversation_id {
         Some(id) => store.load(id)?,
@@ -1757,6 +1804,8 @@ fn draft_input(
 
 /// Spoken lines before a string shown with its scene in a draft.
 const DRAFT_SCENE_LINES: usize = 6;
+/// Spoken lines after a string shown with its scene in a draft.
+const DRAFT_SCENE_LINES_AFTER: usize = 3;
 
 /// The speaker and the scene of a quest or cutscene string, for a draft.
 /// The scene is context only, so one that cannot be read is left out.
@@ -1775,6 +1824,7 @@ fn draft_scene(
         &dialogue,
         &[row],
         DRAFT_SCENE_LINES,
+        DRAFT_SCENE_LINES_AFTER,
     )
     .ok()?;
     Some((dialogue.speaker(row.0, row.1).map(str::to_owned), brief))
@@ -1869,6 +1919,63 @@ mod tests {
         let game = crate::test_support::test_game();
         let session = crate::test_support::test_session(directory.path(), &game);
         ((directory, game), session)
+    }
+
+    #[test]
+    fn a_new_file_change_builds_on_the_latest_pending_one_for_the_current_file() {
+        let record = |id: &str, file, expected: Option<&str>, status| ProposalRecord {
+            id: id.to_owned(),
+            file: Some(file),
+            job: None,
+            web: None,
+            review: None,
+            job_limit: None,
+            location: None,
+            source: String::new(),
+            target: format!("{id} content"),
+            expected: UnitState {
+                target: expected.map(str::to_owned),
+                review_state: None,
+            },
+            status,
+            message: None,
+            created_at_unix_ms: 0,
+        };
+        let records = [
+            record(
+                "old",
+                ProjectFile::Glossary,
+                Some("a"),
+                ProposalStatus::Pending,
+            ),
+            record(
+                "latest",
+                ProjectFile::Glossary,
+                Some("b"),
+                ProposalStatus::Pending,
+            ),
+            record(
+                "applied",
+                ProjectFile::Glossary,
+                Some("b"),
+                ProposalStatus::Applied,
+            ),
+            record(
+                "voices",
+                ProjectFile::Voices,
+                Some("b"),
+                ProposalStatus::Pending,
+            ),
+        ];
+        let pending =
+            latest_pending_change(&records, ProjectFile::Glossary, Some("b")).expect("pending");
+        assert_eq!(pending.proposal_id, "latest");
+        assert_eq!(pending.after, "latest content");
+        assert!(
+            latest_pending_change(&records, ProjectFile::Glossary, Some("c")).is_none(),
+            "a change made against other content would conflict"
+        );
+        assert!(latest_pending_change(&records, ProjectFile::Glossary, None).is_none());
     }
 
     #[test]
