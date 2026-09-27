@@ -2,26 +2,33 @@ import { EditorSelection, EditorState, StateField, type Extension, type Range } 
 import { Decoration, EditorView, WidgetType, type DecorationSet } from "@codemirror/view";
 import type { Translate } from "../i18n/translate";
 import { chipSpecs, type ChipSpec, type ChipTone } from "../macroChips";
+import type { MacroConditionDto, MacroTagDto } from "../types";
 import { loadIcon } from "../ui/gameGlyphs";
 
 /**
  * The text editor's chip view: tags drawn as compact atomic chips,
- * formatting pairs as styled text between thin markers, and `<br>` as a
- * line break. The document is the macro text itself, so copying, undo, and
+ * conditions in words, formatting pairs as styled text between thin
+ * markers, and line breaks for `<br>` and the branches of complex
+ * conditions. The document is the macro text itself, so copying, undo, and
  * saving see exactly what Rust validates.
  */
 
 /** Colors of opening color tags by their source text, learned from Rust views. */
 const tagColors = new Map<string, string>();
+/** Conditions of opening `<if>` and `<switch>` tags by their source text. */
+const tagConditions = new Map<string, MacroConditionDto>();
 
-/** Remembers the colors of a Rust view's opening color tags. */
-export function learnTagColors(text: string, tags: readonly { from: number; to: number; color: string | null }[]): boolean {
+/** Remembers what a Rust view says about tags; true when anything new was learned. */
+export function learnTags(text: string, tags: readonly MacroTagDto[]): boolean {
   let learned = false;
   for (const tag of tags) {
-    if (!tag.color) continue;
     const source = text.slice(tag.from, tag.to);
-    if (tagColors.get(source) !== tag.color) {
+    if (tag.color && tagColors.get(source) !== tag.color) {
       tagColors.set(source, tag.color);
+      learned = true;
+    }
+    if (tag.condition && !tagConditions.has(source)) {
+      tagConditions.set(source, tag.condition);
       learned = true;
     }
   }
@@ -66,18 +73,29 @@ class ChipWidget extends WidgetType {
   }
 }
 
-/** Ends the visual line after a `<br>` chip, so the cursor after it sits on the next line. */
-class LineEndWidget extends WidgetType {
-  override eq(): boolean {
-    return true;
+/** Ends a visual line and indents the next one by `indent` levels. */
+class BreakWidget extends WidgetType {
+  constructor(readonly indent: number) {
+    super();
+  }
+
+  override eq(other: BreakWidget): boolean {
+    return other.indent === this.indent;
   }
 
   toDOM(): HTMLElement {
-    return document.createElement("br");
+    const wrapper = document.createElement("span");
+    wrapper.className = "cm-chip-break-line";
+    wrapper.append(document.createElement("br"));
+    if (this.indent > 0) {
+      const indent = document.createElement("span");
+      indent.className = "cm-chip-indent";
+      indent.style.width = `${this.indent * 1.5}em`;
+      wrapper.append(indent);
+    }
+    return wrapper;
   }
 }
-
-const lineEnd = Decoration.widget({ widget: new LineEndWidget(), side: -1 });
 
 class MarkerWidget extends WidgetType {
   constructor(readonly side: "open" | "close", readonly color: string | null, readonly error: boolean) {
@@ -100,60 +118,67 @@ class MarkerWidget extends WidgetType {
   }
 }
 
+/** What picking a chip of the source adds to the translation. */
+export type ChipPick = { insert: string } | { wrap: readonly [string, string] };
+
 export type ChipContext = {
   t: Translate;
   /** The text the error ranges describe; errors apply only while it is the document. */
   text: string | null;
   errors: readonly (readonly [number, number])[];
-  /** Bumps when new tag colors are learned, so the chips are redrawn. */
+  /** Bumps when new tag facts are learned, so the chips are redrawn. */
   version: number;
+  /** Called when a chip is clicked, in an editor whose chips can be picked. */
+  onPick?: ((pick: ChipPick) => void) | undefined;
 };
 
-type Chips = { decorations: DecorationSet; atoms: DecorationSet };
+type Chips = {
+  decorations: DecorationSet;
+  atoms: DecorationSet;
+  specs: readonly ChipSpec[];
+  /** The side a cursor belongs on at each line break position. */
+  breaks: ReadonlyMap<number, -1 | 1>;
+};
+
+const lookup = {
+  colorOf: (tag: string) => tagColors.get(tag) ?? null,
+  conditionOf: (tag: string) => tagConditions.get(tag) ?? null,
+};
 
 function build(doc: string, context: ChipContext): Chips {
   const errors = context.text === doc ? context.errors : [];
-  const hasError = (spec: ChipSpec) => errors.some(([from, to]) => from < spec.to && to > spec.from);
+  const hasError = (from: number, to: number) => errors.some(([start, end]) => start < to && end > from);
   const ranges: Range<Decoration>[] = [];
   const atoms: Range<Decoration>[] = [];
-  for (const spec of chipSpecs(doc, (tag) => tagColors.get(tag) ?? null, context.t)) {
-    if (spec.kind === "style") {
-      const css = [
-        spec.color ? `color: ${cssColor(spec.color)}` : "",
-        spec.italic ? "font-style: italic" : "",
-        spec.bold ? "font-weight: 700" : "",
-      ].filter(Boolean).join("; ");
-      ranges.push(Decoration.mark({ attributes: { style: css } }).range(spec.from, spec.to));
-      continue;
+  const breaks = new Map<number, -1 | 1>();
+  const specs = chipSpecs(doc, lookup, context.t);
+  for (const spec of specs) {
+    switch (spec.kind) {
+      case "style": {
+        const css = [
+          spec.color ? `color: ${cssColor(spec.color)}` : "",
+          spec.italic ? "font-style: italic" : "",
+          spec.bold ? "font-weight: 700" : "",
+        ].filter(Boolean).join("; ");
+        ranges.push(Decoration.mark({ attributes: { style: css } }).range(spec.from, spec.to));
+        break;
+      }
+      case "break":
+        ranges.push(Decoration.widget({ widget: new BreakWidget(spec.indent), side: -1 }).range(spec.at));
+        breaks.set(spec.at, spec.assoc);
+        break;
+      default: {
+        const widget = spec.kind === "chip"
+          ? new ChipWidget(spec.label, spec.tone, spec.icon, hasError(spec.from, spec.to))
+          : new MarkerWidget(spec.side, spec.color, hasError(spec.from, spec.to));
+        const range = Decoration.replace({ widget }).range(spec.from, spec.to);
+        ranges.push(range);
+        atoms.push(range);
+      }
     }
-    const widget = spec.kind === "chip"
-      ? new ChipWidget(spec.label, spec.tone, spec.icon, hasError(spec))
-      : new MarkerWidget(spec.side, spec.color, hasError(spec));
-    const range = Decoration.replace({ widget }).range(spec.from, spec.to);
-    ranges.push(range);
-    atoms.push(range);
-    if (spec.kind === "chip" && spec.tone === "break") ranges.push(lineEnd.range(spec.to));
   }
-  return { decorations: Decoration.set(ranges, true), atoms: Decoration.set(atoms, true) };
+  return { decorations: Decoration.set(ranges, true), atoms: Decoration.set(atoms, true), specs, breaks };
 }
-
-/**
- * A cursor right after `<br>` belongs to the next line: it is drawn there,
- * where typing puts text, not at the end of the line the break ends.
- */
-const cursorAfterBreak = EditorState.transactionFilter.of((transaction) => {
-  const selection = transaction.selection;
-  if (!selection) return transaction;
-  const doc = transaction.newDoc;
-  let changed = false;
-  const ranges = selection.ranges.map((range) => {
-    if (!range.empty || range.assoc === 1 || range.head < 4 || doc.sliceString(range.head - 4, range.head) !== "<br>") return range;
-    changed = true;
-    return EditorSelection.cursor(range.head, 1);
-  });
-  if (!changed) return transaction;
-  return [transaction, { selection: EditorSelection.create(ranges, selection.mainIndex), sequential: true }];
-});
 
 /** The chip view for `context`; reconfigure it when the context changes. */
 export function macroChips(context: ChipContext): Extension {
@@ -165,5 +190,43 @@ export function macroChips(context: ChipContext): Extension {
       EditorView.atomicRanges.of((view) => view.state.field(chips).atoms),
     ],
   });
-  return [field, cursorAfterBreak];
+
+  // A cursor at a line break sits where typing puts text: after a `<br>` or
+  // a closed block on the next line, before a condition tag on the line
+  // above.
+  const cursorAtBreaks = EditorState.transactionFilter.of((transaction) => {
+    const selection = transaction.selection;
+    if (!selection) return transaction;
+    const breaks = transaction.state.field(field).breaks;
+    let changed = false;
+    const ranges = selection.ranges.map((range) => {
+      const assoc = range.empty ? breaks.get(range.head) : undefined;
+      if (assoc === undefined || range.assoc === assoc) return range;
+      changed = true;
+      return EditorSelection.cursor(range.head, assoc);
+    });
+    if (!changed) return transaction;
+    return [transaction, { selection: EditorSelection.create(ranges, selection.mainIndex), sequential: true }];
+  });
+
+  const picking = context.onPick
+    ? [
+      EditorView.editorAttributes.of({ class: "is-pickable" }),
+      EditorView.domEventHandlers({
+        mousedown(event, view) {
+          const element = (event.target as HTMLElement | null)?.closest(".cm-chip, .cm-chip-marker");
+          if (!element) return false;
+          const position = view.posAtDOM(element);
+          const spec = view.state.field(field).specs.find((candidate) => candidate.kind !== "style" && candidate.kind !== "break" && candidate.from <= position && position < candidate.to);
+          if (!spec) return false;
+          if (spec.kind === "chip") context.onPick?.({ insert: spec.insert });
+          else if (spec.kind === "marker" && spec.wrap) context.onPick?.({ wrap: spec.wrap });
+          else return false;
+          event.preventDefault();
+          return true;
+        },
+      }),
+    ]
+    : [];
+  return [field, cursorAtBreaks, picking];
 }

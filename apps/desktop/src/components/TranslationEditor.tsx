@@ -5,7 +5,7 @@ import { diffWords } from "../textDiff";
 import { IconButton } from "../ui/primitives/IconButton";
 import { Segmented } from "../ui/primitives/Segmented";
 import { UiIcon } from "../ui/primitives/UiIcon";
-import { MacroEditor, focusMacroEditor } from "./MacroEditor";
+import { MacroEditor, focusMacroEditor, type MacroEditorApi } from "./MacroEditor";
 import { useMacroView } from "../ui/useMacroView";
 import { ReviewDot, reviewLabel } from "./ReviewDot";
 import { StringHistory } from "./StringHistory";
@@ -206,6 +206,8 @@ const TranslationEditorImpl = forwardRef<TranslationEditorHandle, TranslationEdi
   const sourceMode = preferences.sourcePaneMode;
   const targetMode = preferences.targetPaneMode;
   const sourceView = useMacroView(selectedCell?.sourceMacro ?? null);
+  // Clicking a tag of the source adds it to the translation at its cursor.
+  const targetApi = useRef<MacroEditorApi | null>(null);
   const targetView = useMacroView(draft === null ? null : draft.target);
 
   const updateDraft = useCallback((cell: TranslationCellDto, field: keyof CellDraft, value: string) => {
@@ -349,7 +351,7 @@ const TranslationEditorImpl = forwardRef<TranslationEditorHandle, TranslationEdi
             <IconButton icon="copyPlus" label={t("editor.copySource")} disabled={cellBusy} onClick={copySource} />
             <PaneModeSwitch value={sourceMode} onChange={(mode) => setPreference("sourcePaneMode", mode)} />
           </div>
-          <MacroEditor className="editor-surface" value={selectedCell.sourceMacro} readOnly view={sourceView} presentation={sourceMode === "code" ? "code" : "chips"} ariaLabel={t("editor.sourceText", { column: String(selectedCell.sourceBinding.columnIndex) })} placeholder={t("editor.emptySource")} onNavigate={onNavigate} />
+          <MacroEditor className="editor-surface" value={selectedCell.sourceMacro} readOnly view={sourceView} presentation={sourceMode === "code" ? "code" : "chips"} onPick={cellBusy ? undefined : (pick) => targetApi.current?.apply(pick)} ariaLabel={t("editor.sourceText", { column: String(selectedCell.sourceBinding.columnIndex) })} placeholder={t("editor.emptySource")} onNavigate={onNavigate} />
           {row.context.length > 0 ? (
             <details className="context-block">
               <summary><UiIcon icon="chevronRight" size="xs" />{t("editor.context")} <span className="count">{row.context.length}</span></summary>
@@ -382,6 +384,7 @@ const TranslationEditorImpl = forwardRef<TranslationEditorHandle, TranslationEdi
             onNavigate={onNavigate}
             view={targetView}
             presentation={targetMode === "code" ? "code" : "chips"}
+            apiRef={targetApi}
           />
           <div className="editor-pane-foot">
             <span className="editor-hint">

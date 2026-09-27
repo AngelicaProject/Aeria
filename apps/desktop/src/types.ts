@@ -840,6 +840,22 @@ export type MacroTagDto = {
   args: MacroArgDto[];
   /** The color an opening color tag sets, `#rrggbbaa`, when it is known. */
   color: string | null;
+  /** What an opening `<if>` or `<switch>` tests, part by part. */
+  condition: MacroConditionDto | null;
+};
+
+/** A number (named by its row when compared with a row global such as a class), a parameter, a time value, or other text. */
+export type MacroOperandDto =
+  | { kind: "int"; value: number; name: string | null }
+  | { kind: "parameter"; code: string; meaning: string | null }
+  | { kind: "time"; name: string }
+  | { kind: "other"; text: string };
+
+/** A condition of an `<if>` or the value of a `<switch>`; `left` alone tests for not zero or empty. */
+export type MacroConditionDto = {
+  left: MacroOperandDto;
+  operator: "==" | "!=" | "<" | "<=" | ">" | ">=" | null;
+  right: MacroOperandDto | null;
 };
 
 export type MacroViewDto = {

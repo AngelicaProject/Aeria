@@ -365,6 +365,24 @@ impl GameSource {
             .map(|index| colors[index].1)
     }
 
+    /// The macro text of a String cell of any sheet in the source language,
+    /// such as a class name.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when a game file cannot be read.
+    pub fn cell_text(
+        &self,
+        sheet: &str,
+        row: u32,
+        column: u32,
+    ) -> Result<Option<String>, SourceError> {
+        Ok(match self.sheet(sheet)? {
+            SheetLookup::Present(sheet) => sheet.cell(row, 0, column).map(|cell| cell.text()),
+            SheetLookup::Missing | SheetLookup::Unavailable(_) => None,
+        })
+    }
+
     /// The private use glyphs of the game font, such as `U+E03C`, the
     /// high-quality mark: symbols game text writes as characters that only
     /// the game font draws. `None` when the font cannot be read.

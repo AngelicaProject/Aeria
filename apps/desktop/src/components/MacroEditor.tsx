@@ -19,10 +19,16 @@ import type { Translate } from "../i18n/translate";
 import { useI18n } from "../ui/i18n";
 import { usePreferences } from "../ui/preferences";
 import type { MacroViewState } from "../ui/useMacroView";
-import { learnTagColors, macroChips, type ChipContext } from "./macroChipsExtension";
+import { learnTags, macroChips, type ChipContext, type ChipPick } from "./macroChipsExtension";
 
 /** How the editor draws tags: as chips and styled text, or as the macro text itself. */
 export type MacroPresentation = "chips" | "code";
+
+/** Edits another component can make in an editor. */
+export type MacroEditorApi = {
+  /** Replaces the selection with `text`, or wraps it in a pair of tags, and focuses the editor. */
+  apply: (pick: ChipPick) => void;
+};
 
 type MacroEditorProps = {
   value: string;
@@ -39,6 +45,10 @@ type MacroEditorProps = {
   /** The Rust description of the text, for hovers and error marks. */
   view?: MacroViewState | null;
   presentation?: MacroPresentation;
+  /** Called when a chip is clicked; chips of an editor with this handler can be picked. */
+  onPick?: ((pick: ChipPick) => void) | undefined;
+  /** Receives the editor's API while it is mounted. */
+  apiRef?: { current: MacroEditorApi | null };
 };
 
 const externalChange = Annotation.define<boolean>();
@@ -131,9 +141,10 @@ function insertLineBreak(view: EditorView): boolean {
   return true;
 }
 
-function chipContext(macroView: MacroViewState | null | undefined, t: Translate, version: number): ChipContext {
+function chipContext(macroView: MacroViewState | null | undefined, t: Translate, version: number, onPick: ((pick: ChipPick) => void) | undefined): ChipContext {
   return {
     t,
+    onPick,
     text: macroView?.text ?? null,
     errors: macroView?.view.diagnostics.map((diagnostic) => [diagnostic.from, Math.max(diagnostic.to, diagnostic.from + 1)] as const) ?? [],
     version,
@@ -145,7 +156,7 @@ function presentationExtensions(presentation: MacroPresentation, highlight: bool
   return highlight ? macroHighlighter : [];
 }
 
-export function MacroEditor({ value, ariaLabel, onChange, readOnly = false, disabled = false, placeholder = "", className, onSave, onSaveAndNext, onApproveAndNext, onNavigate, view: macroView, presentation = "code" }: MacroEditorProps) {
+export function MacroEditor({ value, ariaLabel, onChange, readOnly = false, disabled = false, placeholder = "", className, onSave, onSaveAndNext, onApproveAndNext, onNavigate, view: macroView, presentation = "code", onPick, apiRef }: MacroEditorProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
   const { t } = useI18n();
@@ -156,6 +167,10 @@ export function MacroEditor({ value, ariaLabel, onChange, readOnly = false, disa
   const compartments = useRef({ editable: new Compartment(), placeholder: new Compartment(), label: new Compartment(), highlight: new Compartment(), specialChars: new Compartment() });
   const { preferences } = usePreferences();
   const colorVersion = useRef(0);
+  // Picks go through a ref so the chip view is not rebuilt for a new handler.
+  const pickHandler = useRef(onPick);
+  pickHandler.current = onPick;
+  const pick = onPick ? (value: ChipPick) => pickHandler.current?.(value) : undefined;
 
   useEffect(() => {
     const host = hostRef.current;
@@ -183,7 +198,7 @@ export function MacroEditor({ value, ariaLabel, onChange, readOnly = false, disa
           EditorView.lineWrapping,
           diagnosticsField,
           macroHover(hoverSource),
-          highlight.of(presentationExtensions(presentation, preferences.highlightMacros, chipContext(macroView, t, colorVersion.current))),
+          highlight.of(presentationExtensions(presentation, preferences.highlightMacros, chipContext(macroView, t, colorVersion.current, pick))),
           editable.of(editableExtensions(readOnly, disabled)),
           placeholderCompartment.of(placeholder ? placeholderExtension(placeholder) : []),
           label.of(EditorView.contentAttributes.of({ "aria-label": ariaLabel, spellcheck: "false" })),
@@ -195,9 +210,26 @@ export function MacroEditor({ value, ariaLabel, onChange, readOnly = false, disa
       }),
     });
     viewRef.current = view;
+    if (apiRef) {
+      apiRef.current = {
+        apply(picked) {
+          if (view.state.readOnly) return;
+          const range = view.state.selection.main;
+          const insert = "insert" in picked
+            ? picked.insert
+            : `${picked.wrap[0]}${view.state.sliceDoc(range.from, range.to)}${picked.wrap[1]}`;
+          const cursor = "insert" in picked || range.empty
+            ? range.from + ("insert" in picked ? insert.length : picked.wrap[0].length)
+            : range.from + insert.length;
+          view.dispatch({ changes: { from: range.from, to: range.to, insert }, selection: { anchor: cursor }, scrollIntoView: true, userEvent: "input" });
+          view.focus();
+        },
+      };
+    }
     return () => {
       view.destroy();
       viewRef.current = null;
+      if (apiRef) apiRef.current = null;
     };
     // The view is created once; later prop changes are applied by the effects below.
   }, []);
@@ -227,12 +259,12 @@ export function MacroEditor({ value, ariaLabel, onChange, readOnly = false, disa
   }, [macroView]);
 
   useEffect(() => {
-    if (macroView && learnTagColors(macroView.text, macroView.view.tags)) colorVersion.current += 1;
+    if (macroView && learnTags(macroView.text, macroView.view.tags)) colorVersion.current += 1;
     viewRef.current?.dispatch({ effects: [
-      compartments.current.highlight.reconfigure(presentationExtensions(presentation, preferences.highlightMacros, chipContext(macroView, t, colorVersion.current))),
+      compartments.current.highlight.reconfigure(presentationExtensions(presentation, preferences.highlightMacros, chipContext(macroView, t, colorVersion.current, pick))),
       compartments.current.specialChars.reconfigure(preferences.showControlCharacters ? highlightSpecialChars() : []),
     ] });
-  }, [macroView, presentation, preferences.highlightMacros, preferences.showControlCharacters, t]);
+  }, [macroView, presentation, preferences.highlightMacros, preferences.showControlCharacters, t, Boolean(onPick)]);
 
   useEffect(() => {
     viewRef.current?.dispatch({ effects: compartments.current.placeholder.reconfigure(placeholder ? placeholderExtension(placeholder) : []) });

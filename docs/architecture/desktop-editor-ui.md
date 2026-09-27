@@ -181,8 +181,17 @@ drawn is presentation only, Rust remains the authority for parsing and
 validation, and macro text is never rewritten by the presentation.
 
 - **Text** is for translating. Tags are drawn as compact chips a translator
-  reads past: conditions (`if ($gn68 == 19)`, `otherwise`, `end`), values
-  (`Item · $n1`), and game icons as their images. Formatting pairs vanish
+  reads past: conditions, values (`Item · $n1`), and game icons as their
+  images. Conditions read in words from what `macro_view` reports: `if
+  class = monk` for `<if ($gn68 == 20)>` with the class named from the
+  game's `ClassJob` sheet, `if level ≥ 94`, `if player is female`; other
+  parameters keep their code. `<else>` is `otherwise`, `<case>` is
+  `case 1`, `case 2`, and a closing tag is `end`. A condition that holds
+  another condition or a line break is laid out in lines: its opening tag,
+  each branch, and its end start new lines, indented by the complex
+  conditions around them, and the text after it continues on a new line;
+  a simple condition stays inline. A value branch such as `{240}` reads as
+  the value, marked as not translatable. Formatting pairs vanish
   into the text they format: text inside `<ui-color 504>…</ui-color>` is
   drawn in that color, italics and bold as such, and a color with its
   outline (`<ui-color 504><ui-edge-color 505>`) is one thin marker in the
@@ -191,6 +200,12 @@ validation, and macro text is never rewritten by the presentation.
   atomic: the cursor steps over them, Backspace deletes a whole tag, and a
   tag with an error is outlined in red. Colors of `<ui-color>` come from the
   game through `macro_view`.
+- **Picking tags from the source.** Clicking a chip of the source inserts
+  its tag into the translation at the cursor: a value, an icon, or a line
+  break as its tag, and an opening condition chip as the whole condition
+  block with the source branches, for the translator to translate. Clicking
+  either marker of a formatting pair wraps the translation's selection in
+  the whole pair, or inserts the empty pair with the cursor inside.
 - **Code** shows the macro text with every tag written out and highlighted,
   for editing tag arguments.
 

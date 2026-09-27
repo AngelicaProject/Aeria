@@ -185,9 +185,13 @@ reload and never derives sheet-wide progress from loaded row pages.
 
 `macro_view(text)` describes macro text for the editor: its diagnostics and
 its tags (opening, separator, closing, or inline, with their catalog
-arguments and, on an opening color tag, the color it sets), with UTF-16
-offsets. `<ui-color>` colors are read from the open project's `GameSource`
-(`GameSource::ui_color`); without a project they are unknown. It changes
+arguments; on an opening color tag, the color it sets; and on an opening
+`<if>` or `<switch>`, what it tests part by part: operands as numbers,
+parameters with the meaning of a known global, or time values, with a
+number compared with a row global such as the class named by its row), with
+UTF-16 offsets. `<ui-color>` colors and row names are read from the open
+project's `GameSource` (`GameSource::ui_color` and `GameSource::cell_text`);
+without a project they are unknown. It changes
 nothing and needs no project.
 
 `game_glyph_font()` returns, as raw bytes, a TrueType font of the private use

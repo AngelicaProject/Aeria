@@ -60,6 +60,36 @@ pub struct MacroTagDto {
     pub args: Vec<MacroArgDto>,
     /// The color an opening color tag sets, `#rrggbbaa`, when it is known.
     pub color: Option<String>,
+    /// What an opening `<if>` or `<switch>` tests, part by part.
+    pub condition: Option<ConditionDto>,
+}
+
+/// A condition of an `<if>` or the value of a `<switch>`: `left` alone is
+/// true when it is not zero or empty.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConditionDto {
+    pub left: OperandDto,
+    /// `==`, `!=`, `<`, `<=`, `>`, or `>=`.
+    pub operator: Option<&'static str>,
+    pub right: Option<OperandDto>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum OperandDto {
+    /// A number, with the name of its row when it is compared with a global
+    /// whose values are rows of a sheet, such as a class.
+    Int { value: u32, name: Option<String> },
+    /// A parameter such as `$gn68`, with the established meaning of a global.
+    Parameter {
+        code: String,
+        meaning: Option<&'static str>,
+    },
+    /// A time value such as `hour`.
+    Time { name: &'static str },
+    /// Anything else, as macro text.
+    Other { text: String },
 }
 
 #[derive(Debug, Serialize)]
@@ -90,7 +120,7 @@ pub struct ParameterDto {
 pub async fn macro_view(app: tauri::AppHandle, text: String) -> CommandResult<MacroViewDto> {
     run_blocking(move || {
         let source = project_source(&app);
-        Ok(view(&text, &|row| source.as_ref()?.ui_color(row)))
+        Ok(view(&text, &source))
     })
     .await
 }
@@ -172,16 +202,43 @@ pub async fn game_icon(app: tauri::AppHandle, id: u32) -> CommandResult<tauri::i
     .await
 }
 
-/// The foreground color of a `UIColor` row as `0xRRGGBBAA`.
-type UiColors<'a> = &'a dyn Fn(u32) -> Option<u32>;
+/// What `macro_view` reads from the open project's game.
+trait Game {
+    /// The foreground color of a `UIColor` row as `0xRRGGBBAA`.
+    fn ui_color(&self, row: u32) -> Option<u32>;
+    /// The text of the first column of a sheet row, such as a class name.
+    fn row_name(&self, sheet: &str, row: u32) -> Option<String>;
+}
 
-fn view(text: &str, ui_colors: UiColors<'_>) -> MacroViewDto {
+impl Game for Option<Arc<GameSource>> {
+    fn ui_color(&self, row: u32) -> Option<u32> {
+        self.as_ref()?.ui_color(row)
+    }
+
+    fn row_name(&self, sheet: &str, row: u32) -> Option<String> {
+        let text = self.as_ref()?.cell_text(sheet, row, 0).ok()??;
+        Some(parse(&text).plain_text()).filter(|name| !name.is_empty())
+    }
+}
+
+fn view(text: &str, game: &dyn Game) -> MacroViewDto {
     let document = parse(text);
     let offsets = Utf16Offsets::new(text);
     let mut tags = Vec::new();
     collect_tags(&document, document.nodes(), &offsets, &mut tags);
     for tag in &mut tags {
-        tag.color = tag_color(tag, ui_colors);
+        tag.color = tag_color(tag, game);
+    }
+    let mut conditions = Vec::new();
+    collect_conditions(document.nodes(), &document, game, &mut conditions);
+    for (from, condition) in conditions {
+        let from = offsets.at(from);
+        if let Some(tag) = tags
+            .iter_mut()
+            .find(|tag| tag.from == from && matches!(tag.part, MacroTagPart::Open))
+        {
+            tag.condition = Some(condition);
+        }
     }
     MacroViewDto {
         diagnostics: document
@@ -288,6 +345,7 @@ fn collect_tags(
                 family: None,
                 args: Vec::new(),
                 color: None,
+                condition: None,
             }),
             SyntaxKind::Macro(syntax) => {
                 macro_tags(document, syntax, offsets, tags);
@@ -382,13 +440,14 @@ fn macro_tags(
                 Vec::new()
             },
             color: None,
+            condition: None,
         });
     }
 }
 
 /// The color an opening `<color>`, `<edge-color>`, `<ui-color>`, or
 /// `<ui-edge-color>` tag sets: its `#AARRGGBB` value, or the `UIColor` row.
-fn tag_color(tag: &MacroTagDto, ui_colors: UiColors<'_>) -> Option<String> {
+fn tag_color(tag: &MacroTagDto, game: &dyn Game) -> Option<String> {
     if !matches!(tag.part, MacroTagPart::Open) {
         return None;
     }
@@ -398,8 +457,99 @@ fn tag_color(tag: &MacroTagDto, ui_colors: UiColors<'_>) -> Option<String> {
             let argb = u32::from_str_radix(value.strip_prefix('#')?, 16).ok()?;
             color(Some(argb.rotate_left(8)))
         }
-        "ui-color" | "ui-edge-color" => color(ui_colors(value.parse().ok()?)),
+        "ui-color" | "ui-edge-color" => color(game.ui_color(value.parse().ok()?)),
         _ => None,
+    }
+}
+
+/// The conditions of every `<if>` and `<switch>` in `nodes`, by the byte
+/// offset of their opening tag.
+fn collect_conditions(
+    nodes: &[SyntaxNode],
+    document: &MacroString,
+    game: &dyn Game,
+    out: &mut Vec<(usize, ConditionDto)>,
+) {
+    for node in nodes {
+        let SyntaxKind::Macro(syntax) = &node.kind else {
+            continue;
+        };
+        let name = syntax.spec.map_or("", |spec| spec.name);
+        if matches!(name, "if" | "switch")
+            && let (Some(span), Some(arg)) = (syntax.tags.first(), syntax.args.first())
+        {
+            out.push((span.start(), condition(arg, document, game)));
+        }
+        for arg in &syntax.args {
+            if let ExprKind::Str(nodes) = &arg.kind {
+                collect_conditions(nodes, document, game, out);
+            }
+        }
+    }
+}
+
+fn condition(expr: &ExprSyntax, document: &MacroString, game: &dyn Game) -> ConditionDto {
+    let ExprKind::Compare(code, left, right) = &expr.kind else {
+        return ConditionDto {
+            left: operand(expr, None, document, game),
+            operator: None,
+            right: None,
+        };
+    };
+    let operator = aeria_se::catalog::COMPARISONS
+        .iter()
+        .find(|spec| spec.code == *code)
+        .map(|spec| spec.operator);
+    // A number compared with a row global, such as a class, is named by its row.
+    let sheet_of = |expr: &ExprSyntax| {
+        let parameter = parameter(expr)?;
+        aeria_se::catalog::global(parameter.prefix, parameter.index)?.sheet
+    };
+    ConditionDto {
+        left: operand(left, sheet_of(right), document, game),
+        operator,
+        right: Some(operand(right, sheet_of(left), document, game)),
+    }
+}
+
+fn operand(
+    expr: &ExprSyntax,
+    sheet: Option<&str>,
+    document: &MacroString,
+    game: &dyn Game,
+) -> OperandDto {
+    match &expr.kind {
+        ExprKind::Int(value) => OperandDto::Int {
+            value: *value,
+            name: sheet.and_then(|sheet| game.row_name(sheet, *value)),
+        },
+        ExprKind::Nullary(code) => aeria_se::catalog::NULLARY
+            .iter()
+            .find(|spec| spec.code == *code)
+            .map_or_else(
+                || OperandDto::Other {
+                    text: document
+                        .slice(expr.span)
+                        .unwrap_or_default()
+                        .trim()
+                        .to_owned(),
+                },
+                |spec| OperandDto::Time { name: spec.name },
+            ),
+        _ => match parameter(expr) {
+            Some(parameter) => OperandDto::Parameter {
+                code: format!("${}{}", parameter.prefix, parameter.index),
+                meaning: aeria_se::catalog::global(parameter.prefix, parameter.index)
+                    .map(|global| global.name),
+            },
+            None => OperandDto::Other {
+                text: document
+                    .slice(expr.span)
+                    .unwrap_or_default()
+                    .trim()
+                    .to_owned(),
+            },
+        },
     }
 }
 
@@ -411,15 +561,47 @@ fn color(value: Option<u32>) -> Option<String> {
 mod tests {
     use super::*;
 
-    fn no_colors(_row: u32) -> Option<u32> {
-        None
+    struct TestGame;
+
+    impl Game for TestGame {
+        fn ui_color(&self, row: u32) -> Option<u32> {
+            (row == 504).then_some(0x00CC_22FF)
+        }
+
+        fn row_name(&self, sheet: &str, row: u32) -> Option<String> {
+            (sheet == "ClassJob" && row == 21).then(|| "monk".to_owned())
+        }
+    }
+
+    #[test]
+    fn conditions_name_their_globals_and_rows() {
+        let view = view(
+            "<if ($gn68 == 21)><if ($gn72 >= 94)>a</if></if><switch $n1><case>x</switch><if $gn4>b</if>",
+            &TestGame,
+        );
+        let conditions: Vec<serde_json::Value> = view
+            .tags
+            .iter()
+            .filter_map(|tag| tag.condition.as_ref())
+            .map(|condition| serde_json::to_value(condition).expect("json"))
+            .collect();
+        assert_eq!(conditions.len(), 4);
+        assert_eq!(conditions[0]["left"]["meaning"], "class-job");
+        assert_eq!(conditions[0]["operator"], "==");
+        assert_eq!(conditions[0]["right"]["value"], 21);
+        assert_eq!(conditions[0]["right"]["name"], "monk");
+        assert_eq!(conditions[1]["left"]["meaning"], "level");
+        assert_eq!(conditions[1]["right"]["name"], serde_json::Value::Null);
+        assert_eq!(conditions[2]["left"]["code"], "$n1");
+        assert_eq!(conditions[2]["operator"], serde_json::Value::Null);
+        assert_eq!(conditions[3]["left"]["meaning"], "player-female");
     }
 
     #[test]
     fn opening_color_tags_carry_their_color() {
         let view = view(
             "<color #FF13212F>x</color><ui-color 504>y</ui-color><ui-color 9>z</ui-color>",
-            &|row| (row == 504).then_some(0x00CC_22FF),
+            &TestGame,
         );
         let colors: Vec<Option<&str>> = view.tags.iter().map(|tag| tag.color.as_deref()).collect();
         assert_eq!(
@@ -431,7 +613,7 @@ mod tests {
     #[test]
     fn a_view_reports_tags_and_diagnostics_in_utf16_offsets() {
         let text = "Ф<if ($n1 == 1)><i>a</i><else>b</if> <sheet Item $n1 0><nope>";
-        let view = view(text, &no_colors);
+        let view = view(text, &TestGame);
         let spans: Vec<(&str, usize, usize)> = view
             .tags
             .iter()
