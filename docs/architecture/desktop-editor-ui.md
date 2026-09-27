@@ -463,7 +463,7 @@ with a validated draft for the selected string without saving it.
 
 **Glossary and guidance** opens from the Translation menu, the command
 palette, and the Angelica panel header. It edits the project-shared
-`aeria-glossary.csv` and `aeria-guidance.md` described in
+`aeria-glossary.csv`, `aeria-guidance.md`, and `aeria-voices.md` described in
 [`ai.md`](./ai.md#guidance-and-glossary).
 
 The Glossary tab is a table of term, translation, note, and forbidden
@@ -472,7 +472,10 @@ per row; at most 300 filtered rows are shown at once. Rows with an empty term
 or translation, or a term repeated case-insensitively, are marked and block
 saving. Rows the file excludes are listed with their line numbers; saving
 removes them only after confirmation. The Guidance tab is a Markdown text
-area with its size against the 64 KiB limit. Each tab has **Revert** and
+area with its size against the 64 KiB limit. The Voices tab is a Markdown text
+area for [voice profiles](../formats/voices-v1.md) with its size against the
+256 KiB limit; profiles the file ignores are listed with their line numbers,
+and a save with an ignored profile is refused with the first problem. Each tab has **Revert** and
 **Save**; closing with unsaved changes asks first. A save fails, without
 writing, when the file changed since it was loaded.
 

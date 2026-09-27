@@ -29,6 +29,7 @@ export function bindingOf(proposal: ProposalRecord): SourceBinding | null {
 const fileNames: Readonly<Record<NonNullable<ProposalRecord["file"]>, string>> = {
   guidance: "aeria-guidance.md",
   glossary: "aeria-glossary.csv",
+  voices: "aeria-voices.md",
 };
 
 /** Pending proposals and the ones that could not be applied. */

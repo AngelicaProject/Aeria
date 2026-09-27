@@ -542,6 +542,10 @@ export function saveProjectGuidance(expected: string | null, text: string): Prom
   return call<ProjectGuideDto>("save_project_guidance", { expected, text });
 }
 
+export function saveProjectVoices(expected: string | null, text: string): Promise<ProjectGuideDto> {
+  return call<ProjectGuideDto>("save_project_voices", { expected, text });
+}
+
 export function saveProjectGlossary(expected: string | null, entries: GlossaryEntryInput[]): Promise<ProjectGuideDto> {
   return call<ProjectGuideDto>("save_project_glossary", { expected, entries });
 }

@@ -2,13 +2,16 @@
 //!
 //! `aeria-guidance.md` is free-form Markdown passed to the model as text.
 //! `aeria-glossary.csv` is Glossary Format v1 (`docs/formats/glossary-v1.md`).
-//! Both are optional and shared through Git like any other project file.
+//! Both are optional and shared through Git like any other project file, as
+//! is `aeria-voices.md` (see [`crate::voices`]).
 
 use std::fs;
 use std::io;
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
+
+use crate::voices::{MAX_VOICES_BYTES, VOICES_FILE, VoiceProfiles, parse_voices};
 
 /// Project guidance file name at the repository root.
 pub const GUIDANCE_FILE: &str = "aeria-guidance.md";
@@ -31,6 +34,7 @@ const COLUMNS: [&str; 4] = ["term", "translation", "note", "forbidden"];
 pub enum ProjectFile {
     Guidance,
     Glossary,
+    Voices,
 }
 
 impl ProjectFile {
@@ -40,6 +44,7 @@ impl ProjectFile {
         match self {
             Self::Guidance => GUIDANCE_FILE,
             Self::Glossary => GLOSSARY_FILE,
+            Self::Voices => VOICES_FILE,
         }
     }
 
@@ -49,6 +54,7 @@ impl ProjectFile {
         match self {
             Self::Guidance => MAX_GUIDANCE_BYTES,
             Self::Glossary => MAX_GLOSSARY_BYTES,
+            Self::Voices => MAX_VOICES_BYTES,
         }
     }
 }
@@ -374,11 +380,13 @@ impl Glossary {
     }
 }
 
-/// The project's guidance and glossary as read from the repository.
+/// The project's guidance, glossary, and voice profiles as read from the
+/// repository.
 #[derive(Clone, Debug, Default)]
 pub struct ProjectGuide {
     pub guidance: Option<String>,
     pub glossary: Option<Glossary>,
+    pub voices: Option<VoiceProfiles>,
     /// Why an existing file could not be used.
     pub problems: Vec<String>,
 }
@@ -398,7 +406,7 @@ fn read_bounded(path: &Path, limit: u64) -> Result<Option<Vec<u8>>, String> {
 }
 
 impl ProjectGuide {
-    /// Reads both files from a repository root. Missing files are normal;
+    /// Reads the files from a repository root. Missing files are normal;
     /// unusable ones are reported in `problems`.
     #[must_use]
     pub fn load(repository_root: &Path) -> Self {
@@ -406,9 +414,31 @@ impl ProjectGuide {
             read_project_file(repository_root, ProjectFile::Guidance),
             read_project_file(repository_root, ProjectFile::Glossary),
         )
+        .with_voices(read_project_file(repository_root, ProjectFile::Voices))
     }
 
-    /// Builds the guide from the two files' contents as read.
+    /// Adds the voice profile file's contents as read. Ignored profiles are
+    /// reported in `problems`.
+    #[must_use]
+    pub fn with_voices(mut self, voices: Result<Option<String>, String>) -> Self {
+        match voices {
+            Ok(Some(text)) => {
+                let voices = parse_voices(&text);
+                for diagnostic in &voices.diagnostics {
+                    self.problems.push(format!(
+                        "{VOICES_FILE} line {}: {}",
+                        diagnostic.line, diagnostic.message
+                    ));
+                }
+                self.voices = Some(voices);
+            }
+            Ok(None) => {}
+            Err(problem) => self.problems.push(problem),
+        }
+        self
+    }
+
+    /// Builds the guide from the guidance and glossary contents as read.
     #[must_use]
     pub fn from_files(
         guidance: Result<Option<String>, String>,

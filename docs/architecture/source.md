@@ -130,6 +130,49 @@ When several columns qualify, the lowest column index is used. The key of a
 row is the text of its row key cell. Condition 4 excludes translatable text:
 a translated name that is merely unique must never act as an identity key.
 
+## Dialogue
+
+Quest sheets (`quest/…/<ID>`) and cutscene sheets (`cut_scene/…/<ID>`) with
+row keys describe their rows in the keys. This structure is context for
+translators and Angelica; it never affects identity, permission, or any
+persisted data.
+
+`GameSource::dialogue` returns the rows of such a sheet that have text, in row
+order, each with its key, the first non-empty String cell other than the key,
+and a role read from the key. After the `TEXT_<ID>_` prefix, where `<ID>` is
+the last segment of the sheet name and case is ignored:
+
+| Rest of the key | Role | Example |
+| --- | --- | --- |
+| `SEQ_<n>` | Quest journal entry | `TEXT_MANFST004_00124_SEQ_00` |
+| `TODO_<n>` | Objective | `TEXT_MANFST004_00124_TODO_02` |
+| `<label>_<n>_<n>` | Speech by `<label>` | `TEXT_MANFST004_00124_MIOUNNE_000_1` |
+| `<n>_<label>` | Speech by `<label>` | `TEXT_VOICEMAN_02400_000010_ILBERD` |
+| anything else | Other | `TEXT_JOBRDM501_02577_QIB_001_XRHUNTIA_BATTLETALK_16` |
+
+`<n>` is a run of digits. A speaker label is one or more `_`-separated
+segments of ASCII letters and digits, none of them only digits, such as
+`URIANGER`, `AMHGARANJY_GEVA`, or `SYSTEM_NONE_VOICE`. Labels are the game's
+internal names: `SYSTEM` is system text, labels such as `Q1` and `A1` are
+usually a player choice's question and answers, and one character can have
+several labels. A key without the prefix, or one that matches no rule, is
+*other*; Aeria never guesses a speaker.
+
+Row order follows the script, but not its branches: the order in which the
+game plays lines is decided by quest scripts, which Aeria does not read. Who
+a line is addressed to is not recorded.
+
+`GameSource::quest_row` links a quest sheet to its `Quest` row: the only row
+with a String cell that is not translatable and holds the sheet's ID, such
+as `ManFst004_00124`. The row's translatable cells hold the quest's name.
+When no row or more than one row holds the ID, the sheet has no quest.
+`Quest` is read once per source.
+
+`GameSource::speakers` and `GameSource::speaker_lines` find the speech of one
+label across every quest and cutscene sheet, in sheet-name and row order. The
+first call reads every dialogue sheet on up to four threads, a few seconds on
+the current game, and keeps an index of the lines in memory.
+
 ## Performance
 
 Reading every sheet of one language takes about one to two seconds on one

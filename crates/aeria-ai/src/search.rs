@@ -320,6 +320,23 @@ mod tests {
         fn project_file(&self, _: ProjectFile) -> Result<Option<String>, ToolError> {
             Ok(None)
         }
+
+        fn dialogue(&self, _: &str) -> Result<Option<crate::dialogue::SheetDialogue>, ToolError> {
+            Ok(None)
+        }
+
+        fn speakers(&self, _: &str) -> Result<Vec<(String, usize)>, ToolError> {
+            Ok(Vec::new())
+        }
+
+        fn speaker_lines(
+            &self,
+            _: &str,
+            _: usize,
+            _: usize,
+        ) -> Result<(usize, Vec<UnitLocation>), ToolError> {
+            Ok((0, Vec::new()))
+        }
     }
 
     #[derive(Default)]

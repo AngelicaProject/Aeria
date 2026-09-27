@@ -531,7 +531,7 @@ export type AgentMode = "chat" | "ask" | "autoDraft";
 export type ProposalRecord = {
   id: string;
   /** The changed project file; null for a translation. */
-  file: "guidance" | "glossary" | null;
+  file: "guidance" | "glossary" | "voices" | null;
   /** A job to start; `target` then holds its one-line summary. */
   job?: JobProposal | null;
   /** A domain Angelica asked to read; `target` then holds the link. */
@@ -661,6 +661,11 @@ export type ProjectGuideDto = {
   diagnostics: { line: number; message: string }[];
   guidanceError: string | null;
   glossaryError: string | null;
+  /** The voice profile text; null when the file does not exist. */
+  voices: string | null;
+  /** Profiles the voice file ignores, with the reason. */
+  voiceDiagnostics: { line: number; message: string }[];
+  voicesError: string | null;
 };
 
 /** Project-shared pack identity in aeria-pack.json. */

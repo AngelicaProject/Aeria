@@ -378,7 +378,8 @@ chunk's units in tagged-text form. Its tools are restricted to:
 
 - `get_unit` and neighbouring rows of its own sheet, for context;
 - `other_languages`, for the same string in the game's other client languages;
-- `get_guidance`, for glossary lookups;
+- `dialogue_context`, for the scene of a quest or cutscene line;
+- `get_guidance` and `get_voices`, for glossary and voice profile lookups;
 - `validate_target`, to check itself before submitting;
 - `submit_translations`, for units in its chunk only;
 - `report_issue`, to escalate an ambiguous term, missing context, or a

@@ -12,6 +12,7 @@ pub mod chat;
 pub mod chatgpt;
 pub mod client;
 pub mod conversation;
+pub mod dialogue;
 pub mod draft;
 pub mod guidance;
 pub mod images;
@@ -23,6 +24,7 @@ pub mod search;
 pub mod secrets;
 pub mod settings;
 pub mod tools;
+pub mod voices;
 pub mod web;
 pub mod worker;
 

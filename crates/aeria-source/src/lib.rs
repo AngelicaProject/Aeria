@@ -7,10 +7,11 @@
 
 #![forbid(unsafe_code)]
 
+mod dialogue;
 mod glyphs;
 mod sheet;
 
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
@@ -22,6 +23,7 @@ use aeria_sqpack::{GameData, SqPackError};
 use thiserror::Error;
 
 pub use aeria_core::{GameVersion, GameVersionError, LayoutHash};
+pub use dialogue::{Dialogue, DialogueKind, DialogueLine, LineRole, line_role, sheet_id};
 pub use glyphs::{FontGlyph, FontGlyphs, Icon};
 pub use sheet::{
     MIN_KEYED_ROWS, RowKeys, SourceCell, SourceRow, SourceSheet, StringColumn, Unavailable,
@@ -154,6 +156,26 @@ pub struct GameSource {
     catalog: std::sync::OnceLock<Arc<Vec<SheetSummary>>>,
     ui_colors: std::sync::OnceLock<Vec<(u32, u32)>>,
     icons: std::sync::OnceLock<Option<(Vec<u8>, Vec<u8>)>>,
+    quests: Mutex<Option<Arc<QuestIndex>>>,
+    speakers: Mutex<Option<Arc<SpeakerIndex>>>,
+}
+
+/// Quest sheet IDs and the `Quest` row that names each one.
+type QuestIndex = HashMap<String, (u32, u16)>;
+
+/// Speech lines by speaker label: `(sheet index, row, subrow)` in sheet-name
+/// and row order.
+type SpeakerIndex = BTreeMap<String, Vec<(u32, u32, u16)>>;
+
+/// One speech line: `(speaker, sheet index, row, subrow)`.
+type SpeechLine = (String, u32, u32, u16);
+
+/// One row of a sheet.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RowAddress {
+    pub sheet: String,
+    pub row_id: u32,
+    pub subrow_id: u16,
 }
 
 impl fmt::Debug for GameSource {
@@ -195,6 +217,8 @@ impl GameSource {
             catalog: std::sync::OnceLock::new(),
             ui_colors: std::sync::OnceLock::new(),
             icons: std::sync::OnceLock::new(),
+            quests: Mutex::new(None),
+            speakers: Mutex::new(None),
         })
     }
 
@@ -525,6 +549,190 @@ impl GameSource {
             Ok(sheet) => SheetLookup::Present(Arc::new(sheet)),
             Err(unavailable) => SheetLookup::Unavailable(unavailable),
         })
+    }
+
+    /// The dialogue of a quest or cutscene sheet (see [`Dialogue::of`]);
+    /// `None` for any other sheet, or one without row keys.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when a game file cannot be read.
+    pub fn dialogue(&self, sheet: &str) -> Result<Option<Dialogue>, SourceError> {
+        if DialogueKind::of(sheet).is_none() {
+            return Ok(None);
+        }
+        Ok(match self.sheet(sheet)? {
+            SheetLookup::Present(sheet) => Dialogue::of(&sheet),
+            SheetLookup::Missing | SheetLookup::Unavailable(_) => None,
+        })
+    }
+
+    /// The `Quest` row of a quest sheet: the only row with a String cell
+    /// that is not translatable and holds the sheet's ID, such as
+    /// `ManFst004_00124` for `quest/001/ManFst004_00124`. `None` when no row
+    /// or more than one row holds it. `Quest` is read once.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when a game file cannot be read.
+    pub fn quest_row(&self, sheet: &str) -> Result<Option<(u32, u16)>, SourceError> {
+        if DialogueKind::of(sheet) != Some(DialogueKind::Quest) {
+            return Ok(None);
+        }
+        let mut quests = self.quests.lock().unwrap_or_else(PoisonError::into_inner);
+        let index = match quests.as_ref() {
+            Some(index) => Arc::clone(index),
+            None => Arc::clone(quests.insert(Arc::new(self.read_quest_index()?))),
+        };
+        drop(quests);
+        Ok(index.get(sheet_id(sheet)).copied())
+    }
+
+    fn read_quest_index(&self) -> Result<QuestIndex, SourceError> {
+        let ids: HashSet<&str> = self
+            .sheet_names
+            .iter()
+            .filter(|name| DialogueKind::of(name) == Some(DialogueKind::Quest))
+            .map(|name| sheet_id(name))
+            .collect();
+        let SheetLookup::Present(quest) = self.sheet("Quest")? else {
+            return Ok(QuestIndex::new());
+        };
+        let mut rows: HashMap<String, Vec<(u32, u16)>> = HashMap::new();
+        for row in quest.rows() {
+            for cell in quest.cells(row) {
+                if cell.translatable || cell.bytes.is_empty() {
+                    continue;
+                }
+                let text = cell.text();
+                if ids.contains(text.as_str()) {
+                    let found = rows.entry(text).or_default();
+                    if !found.contains(&(row.row_id, row.subrow_id)) {
+                        found.push((row.row_id, row.subrow_id));
+                    }
+                }
+            }
+        }
+        Ok(rows
+            .into_iter()
+            .filter_map(|(id, rows)| match rows.as_slice() {
+                [row] => Some((id, *row)),
+                _ => None,
+            })
+            .collect())
+    }
+
+    /// Speaker labels of quest and cutscene speech that contain `query`
+    /// (ignoring ASCII case), with their number of lines, in label order.
+    /// The first call reads every quest and cutscene sheet on up to
+    /// `threads` threads.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when a game file cannot be read.
+    pub fn speakers(
+        &self,
+        query: &str,
+        threads: usize,
+    ) -> Result<Vec<(String, usize)>, SourceError> {
+        let query = query.to_ascii_uppercase();
+        Ok(self
+            .speaker_index(threads)?
+            .iter()
+            .filter(|(label, _)| label.to_ascii_uppercase().contains(&query))
+            .map(|(label, lines)| (label.clone(), lines.len()))
+            .collect())
+    }
+
+    /// The speech lines of one speaker label in sheet-name and row order:
+    /// the total and the lines from `offset`, at most `limit`. The first
+    /// call reads every quest and cutscene sheet on up to `threads` threads.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when a game file cannot be read.
+    pub fn speaker_lines(
+        &self,
+        speaker: &str,
+        offset: usize,
+        limit: usize,
+        threads: usize,
+    ) -> Result<(usize, Vec<RowAddress>), SourceError> {
+        let index = self.speaker_index(threads)?;
+        let Some(lines) = index.get(speaker) else {
+            return Ok((0, Vec::new()));
+        };
+        let page = lines
+            .iter()
+            .skip(offset)
+            .take(limit)
+            .filter_map(|&(sheet, row_id, subrow_id)| {
+                Some(RowAddress {
+                    sheet: self.sheet_names.get(sheet as usize)?.clone(),
+                    row_id,
+                    subrow_id,
+                })
+            })
+            .collect();
+        Ok((lines.len(), page))
+    }
+
+    fn speaker_index(&self, threads: usize) -> Result<Arc<SpeakerIndex>, SourceError> {
+        let mut speakers = self.speakers.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(index) = speakers.as_ref() {
+            return Ok(Arc::clone(index));
+        }
+        let sheets: Vec<usize> = (0..self.sheet_names.len())
+            .filter(|&index| DialogueKind::of(&self.sheet_names[index]).is_some())
+            .collect();
+        let chunks: Vec<&[usize]> = sheets
+            .chunks(sheets.len().div_ceil(threads.max(1)).max(1))
+            .collect();
+        let found: Vec<Result<Vec<SpeechLine>, SourceError>> = std::thread::scope(|scope| {
+            let handles: Vec<_> = chunks
+                .iter()
+                .map(|chunk| scope.spawn(|| self.speech_lines(chunk)))
+                .collect();
+            handles
+                .into_iter()
+                .map(|handle| {
+                    handle
+                        .join()
+                        .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
+                })
+                .collect()
+        });
+        let mut index = SpeakerIndex::new();
+        for lines in found {
+            for (speaker, sheet, row_id, subrow_id) in lines? {
+                index
+                    .entry(speaker)
+                    .or_default()
+                    .push((sheet, row_id, subrow_id));
+            }
+        }
+        Ok(Arc::clone(speakers.insert(Arc::new(index))))
+    }
+
+    /// The speech lines of some sheets, as `(speaker, sheet index, row,
+    /// subrow)`, in the order given.
+    fn speech_lines(&self, sheets: &[usize]) -> Result<Vec<SpeechLine>, SourceError> {
+        let mut lines = Vec::new();
+        for &index in sheets {
+            let SheetLookup::Present(sheet) = self.read_sheet(&self.sheet_names[index])? else {
+                continue;
+            };
+            let Some(dialogue) = Dialogue::of(&sheet) else {
+                continue;
+            };
+            let sheet_index = u32::try_from(index).unwrap_or(u32::MAX);
+            for line in dialogue.lines {
+                if let LineRole::Speech { speaker } = line.role {
+                    lines.push((speaker, sheet_index, line.row_id, line.subrow_id));
+                }
+            }
+        }
+        Ok(lines)
     }
 }
 
