@@ -379,6 +379,23 @@ impl GameSource {
         })
     }
 
+    /// The row ids of a sheet in order, without subrows repeated; empty
+    /// when the sheet is missing or unavailable.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when a game file cannot be read.
+    pub fn row_ids(&self, sheet: &str) -> Result<Vec<u32>, SourceError> {
+        Ok(match self.sheet(sheet)? {
+            SheetLookup::Present(sheet) => {
+                let mut ids: Vec<u32> = sheet.rows().iter().map(|row| row.row_id).collect();
+                ids.dedup();
+                ids
+            }
+            SheetLookup::Missing | SheetLookup::Unavailable(_) => Vec::new(),
+        })
+    }
+
     /// Reads a sheet without keeping it in memory, for scans over many
     /// sheets.
     ///

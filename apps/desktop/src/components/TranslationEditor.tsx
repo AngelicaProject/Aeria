@@ -6,6 +6,9 @@ import { IconButton } from "../ui/primitives/IconButton";
 import { Segmented } from "../ui/primitives/Segmented";
 import { UiIcon } from "../ui/primitives/UiIcon";
 import { GamePreview } from "./GamePreview";
+import { PreviewVariables } from "./PreviewVariables";
+import { mergeVariables } from "../previewVariables";
+import { usePreviewValues } from "../ui/previewValues";
 import { MacroEditor, focusMacroEditor } from "./MacroEditor";
 import { useMacroView } from "../ui/useMacroView";
 import { ReviewDot, reviewLabel } from "./ReviewDot";
@@ -215,8 +218,14 @@ const TranslationEditorImpl = forwardRef<TranslationEditorHandle, TranslationEdi
   const { preferences, setPreference } = usePreferences();
   const sourceMode = preferences.sourcePaneMode;
   const targetMode = preferences.targetPaneMode;
-  const sourceView = useMacroView(selectedCell?.sourceMacro ?? null);
-  const targetView = useMacroView(draft === null ? null : draft.target);
+  const previewValues = usePreviewValues();
+  const sourceView = useMacroView(selectedCell?.sourceMacro ?? null, previewValues);
+  const targetView = useMacroView(draft === null ? null : draft.target, previewValues);
+  // One set of variables for both panes: the values apply to both strings.
+  const previewVariables = useMemo(() => mergeVariables(
+    sourceMode === "game" ? sourceView?.view.variables : null,
+    targetMode === "game" && draft !== null && draft.target.length > 0 ? targetView?.view.variables : null,
+  ), [sourceMode, targetMode, sourceView, targetView, draft]);
 
   const updateDraft = useCallback((cell: TranslationCellDto, field: keyof CellDraft, value: string) => {
     const key = bindingKey(cell.sourceBinding);
@@ -348,7 +357,8 @@ const TranslationEditorImpl = forwardRef<TranslationEditorHandle, TranslationEdi
         </div>
       </header>
 
-      <div className="editor-grid">
+      <div className={`editor-grid${previewVariables.length > 0 ? " has-variables" : ""}`}>
+        <PreviewVariables variables={previewVariables} />
         <div className="editor-pane editor-source">
           <div className="editor-pane-head">
             <span className="eyebrow">{t("editor.source")}</span>

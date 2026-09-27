@@ -966,6 +966,96 @@ pub const PARAMETERS: &[ParameterSpec] = &[
     },
 ];
 
+/// A global parameter whose meaning the game strings establish.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct GlobalSpec {
+    /// `gn` or `gs`.
+    pub prefix: &'static str,
+    pub index: u32,
+    /// A stable name, such as `class-job`.
+    pub name: &'static str,
+    /// The sheet whose row the value is, when it is one.
+    pub sheet: Option<&'static str>,
+    pub summary: &'static str,
+}
+
+/// Global parameters with an established meaning. Each entry rests on how
+/// game strings use it: what it is compared with and what the branches say.
+/// Other globals are shown by their code.
+pub const GLOBALS: &[GlobalSpec] = &[
+    // "<if ($gs1 == $gs3)>your<else>…'s" and "<split " " 1><string $gs1></split>, it's you!"
+    GlobalSpec {
+        prefix: "gs",
+        index: 1,
+        name: "player-name",
+        sheet: None,
+        summary: "the name of the player character",
+    },
+    // "A <if $gn4>woman<else>man</if> your size"
+    GlobalSpec {
+        prefix: "gn",
+        index: 4,
+        name: "player-female",
+        sheet: None,
+        summary: "1 when the player character is female, 0 when male",
+    },
+    // "<if ($gn52 > 0)>Storm<else><if ($gn53 > 0)>Serpent<else>Flame"
+    // and "<sheet GCRankLimsaMaleText $gn52 8>"
+    GlobalSpec {
+        prefix: "gn",
+        index: 52,
+        name: "rank-maelstrom",
+        sheet: None,
+        summary: "the player's rank in the Maelstrom, 0 when not a member",
+    },
+    GlobalSpec {
+        prefix: "gn",
+        index: 53,
+        name: "rank-twin-adder",
+        sheet: None,
+        summary: "the player's rank in the Order of the Twin Adder, 0 when not a member",
+    },
+    GlobalSpec {
+        prefix: "gn",
+        index: 54,
+        name: "rank-immortal-flames",
+        sheet: None,
+        summary: "the player's rank in the Immortal Flames, 0 when not a member",
+    },
+    // Compared with ClassJob rows: "<if ($gn68 == 17)>… class is changed to botanist"
+    GlobalSpec {
+        prefix: "gn",
+        index: 68,
+        name: "class-job",
+        sheet: Some("ClassJob"),
+        summary: "the player's current class or job, a ClassJob row",
+    },
+    // "A <if ($gn71 == 3)>… man your size─the beasts would swallow you whole": Race 3 is Lalafell
+    GlobalSpec {
+        prefix: "gn",
+        index: 71,
+        name: "race",
+        sheet: Some("Race"),
+        summary: "the player character's race, a Race row",
+    },
+    // Compared with trait levels in action descriptions: "<if ($gn72 >= 94)>{220}"
+    GlobalSpec {
+        prefix: "gn",
+        index: 72,
+        name: "level",
+        sheet: None,
+        summary: "the level of the player's current class or job",
+    },
+];
+
+/// The established meaning of a global parameter.
+#[must_use]
+pub fn global(prefix: &str, index: u32) -> Option<&'static GlobalSpec> {
+    GLOBALS
+        .iter()
+        .find(|spec| spec.prefix == prefix && spec.index == index)
+}
+
 /// A comparison operator.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ComparisonSpec {

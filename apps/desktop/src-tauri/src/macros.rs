@@ -6,15 +6,18 @@
 use std::sync::Arc;
 
 use aeria_se::catalog::{Form, Place, Role};
+use std::collections::BTreeMap;
+
 use aeria_se::preview::{
-    ChoiceKind, Operand, Parameter, Piece, PreviewData, Style, Test, ValueKind,
+    ChoiceKind, Parameter, Piece, PreviewData, Style, Value, ValueKind, Values, Variable,
+    VariableKind,
 };
 use aeria_se::{
     ExprKind, ExprSyntax, MacroString, MacroSyntax, SemanticFamily, SyntaxKind, SyntaxNode,
     Written, parse,
 };
 use aeria_source::GameSource;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tauri::Manager;
 
 use crate::commands::run_blocking;
@@ -29,6 +32,42 @@ pub struct MacroViewDto {
     pub diagnostics: Vec<MacroDiagnosticDto>,
     pub tags: Vec<MacroTagDto>,
     pub preview: Vec<PreviewPieceDto>,
+    /// Every variable the preview read, in order of first use.
+    pub variables: Vec<PreviewVariableDto>,
+}
+
+/// A variable value: a number or a text.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(untagged)]
+pub enum PreviewValueDto {
+    Int(u32),
+    Text(String),
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PreviewOptionDto {
+    pub value: u32,
+    pub label: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PreviewVariableDto {
+    /// `n1`, `gn68`, `gs1`, `hour`, or a character property such as `gender`.
+    pub key: String,
+    /// `number`, `text`, `time`, or `character`.
+    pub kind: &'static str,
+    pub parameter: Option<ParameterDto>,
+    /// The established meaning of a global parameter, such as `class-job`.
+    pub global: Option<&'static str>,
+    /// The sheet the value names a row of.
+    pub sheet: Option<String>,
+    pub default: PreviewValueDto,
+    pub value: PreviewValueDto,
+    /// The text of the row the value names.
+    pub value_name: Option<String>,
+    pub options: Vec<PreviewOptionDto>,
 }
 
 #[derive(Debug, Serialize)]
@@ -90,36 +129,11 @@ pub struct StyleDto {
     pub bold: bool,
 }
 
-/// A value a condition reads, when the preview can evaluate it.
-#[derive(Debug, Serialize)]
-#[serde(tag = "type", rename_all = "camelCase")]
-pub enum OperandDto {
-    Int { value: u32 },
-    Parameter { prefix: &'static str, index: u32 },
-    GameValue { name: &'static str },
-    Other,
-}
-
-/// A condition, when the preview can evaluate it.
-#[derive(Debug, Serialize)]
-#[serde(tag = "type", rename_all = "camelCase")]
-pub enum TestDto {
-    Value {
-        operand: OperandDto,
-    },
-    Compare {
-        operator: &'static str,
-        left: OperandDto,
-        right: OperandDto,
-    },
-    Other,
-}
-
 #[derive(Debug, Serialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum ChoiceDto {
-    If { condition: String, test: TestDto },
-    Switch { value: String, selector: OperandDto },
+    If { condition: String },
+    Switch { value: String },
     Gender,
     Myself,
     Name,
@@ -141,13 +155,18 @@ pub enum PreviewPieceDto {
         parameter: Option<ParameterDto>,
         label: String,
         style: StyleDto,
+        /// The value filled in from the variables; empty when unknown.
+        shown: Vec<PreviewPieceDto>,
     },
     Icon {
         icon: u32,
         device: bool,
     },
+    /// When the variables select a branch, `selected` names it and only
+    /// that branch holds pieces.
     Choice {
         choice: ChoiceDto,
+        selected: Option<usize>,
         branches: Vec<Vec<PreviewPieceDto>>,
     },
     Ruby {
@@ -174,18 +193,34 @@ impl PreviewData for GameData {
             .ok()
             .flatten()
     }
+
+    fn sheet_rows(&self, sheet: &str) -> Vec<u32> {
+        self.0
+            .as_ref()
+            .and_then(|source| source.row_ids(sheet).ok())
+            .unwrap_or_default()
+    }
 }
 
 #[tauri::command(rename_all = "camelCase")]
 /// Describes macro text for the editor: its diagnostics, its tags with
 /// their arguments, and a preview as the game shows it. Game data is read
 /// from the open project's game; without a project, references are shown
-/// as values.
+/// as values. `values` holds the values chosen for the preview's variables.
 ///
 /// # Errors
 ///
 /// Returns a typed command error when the desktop worker fails.
-pub async fn macro_view(app: tauri::AppHandle, text: String) -> CommandResult<MacroViewDto> {
+pub async fn macro_view(
+    app: tauri::AppHandle,
+    text: String,
+    values: Option<BTreeMap<String, PreviewValueDto>>,
+) -> CommandResult<MacroViewDto> {
+    let values: Values = values
+        .unwrap_or_default()
+        .into_iter()
+        .map(|(key, value)| (key, value_of(value)))
+        .collect();
     run_blocking(move || {
         let state = app.state::<DesktopState>();
         let source = state.lock_project().ok().and_then(|project| {
@@ -193,16 +228,17 @@ pub async fn macro_view(app: tauri::AppHandle, text: String) -> CommandResult<Ma
                 .as_ref()
                 .map(aeria_workspace::ProjectSession::source_handle)
         });
-        Ok(view(&text, &GameData(source)))
+        Ok(view(&text, &GameData(source), &values))
     })
     .await
 }
 
-fn view(text: &str, data: &dyn PreviewData) -> MacroViewDto {
+fn view(text: &str, data: &dyn PreviewData, values: &Values) -> MacroViewDto {
     let document = parse(text);
     let offsets = Utf16Offsets::new(text);
     let mut tags = Vec::new();
     collect_tags(&document, document.nodes(), &offsets, &mut tags);
+    let preview = aeria_se::preview::preview(text, data, values);
     MacroViewDto {
         diagnostics: document
             .diagnostics()
@@ -214,10 +250,8 @@ fn view(text: &str, data: &dyn PreviewData) -> MacroViewDto {
             })
             .collect(),
         tags,
-        preview: aeria_se::preview::preview(text, data)
-            .into_iter()
-            .map(piece_dto)
-            .collect(),
+        preview: preview.pieces.into_iter().map(piece_dto).collect(),
+        variables: preview.variables.into_iter().map(variable_dto).collect(),
     }
 }
 
@@ -439,33 +473,40 @@ const fn value_kind(kind: ValueKind) -> &'static str {
     }
 }
 
-fn operand_dto(operand: Operand) -> OperandDto {
-    match operand {
-        Operand::Int(value) => OperandDto::Int { value },
-        Operand::Parameter(parameter) => OperandDto::Parameter {
-            prefix: parameter.prefix,
-            index: parameter.index,
-        },
-        Operand::GameValue(name) => OperandDto::GameValue { name },
-        Operand::Other => OperandDto::Other,
+fn value_of(value: PreviewValueDto) -> Value {
+    match value {
+        PreviewValueDto::Int(value) => Value::Int(value),
+        PreviewValueDto::Text(text) => Value::Text(text),
     }
 }
 
-fn test_dto(test: Test) -> TestDto {
-    match test {
-        Test::Value(operand) => TestDto::Value {
-            operand: operand_dto(operand),
+fn value_dto(value: Value) -> PreviewValueDto {
+    match value {
+        Value::Int(value) => PreviewValueDto::Int(value),
+        Value::Text(text) => PreviewValueDto::Text(text),
+    }
+}
+
+fn variable_dto(variable: Variable) -> PreviewVariableDto {
+    PreviewVariableDto {
+        key: variable.key,
+        kind: match variable.kind {
+            VariableKind::Number => "number",
+            VariableKind::Text => "text",
+            VariableKind::Time => "time",
+            VariableKind::Character => "character",
         },
-        Test::Compare {
-            operator,
-            left,
-            right,
-        } => TestDto::Compare {
-            operator,
-            left: operand_dto(left),
-            right: operand_dto(right),
-        },
-        Test::Other => TestDto::Other,
+        parameter: variable.parameter.map(parameter_dto),
+        global: variable.global.map(|global| global.name),
+        sheet: variable.sheet.map(|(sheet, _)| sheet),
+        default: value_dto(variable.default),
+        value: value_dto(variable.value),
+        value_name: variable.value_name,
+        options: variable
+            .options
+            .into_iter()
+            .map(|(value, label)| PreviewOptionDto { value, label })
+            .collect(),
     }
 }
 
@@ -482,29 +523,30 @@ fn piece_dto(piece: Piece) -> PreviewPieceDto {
             parameter,
             label,
             style,
+            shown,
         } => PreviewPieceDto::Value {
             value_kind: value_kind(kind),
             source,
             parameter: parameter.map(parameter_dto),
             label,
             style: style_dto(style),
+            shown: shown.into_iter().map(piece_dto).collect(),
         },
         Piece::Icon { icon, device } => PreviewPieceDto::Icon { icon, device },
-        Piece::Choice { kind, branches } => PreviewPieceDto::Choice {
+        Piece::Choice {
+            kind,
+            selected,
+            branches,
+        } => PreviewPieceDto::Choice {
             choice: match kind {
-                ChoiceKind::If { condition, test } => ChoiceDto::If {
-                    condition,
-                    test: test_dto(test),
-                },
-                ChoiceKind::Switch { value, selector } => ChoiceDto::Switch {
-                    value,
-                    selector: operand_dto(selector),
-                },
+                ChoiceKind::If { condition } => ChoiceDto::If { condition },
+                ChoiceKind::Switch { value } => ChoiceDto::Switch { value },
                 ChoiceKind::Gender => ChoiceDto::Gender,
                 ChoiceKind::Myself => ChoiceDto::Myself,
                 ChoiceKind::Name => ChoiceDto::Name,
                 ChoiceKind::Josa => ChoiceDto::Josa,
             },
+            selected,
             branches: branches
                 .into_iter()
                 .map(|branch| branch.into_iter().map(piece_dto).collect())
@@ -525,7 +567,7 @@ mod tests {
     #[test]
     fn a_view_reports_tags_diagnostics_and_a_preview_in_utf16_offsets() {
         let text = "Ф<if ($n1 == 1)><i>a</i><else>b</if> <sheet Item $n1 0><nope>";
-        let view = view(text, &aeria_se::preview::NoData);
+        let view = view(text, &aeria_se::preview::NoData, &Values::new());
         let spans: Vec<(&str, usize, usize)> = view
             .tags
             .iter()
@@ -557,12 +599,14 @@ mod tests {
         let json = serde_json::to_value(&view.preview).expect("json");
         assert_eq!(json[1]["kind"], "choice");
         assert_eq!(json[1]["choice"]["type"], "if");
-        assert_eq!(json[1]["choice"]["test"]["type"], "compare");
-        assert_eq!(json[1]["choice"]["test"]["operator"], "==");
-        assert_eq!(json[1]["choice"]["test"]["left"]["prefix"], "n");
-        assert_eq!(json[1]["choice"]["test"]["right"]["value"], 1);
+        assert_eq!(json[1]["choice"]["condition"], "($n1 == 1)");
+        assert_eq!(json[1]["selected"], 0);
         assert_eq!(json[1]["branches"][0][0]["style"]["italic"], true);
         assert_eq!(json[3]["kind"], "value");
         assert_eq!(json[3]["valueKind"], "gameData");
+        let variables = serde_json::to_value(&view.variables).expect("json");
+        assert_eq!(variables[0]["key"], "n1");
+        assert_eq!(variables[0]["default"], 1);
+        assert_eq!(variables[0]["sheet"], "Item");
     }
 }

@@ -183,13 +183,16 @@ renderer re-reads it after each committed translation mutation or workspace
 reload and never derives sheet-wide progress from loaded row pages.
 `app_info` returns the application name and version for display.
 
-`macro_view(text)` describes macro text for the editor: its diagnostics, its
-tags (opening, separator, closing, or inline, with their catalog arguments),
-and a game preview from `aeria_se::preview`, all with UTF-16 offsets. It
-reads `UIColor` rows and constant sheet references from the open project's
-`GameSource` (`GameSource::ui_color` and `GameSource::cell_text`); without a
-project, references are shown as values. It changes nothing and needs no
-project.
+`macro_view(text, values)` describes macro text for the editor: its
+diagnostics, its tags (opening, separator, closing, or inline, with their
+catalog arguments), a game preview from `aeria_se::preview` evaluated with
+`values` (the renderer's chosen values of preview variables, numbers or
+texts by key such as `gn68`), and the variables the preview read with their
+defaults, meanings, and row names, all with UTF-16 offsets. It reads
+`UIColor` rows, sheet rows, and row ids from the open project's
+`GameSource` (`GameSource::ui_color`, `GameSource::cell_text`, and
+`GameSource::row_ids`); without a project, references are shown as values.
+It changes nothing and needs no project.
 
 Filesystem, game reading, SQLite, workspace loading, row paging, and ordinary
 translation mutations run inside Tauri blocking workers. The async command

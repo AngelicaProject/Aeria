@@ -195,26 +195,33 @@ an older text):
   opens in game, since it is only read; the target opens as text for
   editing, and its editor keeps its state while the pane shows the game
   view. Both modes are local preferences (`sourcePaneMode`,
-  `targetPaneMode`). The game view shows the string as the game shows it:
-  colors from `<color>` and the game's `UIColor` sheet, outlines, italics,
-  bold, line breaks, and names read from game data for constant references
-  such as `<sheet Item 4 0>`, at the editor's font size. Values supplied at
-  runtime are chips that show the code as written (`$n1`, `ClassJob · $n1`,
-  or "player name"), and their tooltip says in full words what fills them
-  in: a parameter the game passes to the string, or a global game variable
-  such as the player's class. Conditions are evaluated as the game does,
-  from a **Conditions** bar above the text that lists every variable the
-  string's conditions read: parameters and global game variables such as
-  `$gn68` (class) and `$gn72` (level) as numbers, time values, and the
-  character's gender, whether it is the reading player, its name, and a
-  Korean word ending as choices. Each variable starts at the value that
-  shows the first branch of the first condition reading it; values set by
-  the user are shared by every string and kept locally, so setting a class
-  and level once shows every tooltip of that class, and **Reset** returns
-  the string's variables to their defaults. Nested conditions follow from
-  the values; a conditional fragment is underlined with the reason it is
-  shown in its tooltip. Only a condition the preview cannot evaluate, such as
-  one comparing text, is switched by clicking through its branches. Switching strings keeps the previous
+  `targetPaneMode`). The game view shows the string as the game shows it,
+  on the pane itself and set like the text editor, so switching modes keeps
+  the text in place: colors from `<color>` and the game's `UIColor` sheet,
+  outlines, italics, bold, line breaks, and names read from game data, at
+  the editor's font size.
+- **Variables.** Strings read variables: parameters the game passes to the
+  string (`$n1`), global game variables (`$gn68`), time values, and
+  properties of a character. A single **Variables** bar above the source
+  and target panes lists every variable the shown strings read, each once,
+  and Rust evaluates both previews with its values
+  (`macro_view(text, values)`), as the game does: conditions, nested ones
+  included, show the branch the values select; numbers, texts, and rows
+  named by a variable are filled in, so `<sheet Item $n1 0>` with `$n1` = 4
+  reads "wind shard". Variables with an established meaning are named in
+  words (**Class** chosen from the `ClassJob` sheet, **Level**, **Race**,
+  **Player name**, male or female player), with the code in the tooltip;
+  others show their code, and a row variable shows the name of its row next
+  to the number. Each variable starts at the value that shows the first
+  branch of the first condition reading it. Values set by the user are
+  shared by every string and kept locally, so setting a class and level
+  once shows every tooltip of that class; **Reset** returns the shown
+  variables to their defaults. A filled-in value is underlined, and
+  clicking it moves to its variable; a selected branch is underlined with a
+  dotted line and the reason it is shown in its tooltip. A value no
+  variable gives stays a chip with its code, and only a condition the
+  preview cannot evaluate, such as a test of game data text, is switched by
+  clicking through its branches. Switching strings keeps the previous
   view until the new one arrives, requests it without delay (only typing is
   debounced), and shows strings seen before at once from a cache. Icons are
   shown by number until the game's icon textures are read.
