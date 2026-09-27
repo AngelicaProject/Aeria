@@ -61,7 +61,8 @@ function iconUrl(bytes: ArrayBuffer): string | null {
   return canvas.toDataURL("image/png");
 }
 
-function loadIcon(id: number): Promise<string | null> {
+/** The image of an inline game icon as a data URL, or null when the game has none. */
+export function loadIcon(id: number): Promise<string | null> {
   let icon = icons.get(id);
   if (!icon) {
     icon = gameIcon(id).then(iconUrl, () => null);

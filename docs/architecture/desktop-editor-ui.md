@@ -172,13 +172,29 @@ derived from `git_pending_changes`.
 The editor sits below the list and edits one occurrence at a time. Its bar shows
 the occurrence's review state and coordinate, field tabs for multi-cell rows,
 the review-state control, and Revert. The source and target panes each have
-their own Text / In game switch (see below).
+their own In game / Text / Code switch (see below).
 
 Source and target sit side by side, with the translator note beside them (or
 below them in a narrow document). Source is read-only; target is a CodeMirror
-editor. Both highlight macro spans with a presentation-only scanner;
-Rust remains the authority for parsing and validation, and macro text is never
-rewritten by the highlighter.
+editor. The document of both is always the exact macro text; how tags are
+drawn is presentation only, Rust remains the authority for parsing and
+validation, and macro text is never rewritten by the presentation.
+
+- **Text** is for translating. Tags are drawn as compact chips a translator
+  reads past: conditions (`if ($gn68 == 19)`, `otherwise`, `end`), values
+  (`Item · $n1`), and game icons as their images. Formatting pairs vanish
+  into the text they format: text inside `<ui-color 504>…</ui-color>` is
+  drawn in that color, italics and bold as such, and a color with its
+  outline (`<ui-color 504><ui-edge-color 505>`) is one thin marker in the
+  color at each edge. `<br>` is a small `↵` followed by a real line break,
+  and the cursor after it sits on the new line. Chips and markers are
+  atomic: the cursor steps over them, Backspace deletes a whole tag, and a
+  tag with an error is outlined in red. Colors of `<ui-color>` come from the
+  game through `macro_view`.
+- **Code** shows the macro text with every tag written out and highlighted,
+  for editing tag arguments.
+
+In every mode Enter inserts `<br>`, the game's line break.
 
 The editors also show what Rust reads from the text, through the
 `macro_view` command (debounced while typing, and ignored when it describes
@@ -191,9 +207,9 @@ an older text):
 - **Errors.** Diagnostics are underlined, and hovering one shows its message,
   such as `<colour> is not a macro; did you mean <color>?`.
 - **In game.** Each of the source and target panes switches between
-  **In game** and **Text**, and the chosen mode fills the pane. The source
-  opens in game, since it is only read; the target opens as text for
-  editing, and its editor keeps its state while the pane shows the game
+  **In game**, **Text**, and **Code**, and the chosen mode fills the pane.
+  The source opens in game, since it is only read; the target opens as text
+  for editing, and its editor keeps its state while the pane shows the game
   view. Both modes are local preferences (`sourcePaneMode`,
   `targetPaneMode`). The game view shows the string as the game shows it,
   on the pane itself and set like the text editor, so switching modes keeps

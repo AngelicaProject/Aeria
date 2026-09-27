@@ -142,6 +142,7 @@ function PaneModeSwitch({ value, onChange }: { value: PaneMode; onChange: (mode:
       options={[
         { value: "game", label: t("preview.mode.game"), title: t("preview.mode.gameHint") },
         { value: "text", label: t("preview.mode.text"), title: t("preview.mode.textHint") },
+        { value: "code", label: t("preview.mode.code"), title: t("preview.mode.codeHint") },
       ]}
     />
   );
@@ -371,7 +372,7 @@ const TranslationEditorImpl = forwardRef<TranslationEditorHandle, TranslationEdi
           </div>
           {sourceMode === "game"
             ? <PanePreview pieces={sourceView ? sourceView.view.preview : null} empty={t("editor.emptySource")} />
-            : <MacroEditor className="editor-surface" value={selectedCell.sourceMacro} readOnly view={sourceView} ariaLabel={t("editor.sourceText", { column: String(selectedCell.sourceBinding.columnIndex) })} placeholder={t("editor.emptySource")} onNavigate={onNavigate} />}
+            : <MacroEditor className="editor-surface" value={selectedCell.sourceMacro} readOnly view={sourceView} presentation={sourceMode === "code" ? "code" : "chips"} ariaLabel={t("editor.sourceText", { column: String(selectedCell.sourceBinding.columnIndex) })} placeholder={t("editor.emptySource")} onNavigate={onNavigate} />}
           {row.context.length > 0 ? (
             <details className="context-block">
               <summary><UiIcon icon="chevronRight" size="xs" />{t("editor.context")} <span className="count">{row.context.length}</span></summary>
@@ -404,6 +405,7 @@ const TranslationEditorImpl = forwardRef<TranslationEditorHandle, TranslationEdi
             onApproveAndNext={approve}
             onNavigate={onNavigate}
             view={targetView}
+            presentation={targetMode === "code" ? "code" : "chips"}
           />
           <div className="editor-pane-foot">
             <span className="editor-hint">

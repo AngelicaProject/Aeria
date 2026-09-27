@@ -838,6 +838,8 @@ export type MacroTagDto = {
   part: MacroTagPart;
   family: MacroFamily | null;
   args: MacroArgDto[];
+  /** The color an opening color tag sets, `#rrggbbaa`, when it is known. */
+  color: string | null;
 };
 
 export type PreviewStyleDto = { color: string | null; edge: string | null; italic: boolean; bold: boolean };

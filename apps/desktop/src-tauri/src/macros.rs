@@ -100,6 +100,8 @@ pub struct MacroTagDto {
     pub family: Option<&'static str>,
     /// The inline arguments, on an opening or inline tag.
     pub args: Vec<MacroArgDto>,
+    /// The color an opening color tag sets, `#rrggbbaa`, when it is known.
+    pub color: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -306,6 +308,9 @@ fn view(text: &str, data: &dyn PreviewData, values: &Values) -> MacroViewDto {
     let offsets = Utf16Offsets::new(text);
     let mut tags = Vec::new();
     collect_tags(&document, document.nodes(), &offsets, &mut tags);
+    for tag in &mut tags {
+        tag.color = tag_color(tag, data);
+    }
     let preview = aeria_se::preview::preview(text, data, values);
     MacroViewDto {
         diagnostics: document
@@ -413,6 +418,7 @@ fn collect_tags(
                 part: MacroTagPart::Raw,
                 family: None,
                 args: Vec::new(),
+                color: None,
             }),
             SyntaxKind::Macro(syntax) => {
                 macro_tags(document, syntax, offsets, tags);
@@ -506,7 +512,25 @@ fn macro_tags(
             } else {
                 Vec::new()
             },
+            color: None,
         });
+    }
+}
+
+/// The color an opening `<color>`, `<edge-color>`, `<ui-color>`, or
+/// `<ui-edge-color>` tag sets: its `#AARRGGBB` value, or the `UIColor` row.
+fn tag_color(tag: &MacroTagDto, data: &dyn PreviewData) -> Option<String> {
+    if !matches!(tag.part, MacroTagPart::Open) {
+        return None;
+    }
+    let value = tag.args.first()?.value.trim();
+    match tag.name.as_str() {
+        "color" | "edge-color" => {
+            let argb = u32::from_str_radix(value.strip_prefix('#')?, 16).ok()?;
+            color(Some(argb.rotate_left(8)))
+        }
+        "ui-color" | "ui-edge-color" => color(data.ui_color(value.parse().ok()?)),
+        _ => None,
     }
 }
 
@@ -631,6 +655,32 @@ fn piece_dto(piece: Piece) -> PreviewPieceDto {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct Colors;
+
+    impl PreviewData for Colors {
+        fn ui_color(&self, row: u32) -> Option<u32> {
+            (row == 504).then_some(0x00CC_22FF)
+        }
+
+        fn sheet_text(&self, _sheet: &str, _row: u32, _column: u32) -> Option<String> {
+            None
+        }
+    }
+
+    #[test]
+    fn opening_color_tags_carry_their_color() {
+        let view = view(
+            "<color #FF13212F>x</color><ui-color 504>y</ui-color><ui-color 9>z</ui-color>",
+            &Colors,
+            &Values::new(),
+        );
+        let colors: Vec<Option<&str>> = view.tags.iter().map(|tag| tag.color.as_deref()).collect();
+        assert_eq!(
+            colors,
+            [Some("#13212fff"), None, Some("#00cc22ff"), None, None, None]
+        );
+    }
 
     #[test]
     fn a_view_reports_tags_diagnostics_and_a_preview_in_utf16_offsets() {

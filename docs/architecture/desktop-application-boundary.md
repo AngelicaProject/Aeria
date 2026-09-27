@@ -185,7 +185,7 @@ reload and never derives sheet-wide progress from loaded row pages.
 
 `macro_view(text, values)` describes macro text for the editor: its
 diagnostics, its tags (opening, separator, closing, or inline, with their
-catalog arguments), a game preview from `aeria_se::preview` evaluated with
+catalog arguments and, on an opening color tag, the color it sets), a game preview from `aeria_se::preview` evaluated with
 `values` (the renderer's chosen values of preview variables, numbers or
 texts by key such as `gn68`), and the variables the preview read with their
 defaults, meanings, and row names, all with UTF-16 offsets. It reads

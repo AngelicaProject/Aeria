@@ -19,6 +19,10 @@ import type { Translate } from "../i18n/translate";
 import { useI18n } from "../ui/i18n";
 import { usePreferences } from "../ui/preferences";
 import type { MacroViewState } from "../ui/useMacroView";
+import { learnTagColors, macroChips, type ChipContext } from "./macroChipsExtension";
+
+/** How the editor draws tags: as chips and styled text, or as the macro text itself. */
+export type MacroPresentation = "chips" | "code";
 
 type MacroEditorProps = {
   value: string;
@@ -34,6 +38,7 @@ type MacroEditorProps = {
   onNavigate?: (direction: 1 | -1) => void;
   /** The Rust description of the text, for hovers and error marks. */
   view?: MacroViewState | null;
+  presentation?: MacroPresentation;
 };
 
 const externalChange = Annotation.define<boolean>();
@@ -119,7 +124,28 @@ const macroHighlighter = ViewPlugin.fromClass(class {
   }
 }, { decorations: (plugin) => plugin.decorations });
 
-export function MacroEditor({ value, ariaLabel, onChange, readOnly = false, disabled = false, placeholder = "", className, onSave, onSaveAndNext, onApproveAndNext, onNavigate, view: macroView }: MacroEditorProps) {
+/** Enter adds a line break as the game writes it. */
+function insertLineBreak(view: EditorView): boolean {
+  if (view.state.readOnly) return false;
+  view.dispatch(view.state.replaceSelection("<br>"), { scrollIntoView: true, userEvent: "input" });
+  return true;
+}
+
+function chipContext(macroView: MacroViewState | null | undefined, t: Translate, version: number): ChipContext {
+  return {
+    t,
+    text: macroView?.text ?? null,
+    errors: macroView?.view.diagnostics.map((diagnostic) => [diagnostic.from, Math.max(diagnostic.to, diagnostic.from + 1)] as const) ?? [],
+    version,
+  };
+}
+
+function presentationExtensions(presentation: MacroPresentation, highlight: boolean, context: ChipContext): Extension {
+  if (presentation === "chips") return macroChips(context);
+  return highlight ? macroHighlighter : [];
+}
+
+export function MacroEditor({ value, ariaLabel, onChange, readOnly = false, disabled = false, placeholder = "", className, onSave, onSaveAndNext, onApproveAndNext, onNavigate, view: macroView, presentation = "code" }: MacroEditorProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
   const { t } = useI18n();
@@ -129,6 +155,7 @@ export function MacroEditor({ value, ariaLabel, onChange, readOnly = false, disa
   hoverSource.current = { view: macroView ?? null, t };
   const compartments = useRef({ editable: new Compartment(), placeholder: new Compartment(), label: new Compartment(), highlight: new Compartment(), specialChars: new Compartment() });
   const { preferences } = usePreferences();
+  const colorVersion = useRef(0);
 
   useEffect(() => {
     const host = hostRef.current;
@@ -140,6 +167,8 @@ export function MacroEditor({ value, ariaLabel, onChange, readOnly = false, disa
       { key: "Mod-Enter", preventDefault: true, run: () => { handlers.current.onSaveAndNext?.(); return Boolean(handlers.current.onSaveAndNext); } },
       { key: "Alt-ArrowDown", preventDefault: true, run: () => { handlers.current.onNavigate?.(1); return Boolean(handlers.current.onNavigate); } },
       { key: "Alt-ArrowUp", preventDefault: true, run: () => { handlers.current.onNavigate?.(-1); return Boolean(handlers.current.onNavigate); } },
+      { key: "Enter", preventDefault: true, run: insertLineBreak },
+      { key: "Shift-Enter", preventDefault: true, run: insertLineBreak },
     ]));
     const view = new EditorView({
       parent: host,
@@ -154,7 +183,7 @@ export function MacroEditor({ value, ariaLabel, onChange, readOnly = false, disa
           EditorView.lineWrapping,
           diagnosticsField,
           macroHover(hoverSource),
-          highlight.of(preferences.highlightMacros ? macroHighlighter : []),
+          highlight.of(presentationExtensions(presentation, preferences.highlightMacros, chipContext(macroView, t, colorVersion.current))),
           editable.of(editableExtensions(readOnly, disabled)),
           placeholderCompartment.of(placeholder ? placeholderExtension(placeholder) : []),
           label.of(EditorView.contentAttributes.of({ "aria-label": ariaLabel, spellcheck: "false" })),
@@ -198,11 +227,12 @@ export function MacroEditor({ value, ariaLabel, onChange, readOnly = false, disa
   }, [macroView]);
 
   useEffect(() => {
+    if (macroView && learnTagColors(macroView.text, macroView.view.tags)) colorVersion.current += 1;
     viewRef.current?.dispatch({ effects: [
-      compartments.current.highlight.reconfigure(preferences.highlightMacros ? macroHighlighter : []),
+      compartments.current.highlight.reconfigure(presentationExtensions(presentation, preferences.highlightMacros, chipContext(macroView, t, colorVersion.current))),
       compartments.current.specialChars.reconfigure(preferences.showControlCharacters ? highlightSpecialChars() : []),
     ] });
-  }, [preferences.highlightMacros, preferences.showControlCharacters]);
+  }, [macroView, presentation, preferences.highlightMacros, preferences.showControlCharacters, t]);
 
   useEffect(() => {
     viewRef.current?.dispatch({ effects: compartments.current.placeholder.reconfigure(placeholder ? placeholderExtension(placeholder) : []) });
@@ -212,7 +242,7 @@ export function MacroEditor({ value, ariaLabel, onChange, readOnly = false, disa
     viewRef.current?.dispatch({ effects: compartments.current.label.reconfigure(EditorView.contentAttributes.of({ "aria-label": ariaLabel, spellcheck: "false" })) });
   }, [ariaLabel]);
 
-  return <div ref={hostRef} className={`macro-editor${readOnly ? " is-readonly" : ""}${disabled ? " is-disabled" : ""}${className ? ` ${className}` : ""}`} />;
+  return <div ref={hostRef} className={`macro-editor is-${presentation}${readOnly ? " is-readonly" : ""}${disabled ? " is-disabled" : ""}${className ? ` ${className}` : ""}`} />;
 }
 
 function editableExtensions(readOnly: boolean, disabled: boolean): Extension {

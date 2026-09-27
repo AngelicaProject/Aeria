@@ -157,6 +157,45 @@
 }
 .cm-macro-name { color: var(--macro); font-weight: 600; }
 
+/* The chip view: tags as compact chips a translator reads past, formatting as
+   styled text between thin markers, and line breaks as line breaks. */
+.cm-chip {
+  display: inline-block;
+  margin: 0 2px;
+  padding: 0 5px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--macro) 14%, transparent);
+  color: var(--macro);
+  font-family: var(--font-ui);
+  font-size: 0.78em;
+  font-style: normal;
+  font-weight: 500;
+  line-height: 1.5;
+  vertical-align: 0.08em;
+  white-space: nowrap;
+  cursor: default;
+  user-select: none;
+}
+.cm-chip-condition { background: color-mix(in srgb, var(--warn) 16%, transparent); color: var(--warn); }
+.cm-chip-break,
+.cm-chip-space { padding: 0 3px; background: transparent; color: var(--fg-faint); }
+.cm-chip-unknown { background: color-mix(in srgb, var(--bad) 14%, transparent); color: var(--bad); font-family: var(--font-mono); }
+.cm-chip.has-image { padding: 0; background: transparent; line-height: 0; vertical-align: -0.28em; }
+.cm-chip.has-image img { height: 1.35em; }
+.cm-chip.is-error,
+.cm-chip-marker.is-error { box-shadow: 0 0 0 1px var(--bad); }
+.cm-chip-marker {
+  display: inline-block;
+  width: 3px;
+  height: 1.05em;
+  margin: 0 2px;
+  border-radius: 2px;
+  background: var(--marker-color, var(--fg-faint));
+  vertical-align: -0.15em;
+  opacity: 0.85;
+}
+.cm-chip-marker.is-close { opacity: 0.45; }
+
 /* Narrow documents: stack the note under source and target. */
 @container (max-width: 860px) {
   .editor-grid { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) auto; }
