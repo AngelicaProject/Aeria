@@ -138,6 +138,16 @@ export function macroView(text: string, values: Readonly<Record<string, PreviewV
   return call<MacroViewDto>("macro_view", { text, values });
 }
 
+/** A TrueType font of the game font's private use glyphs; empty without a project. */
+export function gameGlyphFont(): Promise<ArrayBuffer> {
+  return call<ArrayBuffer>("game_glyph_font");
+}
+
+/** An inline game icon: width and height as little-endian u16, then RGBA; empty when absent. */
+export function gameIcon(id: number): Promise<ArrayBuffer> {
+  return call<ArrayBuffer>("game_icon", { id });
+}
+
 export function translationProgress(): Promise<SheetProgressDto[]> {
   return call<SheetProgressDto[]>("translation_progress");
 }

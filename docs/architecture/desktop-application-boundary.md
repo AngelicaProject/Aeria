@@ -194,6 +194,13 @@ defaults, meanings, and row names, all with UTF-16 offsets. It reads
 `GameSource::row_ids`); without a project, references are shown as values.
 It changes nothing and needs no project.
 
+`game_glyph_font()` returns, as raw bytes, a TrueType font of the private use
+glyphs of the open project's game font (`GameSource::private_glyphs`, drawn
+by `aeria_fonts::bitmap_font`), and `game_icon(id)` an inline icon of
+`<icon>` macros (`GameSource::icon`): its width and height as little-endian
+16-bit numbers, then RGBA pixels. Both are empty without a project or when
+the game has nothing to show.
+
 Filesystem, game reading, SQLite, workspace loading, row paging, and ordinary
 translation mutations run inside Tauri blocking workers. The async command
 handlers do not hold `DesktopState` or the project mutex across an await;

@@ -223,8 +223,17 @@ an older text):
   preview cannot evaluate, such as a test of game data text, is switched by
   clicking through its branches. Switching strings keeps the previous
   view until the new one arrives, requests it without delay (only typing is
-  debounced), and shows strings seen before at once from a cache. Icons are
-  shown by number until the game's icon textures are read.
+  debounced), and shows strings seen before at once from a cache. `<icon>`
+  and `<icon2>` show the game's inline icons, as the game draws them with a
+  keyboard or an Xbox controller; an id the game has no icon for shows its
+  number.
+- **Game symbols.** Game text writes some symbols as private use characters
+  that only the game font draws, such as `U+E03C`, the high-quality mark.
+  When a project opens, the renderer loads a font of these glyphs made from
+  the project's game (`game_glyph_font`) and names it first in every font
+  stack, limited to the private use area, so the string list, the editors,
+  and the preview show the symbols instead of empty boxes, and every other
+  character keeps the interface fonts.
 
 Row context cells are available in a collapsible section under the source. **Copy source to target** replaces the target draft
 with the source macro text.

@@ -189,6 +189,8 @@ pub fn run() {
             set_translation_review_state,
             translation_progress,
             macros::macro_view,
+            macros::game_glyph_font,
+            macros::game_icon,
             git_overview,
             git_initialize,
             git_set_identity,

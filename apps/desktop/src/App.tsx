@@ -11,6 +11,7 @@ import { TitleTooltips } from "./ui/primitives/TitleTooltips";
 import { DetachedToolWindow, isDetachedPanel } from "./components/DetachedToolWindow";
 import { SourceUpdateDialog } from "./components/SourceUpdateDialog";
 import { UpdateNotice } from "./components/UpdateNotice";
+import { loadGameGlyphs } from "./ui/gameGlyphs";
 
 type StartupState = "starting" | "launcher";
 
@@ -28,6 +29,12 @@ function MainWindow() {
     setProjectWarning(result.warning);
     setSourceUpdateView(result.sourceUpdate ? { report: result.sourceUpdate } : null);
   }
+
+  // The game's symbols and icons follow the open project's game.
+  const gamePath = project?.gamePath ?? null;
+  useEffect(() => {
+    void loadGameGlyphs(gamePath);
+  }, [gamePath]);
 
   useEffect(() => {
     let active = true;

@@ -1,6 +1,7 @@
 import { useState, type CSSProperties, type ReactNode } from "react";
 import { choiceLabels, parameterCode, valueHint, valueLabel } from "../macroLabels";
 import type { PreviewPieceDto, PreviewStyleDto } from "../types";
+import { useGameIcon } from "../ui/gameGlyphs";
 import { useI18n } from "../ui/i18n";
 import { focusPreviewVariable } from "./PreviewVariables";
 
@@ -65,7 +66,7 @@ function Piece({ piece, path, clicked }: { piece: PreviewPieceDto; path: string;
       );
     }
     case "icon":
-      return <span className="preview-icon" title={t("preview.icon", { icon: piece.icon })}>{piece.icon}</span>;
+      return <GameIcon icon={piece.icon} />;
     case "opaque":
       return <span className="preview-opaque">{piece.spelling}</span>;
     case "ruby":
@@ -116,6 +117,16 @@ function Piece({ piece, path, clicked }: { piece: PreviewPieceDto; path: string;
       );
     }
   }
+}
+
+/** An inline game icon as the game draws it; its number until the image is read. */
+function GameIcon({ icon }: { icon: number }) {
+  const { t } = useI18n();
+  const url = useGameIcon(icon);
+  const title = t("preview.icon", { icon });
+  return url
+    ? <img className="preview-icon-image" src={url} alt={title} title={title} draggable={false} />
+    : <span className="preview-icon" title={title}>{icon}</span>;
 }
 
 /**

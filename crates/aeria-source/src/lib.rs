@@ -7,6 +7,7 @@
 
 #![forbid(unsafe_code)]
 
+mod glyphs;
 mod sheet;
 
 use std::collections::VecDeque;
@@ -21,6 +22,7 @@ use aeria_sqpack::{GameData, SqPackError};
 use thiserror::Error;
 
 pub use aeria_core::{GameVersion, GameVersionError, LayoutHash};
+pub use glyphs::{FontGlyph, FontGlyphs, Icon};
 pub use sheet::{
     MIN_KEYED_ROWS, RowKeys, SourceCell, SourceRow, SourceSheet, StringColumn, Unavailable,
     layout_hash,
@@ -142,6 +144,7 @@ pub struct GameSource {
     cache: Mutex<VecDeque<(String, Arc<SourceSheet>)>>,
     catalog: std::sync::OnceLock<Arc<Vec<SheetSummary>>>,
     ui_colors: std::sync::OnceLock<Vec<(u32, u32)>>,
+    icons: std::sync::OnceLock<Option<(Vec<u8>, Vec<u8>)>>,
 }
 
 impl fmt::Debug for GameSource {
@@ -181,6 +184,7 @@ impl GameSource {
             cache: Mutex::new(VecDeque::new()),
             catalog: std::sync::OnceLock::new(),
             ui_colors: std::sync::OnceLock::new(),
+            icons: std::sync::OnceLock::new(),
         })
     }
 
@@ -377,6 +381,47 @@ impl GameSource {
             SheetLookup::Present(sheet) => sheet.cell(row, 0, column).map(|cell| cell.text()),
             SheetLookup::Missing | SheetLookup::Unavailable(_) => None,
         })
+    }
+
+    /// The private use glyphs of the game font, such as `U+E03C`, the
+    /// high-quality mark: symbols game text writes as characters that only
+    /// the game font draws. `None` when the font cannot be read.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when a game file cannot be read.
+    pub fn private_glyphs(&self) -> Result<Option<FontGlyphs>, SourceError> {
+        let Some(fdt) = self.game.file(glyphs::GLYPH_FONT)? else {
+            return Ok(None);
+        };
+        let mut failure = None;
+        let result = glyphs::private_glyphs(&fdt, |page| {
+            match self.game.file(&format!("common/font/font{}.tex", page + 1)) {
+                Ok(file) => file,
+                Err(error) => {
+                    failure = Some(error);
+                    None
+                }
+            }
+        });
+        match failure {
+            Some(error) => Err(error.into()),
+            None => Ok(result),
+        }
+    }
+
+    /// The inline icon an `<icon>` macro shows, at double size, as the game
+    /// shows it with a keyboard or an Xbox controller. `None` for an id the
+    /// game has no icon for.
+    #[must_use]
+    pub fn icon(&self, id: u32) -> Option<Icon> {
+        let files = self.icons.get_or_init(|| {
+            let table = self.game.file(glyphs::ICON_TABLE).ok()??;
+            let texture = self.game.file(glyphs::ICON_TEXTURE).ok()??;
+            Some((table, texture))
+        });
+        let (table, texture) = files.as_ref()?;
+        glyphs::icon(table, texture, id)
     }
 
     /// The row ids of a sheet in order, without subrows repeated; empty

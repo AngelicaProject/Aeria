@@ -74,6 +74,17 @@ texts are equal are the same source for Aeria even when their bytes differ.
 Export and Harmonia compare bytes instead (see
 [`export.md`](./export.md)).
 
+## Game glyphs
+
+Besides sheets, `aeria-source` reads what the interface needs to show game
+text as the game does. `GameSource::private_glyphs` cuts the private use
+glyphs (such as `U+E03C`, the high-quality mark) out of the largest game
+font, `common/font/axis_36.fdt` and its `font*.tex` pages, as coverage with
+the font's metrics. `GameSource::icon` cuts an inline icon of `<icon>`
+macros out of `common/font/fonticon_xinput.tex` at double size, by the
+positions in `common/font/gfdata.gfd`, following its redirects. Textures are
+`SqPack` texture files, which `aeria-sqpack` reads like standard files.
+
 ## Translation permission
 
 A String cell may be translated only when its text is language-dependent.

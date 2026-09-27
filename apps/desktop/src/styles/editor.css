@@ -308,6 +308,8 @@
   font-size: 0.7em;
   vertical-align: middle;
 }
+/* Game icons are drawn at twice their size; show them about as tall as a line. */
+.preview-icon-image { height: 1.3em; margin: 0 1px; vertical-align: -0.28em; image-rendering: auto; }
 .preview-opaque { color: var(--fg-subtle); font-family: var(--font-mono); font-size: 0.85em; }
 .preview-choice {
   border-bottom: 1px dashed color-mix(in srgb, var(--fg) 35%, transparent);

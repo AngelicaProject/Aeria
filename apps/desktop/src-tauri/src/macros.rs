@@ -221,14 +221,82 @@ pub async fn macro_view(
         .into_iter()
         .map(|(key, value)| (key, value_of(value)))
         .collect();
+    run_blocking(move || Ok(view(&text, &GameData(project_source(&app)), &values))).await
+}
+
+/// The open project's game, when a project is open.
+fn project_source(app: &tauri::AppHandle) -> Option<Arc<GameSource>> {
+    let state = app.state::<DesktopState>();
+    let project = state.lock_project().ok()?;
+    project
+        .as_ref()
+        .map(aeria_workspace::ProjectSession::source_handle)
+}
+
+/// The family name the renderer registers the game glyph font under.
+const GLYPH_FONT_FAMILY: &str = "Aeria Game Glyphs";
+
+#[tauri::command(rename_all = "camelCase")]
+/// A TrueType font of the game font's private use glyphs, such as `U+E03C`
+/// (the high-quality mark), for showing game text in the interface. The
+/// renderer adds it after its own fonts, so it draws only these symbols.
+/// Empty without a project or when the game font cannot be read.
+///
+/// # Errors
+///
+/// Returns a typed command error when the desktop worker fails.
+pub async fn game_glyph_font(app: tauri::AppHandle) -> CommandResult<tauri::ipc::Response> {
     run_blocking(move || {
-        let state = app.state::<DesktopState>();
-        let source = state.lock_project().ok().and_then(|project| {
-            project
-                .as_ref()
-                .map(aeria_workspace::ProjectSession::source_handle)
-        });
-        Ok(view(&text, &GameData(source), &values))
+        let Some(source) = project_source(&app) else {
+            return Ok(tauri::ipc::Response::new(Vec::new()));
+        };
+        let Ok(Some(font)) = source.private_glyphs() else {
+            return Ok(tauri::ipc::Response::new(Vec::new()));
+        };
+        let glyphs: Vec<aeria_fonts::BitmapGlyph<'_>> = font
+            .glyphs
+            .iter()
+            .map(|glyph| aeria_fonts::BitmapGlyph {
+                character: glyph.character,
+                width: glyph.width,
+                height: glyph.height,
+                top: font.ascent - glyph.offset_y,
+                advance: glyph.advance,
+                alpha: &glyph.alpha,
+            })
+            .collect();
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let size = font.size.round().max(1.0) as u32;
+        Ok(tauri::ipc::Response::new(aeria_fonts::bitmap_font(
+            GLYPH_FONT_FAMILY,
+            size,
+            font.ascent,
+            font.line_height - font.ascent,
+            &glyphs,
+        )))
+    })
+    .await
+}
+
+#[tauri::command(rename_all = "camelCase")]
+/// The inline icon an `<icon>` macro shows: its width and height as
+/// little-endian 16-bit numbers, then RGBA pixels row by row. Empty without
+/// a project or for an id the game has no icon for.
+///
+/// # Errors
+///
+/// Returns a typed command error when the desktop worker fails.
+pub async fn game_icon(app: tauri::AppHandle, id: u32) -> CommandResult<tauri::ipc::Response> {
+    run_blocking(move || {
+        let Some(icon) = project_source(&app).and_then(|source| source.icon(id)) else {
+            return Ok(tauri::ipc::Response::new(Vec::new()));
+        };
+        let mut bytes = Vec::with_capacity(4 + icon.rgba.len());
+        for size in [icon.width, icon.height] {
+            bytes.extend_from_slice(&u16::try_from(size).unwrap_or(0).to_le_bytes());
+        }
+        bytes.extend(icon.rgba);
+        Ok(tauri::ipc::Response::new(bytes))
     })
     .await
 }
