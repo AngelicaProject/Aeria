@@ -2,13 +2,16 @@
 //!
 //! Every string must print as macro text that parses without diagnostics
 //! and encodes back to the same bytes, unless it holds bytes that are not a
-//! valid game string, which print as `<raw …>`. Run with a game folder:
+//! valid game string, which print as `<raw …>`. Every other string must be
+//! well-formed as Pack Format v1 defines it. The test also reports macro codes
+//! the catalog does not name, so a game patch that adds macros shows up in
+//! one run. Run with a game folder:
 //!
 //! ```text
 //! AERIA_GAME_PATH="C:/Program Files (x86)/.../FINAL FANTASY XIV Online" cargo test -p aeria-source --release --test game_corpus -- --ignored --nocapture
 //! ```
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use aeria_se::{bytes, codec, parse};
 use aeria_source::{GameSource, SheetLookup, SourceLanguage};
@@ -20,6 +23,9 @@ fn every_game_string_round_trips_through_macro_text() {
     let mut failures = Vec::new();
     let mut raw = 0_usize;
     let mut checked = 0_usize;
+    // Macros printed as `<code:XX …>`: code → (strings, first sheet).
+    let mut generic: BTreeMap<String, (usize, String)> = BTreeMap::new();
+    let mut raw_sheets = BTreeSet::new();
     for language in [
         SourceLanguage::English,
         SourceLanguage::Japanese,
@@ -45,8 +51,22 @@ fn every_game_string_round_trips_through_macro_text() {
                         && !document.diagnostics().is_empty();
                     if has_raw {
                         raw += 1;
+                        raw_sheets.insert(name.clone());
                         assert_eq!(bytes::encode(&bytes::decode(cell.bytes)), cell.bytes);
                         continue;
+                    }
+                    if !bytes::is_well_formed(cell.bytes) && failures.len() < 20 {
+                        failures.push(format!("{name}#{}: not well-formed: {text}", row.row_id));
+                    }
+                    let codes: BTreeSet<&str> = text
+                        .match_indices("<code:")
+                        .filter_map(|(index, _)| text.get(index + 6..index + 8))
+                        .collect();
+                    for code in codes {
+                        generic
+                            .entry(code.to_owned())
+                            .or_insert_with(|| (0, name.clone()))
+                            .0 += 1;
                     }
                     let round_trip = codec::encode(&text);
                     if round_trip.as_deref() != Ok(cell.bytes) && failures.len() < 20 {
@@ -56,6 +76,9 @@ fn every_game_string_round_trips_through_macro_text() {
             }
         }
     }
-    println!("checked {checked} distinct strings, {raw} with raw bytes");
+    println!("checked {checked} distinct strings, {raw} with raw bytes in {raw_sheets:?}");
+    for (code, (strings, sheet)) in &generic {
+        println!("macro code {code} without a catalog entry: {strings} strings, first in {sheet}");
+    }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }

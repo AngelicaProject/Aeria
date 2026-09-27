@@ -137,6 +137,96 @@ fn expression_length(bytes: &[u8]) -> Option<usize> {
 }
 
 // ---------------------------------------------------------------------------
+// Well-formed strings
+
+/// Deepest nesting of expressions in a well-formed string.
+pub const MAX_EXPRESSION_DEPTH: usize = 256;
+
+/// Whether `bytes` is a well-formed string, the structural rule a pack reader
+/// checks before it writes a string into the game (Pack Format v1). It needs
+/// no catalog: any macro code and any nullary value of the reserved ranges is
+/// accepted, so a reader keeps accepting strings with macros named after its
+/// release. Every string that [`decode`] reads without raw bytes is
+/// well-formed, unless it is empty or nests deeper than
+/// [`MAX_EXPRESSION_DEPTH`].
+#[must_use]
+pub fn is_well_formed(bytes: &[u8]) -> bool {
+    !bytes.is_empty() && well_formed_text(bytes, 0)
+}
+
+fn well_formed_text(mut bytes: &[u8], depth: usize) -> bool {
+    while let Some(&first) = bytes.first() {
+        let length = match first {
+            0 => return false,
+            STX => match well_formed_payload(bytes, depth) {
+                Some(length) => length,
+                None => return false,
+            },
+            _ => {
+                let end = bytes
+                    .iter()
+                    .position(|byte| matches!(*byte, STX | 0))
+                    .unwrap_or(bytes.len());
+                if std::str::from_utf8(&bytes[..end]).is_err() {
+                    return false;
+                }
+                end
+            }
+        };
+        bytes = &bytes[length..];
+    }
+    true
+}
+
+/// An integer in its canonical form: the short form below `0xCF`.
+fn canonical_uint(bytes: &[u8]) -> Option<(u32, usize)> {
+    decode_uint(bytes).filter(|&(value, length)| length == 1 || value >= 0xCF)
+}
+
+fn well_formed_payload(bytes: &[u8], depth: usize) -> Option<usize> {
+    let (length, length_bytes) = canonical_uint(bytes.get(2..)?)?;
+    let start = 2 + length_bytes;
+    let end = start.checked_add(usize::try_from(length).ok()?)?;
+    if bytes.get(end) != Some(&ETX) {
+        return None;
+    }
+    let mut body = &bytes[start..end];
+    while !body.is_empty() {
+        let used = well_formed_expr(body, depth + 1)?;
+        body = &body[used..];
+    }
+    Some(end + 1)
+}
+
+fn well_formed_expr(bytes: &[u8], depth: usize) -> Option<usize> {
+    if depth > MAX_EXPRESSION_DEPTH {
+        return None;
+    }
+    let kind = *bytes.first()?;
+    if decode_uint(bytes).is_some() {
+        return canonical_uint(bytes).map(|(_, length)| length);
+    }
+    if kind == STRING_EXPRESSION {
+        let (length, length_bytes) = canonical_uint(&bytes[1..])?;
+        let total = (1 + length_bytes).checked_add(usize::try_from(length).ok()?)?;
+        let text = bytes.get(1 + length_bytes..total)?;
+        return well_formed_text(text, depth).then_some(total);
+    }
+    if is_nullary(kind) {
+        return Some(1);
+    }
+    if is_param(kind) {
+        return Some(1 + well_formed_expr(&bytes[1..], depth + 1)?);
+    }
+    if is_compare(kind) {
+        let first = well_formed_expr(&bytes[1..], depth + 1)?;
+        let second = well_formed_expr(&bytes[1 + first..], depth + 1)?;
+        return Some(1 + first + second);
+    }
+    None
+}
+
+// ---------------------------------------------------------------------------
 // Decoding
 
 /// Reads bytes into nodes. Every input decodes, and [`encode`] writes the

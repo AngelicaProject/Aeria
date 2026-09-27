@@ -113,6 +113,22 @@ and requires a workspace format change. Naming a previously unnamed code
 changes how its strings print, and a source update then reports those units
 as changed.
 
+### Macros added by the game
+
+A game patch can add macro codes or change the arguments of a known one. The
+byte layer needs no catalog, so such a macro still reads, prints generically
+as `<code:XX …>`, encodes back to the same bytes, and is opaque to the
+editor, the preview, and the translation agent. Strings that contain it stay
+translatable. A new kind of expression inside a macro is different: its bytes
+stay raw, and those strings cannot be translated until the byte model learns
+it.
+
+The game corpus test lists the codes the catalog does not name (see
+[`../development/testing.md`](../development/testing.md#game-strings)).
+Naming one is a catalog entry and a golden vector. Pack readers check only the
+catalog-free [well-formed rule](../formats/pack-v1.md#well-formed-strings), so
+a new macro never needs a Harmonia release.
+
 ### Parsing and diagnostics
 
 `parse` never fails. It returns the source, a syntax tree, and diagnostics

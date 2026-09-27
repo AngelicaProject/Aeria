@@ -45,12 +45,19 @@ every form and every catalog entry
 (`crates/aeria-se/tests/fixtures/macro_text.golden.txt`). A new catalog
 entry needs a vector; the test fails otherwise.
 
+The well-formed string rule of the pack format has its own vectors
+(`crates/aeria-se/tests/fixtures/well_formed.vectors.txt`): every golden
+vector must appear there as accepted, and Harmonia runs a copy of the file
+against its pack reader. Change both copies in the same change.
+
 Changes to the byte model, the printer, or the parser are also checked
 against a real game with the ignored test
 `crates/aeria-source/tests/game_corpus.rs`: every distinct string in all four
-source languages must print as macro text that encodes back to its bytes.
-Run it manually with `AERIA_GAME_PATH` set; it is not part of CI, which has
-no game installation.
+source languages must print as macro text that encodes back to its bytes, and
+every string without raw bytes must be well-formed. The test prints the macro
+codes the catalog does not name, so run it after a game patch to see which
+new macros need a catalog entry. Run it manually with `AERIA_GAME_PATH` set;
+it is not part of CI, which has no game installation.
 
 ## Harmonia pack interop
 

@@ -396,6 +396,9 @@ fn canonical_cells<'a>(
         if cell.text.contains(&0) {
             return Err(cell_error("encoded string contains a NUL byte"));
         }
+        if !aeria_se::bytes::is_well_formed(&cell.text) {
+            return Err(cell_error("encoded string is not a well-formed SeString"));
+        }
         if manifest.content_policy == ContentPolicy::Reviewed && cell.state != CellState::Reviewed {
             return Err(cell_error("unreviewed cell in a reviewed-only pack"));
         }

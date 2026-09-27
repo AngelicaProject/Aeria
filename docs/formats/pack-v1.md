@@ -202,6 +202,34 @@ The bytes are produced by encoding the validated target macro text with
 [`../architecture/export.md`](../architecture/export.md)). Harmonia writes
 them into the game row buffer unchanged.
 
+### Well-formed strings
+
+Every stored string is well-formed. The rule is structural and needs no macro
+catalog, so a reader accepts macros named after its release:
+
+- The string is not empty. It is a sequence of text runs and payloads.
+- A text run is bytes other than `0x00` and `0x02` (STX) and is valid UTF-8.
+- A payload is `0x02`, a code byte (any value), an integer `length`, `length`
+  body bytes, and `0x03` (ETX). The body is a sequence of expressions that
+  covers it exactly.
+- An integer is canonical: one byte `value + 1` for values below `0xCF`;
+  otherwise a marker `0xF0..0xFE` whose low four bits plus one flag, from the
+  highest, which of the four big-endian value bytes follow. Present value bytes
+  are never zero, and the flagged form is used only for values `>= 0xCF`.
+- An expression is an integer; a string (`0xFF`, an integer length, and that
+  many bytes forming a string by these rules, which may be empty); a nullary
+  value (`0xD0..0xDF` or `0xEC`); a parameter (`0xE8..0xEB` and one operand
+  expression); or a comparison (`0xE0..0xE5` and two operand expressions). Any
+  other byte is not an expression.
+- Expressions nest at most 256 deep: a payload's expressions are at depth 1,
+  and a parameter or comparison operand, or an expression inside a payload of a
+  string expression, is one deeper.
+
+`aeria_se::bytes::is_well_formed` implements the rule, and the export writer
+refuses a string that breaks it. The vectors in
+`crates/aeria-se/tests/fixtures/well_formed.vectors.txt` pin the answers;
+Harmonia's tests run a copy of the same file.
+
 ## `FONTS` section
 
 Minor 1 adds an optional section with glyphs for game fonts that lack
@@ -389,8 +417,8 @@ Before a pack is installed or loaded, the reader verifies:
 4. manifest schema and that `counts` match the sections;
 5. when present, every `FONTS` rule above;
 6. every ordering, uniqueness, range, and cross-reference rule above;
-7. every string range, its terminator, and that it parses as a well-formed
-   SeString.
+7. every string range, its terminator, and that the string is
+   [well-formed](#well-formed-strings).
 
 Any failure rejects the whole pack.
 
