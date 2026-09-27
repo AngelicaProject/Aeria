@@ -60,6 +60,10 @@ Each release carries:
 | `aeria-check-<version>-x86_64-unknown-linux-gnu.tar.gz` | The `aeria-check` binary for the [merge check CI](../architecture/git.md#merge-check-ci) of translation repositories (stable releases) |
 | `SHA256SUMS.txt` | SHA-256 of the installer, the portable archive, and the `aeria-check` archive |
 
+The [website](./website.md) links the installer and portable archive of the
+stable and nightly releases directly, matching them by these names, and is
+redeployed after every release.
+
 The `aeria-check` archive is built on `ubuntu-22.04` before the desktop build,
 which embeds its URL and SHA-256 for the merge check workflow it offers. Such
 a workflow pins the archive, so a published archive never changes. Nightly

@@ -31,6 +31,7 @@ Then load the canonical project documentation for the affected area:
 - Dependencies and toolchains: `docs/development/dependencies.md`
 - Tests and fixtures: `docs/development/testing.md`
 - Releases and packaging: `docs/development/releases.md`
+- Project website (GitHub Pages): `docs/development/website.md`
 - Contribution workflow: `docs/development/README.md`
 
 Start from `docs/README.md` when the correct document is not obvious.

@@ -60,6 +60,13 @@ See [`releases.md`](./releases.md#release-workflow).
 `pnpm test` also runs `tools/release/version.test.mjs`, which covers the
 nightly version rule and the updater feed format.
 
+## Website
+
+`.github/workflows/pages.yml` deploys the static landing page in `site/` to
+GitHub Pages after pushes to `main` that change it and after every successful
+release, so its download links name the current builds. See
+[`website.md`](./website.md).
+
 ## Local validation
 
 During implementation, run focused checks for fast feedback. Before requesting review, run the broader checks required by the affected area. Use locked/frozen dependency resolution where CI does.
