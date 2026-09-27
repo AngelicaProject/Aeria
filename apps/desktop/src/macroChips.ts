@@ -6,28 +6,29 @@ import type { MacroConditionDto, MacroOperandDto } from "./types";
 /**
  * How the text editor shows macro text to a translator: tags become compact
  * chips, conditions read in words, formatting pairs disappear into styled
- * text with thin markers at their edges, `<br>` and the branches of
- * complex conditions start new lines, and `{240}` reads as the value it
- * is. The document stays the exact macro text; this module only decides
- * how each part is drawn. Rust remains the authority for parsing and
- * validation.
+ * text with thin markers at their edges, `<br>` starts a new line, and
+ * `{240}` reads as the value it is. A condition whose branches hold no text
+ * to translate, only values such as `{10}` and `{5}`, is one chip that
+ * lists its values. Lines start only where the text breaks them, so what
+ * reads as one line is one line. The document stays the exact macro text;
+ * this module only decides how each part is drawn. Rust remains the
+ * authority for parsing and validation.
  */
 
-export type ChipTone = "value" | "number" | "condition" | "break" | "icon" | "space" | "unknown";
+export type ChipTone = "value" | "number" | "choice" | "condition" | "break" | "icon" | "space" | "unknown";
 
 export type ChipSpec =
-  /** A tag or `{value}` drawn as one chip; `insert` is what picking it adds to a translation. */
-  | { kind: "chip"; from: number; to: number; label: string; tone: ChipTone; icon?: number; insert: string }
+  /**
+   * A tag, a `{value}`, or a condition of values drawn as one chip; `insert`
+   * is what picking it adds to a translation, and `title` explains it.
+   */
+  | { kind: "chip"; from: number; to: number; label: string; tone: ChipTone; icon?: number; insert: string; title?: string }
   /** Adjacent opening or closing formatting tags, drawn as one thin marker; picking it wraps text in the pair. */
   | { kind: "marker"; from: number; to: number; side: "open" | "close"; color: string | null; wrap: readonly [string, string] | null }
   /** Text inside formatting pairs, drawn with their style. */
   | { kind: "style"; from: number; to: number; color: string | null; italic: boolean; bold: boolean }
-  /**
-   * A new visual line at `at`, indented by `indent` levels. `assoc` says on
-   * which side of the break a cursor at `at` belongs: -1 at the end of the
-   * line before it, 1 at the start of the line after it.
-   */
-  | { kind: "break"; at: number; indent: number; assoc: -1 | 1 };
+  /** A new visual line at `at`, after a `<br>`; a cursor at `at` belongs on it. */
+  | { kind: "break"; at: number };
 
 /** What chips read from the latest Rust views of macro text. */
 export type ChipLookup = {
@@ -184,25 +185,18 @@ function chipOf(tag: Tag, t: Translate): { label: string; tone: ChipTone; icon?:
   return { label: tag.name, tone: "unknown" };
 }
 
-type Block = { open: number; close: number | null; complex: boolean; parent: number | null };
+type Block = { open: number; close: number | null };
 
-/**
- * Pairs condition blocks. A block is complex when it holds another block or
- * a line break; its tags then start lines, indented by their nesting.
- */
+/** Pairs each condition block's opening tag with its separators and closing tag. */
 function blocksOf(items: readonly Item[]): { blocks: Block[]; blockOf: Map<number, number> } {
   const blocks: Block[] = [];
   const blockOf = new Map<number, number>();
   const stack: number[] = [];
-  const markComplex = () => {
-    for (const index of stack) blocks[index]!.complex = true;
-  };
   items.forEach((item, index) => {
     if (item.type !== "tag") return;
     const { tag } = item;
     if (BLOCKS.has(tag.name) && !tag.closing) {
-      markComplex();
-      blocks.push({ open: index, close: null, complex: false, parent: stack.at(-1) ?? null });
+      blocks.push({ open: index, close: null });
       stack.push(blocks.length - 1);
       blockOf.set(index, blocks.length - 1);
     } else if (SEPARATORS.has(tag.name) && !tag.closing && stack.length > 0) {
@@ -211,20 +205,87 @@ function blocksOf(items: readonly Item[]): { blocks: Block[]; blockOf: Map<numbe
       const block = stack.pop()!;
       blocks[block]!.close = index;
       blockOf.set(index, block);
-    } else if (tag.name === "br") {
-      markComplex();
     }
   });
   return { blocks, blockOf };
 }
 
-/** How many complex blocks enclose `block`, not counting itself. */
-function depthOf(blocks: readonly Block[], block: number | null): number {
-  let depth = 0;
-  for (let current = block === null ? null : blocks[block]!.parent; current !== null; current = blocks[current]!.parent) {
-    if (blocks[current]!.complex) depth += 1;
+const LETTER = /\p{L}/u;
+
+/**
+ * Whether the block from item `open` to item `close` holds no text to
+ * translate: only condition tags, `{value}` branches, and text without
+ * letters, such as digits or spaces.
+ */
+function holdsOnlyValues(text: string, items: readonly Item[], open: number, close: number): boolean {
+  let cursor = (items[open] as Extract<Item, { type: "tag" }>).tag.to;
+  for (let index = open + 1; index <= close; index += 1) {
+    const item = items[index]!;
+    const from = item.type === "brace" ? item.from : item.tag.from;
+    if (LETTER.test(text.slice(cursor, from))) return false;
+    if (item.type === "tag" && !BLOCKS.has(item.tag.name) && !SEPARATORS.has(item.tag.name)) return false;
+    cursor = item.type === "brace" ? item.to : item.tag.to;
   }
-  return depth;
+  return true;
+}
+
+/**
+ * The branches of a condition of values in words, such as "class = monk →
+ * (level ≥ 72 → 10, otherwise 5), otherwise 5", and its distinct values.
+ */
+function describeValues(
+  text: string,
+  items: readonly Item[],
+  open: number,
+  close: number,
+  lookup: ChipLookup,
+  t: Translate,
+): { summary: string; values: string[] } {
+  const values: string[] = [];
+  let index = open;
+  const branch = (): string => {
+    const parts: string[] = [];
+    let cursor = (items[index] as Extract<Item, { type: "tag" }>).tag.to;
+    index += 1;
+    while (index <= close) {
+      const item = items[index]!;
+      const from = item.type === "brace" ? item.from : item.tag.from;
+      const written = text.slice(cursor, from).trim();
+      if (written) {
+        parts.push(written);
+        if (!values.includes(written)) values.push(written);
+      }
+      if (item.type === "brace") {
+        parts.push(item.inner);
+        if (!values.includes(item.inner)) values.push(item.inner);
+        cursor = item.to;
+        index += 1;
+      } else if (BLOCKS.has(item.tag.name) && !item.tag.closing) {
+        parts.push(`(${block()})`);
+        cursor = (items[index - 1] as Extract<Item, { type: "tag" }>).tag.to;
+      } else {
+        break;
+      }
+    }
+    return parts.join(" ") || "∅";
+  };
+  const block = (): string => {
+    const tag = (items[index] as Extract<Item, { type: "tag" }>).tag;
+    const condition = lookup.conditionOf(tag.text);
+    const subject = condition ? conditionLabel(condition, t) : tag.args.join(" ") || blockLabel(tag, lookup, t);
+    const branches: string[] = [];
+    for (;;) {
+      branches.push(branch());
+      const current = items[index];
+      if (!current || current.type !== "tag" || current.tag.closing) break;
+    }
+    index += 1;
+    if (tag.name === "switch") return `${subject}: ${branches.map((value, position) => `${position + 1} → ${value}`).join(", ")}`;
+    if (tag.name === "if") return `${subject} → ${branches[0] ?? "∅"}${branches.length > 1 ? `, ${t("chip.else")} ${branches.slice(1).join(", ")}` : ""}`;
+    return `${blockLabel(tag, lookup, t)}: ${branches.join(" / ")}`;
+  };
+  const summary = block();
+  return { summary, values };
 }
 
 /** Closing tags for a group of opening formatting tags, innermost first. */
@@ -239,8 +300,6 @@ export function chipSpecs(text: string, lookup: ChipLookup, t: Translate): ChipS
   const specs: ChipSpec[] = [];
   const open: { name: string; color: string | null }[] = [];
   const cases = new Map<number, number>();
-  /** Complex blocks enclosing the current position. */
-  const inside: number[] = [];
   let cursor = 0;
   const style = (from: number, to: number) => {
     if (from >= to || open.length === 0) return;
@@ -249,43 +308,37 @@ export function chipSpecs(text: string, lookup: ChipLookup, t: Translate): ChipS
     const bold = open.some((entry) => entry.name === "b");
     if (color || italic || bold) specs.push({ kind: "style", from, to, color, italic, bold });
   };
-  // A break at the very end only after `<br>`: the cursor after a new line
-  // break needs the line it starts.
-  const lineBreak = (at: number, indent: number, assoc: -1 | 1, atEnd = false) => {
-    if (at <= 0 || at > text.length || (at === text.length && !atEnd)) return;
-    const previous = specs.at(-1);
-    if (previous?.kind === "break" && previous.at === at) {
-      previous.indent = indent;
-      previous.assoc = assoc;
-      return;
-    }
-    specs.push({ kind: "break", at, indent, assoc });
-  };
 
-  items.forEach((item, index) => {
+  for (let index = 0; index < items.length; index += 1) {
+    const item = items[index]!;
     style(cursor, item.type === "brace" ? item.from : item.tag.from);
     if (item.type === "brace") {
       specs.push({ kind: "chip", from: item.from, to: item.to, label: item.inner, tone: "number", insert: text.slice(item.from, item.to) });
       cursor = item.to;
-      return;
+      continue;
     }
     const { tag } = item;
     cursor = tag.to;
     const blockIndex = blockOf.get(index);
     if (blockIndex !== undefined) {
       const block = blocks[blockIndex]!;
-      const depth = depthOf(blocks, blockIndex);
-      if (block.complex) lineBreak(tag.from, depth, -1);
+      const close = block.close === null ? null : items[block.close];
+      if (!tag.closing && BLOCKS.has(tag.name) && close?.type === "tag" && holdsOnlyValues(text, items, index, block.close!)) {
+        // A condition of values: one chip, its branches in the title.
+        const { summary, values } = describeValues(text, items, index, block.close!, lookup, t);
+        const insert = text.slice(tag.from, close.tag.to);
+        specs.push({ kind: "chip", from: tag.from, to: close.tag.to, label: values.join(" / ") || "∅", tone: "choice", insert, title: summary });
+        cursor = close.tag.to;
+        index = block.close!;
+        continue;
+      }
       let label: string;
       let insert = tag.text;
       if (!tag.closing && BLOCKS.has(tag.name)) {
         label = blockLabel(tag, lookup, t);
-        const close = block.close === null ? null : items[block.close];
         if (close?.type === "tag") insert = text.slice(tag.from, close.tag.to);
-        if (block.complex) inside.push(blockIndex);
       } else if (tag.closing) {
         label = t("chip.end");
-        if (inside.at(-1) === blockIndex) inside.pop();
       } else if (tag.name === "case") {
         const count = (cases.get(blockIndex) ?? 0) + 1;
         cases.set(blockIndex, count);
@@ -294,17 +347,13 @@ export function chipSpecs(text: string, lookup: ChipLookup, t: Translate): ChipS
         label = t(`chip.${tag.name}` as "chip.else");
       }
       specs.push({ kind: "chip", from: tag.from, to: tag.to, label, tone: "condition", insert });
-      if (tag.closing && block.complex) {
-        const next = items[index + 1];
-        const nextIsBreak = next?.type === "tag" && next.tag.name === "br" && next.tag.from === tag.to;
-        if (!nextIsBreak) lineBreak(tag.to, depth, 1);
-      }
-      return;
+      continue;
     }
     if (!FORMATTING.has(tag.name)) {
       specs.push({ kind: "chip", from: tag.from, to: tag.to, ...chipOf(tag, t), insert: tag.text });
-      if (tag.name === "br") lineBreak(tag.to, inside.length, 1, true);
-      return;
+      // The cursor after a line break needs its line, even at the end of the text.
+      if (tag.name === "br") specs.push({ kind: "break", at: tag.to });
+      continue;
     }
     const side = tag.closing ? "close" : "open";
     const color = !tag.closing && FOREGROUND.has(tag.name) ? lookup.colorOf(tag.text) : null;
@@ -322,7 +371,7 @@ export function chipSpecs(text: string, lookup: ChipLookup, t: Translate): ChipS
     } else {
       specs.push({ kind: "marker", from: tag.from, to: tag.to, side, color, wrap: null });
     }
-  });
+  }
   style(cursor, text.length);
 
   // Pair markers so picking either edge wraps text in the whole pair.

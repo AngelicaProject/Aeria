@@ -197,8 +197,10 @@
 .cm-chip-marker.is-close { opacity: 0.45; }
 /* A value branch such as {240}: the value itself, marked as not translatable. */
 .cm-chip-number { margin: 0 1px; padding: 0 2px; background: transparent; color: var(--macro); font-family: inherit; font-size: 1em; font-weight: 600; }
-/* A line the chip view starts: after <br> and around the branches of complex conditions. */
-.cm-chip-indent { display: inline-block; height: 1em; vertical-align: text-bottom; }
+/* The start of the line after a <br>, a box for the cursor at the end of the text. */
+.cm-chip-line-start { display: inline-block; width: 0; height: 1em; vertical-align: text-bottom; }
+/* A condition whose branches are values only, such as 10 / 5. */
+.cm-chip-choice { background: transparent; color: var(--macro); font-family: inherit; font-size: 1em; font-weight: 600; box-shadow: inset 0 -1px 0 color-mix(in srgb, var(--macro) 60%, transparent); border-radius: 0; padding: 0 2px; cursor: help; }
 /* Source chips can be picked into the translation. */
 .macro-editor .is-pickable .cm-chip,
 .macro-editor .is-pickable .cm-chip-marker { cursor: copy; }

@@ -186,12 +186,13 @@ validation, and macro text is never rewritten by the presentation.
   class = monk` for `<if ($gn68 == 20)>` with the class named from the
   game's `ClassJob` sheet, `if level ≥ 94`, `if player is female`; other
   parameters keep their code. `<else>` is `otherwise`, `<case>` is
-  `case 1`, `case 2`, and a closing tag is `end`. A condition that holds
-  another condition or a line break is laid out in lines: its opening tag,
-  each branch, and its end start new lines, indented by the complex
-  conditions around them, and the text after it continues on a new line;
-  a simple condition stays inline. A value branch such as `{240}` reads as
-  the value, marked as not translatable. Formatting pairs vanish
+  `case 1`, `case 2`, and a closing tag is `end`. A value branch such as
+  `{240}` reads as the value, marked as not translatable. A condition whose
+  branches hold no text to translate, only values and text without letters,
+  is a single chip listing its distinct values, such as `10 / 5`; its
+  tooltip gives the branches in words (`class = monk → (level ≥ 72 → 10,
+  otherwise 5), otherwise 5`), and Code mode edits them. Lines start only
+  where the text has `<br>`, so what reads as one line is one line. Formatting pairs vanish
   into the text they format: text inside `<ui-color 504>…</ui-color>` is
   drawn in that color, italics and bold as such, and a color with its
   outline (`<ui-color 504><ui-edge-color 505>`) is one thin marker in the

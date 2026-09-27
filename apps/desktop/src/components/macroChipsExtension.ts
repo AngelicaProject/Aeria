@@ -41,18 +41,19 @@ function cssColor(rgba: string): string {
 }
 
 class ChipWidget extends WidgetType {
-  constructor(readonly label: string, readonly tone: ChipTone, readonly icon: number | undefined, readonly error: boolean) {
+  constructor(readonly label: string, readonly tone: ChipTone, readonly icon: number | undefined, readonly error: boolean, readonly title: string | undefined) {
     super();
   }
 
   override eq(other: ChipWidget): boolean {
-    return other.label === this.label && other.tone === this.tone && other.icon === this.icon && other.error === this.error;
+    return other.label === this.label && other.tone === this.tone && other.icon === this.icon && other.error === this.error && other.title === this.title;
   }
 
   toDOM(): HTMLElement {
     const chip = document.createElement("span");
     chip.className = `cm-chip cm-chip-${this.tone}${this.error ? " is-error" : ""}`;
     chip.textContent = this.label;
+    if (this.title) chip.title = this.title;
     if (this.icon !== undefined) {
       const icon = this.icon;
       void loadIcon(icon).then((url) => {
@@ -73,25 +74,20 @@ class ChipWidget extends WidgetType {
   }
 }
 
-/** Ends a visual line and indents the next one by `indent` levels. */
+/** Ends a visual line after a `<br>` chip. */
 class BreakWidget extends WidgetType {
-  constructor(readonly indent: number) {
-    super();
-  }
-
-  override eq(other: BreakWidget): boolean {
-    return other.indent === this.indent;
+  override eq(): boolean {
+    return true;
   }
 
   toDOM(): HTMLElement {
     const wrapper = document.createElement("span");
     wrapper.className = "cm-chip-break-line";
-    // The indent is there even when empty: it gives the new line a box, so
-    // a cursor after the break is drawn on it at the end of the text too.
-    const indent = document.createElement("span");
-    indent.className = "cm-chip-indent";
-    indent.style.width = `${this.indent * 1.5}em`;
-    wrapper.append(document.createElement("br"), indent);
+    // An empty box on the new line, so a cursor after the break is drawn
+    // there even at the end of the text.
+    const line = document.createElement("span");
+    line.className = "cm-chip-line-start";
+    wrapper.append(document.createElement("br"), line);
     return wrapper;
   }
 }
@@ -135,8 +131,8 @@ type Chips = {
   decorations: DecorationSet;
   atoms: DecorationSet;
   specs: readonly ChipSpec[];
-  /** The side a cursor belongs on at each line break position. */
-  breaks: ReadonlyMap<number, -1 | 1>;
+  /** Positions right after a line break, where a cursor belongs on the new line. */
+  breaks: ReadonlySet<number>;
 };
 
 const lookup = {
@@ -149,7 +145,7 @@ function build(doc: string, context: ChipContext): Chips {
   const hasError = (from: number, to: number) => errors.some(([start, end]) => start < to && end > from);
   const ranges: Range<Decoration>[] = [];
   const atoms: Range<Decoration>[] = [];
-  const breaks = new Map<number, -1 | 1>();
+  const breaks = new Set<number>();
   const specs = chipSpecs(doc, lookup, context.t);
   for (const spec of specs) {
     switch (spec.kind) {
@@ -163,12 +159,12 @@ function build(doc: string, context: ChipContext): Chips {
         break;
       }
       case "break":
-        ranges.push(Decoration.widget({ widget: new BreakWidget(spec.indent), side: -1 }).range(spec.at));
-        breaks.set(spec.at, spec.assoc);
+        ranges.push(Decoration.widget({ widget: new BreakWidget(), side: -1 }).range(spec.at));
+        breaks.add(spec.at);
         break;
       default: {
         const widget = spec.kind === "chip"
-          ? new ChipWidget(spec.label, spec.tone, spec.icon, hasError(spec.from, spec.to))
+          ? new ChipWidget(spec.label, spec.tone, spec.icon, hasError(spec.from, spec.to), spec.title)
           : new MarkerWidget(spec.side, spec.color, hasError(spec.from, spec.to));
         const range = Decoration.replace({ widget }).range(spec.from, spec.to);
         ranges.push(range);
@@ -190,19 +186,16 @@ export function macroChips(context: ChipContext): Extension {
     ],
   });
 
-  // A cursor at a line break sits where typing puts text: after a `<br>` or
-  // a closed block on the next line, before a condition tag on the line
-  // above.
+  // A cursor right after a `<br>` sits on the new line, where typing puts text.
   const cursorAtBreaks = EditorState.transactionFilter.of((transaction) => {
     const selection = transaction.selection;
     if (!selection) return transaction;
     const breaks = transaction.state.field(field).breaks;
     let changed = false;
     const ranges = selection.ranges.map((range) => {
-      const assoc = range.empty ? breaks.get(range.head) : undefined;
-      if (assoc === undefined || range.assoc === assoc) return range;
+      if (!range.empty || range.assoc === 1 || !breaks.has(range.head)) return range;
       changed = true;
-      return EditorSelection.cursor(range.head, assoc);
+      return EditorSelection.cursor(range.head, 1);
     });
     if (!changed) return transaction;
     return [transaction, { selection: EditorSelection.create(ranges, selection.mainIndex), sequential: true }];
