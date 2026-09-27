@@ -116,6 +116,15 @@ impl SheetDialogue {
         lines
     }
 
+    /// Up to `count` spoken lines after line `index`, in order.
+    fn spoken_after(&self, index: usize, count: usize) -> Vec<&DialogueLine> {
+        self.lines[index + 1..]
+            .iter()
+            .filter(|line| line.is_spoken())
+            .take(count)
+            .collect()
+    }
+
     fn entries(&self, role: &LineRole) -> impl Iterator<Item = &DialogueLine> {
         self.lines.iter().filter(move |line| line.role == *role)
     }
@@ -632,11 +641,15 @@ pub(crate) fn propose_voice_profile(
         .map(|profile| (profile.speakers.clone(), profile.profile.clone()))
         .collect();
     let before = reader.project_file(ProjectFile::Voices)?;
-    let after = change_voices(before.as_deref(), &set, &args.remove).map_err(ToolError::new)?;
+    let pending = writer.pending_file_change(ProjectFile::Voices)?;
+    let base = pending
+        .as_ref()
+        .map_or(before.as_deref(), |pending| Some(pending.after.as_str()));
+    let after = change_voices(base, &set, &args.remove).map_err(ToolError::new)?;
     if after.len() as u64 > ProjectFile::Voices.max_bytes() {
         return Err(ToolError::new("the voice profiles would be too long"));
     }
-    if before.as_deref() == Some(after.as_str()) {
+    if before.as_deref() == Some(after.as_str()) || base == Some(after.as_str()) {
         return Err(ToolError::new("aeria-voices.md would not change"));
     }
     let file = ProjectFile::Voices.file_name();
@@ -645,13 +658,15 @@ pub(crate) fn propose_voice_profile(
             file: ProjectFile::Voices,
             before,
             after,
+            replaces: pending.as_ref().map(|pending| pending.proposal_id.clone()),
         })? {
             ProposalOutcome::Pending { proposal_id } => json!({
                 "status": "awaitingApproval",
                 "proposalId": proposal_id,
                 "file": file,
                 "profiles": set.len(),
-                "note": "Wait until the user applies this change before proposing more voice profiles; a later change made before then would conflict with it.",
+                "replaced": pending.map(|pending| pending.proposal_id),
+                "note": "You may propose more changes to this file before the user decides: a new change starts from this one, includes it, and replaces it, so the user approves a single change.",
             }),
             ProposalOutcome::Applied => json!({ "status": "applied", "file": file }),
             ProposalOutcome::Conflict { message } | ProposalOutcome::Failed { message } => {
@@ -663,9 +678,10 @@ pub(crate) fn propose_voice_profile(
 
 /// A plain-text summary of the scene before some lines of a dialogue
 /// sheet, for requests without tools: the quest name, journal, and
-/// objectives, then up to `before` spoken lines before the first of `rows`
-/// with their speakers and current translations, then the voice profiles
-/// of the speakers of those lines and of `rows`.
+/// objectives, then the spoken lines around `rows` with their speakers and
+/// current translations: up to `before` lines before the first, the lines
+/// between them that are not in `rows`, and up to `after` lines after the
+/// last; then the voice profiles of the speakers of those lines and of `rows`.
 ///
 /// # Errors
 ///
@@ -677,6 +693,7 @@ pub fn scene_brief(
     dialogue: &SheetDialogue,
     rows: &[(u32, u16)],
     before: usize,
+    after: usize,
 ) -> Result<String, ToolError> {
     let mut brief = String::new();
     match (dialogue.kind, dialogue.quest) {
@@ -713,15 +730,28 @@ pub fn scene_brief(
         .iter()
         .filter_map(|&(row, subrow)| dialogue.speaker(row, subrow))
         .collect();
-    let first = rows
+    let positions: Vec<usize> = rows
         .iter()
         .filter_map(|&(row, subrow)| dialogue.position(row, subrow))
-        .min();
-    if let Some(first) = first {
-        let earlier = dialogue.spoken_before(first, before);
-        if !earlier.is_empty() {
-            let _ = writeln!(brief, "Lines before, in sheet order:");
-            for line in earlier {
+        .collect();
+    if let (Some(&first), Some(&last)) = (positions.iter().min(), positions.iter().max()) {
+        let among: Vec<&DialogueLine> = dialogue.lines[first..=last]
+            .iter()
+            .enumerate()
+            .filter(|(offset, line)| line.is_spoken() && !positions.contains(&(first + offset)))
+            .map(|(_, line)| line)
+            .take(MAX_NEIGHBOUR_LINES)
+            .collect();
+        for (title, lines) in [
+            ("Lines before", dialogue.spoken_before(first, before)),
+            ("Lines among these strings, not translated here", among),
+            ("Lines after", dialogue.spoken_after(last, after)),
+        ] {
+            if lines.is_empty() {
+                continue;
+            }
+            let _ = writeln!(brief, "{title}, in sheet order:");
+            for line in lines {
                 let text = plain_cut(&line.source, BRIEF_LINE_CHARS);
                 let _ = write!(brief, "- {}: {text}", line.speaker().unwrap_or(&line.key));
                 if let (Some(target), _) = translation(reader, sheet, line)? {
@@ -1135,8 +1165,8 @@ mod tests {
     fn a_scene_brief_leads_into_a_chunk() {
         let reader = Reader::default();
         let guide = ProjectGuide::default().with_voices(Ok(Some(VOICES.to_owned())));
-        let brief =
-            scene_brief(&reader, &guide, SHEET, &quest_dialogue(), &[(51, 0)], 2).expect("brief");
+        let brief = scene_brief(&reader, &guide, SHEET, &quest_dialogue(), &[(51, 0)], 2, 0)
+            .expect("brief");
         assert!(brief.starts_with(
             "Quest \"Close to Home\" (translated as \"Как дома\"), sheet quest/001/ManFst004_00124.\n"
         ));
@@ -1149,5 +1179,25 @@ mod tests {
             !brief.contains("MIOUNNE\">"),
             "only speakers of the scene are shown"
         );
+
+        let brief = scene_brief(
+            &reader,
+            &guide,
+            SHEET,
+            &quest_dialogue(),
+            &[(49, 0), (51, 0)],
+            1,
+            1,
+        )
+        .expect("brief");
+        assert!(
+            brief
+                .contains("Lines before, in sheet order:\n- MIOUNNE: Let us begin. → Начнём же.\n")
+        );
+        assert!(brief.contains(
+            "Lines among these strings, not translated here, in sheet order:\n- TEXT_X_QIB_BATTLETALK_05: Hah!\n"
+        ));
+        assert!(brief.contains("Lines after, in sheet order:\n- MIOUNNE: Indeed.\n"));
+        assert!(brief.contains("<voice speakers=\"MIOUNNE\">"));
     }
 }

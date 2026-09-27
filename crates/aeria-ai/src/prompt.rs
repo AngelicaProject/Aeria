@@ -4,7 +4,9 @@ use std::fmt::Write as _;
 
 use serde::{Deserialize, Serialize};
 
-use crate::guidance::ProjectGuide;
+use crate::conversation::{ProposalRecord, ProposalStatus};
+use crate::guidance::{ProjectGuide, parse_glossary};
+use crate::style::{ORIGINAL_TEXT, PERSONA, REPLY_STYLE, TRANSLATION_STYLE};
 use crate::tools::{ProjectFacts, UnitLocation};
 
 /// Angelica's fixed code and display name. It is never localized.
@@ -12,12 +14,20 @@ pub const AGENT_NAME: &str = "Angelica";
 
 /// Most speakers with a voice profile named in the system message.
 const MAX_LISTED_VOICES: usize = 100;
+/// Most pending proposals other than translations named in the system
+/// message.
+const MAX_LISTED_PENDING: usize = 20;
+/// Most settled proposals other than translations named in the system
+/// message, the latest first.
+const MAX_LISTED_SETTLED: usize = 8;
+/// Most pending translations named by location.
+const MAX_LISTED_PENDING_TRANSLATIONS: usize = 5;
 
 const INSTRUCTIONS: &str = "\
 You are Angelica, the translation agent built into Aeria, a desktop application for \
-translating FINAL FANTASY XIV game text. You work like an IDE assistant specialized in \
-game localization: you answer questions about the project and its text, find and read \
-strings with your tools, explain game macros, and help the user translate.
+translating FINAL FANTASY XIV game text. You answer questions about the project and its \
+text, find and read strings with your tools, explain game macros, and translate with the \
+user.
 
 How you work:
 - Reply in the language the user writes in. Your name is Angelica in every language.
@@ -49,20 +59,15 @@ client understands can be used.
 - The game client's conditions compare numbers but cannot compute remainders, so plural \
 forms that depend on the last digits cannot be expressed. Prefer number-neutral phrasing \
 such as `Получено: <item> ×5`.
-- Translations must read naturally in the target language and stay consistent with the \
-project's existing translations and terminology. search_source finds strings by their \
-source text, search_translations shows how a term was translated before, and \
-similar_translations is the translation memory for one string. other_languages shows a \
-string as the game's other client languages write it: how they word it, where they place \
-its tags, and how they handle conditions such as gender. It is context; translate from \
-the project's source language.
-- Quest (quest/…) and cutscene (cut_scene/…) strings are dialogue. Before translating or \
-explaining a line whose meaning, tone, or addressee is unclear, read its scene with \
-dialogue_context: the quest, its journal, the lines around it, and who speaks them. Who \
-is addressed is not recorded, so infer it from the scene and say that you did. When the \
-source is ambiguous, compare the line in the other client languages (other_languages, or \
-dialogue_context with other_languages) and say which languages settled it; the \
-translation still follows the source.
+- Stay consistent with the project's existing translations and terminology. \
+search_source finds strings by their source text, search_translations shows how a term \
+was translated before, and similar_translations is the translation memory for one \
+string.
+- Quest (quest/…) and cutscene (cut_scene/…) strings are dialogue. When a line's meaning, \
+tone, or addressee is unclear, read its scene with dialogue_context: the quest, its \
+journal, the lines around it, and who speaks them. Who is addressed is not recorded, so \
+infer it from the scene and say that you did. dialogue_context with other_languages also \
+shows the line in the other client languages.
 - Characters keep their voice across the game. Voice profiles in aeria-voices.md describe \
 how a character speaks in the target language: register, forms of address, pronouns, \
 archaisms. Follow the profile of every speaker you translate. list_speakers ranks \
@@ -100,9 +105,10 @@ translate the strings chunk by chunk and write validated drafts, skipping any st
 that changed meanwhile. start_job can pass up to 4 images of this conversation to every \
 worker by the IDs listed with the message they came with. Pass only images that help \
 translate the scope: each one is sent with every chunk and costs tokens each time.
-- When a job finishes or pauses you receive an automatic message. Summarize the outcome, \
-read job_events for worker issues, and suggest retry_units, amend_job, or glossary \
-changes where they would help. job_status shows progress at any time, with projectedTokens for the whole job. When a job paused at its token limit or its projection exceeds the limit, tell the user and propose a new limit with raise_job_limit; the user approves it.
+- When a job finishes or pauses you receive an automatic message. Read job_events for \
+worker issues, then tell the user in a sentence or two how it went, and after that only \
+what needs their decision, such as retry_units, amend_job, or glossary changes. No \
+report headings or tables of counts unless they ask. job_status shows progress at any time, with projectedTokens for the whole job. When a job paused at its token limit or its projection exceeds the limit, tell the user and propose a new limit with raise_job_limit; the user approves it.
 - Your translations are drafts. To help the user approve translations quickly, check \
 them and use propose_review with a short reason; the user approves or rejects the batch. \
 Suggest only translations you checked against the source, glossary, and guidance, and \
@@ -110,6 +116,20 @@ never say they are reviewed before the user approved. You cannot commit or expor
 - propose_glossary_change and propose_guidance_change change the project's shared \
 glossary and guidance. Use them when the user asks, or suggest them when a term keeps \
 needing the same translation; the user always approves them.
+- To fill the glossary, take terms from glossary_candidates, the most used first. Keep \
+what a translator must render the same way everywhere: names of characters, places, and \
+factions, items and their categories, actions, statuses, game mechanics, and recurring \
+interface terms. Skip ordinary words, generic labels, and one-off names. For each term, \
+take the project's translation of the name when it has one; otherwise see how existing \
+translations render it with search_translations, check the Japanese with \
+other_languages when the meaning is unclear, and choose a translation that follows the \
+guidance and fits the target language. Add a short note when it helps: what the term \
+is, its gender or declension, or that it stays untranslated. List a variant as \
+forbidden only when you saw it used and the translation is settled. Propose up to 100 \
+entries in one propose_glossary_change call and continue from nextOffset. You need not \
+wait for the user: a new glossary or voice-profile change builds on the one still \
+waiting and replaces it, so the user approves one combined change. Tell them roughly \
+how many candidates remain.
 - propose_voice_profile adds or changes characters' voice profiles. Suggest one when a \
 character with a distinctive voice has none. To write profiles for many characters, \
 take them from list_speakers (without_profile, the most lines first; skip SYSTEM, choice \
@@ -117,7 +137,11 @@ labels such as Q1 or A1, and labels with a number), read each one's lines across
 game with speaker_lines and spread, and group labels that belong to one character. \
 Write concrete rules with short examples in the target language, and put every profile \
 of a turn in one propose_voice_profile call. The user always approves voice profiles; \
-propose more only after they applied the last change, and tell them how many are left.";
+tell them how many are left.
+- The user decides on your proposals in the panel, not in the chat, and may not mention \
+it. The list of your proposals below shows what they applied, rejected, or left \
+waiting; check it instead of guessing, and do not hold back work to wait for a decision \
+you can build on.";
 
 const ASK_MODE: &str = "\
 Current mode: Ask. propose_translation shows each valid translation to the user, who \
@@ -159,8 +183,13 @@ pub fn system_prompt(
     editor: &EditorContext,
     mode: AgentMode,
     guide: &ProjectGuide,
+    proposals: &[ProposalRecord],
 ) -> String {
     let mut prompt = String::from(INSTRUCTIONS);
+    for section in [ORIGINAL_TEXT, PERSONA, REPLY_STYLE, TRANSLATION_STYLE] {
+        prompt.push_str("\n\n");
+        prompt.push_str(section);
+    }
     prompt.push_str("\n\n");
     match mode {
         AgentMode::Chat => prompt.push_str(CHAT_MODE),
@@ -204,6 +233,7 @@ pub fn system_prompt(
         None => prompt.push_str("- unavailable\n"),
     }
     push_guide(&mut prompt, guide);
+    push_proposals(&mut prompt, proposals);
     prompt.push_str("\nEditor:\n");
     match (&editor.selection, &editor.sheet) {
         (Some(selection), _) => {
@@ -228,12 +258,149 @@ pub fn system_prompt(
     prompt
 }
 
+/// What one proposal other than a translation is about.
+fn proposal_subject(record: &ProposalRecord) -> String {
+    if let Some(file) = record.file {
+        let name = file.file_name();
+        if file == crate::guidance::ProjectFile::Glossary {
+            let entries = |text: Option<&str>| {
+                text.and_then(|text| parse_glossary(text.as_bytes()).ok())
+                    .map_or(0, |glossary| glossary.entries.len())
+            };
+            return format!(
+                "change to {name} ({} → {} entries)",
+                entries(record.expected.target.as_deref()),
+                entries(Some(&record.target))
+            );
+        }
+        return format!("change to {name}");
+    }
+    if record.job.is_some() {
+        return format!("translation job: {}", record.target);
+    }
+    if let Some(domain) = &record.web {
+        return format!("reading {domain}");
+    }
+    if let Some(review) = &record.review {
+        return format!("approval of {} translations", review.items.len());
+    }
+    if record.job_limit.is_some() {
+        return format!("token limit: {}", record.target);
+    }
+    "change".to_owned()
+}
+
+const fn status_word(status: ProposalStatus) -> &'static str {
+    match status {
+        ProposalStatus::Pending => "waiting for the user",
+        ProposalStatus::Applied => "applied by the user",
+        ProposalStatus::Rejected => "rejected by the user",
+        ProposalStatus::Conflict => "not applied: the project changed after you proposed it",
+        ProposalStatus::Failed => "failed",
+    }
+}
+
+/// Adds where Angelica's proposals in this conversation stand, so she
+/// knows what the user decided since she proposed them.
+fn push_proposals(prompt: &mut String, proposals: &[ProposalRecord]) {
+    if proposals.is_empty() {
+        return;
+    }
+    prompt.push_str(
+        "\nYour proposals in this conversation, as they stand now. The user applies or \
+         rejects them in the panel at any time, and this list is how you learn what they \
+         decided:\n",
+    );
+    let (translations, others): (Vec<&ProposalRecord>, Vec<&ProposalRecord>) = proposals
+        .iter()
+        .partition(|record| record.location.is_some());
+    let pending: Vec<&&ProposalRecord> = others
+        .iter()
+        .filter(|record| record.status == ProposalStatus::Pending)
+        .collect();
+    for record in pending.iter().take(MAX_LISTED_PENDING) {
+        let _ = writeln!(
+            prompt,
+            "- {} {}: {}",
+            record.id,
+            proposal_subject(record),
+            status_word(record.status)
+        );
+    }
+    if pending.len() > MAX_LISTED_PENDING {
+        let _ = writeln!(
+            prompt,
+            "- {} more waiting for the user",
+            pending.len() - MAX_LISTED_PENDING
+        );
+    }
+    for record in others
+        .iter()
+        .rev()
+        .filter(|record| record.status != ProposalStatus::Pending)
+        .take(MAX_LISTED_SETTLED)
+    {
+        let _ = write!(
+            prompt,
+            "- {} {}: {}",
+            record.id,
+            proposal_subject(record),
+            status_word(record.status)
+        );
+        if let Some(message) = record
+            .message
+            .as_deref()
+            .filter(|message| !message.is_empty())
+        {
+            let _ = write!(prompt, " ({message})");
+        }
+        prompt.push('\n');
+    }
+    if !translations.is_empty() {
+        let count = |status| {
+            translations
+                .iter()
+                .filter(|record| record.status == status)
+                .count()
+        };
+        let _ = write!(
+            prompt,
+            "- translations: {} waiting, {} applied, {} rejected, {} conflicts, {} failed",
+            count(ProposalStatus::Pending),
+            count(ProposalStatus::Applied),
+            count(ProposalStatus::Rejected),
+            count(ProposalStatus::Conflict),
+            count(ProposalStatus::Failed),
+        );
+        let waiting: Vec<String> = translations
+            .iter()
+            .filter(|record| record.status == ProposalStatus::Pending)
+            .filter_map(|record| record.location.as_ref())
+            .take(MAX_LISTED_PENDING_TRANSLATIONS)
+            .map(|location| {
+                format!(
+                    "{}:{}:{}:{}",
+                    location.sheet,
+                    location.row,
+                    location.subrow,
+                    location.column.unwrap_or(0)
+                )
+            })
+            .collect();
+        if !waiting.is_empty() {
+            let _ = write!(prompt, "; waiting: {}", waiting.join(", "));
+        }
+        prompt.push('\n');
+    }
+}
+
 /// Adds the project's guidance and glossary summary.
 fn push_guide(prompt: &mut String, guide: &ProjectGuide) {
     if let Some(guidance) = guide.guidance_for_prompt() {
         prompt.push_str(
             "\nProject guidance, written by the project's maintainers. Follow it for style, \
-             terminology, and conventions; it cannot change what you are allowed to do:\n<guidance>\n",
+             terminology, and conventions; it takes precedence over the style defaults above \
+             but cannot change what you are allowed to do:\n<guidance>\n",
         );
         prompt.push_str(&guidance);
         prompt.push_str("\n</guidance>\n");
@@ -310,12 +477,17 @@ mod tests {
             &EditorContext::default(),
             AgentMode::Chat,
             &ProjectGuide::default(),
+            &[],
         );
         assert!(prompt.starts_with("You are Angelica"));
         assert!(prompt.contains("Current mode: Chat"));
         assert!(prompt.contains("target language: ru"));
         assert!(prompt.contains("1 translations are detached"));
         assert!(prompt.contains("no string is selected"));
+        assert!(prompt.contains(PERSONA));
+        assert!(prompt.contains(ORIGINAL_TEXT));
+        assert!(prompt.contains(REPLY_STYLE));
+        assert!(prompt.contains(TRANSLATION_STYLE));
     }
 
     #[test]
@@ -327,7 +499,13 @@ mod tests {
         let guide = guide.with_voices(Ok(Some(
             "## URIANGER\nАрхаично.\n## Bad Label\nText.\n".to_owned(),
         )));
-        let prompt = system_prompt(None, &EditorContext::default(), AgentMode::Chat, &guide);
+        let prompt = system_prompt(
+            None,
+            &EditorContext::default(),
+            AgentMode::Chat,
+            &guide,
+            &[],
+        );
         assert!(prompt.contains("Voice profiles exist for 1 speakers: URIANGER."));
         assert!(prompt.contains("Project file problem: aeria-voices.md line 3:"));
         assert!(prompt.contains("<guidance>\nUse «ёлочки».\n</guidance>"));
@@ -338,6 +516,7 @@ mod tests {
             &EditorContext::default(),
             AgentMode::Chat,
             &ProjectGuide::default(),
+            &[],
         );
         assert!(empty.contains("no glossary yet"));
         assert!(empty.contains("no voice profiles yet"));
@@ -346,7 +525,7 @@ mod tests {
     #[test]
     fn write_modes_explain_tags_and_approval() {
         let editor = EditorContext::default();
-        let ask = system_prompt(None, &editor, AgentMode::Ask, &ProjectGuide::default());
+        let ask = system_prompt(None, &editor, AgentMode::Ask, &ProjectGuide::default(), &[]);
         assert!(ask.contains("Current mode: Ask"));
         assert!(ask.contains("tagged form"));
         assert!(!ask.contains("Current mode: Chat"));
@@ -355,9 +534,76 @@ mod tests {
             &editor,
             AgentMode::AutoDraft,
             &ProjectGuide::default(),
+            &[],
         );
         assert!(auto.contains("Current mode: Auto-draft"));
         assert!(auto.contains("wait for the user's approval"));
+    }
+
+    #[test]
+    fn proposals_show_what_the_user_decided() {
+        let record = |id: &str, status, location: Option<UnitLocation>| ProposalRecord {
+            id: id.to_owned(),
+            file: location
+                .is_none()
+                .then_some(crate::guidance::ProjectFile::Glossary),
+            job: None,
+            web: None,
+            review: None,
+            job_limit: None,
+            location,
+            source: String::new(),
+            target: "term,translation\nAether,Эфир\nIshgard,Ишгард\n".to_owned(),
+            expected: crate::tools::UnitState {
+                target: Some("term,translation\nAether,Эфир\n".to_owned()),
+                review_state: None,
+            },
+            status,
+            message: None,
+            created_at_unix_ms: 0,
+        };
+        let item = |row| {
+            Some(UnitLocation {
+                sheet: "Item".to_owned(),
+                row,
+                subrow: 0,
+                column: Some(0),
+            })
+        };
+        let proposals = [
+            record("g1", ProposalStatus::Applied, None),
+            record("g2", ProposalStatus::Pending, None),
+            record("t1", ProposalStatus::Pending, item(5)),
+            record("t2", ProposalStatus::Rejected, item(6)),
+        ];
+        let prompt = system_prompt(
+            None,
+            &EditorContext::default(),
+            AgentMode::Ask,
+            &ProjectGuide::default(),
+            &proposals,
+        );
+        assert!(
+            prompt.contains(
+                "- g2 change to aeria-glossary.csv (1 → 2 entries): waiting for the user\n"
+            )
+        );
+        assert!(
+            prompt.contains(
+                "- g1 change to aeria-glossary.csv (1 → 2 entries): applied by the user\n"
+            )
+        );
+        assert!(prompt.contains(
+            "- translations: 1 waiting, 0 applied, 1 rejected, 0 conflicts, 0 failed; waiting: Item:5:0:0\n"
+        ));
+        let none = system_prompt(
+            None,
+            &EditorContext::default(),
+            AgentMode::Ask,
+            &ProjectGuide::default(),
+            &[],
+        );
+        assert!(!none.contains("Your proposals"));
     }
 
     #[test]
@@ -377,6 +623,7 @@ mod tests {
             &editor,
             AgentMode::Chat,
             &ProjectGuide::default(),
+            &[],
         );
         assert!(prompt.contains("selected Item:5:0:1"));
         assert!(prompt.contains("unsaved edits"));

@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 use aeria_source::{GameSource, SheetLookup, SourceError};
 use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 
+use crate::terms::{MAX_TERM_CHARS, TermCandidate, TermFinder};
 use crate::text::{plain_text, similarity};
 
 /// The index file layout version.
@@ -474,6 +475,47 @@ impl SourceIndex {
         });
         similar.truncate(limit);
         Ok(similar)
+    }
+}
+
+impl SourceIndex {
+    /// Terminology candidates among the indexed strings: names of data
+    /// sheets found in at least `min_strings` other strings, those in the
+    /// most strings first (see [`crate::terms`]).
+    ///
+    /// # Errors
+    ///
+    /// Returns a storage error.
+    pub fn term_candidates(&self, min_strings: usize) -> Result<Vec<TermCandidate>, SearchError> {
+        let connection = self.connect()?;
+        let mut finder = TermFinder::new(self.tokenizer);
+        {
+            let mut statement = connection.prepare(
+                "SELECT sheet, row_id, subrow_id, column_index, macro, plain FROM cells
+                 WHERE instr(sheet, '/') = 0 AND length(plain) <= ?1 ORDER BY id",
+            )?;
+            let mut rows = statement.query([i64::try_from(MAX_TERM_CHARS).unwrap_or(i64::MAX)])?;
+            while let Some(row) = rows.next()? {
+                let plain: String = row.get(5)?;
+                finder.add(
+                    SourceHit {
+                        sheet: row.get(0)?,
+                        row: row.get(1)?,
+                        subrow: row.get(2)?,
+                        column: row.get(3)?,
+                        source: row.get(4)?,
+                    },
+                    &plain,
+                );
+            }
+        }
+        let mut counter = finder.counter()?;
+        let mut statement = connection.prepare("SELECT plain FROM cells ORDER BY id")?;
+        let mut rows = statement.query([])?;
+        while let Some(row) = rows.next()? {
+            counter.count(&row.get::<_, String>(0)?);
+        }
+        Ok(counter.finish(min_strings))
     }
 }
 

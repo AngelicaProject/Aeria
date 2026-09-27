@@ -45,6 +45,32 @@ rebuilt. A cancelled or failed build leaves no index.
   against a query, ignoring case. Translations change with every edit, so
   they are searched in the workspace rather than indexed.
 
+## Terminology candidates
+
+`SourceIndex::term_candidates` finds names that recur in the game's text,
+for filling a project glossary. It reads the index twice and takes about two
+seconds for the English client.
+
+1. A *name* is an indexed cell of a data sheet (a sheet name without `/`, so
+   not quest, cutscene, or other script text) whose text has no macros, is 2
+   to 48 characters and at most 5 words, contains a letter, and has only
+   letters, digits, spaces, and `'`, `’`, `-`, `&`, `・`, or `ー`. With the
+   word tokenizer it must start with an uppercase letter. Cells with the same
+   text are one name.
+2. Every indexed string is scanned for all names at once (Aho-Corasick,
+   leftmost-longest, so `Fire Shard` is found instead of `Fire`), with the
+   same case. With the word tokenizer a match must stand as whole words and
+   must not start a sentence or a line, where any word is capitalized. A
+   string whose whole text is the name does not count.
+3. A candidate is a name found in at least the requested number of other
+   strings. Candidates are ordered by those strings, then occurrences, then
+   text, and keep up to three of their name cells.
+
+The result is a heuristic: ordinary capitalized words, such as interface
+labels or the pronoun *I*, can rank high. Choosing terminology is left to
+the translator or Angelica. The desktop computes the list on first use for a
+game data key and keeps the last one in memory.
+
 ## Desktop use
 
 The desktop builds the active project's index in a background worker the

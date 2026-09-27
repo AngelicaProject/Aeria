@@ -23,6 +23,7 @@ pub mod responses;
 pub mod search;
 pub mod secrets;
 pub mod settings;
+pub mod style;
 pub mod tools;
 pub mod voices;
 pub mod web;

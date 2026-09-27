@@ -18,6 +18,8 @@ use crate::tools::{ReviewLabel, UnitLocation, UnitState};
 
 /// Most strings in one chunk.
 pub const CHUNK_UNITS: usize = 30;
+/// Most strings in one chunk of a quest or cutscene sheet.
+pub const DIALOGUE_CHUNK_UNITS: usize = 60;
 /// Most source characters in one chunk.
 pub const CHUNK_SOURCE_CHARS: usize = 12_000;
 /// Most workers one job runs at once.
@@ -247,20 +249,40 @@ pub struct ScopedUnit {
     pub source_chars: usize,
 }
 
+/// The most strings a chunk of `sheet` may hold when the job has `count` of
+/// the sheet's strings in a row. A quest or cutscene sheet is one scene, so
+/// its chunks hold up to [`DIALOGUE_CHUNK_UNITS`] strings and are split
+/// evenly, so no chunk is left with a few stray lines.
+fn chunk_unit_limit(sheet: &str, count: usize) -> usize {
+    if sheet.starts_with("quest/") || sheet.starts_with("cut_scene/") {
+        count.div_ceil(count.div_ceil(DIALOGUE_CHUNK_UNITS).max(1))
+    } else {
+        CHUNK_UNITS
+    }
+}
+
 /// Chunk numbers for units in order: a new chunk starts at a new sheet or
-/// when a chunk would exceed [`CHUNK_UNITS`] strings or
+/// when a chunk would exceed its string limit (see [`chunk_unit_limit`]) or
 /// [`CHUNK_SOURCE_CHARS`] source characters.
 #[must_use]
 pub fn assign_chunks(units: &[ScopedUnit]) -> Vec<u64> {
     let mut chunks = Vec::with_capacity(units.len());
     let mut chunk = 0_u64;
     let (mut chunk_units, mut chunk_chars) = (0_usize, 0_usize);
-    let mut previous_sheet: Option<&str> = None;
-    for unit in units {
-        let new_sheet = previous_sheet.is_some_and(|sheet| sheet != unit.location.sheet);
+    let mut limit = CHUNK_UNITS;
+    for (index, unit) in units.iter().enumerate() {
+        let sheet = &unit.location.sheet;
+        let new_sheet = index == 0 || units[index - 1].location.sheet != *sheet;
+        if new_sheet {
+            let count = units[index..]
+                .iter()
+                .take_while(|next| next.location.sheet == *sheet)
+                .count();
+            limit = chunk_unit_limit(sheet, count);
+        }
         if chunk_units > 0
             && (new_sheet
-                || chunk_units >= CHUNK_UNITS
+                || chunk_units >= limit
                 || chunk_chars + unit.source_chars > CHUNK_SOURCE_CHARS)
         {
             chunk += 1;
@@ -269,7 +291,6 @@ pub fn assign_chunks(units: &[ScopedUnit]) -> Vec<u64> {
         }
         chunk_units += 1;
         chunk_chars += unit.source_chars;
-        previous_sheet = Some(&unit.location.sheet);
         chunks.push(chunk);
     }
     chunks
@@ -1139,6 +1160,18 @@ mod tests {
         let fourth = store.claim_chunk(&job.id).expect("claim").expect("chunk");
         assert_eq!(fourth[0].location.row, 2);
         assert!(store.claim_chunk(&job.id).expect("claim").is_none());
+    }
+
+    #[test]
+    fn dialogue_sheets_split_into_even_larger_chunks() {
+        let quest = "quest/001/ManFst004_00124";
+        let mut units: Vec<ScopedUnit> = (0..70).map(|row| unit(quest, row, 10)).collect();
+        units.extend((0..40).map(|row| unit("cut_scene/024/VoiceMan_02400", row, 10)));
+        let chunks = assign_chunks(&units);
+        let sizes: Vec<usize> = (0..=chunks[chunks.len() - 1])
+            .map(|chunk| chunks.iter().filter(|&&c| c == chunk).count())
+            .collect();
+        assert_eq!(sizes, [35, 35, 40]);
     }
 
     #[test]

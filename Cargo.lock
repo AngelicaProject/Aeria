@@ -172,6 +172,7 @@ dependencies = [
  "aeria-se",
  "aeria-source",
  "aeria-sqpack",
+ "aho-corasick",
  "rusqlite",
  "tempfile",
  "thiserror 2.0.20",

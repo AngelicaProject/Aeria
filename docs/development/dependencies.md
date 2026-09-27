@@ -42,7 +42,9 @@ hashes of SqPack indexes and `flate2` (MIT OR Apache-2.0) to inflate SqPack
 data blocks. Both are already in the desktop dependency graph through Tauri.
 
 `aeria-search` uses `rusqlite` (MIT) with `bundled`, whose SQLite includes
-FTS5 with the `unicode61` and `trigram` tokenizers.
+FTS5 with the `unicode61` and `trigram` tokenizers, and `aho-corasick`
+(Unlicense OR MIT), already in the graph through `regex`, to find every
+terminology candidate in the game's text in one pass.
 
 `aeria-export` uses:
 
