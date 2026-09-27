@@ -32,6 +32,9 @@ pub struct DraftRequest<'a> {
     pub guidance: Option<&'a str>,
     /// Glossary entries whose terms occur in the source.
     pub glossary: &'a [GlossaryEntry],
+    /// For a quest or cutscene line: its speaker label and the scene before
+    /// it (see [`crate::dialogue::scene_brief`]).
+    pub dialogue: Option<(Option<&'a str>, &'a str)>,
 }
 
 /// A validated draft.
@@ -91,6 +94,15 @@ fn user_message(request: &DraftRequest<'_>, tagged: &str, legend: &[String]) -> 
         for cell in request.context {
             let _ = writeln!(message, "- column {}: {}", cell.column, cell.source);
         }
+    }
+    if let Some((speaker, scene)) = request.dialogue {
+        if let Some(speaker) = speaker {
+            let _ = writeln!(message, "Speaker label: {speaker}");
+        }
+        let _ = writeln!(
+            message,
+            "The string is dialogue. Its scene, for context only; follow the voice profiles for how characters speak:\n{scene}"
+        );
     }
     if let Some(target) = request.current_target {
         let _ = writeln!(message, "Current translation, to improve: {target}");
@@ -232,6 +244,11 @@ mod tests {
                 note: None,
                 forbidden: vec!["Хай".to_owned()],
             }],
+            dialogue: Some((
+                Some("URIANGER"),
+                "Quest \"Close to Home\".
+",
+            )),
         };
         let tagged = aeria_se::project(request.source).expect("tags");
         let legend: Vec<String> = tagged.tags.iter().map(aeria_se::Tag::legend).collect();

@@ -9,6 +9,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::chat::ToolDefinition;
+use crate::dialogue::{
+    SheetDialogue, dialogue_context, dialogue_tool_definitions, get_voices, propose_voice_profile,
+    speaker_lines, voice_change_definition,
+};
 use crate::guidance::{Glossary, GlossaryEntry, ProjectFile, ProjectGuide, change_glossary};
 use crate::images::MAX_JOB_IMAGES;
 use crate::jobs::{
@@ -208,6 +212,32 @@ pub trait ProjectReader: Send + Sync {
     /// # Errors
     /// Returns an error when the file exists but cannot be read.
     fn project_file(&self, file: ProjectFile) -> Result<Option<String>, ToolError>;
+
+    /// The dialogue structure of a quest or cutscene sheet; `None` for any
+    /// other sheet.
+    ///
+    /// # Errors
+    /// Returns an error when no project is open or the game cannot be read.
+    fn dialogue(&self, sheet: &str) -> Result<Option<SheetDialogue>, ToolError>;
+
+    /// Speaker labels of quest and cutscene speech that contain `query`,
+    /// ignoring case, with their number of lines.
+    ///
+    /// # Errors
+    /// Returns an error when no project is open or the game cannot be read.
+    fn speakers(&self, query: &str) -> Result<Vec<(String, usize)>, ToolError>;
+
+    /// One speaker label's lines in sheet-name and row order: the total and
+    /// up to `limit` lines from `offset`, without a column.
+    ///
+    /// # Errors
+    /// Returns an error when no project is open or the game cannot be read.
+    fn speaker_lines(
+        &self,
+        speaker: &str,
+        offset: usize,
+        limit: usize,
+    ) -> Result<(usize, Vec<UnitLocation>), ToolError>;
 }
 
 /// Most glossary entries attached to one string.
@@ -739,7 +769,7 @@ pub fn write_tool_definitions() -> Vec<ToolDefinition> {
         "required": ["sheet", "row", "subrow", "column", "target"],
         "additionalProperties": false,
     });
-    vec![
+    let mut tools = vec![
         ToolDefinition {
             name: "validate_target",
             description: "Checks a tagged translation of one string against its source without writing anything, and returns the rebuilt macro string or what to fix.",
@@ -821,12 +851,21 @@ pub fn write_tool_definitions() -> Vec<ToolDefinition> {
                 "additionalProperties": false,
             }),
         },
-    ]
+    ];
+    tools.push(voice_change_definition());
+    tools
 }
 
 /// Definitions of the read-only tools offered in Chat mode.
 #[must_use]
 pub fn read_tool_definitions() -> Vec<ToolDefinition> {
+    let mut tools = project_read_definitions();
+    tools.extend(dialogue_tool_definitions());
+    tools
+}
+
+/// The read tools over the project's strings and files.
+fn project_read_definitions() -> Vec<ToolDefinition> {
     let location = |description: &str| {
         json!({
             "type": "object",
@@ -1157,6 +1196,9 @@ impl<'a> ReadTools<'a> {
                 Ok(json!({ "opened": location }))
             }
             "get_guidance" => Ok(self.get_guidance(&parse(arguments)?)),
+            "dialogue_context" => dialogue_context(self.reader, &self.guide(), &parse(arguments)?),
+            "speaker_lines" => speaker_lines(self.reader, &self.guide(), &parse(arguments)?),
+            "get_voices" => Ok(get_voices(&self.guide(), &parse(arguments)?)),
             "search_source" | "search_translations" | "similar_translations" => {
                 let Some(search) = self.search else {
                     return Err(ToolError::new("search is not available here"));
@@ -1175,6 +1217,7 @@ impl<'a> ReadTools<'a> {
             | "propose_translation"
             | "propose_glossary_change"
             | "propose_review"
+            | "propose_voice_profile"
             | "propose_guidance_change" => {
                 let Some(writer) = self.writer else {
                     return Err(ToolError::new(
@@ -1195,6 +1238,9 @@ impl<'a> ReadTools<'a> {
                         self.propose_glossary_change(writer, parse(arguments)?)
                     }
                     "propose_review" => Self::propose_review(writer, parse(arguments)?),
+                    "propose_voice_profile" => {
+                        propose_voice_profile(self.reader, writer, &parse(arguments)?)
+                    }
                     _ => self.propose_guidance_change(writer, &parse(arguments)?),
                 }
             }
@@ -1298,6 +1344,7 @@ impl<'a> ReadTools<'a> {
                 .map_err(|error| format!("{}: {}", ProjectFile::file_name(file), error.0))
         };
         ProjectGuide::from_files(read(ProjectFile::Guidance), read(ProjectFile::Glossary))
+            .with_voices(read(ProjectFile::Voices))
     }
 
     fn get_guidance(&self, args: &GuidanceArgs) -> Value {
@@ -1799,7 +1846,25 @@ mod tests {
                 ProjectFile::Glossary => {
                     Some("term,translation,forbidden\nSource 0,Исходник,Сорс\n".to_owned())
                 }
+                ProjectFile::Voices => None,
             })
+        }
+
+        fn dialogue(&self, _: &str) -> Result<Option<crate::dialogue::SheetDialogue>, ToolError> {
+            Ok(None)
+        }
+
+        fn speakers(&self, _: &str) -> Result<Vec<(String, usize)>, ToolError> {
+            Ok(Vec::new())
+        }
+
+        fn speaker_lines(
+            &self,
+            _: &str,
+            _: usize,
+            _: usize,
+        ) -> Result<(usize, Vec<UnitLocation>), ToolError> {
+            Ok((0, Vec::new()))
         }
     }
 

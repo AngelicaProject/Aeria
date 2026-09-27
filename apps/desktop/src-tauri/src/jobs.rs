@@ -1018,6 +1018,26 @@ impl ProjectReader for JobReader {
     ) -> Result<Option<String>, ToolError> {
         self.reader()?.project_file(file)
     }
+
+    fn dialogue(
+        &self,
+        sheet: &str,
+    ) -> Result<Option<aeria_ai::dialogue::SheetDialogue>, ToolError> {
+        self.reader()?.dialogue(sheet)
+    }
+
+    fn speakers(&self, query: &str) -> Result<Vec<(String, usize)>, ToolError> {
+        self.reader()?.speakers(query)
+    }
+
+    fn speaker_lines(
+        &self,
+        speaker: &str,
+        offset: usize,
+        limit: usize,
+    ) -> Result<(usize, Vec<UnitLocation>), ToolError> {
+        self.reader()?.speaker_lines(speaker, offset, limit)
+    }
 }
 
 struct WorkerExecutor {

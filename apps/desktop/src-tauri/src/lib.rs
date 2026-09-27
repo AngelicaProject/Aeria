@@ -80,7 +80,7 @@ pub use git::{
 };
 pub use guide::{
     GlossaryEntryInput, ProjectGuideDto, project_guide, save_project_glossary,
-    save_project_guidance,
+    save_project_guidance, save_project_voices,
 };
 pub use jobs::{
     angelica_job_control, angelica_job_events, angelica_job_remove, angelica_job_retry,
@@ -262,6 +262,7 @@ pub fn run() {
             project_guide,
             save_project_guidance,
             save_project_glossary,
+            save_project_voices,
             export_overview,
             export_save_settings,
             export_generate_key,

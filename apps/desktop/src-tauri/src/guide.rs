@@ -1,6 +1,7 @@
-//! The project guidance and glossary editor.
+//! The project guidance, glossary, and voice profile editor.
 //!
-//! The user edits `aeria-guidance.md` and `aeria-glossary.csv` directly. A
+//! The user edits `aeria-guidance.md`, `aeria-glossary.csv`, and
+//! `aeria-voices.md` directly. A
 //! save replaces a file only if it still has the content the editor loaded,
 //! so a change made meanwhile by hand, by Git, or through an approved
 //! Angelica proposal is never overwritten.
@@ -9,6 +10,7 @@ use aeria_ai::guidance::{
     GlossaryDiagnostic, GlossaryEntry, MAX_GUIDANCE_BYTES, ProjectFile, parse_glossary,
     read_project_file, write_glossary,
 };
+use aeria_ai::voices::{MAX_VOICES_BYTES, VoiceDiagnostic, parse_voices};
 use serde::{Deserialize, Serialize};
 
 use crate::angelica::{apply_file_change, repository_root};
@@ -17,7 +19,7 @@ use crate::error::CommandError;
 
 type CommandResult<T> = Result<T, CommandError>;
 
-/// Both files as the editor shows them.
+/// The files as the editor shows them.
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProjectGuideDto {
@@ -31,6 +33,11 @@ pub struct ProjectGuideDto {
     /// Why a file cannot be used at all.
     pub guidance_error: Option<String>,
     pub glossary_error: Option<String>,
+    /// The voice profile text; `None` when the file does not exist.
+    pub voices: Option<String>,
+    /// Profiles the voice file ignores, with the reason.
+    pub voice_diagnostics: Vec<VoiceDiagnostic>,
+    pub voices_error: Option<String>,
 }
 
 /// One edited glossary entry.
@@ -57,6 +64,9 @@ fn load(root: &std::path::Path) -> ProjectGuideDto {
         diagnostics: Vec::new(),
         guidance_error: None,
         glossary_error: None,
+        voices: None,
+        voice_diagnostics: Vec::new(),
+        voices_error: None,
     };
     match read_project_file(root, ProjectFile::Guidance) {
         Ok(text) => dto.guidance = text,
@@ -76,7 +86,33 @@ fn load(root: &std::path::Path) -> ProjectGuideDto {
         Ok(None) => {}
         Err(message) => dto.glossary_error = Some(message),
     }
+    match read_project_file(root, ProjectFile::Voices) {
+        Ok(text) => {
+            dto.voice_diagnostics = text
+                .as_deref()
+                .map(|text| parse_voices(text).diagnostics)
+                .unwrap_or_default();
+            dto.voices = text;
+        }
+        Err(message) => dto.voices_error = Some(message),
+    }
     dto
+}
+
+/// Checks edited voice profiles: every profile must be usable.
+fn check_voices(text: &str) -> CommandResult<()> {
+    if text.len() as u64 > MAX_VOICES_BYTES {
+        return Err(guide_error(format!(
+            "the voice profiles are larger than {MAX_VOICES_BYTES} bytes"
+        )));
+    }
+    match parse_voices(text).diagnostics.first() {
+        Some(problem) => Err(guide_error(format!(
+            "line {}: {}",
+            problem.line, problem.message
+        ))),
+        None => Ok(()),
+    }
 }
 
 /// The canonical glossary file for edited entries. Every entry must be
@@ -194,6 +230,32 @@ pub async fn save_project_glossary(
     .await
 }
 
+#[tauri::command(rename_all = "camelCase")]
+/// Replaces the voice profiles if the file still has the `expected`
+/// content (`None` when it did not exist).
+///
+/// # Errors
+///
+/// Returns `projectGuideInvalid` for text over 256 KiB or with a profile
+/// that would be ignored, `projectGuideConflict` when the file changed, or
+/// `projectGuideWrite`.
+pub async fn save_project_voices(
+    app: tauri::AppHandle,
+    expected: Option<String>,
+    text: String,
+) -> CommandResult<ProjectGuideDto> {
+    check_voices(&text)?;
+    run_blocking(move || {
+        save(
+            &repository_root(&app)?,
+            ProjectFile::Voices,
+            expected.as_deref(),
+            &text,
+        )
+    })
+    .await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -242,5 +304,24 @@ mod tests {
         assert_eq!(saved.entries.len(), 1);
         assert_eq!(saved.glossary_text.as_deref(), Some(text.as_str()));
         assert!(saved.diagnostics.is_empty());
+    }
+
+    #[test]
+    fn voice_profiles_are_saved_only_when_every_profile_is_usable() {
+        let directory = tempfile::tempdir().expect("directory");
+        let root = directory.path();
+        let text = "## URIANGER\nАрхаичная речь.\n";
+        check_voices(text).expect("valid");
+        let saved = save(root, ProjectFile::Voices, None, text).expect("saved");
+        assert_eq!(saved.voices.as_deref(), Some(text));
+        assert!(saved.voice_diagnostics.is_empty());
+        let invalid = check_voices("## Urianger Augurelle\nText.\n").expect_err("label");
+        assert!(
+            invalid.message.starts_with("line 1:"),
+            "{}",
+            invalid.message
+        );
+        let conflict = save(root, ProjectFile::Voices, None, text).expect_err("changed");
+        assert_eq!(conflict.code, "projectGuideConflict");
     }
 }

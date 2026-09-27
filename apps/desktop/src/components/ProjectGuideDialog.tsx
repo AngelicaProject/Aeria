@@ -1,6 +1,6 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Dialog } from "radix-ui";
-import { normalizeCommandError, projectGuide, saveProjectGlossary, saveProjectGuidance } from "../ipc";
+import { normalizeCommandError, projectGuide, saveProjectGlossary, saveProjectGuidance, saveProjectVoices } from "../ipc";
 import { filterRows, inputsFromRows, rowProblems, rowsChanged, rowsFromEntries, type GlossaryRow, type RowProblem } from "../projectGuide";
 import type { CommandError, ProjectGuideDto } from "../types";
 import type { MessageKey } from "../i18n/translate";
@@ -10,7 +10,7 @@ import { UiIcon } from "../ui/primitives/UiIcon";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { ErrorBanner } from "./ErrorBanner";
 
-export type ProjectGuideTab = "glossary" | "guidance";
+export type ProjectGuideTab = "glossary" | "guidance" | "voices";
 
 type ProjectGuideDialogProps = {
   open: boolean;
@@ -27,8 +27,9 @@ const problemLabels: Readonly<Record<RowProblem, MessageKey>> = {
 /** Rows rendered at once; the filter narrows larger glossaries. */
 const ROWS_SHOWN = 300;
 const GUIDANCE_LIMIT = 64 * 1024;
+const VOICES_LIMIT = 256 * 1024;
 
-/** The project's shared glossary and guidance, edited by translators. */
+/** The project's shared glossary, guidance, and voice profiles, edited by translators. */
 /** Memoized so the closed dialog does not re-render with the workbench. */
 export const ProjectGuideDialog = memo(function ProjectGuideDialog({ open, initialTab, onOpenChange }: ProjectGuideDialogProps) {
   const { t } = useI18n();
@@ -36,6 +37,7 @@ export const ProjectGuideDialog = memo(function ProjectGuideDialog({ open, initi
   const [saved, setSaved] = useState<ProjectGuideDto | null>(null);
   const [rows, setRows] = useState<GlossaryRow[]>([]);
   const [guidance, setGuidance] = useState("");
+  const [voices, setVoices] = useState("");
   const [query, setQuery] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<CommandError | null>(null);
@@ -48,6 +50,7 @@ export const ProjectGuideDialog = memo(function ProjectGuideDialog({ open, initi
     nextKey.current = next.length;
     setRows(next);
     setGuidance(guide.guidance ?? "");
+    setVoices(guide.voices ?? "");
   }, []);
 
   const load = useCallback(() => {
@@ -66,6 +69,8 @@ export const ProjectGuideDialog = memo(function ProjectGuideDialog({ open, initi
   const glossaryDirty = saved !== null && rowsChanged(rows, saved.entries);
   const guidanceDirty = saved !== null && guidance !== (saved.guidance ?? "");
   const guidanceBytes = useMemo(() => new TextEncoder().encode(guidance).length, [guidance]);
+  const voicesDirty = saved !== null && voices !== (saved.voices ?? "");
+  const voicesBytes = useMemo(() => new TextEncoder().encode(voices).length, [voices]);
   const filtered = useMemo(() => filterRows(rows, query), [query, rows]);
 
   const run = async (operation: () => Promise<ProjectGuideDto>) => {
@@ -97,6 +102,11 @@ export const ProjectGuideDialog = memo(function ProjectGuideDialog({ open, initi
     void run(() => saveProjectGuidance(saved.guidance, guidance));
   };
 
+  const saveVoices = () => {
+    if (!saved) return;
+    void run(() => saveProjectVoices(saved.voices, voices));
+  };
+
   const update = (key: number, field: keyof Omit<GlossaryRow, "key">, value: string) => {
     setRows((current) => current.map((row) => row.key === key ? { ...row, [field]: value } : row));
   };
@@ -108,7 +118,7 @@ export const ProjectGuideDialog = memo(function ProjectGuideDialog({ open, initi
   };
 
   const close = (next: boolean) => {
-    if (next || !(glossaryDirty || guidanceDirty)) { onOpenChange(next); return; }
+    if (next || !(glossaryDirty || guidanceDirty || voicesDirty)) { onOpenChange(next); return; }
     setConfirm({ message: t("guide.discard"), run: () => onOpenChange(false) });
   };
 
@@ -126,6 +136,7 @@ export const ProjectGuideDialog = memo(function ProjectGuideDialog({ open, initi
               options={[
                 { value: "glossary", label: glossaryDirty ? `${t("guide.tab.glossary")} •` : t("guide.tab.glossary") },
                 { value: "guidance", label: guidanceDirty ? `${t("guide.tab.guidance")} •` : t("guide.tab.guidance") },
+                { value: "voices", label: voicesDirty ? `${t("guide.tab.voices")} •` : t("guide.tab.voices") },
               ]}
             />
             <Dialog.Close className="icon-button icon-button-ghost" aria-label={t("settings.closeLabel")}><UiIcon icon="x" size="sm" /></Dialog.Close>
@@ -177,6 +188,23 @@ export const ProjectGuideDialog = memo(function ProjectGuideDialog({ open, initi
                 {problems.size > 0 ? <span className="guide-problems">{t("guide.glossary.problems", { count: problems.size })}</span> : null}
                 <button className="button button-ghost" type="button" disabled={busy || !glossaryDirty} onClick={() => show(saved)}>{t("guide.revert")}</button>
                 <button className="button button-primary" type="button" disabled={busy || !glossaryDirty || problems.size > 0} onClick={saveGlossary}>{t("guide.save")}</button>
+              </div>
+            </section>
+          ) : tab === "voices" ? (
+            <section className="guide-body">
+              <p className="field-hint">{t("guide.voices.hint")}</p>
+              {saved.voicesError ? <p className="ai-test-result failed"><UiIcon icon="circleAlert" size="xs" />{saved.voicesError}</p> : null}
+              {saved.voiceDiagnostics.length > 0 ? (
+                <details className="guide-diagnostics">
+                  <summary>{t("guide.voices.ignored", { count: saved.voiceDiagnostics.length })}</summary>
+                  <ul>{saved.voiceDiagnostics.map((problem) => <li key={problem.line}>{t("guide.glossary.line", { line: problem.line })}: {problem.message}</li>)}</ul>
+                </details>
+              ) : null}
+              <textarea className="input guide-guidance" value={voices} spellCheck placeholder={t("guide.voices.placeholder")} aria-label={t("guide.tab.voices")} onChange={(event) => setVoices(event.target.value)} />
+              <div className="dialog-actions">
+                <span className={voicesBytes > VOICES_LIMIT ? "guide-problems" : "muted"}>{t("guide.voices.size", { kib: (voicesBytes / 1024).toFixed(1) })}</span>
+                <button className="button button-ghost" type="button" disabled={busy || !voicesDirty} onClick={() => setVoices(saved.voices ?? "")}>{t("guide.revert")}</button>
+                <button className="button button-primary" type="button" disabled={busy || !voicesDirty || voicesBytes > VOICES_LIMIT} onClick={saveVoices}>{t("guide.save")}</button>
               </div>
             </section>
           ) : (

@@ -231,6 +231,9 @@ returned to the model as `{"error": …}` results instead of ending the turn.
 | `read_rows` | One `page_translation_rows` page of at most 50 scanned source rows, optionally filtered by state, with the `nextAfter` cursor. |
 | `get_unit` | One source row, or one column of it, with translations, review states, notes, unit IDs, and context cells. |
 | `other_languages` | The same row's translatable strings, or one column, in the game's other client languages as macro text, each bounded like other cell text; `null` where a language has no such string. Context for wording and tag placement; the translation is still made from the source language. |
+| `dialogue_context` | For a line of a quest or cutscene sheet (see [Dialogue context](#dialogue-context)): the quest's name and translation, its journal entries and objectives (up to 24 each), up to 40 spoken lines before and after the line (8 and 4 by default), each with its key, speaker label, source, translation, and review state, the voice profiles of their speakers and the speakers without one, and optionally the line in the other client languages. |
+| `speaker_lines` | One speaker label's lines across every quest and cutscene, up to 30 per page, with translations and the speaker's voice profile. An unknown label returns up to 20 labels that contain it: those that start with it first, then those with the most lines. |
+| `get_voices` | The voice profiles of given speaker labels, or every speaker label with a profile. |
 | `pending_changes` | Uncommitted translation changes from `aeria-git`, up to 200. |
 | `unit_history` | Committed history of one unit, up to 50 entries. |
 | `navigate_to` | Opens an occurrence in the editor; changes nothing in the project. |
@@ -283,6 +286,7 @@ instruction and may be wrong.
 | --- | --- |
 | `validate_target` | Rebuilds a tagged translation of one string without writing, and returns the target or the rule violations. |
 | `propose_translation` | Accepts 1 to 20 tagged translations. Each is rebuilt and checked; rejected ones return what to fix; valid ones are submitted and reported as `applied`, `awaitingApproval` (with a proposal ID), `conflict`, or `failed`. |
+| `propose_voice_profile` | Sets one character's voice profile or removes speaker labels from profiles; always waits for approval (see [Voice profiles](#voice-profiles)). |
 
 A valid translation records the string's target and review state at the time
 it was produced. Every write, immediate or approved, goes through
@@ -342,6 +346,49 @@ otherwise the proposal becomes a conflict.
 Draft with Angelica includes the guidance and the glossary entries matching
 the string.
 
+### Voice profiles
+
+`aeria-voices.md` ([Voice Profiles Format v1](../formats/voices-v1.md)) is a
+third optional, human-edited file at the repository root, shared through Git.
+Each profile names a character by the speaker labels of the game's dialogue
+keys and describes how the character speaks in the target language: register,
+forms of address, pronouns, archaisms, and examples. It is edited in the
+**Glossary and guidance** dialog or by hand, and read like the guidance, so
+edits take effect on the next message.
+
+Angelica's system message lists up to 100 speaker labels that have a profile.
+`dialogue_context` and `speaker_lines` include the profiles of the speakers
+they return, workers receive the profiles of their chunk's speakers, and Draft
+with Angelica receives the profile of the string's speaker. Each profile's
+text is cut at 2,000 characters in requests. Ignored profiles are reported as
+project file problems.
+
+`propose_voice_profile` is offered in Ask and Auto-draft modes. It replaces
+the one profile that names any of the given labels, or adds a profile, and
+can remove labels; the result is written in canonical form. Labels that
+belong to different profiles, and files with ignored profiles, are refused.
+The change always waits for approval and is applied like a glossary change:
+only if the file still has the content it was proposed against, and only if
+every profile of the new file is usable.
+
+### Dialogue context
+
+Quest and cutscene strings are dialogue. Their structure is read from the row
+keys by `aeria-source` (see [`source.md`](./source.md#dialogue)) and shaped by
+`aeria-ai::dialogue`. It is context only: nothing about it is recorded, and
+speaker labels, line order, and quest links never decide identity, validation,
+or writes.
+
+*Spoken lines* are speech and other lines; journal entries and objectives are
+not. `dialogue_context` returns neighbours only for a spoken line. The
+instructions tell Angelica to read a line's scene when its meaning, tone, or
+addressee is unclear, to say when she inferred who is addressed, and to
+compare the other client languages when the source is ambiguous and say which
+settled it, while still translating from the source language.
+
+The first `speaker_lines` call builds the speaker index (see
+[`source.md`](./source.md#dialogue)) outside the project lock.
+
 ### Proposals
 
 Proposals are stored beside their conversation in
@@ -357,7 +404,9 @@ the oldest settled ones first. Deleting a conversation deletes its proposals.
 The editor's **Draft with Angelica** uses Angelica's default model for one
 string without tools. The request carries the source in tagged form with its
 legend, the row's context cells, the current translation and note, and the
-project languages. The reply is read between `<translation>` markers,
+project languages. For a quest or cutscene string it also carries the
+string's speaker label and its scene as workers receive it, with the six
+spoken lines before the string. The reply is read between `<translation>` markers,
 rebuilt, and checked; a refused reply is sent back with the violations, for
 at most three requests in total. The result becomes an unsaved draft in the
 editor, which the user saves explicitly.
@@ -402,10 +451,15 @@ instructions, the project facts, guidance and matching glossary entries, the
 job's instructions as they are when the chunk starts, and its strings in
 tagged form with their legends, context cells, current translations,
 notes, and up to three translation-memory matches, followed by the job's
-images when the worker model accepts images. Images come from the job's
+images when the worker model accepts images. A chunk of a quest or cutscene
+sheet starts with its scene: the quest's name and translation, up to 12
+journal entries and objectives, the four spoken lines before the chunk's
+first string with their speakers and translations, and the voice profiles
+(at most 8) of those speakers and the chunk's; each string names its speaker
+label. A sheet whose dialogue cannot be read is translated without a scene. Images come from the job's
 conversation; after the conversation is deleted, workers are told they are no
-longer available. Its tools are `get_unit`, `other_languages`, and `read_rows` for
-context, `get_guidance`,
+longer available. Its tools are `get_unit`, `other_languages`, `read_rows`, and
+`dialogue_context` for context, `get_guidance` and `get_voices`,
 `validate_target`, `submit_translations` for the strings of its own chunk
 only, and `report_issue`, which records an event for Angelica. A worker has at
 most 8 responses. A submitted translation is rebuilt and written as a draft

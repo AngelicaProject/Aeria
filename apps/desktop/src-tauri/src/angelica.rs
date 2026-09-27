@@ -19,6 +19,7 @@ use aeria_ai::conversation::{
     Conversation, ConversationError, ConversationStore, ConversationSummary,
 };
 use aeria_ai::conversation::{ProposalRecord, ProposalStatus};
+use aeria_ai::dialogue::{DialogueKind, DialogueLine, LineRole, SheetDialogue, scene_brief};
 use aeria_ai::guidance::{GlossaryEntry, ProjectFile, ProjectGuide, read_project_file};
 use aeria_ai::images::{
     ImageError, ImagePayloads, ImageRef, MAX_IMAGES_PER_MESSAGE, data_url, decode_base64, inspect,
@@ -451,6 +452,84 @@ impl ProjectReader for DesktopReader {
         let root = self.with_session(|session| Ok(session.repository_root().to_owned()))?;
         read_project_file(&root, file).map_err(ToolError::new)
     }
+
+    fn dialogue(&self, sheet: &str) -> Result<Option<SheetDialogue>, ToolError> {
+        let source = self.with_session(|session| Ok(session.source_handle()))?;
+        let Some(dialogue) = source
+            .dialogue(sheet)
+            .map_err(|error| ToolError::new(error.to_string()))?
+        else {
+            return Ok(None);
+        };
+        let quest = source
+            .quest_row(sheet)
+            .map_err(|error| ToolError::new(error.to_string()))?;
+        Ok(Some(sheet_dialogue(dialogue, quest)))
+    }
+
+    fn speakers(&self, query: &str) -> Result<Vec<(String, usize)>, ToolError> {
+        let source = self.with_session(|session| Ok(session.source_handle()))?;
+        source
+            .speakers(query, speaker_scan_threads())
+            .map_err(|error| ToolError::new(error.to_string()))
+    }
+
+    fn speaker_lines(
+        &self,
+        speaker: &str,
+        offset: usize,
+        limit: usize,
+    ) -> Result<(usize, Vec<UnitLocation>), ToolError> {
+        let source = self.with_session(|session| Ok(session.source_handle()))?;
+        let (total, lines) = source
+            .speaker_lines(speaker, offset, limit, speaker_scan_threads())
+            .map_err(|error| ToolError::new(error.to_string()))?;
+        Ok((
+            total,
+            lines
+                .into_iter()
+                .map(|line| UnitLocation {
+                    sheet: line.sheet,
+                    row: line.row_id,
+                    subrow: line.subrow_id,
+                    column: None,
+                })
+                .collect(),
+        ))
+    }
+}
+
+/// Threads for the one-time scan of every dialogue sheet for speakers.
+fn speaker_scan_threads() -> usize {
+    std::thread::available_parallelism().map_or(1, |threads| threads.get().min(4))
+}
+
+/// Maps the game's dialogue structure to the tools' form.
+fn sheet_dialogue(dialogue: aeria_source::Dialogue, quest: Option<(u32, u16)>) -> SheetDialogue {
+    SheetDialogue {
+        kind: match dialogue.kind {
+            aeria_source::DialogueKind::Quest => DialogueKind::Quest,
+            aeria_source::DialogueKind::Cutscene => DialogueKind::Cutscene,
+        },
+        quest,
+        lines: dialogue
+            .lines
+            .into_iter()
+            .map(|line| DialogueLine {
+                row: line.row_id,
+                subrow: line.subrow_id,
+                column: line.column,
+                key: line.key,
+                role: match line.role {
+                    aeria_source::LineRole::Journal => LineRole::Journal,
+                    aeria_source::LineRole::Objective => LineRole::Objective,
+                    aeria_source::LineRole::Speech { speaker } => LineRole::Speech(speaker),
+                    aeria_source::LineRole::Other => LineRole::Other,
+                },
+                source: line.text,
+            })
+            .collect(),
+    }
 }
 
 pub(crate) fn repository_root(app: &tauri::AppHandle) -> CommandResult<std::path::PathBuf> {
@@ -479,6 +558,19 @@ pub(crate) fn apply_file_change(
     if file == ProjectFile::Glossary {
         aeria_ai::guidance::parse_glossary(content.as_bytes())
             .map_err(|error| (ProposalStatus::Failed, error.to_string()))?;
+    }
+    if file == ProjectFile::Voices
+        && let Some(problem) = aeria_ai::voices::parse_voices(content).diagnostics.first()
+    {
+        return Err((
+            ProposalStatus::Failed,
+            format!(
+                "{} line {}: {}",
+                file.file_name(),
+                problem.line,
+                problem.message
+            ),
+        ));
     }
     let path = root.join(file.file_name());
     let partial = root.join(format!(".{}.partial", file.file_name()));
@@ -1663,6 +1755,31 @@ fn draft_input(
     })
 }
 
+/// Spoken lines before a string shown with its scene in a draft.
+const DRAFT_SCENE_LINES: usize = 6;
+
+/// The speaker and the scene of a quest or cutscene string, for a draft.
+/// The scene is context only, so one that cannot be read is left out.
+fn draft_scene(
+    app: &tauri::AppHandle,
+    binding: &SourceBinding,
+) -> Option<(Option<String>, String)> {
+    let reader = DesktopReader { app: app.clone() };
+    let dialogue = reader.dialogue(binding.sheet_name()).ok()??;
+    let guide = ProjectGuide::load(&repository_root(app).ok()?);
+    let row = (binding.row_id(), binding.subrow_id());
+    let brief = scene_brief(
+        &reader,
+        &guide,
+        binding.sheet_name(),
+        &dialogue,
+        &[row],
+        DRAFT_SCENE_LINES,
+    )
+    .ok()?;
+    Some((dialogue.speaker(row.0, row.1).map(str::to_owned), brief))
+}
+
 #[tauri::command(rename_all = "camelCase")]
 /// Drafts a translation of one string with Angelica's default model. The
 /// draft is returned for the editor; nothing is saved.
@@ -1690,6 +1807,9 @@ pub async fn angelica_draft(
     let input_app = app.clone();
     let input_binding = binding.clone();
     let input = run_blocking(move || draft_input(&input_app, &input_binding, &selection)).await?;
+    let scene_app = app.clone();
+    let scene_binding = binding.clone();
+    let scene = run_blocking(move || Ok(draft_scene(&scene_app, &scene_binding))).await?;
     let client = app.state::<DesktopState>().ai_client()?;
     let location = format!(
         "{}:{}:{}:{}",
@@ -1714,6 +1834,9 @@ pub async fn angelica_draft(
             note: input.note.as_deref(),
             guidance: input.guidance.as_deref(),
             glossary: &input.glossary,
+            dialogue: scene
+                .as_ref()
+                .map(|(speaker, brief)| (speaker.as_deref(), brief.as_str())),
         },
     )
     .await
