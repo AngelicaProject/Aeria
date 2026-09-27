@@ -30,6 +30,11 @@ test("a color and its outline read as one styled span between two markers", () =
   ]);
 });
 
+test("a line break at the end still starts a line for the cursor", () => {
+  assert.deepEqual(view("a<br>"), ["[↵]", "⏎"]);
+  assert.deepEqual(chipSpecs("a<br>", lookup, ru).find((spec) => spec.kind === "break"), { kind: "break", at: 5, indent: 0, assoc: 1 });
+});
+
 test("nested formatting keeps the innermost color and adds italics", () => {
   assert.deepEqual(view("<ui-color 504>a<i>b</i></ui-color>"), [
     "⟨#00cc22ff:<ui-color 504>",

@@ -86,13 +86,12 @@ class BreakWidget extends WidgetType {
   toDOM(): HTMLElement {
     const wrapper = document.createElement("span");
     wrapper.className = "cm-chip-break-line";
-    wrapper.append(document.createElement("br"));
-    if (this.indent > 0) {
-      const indent = document.createElement("span");
-      indent.className = "cm-chip-indent";
-      indent.style.width = `${this.indent * 1.5}em`;
-      wrapper.append(indent);
-    }
+    // The indent is there even when empty: it gives the new line a box, so
+    // a cursor after the break is drawn on it at the end of the text too.
+    const indent = document.createElement("span");
+    indent.className = "cm-chip-indent";
+    indent.style.width = `${this.indent * 1.5}em`;
+    wrapper.append(document.createElement("br"), indent);
     return wrapper;
   }
 }

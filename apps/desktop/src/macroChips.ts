@@ -249,8 +249,10 @@ export function chipSpecs(text: string, lookup: ChipLookup, t: Translate): ChipS
     const bold = open.some((entry) => entry.name === "b");
     if (color || italic || bold) specs.push({ kind: "style", from, to, color, italic, bold });
   };
-  const lineBreak = (at: number, indent: number, assoc: -1 | 1) => {
-    if (at <= 0 || at >= text.length) return;
+  // A break at the very end only after `<br>`: the cursor after a new line
+  // break needs the line it starts.
+  const lineBreak = (at: number, indent: number, assoc: -1 | 1, atEnd = false) => {
+    if (at <= 0 || at > text.length || (at === text.length && !atEnd)) return;
     const previous = specs.at(-1);
     if (previous?.kind === "break" && previous.at === at) {
       previous.indent = indent;
@@ -301,7 +303,7 @@ export function chipSpecs(text: string, lookup: ChipLookup, t: Translate): ChipS
     }
     if (!FORMATTING.has(tag.name)) {
       specs.push({ kind: "chip", from: tag.from, to: tag.to, ...chipOf(tag, t), insert: tag.text });
-      if (tag.name === "br") lineBreak(tag.to, inside.length, 1);
+      if (tag.name === "br") lineBreak(tag.to, inside.length, 1, true);
       return;
     }
     const side = tag.closing ? "close" : "open";

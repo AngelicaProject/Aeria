@@ -198,7 +198,7 @@
 /* A value branch such as {240}: the value itself, marked as not translatable. */
 .cm-chip-number { margin: 0 1px; padding: 0 2px; background: transparent; color: var(--macro); font-family: inherit; font-size: 1em; font-weight: 600; }
 /* A line the chip view starts: after <br> and around the branches of complex conditions. */
-.cm-chip-indent { display: inline-block; height: 1px; }
+.cm-chip-indent { display: inline-block; height: 1em; vertical-align: text-bottom; }
 /* Source chips can be picked into the translation. */
 .macro-editor .is-pickable .cm-chip,
 .macro-editor .is-pickable .cm-chip-marker { cursor: copy; }
