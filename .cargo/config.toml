@@ -1,0 +1,6 @@
+[env]
+# The bundled SQLite of `libsqlite3-sys` enables memory management, which
+# makes every connection share one page cache behind a global mutex. Parallel
+# translation-memory searches then spin on that mutex; see
+# docs/development/dependencies.md.
+LIBSQLITE3_FLAGS = "-USQLITE_ENABLE_MEMORY_MANAGEMENT"

@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::conversation::{ProposalRecord, ProposalStatus};
 use crate::guidance::{ProjectGuide, parse_glossary};
-use crate::style::{ORIGINAL_TEXT, PERSONA, REPLY_STYLE, TRANSLATION_STYLE};
+use crate::style::{ORIGINAL_TEXT, PERSONA, PLAYER_CHARACTER, REPLY_STYLE, TRANSLATION_STYLE};
 use crate::tools::{ProjectFacts, UnitLocation};
 
 /// Angelica's fixed code and display name. It is never localized.
@@ -95,8 +95,8 @@ formatting follow the target language, not the source's shape.
 - Keep every macro marked as game data; it may move or repeat. Keep the source's \
 formatting as often as the source has it, in any order. Conditions may be reworded, \
 restructured, added, or dropped: add one where the target language must agree with the \
-player character's gender or another known value. Write \\< \\{ \\\\ for literal \
-characters.
+player character's gender (see The player character above) or another known value. \
+Write \\< \\{ \\\\ for literal characters.
 - Use validate_target when unsure. propose_translation checks every translation and \
 returns what to fix for any it rejects; correct and propose those again.
 - Propose at most 20 strings per call. For more than a few pages of strings, such as a \
@@ -188,7 +188,13 @@ pub fn system_prompt(
     proposals: &[ProposalRecord],
 ) -> String {
     let mut prompt = String::from(INSTRUCTIONS);
-    for section in [ORIGINAL_TEXT, PERSONA, REPLY_STYLE, TRANSLATION_STYLE] {
+    for section in [
+        ORIGINAL_TEXT,
+        PERSONA,
+        REPLY_STYLE,
+        TRANSLATION_STYLE,
+        PLAYER_CHARACTER,
+    ] {
         prompt.push_str("\n\n");
         prompt.push_str(section);
     }
@@ -492,6 +498,7 @@ mod tests {
         assert!(prompt.contains(ORIGINAL_TEXT));
         assert!(prompt.contains(REPLY_STYLE));
         assert!(prompt.contains(TRANSLATION_STYLE));
+        assert!(prompt.contains(PLAYER_CHARACTER));
     }
 
     #[test]

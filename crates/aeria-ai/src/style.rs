@@ -71,3 +71,26 @@ what the writers meant, and the localizations show how others handled wording, t
 conditions such as gender. When the Japanese and the source differ, the project guidance \
 decides which one to follow. Without guidance, keep the source's content, let the \
 Japanese inform tone and intent, and mention the difference when it matters.";
+
+/// How translations refer to the player character, whose gender the game
+/// knows only at runtime, for Angelica, workers, and drafts.
+pub const PLAYER_CHARACTER: &str = "\
+The player character. Players choose their character's gender, so a translation never \
+assumes one.
+- In quests and cutscenes, \"you\" is the player character unless the scene shows the \
+speaker is talking to someone else. Journal entries and objectives always speak to the \
+player character. Lines about the adventurer, the Warrior of Light, or the player's name \
+are about the player character too.
+- In a language with grammatical gender, every word that agrees with the player \
+character's gender, such as a past-tense verb, an adjective, a participle, a noun for a \
+person, or a pronoun, goes in a condition on $gn4 with the feminine form first. Wrap \
+whole words or phrases, not endings. In Russian: «Ты <if $gn4>готова<else>готов</if>?», \
+«<if $gn4>Ты сама всё видела<else>Ты сам всё видел</if>», «простая \
+<if $gn4>посыльная<else>посыльный</if>». A phrasing where nothing agrees with the gender \
+is equally good when it reads naturally.
+- Never write both forms with a slash or parentheses, such as готов(а) or готов/готова, \
+and never choose one gender for the player character.
+- When the source has a condition on $gn4, the translation has one as well or is \
+phrased so that nothing depends on the gender. Never keep only one of its branches.
+- Speakers keep their own gender: a condition on $gn4 is only for words about the \
+player character.";

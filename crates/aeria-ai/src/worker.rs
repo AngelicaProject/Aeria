@@ -15,14 +15,14 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::chat::ToolDefinition;
-use crate::dialogue::{SheetDialogue, scene_brief};
+use crate::dialogue::{LineRole, SheetDialogue, scene_brief};
 use crate::guidance::ProjectGuide;
 use crate::jobs::{JobUnit, UnitStatus};
 use crate::search::MemoryMatch;
-use crate::style::{ORIGINAL_TEXT, TRANSLATION_STYLE};
+use crate::style::{ORIGINAL_TEXT, PLAYER_CHARACTER, TRANSLATION_STYLE};
 use crate::tools::{
-    ContextCell, ProjectFacts, ProjectReader, ReadTools, ToolError, ToolOutput, UnitLocation,
-    UnitState, read_tool_definitions,
+    ContextCell, ProjectFacts, ProjectReader, ReadTools, ReviewLabel, ToolError, ToolOutput,
+    UnitLocation, UnitState, read_tool_definitions,
 };
 
 /// Most model responses one worker may use for its chunk.
@@ -112,13 +112,16 @@ order, conditions, and formatting follow the target language. Each string lists 
 macros do. Keep every macro marked as game data; it may move or repeat. Keep the \
 source's formatting as often as the source has it, in any order. Conditions may be \
 reworded, restructured, added, or dropped: add one where the target language must agree \
-with the player character's gender or another known value. Write \\< \\{ \\\\ for \
-literal characters.
+with the player character's gender (see The player character below) or another known \
+value. Write \\< \\{ \\\\ for literal characters.
 - The game cannot compute number endings, so prefer number-neutral phrasing.
 - Follow the project guidance and glossary, inflecting glossary terms as the target \
 language needs and never using a forbidden variant.
-- Translation memory lists existing translations of similar sources; keep their wording \
-where the source is the same, and stay consistent with them otherwise.
+- Translation memory lists existing translations of similar sources with their review \
+state. Keep the wording of reviewed ones where the source is the same, and stay \
+consistent with them otherwise. Unreviewed drafts are unchecked machine translations: \
+follow their names and terms for consistency, but never copy a mistake, such as a word \
+that assumes the player character's gender.
 - Use get_unit, read_rows, or get_guidance when a string needs more context, and \
 other_languages when its meaning, joke, or tone is unclear.
 - Quest and cutscene strings come with their scene: the quest, the lines before, between, \
@@ -298,7 +301,7 @@ impl ChunkWorker {
         let mut prompt = String::from(WORKER_INSTRUCTIONS);
         prompt.push('\n');
         prompt.push_str(&aeria_se::authoring_reference());
-        for section in [ORIGINAL_TEXT, TRANSLATION_STYLE] {
+        for section in [ORIGINAL_TEXT, TRANSLATION_STYLE, PLAYER_CHARACTER] {
             prompt.push_str("\n\n");
             prompt.push_str(section);
         }
@@ -352,12 +355,23 @@ impl ChunkWorker {
                 location.column.unwrap_or(0)
             );
             let _ = writeln!(message, "<source>{}</source>", context.source);
-            if let Some(speaker) = self
+            match self
                 .dialogue
                 .as_ref()
-                .and_then(|dialogue| dialogue.speaker(location.row, location.subrow))
+                .and_then(|dialogue| dialogue.role(location.row, location.subrow))
             {
-                let _ = writeln!(message, "- speaker: {speaker}");
+                Some(LineRole::Speech(speaker)) => {
+                    let _ = writeln!(message, "- speaker: {speaker}");
+                }
+                Some(LineRole::Journal) => {
+                    message.push_str(
+                        "- quest journal entry, speaking to the player character as \"you\"\n",
+                    );
+                }
+                Some(LineRole::Objective) => {
+                    message.push_str("- quest objective, speaking to the player character\n");
+                }
+                Some(LineRole::Other) | None => {}
             }
             for construct in &constructs {
                 let _ = writeln!(message, "- macro {}", construct.legend());
@@ -376,9 +390,14 @@ impl ChunkWorker {
                 let _ = writeln!(message, "- translator note: {note}");
             }
             for memory in &context.memory {
+                let review = match memory.review_state {
+                    ReviewLabel::Reviewed => "reviewed",
+                    ReviewLabel::NeedsReview => "needs review",
+                    ReviewLabel::Draft => "unreviewed draft",
+                };
                 let _ = writeln!(
                     message,
-                    "- translation memory ({:.0} % similar): {} → {}",
+                    "- translation memory ({:.0} % similar, {review}): {} → {}",
                     memory.similarity * 100.0,
                     memory.source,
                     memory.target
@@ -749,20 +768,23 @@ mod tests {
             sheet: &str,
         ) -> Result<Option<crate::dialogue::SheetDialogue>, ToolError> {
             use crate::dialogue::{DialogueKind, DialogueLine, LineRole, SheetDialogue};
-            let line = |row: u32, speaker: &str, source: &str| DialogueLine {
+            let line = |row: u32, role: LineRole, source: &str| DialogueLine {
                 row,
                 subrow: 0,
                 column: 0,
                 key: format!("TEXT_{row}"),
-                role: LineRole::Speech(speaker.to_owned()),
+                role,
                 source: source.to_owned(),
             };
+            let speech = |speaker: &str| LineRole::Speech(speaker.to_owned());
             Ok((sheet == "Item").then(|| SheetDialogue {
                 kind: DialogueKind::Cutscene,
                 quest: None,
                 lines: vec![
-                    line(0, "URIANGER", "Well met."),
-                    line(1, "ALPHINAUD", "Hi!"),
+                    line(0, speech("URIANGER"), "Well met."),
+                    line(1, speech("ALPHINAUD"), "Hi!"),
+                    line(2, LineRole::Journal, "Bye"),
+                    line(3, LineRole::Objective, "Aether"),
                 ],
             }))
         }
@@ -814,6 +836,31 @@ mod tests {
     }
 
     #[test]
+    fn chunk_strings_say_who_they_address_and_how_far_memory_is_checked() {
+        let (host, guide) = host_and_guide();
+        let worker = ChunkWorker::new(
+            vec![job_unit(10, 1), job_unit(11, 2), job_unit(12, 3)],
+            host,
+            Arc::new(Reader),
+            guide,
+        );
+        let message = worker.chunk_message();
+        assert!(message.contains(
+            "<source>Bye</source>
+- quest journal entry, speaking to the player character as \"you\"
+"
+        ));
+        assert!(message.contains(
+            "<source>Aether</source>
+- quest objective, speaking to the player character
+"
+        ));
+        assert!(message.contains(
+            "- translation memory (90 % similar, reviewed): Hi <player-name $n1>. → Привет, <player-name $n1>."
+        ));
+    }
+
+    #[test]
     fn a_worker_writes_its_own_units_and_reports_outcomes() {
         let (host, guide) = host_and_guide();
         let worker = ChunkWorker::new(
@@ -832,6 +879,10 @@ mod tests {
         assert!(message.starts_with(
             "Scene of these strings:
 Cutscene sheet Item.
+Quest journal:
+- Bye
+Objectives:
+- Aether
 Lines before, in sheet order:
 - URIANGER: Well met.
 "
@@ -844,9 +895,6 @@ Lines before, in sheet order:
         ));
         assert!(message.contains("<source>Hi <player-name $n1>!</source>"));
         assert!(message.contains("- translator note: greeting"));
-        assert!(message.contains(
-            "- translation memory (90 % similar): Hi <player-name $n1>. → Привет, <player-name $n1>."
-        ));
         assert!(message.contains("- current translation, to replace: Пока"));
         assert!(message.contains("- glossary: Aether → Эфир"));
         assert!(!message.contains("Unit 4"));
@@ -854,6 +902,7 @@ Lines before, in sheet order:
         assert!(prompt.contains("Job instructions:\nUse formal address."));
         assert!(prompt.contains("<guidance>\nBe brief.\n</guidance>"));
         assert!(prompt.contains(TRANSLATION_STYLE));
+        assert!(prompt.contains(PLAYER_CHARACTER));
 
         let output = worker.execute(
             "submit_translations",

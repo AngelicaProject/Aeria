@@ -426,10 +426,14 @@ impl SourceIndex {
             .collect::<Vec<_>>()
             .join(" OR ");
         let connection = self.connect()?;
+        // Rank in the full-text index first and read only the best cells:
+        // joining before the limit reads the text of every match.
         let mut statement = connection.prepare(
             "SELECT c.sheet, c.row_id, c.subrow_id, c.column_index, c.macro, c.plain
-             FROM cells_fts JOIN cells c ON c.id = cells_fts.rowid
-             WHERE cells_fts MATCH ?1 ORDER BY bm25(cells_fts), c.id LIMIT ?2",
+             FROM (SELECT rowid AS id, bm25(cells_fts) AS score FROM cells_fts
+                   WHERE cells_fts MATCH ?1 ORDER BY score, rowid LIMIT ?2) best
+             JOIN cells c ON c.id = best.id
+             ORDER BY best.score, c.id",
         )?;
         let mut similar = statement
             .query_map(params![query, SIMILAR_CANDIDATES], |row| {
