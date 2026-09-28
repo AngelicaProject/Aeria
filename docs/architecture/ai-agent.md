@@ -4,7 +4,9 @@
 > describes the intended design of Aeria's AI agent so that the
 > implementation milestones can be reviewed against one plan. Decisions still
 > open are listed in [Open questions](#open-questions). The general AI
-> invariants in [`ai.md`](./ai.md) apply and take precedence.
+> invariants in [`ai.md`](./ai.md) apply and take precedence. How agents are
+> to localize the whole corpus is proposed in
+> [`localization-system.md`](./localization-system.md).
 
 ## Purpose
 

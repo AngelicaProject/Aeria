@@ -19,6 +19,7 @@ Start with [`overview.md`](./overview.md). It defines the major runtime boundari
 | Search and translation memory | [`search.md`](./search.md) | `aeria-search` |
 | Translation assistance | [`ai.md`](./ai.md) | `aeria-ai` |
 | Angelica agent (proposal) | [`ai-agent.md`](./ai-agent.md) | `aeria-ai`, desktop AI dock |
+| Agent localization system (proposal) | [`localization-system.md`](./localization-system.md) | `aeria-ai` |
 | Runtime translation pack export | [`export.md`](./export.md) | `aeria-export` |
 
 Architecture documents own boundaries and invariants, not low-level coding style. Implementation conventions belong under [`../development/`](../development/README.md), while serialized contracts belong under [`../formats/`](../formats/README.md).

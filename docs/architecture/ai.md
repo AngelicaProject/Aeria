@@ -7,6 +7,11 @@ Aeria remains usable without a configured AI provider.
 The proposed design of the Angelica agent, its tools, and batch jobs is in
 [`ai-agent.md`](./ai-agent.md).
 
+The proposed [agent localization system](./localization-system.md) replaces
+translation job workers and the guidance, glossary, and voice profile files
+with localizer and critic subagents and agent-maintained project knowledge,
+and lets agents write final translations.
+
 ## Provider boundary
 
 The core interface is provider-neutral. Additional provider adapters are justified when they offer useful capabilities beyond the common protocol.
