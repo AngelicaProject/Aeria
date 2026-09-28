@@ -611,10 +611,12 @@ button.angelica-chip:hover { background: var(--hover); color: var(--fg); }
 .angelica-job-bar { display: flex; height: 4px; overflow: hidden; border-radius: 2px; background: var(--line); }
 .angelica-job-bar > span { flex: none; height: 100%; transition: width 0.3s ease; }
 .angelica-job-bar > .drafted { background: var(--accent); }
+.angelica-job-bar > .flagged { background: var(--warn); }
 .angelica-job-bar > .problems { background: var(--bad); }
 .angelica-job-bar > .running { background: color-mix(in srgb, var(--accent) 45%, transparent); }
 .angelica-job-stats { display: flex; flex-wrap: wrap; gap: 2px 10px; min-width: 0; color: var(--fg-muted); font-variant-numeric: tabular-nums; }
 .angelica-job-problems { color: var(--bad); }
+.angelica-job-flagged { color: var(--warn); }
 .angelica-job-reason { display: flex; align-items: center; gap: 5px; min-width: 0; margin: 0; color: var(--warn); }
 .angelica-job-reason > svg { flex: none; }
 .angelica-job-reason > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -654,18 +656,7 @@ button.angelica-chip:hover { background: var(--hover); color: var(--fg); }
 .angelica-worker-silence { color: var(--warn); }
 .angelica-worker.stalled .angelica-worker-silence { color: var(--bad); }
 .angelica-worker-meta { display: flex; flex-wrap: wrap; gap: 0 8px; min-width: 0; color: var(--fg-subtle); }
-.angelica-worker-target { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 6px; min-width: 0; padding-left: 13px; }
-.angelica-worker-unit { flex: none; color: var(--accent-text); font-variant-numeric: tabular-nums; }
-.angelica-worker-target .mono { flex: none; color: var(--fg-muted); font-family: var(--font-mono); font-size: var(--text-2xs); }
-.angelica-worker-source { display: -webkit-box; flex: 1 1 100%; min-width: 0; overflow: hidden; color: var(--fg); overflow-wrap: anywhere; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
 .angelica-worker-meta > span { overflow: hidden; max-width: 100%; text-overflow: ellipsis; white-space: nowrap; }
-.angelica-worker-thought { display: grid; gap: 1px; min-width: 0; margin-top: 2px; padding: 1px 0 1px 8px; border: 0; border-left: 2px solid var(--line-strong); background: transparent; color: var(--fg-muted); font: inherit; text-align: left; overflow-wrap: anywhere; cursor: pointer; }
-.angelica-worker-thought.live { border-left-color: var(--accent); }
-.angelica-worker-thought:hover { color: var(--fg); }
-.angelica-worker-thought-heading { overflow: hidden; color: var(--fg); font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
-/* The newest lines stay in view: overflow is cut from the top. */
-.angelica-worker-thought-tail { display: flex; flex-direction: column-reverse; max-height: calc(3 * 1.45em); overflow: hidden; line-height: 1.45; white-space: pre-wrap; mask-image: linear-gradient(to bottom, transparent, #000 1.2em); }
-.angelica-worker-thought-full { line-height: 1.45; white-space: pre-wrap; }
 .angelica-proposal { display: grid; gap: 4px; padding: 6px 8px; border: 1px solid var(--line); border-radius: var(--radius-sm); }
 .angelica-proposal.conflict,
 .angelica-proposal.failed { border-color: color-mix(in srgb, var(--bad) 40%, transparent); }

@@ -678,9 +678,9 @@ export type JobSpec = { scope: JobScope; instructions: string; model: AiModelSel
 
 export type JobStatus = "running" | "paused" | "completed" | "cancelled";
 
-export type JobUnitStatus = "pending" | "running" | "drafted" | "rejected" | "failed" | "conflict";
+export type JobUnitStatus = "pending" | "running" | "drafted" | "finished" | "flagged" | "rejected" | "failed" | "conflict";
 
-export type JobCounts = { total: number; pending: number; running: number; drafted: number; rejected: number; failed: number; conflict: number };
+export type JobCounts = { total: number; pending: number; running: number; drafted: number; finished: number; flagged: number; rejected: number; failed: number; conflict: number };
 
 export type JobSummary = {
   id: string;
@@ -715,7 +715,10 @@ export type JobEvent = { seq: number; createdAtUnixMs: number; kind: string; mes
 
 export type JobAction = "pause" | "resume" | "cancel";
 
-export type WorkerPhase = "idle" | "preparing" | "waiting" | "reasoning" | "writing" | "tool" | "recording" | "backoff" | "stopped";
+export type WorkerPhase = "idle" | "preparing" | "waiting" | "reasoning" | "writing" | "recording" | "backoff" | "stopped";
+
+/** The localizer step a lane is on. */
+export type WorkerStep = "contract" | "writing" | "reviewing" | "fixing" | "rechecking";
 
 /** What one lane of a running job is doing; live state, never stored. */
 export type WorkerActivity = {
@@ -725,34 +728,22 @@ export type WorkerActivity = {
   sheet: string | null;
   units: number;
   finishedUnits: number;
+  /** The localizer step, while a chunk runs. */
+  step: WorkerStep | null;
+  /** The step's number, from 1, and the number of steps. */
   round: number;
   maxRounds: number;
-  tool: string | null;
+  /** Requests of the current step that have not answered yet. */
+  requests: number;
   chunkTokens: number;
   chunksDone: number;
   phaseStartedUnixMs: number;
   lastActivityUnixMs: number;
   retryAtUnixMs: number | null;
   lastError: string | null;
-  /** The end of the lane's latest streamed reasoning. */
-  thought: string | null;
   /** The first and last source row of the current chunk. */
   firstRow: number | null;
   lastRow: number | null;
-  /** Strings whose translation the current response has streamed so far. */
-  streamedUnits: number;
-  /** Translations in the submission the `tool` phase checks and writes. */
-  toolUnits: number;
-  /** The string the lane is writing, checking, or reading about. */
-  target: WorkerTarget | null;
-};
-
-export type WorkerTarget = {
-  /** The string's number in the chunk, from 1; null for a context read. */
-  unit: number | null;
-  address: string;
-  /** The start of the source as plain text; empty when unknown. */
-  source: string;
 };
 
 export type GlossaryEntry = { term: string; translation: string; note?: string; forbidden?: string[] };

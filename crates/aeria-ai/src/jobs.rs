@@ -18,9 +18,10 @@ use crate::tools::{ReviewLabel, UnitLocation, UnitState};
 
 /// Most strings in one chunk.
 pub const CHUNK_UNITS: usize = 30;
-/// Most strings in one chunk of a quest or cutscene sheet.
-pub const DIALOGUE_CHUNK_UNITS: usize = 60;
-/// Most source characters in one chunk.
+/// Most strings in one chunk of a quest or cutscene sheet: the localizer
+/// translates a whole scene at once, in parallel parts.
+pub const DIALOGUE_CHUNK_UNITS: usize = crate::localizer::MAX_UNIT_LINES;
+/// Most source characters in one chunk of a sheet that is not dialogue.
 pub const CHUNK_SOURCE_CHARS: usize = 12_000;
 /// Most workers one job runs at once.
 pub const MAX_CONCURRENCY: u8 = 16;
@@ -99,7 +100,13 @@ pub enum UnitStatus {
     Pending,
     /// Claimed by a running worker.
     Running,
+    /// Written as a draft by an earlier version of Aeria.
     Drafted,
+    /// Written as a final translation: the critics left nothing open.
+    Finished,
+    /// Written, but a critic's major finding is still open; the string
+    /// needs review and the message says why.
+    Flagged,
     /// The worker's translation broke the structure after its corrections.
     Rejected,
     /// The worker did not translate the string or a provider request failed.
@@ -114,6 +121,8 @@ impl UnitStatus {
             Self::Pending => "pending",
             Self::Running => "running",
             Self::Drafted => "drafted",
+            Self::Finished => "finished",
+            Self::Flagged => "flagged",
             Self::Rejected => "rejected",
             Self::Failed => "failed",
             Self::Conflict => "conflict",
@@ -124,6 +133,8 @@ impl UnitStatus {
         match value {
             "running" => Self::Running,
             "drafted" => Self::Drafted,
+            "finished" => Self::Finished,
+            "flagged" => Self::Flagged,
             "rejected" => Self::Rejected,
             "failed" => Self::Failed,
             "conflict" => Self::Conflict,
@@ -160,6 +171,10 @@ pub struct JobCounts {
     pub pending: u64,
     pub running: u64,
     pub drafted: u64,
+    #[serde(default)]
+    pub finished: u64,
+    #[serde(default)]
+    pub flagged: u64,
     pub rejected: u64,
     pub failed: u64,
     pub conflict: u64,
@@ -169,7 +184,7 @@ impl JobCounts {
     /// Strings with a final outcome.
     #[must_use]
     pub const fn processed(&self) -> u64 {
-        self.drafted + self.rejected + self.failed + self.conflict
+        self.drafted + self.finished + self.flagged + self.rejected + self.failed + self.conflict
     }
 }
 
@@ -249,12 +264,16 @@ pub struct ScopedUnit {
     pub source_chars: usize,
 }
 
+fn is_dialogue(sheet: &str) -> bool {
+    sheet.starts_with("quest/") || sheet.starts_with("cut_scene/")
+}
+
 /// The most strings a chunk of `sheet` may hold when the job has `count` of
 /// the sheet's strings in a row. A quest or cutscene sheet is one scene, so
-/// its chunks hold up to [`DIALOGUE_CHUNK_UNITS`] strings and are split
-/// evenly, so no chunk is left with a few stray lines.
+/// it is one chunk up to [`DIALOGUE_CHUNK_UNITS`] strings; a larger one is
+/// split evenly, so no chunk is left with a few stray lines.
 fn chunk_unit_limit(sheet: &str, count: usize) -> usize {
-    if sheet.starts_with("quest/") || sheet.starts_with("cut_scene/") {
+    if is_dialogue(sheet) {
         count.div_ceil(count.div_ceil(DIALOGUE_CHUNK_UNITS).max(1))
     } else {
         CHUNK_UNITS
@@ -262,8 +281,9 @@ fn chunk_unit_limit(sheet: &str, count: usize) -> usize {
 }
 
 /// Chunk numbers for units in order: a new chunk starts at a new sheet or
-/// when a chunk would exceed its string limit (see [`chunk_unit_limit`]) or
-/// [`CHUNK_SOURCE_CHARS`] source characters.
+/// when a chunk would exceed its string limit (see [`chunk_unit_limit`]) or,
+/// outside quest and cutscene sheets, [`CHUNK_SOURCE_CHARS`] source
+/// characters.
 #[must_use]
 pub fn assign_chunks(units: &[ScopedUnit]) -> Vec<u64> {
     let mut chunks = Vec::with_capacity(units.len());
@@ -283,7 +303,7 @@ pub fn assign_chunks(units: &[ScopedUnit]) -> Vec<u64> {
         if chunk_units > 0
             && (new_sheet
                 || chunk_units >= limit
-                || chunk_chars + unit.source_chars > CHUNK_SOURCE_CHARS)
+                || (!is_dialogue(sheet) && chunk_chars + unit.source_chars > CHUNK_SOURCE_CHARS))
         {
             chunk += 1;
             chunk_units = 0;
@@ -310,12 +330,14 @@ pub struct JobEstimate {
     pub history_chunk_tokens: Option<u64>,
 }
 
-/// Per-request overhead in the token estimate: instructions, tools,
-/// guidance, and the strings' context.
-const CHUNK_OVERHEAD_TOKENS: u64 = 6000;
-/// Responses a worker typically needs for a chunk. Every request resends
-/// the whole turn, so the chunk's input is paid once per response.
-const EXPECTED_ROUNDS: u64 = 3;
+/// Tokens a chunk costs besides its strings in the estimate: the
+/// localizer's instructions and project knowledge, sent with each of its
+/// requests. Measured on quests with the localizer.
+const CHUNK_OVERHEAD_TOKENS: u64 = 50_000;
+/// Tokens per source character in the estimate: the script with the other
+/// languages, read by the contract, the writers, and the critics, and the
+/// translation written and fixed. Measured on quests with the localizer.
+const TOKENS_PER_SOURCE_CHAR: u64 = 13;
 /// Finished chunks of earlier jobs needed before their average replaces
 /// the formula.
 pub const HISTORY_MIN_CHUNKS: u64 = 3;
@@ -325,14 +347,13 @@ const HISTORY_JOBS: usize = 20;
 impl JobEstimate {
     /// Estimates a job over `units`. `history_chunk_tokens` is the average
     /// per chunk of earlier jobs with the same model; without it the
-    /// estimate assumes [`EXPECTED_ROUNDS`] responses per chunk, each
-    /// resending the overhead and the source, plus the source written once.
+    /// estimate is [`CHUNK_OVERHEAD_TOKENS`] per chunk plus
+    /// [`TOKENS_PER_SOURCE_CHAR`] per source character.
     #[must_use]
     pub fn for_units(units: &[ScopedUnit], history_chunk_tokens: Option<u64>) -> Self {
         let chunks = assign_chunks(units).last().map_or(0, |last| last + 1);
         let characters: u64 = units.iter().map(|unit| unit.source_chars as u64).sum();
-        let formula =
-            chunks * CHUNK_OVERHEAD_TOKENS * EXPECTED_ROUNDS + characters * (EXPECTED_ROUNDS + 1);
+        let formula = chunks * CHUNK_OVERHEAD_TOKENS + characters * TOKENS_PER_SOURCE_CHAR;
         Self {
             units: units.len() as u64,
             chunks,
@@ -596,6 +617,8 @@ impl JobStore {
                 UnitStatus::Pending => counts.pending += count,
                 UnitStatus::Running => counts.running += count,
                 UnitStatus::Drafted => counts.drafted += count,
+                UnitStatus::Finished => counts.finished += count,
+                UnitStatus::Flagged => counts.flagged += count,
                 UnitStatus::Rejected => counts.rejected += count,
                 UnitStatus::Failed => counts.failed += count,
                 UnitStatus::Conflict => counts.conflict += count,
@@ -909,7 +932,11 @@ impl JobStore {
             .filter(|status| {
                 !matches!(
                     status,
-                    UnitStatus::Pending | UnitStatus::Running | UnitStatus::Drafted
+                    UnitStatus::Pending
+                        | UnitStatus::Running
+                        | UnitStatus::Drafted
+                        | UnitStatus::Finished
+                        | UnitStatus::Flagged
                 )
             })
             .map(|status| format!("'{}'", status.as_str()))
@@ -1163,15 +1190,16 @@ mod tests {
     }
 
     #[test]
-    fn dialogue_sheets_split_into_even_larger_chunks() {
+    fn dialogue_sheets_are_whole_chunks_and_long_ones_split_evenly() {
         let quest = "quest/001/ManFst004_00124";
-        let mut units: Vec<ScopedUnit> = (0..70).map(|row| unit(quest, row, 10)).collect();
-        units.extend((0..40).map(|row| unit("cut_scene/024/VoiceMan_02400", row, 10)));
+        // Long source lines do not split a scene.
+        let mut units: Vec<ScopedUnit> = (0..70).map(|row| unit(quest, row, 1_000)).collect();
+        units.extend((0..300).map(|row| unit("cut_scene/024/VoiceMan_02400", row, 10)));
         let chunks = assign_chunks(&units);
         let sizes: Vec<usize> = (0..=chunks[chunks.len() - 1])
             .map(|chunk| chunks.iter().filter(|&&c| c == chunk).count())
             .collect();
-        assert_eq!(sizes, [35, 35, 40]);
+        assert_eq!(sizes, [70, 150, 150]);
     }
 
     #[test]
@@ -1183,8 +1211,7 @@ mod tests {
         assert_eq!(estimate.chunks, 2);
         assert_eq!(
             estimate.estimated_tokens,
-            2 * CHUNK_OVERHEAD_TOKENS * EXPECTED_ROUNDS
-                + u64::from(count) * 30 * (EXPECTED_ROUNDS + 1)
+            2 * CHUNK_OVERHEAD_TOKENS + u64::from(count) * 30 * TOKENS_PER_SOURCE_CHAR
         );
         assert_eq!(estimate.history_chunk_tokens, None);
         assert_eq!(JobEstimate::for_units(&[], None).chunks, 0);

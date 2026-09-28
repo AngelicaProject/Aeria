@@ -15,6 +15,7 @@ import {
   isToolError,
   jobProblems,
   jobProgress,
+  jobWritten,
   modelAcceptsImages,
   parseReply,
   parseSpans,
@@ -115,9 +116,10 @@ test("automatic messages from Aeria are shown as notices", () => {
 });
 
 test("job progress counts final outcomes and problems", () => {
-  const counts = { total: 10, pending: 4, running: 2, drafted: 2, rejected: 1, failed: 0, conflict: 1 };
-  assert.equal(jobProgress(counts), 0.4);
-  assert.equal(jobProblems(counts), 2);
+  const counts = { total: 12, pending: 4, running: 2, drafted: 1, finished: 1, flagged: 2, rejected: 1, failed: 0, conflict: 1 };
+  assert.equal(jobWritten(counts), 4, "final, needing review, and drafts of earlier jobs");
+  assert.equal(jobProgress(counts), 0.5);
+  assert.equal(jobProblems(counts), 2, "only outcomes that can be retried");
   assert.equal(jobProgress({ ...counts, total: 0 }), 1);
 });
 

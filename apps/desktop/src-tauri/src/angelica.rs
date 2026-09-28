@@ -645,14 +645,19 @@ pub(crate) fn write_assisted(
     target: &str,
     expected: &UnitState,
     replace_reviewed: bool,
+    review: Option<ReviewLabel>,
 ) -> Result<(), AssistedWriteError> {
     let binding = binding_of(location).map_err(|error| AssistedWriteError::Structure {
         messages: vec![error.0],
     })?;
     let id =
         session.set_assisted_target(&binding, target, &expectation(expected), replace_reviewed)?;
+    // The target is written first; a failed review update leaves a draft.
+    let reviewed = review.map_or(Ok(()), |review| {
+        session.set_review_state(id, review_state(review))
+    });
     announce_unit(app, session, &binding, id);
-    Ok(())
+    Ok(reviewed?)
 }
 
 /// Sends a unit's new overlay to the editor.
@@ -809,6 +814,7 @@ impl ProjectWriter for DesktopWriter {
                         &proposal.target,
                         &proposal.expected,
                         false,
+                        None,
                     ) {
                         Ok(()) => ProposalOutcome::Applied,
                         Err(error @ AssistedWriteError::Conflict { .. }) => {
@@ -1617,6 +1623,7 @@ fn apply_record(
             &record.target,
             &record.expected,
             true,
+            None,
         ) {
             Ok(()) => (ProposalStatus::Applied, None),
             Err(error @ AssistedWriteError::Conflict { .. }) => {

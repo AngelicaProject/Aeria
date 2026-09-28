@@ -17,6 +17,8 @@ pub mod draft;
 pub mod guidance;
 pub mod images;
 pub mod jobs;
+pub mod knowledge;
+pub mod localizer;
 pub mod prompt;
 pub mod provider;
 pub mod responses;

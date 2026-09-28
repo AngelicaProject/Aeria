@@ -8,6 +8,7 @@
 //! or when the provider keeps failing, and wakes Angelica in its
 //! conversation when it pauses or finishes.
 
+use std::collections::BTreeSet;
 use std::fmt::Write as _;
 use std::future::Future;
 use std::path::PathBuf;
@@ -16,21 +17,24 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use aeria_ai::ProviderError;
-use aeria_ai::agent::{AgentEvent, ToolExecutor, TurnConfig, run_turn};
-use aeria_ai::chat::{ChatMessage, ToolCall};
+use aeria_ai::chat::{ChatMessage, ChatRequest, StreamDelta};
 use aeria_ai::conversation::{ConversationStore, ProposalRecord, ProposalStatus};
-use aeria_ai::guidance::ProjectGuide;
 use aeria_ai::images::{ImagePayloads, ImageRef, message_images};
 use aeria_ai::jobs::{
     JobError, JobEstimate, JobEvent, JobFilter, JobLimitProposal, JobProposal, JobScope, JobSpec,
     JobStatus, JobStore, JobSummary, JobUnit, ScopedUnit, UnitStatus,
 };
+use aeria_ai::knowledge::Knowledge;
+use aeria_ai::localizer::{
+    Caller, Finish, LineOutcome, LocalizeResult, Replies, Request as LocalizerRequest, Role, Step,
+    effort_for, localize,
+};
 use aeria_ai::search::ProjectSearch;
 use aeria_ai::tools::{
-    JobAction, JobControl, ProjectReader, ProposalOutcome, ToolError, ToolOutput, UnitLocation,
+    JobAction, JobControl, ProjectReader, ProposalOutcome, ReviewLabel, ToolError, UnitLocation,
     UnitState,
 };
-use aeria_ai::worker::{ChunkWorker, JobHost, UnitContext, WORKER_ROUNDS, WriteFailure};
+use aeria_ai::worker::{JobHost, PreparedUnit, UnitContext, WriteFailure, prepare_unit};
 use aeria_workspace::{AssistedWriteError, ProjectSession, TranslationRowCursor};
 use serde::Serialize;
 use tauri::{Emitter, Manager};
@@ -695,8 +699,8 @@ async fn run_job(run: JobRun) {
             store.set_status(id, JobStatus::Completed, None)?;
             let counts = job.counts;
             let message = format!(
-                "finished: {} drafted, {} rejected, {} failed, {} skipped because they changed",
-                counts.drafted, counts.rejected, counts.failed, counts.conflict
+                "finished: {} final, {} need review, {} rejected, {} failed, {} skipped because they changed",
+                counts.finished + counts.drafted, counts.flagged, counts.rejected, counts.failed, counts.conflict
             );
             store.add_event(id, "completed", &message, None)?;
             Ok(Some(Some((job.conversation_id, message))))
@@ -835,9 +839,8 @@ async fn lane_loop(run: &JobRun, lane: usize) {
                 rows.max().unwrap_or(first.location.row),
             );
             let count = u32::try_from(units.len()).unwrap_or(u32::MAX);
-            let rounds = u32::try_from(WORKER_ROUNDS).unwrap_or(u32::MAX);
             run.workers.update(lane, |activity, now| {
-                activity.start_chunk(chunk, &sheet, rows, count, rounds, now);
+                activity.start_chunk(chunk, &sheet, rows, count, now);
             });
         }
         match run_chunk(run, &spec, units, lane).await {
@@ -922,6 +925,7 @@ impl JobHost for DesktopJobHost {
         location: &UnitLocation,
         target: &str,
         expected: &UnitState,
+        review: ReviewLabel,
     ) -> Result<(), WriteFailure> {
         let state = self.run.app.state::<DesktopState>();
         let mut project = state
@@ -933,11 +937,18 @@ impl JobHost for DesktopJobHost {
             .ok_or_else(|| {
                 WriteFailure::Failed("the job's project is no longer open".to_owned())
             })?;
-        write_assisted(&self.run.app, session, location, target, expected, false).map_err(|error| {
-            match error {
-                AssistedWriteError::Conflict { .. } => WriteFailure::Conflict(error.to_string()),
-                other => WriteFailure::Failed(other.to_string()),
-            }
+        write_assisted(
+            &self.run.app,
+            session,
+            location,
+            target,
+            expected,
+            false,
+            Some(review),
+        )
+        .map_err(|error| match error {
+            AssistedWriteError::Conflict { .. } => WriteFailure::Conflict(error.to_string()),
+            other => WriteFailure::Failed(other.to_string()),
         })
     }
 
@@ -1040,48 +1051,25 @@ impl ProjectReader for JobReader {
     }
 }
 
-struct WorkerExecutor {
-    worker: Arc<ChunkWorker>,
-}
+/// Most requests of one chunk sent at once. A unit's parts and critics run
+/// in parallel; this keeps one chunk from flooding the provider.
+const CHUNK_PARALLEL_REQUESTS: usize = 8;
 
-impl ToolExecutor for WorkerExecutor {
-    fn execute<'a>(
-        &'a self,
-        call: &'a ToolCall,
-    ) -> Pin<Box<dyn Future<Output = ToolOutput> + Send + 'a>> {
-        let worker = Arc::clone(&self.worker);
-        let name = call.name.clone();
-        let arguments = call.arguments.clone();
-        Box::pin(async move {
-            tauri::async_runtime::spawn_blocking(move || worker.execute(&name, &arguments))
-                .await
-                .unwrap_or_else(|error| ToolOutput {
-                    content:
-                        serde_json::json!({ "error": format!("the tool worker failed: {error}") })
-                            .to_string(),
-                    is_error: true,
-                })
-        })
-    }
-}
-
-/// A worker ready to run, with its model and instructions.
+/// A chunk ready for the localizer, with its model and the job's images.
 struct PreparedChunk {
     model: aeria_ai::ModelConfig,
-    worker: ChunkWorker,
-    system: String,
-    /// The chunk's strings with the job's images.
-    message: ChatMessage,
+    prepared: PreparedUnit,
+    images: Vec<ImageRef>,
     /// The images' data, loaded when the model accepts images.
     payloads: Option<ImagePayloads>,
 }
 
-/// Loads each string's context and the job's current instructions.
+/// Loads each string's context, the scene, and the job's current
+/// instructions.
 fn prepare_chunk(
     run: &JobRun,
     selection: &aeria_ai::ModelSelection,
-    units: Vec<JobUnit>,
-    lane: usize,
+    units: &[JobUnit],
 ) -> CommandResult<PreparedChunk> {
     let settings = settings_store(&run.app)?.load()?;
     let model = settings
@@ -1091,41 +1079,167 @@ fn prepare_chunk(
     let reader = JobReader { run: run.clone() };
     let facts = reader.facts().ok();
     let job = run.store.summary(&run.job_id)?;
-    let instructions = job.spec.instructions;
-    let images = job.spec.images;
     // Images stay with the job's conversation; a deleted conversation
-    // leaves the workers a notice that they are no longer available.
+    // leaves the localizer without them.
     let payloads = model.vision.then(|| {
         project_conversation_store(&run.app, &run.root).map_or_else(
             |_| ImagePayloads::default(),
             |store| {
-                let images: Vec<&ImageRef> = images.iter().collect();
+                let images: Vec<&ImageRef> = job.spec.images.iter().collect();
                 load_image_payloads(&store, &job.conversation_id, &images)
             },
         )
     });
-    let worker = ChunkWorker::new(
+    let prepared = prepare_unit(
         units,
-        Arc::new(DesktopJobHost { run: run.clone() }),
-        Arc::new(reader),
-        ProjectGuide::load(&run.root),
+        &DesktopJobHost { run: run.clone() },
+        &reader,
+        &Knowledge::load(&run.root),
+        facts.as_ref(),
+        &job.spec.instructions,
     );
-    let system = worker.system_prompt(facts.as_ref(), &instructions);
-    let previews = worker.unit_previews();
-    run.workers
-        .update(lane, |activity, _| activity.set_previews(previews));
-    let message = ChatMessage::User {
-        content: worker.chunk_message(),
-        automatic: false,
-        images,
-    };
     Ok(PreparedChunk {
         model,
-        worker,
-        system,
-        message,
+        prepared,
+        images: job.spec.images,
         payloads,
     })
+}
+
+/// Sends the localizer's requests for one chunk, in parallel, and follows
+/// them on the lane's activity.
+struct JobCaller {
+    run: JobRun,
+    lane: usize,
+    client: aeria_ai::OpenAiCompatibleClient,
+    endpoint: aeria_ai::ProviderEndpoint,
+    model: String,
+    efforts: Vec<aeria_ai::ReasoningEffort>,
+    /// The job's effort, a ceiling for every role.
+    ceiling: Option<aeria_ai::ReasoningEffort>,
+    session: String,
+    images: Vec<ImageRef>,
+    payloads: Option<ImagePayloads>,
+    /// Tokens used so far, kept when the chunk is interrupted.
+    spent: std::sync::Mutex<aeria_ai::chat::Usage>,
+}
+
+impl JobCaller {
+    async fn send(
+        &self,
+        index: usize,
+        request: LocalizerRequest,
+    ) -> Result<(String, aeria_ai::chat::Usage), ProviderError> {
+        // The job's images show where the strings appear; they go to the
+        // requests that write.
+        let images = if matches!(request.role, Role::Contract | Role::Writer) {
+            self.images.clone()
+        } else {
+            Vec::new()
+        };
+        let messages = vec![ChatMessage::User {
+            content: request.user,
+            automatic: false,
+            images,
+        }];
+        let chat = ChatRequest {
+            model: &self.model,
+            effort: effort_for(request.role, &self.efforts, self.ceiling),
+            system: &request.system,
+            messages: &messages,
+            tools: &[],
+            turn_start: 0,
+            images: self.payloads.as_ref(),
+        };
+        let session = format!("{}-{}-{index}", self.session, request.role.as_str());
+        let run = &self.run;
+        let lane = self.lane;
+        let mut on_delta = |delta: StreamDelta| {
+            let reasoning = matches!(delta, StreamDelta::Reasoning(_));
+            run.workers
+                .update(lane, |activity, now| activity.stream(reasoning, now));
+        };
+        let response = self
+            .client
+            .stream_chat(&self.endpoint, &session, &chat, &mut on_delta)
+            .await?;
+        let usage = response.usage.unwrap_or_default();
+        if let Ok(mut spent) = self.spent.lock() {
+            spent.add(usage);
+        }
+        self.run.workers.update(self.lane, |activity, now| {
+            activity.answered(usage.prompt_tokens + usage.completion_tokens, now);
+        });
+        Ok((response.content, usage))
+    }
+
+    fn spent(&self) -> aeria_ai::chat::Usage {
+        self.spent.lock().map(|spent| *spent).unwrap_or_default()
+    }
+}
+
+impl Caller for JobCaller {
+    fn call_all(&self, requests: Vec<LocalizerRequest>) -> Replies<'_> {
+        Box::pin(async move {
+            let mut replies = Vec::with_capacity(requests.len());
+            let mut requests = requests.into_iter().enumerate().peekable();
+            while requests.peek().is_some() {
+                let batch: Vec<_> = requests.by_ref().take(CHUNK_PARALLEL_REQUESTS).collect();
+                let count = u32::try_from(batch.len()).unwrap_or(u32::MAX);
+                self.run
+                    .workers
+                    .update(self.lane, |activity, now| activity.send(count, now));
+                let results = futures_join(
+                    batch
+                        .into_iter()
+                        .map(|(index, request)| {
+                            Box::pin(self.send(index, request))
+                                as Pin<Box<dyn Future<Output = _> + Send + '_>>
+                        })
+                        .collect(),
+                )
+                .await;
+                for result in results {
+                    replies.push(result?);
+                }
+            }
+            Ok(replies)
+        })
+    }
+
+    fn step(&self, step: Step) {
+        self.run.workers.update(self.lane, |activity, now| {
+            activity.set_step(step.into(), now);
+        });
+    }
+}
+
+/// Awaits futures together and returns their outputs in order.
+async fn futures_join<T>(futures: Vec<Pin<Box<dyn Future<Output = T> + Send + '_>>>) -> Vec<T> {
+    let mut futures: Vec<Option<Pin<Box<dyn Future<Output = T> + Send + '_>>>> =
+        futures.into_iter().map(Some).collect();
+    let mut outputs: Vec<Option<T>> = futures.iter().map(|_| None).collect();
+    std::future::poll_fn(|context| {
+        let mut pending = false;
+        for (future, output) in futures.iter_mut().zip(outputs.iter_mut()) {
+            if let Some(running) = future {
+                match running.as_mut().poll(context) {
+                    std::task::Poll::Ready(value) => {
+                        *output = Some(value);
+                        *future = None;
+                    }
+                    std::task::Poll::Pending => pending = true,
+                }
+            }
+        }
+        if pending {
+            std::task::Poll::Pending
+        } else {
+            std::task::Poll::Ready(())
+        }
+    })
+    .await;
+    outputs.into_iter().flatten().collect()
 }
 
 /// Records a chunk's outcomes and usage, retrying a busy job store so the
@@ -1150,9 +1264,9 @@ async fn record_chunk(
     }
 }
 
-/// How a chunk the provider interrupted ends, and what its unfinished
-/// strings become: transient failures and a rejected key requeue them, other
-/// failures fail them.
+/// How a chunk the provider interrupted ends, and what its strings become:
+/// transient failures and a rejected key requeue them, other failures fail
+/// them.
 fn interrupted(error: ProviderError) -> (ChunkEnd, (UnitStatus, Option<String>)) {
     match error {
         ProviderError::RateLimited { .. }
@@ -1173,109 +1287,175 @@ fn interrupted(error: ProviderError) -> (ChunkEnd, (UnitStatus, Option<String>))
     }
 }
 
-/// Runs one worker over one claimed chunk and records the outcomes.
+/// Writes the localizer's results: a final translation as reviewed, one
+/// with an open finding as needing review, and records why a string was
+/// not written.
+fn write_outcomes(
+    run: &JobRun,
+    units: &[JobUnit],
+    outcomes: Vec<LineOutcome>,
+) -> Vec<(u64, UnitStatus, Option<String>)> {
+    let host = DesktopJobHost { run: run.clone() };
+    outcomes
+        .into_iter()
+        .filter_map(|outcome| {
+            let unit = units.get(outcome.task)?;
+            let (review, status, message) = match &outcome.finish {
+                Finish::Rejected(reason) => {
+                    return Some((unit.seq, UnitStatus::Rejected, Some(reason.clone())));
+                }
+                Finish::Final => (ReviewLabel::Reviewed, UnitStatus::Finished, None),
+                Finish::NeedsReview(reason) => (
+                    ReviewLabel::NeedsReview,
+                    UnitStatus::Flagged,
+                    Some(reason.clone()),
+                ),
+            };
+            let Some(target) = outcome.target.as_deref() else {
+                return Some((
+                    unit.seq,
+                    UnitStatus::Rejected,
+                    Some("no translation was produced".to_owned()),
+                ));
+            };
+            Some(
+                match host.write(&unit.location, target, &unit.expected, review) {
+                    Ok(()) => {
+                        if let Some(reason) = &message {
+                            host.report(&format!("needs review: {reason}"), Some(&unit.location));
+                        }
+                        (unit.seq, status, message)
+                    }
+                    Err(WriteFailure::Conflict(message)) => {
+                        (unit.seq, UnitStatus::Conflict, Some(message))
+                    }
+                    Err(WriteFailure::Failed(message)) => {
+                        (unit.seq, UnitStatus::Failed, Some(message))
+                    }
+                },
+            )
+        })
+        .collect()
+}
+
+/// Localizes one claimed chunk and records the outcomes.
 async fn run_chunk(run: &JobRun, spec: &JobSpec, units: Vec<JobUnit>, lane: usize) -> ChunkEnd {
     let chunk = units.first().map_or(0, |unit| unit.chunk);
     let released: Vec<_> = units
         .iter()
         .map(|unit| (unit.seq, UnitStatus::Pending, None))
         .collect();
-    let usage = aeria_ai::chat::Usage::default();
 
     let endpoint = match resolve_endpoint(&run.app, spec.model.provider_id.clone()).await {
         Ok(endpoint) => endpoint,
         Err(error) => {
-            record_chunk(run, released, usage).await;
+            record_chunk(run, released, aeria_ai::chat::Usage::default()).await;
             return ChunkEnd::Stop(error.message);
         }
     };
     let prepare_run = run.clone();
     let selection = spec.model.clone();
-    let prepared = run_blocking(move || prepare_chunk(&prepare_run, &selection, units, lane)).await;
+    let prepare_units = units.clone();
+    let prepared =
+        run_blocking(move || prepare_chunk(&prepare_run, &selection, &prepare_units)).await;
     let client = run.app.state::<DesktopState>().ai_client();
-    let (
-        PreparedChunk {
-            model,
-            worker,
-            system,
-            message,
-            payloads,
-        },
-        client,
-    ) = match (prepared, client) {
+    let (prepared, client) = match (prepared, client) {
         (Ok(prepared), Ok(client)) => (prepared, client),
         (Err(error), _) | (_, Err(error)) => {
-            record_chunk(run, released, usage).await;
+            record_chunk(run, released, aeria_ai::chat::Usage::default()).await;
             return ChunkEnd::Stop(error.message);
         }
     };
-    let worker = Arc::new(worker);
-    if !worker.has_work() {
-        record_chunk(run, worker.outcomes(), usage).await;
+    let PreparedChunk {
+        model,
+        prepared,
+        images,
+        payloads,
+    } = prepared;
+    let outcomes: Vec<(u64, UnitStatus, Option<String>)> = prepared
+        .failed
+        .iter()
+        .filter_map(|(index, reason)| {
+            units
+                .get(*index)
+                .map(|unit| (unit.seq, UnitStatus::Failed, Some(reason.clone())))
+        })
+        .collect();
+    if prepared.unit.lines.iter().all(|line| line.task.is_none()) {
+        record_chunk(run, outcomes, aeria_ai::chat::Usage::default()).await;
         return ChunkEnd::Done;
     }
 
-    let tools = ChunkWorker::tool_definitions();
-    let session = format!("{}-{chunk}", run.job_id);
-    let config = TurnConfig {
-        model: &model.id,
-        effort: spec.model.effort,
-        system: &system,
-        tools: &tools,
-        context_tokens: model.context_window,
-        session: &session,
-        max_rounds: WORKER_ROUNDS,
-        images: payloads.as_ref(),
+    let caller = JobCaller {
+        run: run.clone(),
+        lane,
+        client,
+        endpoint,
+        model: model.id.clone(),
+        efforts: model.reasoning_efforts.clone(),
+        ceiling: spec.model.effort,
+        session: format!("{}-{chunk}", run.job_id),
+        images,
+        payloads,
+        spent: std::sync::Mutex::new(aeria_ai::chat::Usage::default()),
     };
-    let mut messages = vec![message];
-    let executor = WorkerExecutor {
-        worker: Arc::clone(&worker),
-    };
-    run.workers.update(lane, WorkerActivity::first_request);
-    // Usage is counted as responses finish, so an interrupted chunk still
-    // records what it spent.
-    let mut spent = usage;
-    let mut on_event = |event: AgentEvent| {
-        if let AgentEvent::Usage { usage } = &event {
-            spent.add(*usage);
-        }
-        let finished = matches!(event, AgentEvent::ToolFinished { .. })
-            .then(|| u32::try_from(worker.finished()).unwrap_or(u32::MAX));
-        run.workers.update(lane, |activity, now| {
-            activity.apply(&event, now);
-            if let Some(finished) = finished {
-                activity.finished_units = finished;
-            }
-        });
-    };
-    let result = run_turn(
-        &client,
-        &endpoint,
-        &config,
-        &mut messages,
-        &executor,
-        &mut on_event,
-        &mut |_| {},
-    )
-    .await;
+    let result = localize(&caller, prepared.unit).await;
     run.workers.set_phase(lane, WorkerPhase::Recording);
-    let (end, usage, unfinished) = match result {
-        Ok(summary) => (ChunkEnd::Done, summary.usage, None),
-        Err(error) => {
-            let (end, unfinished) = interrupted(error);
-            (end, spent, Some(unfinished))
-        }
-    };
-    // A chunk the provider interrupted keeps its finished strings; the rest
-    // return to the queue or fail.
-    let outcomes = worker
-        .outcomes()
-        .into_iter()
-        .map(|(seq, status, note)| match (status, &unfinished) {
-            (UnitStatus::Drafted | UnitStatus::Conflict, _) | (_, None) => (seq, status, note),
-            (_, Some((status, message))) => (seq, *status, message.clone()),
-        })
-        .collect();
+    finish_chunk(run, &units, lane, outcomes, result, caller.spent()).await
+}
+
+/// Writes a localized chunk's results, or returns its strings to the queue
+/// when the provider interrupted it, and records the outcomes.
+async fn finish_chunk(
+    run: &JobRun,
+    units: &[JobUnit],
+    lane: usize,
+    mut outcomes: Vec<(u64, UnitStatus, Option<String>)>,
+    result: Result<LocalizeResult, ProviderError>,
+    usage: aeria_ai::chat::Usage,
+) -> ChunkEnd {
+    let end =
+        match result {
+            Ok(result) => {
+                let write_run = run.clone();
+                let write_units = units.to_vec();
+                let written = run_blocking(move || {
+                    Ok(write_outcomes(&write_run, &write_units, result.outcomes))
+                })
+                .await
+                .unwrap_or_default();
+                let finished = u32::try_from(written.len()).unwrap_or(u32::MAX);
+                run.workers
+                    .update(lane, |activity, _| activity.finished_units = finished);
+                outcomes.extend(written);
+                // A string the localizer did not return fails; none stays
+                // claimed.
+                let known: BTreeSet<u64> = outcomes.iter().map(|(seq, _, _)| *seq).collect();
+                outcomes.extend(units.iter().filter(|unit| !known.contains(&unit.seq)).map(
+                    |unit| {
+                        (
+                            unit.seq,
+                            UnitStatus::Failed,
+                            Some("the localizer did not return this string".to_owned()),
+                        )
+                    },
+                ));
+                ChunkEnd::Done
+            }
+            // An interrupted chunk writes nothing; its strings return to the
+            // queue or fail.
+            Err(error) => {
+                let (end, (status, message)) = interrupted(error);
+                let failed: BTreeSet<u64> = outcomes.iter().map(|(seq, _, _)| *seq).collect();
+                outcomes.extend(
+                    units
+                        .iter()
+                        .filter(|unit| !failed.contains(&unit.seq))
+                        .map(|unit| (unit.seq, status, message.clone())),
+                );
+                end
+            }
+        };
     record_chunk(run, outcomes, usage).await;
     end
 }

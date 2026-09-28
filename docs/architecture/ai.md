@@ -518,9 +518,12 @@ editor, which the user saves explicitly.
 
 ### Translation jobs
 
-A sheet, several sheets, or the whole project is translated by a job: worker
-subagents that each translate one chunk of strings, run by a deterministic
-orchestrator and supervised by Angelica.
+A sheet, several sheets, or the whole project is translated by a job: the
+localizer translates one chunk of strings at a time as a unit of work, run by
+a deterministic orchestrator and supervised by Angelica. The localizer's
+design and the reasoning behind it are in
+[`localization-system.md`](./localization-system.md); this section describes
+what is implemented.
 
 Angelica has `estimate_job` in every mode and `job_status` and `job_events`
 to report on jobs. In Ask and Auto-draft modes she also has `start_job`,
@@ -530,7 +533,8 @@ to report on jobs. In Ask and Auto-draft modes she also has `start_job`,
 instructions, concurrency, the estimate, and a token limit of twice
 the estimate (at least 200,000). The user starts the job from the proposal.
 `start_job` can also name up to 4 images of its conversation, for example a
-screenshot showing where the strings appear; each is sent to every worker.
+screenshot showing where the strings appear; each is sent with the contract
+and writer requests of every chunk.
 An image ID the conversation does not have is refused, and so are images
 while the jobs model does not accept them. The estimate does not include
 them.
@@ -539,55 +543,102 @@ A scope is a list of sheets, or every sheet with translatable strings, and a
 filter: untranslated strings (the default), strings that need review, or
 untranslated strings and drafts. Reviewed translations are never included.
 The string list is fixed when the job starts, together with each string's
-current target and review state. Strings are grouped in order into chunks of
-at most 30 strings and 12,000 source characters, never across sheets. A quest
-or cutscene sheet is one scene, so its chunks hold up to 60 strings, and a
-sheet's strings in the job are split into chunks of even size: 70 strings
-become two chunks of 35. The
+current target and review state. Strings are grouped in order into chunks,
+never across sheets. A quest or cutscene sheet is one scene, so its strings in
+the job are one chunk of up to 240 strings; a larger one is split into chunks
+of even size. Other sheets are grouped into chunks of at most 30 strings and
+12,000 source characters. The
 estimate is the number of strings and chunks and a token count. When
 earlier jobs of the project with the same jobs model (provider, model, and
 effort) finished at least three chunks together, the count is the chunks
 times their average tokens per finished chunk (from the latest 20 such
-jobs). Otherwise it is a formula: each chunk is assumed to take three
-responses, each resending 6,000 tokens of instructions, tools, and context
-plus the chunk's source characters, and the source is written once
-(`chunks × 18,000 + characters × 4`). The proposal says which basis was
-used.
+jobs). Otherwise it is a formula measured on quests: 50,000 tokens per chunk
+for instructions and project knowledge sent with each request, and 13 tokens
+per source character for the script read by every step and the translation
+written and fixed (`chunks × 50,000 + characters × 13`). The proposal says
+which basis was used.
 
-Each chunk is translated by a worker with a fresh context: fixed worker
-instructions, the project facts, guidance and matching glossary entries, the
-job's instructions as they are when the chunk starts, and its strings with
-their constructs, context cells, current translations,
-notes, and up to three translation-memory matches with their review states,
-followed by the job's images when the worker model accepts images. Workers
-keep the wording of reviewed matches; unreviewed drafts guide names and terms
-only. A chunk of a quest or cutscene
-sheet starts with its scene: the quest's name and translation, up to 12
-journal entries and objectives, the spoken lines around the chunk's strings
-with their speakers and translations (the four before the first, up to 40
-between them that are not in the chunk, and the four after the last), and
-the voice profiles (at most 8) of those speakers and the chunk's; each string
-names its speaker label, or says that it is a journal entry or objective
-speaking to the player character. Workers are told to translate the chunk as one
-conversation. A sheet whose dialogue cannot be read is translated without a scene. Images come from the job's
-conversation; after the conversation is deleted, workers are told they are no
-longer available. Its tools are `get_unit`, `other_languages`, `read_rows`, and
-`dialogue_context` for context, `get_guidance` and `get_voices`,
-`validate_target`, `submit_translations` for the strings of its own chunk
-only, and `report_issue`, which records an event for Angelica. A worker has at
-most 8 responses. A submitted translation is rebuilt and written as a draft
+#### The localizer
+
+`aeria-ai::worker::prepare_unit` turns a chunk into a unit of work, and
+`aeria-ai::localizer::localize` translates it. A unit is a script: for a
+quest or cutscene sheet, its lines in play order from the first chunk string
+to the last with 20 lines on each side, each with its role (journal entry,
+objective, or speaker label); the chunk's strings are marked for translation
+and the other lines are context with their current translations. A chunk of
+another sheet is its strings with their row context. Each string carries its
+constructs, current translation, note, and up to two translation-memory
+matches; every line carries the game's other client languages as evidence.
+A line whose French or German text has a condition on `$gn4` that its source
+lacks is marked as varying with the player character's gender. The unit
+has its text domains: the roles of a quest's lines (journal, objectives,
+system text, dialogue) or the domain of another sheet, read from its name
+(names, items, actions, interface, or lore). It carries the
+[project knowledge](../formats/knowledge-v1.md) that applies to it, human
+entries first: the guidance, the style of its domains, lessons in use, the
+terms that occur in its lines (at most 80), its speakers' profiles (at most
+12), and the story of its sheet so far, and the job's instructions as they
+are when the chunk starts. Writers get short notes for the conventions of
+names, items, actions, interface text, and lore. The localizer's instructions tell it that content comes only from the
+source line: the other languages decide tone, voice, address, and gender,
+never content. A sheet whose dialogue cannot be read is translated as plain
+strings.
+
+The localizer runs five steps; the requests of a step run in parallel, at
+most 8 at a time per chunk:
+
+1. **Contract**: one request reads the whole script and writes the decisions
+   every writer shares: the story and tone, a table of address between
+   speakers and toward the player character, genders, names and terms, and
+   the form of journal entries, objectives, and system text.
+2. **Writing**: the chunk's strings are split into parts of at most 40, in
+   order and of even size, and each part is written by its own request,
+   which sees the whole script and the contract and rereads its text before
+   answering. Replies are lines of the form `L12: text`.
+3. **Critics**: three requests per part check its lines. A blind reader sees
+   only the target text (with the contract and four lines before the part);
+   a fidelity check compares each line with its source; a check of the player
+   character and address sees the source, French, German, and target with
+   the knowledge and the contract; when the unit has knowledge, a
+   consistency check compares the lines with its terms, characters, style,
+   and lessons. Each returns flags with a line, a severity, a problem, and a
+   hint.
+4. **Fixes**: one request per part with flags corrects the flagged lines;
+   changes to other lines are ignored.
+5. **Recheck**: the critics read the changed and flagged lines again; a
+   remaining major flag gets one more fix. A line whose major flag was not
+   changed by that fix needs review.
+
+After writing and after each fix, every line is checked as it would be
+written: structure against the assisted structure policy, a speaker label or
+role marker at its start, two versions joined by an arrow, and a repeat of
+the previous line's translation although the sources differ. Refused lines
+go back for correction up to twice; a line still refused is rejected.
+
+Each role has the reasoning effort that served it best, clamped to the
+efforts the model accepts: high for writers and the check of the player
+character, medium for the contract, the blind reader, the consistency
+check, and fixes, low for the
+fidelity check and structure corrections. The jobs effort from the settings
+is a ceiling for every role.
+
+Nothing is written until the unit is done. Each translation is then written
 through `ProjectSession::set_assisted_target` against the recorded state,
-without permission to replace a reviewed string: a string changed meanwhile
-is skipped as a conflict, and a translation that still breaks the structure
-after the worker's corrections is rejected. Strings the worker leaves
-unsubmitted fail.
+without permission to replace a reviewed string, followed by its review
+state: a translation with no open major flag is written as `reviewed` and
+counts as `finished`; one with an open flag is written as `needsReview`,
+counts as `flagged` with the flag as its message, and is reported as a job
+event. A string changed meanwhile is skipped as a conflict. The contract and
+writer requests carry the job's images when the model accepts images; after
+the job's conversation is deleted they are left out.
 
 Jobs are machine-local application data, one SQLite database per project in
 `<app-data>/jobs/<key>.sqlite3` with the conversation key. A job records its
 conversation, specification (scope, instructions, worker model, token limit,
 concurrency, and the references of its images), status (`running`, `paused` with a reason, `completed`,
 `cancelled`), token usage, events, and each string's chunk, status
-(`pending`, `running`, `drafted`, `rejected`, `failed`, `conflict`),
+(`pending`, `running`, `finished`, `flagged`, `rejected`, `failed`,
+`conflict`, and `drafted` for jobs of earlier versions),
 attempts, and message. The worker model is the jobs model from the settings,
 or Angelica's default model. Settings show an effort choice for jobs even
 while they use Angelica's model; choosing an effort there stores Angelica's
@@ -606,9 +657,10 @@ count stops before claiming its next chunk. Each lane claims the next chunk,
 checks first that the job's project is still open, and pauses the job when
 the token limit is reached or when, after 40 finished strings, more than 30 %
 were rejected. A network, timeout, rate-limit, or unavailable failure returns
-the chunk's unfinished strings to the queue and waits (20 seconds times the
-failures in a row); the third failure in a row pauses the job, as does a
-rejected key. Other provider errors fail the chunk's unfinished strings.
+the chunk's strings to the queue and waits (20 seconds times the failures in
+a row); the third failure in a row pauses the job, as does a rejected key.
+Other provider errors fail the chunk's strings. An interrupted chunk writes
+nothing.
 Pausing or cancelling returns claimed strings to the queue; a job left
 running when Aeria closed is paused the next time its project's jobs are
 read. Rejected, failed, and skipped strings can be queued again.
@@ -621,26 +673,19 @@ same retries so its strings never stay claimed. A job's summary counts its
 active workers, the chunks being translated right now.
 
 A chunk's outcomes and token usage are recorded when the chunk ends. Usage is
-summed as each response finishes, so a chunk the provider interrupts still
+summed as each request finishes, so a chunk the provider interrupts still
 records the tokens it spent.
 
 While a runner runs, each lane also reports its live activity: the chunk,
-sheet, and first and last row it translates, its phase (claiming a chunk, loading context, waiting
-for the provider, reasoning, writing, running a tool, recording results,
-waiting to retry, or stopped), the response it is on, its strings finished
-and tokens used in the chunk, its chunks done, the string it is on, when it
-last changed or received anything from the provider, and the last 600
-characters of the
-reasoning the provider streamed for its current response (kept until the
-next response streams reasoning, cleared with each new chunk). The string
-it is on comes from the `"unit": N` fields of the tool-call arguments as
-they stream, so a worker writing its submission shows which string it is
-writing (its number, address, and the start of its source as plain text)
-and how many strings the response has covered so far; a starting tool call
-names the string or row it checks or reads. Strings count as finished only
-once a submission has been checked, because a worker submits the whole
-chunk at once. Streaming
-reasoning, text, and tool-call arguments all count as activity. This state
+sheet, and first and last row it translates, its phase (claiming a chunk,
+loading context, waiting for the provider, reasoning, writing, recording
+results, waiting to retry, or stopped), the localizer step it is on (contract,
+writing, critics, fixes, or recheck) and how many of the step's requests have
+not answered yet, its strings written and tokens used in the chunk, its
+chunks done, and when it last changed or received anything from the
+provider. Strings count as written when the unit is done, because the
+localizer writes a chunk at its end. Streaming reasoning and text of any of
+the step's requests count as activity. This state
 lives only in memory while the runner runs and is never stored. An expanded
 job card polls it every second while its Workers tab is shown, and marks a
 lane that has waited on the provider without data for 30 seconds as quiet
@@ -649,10 +694,11 @@ after 180 seconds of silence, which requeues the chunk.
 
 The job list in the Angelica panel shows each job as a compact card with its
 status, progress, and controls; expanding it shows the Workers (while
-running), Problems (filterable by outcome, with retry per outcome), Events,
-and Job tabs. A job that no longer runs (paused, completed, or cancelled) can
-be removed from the list, which deletes its local record, strings, and
-events; the drafts it wrote stay in the project. A running job must be
+running), Problems (filterable by outcome, with retry per retryable outcome;
+strings left for review are listed with the reason), Events, and Job tabs. A
+job that no longer runs (paused, completed, or cancelled) can be removed from
+the list, which deletes its local record, strings, and events; the
+translations it wrote stay in the project. A running job must be
 paused or cancelled first.
 
 A job's summary includes its chunk count, its finished chunks (chunks with
@@ -697,7 +743,7 @@ Batch translation runs as [translation jobs](#translation-jobs):
 - a token estimate is shown before a job starts
 - related strings are batched per sheet for context and cost efficiency
 - provider or structural failures are isolated and retryable
-- successfully validated results are written directly as `draft` changes in the Git working tree
+- validated results are written directly in the Git working tree, as `reviewed` when the localizer's critics left nothing open and as `needsReview` otherwise
 - a failed/unsafe result is not persisted as a successful translation
 - commits remain an explicit human action
 
@@ -707,4 +753,6 @@ Model/provider provenance belongs to local job/history/commit context rather tha
 
 The Rust side constructs structured context and validates responses. Macro/structure invariants and glossary/QA checks run before a translation is accepted.
 
-Future AI review/QA features are allowed, but they never turn AI output into `reviewed` automatically.
+Translation jobs write final translations as `reviewed` (see
+[the localizer](#the-localizer)); Angelica's own translations stay drafts
+until the user applies or approves them.

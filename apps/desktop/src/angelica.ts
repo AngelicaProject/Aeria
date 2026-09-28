@@ -205,13 +205,18 @@ export function parseReply(text: string): ReplyBlock[] {
   return blocks;
 }
 
+/** Strings a job wrote: final, needing review, or drafts of earlier jobs. */
+export function jobWritten(counts: JobCounts): number {
+  return counts.finished + counts.flagged + counts.drafted;
+}
+
 /** Share of a job's strings with a final outcome, from 0 to 1. */
 export function jobProgress(counts: JobCounts): number {
   if (counts.total === 0) return 1;
-  return (counts.drafted + counts.rejected + counts.failed + counts.conflict) / counts.total;
+  return (jobWritten(counts) + counts.rejected + counts.failed + counts.conflict) / counts.total;
 }
 
-/** Strings a job could not draft. */
+/** Strings a job could not write; they can be retried. */
 export function jobProblems(counts: JobCounts): number {
   return counts.rejected + counts.failed + counts.conflict;
 }

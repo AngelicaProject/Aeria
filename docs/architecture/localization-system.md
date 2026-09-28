@@ -1,12 +1,13 @@
 # Agent localization system
 
-> **Status: proposal.** Nothing in this document is implemented. It describes
-> how Aeria's agents are to localize the whole game corpus so that the result
-> reads as if it was written in the target language, with people reviewing by
-> exception. When implemented, it replaces the worker model of
-> [translation jobs](./ai.md#translation-jobs) and the human-edited guidance,
-> glossary, and voice profile files described in [`ai.md`](./ai.md). Open
-> decisions are listed in [Open questions](#open-questions). The invariants in
+> **Status: partly implemented.** The localizer and its critics run
+> [translation jobs](./ai.md#translation-jobs); [`ai.md`](./ai.md#the-localizer)
+> describes what is implemented. Project knowledge written by agents, study,
+> learning, and the domains other than quests are a proposal. The document
+> describes how Aeria's agents are to localize the whole game corpus so that
+> the result reads as if it was written in the target language, with people
+> reviewing by exception. Open decisions are listed in
+> [Open questions](#open-questions). The invariants in
 > [`../product/principles.md`](../product/principles.md) and
 > [Invariants](#invariants) below apply.
 
@@ -135,11 +136,12 @@ one target language, and the source already exposes every evidence language
 
 ## Project knowledge
 
-Project knowledge replaces `aeria-guidance.md`, `aeria-glossary.csv`, and
-`aeria-voices.md`. It is a directory of text files at the project root,
-shared through Git, readable by people, and small enough per entry to be
-given to an agent selectively. The serialized format is to be specified in
-`docs/formats/` before implementation; its content is:
+Project knowledge has two layers ([format](../formats/knowledge-v1.md)):
+the human files `aeria-guidance.md`, `aeria-glossary.csv`, and
+`aeria-voices.md`, whose entries are locked, and the `aeria-knowledge`
+directory, which agents write without asking. Both are shared through Git,
+readable by people, and small enough per entry to be given to an agent
+selectively. Its content is:
 
 | Kind | One entry per | Content |
 | --- | --- | --- |
@@ -149,18 +151,18 @@ given to an agent selectively. The serialized format is to be specified in
 | Story | Quest or cutscene | Summary of what happens and what the player learns, translated key phrases that later text may recall |
 | Lesson | Recurring problem | What to do instead, with examples, provenance, and measured effect |
 
-Every entry records its provenance (evidence cited, flags or reactions that
-produced it, the role that wrote it) and whether it is **locked**. An entry
-a person writes or confirms is locked: agents can propose a change to it,
-which waits for that person, but cannot change it themselves.
+Section entries record their provenance in a metadata line (the role that
+wrote them, the findings or reactions that produced them). An entry in the
+human files is **locked**: agents can propose a change to it through
+Angelica, which waits for a person, but cannot change it themselves. A
+person confirms an agent entry by moving it to the human files.
 
 Agents read knowledge through tools that select what a unit needs: the
 characters speaking in it, the terms occurring in it, the story of the
 quests it follows, and the style of its domain. The whole knowledge is never
 sent at once.
 
-Existing guidance, glossary, and voice files are imported once into locked
-entries.
+The human files keep their formats and editors, so no import is needed.
 
 ## Study
 
@@ -200,110 +202,55 @@ run in parallel.
 
 ## Localizer
 
-The localizer is a subagent that owns one unit of work and works in three
-phases in one context:
+The localizer owns one unit of work. A prototype on real quests measured
+what matters for quality and speed, and the implemented localizer follows it
+(see [`ai.md`](./ai.md#the-localizer)):
 
-1. **Understand.** It reads the whole unit in the source language and, where
-   meaning, tone, or intent is unclear, in the evidence languages, and writes
-   a short brief: what happens, who speaks to whom, tone, wordplay and its
-   purpose, what the player already knows. The brief is kept for the critics
-   and becomes the unit's story entry.
-2. **Write.** It writes the unit as one text in the target language. A quest
-   is presented as a script, not as a list of fields:
+- **Contract first.** One request reads the whole unit and fixes the
+  decisions every writer must share: address between characters and toward
+  the player character, genders, names and terms, and the form of journal
+  entries, objectives, and system text. Without it, parts written in
+  parallel disagree on address and names.
+- **Parts in parallel.** The unit's strings are written in parts of at most
+  40 lines, each by its own request that sees the whole unit and the
+  contract. The time of a unit then no longer grows with its length: a
+  142-line quest took about three minutes instead of eighteen.
+- **Continuous text.** A writer gets the unit as a script with line markers
+  and writes its lines back as text, not as fields of a tool call; it
+  rereads its text before answering.
+- **Content from the source only.** The other languages decide tone, voice,
+  address, and gender; a writer that took content from the Japanese was the
+  most frequent fidelity error before this rule.
 
-   ```text
-   [journal 3] You have killed a legend to save the local economy…
-   LYNGSATH 12: Ye've come at a good time, <split " " 1><string $gs1></split>…
-   [objective 2] Report to Luciane.
-   ```
-
-   The localizer writes the script back with the same line markers. Aeria
-   splits it into strings and validates each one; structural errors come back
-   for those lines only. Writing continuous text instead of isolated strings
-   is what lets lines answer each other and read naturally.
-3. **Reread.** It reads its script in the target language only, as a player
-   would, fixes what sounds translated, and submits.
-
-A localizer has the budget to do all three phases; nothing in its
-instructions rewards finishing in fewer responses. It can propose knowledge
-entries, such as a new character's voice, which Angelica merges and
-reconciles across parallel localizers.
+Line hygiene is checked when lines are submitted: a speaker label at the start
+of a line, two versions joined by an arrow, and a repeat of the previous line
+were the defects the prototype saw in long units.
 
 ## Critics
 
-When a unit is written, critics read it. Each has one question and sees only
-what that question needs:
+When a part is written, three narrow critics read it in parallel. Each has
+one question and sees only what that question needs; narrow critics at a
+lower effort found more than one broad critic at a high effort:
 
 | Critic | Sees | Flags |
 | --- | --- | --- |
-| Blind reader | The target text only | Text that reads as a translation, is unnatural or unclear, or does not sound like the character |
-| Fidelity | Source, evidence languages, target | Lost or changed meaning, dropped jokes or hints, additions |
-| Consistency | Target, knowledge entries the unit used | Names, terms, address, the player character's gender, voice, continuity with earlier quests |
+| Blind reader | The target text only, with the contract | Text that reads as a translation, is unclear, or does not fit the lines around it |
+| Fidelity | Each line's source and target | Lost, changed, or added meaning, dropped jokes, oaths, or callbacks |
+| Player and address | Source, French, German, and target, with the knowledge and contract | Words that assume the player character's gender, address that breaks the contract, a speaker's wrong gender |
 
 The blind reader is the main defence against translationese: a reader who
-cannot see the source is not anchored to it.
+cannot see the source is not anchored to it. French and German conditions on
+`$gn4` mark lines that vary with the player character's gender, but only
+about half of them: French past tenses with *avoir* do not agree, while
+Russian ones do, so the check reads every line.
 
-A flag names the line, the kind of problem, its severity, and why. Critics
-do not rewrite. Flags go back to the unit's localizer, which fixes the
-flagged lines with its brief still in context. At most two rounds run. When
-no flag is left, the unit's strings become final; a flag still open marks
-its string `needsReview` with the flag as its reason. Critics only read and
-write short flags, so they can run on a cheaper model than the localizer.
-
-## Review states
-
-Agents use the existing review states as their workflow:
-
-| State | Meaning |
-| --- | --- |
-| `draft` | Written by a localizer, not yet through the critics, or queued for revision |
-| `needsReview` | A flag the agents could not settle; its reason says what a person should decide |
-| `reviewed` | Final: passed the critics, or confirmed by a person |
-
-Final translations written by agents and translations a person wrote or
-confirmed are both `reviewed`, but only the second are protected against
-agent revision. Where that distinction is recorded is an
-[open question](#open-questions).
-
-## Learning
-
-**From critics.** The mentor aggregates flags across units. A problem that
-recurs, such as one English idiom rendered the same unnatural way, becomes a
-candidate lesson.
-
-**From people.** Every reaction is a signal: an edited or rejected draft, a
-chosen calibration variant, or a remark in the conversation such as "this
-character sounds too soft". The mentor turns them into lessons or knowledge
-changes. A person's reaction produces a locked entry.
-
-**Evaluation.** A lesson is kept only when it improves the result on the
-project's benchmark: a set of about ten units chosen to cover the project's
-domains and hardest cases (dialect, humor, drama, interface). The benchmark
-is localized with and without the lesson and compared by the critics' flag
-rate and a blind pairwise judgement. A lesson that does not help is dropped.
-The same benchmark decides between models, efforts, and instruction changes.
-
-**Propagation.** Each draft records the knowledge entries its localizer
-used. When an entry changes, the drafts that used it are queued for a
-targeted revision: the localizer revises only what the change affects, and
-the critics check the result. Translations a person wrote or confirmed are
-not revised; their strings are marked `needsReview` with the change as the
-reason.
-
-## People in the loop
-
-- **Calibration.** At the start of a project, the person picks between a few
-  pairs of renderings of the same scenes (freer or closer, colloquial or
-  bookish, strong or light dialect). The choices become the style entries.
-  This takes minutes and replaces writing guidance.
-- **Reactions.** Any edit, rejection, or remark is learned from (see
-  [Learning](#learning)).
-- **Review by exception.** The person sees the strings with open flags, each
-  with its reason, and can read samples of final units. Settling a flag or
-  editing a string confirms it and protects it from agent revision.
-
-The person never needs to open the knowledge files or agents' instructions,
-but can read and lock any entry.
+A flag names the line, its severity, the problem, and a hint. Critics do not
+rewrite. Flags go back to a fix of the part, which may change only flagged
+lines. The critics then read the changed and flagged lines again, and a
+remaining major flag gets one more fix; a flag still open marks its string
+`needsReview` with the flag as its reason. Consistency with the project
+knowledge is checked by the player-and-address critic and, once knowledge is
+written by agents, is to get its own critic.
 
 ## Tools
 
@@ -343,7 +290,7 @@ changes quality: understanding before writing, and reading after it.
 
 | Subsystem | Change |
 | --- | --- |
-| [Translation jobs](./ai.md#translation-jobs) | Chunks become units of work; workers become localizers; the orchestrator runs the critic and fix rounds. Job storage, lanes, pausing, limits, and supervision remain. |
+| [Translation jobs](./ai.md#translation-jobs) | Implemented: quest and cutscene sheets are whole units of work, the localizer replaces the worker subagent, and its critics decide between final and needs-review translations. Job storage, lanes, pausing, limits, and supervision remain. |
 | [Guidance, glossary, voices](./ai.md#guidance-and-glossary) | Replaced by project knowledge; the current files are imported once. [`glossary-v1.md`](../formats/glossary-v1.md) and [`voices-v1.md`](../formats/voices-v1.md) are retired. |
 | [Draft with Angelica](./ai.md#draft-with-angelica) | Reads knowledge for its string; its result can be checked by the critics. |
 | Angelica's tools | Knowledge tools replace the glossary, guidance, and voice tools; job tools gain study, benchmark, and revision work. |
@@ -351,16 +298,16 @@ changes quality: understanding before writing, and reading after it.
 
 ## Milestones
 
-0. **Prototype, outside Aeria.** Check the evidence-language hypothesis on
-   characters of a real project, then localize two or three quests through
-   understand, write, reread, and critics, and compare them with the current
-   drafts.
-1. **Knowledge and study.** Knowledge format and tools, import of existing
+0. **Prototype, outside Aeria** (done). The evidence languages answered the
+   decisions English hides; five quests of a real project went from 214
+   major critic findings in their drafts to 40, at 236 seconds for 394 lines.
+1. **Quest localizer and critics** (implemented). Units of work for quests,
+   the script, the contract, parallel parts, narrow critics, fixes, final
+   and needs-review translations.
+2. **Knowledge and study.** Knowledge format and tools, import of existing
    files, researchers for names, terms, and characters.
-2. **Quest localizer.** Units of work for quests, script presentation and
-   parsing, the three-phase localizer.
-3. **Critics.** Blind reader, fidelity, consistency, fix rounds,
-   `needsReview` with reasons.
+3. **Consistency.** A critic of the unit against the project knowledge, and
+   knowledge changes from critics' flags.
 4. **Learning.** Mentor, benchmark, lesson evaluation, propagation,
    calibration.
 5. **Other domains.** Units and localizer briefs for names, actions, items,

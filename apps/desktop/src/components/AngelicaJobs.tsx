@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { angelicaJobControl, angelicaJobEvents, angelicaJobRemove, angelicaJobRetry, angelicaJobSetConcurrency, angelicaJobSetLimit, angelicaJobUnits, angelicaJobWorkers, angelicaJobs, normalizeCommandError } from "../ipc";
-import { atTokenLimit, formatElapsed, formatTokens, jobProblems, jobProgress, reasoningTitle, sortJobs, suggestedTokenLimit, totalTokens, workerHealth } from "../angelica";
-import type { CommandError, JobAction, JobEvent, JobFilter, JobStatus, JobSummary, JobUnit, JobUnitStatus, SourceBinding, UnitLocationDto, WorkerActivity, WorkerPhase } from "../types";
+import { atTokenLimit, formatElapsed, formatTokens, jobProblems, jobProgress, jobWritten, sortJobs, suggestedTokenLimit, totalTokens, workerHealth } from "../angelica";
+import type { CommandError, JobAction, JobEvent, JobFilter, JobStatus, JobSummary, JobUnit, JobUnitStatus, SourceBinding, UnitLocationDto, WorkerActivity, WorkerPhase, WorkerStep } from "../types";
 import type { MessageKey } from "../i18n/translate";
 import { useI18n } from "../ui/i18n";
 import { IconButton } from "../ui/primitives/IconButton";
@@ -32,12 +32,14 @@ const unitLabels: Readonly<Record<JobUnitStatus, MessageKey>> = {
   pending: "angelica.job.unit.pending",
   running: "angelica.job.unit.running",
   drafted: "angelica.job.unit.drafted",
+  finished: "angelica.job.unit.finished",
+  flagged: "angelica.job.unit.flagged",
   rejected: "angelica.job.unit.rejected",
   failed: "angelica.job.unit.failed",
   conflict: "angelica.job.unit.conflict",
 };
 
-const phaseLabels: Readonly<Record<Exclude<WorkerPhase, "tool">, MessageKey>> = {
+const phaseLabels: Readonly<Record<WorkerPhase, MessageKey>> = {
   idle: "angelica.worker.idle",
   preparing: "angelica.worker.preparing",
   waiting: "angelica.worker.waiting",
@@ -48,21 +50,22 @@ const phaseLabels: Readonly<Record<Exclude<WorkerPhase, "tool">, MessageKey>> = 
   stopped: "angelica.worker.stopped",
 };
 
-const toolLabels: Readonly<Partial<Record<string, MessageKey>>> = {
-  submit_translations: "angelica.worker.tool.submit",
-  validate_target: "angelica.worker.tool.validate",
-  get_unit: "angelica.worker.tool.context",
-  other_languages: "angelica.worker.tool.context",
-  read_rows: "angelica.worker.tool.context",
-  get_guidance: "angelica.worker.tool.guidance",
-  report_issue: "angelica.worker.tool.report",
+const stepLabels: Readonly<Record<WorkerStep, MessageKey>> = {
+  contract: "angelica.worker.step.contract",
+  writing: "angelica.worker.step.writing",
+  reviewing: "angelica.worker.step.reviewing",
+  fixing: "angelica.worker.step.fixing",
+  rechecking: "angelica.worker.step.rechecking",
 };
 
 /** How often a running job's workers are polled while they are shown. */
 const WORKER_POLL_MS = 1000;
 
-type ProblemStatus = "rejected" | "failed" | "conflict";
+type ProblemStatus = "rejected" | "failed" | "conflict" | "flagged";
+/** Outcomes that can be retried. */
 const PROBLEMS: ProblemStatus[] = ["rejected", "failed", "conflict"];
+/** Outcomes listed on the Problems tab: retryable ones and strings left for review. */
+const LISTED: ProblemStatus[] = [...PROBLEMS, "flagged"];
 /** Finished jobs listed below the ones that still run or wait. */
 const FINISHED_SHOWN = 3;
 
@@ -78,51 +81,11 @@ function unitAddress(location: UnitLocationDto): string {
   return `${location.sheet}:${location.row}:${location.subrow}:${location.column ?? 0}`;
 }
 
-/** Reasoning summaries mark their headings as **bold** paragraphs. */
-function thoughtParts(text: string): { heading: string | null; body: string } {
-  const paragraphs = text.split(/\n{2,}/).map((part) => part.trim()).filter(Boolean);
-  let heading: string | null = null;
-  const body: string[] = [];
-  for (const paragraph of paragraphs) {
-    const match = /^\*\*(.+)\*\*$/s.exec(paragraph);
-    if (match) {
-      heading = match[1] ?? null;
-      body.length = 0;
-    } else {
-      body.push(paragraph.replaceAll("**", ""));
-    }
-  }
-  return { heading, body: body.join("\n\n") };
-}
-
-/** A worker's latest reasoning: its heading and the newest lines, or all of it. */
-function WorkerThought({ text, expanded, headingShown }: { text: string; expanded: boolean; headingShown: boolean }) {
-  if (expanded) return <span className="angelica-worker-thought-full">{text.replaceAll("**", "")}</span>;
-  const { heading, body } = thoughtParts(text);
-  return (
-    <>
-      {heading && !headingShown ? <strong className="angelica-worker-thought-heading">{heading}</strong> : null}
-      {body ? <span className="angelica-worker-thought-tail"><span>{body}</span></span> : null}
-    </>
-  );
-}
-
 /** What a lane is doing right now, as one line. */
 function workerActivity(worker: WorkerActivity, now: number, t: ReturnType<typeof useI18n>["t"]): string {
   switch (worker.phase) {
-    case "reasoning": {
-      const title = worker.thought ? reasoningTitle(worker.thought) : null;
-      return title ? t("angelica.worker.thinkingAbout", { title }) : t("angelica.worker.reasoning");
-    }
-    case "writing":
-      return worker.target?.unit != null
-        ? t("angelica.worker.writingUnit", { current: worker.streamedUnits, total: worker.units })
-        : t("angelica.worker.writingReply");
-    case "tool": {
-      if (worker.tool === "submit_translations" && worker.toolUnits > 0) return t("angelica.worker.tool.submitCount", { count: worker.toolUnits });
-      const label = worker.tool ? toolLabels[worker.tool] : undefined;
-      return label ? t(label) : t("angelica.worker.tool", { tool: worker.tool ?? "" });
-    }
+    case "waiting":
+      return worker.requests > 0 ? t("angelica.worker.waitingRequests", { count: worker.requests }) : t("angelica.worker.waiting");
     case "backoff":
       return worker.retryAtUnixMs !== null ? t("angelica.worker.backoffUntil", { time: formatElapsed(worker.retryAtUnixMs - now) }) : t("angelica.worker.backoff");
     default:
@@ -132,12 +95,9 @@ function workerActivity(worker: WorkerActivity, now: number, t: ReturnType<typeo
 
 function WorkerRow({ worker, now }: { worker: WorkerActivity; now: number }) {
   const { t } = useI18n();
-  const [expanded, setExpanded] = useState(false);
   const health = workerHealth(worker, now);
   const timed = worker.phase !== "stopped" && worker.phase !== "backoff";
   const inChunk = worker.chunk !== null && worker.phase !== "idle" && worker.phase !== "stopped" && worker.phase !== "backoff";
-  const thought = inChunk ? worker.thought?.trim() : undefined;
-  const target = inChunk ? worker.target : null;
   const rows = worker.firstRow === null || worker.lastRow === null ? null
     : worker.firstRow === worker.lastRow ? String(worker.firstRow) : `${worker.firstRow}–${worker.lastRow}`;
   return (
@@ -148,32 +108,14 @@ function WorkerRow({ worker, now }: { worker: WorkerActivity; now: number }) {
         <span className="angelica-worker-phase">{workerActivity(worker, now, t)}</span>
         {timed ? <span className="angelica-worker-time">{formatElapsed(now - worker.phaseStartedUnixMs)}</span> : null}
       </div>
-      {target ? (
-        <div className="angelica-worker-target" title={target.source ? `${target.address}\n${target.source}` : target.address}>
-          {target.unit !== null ? <span className="angelica-worker-unit">{t("angelica.worker.unitNumber", { unit: String(target.unit) })}</span> : null}
-          <span className="mono">{target.address}</span>
-          {target.source ? <span className="angelica-worker-source">{`«${target.source}»`}</span> : null}
-        </div>
-      ) : null}
       {health === "active" ? null : <span className="angelica-worker-silence" title={t("angelica.worker.silentHint")}>{t("angelica.worker.silence", { time: formatElapsed(now - worker.lastActivityUnixMs) })}</span>}
-      {thought ? (
-        <button
-          className={`angelica-worker-thought${expanded ? " expanded" : ""}${worker.phase === "reasoning" ? " live" : ""}`}
-          type="button"
-          aria-expanded={expanded}
-          title={expanded ? undefined : t("angelica.worker.thoughtHint")}
-          onClick={() => setExpanded((value) => !value)}
-        >
-          <WorkerThought text={thought} expanded={expanded} headingShown={worker.phase === "reasoning"} />
-        </button>
-      ) : null}
       <span className="angelica-worker-meta">
         {inChunk ? (
           <>
             <span title={t("angelica.worker.chunkHint", { chunk: String((worker.chunk ?? 0) + 1) })}>
               {rows ? t("angelica.worker.rows", { sheet: worker.sheet ?? "", rows }) : worker.sheet}
             </span>
-            {worker.round > 0 ? <span title={t("angelica.worker.roundHint", { max: worker.maxRounds })}>{t("angelica.worker.round", { round: worker.round, max: worker.maxRounds })}</span> : null}
+            {worker.step ? <span title={t("angelica.worker.stepHint")}>{t("angelica.worker.step", { round: worker.round, max: worker.maxRounds, step: t(stepLabels[worker.step]) })}</span> : null}
             <span title={t("angelica.worker.unitsHint")}>{t("angelica.worker.units", { finished: worker.finishedUnits, total: worker.units })}</span>
             {worker.chunkTokens > 0 ? <span>{t("angelica.worker.tokens", { tokens: formatTokens(worker.chunkTokens) })}</span> : null}
           </>
@@ -226,9 +168,10 @@ function JobProblems({ job, busy, retry, onError, onReveal }: { job: JobSummary;
   const { t, formatNumber } = useI18n();
   const [filter, setFilter] = useState<ProblemStatus | "all">("all");
   const [units, setUnits] = useState<JobUnit[] | null>(null);
-  const problems = jobProblems(job.counts);
-  const statuses = useMemo(() => filter === "all" ? PROBLEMS : [filter], [filter]);
+  const problems = jobProblems(job.counts) + job.counts.flagged;
+  const statuses = useMemo(() => filter === "all" ? LISTED : [filter], [filter]);
   const total = filter === "all" ? problems : job.counts[filter];
+  const retryable = filter === "all" ? jobProblems(job.counts) : filter === "flagged" ? 0 : job.counts[filter];
 
   useEffect(() => {
     let current = true;
@@ -242,14 +185,14 @@ function JobProblems({ job, busy, retry, onError, onReveal }: { job: JobSummary;
   if (problems === 0) return <p className="angelica-job-empty">{t("angelica.job.noProblems")}</p>;
   const options = [
     { value: "all" as const, label: `${t("angelica.job.problemFilter.all")} ${formatNumber(problems)}` },
-    ...PROBLEMS.filter((status) => job.counts[status] > 0).map((status) => ({ value: status, label: `${t(unitLabels[status])} ${formatNumber(job.counts[status])}` })),
+    ...LISTED.filter((status) => job.counts[status] > 0).map((status) => ({ value: status, label: `${t(unitLabels[status])} ${formatNumber(job.counts[status])}` })),
   ];
   return (
     <>
       <div className="angelica-job-toolbar">
         <Segmented value={filter} options={options} onChange={setFilter} label={t("angelica.job.tab.problems")} />
         {job.status !== "running" && job.status !== "cancelled" ? (
-          <button className="button button-ghost" type="button" disabled={busy || total === 0} onClick={() => retry(statuses)}>
+          <button className="button button-ghost" type="button" disabled={busy || retryable === 0} onClick={() => retry(statuses.filter((status) => status !== "flagged"))}>
             <UiIcon icon="refreshCw" size="sm" />{t("angelica.job.retryThese")}
           </button>
         ) : null}
@@ -441,12 +384,14 @@ function JobCard({ job, busy, expanded, onToggle, act, retry, setLimit, setConcu
         </div>
       </div>
       <div className="angelica-job-bar" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(jobProgress(job.counts) * 100)}>
-        <span className="drafted" style={{ width: share(job.counts.drafted) }} />
+        <span className="drafted" style={{ width: share(job.counts.finished + job.counts.drafted) }} />
+        <span className="flagged" style={{ width: share(job.counts.flagged) }} />
         <span className="problems" style={{ width: share(problems) }} />
         <span className="running" style={{ width: share(job.counts.running) }} />
       </div>
       <div className="angelica-job-stats">
-        <span>{t("angelica.job.drafted", { drafted: job.counts.drafted, total: job.counts.total })}</span>
+        <span>{t("angelica.job.written", { written: jobWritten(job.counts), total: job.counts.total })}</span>
+        {job.counts.flagged > 0 ? <span className="angelica-job-flagged" title={t("angelica.job.flaggedHint")}>{t("angelica.job.flagged", { count: job.counts.flagged })}</span> : null}
         {problems > 0 ? <span className="angelica-job-problems">{t("angelica.job.problems", { count: problems })}</span> : null}
         {job.status === "running" ? <span title={t("angelica.job.workersHint")}>{t("angelica.job.workers", { active: job.activeWorkers, total: job.spec.concurrency })}</span> : null}
         <span title={t("angelica.job.tokenLimit", { limit: job.spec.tokenLimit })}>

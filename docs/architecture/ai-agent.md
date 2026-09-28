@@ -32,7 +32,8 @@ These follow from [`../product/principles.md`](../product/principles.md) and
 1. Angelica produces drafts. It can never set `reviewed`, never demote or
    overwrite a `reviewed` unit without an explicit per-unit user approval,
    and never commit, push, sync, switch branches, apply a source update, or
-   export.
+   export. Translation jobs the user started write final translations as
+   `reviewed` (see [`localization-system.md`](./localization-system.md)).
 2. Every target Angelica writes passes intrinsic `aeria-se` validation and
    the AI structure policy described in
    [Structured strings](#structured-strings), and an empty or
