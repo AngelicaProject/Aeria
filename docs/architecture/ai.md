@@ -222,6 +222,15 @@ writing".
   language's own syntax and punctuation, avoid translationese, keep the
   line's register without adding or flattening anything, and reread each
   translation as the player sees it before submitting.
+- **Player character**, in Angelica's, every worker's, and Draft with
+  Angelica's system message: players choose their character's gender, so a
+  translation never assumes one. "You" in quests and cutscenes, journal
+  entries, and objectives is the player character. Every word that agrees
+  with the player character's gender goes in a condition on `$gn4`, wrapping
+  whole words (`Ты <if $gn4>готова<else>готов</if>?`), or the line is phrased
+  so that nothing agrees. Slash and parenthesis forms such as `готов(а)` are
+  never used, and a source condition on `$gn4` is never reduced to one
+  branch.
 
 Persona and style are defaults: the project guidance is described as taking
 precedence over them. They only guide the model; validation, glossary
@@ -544,14 +553,17 @@ Each chunk is translated by a worker with a fresh context: fixed worker
 instructions, the project facts, guidance and matching glossary entries, the
 job's instructions as they are when the chunk starts, and its strings with
 their constructs, context cells, current translations,
-notes, and up to three translation-memory matches, followed by the job's
-images when the worker model accepts images. A chunk of a quest or cutscene
+notes, and up to three translation-memory matches with their review states,
+followed by the job's images when the worker model accepts images. Workers
+keep the wording of reviewed matches; unreviewed drafts guide names and terms
+only. A chunk of a quest or cutscene
 sheet starts with its scene: the quest's name and translation, up to 12
 journal entries and objectives, the spoken lines around the chunk's strings
 with their speakers and translations (the four before the first, up to 40
 between them that are not in the chunk, and the four after the last), and
 the voice profiles (at most 8) of those speakers and the chunk's; each string
-names its speaker label. Workers are told to translate the chunk as one
+names its speaker label, or says that it is a journal entry or objective
+speaking to the player character. Workers are told to translate the chunk as one
 conversation. A sheet whose dialogue cannot be read is translated without a scene. Images come from the job's
 conversation; after the conversation is deleted, workers are told they are no
 longer available. Its tools are `get_unit`, `other_languages`, `read_rows`, and

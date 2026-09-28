@@ -98,6 +98,12 @@ impl SheetDialogue {
             .position(|line| line.row == row && line.subrow == subrow)
     }
 
+    /// The role of one row's line.
+    #[must_use]
+    pub fn role(&self, row: u32, subrow: u16) -> Option<&LineRole> {
+        Some(&self.lines[self.position(row, subrow)?].role)
+    }
+
     /// The speaker label of one row, when it is speech.
     #[must_use]
     pub fn speaker(&self, row: u32, subrow: u16) -> Option<&str> {

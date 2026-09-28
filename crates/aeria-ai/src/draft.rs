@@ -10,7 +10,7 @@ use crate::chat::{ChatMessage, ChatRequest, Usage};
 use crate::client::{OpenAiCompatibleClient, ProviderEndpoint, ProviderError};
 use crate::guidance::GlossaryEntry;
 use crate::provider::ReasoningEffort;
-use crate::style::TRANSLATION_STYLE;
+use crate::style::{PLAYER_CHARACTER, TRANSLATION_STYLE};
 use crate::tools::{ContextCell, ProjectFacts};
 
 /// Most requests one draft makes, including corrections.
@@ -67,9 +67,9 @@ macro does. Write the translation as macro text and localize it: word order, con
 and formatting follow the target language. Keep every macro marked as game data; it may \
 move or repeat. Keep the source's formatting as often as the source has it, in any order. \
 Conditions may be reworded, restructured, added, or dropped: add one where the target \
-language must agree with the player character's gender or another known value. Write \\< \
-\\{ \\\\ for literal characters. The game cannot compute number endings, so prefer \
-number-neutral phrasing.";
+language must agree with the player character's gender (see The player character below) \
+or another known value. Write \\< \\{ \\\\ for literal characters. The game cannot \
+compute number endings, so prefer number-neutral phrasing.";
 
 fn user_message(request: &DraftRequest<'_>, source: &str, legend: &[String]) -> String {
     let mut message = String::new();
@@ -171,7 +171,7 @@ pub async fn draft_translation(
         images: Vec::new(),
     }];
     let system = format!(
-        "{DRAFT_INSTRUCTIONS}\n{}\n\n{TRANSLATION_STYLE}",
+        "{DRAFT_INSTRUCTIONS}\n{}\n\n{TRANSLATION_STYLE}\n\n{PLAYER_CHARACTER}",
         aeria_se::authoring_reference()
     );
     let mut usage = Usage::default();
