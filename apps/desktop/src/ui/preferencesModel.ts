@@ -11,6 +11,8 @@ export type PaneMode = "text" | "code";
 /** The tab the translation editor's side pane shows. */
 export type SidePaneTab = "note" | "languages" | "history";
 export const sidePaneTabs = ["note", "languages", "history"] as const;
+/** How quest and cutscene sheets are shown: as the strings list, or as a scene. */
+export type DialogueView = "strings" | "scene";
 
 export type Preferences = {
   language: LanguagePreference;
@@ -22,6 +24,7 @@ export type Preferences = {
   targetPaneMode: PaneMode;
   sidePaneTab: SidePaneTab;
   listDensity: ListDensity;
+  dialogueView: DialogueView;
   focusTargetOnNext: boolean;
 };
 
@@ -38,6 +41,7 @@ export const defaultPreferences: Preferences = {
   targetPaneMode: "text",
   sidePaneTab: "note",
   listDensity: "comfortable",
+  dialogueView: "scene",
   focusTargetOnNext: true,
 };
 
@@ -65,6 +69,7 @@ export function parsePreferences(raw: string | null): Preferences {
     targetPaneMode: pick(stored.targetPaneMode, ["text", "code"] as const, defaultPreferences.targetPaneMode),
     sidePaneTab: pick(stored.sidePaneTab, sidePaneTabs, defaultPreferences.sidePaneTab),
     listDensity: pick(stored.listDensity, ["compact", "comfortable"] as const, defaultPreferences.listDensity),
+    dialogueView: pick(stored.dialogueView, ["strings", "scene"] as const, defaultPreferences.dialogueView),
     focusTargetOnNext: boolean("focusTargetOnNext"),
   };
 }

@@ -103,7 +103,7 @@ and text for every form and every catalog entry.
 `aeria_se::catalog` is the single table of named macros. Each entry holds
 the code, tag name, form, arguments (name, role, and whether inline or
 block), required and repeating arguments, semantic family, and a one-line
-summary. Printing, parsing, validation, tagged text, legends, and the editor
+summary. Printing, parsing, validation, the agent's constructs, and the editor
 all read it, so naming a new macro code is one new entry with a golden
 vector.
 
@@ -142,6 +142,45 @@ recursed into. The deepest game string nests well below that limit.
 
 Block content keeps its span, so a branch can be replaced in the source
 text without reprinting the rest.
+
+### Idioms
+
+`catalog::IDIOMS` names constructs of several macros whose meaning game
+strings establish, each written as one exact macro text:
+`<split " " 1><string $gs1></split>` is the player character's first name
+(13,280 strings of the current game) and `<split " " 2><string $gs1></split>`
+the last name (850). An idiom is still its macros: macro text, encoding,
+validation, and the structure policy treat them as before. The editor shows
+it as one value with the macros in its tooltip, and the agent's list of the
+source's constructs describes it by its meaning. The editor reads the table from the `macro_idioms`
+command. Naming another idiom is one entry whose text is canonical macro
+text.
+
+### Insertions
+
+`catalog::INSERTIONS` lists the macros a person may insert while
+translating, each in the form the game's dialogue uses for it: the player
+character's full name `<string $gs1>` (13,553 strings), first and last name
+(the idioms above), class or job `<sheet ClassJob $gn68 0>` (504), and race
+`<sheet Race $gn71 0>`; a choice by gender `<if $gn4>…<else>…</if>`
+(6,505), and by one race or class or job, `<if ($gn71 == row)>` and
+`<if ($gn68 == row)>`, offered for each row of `Race` and `ClassJob`; and
+`<i>`, `<capitalize>`, and `<nbsp>`. Every insertion is canonical macro text,
+and the globals it reads have an established meaning.
+
+### Speaker names
+
+A line that starts with `(-name-)` is shown with that name in place of the
+speaking character's own, such as `(-???-)` for someone not yet introduced
+or `(-Exuberant Newcomer-)`. The markers are plain text in the bytes, not a
+macro, so macro text and encoding treat them as text; `aeria_se::speaker`
+reads them as syntax. A speaker name opens with `(-` at the very start of
+the string and closes at the first `-)` after it in text outside macros;
+the name between them is text players read and may hold macros, such as
+`(-<i>An Introduction to the Heavens</i>-)`. On the current game 8,169
+strings of quest, voiced cutscene, `custom`, dungeon, and `DefaultTalk`
+sheets start with one, and `(-` occurs nowhere else at the start of a
+string.
 
 ## Validity
 
@@ -187,7 +226,9 @@ The desktop editor shows macro text in two ways (see
 - **Code**: the macro text with every tag written out.
 
 The document is always the exact macro text, parsed and validated by Rust
-before save. The editor does not evaluate conditions or fill in values.
+before save. The editor does not evaluate conditions or fill in values. A
+person's translation is not held to the assisted structure policy; it only
+has to be valid.
 
 ### Known global parameters
 
@@ -202,50 +243,53 @@ have no name until strings establish their meaning.
 
 ## AI boundary
 
-AI receives structured translatable content with protected placeholders and never writes raw macro text. Structural edits beyond the policy below may later be exposed as explicit validated operations.
+The translation agent reads and writes macro text, as people do in the
+editor's code mode, and localizes a string's structure as its language needs.
+What the game fills in is kept by a deterministic policy, not by the agent's
+judgment. `aeria_se::assisted` owns both parts.
 
-### Tagged text
+### Constructs
 
-`aeria_se::project` turns a well-formed source string into tagged text. Prose
-is plain text with `&`, `<`, and `>` written as `&amp;`, `&lt;`, and `&gt;`.
-Each root or nested protected construct becomes a numbered tag in source
-order:
+`aeria_se::constructs(source)` lists every macro of a well-formed source
+once, in source order, with what it does (from the catalog, with its argument
+values and the meaning of a known global, such as `condition = global number
+4 (1 when the player character is female, 0 when male)`; an idiom reads as its
+meaning) and the rule a translation follows for it:
 
-- `<x id="N"/>` for a construct without translatable content, including
-  opaque constructs and each tag of a pair;
-- `<g id="N"><b>…</b>…</g>` for a block whose translatable parts are
-  translated in place, one `<b>` per part, such as the branches of `<if>` or
-  `<switch>`.
+| Rule | Constructs | A translation |
+| --- | --- | --- |
+| Game data | runtime values (`num`, `player-name`, `string $gs1`), game data references (`sheet`, `noun-en`), icons, sounds, waits, links, opaque constructs, unknown codes, raw bytes | keeps it; it may move or repeat |
+| Formatting | `i`, `b`, `color`, `ui-color`, and their ends | keeps it as often as the source has it, in any order |
+| Condition | `if`, `switch`, `if-gender`, `if-self`, and other conditional selection | may reword, restructure, add, or drop it |
+| Free | `br`, `nbsp`, `shy`, `hyphen`, and text transforms such as `capitalize` | may add or drop it |
 
-Each tag has a legend entry built from the catalog: its exact spelling, what
-it does with its argument values (for example `a value from a game data
-sheet, such as a name; sheet = Item, row = number parameter 1, column = 0`),
-its family, its branch count, and whether it may repeat. A malformed source
-has no projection and is not offered for assisted translation.
-
-`aeria_se::rebuild(source, tagged)` parses a tagged translation, checks it,
-and rebuilds the target by copying each construct's exact source spelling
-and splicing the translated text into the block content, escaped as macro
-text (`\\`, `\<`, `\{`).
+A malformed source has no constructs and is not offered for assisted
+translation. `aeria_se::authoring_reference()` is a short reference of
+condition syntax and the known globals for the agent's instructions.
 
 ### Assisted structure policy
 
-A tagged translation and, independently, the rebuilt macro text
-(`aeria_se::check_assisted_structure`) must satisfy:
+`aeria_se::check_assisted_structure(source, target)` accepts a target that:
 
-- every source construct is kept; no construct kind is droppable yet;
-- a construct stays in its container, the top level or one branch of one
-  construct;
-- constructs may move within their container, except that formatting
-  constructs keep their relative order, so opening and closing tags cannot
-  cross;
-- only runtime values without branches, such as a number, may repeat;
-- constructs with branches keep their number of branches;
-- nothing else may be added. A changed game reference, parameter, argument,
-  or opaque construct is a different construct and is rejected.
+- is well-formed macro text;
+- keeps every piece of game data of the source, compared by its code and
+  arguments with translatable text masked: a changed item, sheet, or
+  parameter is other data. Game data may move and repeat, anywhere in the
+  string, including into or out of a condition's branches, and the target
+  adds none the source lacks;
+- has each formatting construct of the source as many times as the source,
+  in any order;
+- tests, in conditions it has, only parameters the source uses or globals
+  whose meaning is established (see [Known global
+  parameters](#known-global-parameters)); constants and game values such as
+  `$hour` are always allowed;
+- starts with a speaker name exactly when the source does, and does not
+  leave a name the source gives empty (see [Speaker names](#speaker-names)).
 
-The text check compares constructs by their code and arguments, with only
-the content of translatable branches masked, and then compares the branches
-of matching constructs recursively. Refusals are returned as messages written
-for the model, so it can correct its translation. This policy, not strict
-structure comparison, is the acceptance rule for assisted translation.
+Everything else is the translation's own: word order, wording, line breaks,
+and conditions a language needs, such as a verb that agrees with the player
+character's gender (`Чего <if $gn4>застыла<else>застыл</if>?`) where English
+has none. The policy is checked on every string of the current game as its
+own translation, and every one of the 2,474,046 well-formed strings passes.
+Refusals are returned as messages written for the model, so it can correct
+its translation.

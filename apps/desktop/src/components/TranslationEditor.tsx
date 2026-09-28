@@ -6,7 +6,9 @@ import { IconButton } from "../ui/primitives/IconButton";
 import { Segmented } from "../ui/primitives/Segmented";
 import { UiIcon } from "../ui/primitives/UiIcon";
 import { MacroEditor, focusMacroEditor, type MacroEditorApi } from "./MacroEditor";
+import { InsertMacroButton, InsertMacroContextMenu } from "./InsertMacroMenu";
 import { useMacroView } from "../ui/useMacroView";
+import { speakerMarkers } from "../macroTokens";
 import { ReviewDot, reviewLabel } from "./ReviewDot";
 import { OtherLanguages } from "./OtherLanguages";
 import { StringHistory } from "./StringHistory";
@@ -211,6 +213,14 @@ const TranslationEditorImpl = forwardRef<TranslationEditorHandle, TranslationEdi
   // Clicking a tag of the source adds it to the translation at its cursor.
   const targetApi = useRef<MacroEditorApi | null>(null);
   const targetView = useMacroView(draft === null ? null : draft.target);
+  // A speaker name the translation lost or added: valid text, but the game shows another name.
+  const speakerNote = useMemo(() => {
+    if (!selectedCell || draft === null || draft.target.trim().length === 0) return null;
+    const source = speakerMarkers(selectedCell.sourceMacro) !== null;
+    const target = speakerMarkers(draft.target) !== null;
+    if (source === target) return null;
+    return t(source ? "editor.speakerMissing" : "editor.speakerAdded");
+  }, [selectedCell, draft, t]);
 
   const updateDraft = useCallback((cell: TranslationCellDto, field: keyof CellDraft, value: string) => {
     const key = bindingKey(cell.sourceBinding);
@@ -368,29 +378,34 @@ const TranslationEditorImpl = forwardRef<TranslationEditorHandle, TranslationEdi
             {targetDirty ? <span className="edited-label">{t("common.edited")}</span> : null}
             {mutation === "target" ? <span className="saving-label"><span className="spinner spinner-xs" />{t("editor.savingInline")}</span> : null}
             <span className="spacer" />
+            <InsertMacroButton editor={targetApi} disabled={cellBusy} />
             {checkpoint ? <IconButton icon="gitCompareArrows" label={t(showDiff ? "editor.hideDiff" : "editor.showDiff")} pressed={showDiff} onClick={() => setShowDiff((current) => !current)} className={`git-mark git-mark-${checkpoint.kind}`} /> : null}
             <PaneModeSwitch value={targetMode} onChange={(mode) => setPreference("targetPaneMode", mode)} />
           </div>
           {checkpoint && showDiff ? <CheckpointDiff baseline={checkpoint} current={draft.target} /> : null}
-          <MacroEditor
-            key={bindingKey(selectedCell.sourceBinding)}
-            className="editor-surface"
-            value={draft.target}
-            ariaLabel={t("editor.targetText", { column: String(selectedCell.sourceBinding.columnIndex) })}
-            placeholder={t("editor.targetPlaceholder")}
-            disabled={cellBusy}
-            onChange={(value) => updateDraft(selectedCell, "target", value)}
-            onSave={() => saveTarget(false)}
-            onSaveAndNext={() => saveTarget(true)}
-            onApproveAndNext={approve}
-            onNavigate={onNavigate}
-            view={targetView}
-            presentation={targetMode === "code" ? "code" : "chips"}
-            apiRef={targetApi}
-          />
+          <InsertMacroContextMenu editor={targetApi} disabled={cellBusy}>
+            <div className="editor-context">
+              <MacroEditor
+                key={bindingKey(selectedCell.sourceBinding)}
+                className="editor-surface"
+                value={draft.target}
+                ariaLabel={t("editor.targetText", { column: String(selectedCell.sourceBinding.columnIndex) })}
+                placeholder={t("editor.targetPlaceholder")}
+                disabled={cellBusy}
+                onChange={(value) => updateDraft(selectedCell, "target", value)}
+                onSave={() => saveTarget(false)}
+                onSaveAndNext={() => saveTarget(true)}
+                onApproveAndNext={approve}
+                onNavigate={onNavigate}
+                view={targetView}
+                presentation={targetMode === "code" ? "code" : "chips"}
+                apiRef={targetApi}
+              />
+            </div>
+          </InsertMacroContextMenu>
           <div className="editor-pane-foot">
             <span className="editor-hint">
-              {targetIsBlank ? t("editor.enterTranslation") : targetDirty ? t("common.unsaved") : null}
+              {targetIsBlank ? t("editor.enterTranslation") : speakerNote ? <span className="editor-warning">{speakerNote}</span> : targetDirty ? t("common.unsaved") : null}
             </span>
             <button className="button button-ghost" type="button" disabled={cellBusy || targetIsBlank} title={t("editor.approveNextTitle")} onClick={approve}>
               <UiIcon icon="check" size="xs" />{t("editor.approveNext")}

@@ -9,6 +9,7 @@
 
 mod dialogue;
 mod glyphs;
+mod script;
 mod sheet;
 
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
@@ -25,6 +26,12 @@ use thiserror::Error;
 pub use aeria_core::{GameVersion, GameVersionError, LayoutHash};
 pub use dialogue::{Dialogue, DialogueKind, DialogueLine, LineRole, line_role, sheet_id};
 pub use glyphs::{FontGlyph, FontGlyphs, Icon};
+use script::ResolvedCutscene;
+pub use script::{
+    Availability, Choice, ChoiceKind, ChoiceOption, ChunkError, Comparison, Condition, Constant,
+    CutsceneError, FlowNode, Guard, Operand, OptionLabel, QuestReference, QuestScript, SceneFlow,
+    Test, cutscene_keys,
+};
 pub use sheet::{
     MIN_KEYED_ROWS, RowKeys, SourceCell, SourceRow, SourceSheet, StringColumn, Unavailable,
     layout_hash,
@@ -119,6 +126,14 @@ pub enum SourceError {
         path: PathBuf,
         source: GameVersionError,
     },
+
+    /// A quest script is not a compiled script Aeria reads.
+    #[error("the script of {sheet} cannot be read: {source}")]
+    Script { sheet: String, source: ChunkError },
+
+    /// A cutscene a quest plays is not a cutscene file Aeria reads.
+    #[error("the cutscene {path} cannot be read: {source}")]
+    Cutscene { path: String, source: CutsceneError },
 }
 
 /// The result of looking up a sheet.
@@ -157,11 +172,61 @@ pub struct GameSource {
     ui_colors: std::sync::OnceLock<Vec<(u32, u32)>>,
     icons: std::sync::OnceLock<Option<(Vec<u8>, Vec<u8>)>>,
     quests: Mutex<Option<Arc<QuestIndex>>>,
+    variables: Mutex<HashMap<String, Arc<QuestVariables>>>,
+    cutscene_index: Mutex<Option<Arc<CutsceneIndex>>>,
+    /// Where quests' scripts play each `Cutscene` row asked about so far.
+    cutscene_plays: Mutex<HashMap<u32, Vec<CutscenePlay>>>,
     speakers: Mutex<Option<Arc<SpeakerIndex>>>,
 }
 
 /// Quest sheet IDs and the `Quest` row that names each one.
-type QuestIndex = HashMap<String, (u32, u16)>;
+type QuestIndex = HashMap<String, QuestEntry>;
+
+/// The script variables of each row of `Quest` or `QuestBattle`, such as
+/// `CUT_SCENE_01 = 10`.
+type QuestVariables = HashMap<(u32, u16), Vec<(String, u32)>>;
+
+/// Every cutscene file's text keys, by the dialogue sheet they belong to.
+type CutsceneIndex = HashMap<String, Vec<CutsceneLines>>;
+
+/// A cutscene file and the keys of one dialogue sheet it names.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CutsceneLines {
+    /// The cutscene's `Cutscene` row.
+    pub row: u32,
+    /// The cutscene's path, such as `ffxiv/clsarc/clsarc00110/clsarc00110`.
+    pub path: String,
+    /// The sheet's keys the file names, in the sheet's row order.
+    pub keys: Vec<String>,
+}
+
+/// A scene or handler of a quest's scripts that plays a cutscene.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CutscenePlay {
+    /// The quest's sheet, such as `quest/047/AktKmm103_04753`.
+    pub quest: String,
+    /// The quest's name.
+    pub name: Option<String>,
+    /// As in [`SceneFlow`]: the scene number, or the handler's name, and the
+    /// battle script it belongs to.
+    pub scene: Option<u32>,
+    pub handler: Option<String>,
+    pub script: Option<String>,
+}
+
+/// Script suffixes of a quest's battles: `ClsRog250_00148` has its battle
+/// script at `ClsRog250Btl_00148`, and a second one at `ClsRog250Btl2_00148`.
+const BATTLE_SUFFIXES: [&str; 9] = [
+    "Btl", "Btl2", "Btl3", "Btl4", "Btl5", "Btl6", "Btl7", "Btl8", "Btl9",
+];
+
+/// A quest sheet's `Quest` row.
+struct QuestEntry {
+    sheet: String,
+    row: (u32, u16),
+    /// The text of the row's first non-empty translatable cell.
+    name: Option<String>,
+}
 
 /// Speech lines by speaker label: `(sheet index, row, subrow)` in sheet-name
 /// and row order.
@@ -218,6 +283,9 @@ impl GameSource {
             ui_colors: std::sync::OnceLock::new(),
             icons: std::sync::OnceLock::new(),
             quests: Mutex::new(None),
+            variables: Mutex::new(HashMap::new()),
+            cutscene_index: Mutex::new(None),
+            cutscene_plays: Mutex::new(HashMap::new()),
             speakers: Mutex::new(None),
         })
     }
@@ -567,6 +635,475 @@ impl GameSource {
         })
     }
 
+    /// The traced dialogue flow of a quest sheet's script,
+    /// `game_script/<sheet>.luab` (see [`QuestScript`]); `None` for any other
+    /// sheet, or a quest without a script.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when a game file cannot be read or the script is not
+    /// a compiled script Aeria reads.
+    pub fn quest_script(&self, sheet: &str) -> Result<Option<QuestScript>, SourceError> {
+        if DialogueKind::of(sheet) != Some(DialogueKind::Quest)
+            || !self.sheet_names.iter().any(|name| name == sheet)
+        {
+            return Ok(None);
+        }
+        let Some(data) = self.game.file(&format!("game_script/{sheet}.luab"))? else {
+            return Ok(None);
+        };
+        let mut script = QuestScript::read(&data).map_err(|source| SourceError::Script {
+            sheet: sheet.to_owned(),
+            source,
+        })?;
+        let variables = self.quest_row_variables(sheet)?;
+        self.resolve_cutscenes(sheet, &mut script, &variables)?;
+        self.resolve_quests(sheet, &mut script, &variables)?;
+        // The quest's battles have scripts of their own, named after it,
+        // whose cutscene variables are in the `QuestBattle` rows the quest's
+        // `QUESTBATTLE…` variables name.
+        let battle_variables = self.battle_variables(&variables);
+        if let Some((folder, id)) = sheet.rsplit_once('/')
+            && let Some((base, number)) = id.rsplit_once('_')
+        {
+            for suffix in BATTLE_SUFFIXES {
+                let name = format!("{base}{suffix}");
+                let path = format!("game_script/{folder}/{name}_{number}.luab");
+                let Some(data) = self.game.file(&path)? else {
+                    continue;
+                };
+                let mut battle =
+                    QuestScript::read(&data).map_err(|source| SourceError::Script {
+                        sheet: path.clone(),
+                        source,
+                    })?;
+                self.resolve_cutscenes(sheet, &mut battle, &battle_variables)?;
+                self.resolve_quests(sheet, &mut battle, &variables)?;
+                for scene in &mut battle.scenes {
+                    scene.script = Some(name.clone());
+                }
+                script.scenes.extend(battle.scenes);
+            }
+        }
+        Ok(Some(script))
+    }
+
+    /// The script variables of a quest sheet's `Quest` row.
+    fn quest_row_variables(&self, sheet: &str) -> Result<Vec<(String, u32)>, SourceError> {
+        let Some(row) = self.quest_row(sheet)? else {
+            return Ok(Vec::new());
+        };
+        Ok(self
+            .variables("Quest")
+            .get(&row)
+            .cloned()
+            .unwrap_or_default())
+    }
+
+    /// The script variables of the `QuestBattle` rows that a quest's
+    /// `QUESTBATTLE…` variables name. A name with different values in two
+    /// rows is left out, since which row a battle script uses is unknown.
+    fn battle_variables(&self, quest: &[(String, u32)]) -> Vec<(String, u32)> {
+        let battles = self.variables("QuestBattle");
+        let mut merged: Vec<(String, u32)> = Vec::new();
+        let mut conflicts: Vec<String> = Vec::new();
+        for (_, row) in quest
+            .iter()
+            .filter(|(name, _)| name.starts_with("QUESTBATTLE"))
+        {
+            for (name, value) in battles.get(&(*row, 0)).into_iter().flatten() {
+                match merged.iter().find(|(known, _)| known == name) {
+                    Some((_, known)) if known != value => conflicts.push(name.clone()),
+                    Some(_) => {}
+                    None => merged.push((name.clone(), *value)),
+                }
+            }
+        }
+        merged.retain(|(name, _)| !conflicts.contains(name));
+        merged
+    }
+
+    /// Every cutscene file that names keys of a dialogue sheet, with those
+    /// keys in the sheet's row order, in `Cutscene` row order. Reading every
+    /// cutscene file takes a few seconds on up to `threads` threads the first
+    /// time; the index is kept in memory. A file that is missing or is not a
+    /// cutscene file is left out of the index.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when a game file cannot be read.
+    pub fn cutscenes_naming(
+        &self,
+        sheet: &str,
+        threads: usize,
+    ) -> Result<Vec<CutsceneLines>, SourceError> {
+        let index = self.cutscene_index(threads)?;
+        let Some(found) = index.get(sheet) else {
+            return Ok(Vec::new());
+        };
+        let rows: HashMap<String, usize> = self
+            .dialogue(sheet)?
+            .map(|dialogue| {
+                dialogue
+                    .lines
+                    .iter()
+                    .enumerate()
+                    .map(|(index, line)| (line.key.to_ascii_uppercase(), index))
+                    .collect()
+            })
+            .unwrap_or_default();
+        Ok(found
+            .iter()
+            .map(|cutscene| {
+                let mut keys = cutscene.keys.clone();
+                keys.sort_by_key(|key| {
+                    rows.get(&key.to_ascii_uppercase())
+                        .copied()
+                        .unwrap_or(usize::MAX)
+                });
+                CutsceneLines {
+                    keys,
+                    ..cutscene.clone()
+                }
+            })
+            .collect())
+    }
+
+    /// The quests whose scripts play each of the `Cutscene` rows, with the
+    /// scene or handler that plays it, in sheet-name order. Quests whose
+    /// `Quest` row, or a `QuestBattle` row it names, holds one of the rows
+    /// are traced to find where their scripts play it; a quest whose script
+    /// does not play it is left out. Results are kept per row for the source.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the game cannot be read. A quest whose script
+    /// cannot be read is left out.
+    pub fn cutscene_plays(
+        &self,
+        rows: &[u32],
+    ) -> Result<HashMap<u32, Vec<CutscenePlay>>, SourceError> {
+        let cached = |row: &u32| {
+            self.cutscene_plays
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .contains_key(row)
+        };
+        let missing: Vec<u32> = rows.iter().filter(|row| !cached(row)).copied().collect();
+        if !missing.is_empty() {
+            let found = self.find_cutscene_plays(&missing)?;
+            let mut cache = self
+                .cutscene_plays
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            for row in missing {
+                cache.insert(row, found.get(&row).cloned().unwrap_or_default());
+            }
+        }
+        let cache = self
+            .cutscene_plays
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        Ok(rows
+            .iter()
+            .filter_map(|row| {
+                let plays = cache.get(row).filter(|plays| !plays.is_empty())?;
+                Some((*row, plays.clone()))
+            })
+            .collect())
+    }
+
+    /// [`Self::cutscene_plays`] without the cache.
+    fn find_cutscene_plays(
+        &self,
+        rows: &[u32],
+    ) -> Result<HashMap<u32, Vec<CutscenePlay>>, SourceError> {
+        let mut plays: HashMap<u32, Vec<CutscenePlay>> = HashMap::new();
+        if rows.is_empty() {
+            return Ok(plays);
+        }
+        let holds =
+            |variables: &[(String, u32)]| variables.iter().any(|(_, value)| rows.contains(value));
+        let battles: HashSet<u32> = self
+            .variables("QuestBattle")
+            .iter()
+            .filter(|(_, variables)| holds(variables))
+            .map(|((row, _), _)| *row)
+            .collect();
+        let quests: HashSet<u32> = self
+            .variables("Quest")
+            .iter()
+            .filter(|(_, variables)| {
+                holds(variables)
+                    || variables.iter().any(|(name, value)| {
+                        name.starts_with("QUESTBATTLE") && battles.contains(value)
+                    })
+            })
+            .map(|((row, _), _)| *row)
+            .collect();
+        let index = self.quest_index()?;
+        let mut candidates: Vec<&QuestEntry> = index
+            .values()
+            .filter(|entry| entry.row.1 == 0 && quests.contains(&entry.row.0))
+            .collect();
+        candidates.sort_unstable_by(|left, right| left.sheet.cmp(&right.sheet));
+        for entry in candidates {
+            let script = match self.quest_script(&entry.sheet) {
+                Ok(Some(script)) => script,
+                Ok(None) | Err(SourceError::Script { .. } | SourceError::Cutscene { .. }) => {
+                    continue;
+                }
+                Err(error) => return Err(error),
+            };
+            for (scene, row) in script.cutscene_rows() {
+                if !rows.contains(&row) {
+                    continue;
+                }
+                let scene = &script.scenes[scene];
+                plays.entry(row).or_default().push(CutscenePlay {
+                    quest: entry.sheet.clone(),
+                    name: entry.name.clone(),
+                    scene: scene.scene,
+                    handler: scene.handler.clone(),
+                    script: scene.script.clone(),
+                });
+            }
+        }
+        Ok(plays)
+    }
+
+    fn cutscene_index(&self, threads: usize) -> Result<Arc<CutsceneIndex>, SourceError> {
+        let mut index = self
+            .cutscene_index
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if let Some(index) = index.as_ref() {
+            return Ok(Arc::clone(index));
+        }
+        let SheetLookup::Present(cutscenes) = self.sheet("Cutscene")? else {
+            return Ok(Arc::clone(index.insert(Arc::new(CutsceneIndex::new()))));
+        };
+        let files: Vec<(u32, String)> = cutscenes
+            .rows()
+            .iter()
+            .filter_map(|row| {
+                let path = cutscenes
+                    .cells(row)
+                    .find(|cell| !cell.bytes.is_empty())?
+                    .text();
+                Some((row.row_id, path))
+            })
+            .collect();
+        let mut sheets_by_id: HashMap<String, &str> = HashMap::new();
+        for name in &self.sheet_names {
+            if DialogueKind::of(name).is_some() {
+                sheets_by_id.insert(sheet_id(name).to_ascii_uppercase(), name);
+            }
+        }
+        let read = |chunk: &[(u32, String)]| -> Result<Vec<(String, CutsceneLines)>, SourceError> {
+            let mut found = Vec::new();
+            for (row, path) in chunk {
+                let Some(data) = self.game.file(&format!("cut/{path}.cutb"))? else {
+                    continue;
+                };
+                let Ok(keys) = cutscene_keys(&data) else {
+                    continue;
+                };
+                let mut by_sheet: Vec<(String, Vec<String>)> = Vec::new();
+                for key in keys {
+                    let Some(sheet) = sheet_of_key(&sheets_by_id, &key) else {
+                        continue;
+                    };
+                    match by_sheet.iter_mut().find(|(known, _)| known == sheet) {
+                        Some((_, keys)) => keys.push(key),
+                        None => by_sheet.push((sheet.to_owned(), vec![key])),
+                    }
+                }
+                found.extend(by_sheet.into_iter().map(|(sheet, keys)| {
+                    (
+                        sheet,
+                        CutsceneLines {
+                            row: *row,
+                            path: path.clone(),
+                            keys,
+                        },
+                    )
+                }));
+            }
+            Ok(found)
+        };
+        let chunks: Vec<&[(u32, String)]> = files
+            .chunks(files.len().div_ceil(threads.max(1)).max(1))
+            .collect();
+        let found: Vec<Result<Vec<(String, CutsceneLines)>, SourceError>> =
+            std::thread::scope(|scope| {
+                let handles: Vec<_> = chunks
+                    .iter()
+                    .map(|chunk| scope.spawn(|| read(chunk)))
+                    .collect();
+                handles
+                    .into_iter()
+                    .map(|handle| {
+                        handle
+                            .join()
+                            .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
+                    })
+                    .collect()
+            });
+        let mut built = CutsceneIndex::new();
+        for chunk in found {
+            for (sheet, cutscene) in chunk? {
+                built.entry(sheet).or_default().push(cutscene);
+            }
+        }
+        Ok(Arc::clone(index.insert(Arc::new(built))))
+    }
+
+    /// Replaces the quest variables of quest functions, such as `QUEST0` in
+    /// `IsQuestCompleted(QUEST0)`, with the quests they name: the variable's
+    /// value in the quest's `Quest` row is the named quest's `Quest` row.
+    /// A variable without a value stays a field.
+    fn resolve_quests(
+        &self,
+        _sheet: &str,
+        script: &mut QuestScript,
+        row_variables: &[(String, u32)],
+    ) -> Result<(), SourceError> {
+        let names = script.quest_variables();
+        if names.is_empty() || row_variables.is_empty() {
+            return Ok(());
+        }
+        let index = self.quest_index()?;
+        let by_row: HashMap<u32, &QuestEntry> = index
+            .values()
+            .filter(|entry| entry.row.1 == 0)
+            .map(|entry| (entry.row.0, entry))
+            .collect();
+        let mut resolved = HashMap::new();
+        for name in names {
+            let Some(value) = row_variables
+                .iter()
+                .find(|(variable, _)| *variable == name)
+                .map(|(_, value)| *value)
+            else {
+                continue;
+            };
+            let entry = by_row.get(&value);
+            resolved.insert(
+                name.clone(),
+                QuestReference {
+                    variable: name,
+                    row: value,
+                    name: entry.and_then(|entry| entry.name.clone()),
+                    sheet: entry.map(|entry| entry.sheet.clone()),
+                },
+            );
+        }
+        script.set_quests(&resolved);
+        Ok(())
+    }
+
+    /// Fills the lines of the cutscenes a quest's scenes play. A cutscene
+    /// variable resolves through the quest's script variables in its `Quest`
+    /// row (each `String` column is a variable name, and the `UInt32` column
+    /// that follows it in the row data holds its value), the `Cutscene` row
+    /// of that value, whose first String column is a path, and the file
+    /// `cut/<path>.cutb`. A link that is missing leaves the cutscene without
+    /// lines.
+    fn resolve_cutscenes(
+        &self,
+        sheet: &str,
+        script: &mut QuestScript,
+        row_variables: &[(String, u32)],
+    ) -> Result<(), SourceError> {
+        let names = script.cutscene_names();
+        if names.is_empty() || row_variables.is_empty() {
+            return Ok(());
+        }
+        let SheetLookup::Present(cutscenes) = self.sheet("Cutscene")? else {
+            return Ok(());
+        };
+        let rows: HashMap<String, usize> = self
+            .dialogue(sheet)?
+            .map(|dialogue| {
+                dialogue
+                    .lines
+                    .iter()
+                    .enumerate()
+                    .map(|(index, line)| (line.key.to_ascii_uppercase(), index))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let mut sheets_by_id: HashMap<String, &str> = HashMap::new();
+        for name in &self.sheet_names {
+            if DialogueKind::of(name).is_some() {
+                sheets_by_id.insert(sheet_id(name).to_ascii_uppercase(), name);
+            }
+        }
+        let mut resolved = HashMap::new();
+        for name in names {
+            let Some(value) = row_variables
+                .iter()
+                .find(|(variable, _)| *variable == name)
+                .map(|(_, value)| *value)
+            else {
+                continue;
+            };
+            let Some(path) = cutscenes
+                .row(value, 0)
+                .and_then(|row| cutscenes.cells(row).find(|cell| !cell.bytes.is_empty()))
+                .map(|cell| cell.text())
+            else {
+                continue;
+            };
+            let file = format!("cut/{path}.cutb");
+            let Some(data) = self.game.file(&file)? else {
+                continue;
+            };
+            let keys = cutscene_keys(&data).map_err(|source| SourceError::Cutscene {
+                path: file.clone(),
+                source,
+            })?;
+            let mut lines: Vec<(usize, String)> = Vec::new();
+            let mut others: Vec<String> = Vec::new();
+            for key in keys {
+                if let Some(index) = rows.get(&key.to_ascii_uppercase()) {
+                    lines.push((*index, key));
+                } else if let Some(other) = sheet_of_key(&sheets_by_id, &key)
+                    && other != sheet
+                    && !others.iter().any(|known| known == other)
+                {
+                    others.push(other.to_owned());
+                }
+            }
+            lines.sort_unstable();
+            others.sort_unstable();
+            resolved.insert(
+                name,
+                ResolvedCutscene {
+                    row: value,
+                    path,
+                    lines: lines.into_iter().map(|(_, key)| key).collect(),
+                    sheets: others,
+                },
+            );
+        }
+        script.set_cutscenes(&resolved);
+        Ok(())
+    }
+
+    fn variables(&self, sheet: &str) -> Arc<QuestVariables> {
+        let mut variables = self
+            .variables
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        Arc::clone(
+            variables
+                .entry(sheet.to_owned())
+                .or_insert_with(|| Arc::new(read_variables(&self.game, sheet, self.language))),
+        )
+    }
+
     /// The `Quest` row of a quest sheet: the only row with a String cell
     /// that is not translatable and holds the sheet's ID, such as
     /// `ManFst004_00124` for `quest/001/ManFst004_00124`. `None` when no row
@@ -579,22 +1116,62 @@ impl GameSource {
         if DialogueKind::of(sheet) != Some(DialogueKind::Quest) {
             return Ok(None);
         }
+        Ok(self
+            .quest_index()?
+            .get(sheet_id(sheet))
+            .map(|entry| entry.row))
+    }
+
+    /// The other quest sheets whose `Quest` row has the same name, such as
+    /// the versions of a class quest the game gives depending on the
+    /// player's starting class, in sheet-name order. The name is the source
+    /// text of the row's first non-empty translatable cell, compared
+    /// exactly; a quest without a row or a name has no versions.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when a game file cannot be read.
+    pub fn quest_versions(&self, sheet: &str) -> Result<Vec<String>, SourceError> {
+        if DialogueKind::of(sheet) != Some(DialogueKind::Quest) {
+            return Ok(Vec::new());
+        }
+        let index = self.quest_index()?;
+        let Some(name) = index
+            .get(sheet_id(sheet))
+            .filter(|entry| entry.sheet == sheet)
+            .and_then(|entry| entry.name.as_deref())
+        else {
+            return Ok(Vec::new());
+        };
+        let mut versions: Vec<String> = index
+            .values()
+            .filter(|entry| entry.sheet != sheet && entry.name.as_deref() == Some(name))
+            .map(|entry| entry.sheet.clone())
+            .collect();
+        versions.sort_unstable();
+        Ok(versions)
+    }
+
+    fn quest_index(&self) -> Result<Arc<QuestIndex>, SourceError> {
         let mut quests = self.quests.lock().unwrap_or_else(PoisonError::into_inner);
-        let index = match quests.as_ref() {
+        Ok(match quests.as_ref() {
             Some(index) => Arc::clone(index),
             None => Arc::clone(quests.insert(Arc::new(self.read_quest_index()?))),
-        };
-        drop(quests);
-        Ok(index.get(sheet_id(sheet)).copied())
+        })
     }
 
     fn read_quest_index(&self) -> Result<QuestIndex, SourceError> {
-        let ids: HashSet<&str> = self
-            .sheet_names
-            .iter()
-            .filter(|name| DialogueKind::of(name) == Some(DialogueKind::Quest))
-            .map(|name| sheet_id(name))
-            .collect();
+        // Quest sheet IDs, and the sheet of each; an ID in two sheets names
+        // neither.
+        let mut sheets: HashMap<&str, Option<&str>> = HashMap::new();
+        for name in &self.sheet_names {
+            if DialogueKind::of(name) == Some(DialogueKind::Quest) {
+                sheets
+                    .entry(sheet_id(name))
+                    .and_modify(|sheet| *sheet = None)
+                    .or_insert(Some(name.as_str()));
+            }
+        }
         let SheetLookup::Present(quest) = self.sheet("Quest")? else {
             return Ok(QuestIndex::new());
         };
@@ -605,7 +1182,7 @@ impl GameSource {
                     continue;
                 }
                 let text = cell.text();
-                if ids.contains(text.as_str()) {
+                if sheets.contains_key(text.as_str()) {
                     let found = rows.entry(text).or_default();
                     if !found.contains(&(row.row_id, row.subrow_id)) {
                         found.push((row.row_id, row.subrow_id));
@@ -615,9 +1192,27 @@ impl GameSource {
         }
         Ok(rows
             .into_iter()
-            .filter_map(|(id, rows)| match rows.as_slice() {
-                [row] => Some((id, *row)),
-                _ => None,
+            .filter_map(|(id, rows)| {
+                let [row] = rows.as_slice() else {
+                    return None;
+                };
+                let sheet = sheets.get(id.as_str()).copied().flatten()?.to_owned();
+                let name = quest
+                    .row(row.0, row.1)
+                    .and_then(|source| {
+                        quest
+                            .cells(source)
+                            .find(|cell| cell.translatable && !cell.bytes.is_empty())
+                    })
+                    .map(|cell| cell.text());
+                Some((
+                    id,
+                    QuestEntry {
+                        sheet,
+                        row: *row,
+                        name,
+                    },
+                ))
             })
             .collect())
     }
@@ -734,6 +1329,64 @@ impl GameSource {
         }
         Ok(lines)
     }
+}
+
+/// The dialogue sheet a text key belongs to: the one whose ID follows
+/// `TEXT_` in the key, ignoring case, taking the longest ID that matches.
+fn sheet_of_key<'a>(sheets_by_id: &HashMap<String, &'a str>, key: &str) -> Option<&'a str> {
+    let rest = key.get(5..).filter(|_| {
+        key.get(..5)
+            .is_some_and(|head| head.eq_ignore_ascii_case("TEXT_"))
+    })?;
+    rest.match_indices('_')
+        .filter_map(|(end, _)| sheets_by_id.get(&rest[..end].to_ascii_uppercase()).copied())
+        .next_back()
+}
+
+/// The script variables of every row of `Quest` or `QuestBattle`: each
+/// non-empty String column paired with the `UInt32` column whose data starts
+/// 4 bytes after it. A sheet that cannot be read has none.
+fn read_variables(game: &GameData, name: &str, language: SourceLanguage) -> QuestVariables {
+    let Ok(sheet) = excel::read_sheet(game, name, language.excel())
+        .or_else(|_| excel::read_sheet(game, name, excel::Language::None))
+    else {
+        return QuestVariables::new();
+    };
+    let pairs: Vec<(usize, usize)> = sheet
+        .columns
+        .iter()
+        .enumerate()
+        .filter(|(_, column)| column.kind == excel::ColumnKind::String)
+        .filter_map(|(index, column)| {
+            let value = sheet.columns.iter().position(|other| {
+                other.kind == excel::ColumnKind::UInt32 && other.offset == column.offset + 4
+            })?;
+            Some((index, value))
+        })
+        .collect();
+    sheet
+        .rows()
+        .iter()
+        .filter_map(|row| {
+            let variables: Vec<(String, u32)> = pairs
+                .iter()
+                .filter_map(|(name, value)| {
+                    let name = row.string(*name).ok().filter(|name| {
+                        !name.is_empty()
+                            && name
+                                .iter()
+                                .all(|byte| byte.is_ascii_alphanumeric() || *byte == b'_')
+                    })?;
+                    let bytes: [u8; 4] = row.value(*value).ok()?.as_slice().try_into().ok()?;
+                    Some((
+                        String::from_utf8_lossy(name).into_owned(),
+                        u32::from_le_bytes(bytes),
+                    ))
+                })
+                .collect();
+            (!variables.is_empty()).then_some(((row.row_id, row.subrow_id), variables))
+        })
+        .collect()
 }
 
 /// The first color column of every `UIColor` row, sorted by row ID. A sheet

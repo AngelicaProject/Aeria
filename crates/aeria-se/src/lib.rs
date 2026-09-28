@@ -1,5 +1,5 @@
 //! Game strings for Aeria: the string model, macro text, validation, and
-//! tagged text for assisted translation.
+//! the structure policy for assisted translation.
 //!
 //! - [`bytes`] converts `SeString` bytes to the string model without loss.
 //! - [`catalog`] describes every named macro.
@@ -11,20 +11,21 @@
 
 #![forbid(unsafe_code)]
 
+mod assisted;
 pub mod bytes;
 pub mod catalog;
 pub mod codec;
 mod semantic;
+pub mod speaker;
 mod syntax;
-mod tagged;
 
+pub use assisted::{
+    Construct, ConstructRule, StructureError, authoring_reference, check_assisted_structure,
+    constructs, describe as describe_macro,
+};
 pub use catalog::SemanticFamily;
 pub use semantic::{SemanticValidation, SemanticValidity};
 pub use syntax::{
     Diagnostic, DiagnosticKind, ExprKind, ExprSyntax, MAX_NESTING_DEPTH, MacroString, MacroSyntax,
     Span, SyntaxKind, SyntaxNode, Written, parse, print,
-};
-pub use tagged::{
-    Tag, TaggedError, TaggedText, check_assisted_structure, describe as describe_macro, project,
-    rebuild,
 };

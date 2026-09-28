@@ -1,6 +1,6 @@
 import { en } from "./i18n/en.ts";
 import type { MessageKey, Translate } from "./i18n/translate";
-import { scanMacros } from "./macroTokens.ts";
+import { idiomRanges, scanMacros, speakerMarkers, type Idioms } from "./macroTokens.ts";
 import type { MacroConditionDto, MacroOperandDto } from "./types";
 
 /**
@@ -15,7 +15,7 @@ import type { MacroConditionDto, MacroOperandDto } from "./types";
  * authority for parsing and validation.
  */
 
-export type ChipTone = "value" | "number" | "choice" | "condition" | "break" | "icon" | "space" | "unknown";
+export type ChipTone = "value" | "number" | "choice" | "condition" | "break" | "icon" | "space" | "speaker" | "unknown";
 
 export type ChipSpec =
   /**
@@ -39,7 +39,16 @@ export type ChipLookup = {
   colorOf: (tag: string) => string | null;
   /** What an opening `<if>` or `<switch>` tests, by the tag's text. */
   conditionOf: (tag: string) => MacroConditionDto | null;
+  /** Constructs of several macros that read as one value; none when absent. */
+  idioms?: Idioms;
 };
+
+/** How an idiom reads: its own words, or Rust's summary for one without them. */
+export function idiomLabel(t: Translate, name: string, summary: string): string {
+  const key = `idiom.${name}` as MessageKey;
+  const label = t(key);
+  return label === key ? summary : label;
+}
 
 /** Tags that open and close a formatting pair. */
 const FORMATTING = new Set(["color", "edge-color", "ui-color", "ui-edge-color", "shadow-color", "i", "b"]);
@@ -296,6 +305,10 @@ function closingTags(open: string): string {
   return [...open.matchAll(/<([A-Za-z-]+)/g)].map((match) => `</${match[1]}>`).reverse().join("");
 }
 
+function specFrom(spec: ChipSpec): number {
+  return spec.kind === "break" ? spec.at : spec.from;
+}
+
 /** How to draw every part of `text`. */
 export function chipSpecs(text: string, lookup: ChipLookup, t: Translate): ChipSpec[] {
   const items = itemsOf(text);
@@ -312,9 +325,23 @@ export function chipSpecs(text: string, lookup: ChipLookup, t: Translate): ChipS
     if (color || italic || bold) specs.push({ kind: "style", from, to, color, italic, bold });
   };
 
+  const idioms = idiomRanges(text, items.map((item) => item.type === "brace" ? item : item.tag), lookup.idioms ?? new Map());
   for (let index = 0; index < items.length; index += 1) {
     const item = items[index]!;
     style(cursor, item.type === "brace" ? item.from : item.tag.from);
+    const idiom = item.type === "tag" ? idioms.get(item.tag.from) : undefined;
+    if (item.type === "tag" && idiom) {
+      // Several macros that read as one value: one chip, the macros in its title.
+      const source = text.slice(item.tag.from, idiom.to);
+      specs.push({ kind: "chip", from: item.tag.from, to: idiom.to, label: idiomLabel(t, idiom.name, idiom.summary), tone: "value", insert: source, title: source });
+      while (index + 1 < items.length) {
+        const next = items[index + 1]!;
+        if ((next.type === "brace" ? next.from : next.tag.from) >= idiom.to) break;
+        index += 1;
+      }
+      cursor = idiom.to;
+      continue;
+    }
     if (item.type === "brace") {
       specs.push({ kind: "chip", from: item.from, to: item.to, label: item.inner, tone: "number", insert: text.slice(item.from, item.to) });
       cursor = item.to;
@@ -387,6 +414,16 @@ export function chipSpecs(text: string, lookup: ChipLookup, t: Translate): ChipS
     }
   }
   style(cursor, text.length);
+
+  // A speaker name reads "speaker ???: the line".
+  const speaker = speakerMarkers(text);
+  if (speaker) {
+    specs.push(
+      { kind: "chip", from: speaker.open.from, to: speaker.open.to, label: t("chip.speaker"), tone: "speaker", insert: "(-", title: t("chip.speakerTitle") },
+      { kind: "chip", from: speaker.close.from, to: speaker.close.to, label: ":", tone: "speaker", insert: "-)", title: t("chip.speakerEndTitle") },
+    );
+    specs.sort((left, right) => specFrom(left) - specFrom(right));
+  }
 
   // Pair markers so picking either edge wraps text in the whole pair.
   const openMarkers: Extract<ChipSpec, { kind: "marker" }>[] = [];

@@ -13,6 +13,8 @@ test("preferences fall back to defaults for missing, malformed, or unknown value
   assert.equal(parsed.focusTargetOnNext, defaultPreferences.focusTargetOnNext);
   assert.equal(parsed.sidePaneTab, defaultPreferences.sidePaneTab);
   assert.equal(parsePreferences(JSON.stringify({ sidePaneTab: "languages" })).sidePaneTab, "languages");
+  assert.equal(parsePreferences(JSON.stringify({ dialogueView: "film" })).dialogueView, defaultPreferences.dialogueView);
+  assert.equal(parsePreferences(JSON.stringify({ dialogueView: "strings" })).dialogueView, "strings");
 });
 
 test("interface language accepts supported choices only", () => {

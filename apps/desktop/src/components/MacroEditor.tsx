@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import { Annotation, Compartment, EditorState, Prec, StateEffect, StateField, type Extension, type Range } from "@codemirror/state";
+import { Annotation, Compartment, EditorSelection, EditorState, Prec, StateEffect, StateField, type Extension, type Range } from "@codemirror/state";
 import {
   Decoration,
   EditorView,
@@ -14,7 +14,8 @@ import {
 } from "@codemirror/view";
 import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
 import { describeTag, tagAt } from "../macroLabels";
-import { scanMacros } from "../macroTokens";
+import { scanMacros, speakerMarkers, type Idioms } from "../macroTokens";
+import { useMacroIdioms } from "../macroIdioms";
 import type { Translate } from "../i18n/translate";
 import { useI18n } from "../ui/i18n";
 import { usePreferences } from "../ui/preferences";
@@ -28,6 +29,8 @@ export type MacroPresentation = "chips" | "code";
 export type MacroEditorApi = {
   /** Replaces the selection with `text`, or wraps it in a pair of tags, and focuses the editor. */
   apply: (pick: ChipPick) => void;
+  /** The selected macro text. */
+  selection: () => string;
 };
 
 type MacroEditorProps = {
@@ -57,10 +60,15 @@ const macroNameMark = Decoration.mark({ class: "cm-macro-name" });
 
 function macroDecorations(view: EditorView): DecorationSet {
   const ranges: Range<Decoration>[] = [];
-  for (const span of scanMacros(view.state.doc.toString())) {
+  const text = view.state.doc.toString();
+  const tags = scanMacros(text);
+  for (const span of tags) {
     ranges.push(macroMark.range(span.from, span.to));
     for (const [from, to] of span.names) ranges.push(macroNameMark.range(from, to));
   }
+  // The speaker name's markers are syntax too, though the bytes hold them as text.
+  const speaker = speakerMarkers(text, tags);
+  if (speaker) for (const marker of [speaker.open, speaker.close]) ranges.push(macroNameMark.range(marker.from, marker.to));
   return Decoration.set(ranges, true);
 }
 
@@ -141,10 +149,11 @@ function insertLineBreak(view: EditorView): boolean {
   return true;
 }
 
-function chipContext(macroView: MacroViewState | null | undefined, t: Translate, version: number, onPick: ((pick: ChipPick) => void) | undefined): ChipContext {
+function chipContext(macroView: MacroViewState | null | undefined, t: Translate, version: number, onPick: ((pick: ChipPick) => void) | undefined, idioms: Idioms): ChipContext {
   return {
     t,
     onPick,
+    idioms,
     text: macroView?.text ?? null,
     errors: macroView?.view.diagnostics.map((diagnostic) => [diagnostic.from, Math.max(diagnostic.to, diagnostic.from + 1)] as const) ?? [],
     version,
@@ -167,6 +176,7 @@ export function MacroEditor({ value, ariaLabel, onChange, readOnly = false, disa
   const compartments = useRef({ editable: new Compartment(), placeholder: new Compartment(), label: new Compartment(), highlight: new Compartment(), specialChars: new Compartment() });
   const { preferences } = usePreferences();
   const colorVersion = useRef(0);
+  const idioms = useMacroIdioms();
   // Picks go through a ref so the chip view is not rebuilt for a new handler.
   const pickHandler = useRef(onPick);
   pickHandler.current = onPick;
@@ -198,7 +208,7 @@ export function MacroEditor({ value, ariaLabel, onChange, readOnly = false, disa
           EditorView.lineWrapping,
           diagnosticsField,
           macroHover(hoverSource),
-          highlight.of(presentationExtensions(presentation, preferences.highlightMacros, chipContext(macroView, t, colorVersion.current, pick))),
+          highlight.of(presentationExtensions(presentation, preferences.highlightMacros, chipContext(macroView, t, colorVersion.current, pick, idioms))),
           editable.of(editableExtensions(readOnly, disabled)),
           placeholderCompartment.of(placeholder ? placeholderExtension(placeholder) : []),
           label.of(EditorView.contentAttributes.of({ "aria-label": ariaLabel, spellcheck: "false" })),
@@ -212,15 +222,34 @@ export function MacroEditor({ value, ariaLabel, onChange, readOnly = false, disa
     viewRef.current = view;
     if (apiRef) {
       apiRef.current = {
+        selection() {
+          const range = view.state.selection.main;
+          return view.state.sliceDoc(range.from, range.to);
+        },
         apply(picked) {
           if (view.state.readOnly) return;
-          const range = view.state.selection.main;
-          const insert = "insert" in picked
-            ? picked.insert
-            : `${picked.wrap[0]}${view.state.sliceDoc(range.from, range.to)}${picked.wrap[1]}`;
-          const cursor = "insert" in picked || range.empty
-            ? range.from + ("insert" in picked ? insert.length : picked.wrap[0].length)
-            : range.from + insert.length;
+          let range = view.state.selection.main;
+          // Without a selection, a condition takes the word before the cursor.
+          if ("branches" in picked && range.empty) {
+            const before = view.state.sliceDoc(Math.max(0, range.from - 64), range.from);
+            const word = /[\p{L}\p{M}'’-]+$/u.exec(before)?.[0] ?? "";
+            range = EditorSelection.range(range.from - word.length, range.from);
+          }
+          const selected = view.state.sliceDoc(range.from, range.to);
+          let insert: string;
+          let cursor: number;
+          if ("insert" in picked) {
+            insert = picked.insert;
+            cursor = range.from + insert.length;
+          } else if ("wrap" in picked) {
+            insert = `${picked.wrap[0]}${selected}${picked.wrap[1]}`;
+            cursor = range.empty ? range.from + picked.wrap[0].length : range.from + insert.length;
+          } else {
+            // Both branches start as the selection; the cursor ends the first.
+            const [open, separator, close] = picked.branches;
+            insert = `${open}${selected}${separator}${selected}${close}`;
+            cursor = range.from + open.length + selected.length;
+          }
           view.dispatch({ changes: { from: range.from, to: range.to, insert }, selection: { anchor: cursor }, scrollIntoView: true, userEvent: "input" });
           view.focus();
         },
@@ -261,10 +290,10 @@ export function MacroEditor({ value, ariaLabel, onChange, readOnly = false, disa
   useEffect(() => {
     if (macroView && learnTags(macroView.text, macroView.view.tags)) colorVersion.current += 1;
     viewRef.current?.dispatch({ effects: [
-      compartments.current.highlight.reconfigure(presentationExtensions(presentation, preferences.highlightMacros, chipContext(macroView, t, colorVersion.current, pick))),
+      compartments.current.highlight.reconfigure(presentationExtensions(presentation, preferences.highlightMacros, chipContext(macroView, t, colorVersion.current, pick, idioms))),
       compartments.current.specialChars.reconfigure(preferences.showControlCharacters ? highlightSpecialChars() : []),
     ] });
-  }, [macroView, presentation, preferences.highlightMacros, preferences.showControlCharacters, t, Boolean(onPick)]);
+  }, [macroView, presentation, preferences.highlightMacros, preferences.showControlCharacters, t, Boolean(onPick), idioms]);
 
   useEffect(() => {
     viewRef.current?.dispatch({ effects: compartments.current.placeholder.reconfigure(placeholder ? placeholderExtension(placeholder) : []) });

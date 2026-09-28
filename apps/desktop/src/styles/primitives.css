@@ -471,3 +471,6 @@ kbd {
 .source-update-list li { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; padding: 4px 0; border-bottom: 1px solid var(--line); }
 .source-update-target { flex: 1 1 100%; color: var(--fg); overflow-wrap: anywhere; }
 .field > .segmented { justify-self: start; }
+
+/* A long submenu, such as every class and job, scrolls. */
+.menu-content-scroll { max-height: min(420px, 70vh); overflow-y: auto; }

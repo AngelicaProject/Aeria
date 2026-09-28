@@ -58,7 +58,7 @@ Deleting local cache must never delete a user's translation work.
 
 - `aeria-core`: domain types and application contracts that should not know Tauri, Git implementation details, or SQLite.
 - `aeria-sqpack`: read-only access to an installed game's SqPack archives and Excel sheets: the sheet list, sheet headers, and the rows and String cell bytes of a sheet in one language. It never writes to the installation. Its `testing` feature writes synthetic installations for tests.
-- `aeria-source`: the installed game as the translation source: sheets in the source language, String cell text, sheet layouts, translation permission, row keys, and the sheet catalog.
+- `aeria-source`: the installed game as the translation source: sheets in the source language, String cell text, sheet layouts, translation permission, row keys, the dialogue flow traced from quest scripts, and the sheet catalog.
 - `aeria-se`: structured FFXIV string parsing, syntax tree, validation, and rendering model.
 - `aeria-workspace`: versioned translation workspace model, deterministic serialization, and application of planned source updates.
 - `aeria-rebase`: deterministic source update planning.

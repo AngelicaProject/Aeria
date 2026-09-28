@@ -18,6 +18,113 @@ export type OtherLanguageTextDto = {
   text: string | null;
 };
 
+/** The dialogue structure of a quest or cutscene sheet, read from its row keys. */
+export type SheetDialogueDto = {
+  kind: "quest" | "cutscene";
+  quest: QuestNameDto | null;
+  /** Other quest sheets whose `Quest` row has the same name. */
+  versions: string[];
+  lines: DialogueLineDto[];
+  /** The scenes traced from the quest's script; `null` for cutscenes, quests without a script, or an unreadable script. */
+  scenes: SceneFlowDto[] | null;
+  /** Why the quest's script could not be read. */
+  scriptError: string | null;
+  /** Every cutscene file that names lines of the sheet, in `Cutscene` row order. */
+  cutscenes: IndexedCutsceneDto[];
+};
+
+/** A cutscene file and the sheet's lines it names, in row order. */
+export type IndexedCutsceneDto = { row: number; path: string; lines: string[]; plays: CutscenePlayDto[] };
+
+/** A scene or handler of a quest's scripts that plays a cutscene: the quest's sheet and name, and where in its scripts. */
+export type CutscenePlayDto = { quest: string; name: string | null; scene: number | null; handler: string | null; script: string | null };
+
+export type SceneFlowDto = {
+  /** The number of `OnScene<number>`; `null` for another function of the script. */
+  scene: number | null;
+  /** The name another function is assigned to, such as `GetBalloonTalkArgs`. */
+  handler: string | null;
+  /** The quest's battle script it belongs to, such as `ClsRog250Btl`; `null` for the quest's own script. */
+  script: string | null;
+  /** `false` when the scene lists its lines in code order, without branches. */
+  traced: boolean;
+  nodes: FlowNodeDto[];
+};
+
+/** One step of a scene; line keys follow the sheet's `TEXT_<ID>_` prefix, like `DialogueLineDto.key`. */
+export type FlowNodeDto =
+  | { kind: "line"; key: string }
+  /** `prompts` are the possible questions: several when the script chooses one earlier. */
+  | { kind: "choice"; id: number; choice: ChoiceKindDto; prompts: string[]; options: ChoiceOptionDto[] }
+  | { kind: "branch"; condition: GuardDto; then: FlowNodeDto[]; otherwise: FlowNodeDto[] }
+  | { kind: "loop"; id: number; body: FlowNodeDto[] }
+  | { kind: "repeat"; loopId: number }
+  /** `lines` are keys of this sheet the cutscene's file names, in row order; `sheets` are other dialogue sheets it names lines of. */
+  | { kind: "cutscene"; name: string | null; path: string | null; lines: string[]; sheets: string[] }
+  | { kind: "cancelled" }
+  | { kind: "accepted" }
+  | { kind: "completed" };
+
+export type ChoiceKindDto = "questOffer" | "yesNo" | "menu";
+
+export type ChoiceOptionDto = { label: OptionLabelDto; available: AvailabilityDto; then: FlowNodeDto[] };
+
+/** When the player can pick an answer: `never` shows it grayed out; `when` only where the guard holds. */
+export type AvailabilityDto =
+  | { kind: "always" }
+  | { kind: "never" }
+  | { kind: "when"; guard: GuardDto }
+  | { kind: "unknown" };
+
+export type OptionLabelDto =
+  | { kind: "accept" }
+  | { kind: "decline" }
+  | { kind: "yes" }
+  | { kind: "no" }
+  | { kind: "text"; key: string }
+  /** An answer the script passes from elsewhere, such as an entry of a list it built. */
+  | { kind: "script" };
+
+/** One test of a value. */
+export type ConditionDto = { kind: "test"; subject: OperandDto; test: TestDto };
+
+/** What a branch tests: one condition, or several joined with `or` (`any`) or `and` (`all`). */
+export type GuardDto = ConditionDto | { kind: "any"; guards: GuardDto[] } | { kind: "all"; guards: GuardDto[] };
+
+export type TestDto =
+  | { kind: "truthy"; value: boolean }
+  | { kind: "compare"; comparison: "eq" | "ne" | "lt" | "le" | "gt" | "ge"; value: OperandDto };
+
+export type OperandDto =
+  | { kind: "answer"; choice: number }
+  | { kind: "call"; function: string | null; arguments: OperandDto[] }
+  | { kind: "number"; value: number }
+  | { kind: "boolean"; value: boolean }
+  | { kind: "nil" }
+  | { kind: "string"; value: string }
+  | { kind: "field"; name: string }
+  /** A quest a script variable such as `QUEST0` names: its `Quest` row, name, and sheet when known. */
+  | { kind: "quest"; variable: string; row: number; name: string | null; sheet: string | null }
+  | { kind: "global"; name: string }
+  | { kind: "oneOf"; operands: OperandDto[] }
+  | { kind: "unknown" };
+
+export type QuestNameDto = {
+  sourceBinding: SourceBinding;
+  sourceMacro: string;
+  targetMacro: string | null;
+};
+
+export type DialogueLineDto = {
+  sourceBinding: SourceBinding;
+  role: "journal" | "objective" | "speech" | "other";
+  /** The speaker label of speech, such as `URIANGER`, `SYSTEM`, or `A1`. */
+  speaker: string | null;
+  /** The row key after its `TEXT_<ID>_` prefix. */
+  key: string;
+  sourceMacro: string;
+};
+
 export type ProjectSheetDto = {
   name: string;
   rowCount: number;
@@ -842,6 +949,19 @@ export type MacroFamily = "translatableText" | "formatting" | "condition" | "run
 export type MacroArgDto = { name: string; role: string; value: string; parameter: MacroParameterDto | null };
 
 /** One tag of macro text: an opening, closing, separator, or inline tag. */
+/** A macro a translator can insert, in the form game strings use; `{row}` in `parts` is one of `rows`. */
+export type MacroInsertionDto = {
+  name: string;
+  group: "player" | "choice" | "format";
+  form: "insert" | "wrap" | "branches";
+  parts: string[];
+  rows: { row: number; name: string }[];
+  summary: string;
+};
+
+/** A construct of several macros that reads as one value, such as the player's first name. */
+export type MacroIdiomDto = { name: string; text: string; summary: string };
+
 export type MacroTagDto = {
   from: number;
   to: number;

@@ -167,6 +167,113 @@ coverage from `translation_progress`, never a figure derived from loaded pages.
 Strings with uncommitted Git changes carry a gutter marker (added or modified)
 derived from `git_pending_changes`.
 
+### Scene view
+
+Quest (`quest/…`) and cutscene (`cut_scene/…`) sheets whose rows carry
+dialogue keys can also be shown as a scene: a **Strings / Scene** switch
+at the start of the list toolbar, remembered as the `dialogueView`
+preference (scene by default). The structure comes from `sheet_dialogue`
+(see [`source.md`](./source.md#dialogue)) and is presentation only. The
+scene is read as soon as the sheet is selected, beside its strings, and
+the switch shows for every quest and cutscene sheet until the read says it
+has no scene. While a scene loads, the scene view never shows the strings
+list in its place: it keeps the scene shown last, dimmed and inert, with
+the strings it was shown with, or says it is loading when there is none.
+The scene shows as soon as the sheet's strings start to arrive; lines whose
+strings have not arrived yet are inert until they do. The
+scene is one virtualized list of rows indented by depth, with a guide line
+per level. It reads like a script: scene titles are large with a rule
+above them, each speaker's name stands above their lines, a choice is a
+caption in the choice color with its question in italics and its answers
+as outlined pills, and the script's conditions and loops are captions in
+the flow color. What a row is nested in draws a rail per level in that
+container's color: an answer in the choice color, a branch or loop in the
+flow color, and a cutscene or the unplayed lines in a neutral one. The
+colors are the semantic tokens `--scene-choice*`, `--scene-flow*`, and
+`--scene-rail`, derived from each theme's accent and warning. In a narrow
+list, the translation moves under the source. It starts with the quest's name, in translation when there is
+one, which opens its string in the `Quest` sheet, and the other versions of
+the quest, quests with the same name (see
+[`source.md`](./source.md#dialogue)), each of which opens its sheet in a
+pinned tab. The journal entries and the objectives follow.
+
+A quest with a script (see [`source.md`](./source.md#quest-scripts)) then
+reads scene by scene, in the order the game plays its lines. A scene that
+offers the quest is titled *Accepting the quest*, one that completes it
+*Completing the quest*, and others *Scene N*. The script's other functions
+with lines follow, titled by what they do where the name tells (*Balloons
+over characters*, *While escorting or chasing*, *Menu labels*, *Said in
+chat*, *When enemies appear*, *Battle stage*, and so on) with the function's
+name beside the title. Scenes and functions of the quest's battle scripts
+are titled *Quest battle · …* with the battle script's name. Within a
+scene:
+
+- consecutive lines of one speaker sit under one name;
+- a choice shows its question and its answers, like the game's choice
+  list; an answer that is a line of the sheet can be selected like one,
+  and what each answer leads to is nested under it and folds. An answer
+  nothing follows in the scene shows a dash instead of a fold toggle. A
+  grayed-out answer has a dashed outline and says it cannot be picked, and
+  one the player can pick only sometimes says when, such as *Can be picked
+  only if …*;
+- other branches read *If …* and *Otherwise*, with the keyword in the flow
+  color, naming common conditions in words (the player's sex, race, class
+  or job, a completed quest, the reward) and others as code, such as
+  `IsInstanceContentUnlocked(…) > 0`; joined tests read *… or …* and
+  *… and …*, a comparison with `true` or `false` reads as the fact or its
+  negation (*quest «A» is not complete*), and a branch on an answer names
+  the answer. A quest variable reads as the quest's name, and one quest
+  test joined over several quests is said once, such as *one of these
+  quests is complete: «A», «B», «C»*; one value compared with several reads
+  *the player's class or job is one of: …*, also among other tests of the
+  same group, except values the script computes, which may differ though
+  they read the same. A group inside another reads in brackets. The
+  wording lives in `sceneConditions.ts`;
+- a loop reads *Can repeat from here*, and a jump back to it *Back to where
+  it can repeat*;
+- a cutscene shows its name in the quest's script, such as
+  `CUT_SCENE_01`, with its file's path in the tooltip, and folds over the
+  lines its file names, in row order, with links to other sheets it plays
+  lines of. A link names the cutscene file it opens at, such as
+  `cut_scene/065/VoiceMan_06505 | aktkmm10330`: one voiced cutscene sheet
+  often holds the cutscenes of several quests, one block of rows each. Its
+  tooltip says that the order within the cutscene is not read;
+- markers show where the quest is accepted or complete, or the dialogue
+  ends until the player talks again.
+
+Answers, branches, and loops fold. An untraced scene says so and lists its
+lines in code order. A line the script plays from another sheet shows its
+key. After the scripts, each cutscene file that names lines no scene plays
+is a section titled *Cutscene* with its path and those lines, under which
+*Played in* links each quest scene that plays the file, such as *The
+Coming Dawn · Scene 17*, or says that no quest script plays it. Lines still
+left follow in two groups: battle talk, whose keys say `BATTLETALK`, and
+lines named by no script or cutscene file. When the script cannot be read,
+the scene says why.
+
+A cutscene sheet reads cutscene file by cutscene file the same way, with
+lines no cutscene names at the end. A link to a cutscene opens the other
+sheet's scene at it, and marks it for a moment: a cutscene sheet at the
+cutscene file's section, a quest at the cutscene its scene plays. Quests without a script and cutscene
+sheets no cutscene file names are grouped in row order: speech
+with consecutive lines of one speaker under one name, `SYSTEM` labels as
+system text, runs of `Q<n>` and `A<n>` labels as a player choice with its
+question and answers, and other rows under *Other text* with their row
+keys. Row order follows the script but not its branches. The lines of a
+cutscene, in a quest's scene or in a cutscene file's section, are grouped
+the same way. A choice read from row order says *in row order*; its
+tooltip says that the lines after it may depend on the answer, which the
+cutscene's timeline decides and Aeria does not read.
+
+A speaker's name is the speaker label in title case (`AMHGARANJY_GEVA` reads
+*Amhgaranjy Geva*), and the label itself is in its tooltip. Each line shows
+its review state, source, and translation, wrapped and with a line break at
+each `<br>`. Selecting a line opens it in the editor, and the arrow keys,
+Save & next, and Approve & next move through strings as in the list. The
+list's filters stay available; lines they exclude are dimmed rather than
+hidden, so the scene stays whole. A row the game does not allow translating
+is shown without a translation and cannot be selected.
+
 ## Translation editor
 
 The editor sits below the list and edits one occurrence at a time. Its bar shows
@@ -204,15 +311,37 @@ validation, and macro text is never rewritten by the presentation.
   and the cursor after it sits on the new line. Chips and markers are
   atomic: the cursor steps over them, Backspace deletes a whole tag, and a
   tag with an error is outlined in red. Colors of `<ui-color>` come from the
-  game through `macro_view`.
+  game through `macro_view`. An idiom (see
+  [`strings.md`](./strings.md#idioms)), such as
+  `<split " " 1><string $gs1></split>`, is one chip that reads as its
+  meaning, `player's first name`, with its macros in the tooltip; picking it
+  inserts them. The strings list and the scene show it the same way, and
+  Code mode shows its macros. A speaker name (see
+  [`strings.md`](./strings.md#speaker-names)) reads `speaker ???: the
+  line`: its markers are chips, and the name stays text to translate. When
+  the translation lacks the speaker name the source starts with, or starts
+  with one the source lacks, the translation's footer says so; the text is
+  still valid and can be saved.
 - **Picking tags from the source.** Clicking a chip of the source inserts
   its tag into the translation at the cursor: a value, an icon, or a line
   break as its tag, and an opening condition chip as the whole condition
   block with the source branches, for the translator to translate. Clicking
   either marker of a formatting pair wraps the translation's selection in
   the whole pair, or inserts the empty pair with the cursor inside.
+- **Inserting macros.** The target pane's **Insert a macro** button, and
+  the target editor's context menu under its Cut, Copy, and Paste, offer the
+  macros of `aeria_se::catalog::INSERTIONS` (see
+  [`strings.md`](./strings.md#insertions)) through the `macro_insertions`
+  command, grouped: the player character's full name, first name, last name,
+  class or job, and race; a choice by the player character's gender, and one
+  only for a race or a class or job, each chosen from the game's rows in a
+  submenu; and italics, a capital first letter, and a non-breaking space. A
+  value replaces the selection, formatting wraps it, and a choice writes
+  the selection, or the word before the cursor, into both branches, such as
+  `<if $gn4>застыла<else>застыла</if>`, for the translator to reword.
 - **Code** shows the macro text with every tag written out and highlighted,
-  for editing tag arguments.
+  for editing tag arguments; a speaker name's markers are highlighted as
+  syntax, as they are in the strings list.
 
 In every mode Enter inserts `<br>`, the game's line break.
 

@@ -1,0 +1,183 @@
+use aeria_se::{ConstructRule, authoring_reference, check_assisted_structure, constructs};
+
+fn refused(source: &str, target: &str) -> String {
+    check_assisted_structure(source, target)
+        .expect_err("the translation is refused")
+        .into_iter()
+        .map(|error| error.message)
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+#[test]
+fn constructs_explain_what_each_macro_does_and_what_may_change() {
+    let found = constructs(r"Hi <player-name $n1>, <if $gn4>lass<else>lad</if>! <i>Go</i><br>")
+        .expect("constructs");
+    let legends: Vec<String> = found.iter().map(aeria_se::Construct::legend).collect();
+    assert_eq!(found[0].spelling, "<player-name $n1>");
+    assert_eq!(found[0].rule, ConstructRule::Keep);
+    assert!(legends[0].contains("keep it"), "{}", legends[0]);
+    let condition = found
+        .iter()
+        .find(|construct| construct.rule == ConstructRule::Condition)
+        .expect("condition");
+    assert!(
+        condition.legend().contains("player character is female"),
+        "a known global reads as its meaning: {}",
+        condition.legend()
+    );
+    assert!(condition.legend().contains("may be reworded"));
+    assert!(found.iter().any(
+        |construct| construct.spelling == "<i>" && construct.rule == ConstructRule::Formatting
+    ));
+    assert!(
+        found
+            .iter()
+            .any(|construct| construct.spelling == "<br>" && construct.rule == ConstructRule::Free)
+    );
+    assert!(
+        constructs("<sheet Item 5 0").is_err(),
+        "a malformed source has none"
+    );
+}
+
+#[test]
+fn an_idiom_is_explained_by_what_it_means() {
+    let found = constructs(r#"You! <split " " 1><string $gs1></split>?"#).expect("constructs");
+    assert!(
+        found[0]
+            .legend()
+            .contains("the first name of the player character"),
+        "{}",
+        found[0].legend()
+    );
+}
+
+#[test]
+fn game_data_stays_and_may_move_or_repeat() {
+    let source = "You get <num $n1> <sheet Item $n2 0>.";
+    assert!(check_assisted_structure(source, "<sheet Item $n2 0>: <num $n1>.").is_ok());
+    assert!(check_assisted_structure(source, "<num $n1> <sheet Item $n2 0>, <num $n1>!").is_ok());
+    assert!(
+        refused(source, "Вы получили <sheet Item $n2 0>.")
+            .contains("<num $n1> of the source is missing")
+    );
+    assert!(
+        refused(source, "<num $n1> <sheet Item $n2 0> <sheet Quest $n2 0>")
+            .contains("may not add game data")
+    );
+    assert!(
+        refused(source, "<num $n1> <sheet Item $n3 0>").contains("may not add game data"),
+        "a changed argument is other data"
+    );
+}
+
+#[test]
+fn a_translation_may_restructure_conditions_its_language_needs() {
+    let source = "Don't just stand there, <if $gn4>lass<else>lad</if>. Congratulate me!";
+    assert!(
+        check_assisted_structure(
+            source,
+            "Чего <if $gn4>застыла<else>застыл</if>, <if $gn4>девица<else>парень</if>? Похвали меня!"
+        )
+        .is_ok(),
+        "a gender condition the language needs is added"
+    );
+    assert!(
+        check_assisted_structure(source, "Чего стоишь столбом? Похвали меня!").is_ok(),
+        "one it does not need is dropped"
+    );
+    assert!(
+        check_assisted_structure(
+            "Hello, <player-name $n1>.",
+            "<if ($gn68 == 20)>Здравствуй, монах<else>Здравствуй</if>, <player-name $n1>."
+        )
+        .is_ok(),
+        "a known global may be tested"
+    );
+    assert!(
+        check_assisted_structure(
+            "<num $n1> left.",
+            "<if ($n1 == 1)>Осталась <num $n1><else>Осталось <num $n1></if>."
+        )
+        .is_ok(),
+        "a value the source uses may be tested"
+    );
+    assert!(
+        refused("Hello.", "<if ($n2 == 1)>Привет<else>Здравствуйте</if>.")
+            .contains("tests $n2, which the source does not use")
+    );
+    assert!(
+        refused("Hello.", "<if $gn4><player-name $n1><else>друг</if>.")
+            .contains("may not add game data"),
+        "branches of a new condition add no game data"
+    );
+}
+
+#[test]
+fn game_data_inside_a_dropped_condition_stays() {
+    let source = "<if $gn4><sheet Item $n1 0> for her<else><sheet Item $n1 0> for him</if>";
+    assert!(check_assisted_structure(source, "<sheet Item $n1 0> для тебя").is_ok());
+    assert!(refused(source, "Для тебя").contains("<sheet Item $n1 0> of the source is missing"));
+}
+
+#[test]
+fn formatting_stays_as_often_as_the_source_has_it_in_any_order() {
+    let source = "<i>Heavens</i> and <b>earth</b>";
+    assert!(check_assisted_structure(source, "<b>Земля</b> и <i>небеса</i>").is_ok());
+    assert!(refused(source, "<i>Небеса</i> и земля").contains("keep the source's formatting"));
+    assert!(
+        refused(source, "<i>Небеса</i> и <b>земля</b> <i>!</i>")
+            .contains("appears 1× in the source and 2× in the translation")
+    );
+}
+
+#[test]
+fn layout_and_text_transforms_are_free() {
+    assert!(check_assisted_structure("One.<br>Two.", "Раз. Два.").is_ok());
+    assert!(check_assisted_structure("One. Two.", "Раз.<br>Два.").is_ok());
+    assert!(check_assisted_structure("<capitalize>well</capitalize>", "Ну").is_ok());
+    assert!(
+        refused("You, <string $gs1>!", "Ты!").contains("<string $gs1> of the source is missing"),
+        "a transform that shows a value is game data"
+    );
+}
+
+#[test]
+fn a_translation_starts_with_a_speaker_name_exactly_when_the_source_does() {
+    assert!(check_assisted_structure("(-???-)Hello.", "(-Некто-)Привет.").is_ok());
+    assert!(refused("(-???-)Hello.", "Привет.").contains("must start with a speaker name"));
+    assert!(refused("(-???-)Hello.", "Привет (-???-).").contains("must start with a speaker name"));
+    assert!(refused("Hello.", "(-Некто-)Привет.").contains("the source has none"));
+    assert!(refused("(-???-)Hello.", "(--)Привет.").contains("is empty"));
+    assert!(check_assisted_structure("Damage (-<num $n1>%)", "Урон (-<num $n1>%)").is_ok());
+}
+
+#[test]
+fn malformed_text_is_refused_with_its_diagnostics() {
+    let errors = refused("<sheet Item 5 0> x", "<sheet Item 5 0");
+    assert!(errors.contains("not well-formed"), "{errors}");
+}
+
+#[test]
+fn every_golden_vector_satisfies_the_policy_as_it_is() {
+    let mut checked = 0;
+    for line in include_str!("fixtures/macro_text.golden.txt").lines() {
+        if line.starts_with('#') || line.trim().is_empty() {
+            continue;
+        }
+        let source = line.rsplit('\t').next().expect("text");
+        constructs(source).unwrap_or_else(|error| panic!("{source}: {error:?}"));
+        check_assisted_structure(source, source)
+            .unwrap_or_else(|errors| panic!("{source}: {errors:?}"));
+        checked += 1;
+    }
+    assert!(checked > 40, "only {checked} vectors were checked");
+}
+
+#[test]
+fn the_reference_names_the_known_globals() {
+    let reference = authoring_reference();
+    assert!(reference.contains("$gn4 is"), "{reference}");
+    assert!(reference.contains("<if (left op right)>"), "{reference}");
+}

@@ -62,14 +62,16 @@ You are Angelica, the translation agent of Aeria, a FINAL FANTASY XIV translatio
 Translate one game string. Reply with the translation only, between <translation> and \
 </translation>, and nothing else.
 
-The source is given in tagged form: prose with tags such as <x id=\"1\"/> or \
-<g id=\"2\"><b>…</b><b>…</b></g> for game macros, described in the legend. Keep every \
-tag exactly. Tags may move within their level to fit word order, but formatting tags keep \
-their order, tags inside a <b> branch stay in that branch, and only tags marked \"may \
-repeat\" may repeat. Translate the text inside every <b>. Write &lt; &gt; &amp; for literal \
-characters. The game cannot compute number endings, so prefer number-neutral phrasing.";
+The source is macro text, the game's written form, and a list under it explains what each \
+macro does. Write the translation as macro text and localize it: word order, conditions, \
+and formatting follow the target language. Keep every macro marked as game data; it may \
+move or repeat. Keep the source's formatting as often as the source has it, in any order. \
+Conditions may be reworded, restructured, added, or dropped: add one where the target \
+language must agree with the player character's gender or another known value. Write \\< \
+\\{ \\\\ for literal characters. The game cannot compute number endings, so prefer \
+number-neutral phrasing.";
 
-fn user_message(request: &DraftRequest<'_>, tagged: &str, legend: &[String]) -> String {
+fn user_message(request: &DraftRequest<'_>, source: &str, legend: &[String]) -> String {
     let mut message = String::new();
     if let Some(facts) = request.facts {
         let target = facts
@@ -83,7 +85,7 @@ fn user_message(request: &DraftRequest<'_>, tagged: &str, legend: &[String]) -> 
         );
     }
     let _ = writeln!(message, "String {}:", request.location);
-    let _ = writeln!(message, "<source>{tagged}</source>");
+    let _ = writeln!(message, "<source>{source}</source>");
     if !legend.is_empty() {
         message.push_str("Legend:\n");
         for line in legend {
@@ -158,14 +160,20 @@ pub async fn draft_translation(
     endpoint: &ProviderEndpoint,
     request: &DraftRequest<'_>,
 ) -> Result<Draft, DraftError> {
-    let tagged = aeria_se::project(request.source).map_err(|_| DraftError::Untaggable)?;
-    let legend: Vec<String> = tagged.tags.iter().map(aeria_se::Tag::legend).collect();
+    let legend: Vec<String> = aeria_se::constructs(request.source)
+        .map_err(|_| DraftError::Untaggable)?
+        .iter()
+        .map(aeria_se::Construct::legend)
+        .collect();
     let mut messages = vec![ChatMessage::User {
-        content: user_message(request, &tagged.text, &legend),
+        content: user_message(request, request.source, &legend),
         automatic: false,
         images: Vec::new(),
     }];
-    let system = format!("{DRAFT_INSTRUCTIONS}\n\n{TRANSLATION_STYLE}");
+    let system = format!(
+        "{DRAFT_INSTRUCTIONS}\n{}\n\n{TRANSLATION_STYLE}",
+        aeria_se::authoring_reference()
+    );
     let mut usage = Usage::default();
     let mut last_errors = Vec::new();
     for _ in 0..MAX_DRAFT_ATTEMPTS {
@@ -185,10 +193,20 @@ pub async fn draft_translation(
             usage.add(response_usage);
         }
         let candidate = extract(&response.content).to_owned();
-        match aeria_se::rebuild(request.source, &candidate) {
-            Ok(target) if !target.trim().is_empty() => return Ok(Draft { target, usage }),
-            Ok(_) => last_errors = vec!["the translation is empty".to_owned()],
-            Err(errors) => last_errors = errors.into_iter().map(|error| error.message).collect(),
+        if candidate.trim().is_empty() {
+            last_errors = vec!["the translation is empty".to_owned()];
+        } else {
+            match aeria_se::check_assisted_structure(request.source, &candidate) {
+                Ok(()) => {
+                    return Ok(Draft {
+                        target: candidate,
+                        usage,
+                    });
+                }
+                Err(errors) => {
+                    last_errors = errors.into_iter().map(|error| error.message).collect();
+                }
+            }
         }
         messages.push(ChatMessage::Assistant {
             content: response.content,
@@ -253,11 +271,14 @@ mod tests {
 ",
             )),
         };
-        let tagged = aeria_se::project(request.source).expect("tags");
-        let legend: Vec<String> = tagged.tags.iter().map(aeria_se::Tag::legend).collect();
-        let message = user_message(&request, &tagged.text, &legend);
-        assert!(message.contains(r#"<source>Hi <x id="1"/></source>"#));
-        assert!(message.contains("1: <player-name $n1>"));
+        let legend: Vec<String> = aeria_se::constructs(request.source)
+            .expect("constructs")
+            .iter()
+            .map(aeria_se::Construct::legend)
+            .collect();
+        let message = user_message(&request, request.source, &legend);
+        assert!(message.contains("<source>Hi <player-name $n1></source>"));
+        assert!(message.contains("<player-name $n1> — "));
         assert!(message.contains("column 1: Description"));
         assert!(message.contains("Current translation, to improve: Привет"));
         assert!(message.contains("Translator note: informal"));

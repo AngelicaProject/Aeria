@@ -263,7 +263,8 @@ fn keyed(rows: &[(u32, &str, &str)]) -> FakeSheet {
     sheet
 }
 
-/// A game with a quest sheet, a quest whose ID two `Quest` rows hold, a
+/// A game with a quest sheet and another version of it with the same name,
+/// a quest with another name, a quest whose ID two `Quest` rows hold, a
 /// cutscene sheet, and `Quest`.
 fn dialogue_game(folder: &std::path::Path) -> GameSource {
     let quest = keyed(&[
@@ -305,6 +306,20 @@ fn dialogue_game(folder: &std::path::Path) -> GameSource {
                         "Twice_00001".into(),
                     ],
                 ),
+                FakeRow::new(
+                    10,
+                    vec![
+                        format!("Close to Home {suffix}").as_str().into(),
+                        "ManFst998_00125".into(),
+                    ],
+                ),
+                FakeRow::new(
+                    11,
+                    vec![
+                        format!("Far from Home {suffix}").as_str().into(),
+                        "ManFst999_00126".into(),
+                    ],
+                ),
             ],
         );
     }
@@ -312,6 +327,14 @@ fn dialogue_game(folder: &std::path::Path) -> GameSource {
         .with_sheet("quest/001/ManFst004_00124", quest)
         .with_sheet(
             "quest/000/Twice_00001",
+            keyed(&[(0, "K0", "a"), (1, "K1", "b")]),
+        )
+        .with_sheet(
+            "quest/001/ManFst998_00125",
+            keyed(&[(0, "K0", "a"), (1, "K1", "b")]),
+        )
+        .with_sheet(
+            "quest/001/ManFst999_00126",
             keyed(&[(0, "K0", "a"), (1, "K1", "b")]),
         )
         .with_sheet("cut_scene/024/VoiceMan_02400", cutscene)
@@ -394,5 +417,42 @@ fn quests_and_speakers_are_found_across_sheets() {
     assert_eq!(
         source.speaker_lines("NOBODY", 0, 5, 2).expect("readable").0,
         0
+    );
+}
+
+#[test]
+fn quests_with_the_same_name_are_versions_of_each_other() {
+    let folder = tempfile::tempdir().expect("folder");
+    let source = dialogue_game(folder.path());
+    assert_eq!(
+        source
+            .quest_versions("quest/001/ManFst004_00124")
+            .expect("readable"),
+        ["quest/001/ManFst998_00125"]
+    );
+    assert_eq!(
+        source
+            .quest_versions("quest/001/ManFst998_00125")
+            .expect("readable"),
+        ["quest/001/ManFst004_00124"]
+    );
+    assert!(
+        source
+            .quest_versions("quest/001/ManFst999_00126")
+            .expect("readable")
+            .is_empty()
+    );
+    assert!(
+        source
+            .quest_versions("quest/000/Twice_00001")
+            .expect("readable")
+            .is_empty(),
+        "a quest without one row has no name"
+    );
+    assert!(
+        source
+            .quest_versions("cut_scene/024/VoiceMan_02400")
+            .expect("readable")
+            .is_empty()
     );
 }

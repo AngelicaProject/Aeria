@@ -849,9 +849,8 @@ mod tests {
             review_state: target.map(|_| ReviewLabel::Draft),
             note: None,
             unit_id: None,
-            tagged: None,
-            tags: Vec::new(),
-            untaggable: false,
+            constructs: Vec::new(),
+            malformed: false,
             glossary: Vec::new(),
         }
     }

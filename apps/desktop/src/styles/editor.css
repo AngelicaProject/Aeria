@@ -90,6 +90,7 @@
   padding: 6px;
   border-top: 1px solid var(--line);
 }
+.editor-warning { color: var(--warn); }
 .editor-hint { display: flex; flex: 1; flex-wrap: wrap; align-items: center; gap: 3px; min-width: 0; padding-left: 6px; color: var(--fg-faint); font-size: var(--text-2xs); }
 
 .editor-surface { flex: 1; min-height: 72px; }
@@ -185,6 +186,8 @@
   user-select: none;
 }
 .cm-chip-condition { background: color-mix(in srgb, var(--warn) 16%, transparent); color: var(--warn); }
+/* The markers of a speaker name: "speaker ???: the line". */
+.cm-chip-speaker { background: color-mix(in srgb, var(--accent) 14%, transparent); color: var(--accent); }
 .cm-chip-break,
 .cm-chip-space { padding: 0 3px; background: transparent; color: var(--fg-faint); }
 .cm-chip-unknown { background: color-mix(in srgb, var(--bad) 14%, transparent); color: var(--bad); font-family: var(--font-mono); }
@@ -266,3 +269,6 @@
 }
 .macro-hover-title { color: var(--macro); font-family: var(--font-mono); font-weight: 600; }
 .macro-hover.is-error .macro-hover-title { color: var(--bad); }
+
+/* The target editor's context menu trigger adds no box of its own. */
+.editor-context { display: contents; }

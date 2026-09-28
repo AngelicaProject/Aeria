@@ -78,3 +78,17 @@ test("picking a chip adds its tag, a condition its block, and a marker its pair"
   assert.deepEqual(markers[1].wrap, markers[0].wrap);
   assert.deepEqual(chipSpecs("<i>a", lookup, ru).find((spec) => spec.kind === "marker").wrap, ["<i>", "</i>"]);
 });
+
+test("a speaker name reads as speaker, the name, and a colon", () => {
+  assert.deepEqual(view("(-???-)Come to visit old friends?"), ["[говорящий]", "[:]"]);
+  const specs = chipSpecs("(-<i>Title</i>-)Text", lookup, ru);
+  assert.deepEqual(specs.map((spec) => spec.kind === "break" ? spec.at : spec.from), [0, 2, 5, 10, 14], "in text order");
+});
+
+test("an idiom is one chip whose title and pick are its macros", () => {
+  const idioms = new Map([["<split \" \" 2><string $gs1></split>", { name: "player-last-name", summary: "the last name of the player character" }]]);
+  const text = "Ah, <split \" \" 2><string $gs1></split>!";
+  const specs = chipSpecs(text, { ...lookup, idioms }, ru);
+  assert.equal(specs.length, 1);
+  assert.deepEqual([specs[0].label, specs[0].title, specs[0].insert, specs[0].from, specs[0].to], ["фамилия игрока", "<split \" \" 2><string $gs1></split>", "<split \" \" 2><string $gs1></split>", 4, 38]);
+});

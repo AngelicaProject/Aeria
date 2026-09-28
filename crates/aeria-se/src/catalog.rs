@@ -1056,6 +1056,165 @@ pub fn global(prefix: &str, index: u32) -> Option<&'static GlobalSpec> {
         .find(|spec| spec.prefix == prefix && spec.index == index)
 }
 
+/// A construct of several macros whose meaning game strings establish,
+/// written exactly as `text` in macro text. It is still those macros: it only
+/// reads as one value.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct IdiomSpec {
+    /// A stable name, such as `player-first-name`.
+    pub name: &'static str,
+    /// The exact macro text, as it prints.
+    pub text: &'static str,
+    pub summary: &'static str,
+}
+
+/// Every idiom, most frequent first.
+pub const IDIOMS: &[IdiomSpec] = &[
+    // `$gs1` is the player's name, "First Last"; `<split>` takes one part of
+    // it: "<split " " 1><string $gs1></split>, it's you!" (13,280 times).
+    IdiomSpec {
+        name: "player-first-name",
+        text: r#"<split " " 1><string $gs1></split>"#,
+        summary: "the first name of the player character",
+    },
+    // "Ah, <split " " 2><string $gs1></split>" as a family name (850 times).
+    IdiomSpec {
+        name: "player-last-name",
+        text: r#"<split " " 2><string $gs1></split>"#,
+        summary: "the last name of the player character",
+    },
+];
+
+/// The idiom `text` is written as, if any.
+#[must_use]
+pub fn idiom(text: &str) -> Option<&'static IdiomSpec> {
+    IDIOMS.iter().find(|spec| spec.text == text)
+}
+
+/// How an insertion is written around the selection.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum InsertionForm {
+    /// `parts[0]` replaces the selection.
+    Insert,
+    /// The selection goes between `parts[0]` and `parts[1]`.
+    Wrap,
+    /// The selection goes into both branches: `parts[0]`, selection,
+    /// `parts[1]`, selection, `parts[2]`.
+    Branches,
+}
+
+/// A macro a person can insert while translating, in the form game strings
+/// use for it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct InsertionSpec {
+    /// A stable name, such as `player-full-name`.
+    pub name: &'static str,
+    /// The menu group: `player`, `choice`, or `format`.
+    pub group: &'static str,
+    pub form: InsertionForm,
+    /// The macro text around the selection; `{row}` is a row of `rows`.
+    pub parts: &'static [&'static str],
+    /// The sheet whose rows the insertion is offered for, such as `Race`.
+    pub rows: Option<&'static str>,
+    pub summary: &'static str,
+}
+
+/// Every insertion, in menu order. Each is a form the game's dialogue uses:
+/// `<string $gs1>` in 13,553 strings, the first name in 12,368, the gender
+/// choice in 6,505, the class or job in 504, the last name in 742, the race
+/// choice by `<switch $gn71>` in 109 and by `($gn71 == …)`, and class
+/// choices by `($gn68 == …)`.
+pub const INSERTIONS: &[InsertionSpec] = &[
+    InsertionSpec {
+        name: "player-full-name",
+        group: "player",
+        form: InsertionForm::Insert,
+        parts: &["<string $gs1>"],
+        rows: None,
+        summary: "the full name of the player character",
+    },
+    InsertionSpec {
+        name: "player-first-name",
+        group: "player",
+        form: InsertionForm::Insert,
+        parts: &[r#"<split " " 1><string $gs1></split>"#],
+        rows: None,
+        summary: "the first name of the player character",
+    },
+    InsertionSpec {
+        name: "player-last-name",
+        group: "player",
+        form: InsertionForm::Insert,
+        parts: &[r#"<split " " 2><string $gs1></split>"#],
+        rows: None,
+        summary: "the last name of the player character",
+    },
+    InsertionSpec {
+        name: "player-class-job",
+        group: "player",
+        form: InsertionForm::Insert,
+        parts: &["<sheet ClassJob $gn68 0>"],
+        rows: None,
+        summary: "the name of the player's current class or job",
+    },
+    InsertionSpec {
+        name: "player-race",
+        group: "player",
+        form: InsertionForm::Insert,
+        parts: &["<sheet Race $gn71 0>"],
+        rows: None,
+        summary: "the name of the player character's race",
+    },
+    InsertionSpec {
+        name: "gender-choice",
+        group: "choice",
+        form: InsertionForm::Branches,
+        parts: &["<if $gn4>", "<else>", "</if>"],
+        rows: None,
+        summary: "a female form, then a male form, by the player character's gender",
+    },
+    InsertionSpec {
+        name: "race-choice",
+        group: "choice",
+        form: InsertionForm::Branches,
+        parts: &["<if ($gn71 == {row})>", "<else>", "</if>"],
+        rows: Some("Race"),
+        summary: "one form for a race of the player character, another otherwise",
+    },
+    InsertionSpec {
+        name: "class-job-choice",
+        group: "choice",
+        form: InsertionForm::Branches,
+        parts: &["<if ($gn68 == {row})>", "<else>", "</if>"],
+        rows: Some("ClassJob"),
+        summary: "one form for a class or job of the player, another otherwise",
+    },
+    InsertionSpec {
+        name: "italic",
+        group: "format",
+        form: InsertionForm::Wrap,
+        parts: &["<i>", "</i>"],
+        rows: None,
+        summary: "italic text, as game strings write titles",
+    },
+    InsertionSpec {
+        name: "capitalize",
+        group: "format",
+        form: InsertionForm::Wrap,
+        parts: &["<capitalize>", "</capitalize>"],
+        rows: None,
+        summary: "the first letter of the text capitalized",
+    },
+    InsertionSpec {
+        name: "nbsp",
+        group: "format",
+        form: InsertionForm::Insert,
+        parts: &["<nbsp>"],
+        rows: None,
+        summary: "a space the line never breaks at",
+    },
+];
+
 /// A comparison operator.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ComparisonSpec {
@@ -1098,6 +1257,37 @@ pub const STRUCTURE_WORDS: &[&str] = &["else", "case", "rt"];
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_insertion_is_well_formed_and_reads_known_globals() {
+        for spec in INSERTIONS {
+            let text = spec.parts.join("text").replace("{row}", "1");
+            let document = crate::parse(&text);
+            assert!(document.is_well_formed(), "{}: {text}", spec.name);
+            let printed = crate::print(&document.to_nodes().expect("well formed"));
+            assert_eq!(printed, text, "{} is written as it prints", spec.name);
+            for parameter in ["$gs1", "$gn4", "$gn68", "$gn71"] {
+                if text.contains(parameter) {
+                    let (prefix, index) = parameter[1..].split_at(2);
+                    assert!(
+                        global(prefix, index.parse().expect("index")).is_some(),
+                        "{parameter} has an established meaning"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn every_idiom_is_canonical_macro_text() {
+        for spec in IDIOMS {
+            let document = crate::parse(spec.text);
+            assert!(document.is_well_formed(), "{}", spec.text);
+            let printed = crate::print(&document.to_nodes().expect("well formed"));
+            assert_eq!(printed, spec.text, "an idiom is written as it prints");
+            assert_eq!(idiom(spec.text), Some(spec));
+        }
+    }
 
     #[test]
     fn codes_and_names_are_unique_and_well_formed() {

@@ -273,14 +273,15 @@ returned to the model as `{"error": …}` results instead of ending the turn.
 | `unit_history` | Committed history of one unit, up to 50 entries. |
 | `navigate_to` | Opens an occurrence in the editor; changes nothing in the project. |
 
-Each source, target, or note text is cut at 2,000 characters and each result
+Each target or note text is cut at 2,000 characters, a translatable cell's
+source at 8,000 (a partial source cannot be translated), and each result
 at 24,000 characters, with a visible notice. Every tool call takes the project
 lock only for its own read.
 
-Cells returned by `read_rows` and `get_unit` include `tagged`, the source in
-tagged form (see [`strings.md`](./strings.md#tagged-text)), with a `tags`
-legend whenever it differs from the source; a malformed source is marked
-`untaggable`. Tagged sources are cut only above 8,000 characters.
+Cells returned by `read_rows` and `get_unit` include `constructs`, what each
+macro of the source does and what a translation may do with it (see
+[`strings.md`](./strings.md#constructs)); a malformed source is marked
+`malformed`. Angelica writes translations as macro text.
 
 ### Search tools
 
@@ -320,8 +321,8 @@ instruction and may be wrong.
 
 | Tool | Result |
 | --- | --- |
-| `validate_target` | Rebuilds a tagged translation of one string without writing, and returns the target or the rule violations. |
-| `propose_translation` | Accepts 1 to 20 tagged translations. Each is rebuilt and checked; rejected ones return what to fix; valid ones are submitted and reported as `applied`, `awaitingApproval` (with a proposal ID), `conflict`, or `failed`. |
+| `validate_target` | Checks a translation of one string against the [assisted structure policy](./strings.md#assisted-structure-policy) without writing, and returns the rule violations, if any. |
+| `propose_translation` | Accepts 1 to 20 translations. Each is checked; rejected ones return what to fix; valid ones are submitted and reported as `applied`, `awaitingApproval` (with a proposal ID), `conflict`, or `failed`. |
 | `propose_voice_profile` | Sets up to 50 characters' voice profiles and removes speaker labels from profiles, as one change that always waits for approval (see [Voice profiles](#voice-profiles)). |
 
 A valid translation records the string's target and review state at the time
@@ -492,12 +493,12 @@ Angelica to wait for the user's decision before proposing another.
 ### Draft with Angelica
 
 The editor's **Draft with Angelica** uses Angelica's default model for one
-string without tools. The request carries the source in tagged form with its
-legend, the row's context cells, the current translation and note, and the
+string without tools. The request carries the source with its list of
+constructs, the row's context cells, the current translation and note, and the
 project languages. For a quest or cutscene string it also carries the
 string's speaker label and its scene as workers receive it, with the six
-spoken lines before the string and the three after it. The reply is read between `<translation>` markers,
-rebuilt, and checked; a refused reply is sent back with the violations, for
+spoken lines before the string and the three after it. The reply is read between `<translation>` markers
+and checked; a refused reply is sent back with the violations, for
 at most three requests in total. The result becomes an unsaved draft in the
 editor, which the user saves explicitly.
 
@@ -541,8 +542,8 @@ used.
 
 Each chunk is translated by a worker with a fresh context: fixed worker
 instructions, the project facts, guidance and matching glossary entries, the
-job's instructions as they are when the chunk starts, and its strings in
-tagged form with their legends, context cells, current translations,
+job's instructions as they are when the chunk starts, and its strings with
+their constructs, context cells, current translations,
 notes, and up to three translation-memory matches, followed by the job's
 images when the worker model accepts images. A chunk of a quest or cutscene
 sheet starts with its scene: the quest's name and translation, up to 12

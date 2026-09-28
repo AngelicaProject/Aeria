@@ -849,6 +849,13 @@ export function EditorShell({
 
   // Angelica's navigate_to tool asks the editor to show one occurrence.
   const stableRevealBinding = useStableCallback(revealBinding);
+  // A jump to a cutscene opens its sheet's scene there.
+  const [sceneTarget, setSceneTarget] = useState<{ sheet: string; path: string } | null>(null);
+  const stableOpenSheet = useStableCallback((sheetName: string, cutscene?: string) => {
+    setSceneTarget(cutscene ? { sheet: sheetName, path: cutscene } : null);
+    void handleSheetSelect(sheetName, true);
+  });
+  const clearSceneTarget = useCallback(() => setSceneTarget(null), []);
   const stableWorkspaceChanged = useStableCallback(handleWorkspaceChanged);
   const revealBindingRef = useRef(revealBinding);
   revealBindingRef.current = revealBinding;
@@ -1311,6 +1318,7 @@ export function EditorShell({
               <div className="document-split">
                 <TranslationList
                   occurrences={visibleOccurrences}
+                  allOccurrences={allOccurrences}
                   loadedOccurrenceCount={allOccurrences.length}
                   sheetProgress={selectedSheetProgress}
                   filter={lensFilter}
@@ -1326,6 +1334,10 @@ export function EditorShell({
                   onSelect={selectOccurrence}
                   onNavigate={stableNavigateOccurrence}
                   changedKinds={changedKinds}
+                  onReveal={stableRevealBinding}
+                  onOpenSheet={stableOpenSheet}
+                  sceneTarget={sceneTarget}
+                  onSceneTargetShown={clearSceneTarget}
                 />
                 <ResizeHandle axis="y" label={t("workbench.resizeEditor")} {...resizeProps("editor", "--editor-height", -1)} />
                 <TranslationEditor

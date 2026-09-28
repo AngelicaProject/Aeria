@@ -2,6 +2,7 @@ import { EditorSelection, EditorState, StateField, type Extension, type Range } 
 import { Decoration, EditorView, WidgetType, type DecorationSet } from "@codemirror/view";
 import type { Translate } from "../i18n/translate";
 import { chipSpecs, type ChipSpec, type ChipTone } from "../macroChips";
+import type { Idioms } from "../macroTokens";
 import type { MacroConditionDto, MacroTagDto } from "../types";
 import { loadIcon } from "../ui/gameGlyphs";
 
@@ -113,8 +114,12 @@ class MarkerWidget extends WidgetType {
   }
 }
 
-/** What picking a chip of the source adds to the translation. */
-export type ChipPick = { insert: string } | { wrap: readonly [string, string] };
+/**
+ * What picking a chip of the source adds to the translation. `branches`
+ * writes the selection into both branches of a condition, `open`, selection,
+ * `separator`, selection, `close`, for rewording each.
+ */
+export type ChipPick = { insert: string } | { wrap: readonly [string, string] } | { branches: readonly [string, string, string] };
 
 export type ChipContext = {
   t: Translate;
@@ -125,6 +130,8 @@ export type ChipContext = {
   version: number;
   /** Called when a chip is clicked, in an editor whose chips can be picked. */
   onPick?: ((pick: ChipPick) => void) | undefined;
+  /** Constructs of several macros that read as one value. */
+  idioms: Idioms;
 };
 
 type Chips = {
@@ -146,7 +153,7 @@ function build(doc: string, context: ChipContext): Chips {
   const ranges: Range<Decoration>[] = [];
   const atoms: Range<Decoration>[] = [];
   const breaks = new Map<number, -1 | 1>();
-  const specs = chipSpecs(doc, lookup, context.t);
+  const specs = chipSpecs(doc, { ...lookup, idioms: context.idioms }, context.t);
   for (const spec of specs) {
     switch (spec.kind) {
       case "style": {
