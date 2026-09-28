@@ -7,8 +7,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use aeria_core::{ReviewState, SourceBinding, TranslationUnitId};
 use aeria_projects::{ProjectMetadata, ProjectRegistry, REGISTRY_FILE_NAME, RegistryEntry};
 use aeria_source::GameSource;
-use aeria_workspace::TranslationRowCursor;
 use aeria_workspace::{ProjectSession, ProjectSessionError, WorkspaceStore};
+use aeria_workspace::{TranslationReadError, TranslationRowCursor, TranslationRowView};
 
 use tauri::{Manager, State};
 
@@ -19,6 +19,7 @@ use crate::dto::{
 };
 use crate::error::CommandError;
 use crate::paths::AeriaPaths;
+use crate::scene::{QuestNameDto, SheetDialogueDto};
 use crate::source::{load_catalog_with_cache, open_game};
 use crate::state::DesktopState;
 
@@ -684,6 +685,105 @@ pub async fn source_in_other_languages(
 }
 
 #[tauri::command(rename_all = "camelCase")]
+/// Reads the dialogue structure of a quest or cutscene sheet for the scene
+/// view: the role and speaker label of each row with text, the quest's
+/// name and its other versions, and the scenes traced from the quest's
+/// script. `None` for any other sheet, or one without row keys. The structure
+/// is context only and nothing is recorded.
+///
+/// # Errors
+///
+/// Returns a typed command error when no project is open or a game file
+/// cannot be read.
+pub async fn sheet_dialogue(
+    app: tauri::AppHandle,
+    sheet_name: String,
+) -> CommandResult<Option<SheetDialogueDto>> {
+    run_blocking(move || {
+        let state = app.state::<DesktopState>();
+        sheet_dialogue_with_state(&state, &sheet_name)
+    })
+    .await
+}
+
+pub(crate) fn sheet_dialogue_with_state(
+    state: &DesktopState,
+    sheet_name: &str,
+) -> CommandResult<Option<SheetDialogueDto>> {
+    let source = {
+        let project = state.lock_project()?;
+        project
+            .as_ref()
+            .ok_or_else(CommandError::no_project)?
+            .source_handle()
+    };
+    let Some(dialogue) = source.dialogue(sheet_name)? else {
+        return Ok(None);
+    };
+    let quest = match source.quest_row(sheet_name)? {
+        Some((row_id, subrow_id)) => {
+            let project = state.lock_project()?;
+            let session = project.as_ref().ok_or_else(CommandError::no_project)?;
+            translation_row(session, QUEST_SHEET, row_id, subrow_id)?
+                .and_then(|row| row.cells.into_iter().next())
+                .map(|cell| QuestNameDto {
+                    source_binding: SourceBindingDto::from(&cell.source_binding),
+                    source_macro: cell.source_macro,
+                    target_macro: cell.translation.map(|overlay| overlay.target_macro),
+                })
+        }
+        None => None,
+    };
+    // The script is context: when it cannot be read, the scene view shows
+    // the sheet's rows and says why.
+    let script = match source.quest_script(sheet_name) {
+        Ok(script) => Ok(script),
+        Err(
+            error @ (aeria_source::SourceError::Script { .. }
+            | aeria_source::SourceError::Cutscene { .. }),
+        ) => Err(error.to_string()),
+        Err(error) => return Err(error.into()),
+    };
+    let versions = source.quest_versions(sheet_name)?;
+    // Every cutscene file is read once per source, on up to four threads.
+    let threads = std::thread::available_parallelism().map_or(1, |threads| threads.get().min(4));
+    let cutscenes = source.cutscenes_naming(sheet_name, threads)?;
+    let rows: Vec<u32> = cutscenes.iter().map(|cutscene| cutscene.row).collect();
+    let plays = source.cutscene_plays(&rows)?;
+    Ok(Some(SheetDialogueDto::new(
+        sheet_name, dialogue, quest, versions, script, cutscenes, plays,
+    )))
+}
+
+/// The sheet whose rows name quests.
+const QUEST_SHEET: &str = "Quest";
+
+/// One logical row with its workspace overlays; `None` when the row has no
+/// translatable string.
+///
+/// # Errors
+///
+/// Returns an error when the sheet cannot be read.
+pub(crate) fn translation_row(
+    session: &ProjectSession,
+    sheet: &str,
+    row_id: u32,
+    subrow_id: u16,
+) -> Result<Option<TranslationRowView>, TranslationReadError> {
+    // The page cursor is exclusive, so start just before the row.
+    let cursor = match (row_id, subrow_id) {
+        (0, 0) => None,
+        (row, 0) => Some(TranslationRowCursor::new(sheet, row - 1, u16::MAX)),
+        (row, subrow) => Some(TranslationRowCursor::new(sheet, row, subrow - 1)),
+    };
+    let page = session.page_translation_rows(sheet, cursor.as_ref(), 1)?;
+    Ok(page
+        .rows
+        .into_iter()
+        .find(|view| view.row_id == row_id && view.subrow_id == subrow_id))
+}
+
+#[tauri::command(rename_all = "camelCase")]
 #[allow(clippy::needless_pass_by_value)]
 /// Creates or updates the target for one source occurrence.
 ///
@@ -820,6 +920,7 @@ mod tests {
 
     use super::*;
     use crate::dto::{ProjectSheetDto, ReviewStateDto, SourceBindingDto};
+    use crate::scene::{DialogueKindDto, DialogueRoleDto};
     use crate::test_support::{GAME_VERSION, TestGame, open, test_game};
 
     fn binding() -> SourceBindingDto {
@@ -849,6 +950,106 @@ mod tests {
 
     fn registry_path(directory: &Path) -> PathBuf {
         directory.join("app-data").join(REGISTRY_FILE_NAME)
+    }
+
+    #[test]
+    fn a_quest_sheet_reads_as_a_scene_with_its_quest_name() {
+        let directory = tempfile::tempdir().expect("directory");
+        let game_folder = directory.path().join("game");
+        FakeGame::new(GAME_VERSION)
+            .with_text(
+                "quest/001/ManFst004_00124",
+                &TextSheet::new(2, &[0, 1])
+                    .keyed(0)
+                    .row(0, &[(0, "TEXT_MANFST004_00124_SEQ_00"), (1, "Journal")])
+                    .row(1, &[(0, "TEXT_MANFST004_00124_TODO_00"), (1, "Speak")])
+                    .row(
+                        2,
+                        &[(0, "TEXT_MANFST004_00124_MIOUNNE_000_1"), (1, "Welcome")],
+                    )
+                    .row(3, &[(0, "TEXT_MANFST004_00124_POP_MESSAGE"), (1, "Hint")]),
+            )
+            .with_text(
+                "Quest",
+                &TextSheet::new(2, &[0, 1])
+                    .keyed(1)
+                    .row(7, &[(0, "Close to Home"), (1, "ManFst004_00124")])
+                    .row(8, &[(0, "Other"), (1, "Other_00001")]),
+            )
+            .with_text(
+                "Synthetic",
+                &TextSheet::new(1, &[0]).row(1, &[(0, "Plain")]),
+            )
+            .with_file(
+                "game_script/quest/001/ManFst004_00124.luab",
+                b"not a script".to_vec(),
+            )
+            .write(&game_folder)
+            .expect("write game");
+        let root = directory.path().join("repository");
+        fs::create_dir_all(&root).expect("repository");
+        let state = DesktopState::new();
+        initialize_with_game(
+            &state,
+            &root,
+            open(&game_folder),
+            &directory.path().join("cache"),
+            "fr".to_owned(),
+        )
+        .expect("initialize project");
+        let quest_name = SourceBindingDto {
+            sheet_name: "Quest".to_owned(),
+            row_id: 7,
+            subrow_id: 0,
+            column_index: 0,
+        };
+        set_translation_target_with_state(&state, quest_name.clone(), "Comme à la maison")
+            .expect("target");
+
+        let scene = sheet_dialogue_with_state(&state, "quest/001/ManFst004_00124")
+            .expect("readable")
+            .expect("dialogue");
+        assert_eq!(scene.kind, DialogueKindDto::Quest);
+        let quest = scene.quest.expect("quest name");
+        assert_eq!(quest.source_binding, quest_name);
+        assert_eq!(quest.source_macro, "Close to Home");
+        assert_eq!(quest.target_macro.as_deref(), Some("Comme à la maison"));
+        let lines: Vec<(u32, DialogueRoleDto, Option<&str>, &str)> = scene
+            .lines
+            .iter()
+            .map(|line| {
+                (
+                    line.source_binding.row_id,
+                    line.role,
+                    line.speaker.as_deref(),
+                    line.key.as_str(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            lines,
+            [
+                (0, DialogueRoleDto::Journal, None, "SEQ_00"),
+                (1, DialogueRoleDto::Objective, None, "TODO_00"),
+                (2, DialogueRoleDto::Speech, Some("MIOUNNE"), "MIOUNNE_000_1"),
+                (3, DialogueRoleDto::Other, None, "POP_MESSAGE"),
+            ]
+        );
+        assert_eq!(scene.lines[2].source_binding.column_index, 1);
+        assert_eq!(scene.lines[2].source_macro, "Welcome");
+        assert_eq!(scene.scenes, None);
+        assert!(
+            scene
+                .script_error
+                .as_deref()
+                .is_some_and(|error| error.contains("quest/001/ManFst004_00124")),
+            "an unreadable script is reported, not hidden: {:?}",
+            scene.script_error
+        );
+        assert_eq!(
+            sheet_dialogue_with_state(&state, "Synthetic").expect("readable"),
+            None
+        );
     }
 
     #[test]

@@ -55,26 +55,10 @@ pub struct UnitPreview {
 /// Most characters of a unit preview's source.
 const PREVIEW_CHARS: usize = 80;
 
-/// Tagged text as short plain text: tags dropped, entities decoded, and
-/// whitespace collapsed.
-fn plain_preview(tagged: &str) -> String {
-    let mut plain = String::new();
-    let mut in_tag = false;
-    for character in tagged.chars() {
-        match character {
-            '<' => in_tag = true,
-            '>' if in_tag => {
-                in_tag = false;
-                plain.push(' ');
-            }
-            _ if !in_tag => plain.push(character),
-            _ => {}
-        }
-    }
-    let plain = plain
-        .replace("&lt;", "<")
-        .replace("&gt;", ">")
-        .replace("&amp;", "&");
+/// Macro text as short plain text: what players read, with whitespace
+/// collapsed.
+fn plain_preview(text: &str) -> String {
+    let plain = aeria_se::parse(text).plain_text();
     let collapsed = plain.split_whitespace().collect::<Vec<_>>().join(" ");
     if collapsed.chars().count() <= PREVIEW_CHARS {
         return collapsed;
@@ -123,11 +107,13 @@ and nothing else. Nobody reads your replies; only your tool calls matter.
 - Translate every string of the chunk and submit them all in one submit_translations \
 call; fewer calls finish the job sooner. Rejected translations come back with what to \
 fix; correct and submit only those again.
-- Write translations in tagged form: plain prose with every tag of the string copied \
-exactly, `<x id=\"N\"/>` or `<g id=\"N\"><b>…</b></g>`, and &lt; &gt; &amp; for literal \
-characters. Tags may move within their level to fit word order, but formatting tags keep \
-their order, tags inside a <b> branch stay in that branch, and only tags marked \"may \
-repeat\" may repeat. Never write raw macro syntax.
+- Write translations as macro text, the game's written form, and localize them: word \
+order, conditions, and formatting follow the target language. Each string lists what its \
+macros do. Keep every macro marked as game data; it may move or repeat. Keep the \
+source's formatting as often as the source has it, in any order. Conditions may be \
+reworded, restructured, added, or dropped: add one where the target language must agree \
+with the player character's gender or another known value. Write \\< \\{ \\\\ for \
+literal characters.
 - The game cannot compute number endings, so prefer number-neutral phrasing.
 - Follow the project guidance and glossary, inflecting glossary terms as the target \
 language needs and never using a forbidden variant.
@@ -210,7 +196,7 @@ impl ChunkWorker {
             .map(|unit| {
                 let mut entry = UnitProgress::default();
                 let context = match host.context(&unit.location) {
-                    Ok(context) if aeria_se::project(&context.source).is_ok() => Some(context),
+                    Ok(context) if aeria_se::constructs(&context.source).is_ok() => Some(context),
                     Ok(_) => {
                         entry.outcome = Some((
                             UnitStatus::Failed,
@@ -282,8 +268,7 @@ impl ChunkWorker {
                     ),
                     source: context
                         .as_ref()
-                        .and_then(|context| aeria_se::project(&context.source).ok())
-                        .map(|tagged| plain_preview(&tagged.text))
+                        .map(|context| plain_preview(&context.source))
                         .unwrap_or_default(),
                 }
             })
@@ -311,6 +296,8 @@ impl ChunkWorker {
     #[must_use]
     pub fn system_prompt(&self, facts: Option<&ProjectFacts>, instructions: &str) -> String {
         let mut prompt = String::from(WORKER_INSTRUCTIONS);
+        prompt.push('\n');
+        prompt.push_str(&aeria_se::authoring_reference());
         for section in [ORIGINAL_TEXT, TRANSLATION_STYLE] {
             prompt.push_str("\n\n");
             prompt.push_str(section);
@@ -351,7 +338,7 @@ impl ChunkWorker {
             let Some(context) = context else {
                 continue;
             };
-            let Ok(tagged) = aeria_se::project(&context.source) else {
+            let Ok(constructs) = aeria_se::constructs(&context.source) else {
                 continue;
             };
             let location = &unit.location;
@@ -364,7 +351,7 @@ impl ChunkWorker {
                 location.subrow,
                 location.column.unwrap_or(0)
             );
-            let _ = writeln!(message, "<source>{}</source>", tagged.text);
+            let _ = writeln!(message, "<source>{}</source>", context.source);
             if let Some(speaker) = self
                 .dialogue
                 .as_ref()
@@ -372,8 +359,8 @@ impl ChunkWorker {
             {
                 let _ = writeln!(message, "- speaker: {speaker}");
             }
-            for tag in &tagged.tags {
-                let _ = writeln!(message, "- tag {}", tag.legend());
+            for construct in &constructs {
+                let _ = writeln!(message, "- macro {}", construct.legend());
             }
             for cell in &context.context {
                 let _ = writeln!(
@@ -431,7 +418,7 @@ impl ChunkWorker {
                 )
             })
             .collect();
-        let target = json!({ "type": "string", "description": "The translation in tagged form." });
+        let target = json!({ "type": "string", "description": "The translation as macro text." });
         tools.push(ToolDefinition {
             name: "submit_translations",
             description: "Submits translations of this chunk's units. Each is checked and written as a draft; rejected ones return what to fix.",
@@ -515,12 +502,14 @@ impl ChunkWorker {
 
     fn validate(&self, args: &ValidateArgs) -> Result<Value, ToolError> {
         let (_, context) = self.unit(args.unit)?;
-        Ok(match aeria_se::rebuild(&context.source, &args.target) {
-            Ok(target) => json!({ "valid": true, "target": target }),
-            Err(errors) => {
-                json!({ "valid": false, "errors": errors.into_iter().map(|error| error.message).collect::<Vec<_>>() })
-            }
-        })
+        Ok(
+            match aeria_se::check_assisted_structure(&context.source, &args.target) {
+                Ok(()) => json!({ "valid": true }),
+                Err(errors) => {
+                    json!({ "valid": false, "errors": errors.into_iter().map(|error| error.message).collect::<Vec<_>>() })
+                }
+            },
+        )
     }
 
     fn report(&self, args: &ReportArgs) -> Result<Value, ToolError> {
@@ -557,7 +546,7 @@ impl ChunkWorker {
         number: usize,
         unit: &JobUnit,
         context: &UnitContext,
-        tagged: &str,
+        target: &str,
     ) -> Value {
         let Ok(mut progress) = self.progress.lock() else {
             return json!({ "unit": number, "status": "failed", "errors": ["internal state is unavailable"] });
@@ -566,24 +555,21 @@ impl ChunkWorker {
         if entry.outcome.is_some() {
             return json!({ "unit": number, "status": "rejected", "errors": ["this unit is already finished"] });
         }
-        let target = match aeria_se::rebuild(&context.source, tagged) {
-            Ok(target) if !target.trim().is_empty() => target,
-            Ok(_) => {
-                entry.last_errors = vec!["the translation is empty".to_owned()];
-                return json!({ "unit": number, "status": "rejected", "errors": entry.last_errors });
-            }
-            Err(errors) => {
-                entry.last_errors = errors.into_iter().map(|error| error.message).collect();
-                return json!({ "unit": number, "status": "rejected", "errors": entry.last_errors });
-            }
-        };
+        if target.trim().is_empty() {
+            entry.last_errors = vec!["the translation is empty".to_owned()];
+            return json!({ "unit": number, "status": "rejected", "errors": entry.last_errors });
+        }
+        if let Err(errors) = aeria_se::check_assisted_structure(&context.source, target) {
+            entry.last_errors = errors.into_iter().map(|error| error.message).collect();
+            return json!({ "unit": number, "status": "rejected", "errors": entry.last_errors });
+        }
         let warnings = self
             .guide
             .glossary
             .as_ref()
-            .map(|glossary| glossary.check(&context.source, &target))
+            .map(|glossary| glossary.check(&context.source, target))
             .unwrap_or_default();
-        match self.host.write(&unit.location, &target, &unit.expected) {
+        match self.host.write(&unit.location, target, &unit.expected) {
             Ok(()) => {
                 entry.outcome = Some((UnitStatus::Drafted, None));
                 json!({ "unit": number, "status": "written", "glossaryWarnings": warnings })
@@ -645,8 +631,8 @@ mod tests {
     #[test]
     fn previews_are_short_plain_text() {
         assert_eq!(
-            plain_preview("Deal <g id=\"1\"><b>heavy</b></g>  damage &amp; more<x id=\"2\"/>"),
-            "Deal heavy damage & more"
+            plain_preview("Deal <i>heavy</i>  damage \\< more<num $n1>"),
+            "Deal heavy damage < more"
         );
         let long = plain_preview(&"слово ".repeat(40));
         assert_eq!(long.chars().count(), PREVIEW_CHARS);
@@ -815,8 +801,7 @@ mod tests {
         }
     }
 
-    #[test]
-    fn a_worker_writes_its_own_units_and_reports_outcomes() {
+    fn host_and_guide() -> (Arc<Host>, ProjectGuide) {
         let host = Arc::new(Host {
             written: Mutex::new(Vec::new()),
             reports: Mutex::new(Vec::new()),
@@ -825,6 +810,12 @@ mod tests {
             Ok(Some("Be brief.".to_owned())),
             Ok(Some("term,translation\nAether,Эфир\n".to_owned())),
         );
+        (host, guide)
+    }
+
+    #[test]
+    fn a_worker_writes_its_own_units_and_reports_outcomes() {
+        let (host, guide) = host_and_guide();
         let worker = ChunkWorker::new(
             vec![
                 job_unit(10, 1),
@@ -851,7 +842,7 @@ Lines before, in sheet order:
 - speaker: ALPHINAUD
 "
         ));
-        assert!(message.contains(r#"<source>Hi <x id="1"/>!</source>"#));
+        assert!(message.contains("<source>Hi <player-name $n1>!</source>"));
         assert!(message.contains("- translator note: greeting"));
         assert!(message.contains(
             "- translation memory (90 % similar): Hi <player-name $n1>. → Привет, <player-name $n1>."
@@ -895,7 +886,13 @@ Lines before, in sheet order:
 
         let outcomes = worker.outcomes();
         assert_eq!(outcomes[0].1, UnitStatus::Rejected);
-        assert!(outcomes[0].2.as_deref().expect("message").contains("tag 1"));
+        assert!(
+            outcomes[0]
+                .2
+                .as_deref()
+                .expect("message")
+                .contains("<player-name $n1> of the source is missing")
+        );
         assert_eq!(outcomes[1].1, UnitStatus::Conflict);
         assert_eq!(outcomes[2].1, UnitStatus::Drafted);
         assert_eq!(
@@ -905,7 +902,7 @@ Lines before, in sheet order:
 
         let output = worker.execute(
             "submit_translations",
-            r#"{"translations":[{"unit":1,"target":"Привет, <x id=\"1\"/>!"},{"unit":3,"target":"Эфир"}]}"#,
+            r#"{"translations":[{"unit":1,"target":"Привет, <player-name $n1>!"},{"unit":3,"target":"Эфир"}]}"#,
         );
         let value: Value = serde_json::from_str(&output.content).expect("json");
         assert_eq!(value["results"][0]["status"], "written");

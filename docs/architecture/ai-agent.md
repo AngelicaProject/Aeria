@@ -36,8 +36,9 @@ These follow from [`../product/principles.md`](../product/principles.md) and
    [Structured strings](#structured-strings), and an empty or
    whitespace-only target is rejected, exactly as for ordinary edits. A
    rejected result is reported as a failure, never persisted as a successful
-   translation. A permitted structural change is never applied without a
-   person's approval.
+   translation. A structural change the policy permits, such as a condition
+   the target language needs, is part of the draft: like any draft, it
+   becomes reviewed only by a person.
 3. Writes go through `ProjectSession` mutation APIs and the translation
    permission gate. Angelica has no filesystem, shell, SQL, or raw workspace access.
 4. Identity, rebase, merge, migration, and export never consult Angelica.
@@ -139,9 +140,10 @@ instead of receiving large dumps up front.
 
 ## Structured strings
 
-Angelica may change macro structure when the target language needs it, but
-only through a vocabulary of typed constructs that Rust checks and compiles.
-She never writes raw macro text.
+Angelica reads and writes macro text and changes a string's structure as the
+target language needs it. A deterministic policy in `aeria-se` keeps what the
+game fills in (see [`strings.md`](./strings.md#ai-boundary)); the model decides
+wording and structure, not whether game data survives.
 
 Structure is not decoration: in many target languages a faithful translation
 needs a different structure from the source. Examples:
@@ -149,12 +151,11 @@ needs a different structure from the source. Examples:
 - word order moves the player's name or a number to another place in the
   sentence;
 - a verb or adjective agrees with the player's gender, which the English
-  source does not mark;
-- a noun would take plural forms after a number, following the target
-  language's rules rather than the source's `1` / other split (see
-  [Plural forms](#plural-forms) for why this is usually rephrased instead);
-- an English-only construct, such as an article selection, has no equivalent
-  and is dropped.
+  source does not mark: `Чего <if $gn4>застыла<else>застыл</if>?`;
+- an English-only construct, such as a gender choice between "his" and
+  "her" that the target language does not need, is dropped;
+- a noun would take plural forms after a number (see [Plural
+  forms](#plural-forms) for why this is usually rephrased instead).
 
 Unrestricted edits are unsafe for other reasons. A changed item ID shows a
 different item. A reference to a parameter the game does not pass to this
@@ -162,61 +163,44 @@ string shows garbage or crashes at runtime. A removed color end leaks the
 color into the rest of the UI. An opaque construct that Aeria does not
 understand cannot be reasoned about at all.
 
-### Tagged text
+### What the agent sees
 
-Rust projects each source string into tagged text. Translatable prose is plain
-text. Each protected construct becomes a tag with a stable ID and a legend
-entry built from the macro catalog (see
-[`strings.md`](./strings.md#tagged-text)) that says what the construct does
-with its argument values, such as "the name of a player character; player =
-number parameter 1" or "a value from a game data sheet; sheet = Item, row = 5":
+Each string comes with its source macro text and the list of its constructs:
+what each macro does, with its argument values in words, and what a
+translation may do with it:
 
 ```text
-source:  <x id="1"/> obtained <x id="2"/> <x id="3"/>.
-legend:  1 = player name · 2 = integer parameter 1 · 3 = item link (Item 5)
-target:  <x id="1"/> <gender m="получил" f="получила"/>: <x id="3"/> ×<x id="2"/>.
+source:      <player-name $n1> obtained <num $n2> <sheet Item 5 0>.
+constructs:  <player-name $n1> — the name of a player character; player = number parameter 1 (game data: keep it; it may move or repeat)
+             <num $n2> — a number; value = number parameter 2 (game data: …)
+             <sheet Item 5 0> — a value from a game data sheet …; sheet = Item, row = 5, column = 0 (game data: …)
+target:      <player-name $n1> <if $gn4>получила<else>получил</if>: <sheet Item 5 0> ×<num $n2>.
 ```
 
-Constructs with translatable branches, such as an existing conditional, become
-paired tags whose branches are translated in place.
+The instructions add a short reference of condition syntax and the globals
+whose meaning is established (`aeria_se::authoring_reference`).
 
-### Operations
+### Policy
 
-Every difference between the source structure and the returned structure is
-classified. The policy is owned by `aeria-se` and decided per construct kind,
-not by the model:
+The policy is owned by `aeria-se` and decided per construct kind, not by the
+model:
 
-| Operation | Rule |
+| Change | Rule |
 | --- | --- |
-| Move a tag within the same string | Allowed. |
-| Repeat a runtime value, such as the player's name | Allowed. |
-| Add a grammar construct from the vocabulary, such as `gender` | Allowed when every value it reads is already available to this string (see below). Structural change. |
-| Drop a construct that is language-specific in the source, such as an English article selection | Allowed for construct kinds the policy marks as droppable. Structural change. |
-| Drop a runtime value, a game reference, or formatting | Rejected by default. Structural change with a required reason when the policy permits it. |
-| Change a game reference's ID or sheet, or a parameter index | Rejected. |
-| Unbalanced or crossed formatting pairs | Rejected. |
-| Change, move across a branch, or drop an opaque construct | Rejected. Opaque constructs are preserved exactly. |
-| Invent a tag ID, or reference a parameter the source does not use | Rejected. |
-
-A grammar construct may read only context the game client provides for every
-string, such as the player's gender, or a value that the source string itself
-already uses. It cannot introduce new game references or new parameters.
-
-### Grammar constructs
-
-Harmonia only replaces strings; it evaluates nothing. Every grammar construct
-therefore compiles to native macros that the game client evaluates, and the
-vocabulary is limited to what native macros can express. The model supplies
-only the target-language forms; Rust owns the conditions.
+| Move or repeat game data, anywhere in the string | Allowed. |
+| Drop game data, or change an item, sheet, or parameter | Rejected. |
+| Add game data the source does not have | Rejected. |
+| Reorder formatting | Allowed; each formatting construct stays as often as in the source. |
+| Add, drop, or restructure a condition | Allowed when it tests only parameters the source uses or known globals. |
+| Add or drop a line break, a space, or a text transform | Allowed. |
+| Drop or add a speaker name | Rejected; the target starts with one exactly when the source does. |
+| Malformed macro text | Rejected with the parser's diagnostics. |
 
 Native macro expressions offer comparisons (`==`, `!=`, `<`, `>`, `<=`, `>=`)
 between integers, parameters, and time values, plus conditional macros such as
-`if`, `switch`, and `ifpcgender`. They have no arithmetic.
-
-| Construct | Compiles to | Status |
-| --- | --- | --- |
-| `<gender m="…" f="…"/>` | The native gender condition for the local player, in the form the source corpus already uses for the same purpose. | Planned. The exact macro form is taken from verified source strings, not invented. |
-| `<plural …/>` | — | Not offered; see below. |
+`if`, `switch`, and `if-gender`. They have no arithmetic; Harmonia only
+replaces strings and evaluates nothing, so every structure the agent writes
+is one the game client evaluates.
 
 #### Plural forms
 
@@ -354,8 +338,8 @@ what a job may touch; neither Angelica nor the workers can widen it.
 - **Chunks**: units are grouped by sheet and adjacent rows so related text
   shares context, within a per-chunk token budget.
 - **Writes**: a worker's result for a unit is accepted only if the unit
-  belongs to that worker's chunk. It passes the same tagged-text and
-  structural validation as a chat write and is written as `draft` through the
+  belongs to that worker's chunk. It passes the same structural validation
+  as a chat write and is written as `draft` through the
   bulk assisted-write API. An invalid result is recorded as rejected with its
   diagnostic.
 - **State**: jobs, chunks, and per-unit outcomes are stored in local SQLite.
@@ -374,7 +358,7 @@ commit, and cannot write outside their chunk.
 
 Each chunk is translated by a subagent with a fresh context: Angelica's job
 instructions, project guidance, glossary entries matching the chunk, and the
-chunk's units in tagged-text form. Its tools are restricted to:
+chunk's units as macro text with their constructs. Its tools are restricted to:
 
 - `get_unit` and neighbouring rows of its own sheet, for context;
 - `other_languages`, for the same string in the game's other client languages;
@@ -486,11 +470,9 @@ Each milestone is a separate change with its own documentation update.
    test.
 2. **Read-only agent**: agent loop, read tools, the Angelica panel with
    model and effort pickers, local conversations, Chat mode.
-3. **Assisted writes**: `aeria-se` tagged projection, rebuild, and structure
-   policy (move, repeat, droppable constructs), `set_assisted_target`,
-   validation feedback loop, Ask and Auto-draft modes, **Draft with
-   Angelica** in the editor. The `gender` construct follows as a separate
-   change once its native form is confirmed against the source corpus.
+3. **Assisted writes**: `aeria-se` constructs and structure policy, macro
+   text written by the agent, `set_assisted_target`, validation feedback
+   loop, Ask and Auto-draft modes, **Draft with Angelica** in the editor.
 4. **Guidance and glossary**: `aeria-guidance.md`, `aeria-glossary.csv` with
    its format document, glossary tools, and advisory checks.
 5. **Translation jobs**: job orchestrator and store, worker subagents,

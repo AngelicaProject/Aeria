@@ -104,6 +104,18 @@
   --review-needs: var(--color-danger);
   --review-done: var(--color-success);
 
+  /*
+   * Dialogue scenes: a player's choice and what its answers lead to, and
+   * the script's conditions and loops. Derived from each theme's accent and
+   * warning, so every theme has them.
+   */
+  --scene-choice: var(--accent-text);
+  --scene-choice-soft: color-mix(in srgb, var(--color-accent) 9%, transparent);
+  --scene-choice-edge: color-mix(in srgb, var(--color-accent) 42%, transparent);
+  --scene-flow: color-mix(in srgb, var(--color-warning) 82%, var(--color-text));
+  --scene-flow-edge: color-mix(in srgb, var(--color-warning) 36%, transparent);
+  --scene-rail: var(--line-strong);
+
   --shadow-panel: 0 1px 0 0 color-mix(in srgb, var(--color-text) 4%, transparent) inset, 0 10px 30px -18px rgb(0 0 0 / 0.55);
   --shadow-pop: 0 18px 50px -12px rgb(0 0 0 / 0.55), 0 0 0 1px var(--line-strong);
   --shadow-control: 0 1px 0 0 color-mix(in srgb, var(--color-text) 5%, transparent) inset;
@@ -127,6 +139,10 @@
   --line: color-mix(in srgb, var(--color-text) 10%, transparent);
   --line-strong: color-mix(in srgb, var(--color-text) 18%, transparent);
   --accent-text: color-mix(in srgb, var(--color-accent) 85%, var(--color-text));
+  --scene-choice-soft: color-mix(in srgb, var(--color-accent) 12%, transparent);
+  --scene-choice-edge: color-mix(in srgb, var(--color-accent) 55%, transparent);
+  --scene-flow: color-mix(in srgb, var(--color-warning) 55%, var(--color-text));
+  --scene-flow-edge: color-mix(in srgb, var(--color-warning) 60%, transparent);
   --shadow-panel: 0 1px 2px rgb(0 0 0 / 0.06), 0 8px 24px -16px rgb(0 0 0 / 0.25);
   --shadow-pop: 0 18px 48px -12px rgb(0 0 0 / 0.25), 0 0 0 1px var(--line-strong);
 }
@@ -146,6 +162,9 @@
   --line: var(--color-surface-2);
   --line-strong: var(--color-overlay);
   --fg-faint: var(--color-overlay);
+  --scene-choice-edge: var(--color-accent);
+  --scene-flow-edge: var(--color-warning);
+  --scene-rail: var(--color-overlay);
   --shadow-panel: none;
   --shadow-pop: 0 0 0 1px var(--color-text);
 }

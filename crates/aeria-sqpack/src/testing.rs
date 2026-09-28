@@ -107,6 +107,8 @@ pub struct FakeGame {
     pub sheets: BTreeMap<String, FakeSheet>,
     /// Sheets listed in `root.exl` without a header.
     pub headerless: Vec<String>,
+    /// Other files by game path, such as `game_script/…/x.luab`.
+    pub files: BTreeMap<String, Vec<u8>>,
 }
 
 impl FakeGame {
@@ -117,7 +119,15 @@ impl FakeGame {
             version: version.into(),
             sheets: BTreeMap::new(),
             headerless: Vec::new(),
+            files: BTreeMap::new(),
         }
+    }
+
+    /// Adds or replaces a file outside `exd/`.
+    #[must_use]
+    pub fn with_file(mut self, path: impl Into<String>, bytes: Vec<u8>) -> Self {
+        self.files.insert(path.into(), bytes);
+        self
     }
 
     /// Adds or replaces a sheet.
@@ -161,18 +171,36 @@ impl FakeGame {
             }
         }
 
-        let mut data = vec![0_u8; 0x800];
-        let mut entries: Vec<(u64, u32)> = Vec::new();
-        for (path, bytes) in &files {
-            let offset = data.len();
-            data.extend_from_slice(&standard_file(bytes));
-            data.resize(data.len().next_multiple_of(128), 0);
-            let hash = path_hash(path).expect("paths have a folder");
-            let index_data = u32::try_from(offset / 8).expect("small archive");
-            entries.push((hash, index_data));
+        files.extend(
+            self.files
+                .iter()
+                .map(|(path, bytes)| (path.to_lowercase(), bytes.clone())),
+        );
+
+        let mut archives: BTreeMap<u8, Vec<(String, Vec<u8>)>> = BTreeMap::new();
+        for (path, bytes) in files {
+            let category = path
+                .split('/')
+                .next()
+                .and_then(crate::category_id)
+                .expect("files belong to a known category");
+            archives.entry(category).or_default().push((path, bytes));
         }
-        std::fs::write(archive.join("0a0000.win32.dat0"), &data)?;
-        std::fs::write(archive.join("0a0000.win32.index"), index(&entries))?;
+        for (category, files) in archives {
+            let mut data = vec![0_u8; 0x800];
+            let mut entries: Vec<(u64, u32)> = Vec::new();
+            for (path, bytes) in &files {
+                let offset = data.len();
+                data.extend_from_slice(&standard_file(bytes));
+                data.resize(data.len().next_multiple_of(128), 0);
+                let hash = path_hash(path).expect("paths have a folder");
+                let index_data = u32::try_from(offset / 8).expect("small archive");
+                entries.push((hash, index_data));
+            }
+            let prefix = format!("{category:02x}0000.win32");
+            std::fs::write(archive.join(format!("{prefix}.dat0")), &data)?;
+            std::fs::write(archive.join(format!("{prefix}.index")), index(&entries))?;
+        }
         Ok(())
     }
 }

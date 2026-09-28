@@ -1,6 +1,8 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
   CheckWorkflowDto,
+  MacroIdiomDto,
+  MacroInsertionDto,
   MacroViewDto,
   UpdateChannel,
   UpdateStatusDto,
@@ -63,6 +65,7 @@ import type {
   TranslationRowPageDto,
   TranslationOverlayDto,
   OtherLanguageTextDto,
+  SheetDialogueDto,
 } from "./types";
 
 export function normalizeCommandError(error: unknown): CommandError {
@@ -128,6 +131,16 @@ export function openUpdateRelease(): Promise<void> {
 
 export function currentProject(): Promise<ProjectSummaryDto | null> {
   return call<ProjectSummaryDto | null>("current_project");
+}
+
+/** The macros a translator can insert, with the open game's races and classes. */
+export function macroInsertions(): Promise<MacroInsertionDto[]> {
+  return call<MacroInsertionDto[]>("macro_insertions");
+}
+
+/** The constructs of several macros that read as one value. */
+export function macroIdioms(): Promise<MacroIdiomDto[]> {
+  return call<MacroIdiomDto[]>("macro_idioms");
 }
 
 /** Describes macro text: its diagnostics and tags. */
@@ -234,6 +247,11 @@ export function pageTranslationRows(
 /** One source cell in the game's other client languages, for comparison. */
 export function sourceInOtherLanguages(sourceBinding: SourceBinding): Promise<OtherLanguageTextDto[]> {
   return call<OtherLanguageTextDto[]>("source_in_other_languages", { sourceBinding });
+}
+
+/** The scene structure of a quest or cutscene sheet; `null` for other sheets. */
+export function sheetDialogue(sheetName: string): Promise<SheetDialogueDto | null> {
+  return call<SheetDialogueDto | null>("sheet_dialogue", { sheetName });
 }
 
 export function setTranslationTarget(

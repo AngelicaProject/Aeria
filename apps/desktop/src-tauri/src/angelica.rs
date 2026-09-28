@@ -46,7 +46,7 @@ use sha2::{Digest, Sha256};
 use tauri::{Emitter, Manager};
 
 use crate::ai::{resolve_endpoint, settings_store};
-use crate::commands::{parse_translation_unit_id, run_blocking};
+use crate::commands::{parse_translation_unit_id, run_blocking, translation_row};
 use crate::dto::{ProjectSummaryDto, SourceBindingDto, TranslationOverlayDto};
 use crate::error::CommandError;
 use crate::git::{UnitChangeDto, UnitHistoryDto, open_repository};
@@ -253,9 +253,8 @@ fn row_snapshot(row: TranslationRowView) -> RowSnapshot {
                     review_state,
                     note,
                     unit_id,
-                    tagged: None,
-                    tags: Vec::new(),
-                    untaggable: false,
+                    constructs: Vec::new(),
+                    malformed: false,
                     glossary: Vec::new(),
                 }
             })
@@ -362,19 +361,8 @@ pub(crate) fn session_row(
     subrow: u16,
 ) -> Result<Option<RowSnapshot>, ToolError> {
     known_sheet(session, sheet)?;
-    // The page cursor is exclusive, so start just before the row.
-    let cursor = match (row, subrow) {
-        (0, 0) => None,
-        (row, 0) => Some(TranslationRowCursor::new(sheet, row - 1, u16::MAX)),
-        (row, subrow) => Some(TranslationRowCursor::new(sheet, row, subrow - 1)),
-    };
-    let page = session
-        .page_translation_rows(sheet, cursor.as_ref(), 1)
-        .map_err(|error| ToolError::new(error.to_string()))?;
-    Ok(page
-        .rows
-        .into_iter()
-        .find(|view| view.row_id == row && view.subrow_id == subrow)
+    Ok(translation_row(session, sheet, row, subrow)
+        .map_err(|error| ToolError::new(error.to_string()))?
         .map(row_snapshot))
 }
 

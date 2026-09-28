@@ -189,6 +189,27 @@ language, from `GameSource::cell_in_other_languages` (see
 [`source.md`](./source.md#additional-source-languages)); a language without
 the cell has `null` text. It is display context and is never recorded.
 
+`sheet_dialogue(sheetName)` returns the dialogue structure of a quest or
+cutscene sheet for the scene view, from `GameSource::dialogue` and
+`GameSource::quest_row` (see [`source.md`](./source.md#dialogue)): each row
+with text, its role (journal, objective, speech, or other), its speaker label,
+and its row key after the `TEXT_<ID>_` prefix, the quest's name with its
+translation from the `Quest` row, the other versions of the quest from
+`GameSource::quest_versions`, and the scenes traced from the quest's
+script from `GameSource::quest_script` (see
+[`source.md`](./source.md#quest-scripts)), with line keys shortened the same
+way. Each traced function has its scene number, or `null` with the
+`handler` name it is assigned to, and the `script` name of the battle script
+it comes from, or `null` for the quest's own script. Each answer of a
+choice says when it is `available`: `always`, `never` (grayed out), `when`
+a guard holds, or `unknown`. `cutscenes` lists every
+cutscene file that names the sheet's lines, from
+`GameSource::cutscenes_naming`, with its `Cutscene` row, path, those
+keys, and the quest scenes that play it from `GameSource::cutscene_plays`.
+A cutscene in a traced scene has its file's `path` when it resolves. A script or cutscene index that cannot be read leaves `scenes` empty
+and is reported in `scriptError` rather than failing the command. It is
+`null` for any other sheet and is never recorded.
+
 `translation_progress` returns per-sheet `SheetProgressDto` coverage for the
 active project from `ProjectSession::translation_progress` (see
 [`translation-read.md`](./translation-read.md#translation-progress)). The

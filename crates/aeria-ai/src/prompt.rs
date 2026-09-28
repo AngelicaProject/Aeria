@@ -88,13 +88,15 @@ job needs the Ask or Auto-draft mode.";
 
 const WRITING: &str = "\
 Writing translations:
-- Tools return a string's source and, when it contains macros, its `tagged` form with a \
-`tags` legend. Write every translation in tagged form: plain prose with each tag copied \
-exactly, `<x id=\"N\"/>` or `<g id=\"N\"><b>…</b></g>`, and &lt; &gt; &amp; for \
-literal characters. Never write raw macro syntax.
-- Keep every tag. Tags may move within their level to fit the target language's word \
-order, but formatting tags keep their order, tags inside a <b> branch stay in that \
-branch, and only tags marked \"may repeat\" may be used more than once.
+- Tools return a string's source as macro text, the game's written form, with \
+`constructs` explaining what each macro does and what a translation may do with it. \
+Write translations as macro text and localize them: word order, conditions, and \
+formatting follow the target language, not the source's shape.
+- Keep every macro marked as game data; it may move or repeat. Keep the source's \
+formatting as often as the source has it, in any order. Conditions may be reworded, \
+restructured, added, or dropped: add one where the target language must agree with the \
+player character's gender or another known value. Write \\< \\{ \\\\ for literal \
+characters.
 - Use validate_target when unsure. propose_translation checks every translation and \
 returns what to fix for any it rejects; correct and propose those again.
 - Propose at most 20 strings per call. For more than a few pages of strings, such as a \
@@ -195,6 +197,8 @@ pub fn system_prompt(
         AgentMode::Chat => prompt.push_str(CHAT_MODE),
         AgentMode::Ask | AgentMode::AutoDraft => {
             prompt.push_str(WRITING);
+            prompt.push('\n');
+            prompt.push_str(&aeria_se::authoring_reference());
             prompt.push_str("\n\n");
             prompt.push_str(if mode == AgentMode::Ask {
                 ASK_MODE
@@ -527,7 +531,11 @@ mod tests {
         let editor = EditorContext::default();
         let ask = system_prompt(None, &editor, AgentMode::Ask, &ProjectGuide::default(), &[]);
         assert!(ask.contains("Current mode: Ask"));
-        assert!(ask.contains("tagged form"));
+        assert!(ask.contains("as macro text"));
+        assert!(
+            ask.contains("$gn4 is"),
+            "the reference names the known globals"
+        );
         assert!(!ask.contains("Current mode: Chat"));
         let auto = system_prompt(
             None,

@@ -1,12 +1,15 @@
-import { memo, useEffect, useMemo, useRef, useSyncExternalStore, type KeyboardEvent } from "react";
+import { memo, useEffect, useMemo, useRef, useState, useSyncExternalStore, type KeyboardEvent } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { bindingKey, domKey } from "../binding";
-import { segmentMacroText } from "../macroTokens";
 import { emptyOccurrenceFilter, isOccurrenceFilterActive, occurrenceIndex, type OccurrenceFilter, type OccurrenceKindFilter, type OccurrenceStatusFilter, type TranslationOccurrenceView } from "../translationOccurrences";
-import type { SourceBinding, UnitChangeKind } from "../types";
+import type { SheetDialogueDto, SourceBinding, UnitChangeKind } from "../types";
+import { mayHaveScene } from "../dialogueScene";
+import { sheetDialogue } from "../ipc";
 import { Segmented } from "../ui/primitives/Segmented";
 import { UiIcon } from "../ui/primitives/UiIcon";
 import { ReviewDot } from "./ReviewDot";
+import { MacroPreview } from "./MacroPreview";
+import { DialogueScene } from "./DialogueScene";
 import { usePreferences } from "../ui/preferences";
 import { useI18n } from "../ui/i18n";
 import type { MessageKey } from "../i18n/translate";
@@ -15,7 +18,10 @@ import type { LoadProgress } from "../loadProgress";
 const ROW_HEIGHT = { compact: 28, comfortable: 34 } as const;
 
 type TranslationListProps = {
+  /** The strings that pass the filter. */
   occurrences: readonly TranslationOccurrenceView[];
+  /** Every loaded string of the sheet, for the scene view. */
+  allOccurrences: readonly TranslationOccurrenceView[];
   loadedOccurrenceCount: number;
   /** Sheet-wide coverage from the Workspace, not just loaded rows. */
   sheetProgress: { translated: number; reviewed: number; total: number } | null;
@@ -36,7 +42,35 @@ type TranslationListProps = {
   onNavigate: (direction: 1 | -1) => void;
   /** Uncommitted change kind per binding key, for Git markers. */
   changedKinds: ReadonlyMap<string, UnitChangeKind>;
+  /** Opens a string of another sheet, such as a quest's name. */
+  onReveal: (binding: SourceBinding) => void;
+  /** Opens another sheet, such as another version of a quest; with a cutscene file's path, at that cutscene. */
+  onOpenSheet: (sheetName: string, cutscene?: string) => void;
+  /** A cutscene file to show once the scene of `sheet` is loaded. */
+  sceneTarget: { sheet: string; path: string } | null;
+  onSceneTargetShown: () => void;
 };
+
+/**
+ * The scene structure of a sheet, read once per selection, as soon as the
+ * sheet is selected so it loads beside its strings. Only quest and cutscene
+ * sheets can have one; `undefined` while it loads, and `null` when the
+ * sheet has none or it cannot be read, which leaves the strings list.
+ */
+function useSheetDialogue(sheetName: string | null): SheetDialogueDto | null | undefined {
+  const [state, setState] = useState<{ sheet: string; dialogue: SheetDialogueDto | null } | null>(null);
+  useEffect(() => {
+    if (!sheetName || !mayHaveScene(sheetName)) return;
+    let current = true;
+    sheetDialogue(sheetName).then(
+      (dialogue) => { if (current) setState({ sheet: sheetName, dialogue }); },
+      () => { if (current) setState({ sheet: sheetName, dialogue: null }); },
+    );
+    return () => { current = false; };
+  }, [sheetName]);
+  if (!sheetName || !mayHaveScene(sheetName)) return null;
+  return state && state.sheet === sheetName ? state.dialogue : undefined;
+}
 
 const statusOptions: ReadonlyArray<{ value: OccurrenceStatusFilter; label: MessageKey }> = [
   { value: "all", label: "list.all" },
@@ -57,14 +91,6 @@ const changedLabels: Readonly<Record<UnitChangeKind, MessageKey>> = {
   modified: "list.changed.modified",
   removed: "list.changed.removed",
 };
-
-function MacroPreview({ text, empty }: { text: string | null; empty: string }) {
-  const { t } = useI18n();
-  const segments = useMemo(() => text ? segmentMacroText(text.replace(/\s*\n\s*/g, " ")) : [], [text]);
-  if (text === null) return <span className="lens-empty">{empty}</span>;
-  if (text.length === 0) return <span className="lens-empty">{t("common.empty")}</span>;
-  return <>{segments.map((segment, index) => segment.kind === "macro" ? <span className="lens-macro" key={index}>{segment.text}</span> : <span key={index}>{segment.text}</span>)}</>;
-}
 
 /** Subscribes to the streaming count on its own so the list does not re-render per page. */
 function StreamingProgress({ progress, total }: { progress: LoadProgress; total: number | null }) {
@@ -89,6 +115,7 @@ function StreamingProgress({ progress, total }: { progress: LoadProgress; total:
 
 export const TranslationList = memo(function TranslationList({
   occurrences,
+  allOccurrences,
   loadedOccurrenceCount,
   sheetProgress,
   filter,
@@ -104,12 +131,27 @@ export const TranslationList = memo(function TranslationList({
   onSelect,
   onNavigate,
   changedKinds,
+  onReveal,
+  onOpenSheet,
+  sceneTarget,
+  onSceneTargetShown,
 }: TranslationListProps) {
   const { t, formatNumber } = useI18n();
   const scrollRef = useRef<HTMLDivElement>(null);
-  const rowHeight = ROW_HEIGHT[usePreferences().preferences.listDensity];
+  const { preferences, setPreference } = usePreferences();
+  const rowHeight = ROW_HEIGHT[preferences.listDensity];
+  const dialogue = useSheetDialogue(selectedSheetName);
   const selectedKey = selectedBinding ? bindingKey(selectedBinding) : null;
   const showingPreviousSheet = loading && loadedOccurrenceCount > 0 && selectedSheetName !== loadedSheetName;
+  // The scene view never falls back to strings while a scene loads: it keeps
+  // the scene shown last, dimmed, with the strings it was shown with, and
+  // says it is loading only when there is none.
+  const wantsScene = preferences.dialogueView === "scene" && dialogue !== null;
+  const sceneReady = wantsScene && dialogue !== undefined && loadedSheetName === selectedSheetName;
+  const shownScene = useRef<{ sheet: string; dialogue: SheetDialogueDto; occurrences: readonly TranslationOccurrenceView[] } | null>(null);
+  if (sceneReady && loadedSheetName) shownScene.current = { sheet: loadedSheetName, dialogue: dialogue!, occurrences: allOccurrences };
+  const staleScene = wantsScene && !sceneReady ? shownScene.current : null;
+  const showScene = wantsScene;
   const filtered = isOccurrenceFilterActive(filter);
   const virtualizer = useVirtualizer({
     count: occurrences.length,
@@ -123,10 +165,11 @@ export const TranslationList = memo(function TranslationList({
   }, [rowHeight, virtualizer]);
 
   const selectedIndex = useMemo(() => occurrenceIndex(occurrences, selectedBinding), [occurrences, selectedBinding]);
+  const matching = useMemo(() => showScene && filtered ? new Set(occurrences.map((occurrence) => bindingKey(occurrence.binding))) : null, [showScene, filtered, occurrences]);
 
   useEffect(() => {
-    if (selectedIndex >= 0) virtualizer.scrollToIndex(selectedIndex, { align: "auto" });
-  }, [selectedIndex, virtualizer]);
+    if (!showScene && selectedIndex >= 0) virtualizer.scrollToIndex(selectedIndex, { align: "auto" });
+  }, [showScene, selectedIndex, virtualizer]);
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: 0 });
@@ -146,6 +189,17 @@ export const TranslationList = memo(function TranslationList({
   return (
     <section className="lens" aria-label={t("list.label")} aria-busy={loading}>
       <div className="lens-toolbar">
+        {selectedSheetName && mayHaveScene(selectedSheetName) && dialogue !== null ? (
+          <Segmented
+            label={t("scene.view")}
+            value={preferences.dialogueView}
+            onChange={(view) => setPreference("dialogueView", view)}
+            options={[
+              { value: "strings", label: <><UiIcon icon="table2" size="sm" />{t("scene.view.strings")}</>, title: t("scene.view.stringsHint") },
+              { value: "scene", label: <><UiIcon icon="messageSquare" size="sm" />{t("scene.view.scene")}</>, title: t("scene.view.sceneHint") },
+            ]}
+          />
+        ) : null}
         <label className="search-field lens-search">
           <UiIcon icon="search" size="sm" />
           <input
@@ -181,16 +235,59 @@ export const TranslationList = memo(function TranslationList({
         ) : null}
       </div>
 
-      <div className="lens-header" aria-hidden="true">
-        <span />
-        <span>{t("list.header.row")}</span>
-        <span>{t("list.header.field")}</span>
-        <span>{t("list.header.source")}</span>
-        <span>{t("list.header.target")}</span>
-      </div>
+      {showScene ? (
+        <div className="lens-header scene-header" aria-hidden="true">
+          <span />
+          <span>{t("list.header.source")}</span>
+          <span>{t("list.header.target")}</span>
+        </div>
+      ) : (
+        <div className="lens-header" aria-hidden="true">
+          <span />
+          <span>{t("list.header.row")}</span>
+          <span>{t("list.header.field")}</span>
+          <span>{t("list.header.source")}</span>
+          <span>{t("list.header.target")}</span>
+        </div>
+      )}
       {streaming && loadedOccurrenceCount > 0 && !showingPreviousSheet ? <StreamingProgress progress={loadProgress} total={sheetStringCount} /> : null}
 
-      {occurrences.length === 0 && (loading || streaming) ? (
+      {showScene && !sceneReady && staleScene ? (
+        <DialogueScene
+          dialogue={staleScene.dialogue}
+          sheetName={staleScene.sheet}
+          occurrences={staleScene.occurrences}
+          matching={null}
+          selectedKey={selectedKey}
+          disabled
+          stale
+          onSelect={onSelect}
+          onNavigate={onNavigate}
+          onReveal={onReveal}
+          onOpenSheet={onOpenSheet}
+          changedKinds={changedKinds}
+          target={null}
+          onTargetShown={onSceneTargetShown}
+        />
+      ) : showScene && !sceneReady ? (
+        <div className="lens-state" aria-live="polite"><span className="spinner" aria-hidden="true" />{t("list.loadingSheet")}</div>
+      ) : showScene && dialogue ? (
+        <DialogueScene
+          dialogue={dialogue}
+          sheetName={loadedSheetName ?? ""}
+          occurrences={allOccurrences}
+          matching={matching}
+          selectedKey={selectedKey}
+          disabled={disabled}
+          onSelect={onSelect}
+          onNavigate={onNavigate}
+          onReveal={onReveal}
+          onOpenSheet={onOpenSheet}
+          changedKinds={changedKinds}
+          target={sceneTarget && sceneTarget.sheet === loadedSheetName ? sceneTarget.path : null}
+          onTargetShown={onSceneTargetShown}
+        />
+      ) : occurrences.length === 0 && (loading || streaming) ? (
         <div className="lens-state" aria-live="polite"><span className="spinner" aria-hidden="true" />{t(filtered && loadedOccurrenceCount > 0 ? "list.searching" : "list.loadingSheet")}</div>
       ) : occurrences.length === 0 ? (
         <div className="lens-state">

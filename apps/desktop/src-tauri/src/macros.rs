@@ -125,6 +125,90 @@ pub async fn macro_view(app: tauri::AppHandle, text: String) -> CommandResult<Ma
     .await
 }
 
+/// A construct of several macros that reads as one value, such as the
+/// player's first name.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MacroIdiomDto {
+    pub name: &'static str,
+    /// The exact macro text.
+    pub text: &'static str,
+    pub summary: &'static str,
+}
+
+#[tauri::command(rename_all = "camelCase")]
+/// The idioms of `aeria_se::catalog`, for the editor to show each as one
+/// value while the text keeps its macros.
+#[must_use]
+pub fn macro_idioms() -> Vec<MacroIdiomDto> {
+    aeria_se::catalog::IDIOMS
+        .iter()
+        .map(|idiom| MacroIdiomDto {
+            name: idiom.name,
+            text: idiom.text,
+            summary: idiom.summary,
+        })
+        .collect()
+}
+
+/// A macro a person can insert while translating (see
+/// `aeria_se::catalog::INSERTIONS`).
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MacroInsertionDto {
+    pub name: &'static str,
+    pub group: &'static str,
+    /// `insert`, `wrap`, or `branches`.
+    pub form: &'static str,
+    /// The macro text around the selection; `{row}` is one of `rows`.
+    pub parts: &'static [&'static str],
+    /// The rows it is offered for, with their names in the source language;
+    /// empty for an insertion without rows.
+    pub rows: Vec<MacroRowDto>,
+    pub summary: &'static str,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MacroRowDto {
+    pub row: u32,
+    pub name: String,
+}
+
+#[tauri::command(rename_all = "camelCase")]
+/// The macros a person can insert while translating, with the rows of the
+/// open project's game that an insertion is offered for, such as each race.
+/// Without a project, an insertion that needs rows has none.
+///
+/// # Errors
+///
+/// Returns a typed command error when the desktop worker fails.
+pub async fn macro_insertions(app: tauri::AppHandle) -> CommandResult<Vec<MacroInsertionDto>> {
+    run_blocking(move || {
+        let source = project_source(&app);
+        Ok(insertions(&source))
+    })
+    .await
+}
+
+fn insertions(game: &dyn Game) -> Vec<MacroInsertionDto> {
+    aeria_se::catalog::INSERTIONS
+        .iter()
+        .map(|spec| MacroInsertionDto {
+            name: spec.name,
+            group: spec.group,
+            form: match spec.form {
+                aeria_se::catalog::InsertionForm::Insert => "insert",
+                aeria_se::catalog::InsertionForm::Wrap => "wrap",
+                aeria_se::catalog::InsertionForm::Branches => "branches",
+            },
+            parts: spec.parts,
+            rows: spec.rows.map(|sheet| game.rows(sheet)).unwrap_or_default(),
+            summary: spec.summary,
+        })
+        .collect()
+}
+
 /// The open project's game, when a project is open.
 fn project_source(app: &tauri::AppHandle) -> Option<Arc<GameSource>> {
     let state = app.state::<DesktopState>();
@@ -208,6 +292,8 @@ trait Game {
     fn ui_color(&self, row: u32) -> Option<u32>;
     /// The text of the first column of a sheet row, such as a class name.
     fn row_name(&self, sheet: &str, row: u32) -> Option<String>;
+    /// Every row of a sheet whose first column has text, with that text.
+    fn rows(&self, sheet: &str) -> Vec<MacroRowDto>;
 }
 
 impl Game for Option<Arc<GameSource>> {
@@ -218,6 +304,28 @@ impl Game for Option<Arc<GameSource>> {
     fn row_name(&self, sheet: &str, row: u32) -> Option<String> {
         let text = self.as_ref()?.cell_text(sheet, row, 0).ok()??;
         Some(parse(&text).plain_text()).filter(|name| !name.is_empty())
+    }
+
+    fn rows(&self, sheet: &str) -> Vec<MacroRowDto> {
+        let Some(source) = self.as_ref() else {
+            return Vec::new();
+        };
+        let Ok(aeria_source::SheetLookup::Present(table)) = source.sheet(sheet) else {
+            return Vec::new();
+        };
+        table
+            .rows()
+            .iter()
+            .filter(|row| row.subrow_id == 0)
+            .filter_map(|row| {
+                let cell = table.cells(row).next()?;
+                let name = parse(&cell.text()).plain_text();
+                (!name.trim().is_empty()).then_some(MacroRowDto {
+                    row: row.row_id,
+                    name,
+                })
+            })
+            .collect()
     }
 }
 
@@ -571,6 +679,17 @@ mod tests {
         fn row_name(&self, sheet: &str, row: u32) -> Option<String> {
             (sheet == "ClassJob" && row == 21).then(|| "monk".to_owned())
         }
+
+        fn rows(&self, sheet: &str) -> Vec<MacroRowDto> {
+            if sheet == "Race" {
+                vec![MacroRowDto {
+                    row: 3,
+                    name: "Lalafell".to_owned(),
+                }]
+            } else {
+                Vec::new()
+            }
+        }
     }
 
     #[test]
@@ -642,5 +761,29 @@ mod tests {
         assert_eq!(row.parameter.map(|parameter| parameter.index), Some(1));
         assert_eq!(view.diagnostics.len(), 1);
         assert_eq!(view.diagnostics[0].from, 55);
+    }
+
+    #[test]
+    fn insertions_offer_the_rows_of_their_sheet() {
+        let insertions = super::insertions(&TestGame);
+        let race = insertions
+            .iter()
+            .find(|insertion| insertion.name == "race-choice")
+            .expect("race choice");
+        assert_eq!(race.form, "branches");
+        assert_eq!(race.parts, ["<if ($gn71 == {row})>", "<else>", "</if>"]);
+        assert_eq!(
+            race.rows
+                .iter()
+                .map(|row| (row.row, row.name.as_str()))
+                .collect::<Vec<_>>(),
+            [(3, "Lalafell")]
+        );
+        let name = insertions
+            .iter()
+            .find(|insertion| insertion.name == "player-full-name")
+            .expect("full name");
+        assert_eq!((name.form, name.parts), ("insert", &["<string $gs1>"][..]));
+        assert!(name.rows.is_empty());
     }
 }

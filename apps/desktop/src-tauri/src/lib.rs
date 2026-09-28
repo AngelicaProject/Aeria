@@ -14,6 +14,7 @@ mod jobs;
 mod macros;
 mod paths;
 mod project_changes;
+mod scene;
 mod search;
 mod source;
 mod state;
@@ -46,7 +47,7 @@ pub use commands::{
     initialize_project_from_game, list_detached_units, list_recent_projects,
     open_project_from_game, open_recent_project, page_translation_rows, preview_source_update,
     set_project_target_language, set_translation_note, set_translation_review_state,
-    set_translation_target, source_in_other_languages, translation_progress,
+    set_translation_target, sheet_dialogue, source_in_other_languages, translation_progress,
     update_project_from_game,
 };
 pub use dto::{
@@ -186,12 +187,15 @@ pub fn run() {
             forget_recent_project,
             page_translation_rows,
             source_in_other_languages,
+            sheet_dialogue,
             set_translation_target,
             set_translation_note,
             set_translation_review_state,
             translation_progress,
             set_project_target_language,
             macros::macro_view,
+            macros::macro_idioms,
+            macros::macro_insertions,
             macros::game_glyph_font,
             macros::game_icon,
             git_overview,

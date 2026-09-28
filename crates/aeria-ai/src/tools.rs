@@ -25,9 +25,9 @@ use crate::search::{ProjectSearch, run_search_tool};
 
 /// Longest source, target, or note text returned for one cell.
 pub const MAX_CELL_TEXT_CHARS: usize = 2000;
-/// Longest tagged source returned for one cell. Tagged text is never cut
-/// below this, since a partial tagged text cannot be translated.
-pub const MAX_TAGGED_CHARS: usize = 8000;
+/// Longest source returned for a translatable cell. A source is never cut
+/// below this, since a partial source cannot be translated.
+pub const MAX_SOURCE_CHARS: usize = 8000;
 /// Most translations one `propose_translation` call accepts.
 pub const MAX_PROPOSALS_PER_CALL: usize = 20;
 /// Longest serialized tool result.
@@ -98,16 +98,13 @@ pub struct CellSnapshot {
     pub note: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub unit_id: Option<String>,
-    /// The source in tagged form, when it differs from `source`. Filled in
-    /// by the tools, not by the reader.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub tagged: Option<String>,
-    /// Legend of the tags in `tagged`.
+    /// What each macro of the source does and what a translation may do
+    /// with it. Filled in by the tools, not by the reader.
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub tags: Vec<String>,
+    pub constructs: Vec<String>,
     /// The source is malformed and cannot be translated with assistance.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
-    pub untaggable: bool,
+    pub malformed: bool,
     /// Glossary entries whose terms occur in the source.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub glossary: Vec<GlossaryEntry>,
@@ -290,9 +287,7 @@ pub struct TranslatableUnit {
 pub struct Proposal {
     pub location: UnitLocation,
     pub source: String,
-    /// The translation as the model wrote it.
-    pub tagged: String,
-    /// The rebuilt target macro string.
+    /// The target macro string, as the model wrote it.
     pub target: String,
     /// The state the translation was produced against.
     pub expected: UnitState,
@@ -791,7 +786,7 @@ pub fn write_tool_definitions() -> Vec<ToolDefinition> {
             "row": { "type": "integer", "minimum": 0 },
             "subrow": { "type": "integer", "minimum": 0 },
             "column": { "type": "integer", "minimum": 0 },
-            "target": { "type": "string", "description": "The translation in tagged form: every tag of the source's tagged text, &lt; &gt; &amp; for literal characters." },
+            "target": { "type": "string", "description": "The translation as macro text: the game data of the source kept, conditions and formatting as the target language needs them, \\< \\{ \\\\ for literal characters." },
         },
         "required": ["sheet", "row", "subrow", "column", "target"],
         "additionalProperties": false,
@@ -799,7 +794,7 @@ pub fn write_tool_definitions() -> Vec<ToolDefinition> {
     let mut tools = vec![
         ToolDefinition {
             name: "validate_target",
-            description: "Checks a tagged translation of one string against its source without writing anything, and returns the rebuilt macro string or what to fix.",
+            description: "Checks a translation of one string against its source without writing anything, and returns what to fix, if anything.",
             parameters: translation.clone(),
         },
         ToolDefinition {
@@ -1604,12 +1599,11 @@ impl ReadTools<'_> {
             Ok(unit) => unit,
             Err(error) => return Err((location, vec![error.0])),
         };
-        match aeria_se::rebuild(&unit.source, &args.target) {
-            Ok(target) => Ok(Proposal {
+        match aeria_se::check_assisted_structure(&unit.source, &args.target) {
+            Ok(()) => Ok(Proposal {
                 location,
                 source: unit.source,
-                tagged: args.target,
-                target,
+                target: args.target,
                 expected: unit.state,
             }),
             Err(errors) => Err((
@@ -1621,7 +1615,7 @@ impl ReadTools<'_> {
 
     fn validate_target(writer: &dyn ProjectWriter, args: TranslationArgs) -> Value {
         match Self::prepare(writer, args) {
-            Ok(proposal) => json!({ "valid": true, "target": proposal.target }),
+            Ok(_) => json!({ "valid": true }),
             Err((_, errors)) => json!({ "valid": false, "errors": errors }),
         }
     }
@@ -1717,16 +1711,20 @@ fn bound_row(mut row: RowSnapshot, glossary: Option<&Glossary>) -> RowSnapshot {
                 .cloned()
                 .collect();
         }
-        match aeria_se::project(&cell.source) {
-            Ok(tagged) => {
-                if tagged.text != cell.source && tagged.text.chars().count() <= MAX_TAGGED_CHARS {
-                    cell.tagged = Some(tagged.text);
-                    cell.tags = tagged.tags.iter().map(aeria_se::Tag::legend).collect();
-                }
+        match aeria_se::constructs(&cell.source) {
+            Ok(constructs) => {
+                cell.constructs = constructs.iter().map(aeria_se::Construct::legend).collect();
             }
-            Err(_) => cell.untaggable = true,
+            Err(_) => cell.malformed = true,
         }
-        bound_text(&mut cell.source);
+        if cell.source.chars().count() > MAX_SOURCE_CHARS {
+            cell.source = cell
+                .source
+                .chars()
+                .take(MAX_SOURCE_CHARS)
+                .collect::<String>()
+                + "…[truncated]";
+        }
         if let Some(target) = &mut cell.target {
             bound_text(target);
         }
@@ -1791,9 +1789,8 @@ mod tests {
             review_state: state,
             note: None,
             unit_id: target.map(|_| format!("unit-{column}")),
-            tagged: None,
-            tags: Vec::new(),
-            untaggable: false,
+            constructs: Vec::new(),
+            malformed: false,
             glossary: Vec::new(),
         }
     }
@@ -2207,7 +2204,7 @@ mod tests {
         let output = tools.execute(
             "propose_translation",
             r#"{"translations":[
-                {"sheet":"Item","row":1,"subrow":0,"column":0,"target":"Привет, <x id=\"1\"/>!"},
+                {"sheet":"Item","row":1,"subrow":0,"column":0,"target":"Привет, <player-name $n1>!"},
                 {"sheet":"Item","row":2,"subrow":0,"column":0,"target":"До встречи"},
                 {"sheet":"Item","row":1,"subrow":0,"column":0,"target":"Привет!"},
                 {"sheet":"Item","row":9,"subrow":0,"column":0,"target":"x"}
@@ -2223,7 +2220,7 @@ mod tests {
             value["results"][2]["errors"][0]
                 .as_str()
                 .expect("error")
-                .contains("tag 1")
+                .contains("<player-name $n1> of the source is missing")
         );
         let submitted = writer.submitted.lock().expect("lock");
         assert_eq!(submitted[0].target, "Привет, <player-name $n1>!");
@@ -2247,16 +2244,15 @@ mod tests {
         };
         let output = ReadTools::with_writer(&reader, &writer).execute(
             "validate_target",
-            r#"{"sheet":"Item","row":1,"subrow":0,"column":0,"target":"Привет, <x id=\"1\"/>"}"#,
+            r#"{"sheet":"Item","row":1,"subrow":0,"column":0,"target":"Привет, <player-name $n1>"}"#,
         );
         let value: Value = serde_json::from_str(&output.content).expect("json");
         assert_eq!(value["valid"], true);
-        assert_eq!(value["target"], "Привет, <player-name $n1>");
         assert!(writer.submitted.lock().expect("lock").is_empty());
     }
 
     #[test]
-    fn reads_include_tagged_sources_with_a_legend() {
+    fn reads_explain_the_macros_of_their_sources() {
         let row = bound_row(
             RowSnapshot {
                 row: 1,
@@ -2279,10 +2275,11 @@ mod tests {
             },
             None,
         );
-        assert_eq!(row.cells[0].tagged.as_deref(), Some(r#"Hi <x id="1"/>"#));
-        assert!(row.cells[0].tags[0].starts_with("1: <player-name $n1>"));
-        assert!(row.cells[1].tagged.is_none());
-        assert!(row.cells[2].untaggable);
+        assert_eq!(row.cells[0].source, "Hi <player-name $n1>");
+        assert!(row.cells[0].constructs[0].starts_with("<player-name $n1> — "));
+        assert!(row.cells[0].constructs[0].contains("game data"));
+        assert!(row.cells[1].constructs.is_empty());
+        assert!(row.cells[2].malformed);
     }
 
     #[test]

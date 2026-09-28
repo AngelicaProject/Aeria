@@ -132,6 +132,10 @@ pub fn line_role(sheet: &str, key: &str) -> LineRole {
     }
     let speaker = match segments.as_slice() {
         [label @ .., first, second] if is_number(first) && is_number(second) => label,
+        // Unvoiced choices in voiced cutscenes: `Q1_000_001_NONE_VOICE`.
+        [label @ .., first, second, "NONE", "VOICE"] if is_number(first) && is_number(second) => {
+            label
+        }
         [first, label @ ..] if is_number(first) => label,
         _ => return LineRole::Other,
     };
@@ -201,6 +205,14 @@ mod tests {
             speech("SYSTEM_NONE_VOICE")
         );
         assert_eq!(role("TEXT_VOICEMAN_02400_A1_000_003"), speech("A1"));
+        assert_eq!(
+            role("TEXT_VOICEMAN_02400_Q4_000_001_NONE_VOICE"),
+            speech("Q4")
+        );
+        assert_eq!(
+            role("TEXT_VOICEMAN_02400_A4_000_002_NONE_VOICE"),
+            speech("A4")
+        );
     }
 
     #[test]
