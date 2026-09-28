@@ -24,17 +24,20 @@ use aeria_ai::jobs::{
     JobError, JobEstimate, JobEvent, JobFilter, JobLimitProposal, JobProposal, JobScope, JobSpec,
     JobStatus, JobStore, JobSummary, JobUnit, ScopedUnit, UnitStatus,
 };
-use aeria_ai::knowledge::Knowledge;
+use aeria_ai::knowledge::{Domain, Knowledge};
 use aeria_ai::localizer::{
     Caller, Finish, LineOutcome, LocalizeResult, Replies, Request as LocalizerRequest, Role, Step,
     effort_for, localize,
 };
 use aeria_ai::search::ProjectSearch;
+use aeria_ai::study::{contract_story, study_terms};
 use aeria_ai::tools::{
     JobAction, JobControl, ProjectReader, ProposalOutcome, ReviewLabel, ToolError, UnitLocation,
     UnitState,
 };
-use aeria_ai::worker::{JobHost, PreparedUnit, UnitContext, WriteFailure, prepare_unit};
+use aeria_ai::worker::{
+    JobHost, PreparedUnit, UnitContext, WriteFailure, prepare_unit, unit_knowledge,
+};
 use aeria_workspace::{AssistedWriteError, ProjectSession, TranslationRowCursor};
 use serde::Serialize;
 use tauri::{Emitter, Manager};
@@ -54,6 +57,9 @@ use crate::search::DesktopSearch;
 use crate::state::DesktopState;
 
 type CommandResult<T> = Result<T, CommandError>;
+
+#[path = "job_study.rs"]
+mod job_study;
 
 /// Renderer event saying a job changed.
 pub const JOB_EVENT: &str = "angelica://job";
@@ -647,6 +653,15 @@ async fn runner_state(run: &JobRun) -> Option<(u8, bool)> {
 async fn run_job(run: JobRun) {
     let mut concurrency = runner_state(&run).await.map_or(1, |(count, _)| count);
     run.workers.reset(u32::from(concurrency));
+    // The scope is studied once, before the first chunk.
+    if let Err(reason) = job_study::study_scope(&run).await {
+        pause_with_reason(&run, reason).await;
+        run.app
+            .state::<DesktopState>()
+            .finish_job_runner(&run.job_id);
+        notify(&run.app, &run.job_id);
+        return;
+    }
     let mut lanes = JoinSet::new();
     let mut live = std::collections::BTreeSet::new();
     for lane in 0..usize::from(concurrency) {
@@ -1055,59 +1070,24 @@ impl ProjectReader for JobReader {
 /// in parallel; this keeps one chunk from flooding the provider.
 const CHUNK_PARALLEL_REQUESTS: usize = 8;
 
-/// A chunk ready for the localizer, with its model and the job's images.
-struct PreparedChunk {
-    model: aeria_ai::ModelConfig,
-    prepared: PreparedUnit,
-    images: Vec<ImageRef>,
-    /// The images' data, loaded when the model accepts images.
-    payloads: Option<ImagePayloads>,
-}
-
-/// Loads each string's context, the scene, and the job's current
-/// instructions.
-fn prepare_chunk(
-    run: &JobRun,
-    selection: &aeria_ai::ModelSelection,
-    units: &[JobUnit],
-) -> CommandResult<PreparedChunk> {
-    let settings = settings_store(&run.app)?.load()?;
-    let model = settings
-        .selected_model(selection)
-        .map_err(|message| CommandError::new("aiInvalidSettings", message))?
-        .clone();
+/// Loads each string's context, the scene, the project knowledge, and the
+/// job's current instructions.
+fn prepare_chunk(run: &JobRun, units: &[JobUnit]) -> CommandResult<PreparedUnit> {
     let reader = JobReader { run: run.clone() };
     let facts = reader.facts().ok();
     let job = run.store.summary(&run.job_id)?;
-    // Images stay with the job's conversation; a deleted conversation
-    // leaves the localizer without them.
-    let payloads = model.vision.then(|| {
-        project_conversation_store(&run.app, &run.root).map_or_else(
-            |_| ImagePayloads::default(),
-            |store| {
-                let images: Vec<&ImageRef> = job.spec.images.iter().collect();
-                load_image_payloads(&store, &job.conversation_id, &images)
-            },
-        )
-    });
-    let prepared = prepare_unit(
+    Ok(prepare_unit(
         units,
         &DesktopJobHost { run: run.clone() },
         &reader,
         &Knowledge::load(&run.root),
         facts.as_ref(),
         &job.spec.instructions,
-    );
-    Ok(PreparedChunk {
-        model,
-        prepared,
-        images: job.spec.images,
-        payloads,
-    })
+    ))
 }
 
-/// Sends the localizer's requests for one chunk, in parallel, and follows
-/// them on the lane's activity.
+/// Sends the localizer's and researchers' requests for one lane, in
+/// parallel, and follows them on the lane's activity.
 struct JobCaller {
     run: JobRun,
     lane: usize,
@@ -1119,12 +1099,60 @@ struct JobCaller {
     ceiling: Option<aeria_ai::ReasoningEffort>,
     session: String,
     images: Vec<ImageRef>,
+    /// The images' data, loaded when the model accepts images.
     payloads: Option<ImagePayloads>,
-    /// Tokens used so far, kept when the chunk is interrupted.
+    /// Tokens used so far, kept when the work is interrupted.
     spent: std::sync::Mutex<aeria_ai::chat::Usage>,
 }
 
 impl JobCaller {
+    /// A caller for the job's model, with the job's images.
+    async fn for_job(
+        run: &JobRun,
+        spec: &JobSpec,
+        lane: usize,
+        session: String,
+    ) -> CommandResult<Self> {
+        let endpoint = resolve_endpoint(&run.app, spec.model.provider_id.clone()).await?;
+        let client = run.app.state::<DesktopState>().ai_client()?;
+        let setup_run = run.clone();
+        let selection = spec.model.clone();
+        let (model, images, payloads) = run_blocking(move || {
+            let settings = settings_store(&setup_run.app)?.load()?;
+            let model = settings
+                .selected_model(&selection)
+                .map_err(|message| CommandError::new("aiInvalidSettings", message))?
+                .clone();
+            let job = setup_run.store.summary(&setup_run.job_id)?;
+            // Images stay with the job's conversation; a deleted
+            // conversation leaves the localizer without them.
+            let payloads = model.vision.then(|| {
+                project_conversation_store(&setup_run.app, &setup_run.root).map_or_else(
+                    |_| ImagePayloads::default(),
+                    |store| {
+                        let images: Vec<&ImageRef> = job.spec.images.iter().collect();
+                        load_image_payloads(&store, &job.conversation_id, &images)
+                    },
+                )
+            });
+            Ok((model, job.spec.images, payloads))
+        })
+        .await?;
+        Ok(Self {
+            run: run.clone(),
+            lane,
+            client,
+            endpoint,
+            model: model.id,
+            efforts: model.reasoning_efforts,
+            ceiling: spec.model.effort,
+            session,
+            images,
+            payloads,
+            spent: std::sync::Mutex::new(aeria_ai::chat::Usage::default()),
+        })
+    }
+
     async fn send(
         &self,
         index: usize,
@@ -1338,6 +1366,61 @@ fn write_outcomes(
         .collect()
 }
 
+/// A script line's address, `sheet:row:subrow:column`, as a location.
+fn address_location(address: &str) -> Option<UnitLocation> {
+    let mut parts = address.rsplitn(4, ':');
+    let (column, subrow, row, sheet) = (parts.next()?, parts.next()?, parts.next()?, parts.next()?);
+    Some(UnitLocation {
+        sheet: sheet.to_owned(),
+        row: row.parse().ok()?,
+        subrow: subrow.parse().ok()?,
+        column: Some(column.parse().ok()?),
+    })
+}
+
+/// What a finished unit leaves in the project knowledge and the job's
+/// events: its story, for the units of its sheet that follow, and the
+/// critics' findings against the knowledge itself, for Angelica.
+fn keep_learning(
+    run: &JobRun,
+    sheet: &str,
+    dialogue: bool,
+    addresses: &[String],
+    result: &LocalizeResult,
+) {
+    if dialogue && let Some(story) = contract_story(&result.contract) {
+        let knowledge = Knowledge::load(&run.root);
+        let text = match knowledge.story(sheet) {
+            Some(known) if !known.text.contains(&story) => {
+                let joined = format!("{}\n\n{story}", known.text);
+                let start = joined
+                    .char_indices()
+                    .rev()
+                    .nth(3_000)
+                    .map_or(0, |(index, _)| index);
+                joined[start..].to_owned()
+            }
+            Some(known) => known.text.clone(),
+            None => story,
+        };
+        let _ = aeria_ai::knowledge::set_section(
+            &run.root,
+            aeria_ai::knowledge::KnowledgeFile::Story,
+            aeria_ai::knowledge::Section::new(sheet, &text).with("source", "localizer"),
+        );
+    }
+    for flag in &result.flags {
+        if flag.problem.starts_with("KNOWLEDGE") {
+            let location = addresses
+                .get(flag.line)
+                .and_then(|address| address_location(address));
+            let _ = run
+                .store
+                .add_event(&run.job_id, "knowledge", &flag.problem, location.as_ref());
+        }
+    }
+}
+
 /// Localizes one claimed chunk and records the outcomes.
 async fn run_chunk(run: &JobRun, spec: &JobSpec, units: Vec<JobUnit>, lane: usize) -> ChunkEnd {
     let chunk = units.first().map_or(0, |unit| unit.chunk);
@@ -1345,33 +1428,23 @@ async fn run_chunk(run: &JobRun, spec: &JobSpec, units: Vec<JobUnit>, lane: usiz
         .iter()
         .map(|unit| (unit.seq, UnitStatus::Pending, None))
         .collect();
-
-    let endpoint = match resolve_endpoint(&run.app, spec.model.provider_id.clone()).await {
-        Ok(endpoint) => endpoint,
+    let caller = match JobCaller::for_job(run, spec, lane, format!("{}-{chunk}", run.job_id)).await
+    {
+        Ok(caller) => caller,
         Err(error) => {
             record_chunk(run, released, aeria_ai::chat::Usage::default()).await;
             return ChunkEnd::Stop(error.message);
         }
     };
     let prepare_run = run.clone();
-    let selection = spec.model.clone();
     let prepare_units = units.clone();
-    let prepared =
-        run_blocking(move || prepare_chunk(&prepare_run, &selection, &prepare_units)).await;
-    let client = run.app.state::<DesktopState>().ai_client();
-    let (prepared, client) = match (prepared, client) {
-        (Ok(prepared), Ok(client)) => (prepared, client),
-        (Err(error), _) | (_, Err(error)) => {
+    let prepared = match run_blocking(move || prepare_chunk(&prepare_run, &prepare_units)).await {
+        Ok(prepared) => prepared,
+        Err(error) => {
             record_chunk(run, released, aeria_ai::chat::Usage::default()).await;
             return ChunkEnd::Stop(error.message);
         }
     };
-    let PreparedChunk {
-        model,
-        prepared,
-        images,
-        payloads,
-    } = prepared;
     let outcomes: Vec<(u64, UnitStatus, Option<String>)> = prepared
         .failed
         .iter()
@@ -1381,26 +1454,54 @@ async fn run_chunk(run: &JobRun, spec: &JobSpec, units: Vec<JobUnit>, lane: usiz
                 .map(|unit| (unit.seq, UnitStatus::Failed, Some(reason.clone())))
         })
         .collect();
-    if prepared.unit.lines.iter().all(|line| line.task.is_none()) {
+    let mut unit = prepared.unit;
+    if unit.lines.iter().all(|line| line.task.is_none()) {
         record_chunk(run, outcomes, aeria_ai::chat::Usage::default()).await;
         return ChunkEnd::Done;
     }
 
-    let caller = JobCaller {
-        run: run.clone(),
-        lane,
-        client,
-        endpoint,
-        model: model.id.clone(),
-        efforts: model.reasoning_efforts.clone(),
-        ceiling: spec.model.effort,
-        session: format!("{}-{chunk}", run.job_id),
-        images,
-        payloads,
-        spent: std::sync::Mutex::new(aeria_ai::chat::Usage::default()),
+    // Terms the knowledge lacks are decided before the contract, so the
+    // unit is written with them.
+    caller.step(Step::Terms);
+    let host = job_study::DesktopKnowledge {
+        app: run.app.clone(),
+        root: run.root.clone(),
     };
-    let result = localize(&caller, prepared.unit).await;
+    match study_terms(&caller, &host, &unit).await {
+        Ok(written) if !written.is_empty() => {
+            let root = run.root.clone();
+            let studied = unit.clone();
+            if let Ok(text) =
+                run_blocking(move || Ok(unit_knowledge(&Knowledge::load(&root), &studied))).await
+            {
+                unit.knowledge = text;
+            }
+        }
+        Ok(_) => {}
+        Err(error) => {
+            run.workers.set_phase(lane, WorkerPhase::Recording);
+            return finish_chunk(run, &units, lane, outcomes, Err(error), caller.spent()).await;
+        }
+    }
+    let sheet = unit.sheet.clone();
+    let dialogue = unit.domains.iter().any(|domain| {
+        matches!(
+            domain,
+            Domain::Dialogue | Domain::Journal | Domain::Objective | Domain::System
+        )
+    });
+    let addresses: Vec<String> = unit.lines.iter().map(|line| line.address.clone()).collect();
+    let result = localize(&caller, unit).await;
     run.workers.set_phase(lane, WorkerPhase::Recording);
+    if let Ok(result) = &result {
+        let learn_run = run.clone();
+        let learned = result.clone();
+        let _ = run_blocking(move || {
+            keep_learning(&learn_run, &sheet, dialogue, &addresses, &learned);
+            Ok(())
+        })
+        .await;
+    }
     finish_chunk(run, &units, lane, outcomes, result, caller.spent()).await
 }
 

@@ -584,11 +584,47 @@ source line: the other languages decide tone, voice, address, and gender,
 never content. A sheet whose dialogue cannot be read is translated as plain
 strings.
 
-The localizer runs five steps; the requests of a step run in parallel, at
+#### Study
+
+Before a job's first chunk, its runner studies the job's scope once and
+records a `study` event (`aeria-ai::study`, driven by the desktop's
+`job_study`). For each text domain of the scope whose agent style entry is
+missing, and for `general`, a researcher reads up to 40 samples spread over
+the scope (the lines of up to 40 quest and cutscene sheets, or the first
+rows of up to 10 sheets of another domain) in every client language and
+writes the domain's style entry. For each speaker label with at least three
+lines in the scope's quests and cutscenes and no profile in either layer,
+the most lines first and at most 200, a researcher reads up to 30 of the
+speaker's lines sampled evenly across the game with their other languages
+and writes a profile: who the character is and their gender, their voice in
+the Japanese, their address from the French and German, and how they sound
+in the target language, with examples. System text, player choices such as
+`Q1`, and labels without letters are skipped. The study starts building the
+source index, uses the job's model, counts toward the job's tokens, and
+pauses the job with a reason when the provider fails.
+
+Before each chunk's contract, a researcher lists the unit's terminology the
+knowledge does not have (at most 40 terms), reads up to six existing
+translations of each from the source index, and decides renderings; a
+second request checks them for grammar and meaning, and the checked terms
+are written to the agent layer with `study` in their note. The unit's
+knowledge is then read again. A term another chunk wrote meanwhile keeps
+that chunk's rendering.
+
+After a quest or cutscene unit, the story part of its contract is added to
+the sheet's entry in `story.md` (kept to its last 3,000 characters), so the
+sheet's later chunks know what happened. Consistency findings that say the
+knowledge itself is wrong are recorded as `knowledge` job events.
+
+#### Steps
+
+The localizer runs six steps; the requests of a step run in parallel, at
 most 8 at a time per chunk:
 
+0. **Terms**: the study of the unit's terms described above.
 1. **Contract**: one request reads the whole script and writes the decisions
-   every writer shares: the story and tone, a table of address between
+   every writer shares: the story and tone (between `<story>` tags), a table
+   of address between
    speakers and toward the player character, genders, names and terms, and
    the form of journal entries, objectives, and system text.
 2. **Writing**: the chunk's strings are split into parts of at most 40, in

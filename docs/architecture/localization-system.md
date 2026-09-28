@@ -2,8 +2,8 @@
 
 > **Status: partly implemented.** The localizer and its critics run
 > [translation jobs](./ai.md#translation-jobs); [`ai.md`](./ai.md#the-localizer)
-> describes what is implemented. Project knowledge written by agents, study,
-> learning, and the domains other than quests are a proposal. The document
+> describes what is implemented, including project knowledge written by
+> agents and study. Learning and propagation are a proposal. The document
 > describes how Aeria's agents are to localize the whole game corpus so that
 > the result reads as if it was written in the target language, with people
 > reviewing by exception. Open decisions are listed in
@@ -304,8 +304,9 @@ changes quality: understanding before writing, and reading after it.
 1. **Quest localizer and critics** (implemented). Units of work for quests,
    the script, the contract, parallel parts, narrow critics, fixes, final
    and needs-review translations.
-2. **Knowledge and study.** Knowledge format and tools, import of existing
-   files, researchers for names, terms, and characters.
+2. **Knowledge and study** (implemented). The agent layer of project
+   knowledge, researchers for style, characters, and terms, stories kept
+   between units, and a consistency critic.
 3. **Consistency.** A critic of the unit against the project knowledge, and
    knowledge changes from critics' flags.
 4. **Learning.** Mentor, benchmark, lesson evaluation, propagation,

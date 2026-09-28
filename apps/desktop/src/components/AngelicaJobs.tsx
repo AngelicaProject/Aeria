@@ -51,6 +51,8 @@ const phaseLabels: Readonly<Record<WorkerPhase, MessageKey>> = {
 };
 
 const stepLabels: Readonly<Record<WorkerStep, MessageKey>> = {
+  study: "angelica.worker.step.study",
+  terms: "angelica.worker.step.terms",
   contract: "angelica.worker.step.contract",
   writing: "angelica.worker.step.writing",
   reviewing: "angelica.worker.step.reviewing",
@@ -115,7 +117,7 @@ function WorkerRow({ worker, now }: { worker: WorkerActivity; now: number }) {
             <span title={t("angelica.worker.chunkHint", { chunk: String((worker.chunk ?? 0) + 1) })}>
               {rows ? t("angelica.worker.rows", { sheet: worker.sheet ?? "", rows }) : worker.sheet}
             </span>
-            {worker.step ? <span title={t("angelica.worker.stepHint")}>{t("angelica.worker.step", { round: worker.round, max: worker.maxRounds, step: t(stepLabels[worker.step]) })}</span> : null}
+            {worker.step ? <span title={t("angelica.worker.stepHint")}>{worker.round > 0 ? t("angelica.worker.step", { round: worker.round, max: worker.maxRounds, step: t(stepLabels[worker.step]) }) : t(stepLabels[worker.step])}</span> : null}
             <span title={t("angelica.worker.unitsHint")}>{t("angelica.worker.units", { finished: worker.finishedUnits, total: worker.units })}</span>
             {worker.chunkTokens > 0 ? <span>{t("angelica.worker.tokens", { tokens: formatTokens(worker.chunkTokens) })}</span> : null}
           </>

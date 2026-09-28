@@ -952,6 +952,36 @@ impl JobStore {
         Ok(changed as u64)
     }
 
+    /// The sheets of a job's strings, in the order of their first string.
+    ///
+    /// # Errors
+    ///
+    /// Returns a storage error.
+    pub fn sheets(&self, id: &str) -> Result<Vec<String>, JobError> {
+        let connection = self.open()?;
+        let mut statement = connection.prepare(
+            "SELECT sheet FROM job_units WHERE job_id = ?1 GROUP BY sheet ORDER BY MIN(seq)",
+        )?;
+        let sheets = statement
+            .query_map(params![id], |row| row.get::<_, String>(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(sheets)
+    }
+
+    /// Whether a job has an event of a kind.
+    ///
+    /// # Errors
+    ///
+    /// Returns a storage error.
+    pub fn has_event(&self, id: &str, kind: &str) -> Result<bool, JobError> {
+        let found: i64 = self.open()?.query_row(
+            "SELECT COUNT(*) FROM job_events WHERE job_id = ?1 AND kind = ?2",
+            params![id, kind],
+            |row| row.get(0),
+        )?;
+        Ok(found > 0)
+    }
+
     /// Records an event for Angelica.
     ///
     /// # Errors

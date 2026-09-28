@@ -67,6 +67,10 @@ pub enum Role {
     Player,
     Consistency,
     Fix,
+    /// Study of style and characters.
+    Research,
+    /// Study of a unit's terms.
+    Terms,
 }
 
 impl Role {
@@ -82,6 +86,8 @@ impl Role {
             Self::Player => "player",
             Self::Consistency => "consistency",
             Self::Fix => "fix",
+            Self::Research => "research",
+            Self::Terms => "terms",
         }
     }
 
@@ -90,7 +96,12 @@ impl Role {
     const fn wanted_effort(self) -> ReasoningEffort {
         match self {
             Self::Writer | Self::Player => ReasoningEffort::High,
-            Self::Contract | Self::Blind | Self::Consistency | Self::Fix => ReasoningEffort::Medium,
+            Self::Contract
+            | Self::Blind
+            | Self::Consistency
+            | Self::Fix
+            | Self::Research
+            | Self::Terms => ReasoningEffort::Medium,
             Self::Structure | Self::Fidelity => ReasoningEffort::Low,
         }
     }
@@ -207,6 +218,8 @@ impl ScriptLine {
 pub struct UnitOfWork {
     /// What the unit is, such as a quest's name and sheet.
     pub title: String,
+    /// The sheet of the unit's strings.
+    pub sheet: String,
     pub source_language: String,
     pub target_language: String,
     pub lines: Vec<ScriptLine>,
@@ -275,6 +288,10 @@ pub trait Caller: Send + Sync {
 /// The steps of [`localize`], reported to the [`Caller`].
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Step {
+    /// The study of a job's scope, before its first unit.
+    Study,
+    /// The study of a unit's terms, before its contract.
+    Terms,
     Contract,
     Writing,
     Reviewing,
@@ -540,8 +557,9 @@ impl Localization {
                 "{} — {} lines.\n\n{}\n\nSeveral writers will translate the lines marked \
                  `translate` in parallel, and they must agree on every decision. Write the \
                  contract they all follow, in English with {target} renderings:\n\
-                 1. Story: what happens, tone per character, jokes, wordplay, and callbacks \
-                 that span lines (under 120 words).\n\
+                 1. Story, between <story> and </story>: what happens and what the player \
+                 learns, tone per character, jokes, wordplay, and callbacks that span lines \
+                 (under 120 words); it is kept for the units that follow.\n\
                  2. Address: one line per speaker and addressee in this unit, including the \
                  player character, as `SPEAKER → ADDRESSEE: <form of address in {target}>`, \
                  decided from the project knowledge and the French and German; note where \
@@ -1090,6 +1108,8 @@ fn leading_label(target: &str, line: &ScriptLine) -> Option<String> {
 #[derive(Clone, Debug)]
 pub struct LocalizeResult {
     pub outcomes: Vec<LineOutcome>,
+    /// The unit's contract, whose story is kept for later units.
+    pub contract: String,
     pub usage: Usage,
     /// Flags raised in the first review, for the job's record.
     pub flags: Vec<Flag>,
@@ -1214,6 +1234,7 @@ pub async fn localize(
 
     Ok(LocalizeResult {
         outcomes: localization.outcomes(&open, &refused),
+        contract: localization.contract().to_owned(),
         usage,
         flags: first,
     })
@@ -1243,6 +1264,7 @@ mod tests {
     fn unit(lines: Vec<ScriptLine>) -> UnitOfWork {
         UnitOfWork {
             title: "Quest \"Test\" (quest/000/Test)".to_owned(),
+            sheet: "quest/000/Test".to_owned(),
             source_language: "en".to_owned(),
             target_language: "ru".to_owned(),
             lines,

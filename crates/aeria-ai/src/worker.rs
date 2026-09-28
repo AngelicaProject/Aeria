@@ -184,21 +184,9 @@ pub fn prepare_unit(
     }
 
     let domains = unit_domains(&sheet, &lines);
-    let speakers: Vec<&str> = lines
-        .iter()
-        .filter_map(|line| match &line.kind {
-            LineKind::Speech(speaker) => Some(speaker.as_str()),
-            _ => None,
-        })
-        .collect();
-    let knowledge_text = knowledge.prompt_for(
-        &domains,
-        lines.iter().map(|line| line.source.as_str()),
-        speakers,
-        &[sheet.as_str()],
-    );
     let unit = UnitOfWork {
         title: title(reader, &sheet, dialogue.as_ref()),
+        sheet: sheet.clone(),
         source_language: facts.map_or_else(
             || "the source language".to_owned(),
             |facts| facts.source_language.clone(),
@@ -206,16 +194,39 @@ pub fn prepare_unit(
         target_language: facts
             .and_then(|facts| facts.target_language.clone())
             .unwrap_or_else(|| "the target language".to_owned()),
-        knowledge: knowledge_text,
+        knowledge: String::new(),
         domains,
         instructions: instructions.to_owned(),
         lines,
     };
+    let mut unit = unit;
+    unit.knowledge = unit_knowledge(knowledge, &unit);
     PreparedUnit {
         unit,
         failed,
         previews,
     }
+}
+
+/// The project knowledge a unit needs, as prompt text: the style of its
+/// domains, lessons, the terms in its lines, its speakers' profiles, and the
+/// story of its sheet so far.
+#[must_use]
+pub fn unit_knowledge(knowledge: &Knowledge, unit: &UnitOfWork) -> String {
+    let speakers: Vec<&str> = unit
+        .lines
+        .iter()
+        .filter_map(|line| match &line.kind {
+            LineKind::Speech(speaker) => Some(speaker.as_str()),
+            _ => None,
+        })
+        .collect();
+    knowledge.prompt_for(
+        &unit.domains,
+        unit.lines.iter().map(|line| line.source.as_str()),
+        speakers,
+        &[unit.sheet.as_str()],
+    )
 }
 
 fn task_line(

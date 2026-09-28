@@ -14,7 +14,7 @@ use serde::Serialize;
 use crate::angelica::now_unix_ms;
 
 /// Steps of the localizer, for "step N of M".
-pub const LOCALIZER_STEPS: u32 = 5;
+pub const LOCALIZER_STEPS: u32 = 6;
 
 /// What one lane is doing.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
@@ -42,6 +42,9 @@ pub enum WorkerPhase {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum WorkerStep {
+    /// The study of the job's scope, before its first chunk.
+    Study,
+    Terms,
     Contract,
     Writing,
     Reviewing,
@@ -52,6 +55,8 @@ pub enum WorkerStep {
 impl From<Step> for WorkerStep {
     fn from(step: Step) -> Self {
         match step {
+            Step::Study => Self::Study,
+            Step::Terms => Self::Terms,
             Step::Contract => Self::Contract,
             Step::Writing => Self::Writing,
             Step::Reviewing => Self::Reviewing,
@@ -64,11 +69,13 @@ impl From<Step> for WorkerStep {
 impl WorkerStep {
     const fn number(self) -> u32 {
         match self {
-            Self::Contract => 1,
-            Self::Writing => 2,
-            Self::Reviewing => 3,
-            Self::Fixing => 4,
-            Self::Rechecking => 5,
+            Self::Study => 0,
+            Self::Terms => 1,
+            Self::Contract => 2,
+            Self::Writing => 3,
+            Self::Reviewing => 4,
+            Self::Fixing => 5,
+            Self::Rechecking => 6,
         }
     }
 }
@@ -268,7 +275,7 @@ mod tests {
         lane.send(3, 20);
         assert_eq!(
             (lane.round, lane.requests, lane.phase),
-            (2, 3, WorkerPhase::Waiting)
+            (3, 3, WorkerPhase::Waiting)
         );
         lane.stream(true, 25);
         assert_eq!(lane.phase, WorkerPhase::Reasoning);
