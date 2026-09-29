@@ -378,8 +378,10 @@ nothing. The panel shows the question under Angelica's work with each option
 as a button and a button to answer in one's own words, which focuses the
 composer; choosing an option sends "Option A" (localized) as the next
 message, and a question counts as answered once any user message follows
-it. Her instructions tell her to ask one question at a time and end her turn
-after asking.
+it. A successful `ask_choice` ends the turn: tool calls after it in the same
+response are not run (each gets an error result saying a question waits for
+an answer) and no further response is requested, so the next question or a
+job waits for the user's answer.
 
 `estimate_job` and `start_job` add `uncalibratedStyle`: the kinds of text of
 the scope (journal, objectives, and dialogue for quests and cutscenes, or

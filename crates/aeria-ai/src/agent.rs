@@ -173,13 +173,24 @@ pub async fn run_turn(
                 usage,
             });
         }
+        // A question to the user ends the turn: calls after it in the same
+        // response are not run, and no further response is requested.
+        let mut asked = false;
         for call in &calls {
             on_event(AgentEvent::ToolStarted {
                 id: call.id.clone(),
                 name: call.name.clone(),
                 arguments: call.arguments.clone(),
             });
-            let output = executor.execute(call).await;
+            let output = if asked {
+                ToolOutput {
+                    content: serde_json::json!({ "error": "not run: a question to the user waits for an answer; call this again after the answer if it is still needed" }).to_string(),
+                    is_error: true,
+                }
+            } else {
+                executor.execute(call).await
+            };
+            asked |= call.name == ASK_TOOL && !output.is_error;
             on_event(AgentEvent::ToolFinished {
                 id: call.id.clone(),
                 name: call.name.clone(),
@@ -193,12 +204,21 @@ pub async fn run_turn(
             });
             persist(messages);
         }
+        if asked {
+            return Ok(TurnSummary {
+                outcome: TurnOutcome::Completed,
+                usage,
+            });
+        }
     }
     Ok(TurnSummary {
         outcome: TurnOutcome::RoundLimit,
         usage,
     })
 }
+
+/// The tool that asks the user a question; it ends the turn.
+const ASK_TOOL: &str = "ask_choice";
 
 /// Adds a cancellation result for every tool call that has none, so an
 /// interrupted turn never leaves the history in a shape providers reject.
@@ -505,6 +525,55 @@ mod tests {
             requests
         });
         (format!("http://127.0.0.1:{port}/v1"), handle)
+    }
+
+    #[test]
+    fn a_question_ends_the_turn_and_skips_the_calls_after_it() {
+        let (url, server) = serve(vec![
+            "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"q1\",\"function\":{\"name\":\"ask_choice\",\"arguments\":\"{}\"}},{\"index\":1,\"id\":\"j1\",\"function\":{\"name\":\"start_job\",\"arguments\":\"{}\"}}]},\"finish_reason\":\"tool_calls\"}]}\n\ndata: [DONE]\n\n".to_owned(),
+        ]);
+        let endpoint = ProviderEndpoint {
+            base_url: BaseUrl::parse(&url).expect("url"),
+            api_key: ApiKey::new("sk").expect("key"),
+            session_header: None,
+            headers: Vec::new(),
+            protocol: crate::provider::Protocol::ChatCompletions,
+        };
+        let client = OpenAiCompatibleClient::new().expect("client");
+        let config = TurnConfig {
+            model: "m",
+            effort: None,
+            system: "You are Angelica.",
+            tools: &[],
+            context_tokens: None,
+            session: "conversation-1",
+            max_rounds: MAX_ROUNDS_PER_TURN,
+            images: None,
+        };
+        let mut messages = vec![user("Калибруй")];
+        let summary = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime")
+            .block_on(run_turn(
+                &client,
+                &endpoint,
+                &config,
+                &mut messages,
+                &Tools,
+                &mut |_| {},
+                &mut |_| {},
+            ))
+            .expect("turn");
+        assert_eq!(summary.outcome, TurnOutcome::Completed);
+        assert!(
+            matches!(&messages[2], ChatMessage::Tool { content, .. } if content.contains("\"ran\":\"ask_choice\""))
+        );
+        assert!(
+            matches!(&messages[3], ChatMessage::Tool { content, .. } if content.contains("not run"))
+        );
+        assert_eq!(messages.len(), 4, "no further response was requested");
+        assert_eq!(server.join().expect("server").len(), 1);
     }
 
     #[test]
