@@ -908,16 +908,15 @@ pub(crate) fn start_proposed_job(
     Ok(job.id)
 }
 
-/// Scenes a job works on when it starts; the pace grows from here.
-const START_LANES: usize = 16;
 /// Scenes a job keeps working on even while the provider struggles.
 const MIN_LANES: usize = 2;
-/// Chunks finished in a row that add one scene to the pace.
-const GROW_AFTER: u32 = 2;
+/// Chunks finished in a row that add one scene back after a failure.
+const GROW_AFTER: u32 = 1;
 
-/// How many scenes a running job works on at once. Nobody sets it: it
-/// grows by one every [`GROW_AFTER`] finished chunks and halves when the
-/// provider fails, never above the job's concurrency, which is a ceiling.
+/// How many scenes a running job works on at once. Nobody sets it: a job
+/// starts at its concurrency, the ceiling, since nothing says the provider
+/// cannot take it; the pace halves when the provider fails and grows back
+/// by one every [`GROW_AFTER`] finished chunks.
 #[derive(Debug)]
 pub(super) struct Pace {
     target: usize,
@@ -927,7 +926,7 @@ pub(super) struct Pace {
 impl Default for Pace {
     fn default() -> Self {
         Self {
-            target: START_LANES,
+            target: usize::MAX,
             successes: 0,
         }
     }
@@ -956,7 +955,7 @@ impl Pace {
 /// Requests one job sends at once across all its lanes. Each lane's chunk
 /// sends its parts and critics in parallel; this keeps a job with many
 /// lanes within what a provider accepts.
-const JOB_PARALLEL_REQUESTS: usize = 96;
+const JOB_PARALLEL_REQUESTS: usize = 128;
 /// How often a request waiting for a free slot looks again.
 const GATE_POLL: Duration = Duration::from_millis(50);
 
@@ -2501,15 +2500,16 @@ mod tests {
     #[test]
     fn the_pace_grows_with_finished_chunks_and_halves_on_failures() {
         let mut pace = Pace::default();
-        assert_eq!(pace.lanes(48), START_LANES);
+        assert_eq!(pace.lanes(48), 48, "a job starts at its ceiling");
         assert_eq!(pace.lanes(4), 4, "the job's concurrency is a ceiling");
+        pace.succeeded(48);
+        assert_eq!(pace.lanes(48), 48);
+        pace.failed();
+        assert_eq!(pace.lanes(48), 24);
         for _ in 0..GROW_AFTER * 3 {
             pace.succeeded(48);
         }
-        assert_eq!(pace.lanes(48), START_LANES + 3);
-        pace.failed();
-        let grown = START_LANES + 3;
-        assert_eq!(pace.lanes(48), grown / 2);
+        assert_eq!(pace.lanes(48), 27);
         for _ in 0..10 {
             pace.failed();
         }

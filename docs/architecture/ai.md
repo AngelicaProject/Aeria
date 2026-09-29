@@ -891,11 +891,12 @@ or Angelica's default model. Settings show an effort choice for jobs even
 while they use Angelica's model; choosing an effort there stores Angelica's
 current model with that effort as the jobs model.
 
-A job works on up to 48 chunks at once (its concurrency, a ceiling of 48 for
-jobs of 48 chunks or more and 24 otherwise, never more than its chunks).
-How many it works on is its pace, which nobody sets: a job starts with 16,
-adds one for every two chunks finished, and halves, to no fewer than two,
-when a chunk returns for a provider failure such as a rate limit. The
+A job works on up to 64 chunks at once (its concurrency, a ceiling of 64 for
+jobs of 64 chunks or more and 32 otherwise, never more than its chunks), at
+most 128 requests in flight. How many it works on is its pace, which nobody
+sets: a job starts at its ceiling, since nothing says the provider cannot
+take it, halves, to no fewer than two, when a chunk returns for a provider
+failure such as a rate limit, and adds one back for every chunk finished. The
 runner checks the pace every two seconds and starts missing lanes; a lane
 above a lowered pace stops before claiming its next chunk. Each lane claims
 the next chunk, checks first that the job's project is still open, and

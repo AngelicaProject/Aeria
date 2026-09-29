@@ -26,11 +26,11 @@ pub const CHUNK_SOURCE_CHARS: usize = 12_000;
 /// Most workers one job runs at once. A unit waits on a few sequential
 /// requests that each take about a minute, so throughput comes from many
 /// units at once.
-pub const MAX_CONCURRENCY: u8 = 48;
+pub const MAX_CONCURRENCY: u8 = 64;
 /// Workers a job runs when Angelica does not choose.
-pub const DEFAULT_CONCURRENCY: u8 = 24;
+pub const DEFAULT_CONCURRENCY: u8 = 32;
 /// Chunks from which a job runs [`MAX_CONCURRENCY`] workers by default.
-pub const LARGE_JOB_CHUNKS: u64 = 48;
+pub const LARGE_JOB_CHUNKS: u64 = 64;
 
 /// Workers for a job of `chunks` chunks: `requested` or, without it,
 /// [`MAX_CONCURRENCY`] for large jobs and [`DEFAULT_CONCURRENCY`] otherwise;
@@ -1797,7 +1797,7 @@ mod tests {
     #[test]
     fn concurrency_follows_the_job_size() {
         assert_eq!(job_concurrency(None, 1), 1);
-        assert_eq!(job_concurrency(None, 26), DEFAULT_CONCURRENCY);
+        assert_eq!(job_concurrency(None, 40), DEFAULT_CONCURRENCY);
         assert_eq!(job_concurrency(None, LARGE_JOB_CHUNKS), MAX_CONCURRENCY);
         assert_eq!(
             job_concurrency(Some(12), 5),
