@@ -503,11 +503,13 @@ pub fn job_tool_definitions(write: bool) -> Vec<ToolDefinition> {
         "filter": { "type": "string", "enum": ["untranslated", "needsReview", "untranslatedAndDrafts"], "description": "Which strings: untranslated ones (default), ones needing review, or untranslated ones and existing drafts. Reviewed translations are never included." },
     });
     let job_id = json!({ "type": "object", "properties": { "job_id": { "type": "string" } }, "required": ["job_id"], "additionalProperties": false });
+    let mut estimate_properties = scope.as_object().cloned().unwrap_or_default();
+    estimate_properties.insert("quality".to_owned(), json!({ "type": "string", "enum": ["fast", "careful"], "description": "fast (the default): parts of each unit written in parallel, fast enough for the whole game. careful: one writer per unit, stronger critics, and two full rechecks; slower and costlier, for story quests whose scenes must hold together." }));
     let mut tools = vec![
         ToolDefinition {
             name: "estimate_job",
-            description: "Counts the strings, chunks, and approximate tokens a translation job over a scope would use. Changes nothing.",
-            parameters: json!({ "type": "object", "properties": scope.clone(), "additionalProperties": false }),
+            description: "Counts the strings, chunks, and approximate tokens a translation job over a scope would use at a quality. Changes nothing.",
+            parameters: json!({ "type": "object", "properties": estimate_properties, "additionalProperties": false }),
         },
         ToolDefinition {
             name: "job_status",
@@ -606,6 +608,7 @@ struct ScopeArgs {
     #[serde(default)]
     exclude: Vec<String>,
     filter: Option<JobFilter>,
+    quality: Option<JobQuality>,
 }
 
 #[derive(Deserialize)]
@@ -787,7 +790,11 @@ fn run_job_tool(
                 exclude: args.exclude,
                 ..JobScope::sheets(args.sheets, args.filter.unwrap_or(JobFilter::Untranslated))
             };
-            to_value(&jobs.estimate(&scope)?)
+            to_value(
+                &jobs
+                    .estimate(&scope)?
+                    .with_quality(args.quality.unwrap_or(JobQuality::Fast)),
+            )
         }
         "start_job" => start_job(jobs, parse(arguments)?),
         "propose_revision" => propose_revision(jobs, parse(arguments)?),
@@ -2630,6 +2637,8 @@ mod tests {
         let estimate = chat.execute("estimate_job", r#"{"sheets":["Item"]}"#);
         assert!(!estimate.is_error, "{}", estimate.content);
         assert!(estimate.content.contains("12000"));
+        let careful = chat.execute("estimate_job", r#"{"sheets":["Item"],"quality":"careful"}"#);
+        assert!(careful.content.contains("24000"), "{}", careful.content);
         let refused = chat.execute("start_job", r#"{"sheets":["Item"]}"#);
         assert!(refused.is_error);
         assert!(refused.content.contains("Chat mode"));
@@ -2684,6 +2693,7 @@ mod tests {
         assert_eq!(
             jobs.calls.lock().expect("lock").as_slice(),
             [
+                "estimate Untranslated",
                 "estimate Untranslated",
                 "propose [\"Item\"] Formal. Some(16) []",
                 "propose [\"Item\"]  None [\"a\"]",

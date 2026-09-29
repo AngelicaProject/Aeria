@@ -479,6 +479,17 @@ impl JobEstimate {
         }
     }
 
+    /// The estimate for a job of `quality`: a careful job writes each unit
+    /// in one piece and rechecks it twice with stronger critics, about twice
+    /// the tokens.
+    #[must_use]
+    pub fn with_quality(mut self, quality: JobQuality) -> Self {
+        if quality == JobQuality::Careful {
+            self.estimated_tokens = self.estimated_tokens.saturating_mul(2);
+        }
+        self
+    }
+
     /// The token limit a job over this estimate starts with.
     #[must_use]
     pub fn token_limit(&self) -> u64 {

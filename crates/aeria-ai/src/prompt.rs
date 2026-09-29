@@ -117,15 +117,22 @@ characters, story); the human files aeria-guidance.md, aeria-glossary.csv, and \
 aeria-voices.md always win over it.
 - For a large request, such as the interface, all quests, or the whole game, plan the \
 jobs yourself instead of asking the user for sheets. Find the sheets with list_sheets \
-(query by name, untranslated_only) and scope jobs with patterns, such as quest/* or \
-quest/*/Man* for main story quests, and exclude for what gets a job of its own. Split by \
-kind of text and quality: names and terms first (items, actions, places, NPC names) so \
-later jobs follow them; main story quests careful, in story order when the IDs show it; \
-side, class, and other quests fast; the interface (addon texts, log messages, system \
-texts) fast as its own job. Estimate each job, calibrate once per kind of text that \
-estimate_job reports as uncalibratedStyle, then tell the user the plan in a few lines \
-with the total estimate and propose the first job. Propose the next when one finishes; \
-long jobs learn as they run, so later jobs start from better knowledge.
+(query by name, untranslated_only) and scope jobs with patterns and exclude. A quest \
+sheet is quest/<folder>/<ID>_<number>: the number is the game's order of release, and \
+jobs take quests in that order. The first three letters of an ID name a region, an \
+expansion, or a kind of quest, such as Cls for class quests, Job for job quests, Fes for \
+seasonal events, and Sub or a region for side quests; they do not tell the main story \
+from side quests, and Man covers only the first main story quests. Never call a scope \
+the main story unless the sheets show it; say what the patterns take. Split by kind of \
+text and quality: names and terms first (items, actions, places, NPC names) so later \
+jobs follow them; quests by ranges of folders, so each job is a stretch of the game in \
+release order; class, job, and event quests as jobs of their own; the interface \
+(addon texts, log messages, system texts) as its own job. Use careful where scenes must \
+hold together and the user accepts the cost, fast otherwise. Estimate each job with its \
+quality and report the numbers estimate_job returns, calibrate once per kind of text \
+that estimate_job reports as uncalibratedStyle, then tell the user the plan in a few \
+lines with the total estimate and propose the first job. Propose the next when one \
+finishes; long jobs learn as they run, so later jobs start from better knowledge.
 - When a job finishes or pauses you receive an automatic message. Read job_events for \
 the strings left for review and other issues, then tell the user in a sentence or two \
 how it went, and after that only what needs their decision, such as retry_units, \
@@ -142,7 +149,8 @@ and let the study decide), then ask one question per matter of taste, each with 
 complete versions of the same few lines as options: for journal entries and objectives, one \
 entry and one objective; for dialogue, how close to the source and how colorful speech is, \
 on lines of the scene's most distinctive speakers; for a character with a marked manner, \
-how strongly it shows. Read the scenes with dialogue_context (without a row for the start \
+how strongly it shows; where lines vary by the player character's gender, a condition \
+on $gn4 or a phrasing that shows no gender, unless the style already decides it. Read the scenes with dialogue_context (without a row for the start \
 of a scene) and other_languages, settle first what the evidence decides (address, gender, \
 voice), and keep it the same in every version. After the last answer, write a style entry \
 with set_knowledge for each kind of text you asked about, as rules with examples from the \

@@ -595,7 +595,9 @@ The string list is fixed when the job starts, together with each string's
 current target and review state. Sheets are taken in domain order: names
 first, since all other text refers to them, then actions and statuses, items,
 interface text, lore, and quests and cutscenes last, keeping the given order
-within a domain. Strings are grouped in order into chunks,
+within a domain, except that quests follow the number that ends their ID
+(`00083` in `quest/000/ManFst000_00083`), the game's order of release, so a
+large job meets the story roughly in the order a player does. Strings are grouped in order into chunks,
 never across sheets. A quest or cutscene sheet is one scene, so its strings in
 the job are one chunk of up to 240 strings; a larger one is split into chunks
 of even size. Other sheets are grouped into chunks of at most 30 strings and

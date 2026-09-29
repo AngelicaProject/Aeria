@@ -142,7 +142,16 @@ fn domain_order(mut sheets: Vec<String>) -> Vec<String> {
         Domain::Lore => 4,
         Domain::Dialogue | Domain::Journal | Domain::Objective | Domain::System => 5,
     };
-    sheets.sort_by_key(rank);
+    // Quests follow the number that ends their ID, such as 00083 in
+    // `quest/000/ManFst000_00083`: the game's order of release, close to
+    // the order a player meets them. Other sheets keep their order.
+    let quest_number = |sheet: &String| {
+        sheet
+            .strip_prefix("quest/")
+            .and_then(|rest| rest.rsplit_once('_'))
+            .and_then(|(_, number)| number.parse::<u32>().ok())
+    };
+    sheets.sort_by_key(|sheet| (rank(sheet), quest_number(sheet)));
     sheets
 }
 
@@ -514,12 +523,7 @@ impl JobControl for DesktopJobs {
         quality: JobQuality,
     ) -> Result<ProposalOutcome, ToolError> {
         let images = self.conversation_images(images)?;
-        let mut estimate = self.estimate(&scope)?;
-        // A careful job writes each unit in one piece and rechecks it twice
-        // with stronger critics: about twice the tokens.
-        if quality == JobQuality::Careful {
-            estimate.estimated_tokens = estimate.estimated_tokens.saturating_mul(2);
-        }
+        let estimate = self.estimate(&scope)?.with_quality(quality);
         let concurrency = aeria_ai::jobs::job_concurrency(concurrency, estimate.chunks);
         if estimate.units == 0 {
             return Err(ToolError::new("the scope has no strings to translate"));
@@ -2145,6 +2149,29 @@ mod tests {
     use aeria_core::{ReviewState, SourceBinding};
 
     use super::*;
+
+    #[test]
+    fn quests_are_taken_in_release_order_after_names() {
+        let sheets = domain_order(
+            [
+                "quest/001/ManSea001_00107",
+                "quest/000/SubCts107_00094",
+                "PlaceName",
+                "quest/000/ManFst000_00083",
+            ]
+            .map(str::to_owned)
+            .to_vec(),
+        );
+        assert_eq!(
+            sheets,
+            [
+                "PlaceName",
+                "quest/000/ManFst000_00083",
+                "quest/000/SubCts107_00094",
+                "quest/001/ManSea001_00107",
+            ]
+        );
+    }
 
     fn session() -> (
         (tempfile::TempDir, crate::test_support::TestGame),
