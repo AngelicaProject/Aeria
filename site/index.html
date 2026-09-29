@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Aeria — fan translations of FINAL FANTASY XIV</title>
-  <meta name="description" content="Aeria is a free desktop app for fan translations of FINAL FANTASY XIV, from a single translator to a whole language community.">
+  <meta name="description" content="Aeria is a free, open-source desktop app for fan translations of FINAL FANTASY XIV: text straight from the game, checked game tags, translations carried across game versions, and translation with AI agents.">
   <meta property="og:title" content="Aeria">
   <meta property="og:description" content="A free desktop app for fan translations of FINAL FANTASY XIV.">
   <meta property="og:image" content="icon.png">
@@ -24,7 +24,7 @@
     <header class="masthead">
       <a class="wordmark" href="./">Aeria</a>
       <nav aria-label="Main">
-        <a href="#agents">Agents</a>
+        <a href="#agents">AI agents</a>
         <a href="#editor">Features</a>
         <a href="#harmonia">Harmonia</a>
         <a href="#status">Status</a>
@@ -37,7 +37,7 @@
       <section class="opening">
         <div>
           <h1>A desktop app for fan translations of FINAL FANTASY&nbsp;XIV</h1>
-          <p class="lede">Aeria opens the text straight from your game install and keeps every game tag intact while you translate. You can work alone or with your language's whole community, and a game patch breaks neither your project nor the translation players already have installed.</p>
+          <p class="lede">Aeria is a desktop app for fan translations of FINAL FANTASY XIV. It reads the text straight from the installed game, checks the game's tags on every save, and carries a translation over to each new game version without losses. A project can be worked on by a single translator or by a whole language community.</p>
           <div class="downloads" data-mb="MB">
             <div class="dl" data-channel="stable">
               <div class="dl-info">
@@ -67,11 +67,11 @@
       </section>
 
       <section class="block" id="agents">
-        <h2>Agents</h2>
+        <h2>Translating with AI agents</h2>
         <div class="body">
-          <p class="lead">Aeria has no model of its own. Instead, AI agents you already use, such as Claude Code, Codex, or Hermes Agent, translate the project through the <code>aeria</code> command. One button in Settings connects them.</p>
-          <p>An agent reads a whole quest or cutscene in play order, with the Japanese original and the English, German, and French versions of every line side by side, and with your project's terms, style, and character voices. It can split a large job among helpers that work in parallel.</p>
-          <p>Every translation is checked before it is saved: a line with broken tags, a forbidden term, or both genders crammed into one word never gets written. Lines a person wrote or confirmed are never replaced. Everything an agent writes shows up in the editor right away and goes into your project's history like any other change.</p>
+          <p class="lead">Aeria has no language model of its own. Translation is done by external AI agents — Claude Code, Codex, Hermes Agent, or any other agent that can run commands. They work on a project through the <code>aeria</code> command, which is set up in Aeria's settings.</p>
+          <p>An agent receives a whole quest or cutscene, in the order the player sees it. Each line comes with the Japanese original, the English, German, and French versions, and the project's terms, style rules, and descriptions of how each character speaks. Large amounts of work are split among several agents translating in parallel.</p>
+          <p>Every translation is checked before it is saved: a line with a damaged tag, a forbidden variant of a term, or both genders written into one word is not saved. Translations a person wrote or confirmed are never replaced by an agent. Whatever an agent writes appears in the editor at once and enters the project history like any other edit.</p>
         </div>
       </section>
 
@@ -100,37 +100,38 @@
               <dd><b>All three tags in place</b> in every translation</dd>
             </div>
           </dl>
-          <p>Numbers, names, and highlights are filled in by the game itself through tags. You can move tags to fit your language's grammar, but Aeria won't save a line with a missing or broken tag.</p>
+          <p>Numbers, names, and highlights are filled in by the game itself through tags. Tags can be moved to fit the grammar of the target language, but a line with a missing or damaged tag is not saved.</p>
         </div>
       </section>
 
       <section class="block" id="editor">
         <h2>Editor</h2>
         <div class="body">
-          <p>Instead of raw code, the editor shows tags as readable hints like "if the character is female", and colored text appears in its color. You can copy a tag from the original with one click, and mistakes are flagged as you type. Search covers all of the game's text.</p>
+          <p>The editor shows tags as readable labels such as "if the character is female" rather than raw code, and colored text in the color the game will use. A tag from the original is copied into the translation with one click, and mistakes are marked while typing. Search covers all of the game's text.</p>
+          <p>Terms, style rules, and descriptions of how characters speak are kept in the project next to the translation and edited in the same place. Translators and agents follow them alike.</p>
         </div>
       </section>
 
       <section class="block" id="patches">
         <h2>Patches</h2>
         <div class="body">
-          <p>A patch doesn't break your translation. Aeria moves it to the new version of the game and flags the lines the developers changed so you can reread them. When it can't tell for sure where a translation belongs, it sets it aside for review instead of guessing. Nothing gets lost.</p>
-          <p>Packs players already have installed keep working too. Lines that changed show in the original language until the author publishes an update, and a translation is never applied to text it wasn't written for.</p>
+          <p>After a patch, the translation is carried over to the new version of the game, and lines the developers changed are marked for another review. When it cannot be determined with certainty which line a translation now belongs to, Aeria does not guess; the translation is set aside for review. No translation is lost.</p>
+          <p>Packs already installed by players keep working. Changed lines appear in the original language until an updated translation is published, and a translation is never applied to text it was not written for.</p>
         </div>
       </section>
 
       <section class="block" id="team">
         <h2>Working together</h2>
         <div class="body">
-          <p>One person or a whole community can work on a translation. The project is an ordinary Git repository on GitHub or any other host, and Git comes with Aeria. Saving and syncing is enough for everyday work, with branches and pull requests there when you need them. Every line keeps a history of its edits.</p>
-          <p>No accounts or Aeria servers are involved.</p>
+          <p>A project is an ordinary Git repository on GitHub or any other host; Git ships with Aeria. Saving and syncing cover everyday work, and branches and pull requests are available for larger teams. Every line keeps a history of its edits and their authors.</p>
+          <p>No account is required, and Aeria runs no servers of its own.</p>
         </div>
       </section>
 
       <section class="block" id="harmonia">
         <h2>Harmonia</h2>
         <div class="body">
-          <p><a href="https://github.com/AngelicaProject/Harmonia">Harmonia</a>, a Dalamud plugin, shows the translation in the game. You can publish a pack to GitHub Releases right from Aeria, and players install it like this:</p>
+          <p>In the game, the translation is shown by <a href="https://github.com/AngelicaProject/Harmonia">Harmonia</a>, a Dalamud plugin. Packs are published to GitHub Releases directly from Aeria. Installation for players:</p>
           <ol class="steps">
             <li>Launch the game through <a href="https://goatcorp.github.io/">XIVLauncher</a> with Dalamud enabled.</li>
             <li>Open <code>/xlsettings</code> → Experimental → Custom Plugin Repositories, add this address, and save:
@@ -139,14 +140,14 @@
             <li>Open <code>/xlplugins</code>, install Harmonia, and restart the game.</li>
             <li>Open <code>/harmonia</code>, press Add translation, and paste the link from the translation's author or choose a downloaded <code>.hpk</code> file. Restart the game once more.</li>
           </ol>
-          <p class="note">A translation added from a link updates itself; changes take effect the next time you start the game. Cyrillic and other characters the game's fonts lack need <a href="https://github.com/xivdev/Penumbra">Penumbra</a> to show up in window titles and on the title screen.</p>
+          <p class="note">A translation added from a link updates automatically; changes take effect at the next game start. Cyrillic and other characters the game's fonts lack require <a href="https://github.com/xivdev/Penumbra">Penumbra</a> to appear in window titles and on the title screen.</p>
         </div>
       </section>
 
       <section class="block" id="status">
         <h2>Status</h2>
         <div class="body">
-          <p>Aeria is at an early stage and changes quickly. For now there's only a Windows version; Linux will come later. Report bugs and ideas in GitHub Issues. Pull requests are welcome too.</p>
+          <p>Aeria is at an early stage of development and changes quickly. A Windows version is available; a Linux version will follow. Bug reports and suggestions go to GitHub Issues, and pull requests are accepted.</p>
           <ul class="links">
             <li><a href="https://github.com/AngelicaProject/Aeria/releases">Releases</a></li>
             <li><a href="https://github.com/AngelicaProject/Aeria/issues">Issues</a></li>
