@@ -609,6 +609,7 @@ export const en = {
   "angelica.job.concurrencyHint": "Workers translating chunks at once. A running job follows a change within seconds: extra workers finish their chunk first. Lower it if the provider reports rate limits.",
   "angelica.job.tokenUse": "Tokens used",
   "angelica.job.cached": "From cache",
+  "angelica.job.cachedFacts": "{share} from cache",
   "angelica.job.cachedHint": "The share of prompt tokens the provider served from its prompt cache. Providers count them at a fraction; the requests of a chunk start alike so that this share stays high.",
   "angelica.worker.stoppedCount": { one: "{count} worker finished", other: "{count} workers finished" },
   "angelica.job.limit": "Token limit",

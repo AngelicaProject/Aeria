@@ -905,12 +905,17 @@ tokens.
 
 Prompt tokens were four fifths of a job's tokens, most of them the same
 rules, knowledge, and script sent again with every request. Every request
-about a unit except the blind reader's therefore has the same system
-message: the rules, the unit's knowledge, and the whole script with every
-client language. Each role's task, the contract, and the lines it concerns
-follow in the user message. The requests of a chunk share one session and
-prompt cache key, so after the first request the provider can serve that
-prefix from its cache, which providers bill and limit at a fraction.
+about a unit except the blind reader's therefore starts with the same system
+message: the rules, the whole script with every client language, and then
+the unit's knowledge, last because the unit's own study may add to it. The
+unit's term study starts with the same message, so it warms the cache for
+the requests that follow; each role's task, the contract, and the lines it
+concerns follow in the user message. All requests of a chunk use one
+session, which is also the prompt cache key. A probe of the ChatGPT
+provider measured what this needs: requests with the same key and prefix
+got 99 % of their prompt from the cache once one request had stored it,
+eight parallel requests on a cold prefix got 25 %, and the same prefix under
+another key got none; a job whose requests each had their own key got 13 %.
 
 While a runner runs, each lane also reports its live activity: the chunk,
 sheet, and first and last row it translates, its phase (claiming a chunk,

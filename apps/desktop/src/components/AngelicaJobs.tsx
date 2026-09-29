@@ -414,6 +414,7 @@ function JobCard({ job, busy, expanded, onToggle, act, retry, setLimit, setConcu
         <span title={t("angelica.job.tokenLimit", { limit: job.spec.tokenLimit })}>
           {t("angelica.job.limitFacts", { used: formatTokens(tokens), limit: formatTokens(job.spec.tokenLimit) })}
         </span>
+        {job.usage.promptTokens > 0 ? <span title={t("angelica.job.cachedHint")}>{t("angelica.job.cachedFacts", { share: cachedShare(job) })}</span> : null}
         {job.projectedTokens !== null && job.status !== "completed" ? (
           <span className={overLimit(job) ? "angelica-job-over" : undefined} title={t("angelica.job.projectionHint", { finished: job.finishedChunks, total: job.chunks })}>
             {t("angelica.job.projection", { tokens: formatTokens(job.projectedTokens) })}

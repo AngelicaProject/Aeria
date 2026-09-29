@@ -1509,7 +1509,6 @@ impl JobCaller {
 
     async fn send(
         &self,
-        index: usize,
         request: LocalizerRequest,
     ) -> Result<(String, aeria_ai::chat::Usage), ProviderError> {
         // The job's images show where the strings appear; they go to the
@@ -1533,7 +1532,10 @@ impl JobCaller {
             turn_start: 0,
             images: self.payloads.as_ref(),
         };
-        let session = format!("{}-{}-{index}", self.session, request.role.as_str());
+        // Every request of a chunk shares one session and so one prompt
+        // cache key: a provider's cache serves a prefix only to requests with
+        // the key that stored it.
+        let session = self.session.clone();
         let run = &self.run;
         let lane = self.lane;
         let mut on_delta = |delta: StreamDelta| {
@@ -1574,7 +1576,7 @@ impl Caller for JobCaller {
     fn call_all(&self, requests: Vec<LocalizerRequest>) -> Replies<'_> {
         Box::pin(async move {
             let mut replies = Vec::with_capacity(requests.len());
-            let mut requests = requests.into_iter().enumerate().peekable();
+            let mut requests = requests.into_iter().peekable();
             while requests.peek().is_some() {
                 let batch: Vec<_> = requests.by_ref().take(CHUNK_PARALLEL_REQUESTS).collect();
                 let count = u32::try_from(batch.len()).unwrap_or(u32::MAX);
@@ -1584,8 +1586,8 @@ impl Caller for JobCaller {
                 let results = futures_join(
                     batch
                         .into_iter()
-                        .map(|(index, request)| {
-                            Box::pin(self.send(index, request))
+                        .map(|request| {
+                            Box::pin(self.send(request))
                                 as Pin<Box<dyn Future<Output = _> + Send + '_>>
                         })
                         .collect(),

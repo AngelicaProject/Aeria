@@ -25,7 +25,7 @@ use std::fmt::Write as _;
 use crate::client::ProviderError;
 use crate::guidance::GlossaryEntry;
 use crate::knowledge::{Domain, Knowledge, KnowledgeFile, Section};
-use crate::localizer::{Caller, Request, Role, UnitOfWork};
+use crate::localizer::{Caller, Request, Role, UnitOfWork, unit_system};
 
 /// Samples a style researcher reads for one domain, at most.
 pub const STYLE_SAMPLES: usize = 40;
@@ -160,28 +160,6 @@ pub fn character_request(
     }
 }
 
-fn unit_listing(unit: &UnitOfWork) -> String {
-    let mut text = String::new();
-    for line in &unit.lines {
-        let _ = writeln!(text, "- {}", line.source);
-        for (code, evidence) in &line.evidence {
-            if matches!(code.as_str(), "ja" | "fr" | "de") {
-                let _ = writeln!(text, "  {code}: {evidence}");
-            }
-        }
-        // Translations of similar strings show how the project already
-        // renders the names and terms they share.
-        for memory in line.memory.iter().take(2) {
-            let _ = writeln!(
-                text,
-                "  project translation of a similar string: {} → {}",
-                memory.source, memory.target
-            );
-        }
-    }
-    text
-}
-
 /// One request that lists the unit's terminology the knowledge lacks and
 /// decides and checks each rendering, so a unit waits for one answer.
 fn terms_request(unit: &UnitOfWork) -> Request {
@@ -189,9 +167,12 @@ fn terms_request(unit: &UnitOfWork) -> Request {
     Request {
         role: Role::Terms,
         part: None,
-        system: research_system(target),
+        // The localizer's system message, with the whole script: this
+        // request warms the prompt cache for the unit's other requests.
+        system: unit_system(unit),
         user: format!(
-            "{}\n{}\nList the terminology in these lines that must be translated the same way \
+            "Your task now: study the unit's terms. List the terminology in the unit's lines \
+             that must be translated the same way \
              everywhere in the game and that the project knowledge below does not have yet: \
              names of people, places, organizations, monsters, and items, game-specific mechanics \
              and crafting terms, interface names, and fixed in-world expressions such as oaths. \
@@ -216,12 +197,8 @@ fn terms_request(unit: &UnitOfWork) -> Request {
              Output for each term exactly two lines, and nothing else:\n## <term as given>\n\
              <rendering> | <kind and grammatical note> | <wrong renderings to avoid, separated by \
              ;, never the rendering itself; leave the field empty when there are none> | <for a \
-             made-up name only: two alternatives separated by ;>\n\n\
-             Project knowledge:\n{}",
-            unit.title,
-            unit_listing(unit),
-            unit.source_language,
-            unit.knowledge
+             made-up name only: two alternatives separated by ;>",
+            unit.source_language
         ),
     }
 }
@@ -562,7 +539,10 @@ mod tests {
             Box::pin(async move {
                 let mut replies = Vec::new();
                 for request in requests {
-                    self.asked.lock().unwrap().push(request.user.clone());
+                    self.asked
+                        .lock()
+                        .unwrap()
+                        .push(format!("{}\n{}", request.system, request.user));
                     let reply = "## Fire Shard\nогненный осколок | предмет | огненный кристалл\n## Aether\nэфир | |\n## Lyngsath\nЛингсат | имя |\n## fire shard\nосколок | |\n## Level 5\nуровень 5 | |";
                     replies.push((reply.to_owned(), Usage::default()));
                 }

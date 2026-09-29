@@ -484,12 +484,23 @@ impl Localization {
     }
 
     /// The system message every request about the unit starts with, but
-    /// the blind reader's: the rules, the knowledge, and the whole script.
+    /// the blind reader's: the rules, the whole script, and the knowledge.
     /// It is the same for each request of a unit, so a provider's prompt
     /// cache serves it after the first request instead of billing it again;
-    /// each role's task follows in the user message.
+    /// each role's task follows in the user message. The knowledge comes
+    /// last because the unit's study may add to it: what precedes it stays
+    /// cached from the study's request.
     fn localizer_system(&self) -> String {
-        let unit = &self.unit;
+        unit_system(&self.unit)
+    }
+}
+
+/// The shared system message of a unit's requests (see
+/// [`Localization::localizer_system`]); the unit's term study starts with it
+/// too, so it warms the prompt cache for the localizer.
+#[must_use]
+pub fn unit_system(unit: &UnitOfWork) -> String {
+    {
         let mut system = format!(
             "You are a localizer of FINAL FANTASY XIV from {} into {}. You localize the way a \
              professional game writer would: the text must read as if it had been written in \
@@ -513,6 +524,14 @@ impl Localization {
                 unit.instructions.trim()
             );
         }
+        let _ = write!(
+            system,
+            "\n\nThe unit: {} — {} lines, in order. Lines marked `translate` are the job's; \
+             the others are context.\n\n{}",
+            unit.title,
+            unit.lines.len(),
+            script_of(unit)
+        );
         if !unit.knowledge.trim().is_empty() {
             let _ = write!(
                 system,
@@ -520,27 +539,28 @@ impl Localization {
                 unit.knowledge.trim()
             );
         }
-        let _ = write!(
-            system,
-            "\n\nThe unit: {} — {} lines, in order. Lines marked `translate` are the job's; \
-             the others are context.\n\n{}",
-            unit.title,
-            unit.lines.len(),
-            self.script()
-        );
         system
     }
+}
 
+impl Localization {
     /// The whole unit: every line with its role, source, evidence, and
     /// what it needs; job strings are marked `translate`.
     #[must_use]
     pub fn script(&self) -> String {
+        script_of(&self.unit)
+    }
+}
+
+/// The script of a unit (see [`Localization::script`]).
+fn script_of(unit: &UnitOfWork) -> String {
+    {
         let mut script = String::new();
-        for (index, line) in self.unit.lines.iter().enumerate() {
+        for (index, line) in unit.lines.iter().enumerate() {
             if index > 0 {
                 script.push('\n');
             }
-            let _ = write!(script, "{} {}", Self::id(index), line.kind.label());
+            let _ = write!(script, "{} {}", Localization::id(index), line.kind.label());
             match (line.task, &line.current) {
                 (Some(_), _) => script.push_str(" — translate"),
                 (None, Some(current)) => {
@@ -551,7 +571,7 @@ impl Localization {
             if line.task.is_some() && line.gender_marked() {
                 script.push_str(" — varies by player gender");
             }
-            let _ = write!(script, "\n  {}: {}", self.unit.source_language, line.source);
+            let _ = write!(script, "\n  {}: {}", unit.source_language, line.source);
             for (code, text) in &line.evidence {
                 let _ = write!(script, "\n  {code}: {text}");
             }
@@ -591,7 +611,9 @@ impl Localization {
         }
         script
     }
+}
 
+impl Localization {
     /// The target text of some lines as a player reads it: written targets
     /// first, then current translations.
     fn target_script(&self, lines: impl IntoIterator<Item = usize>) -> String {
