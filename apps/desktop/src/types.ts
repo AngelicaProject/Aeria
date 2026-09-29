@@ -692,7 +692,7 @@ export type JobEstimate = {
 export type JobLimitProposal = { jobId: string; tokenLimit: number; previousLimit: number; usedTokens: number; projectedTokens: number | null };
 
 /** How much work the localizer spends on each unit of a job. */
-export type JobQuality = "fast" | "careful";
+export type JobQuality = "fast" | "careful" | "edit";
 
 export type JobProposal = { scope: JobScope; instructions: string; concurrency: number; estimate: JobEstimate; tokenLimit: number; quality?: JobQuality };
 

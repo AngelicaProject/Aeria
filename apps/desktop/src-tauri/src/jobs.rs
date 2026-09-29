@@ -503,10 +503,27 @@ impl JobControl for DesktopJobs {
         quality: JobQuality,
     ) -> Result<ProposalOutcome, ToolError> {
         let (what, locations) = match &target {
-            RevisionTarget::Term(term) => (
-                format!("strings with {term:?}"),
-                term_locations(&self.app, term)?,
-            ),
+            RevisionTarget::Terms(terms) => {
+                let mut locations = Vec::new();
+                for term in terms {
+                    for location in term_locations(&self.app, term)? {
+                        if !locations.contains(&location) {
+                            locations.push(location);
+                        }
+                    }
+                }
+                (
+                    format!(
+                        "strings with {}",
+                        terms
+                            .iter()
+                            .map(|term| format!("{term:?}"))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ),
+                    locations,
+                )
+            }
             RevisionTarget::Speaker(speaker) => (
                 format!("lines of {speaker}"),
                 speaker_locations(&self.app, speaker)?,
@@ -1835,6 +1852,11 @@ fn write_outcomes(
                 recorded.push((unit.seq, UnitStatus::Rejected, Some(reason.clone())));
                 continue;
             }
+            // An edit that left a line alone writes nothing.
+            Finish::Unchanged => {
+                recorded.push((unit.seq, UnitStatus::Finished, None));
+                continue;
+            }
             Finish::Final => (ReviewLabel::Reviewed, UnitStatus::Finished, None),
             Finish::NeedsReview(reason) => (
                 ReviewLabel::NeedsReview,
@@ -2070,8 +2092,9 @@ async fn run_chunk(run: &JobRun, spec: &JobSpec, units: Vec<JobUnit>, lane: usiz
     }
 
     // Terms the knowledge lacks are decided before the contract, so the
-    // unit is written with them.
-    if let Err(error) = study_unit_terms(run, &caller, &mut unit).await {
+    // unit is written with them; an edit only changes what is there.
+    let editing = spec.quality == JobQuality::Edit;
+    if !editing && let Err(error) = study_unit_terms(run, &caller, &mut unit).await {
         run.workers.set_phase(lane, WorkerPhase::Recording);
         let usage = caller.spent();
         return finish_chunk(
@@ -2109,7 +2132,11 @@ async fn run_chunk(run: &JobRun, spec: &JobSpec, units: Vec<JobUnit>, lane: usiz
     let options = LocalizeOptions {
         careful: caller.careful,
     };
-    let result = localize(&caller, unit, options).await;
+    let result = if editing {
+        aeria_ai::localizer::edit(&caller, unit).await
+    } else {
+        localize(&caller, unit, options).await
+    };
     run.workers.set_phase(lane, WorkerPhase::Recording);
     if let Ok(result) = &result {
         let learn_run = run.clone();

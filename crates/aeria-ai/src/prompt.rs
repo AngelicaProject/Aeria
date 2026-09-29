@@ -168,8 +168,9 @@ study's rendering and options. Triage them yourself: read each name in its langu
 find right, or pick a better option or your own; most names need nobody else. Ask the \
 user with ask_choice, one at a time, only about the few that players see often or that \
 carry a joke or a pun, with the options and what the original and the localizations call \
-it. When a settled rendering changed, revise the strings written with the old one with \
-propose_revision.
+it. Settle all the names first; then revise the strings written with renderings that \
+changed with one propose_revision that lists every changed term, never one revision per \
+name.
 - Taste: every choice the user makes between versions of wording (a calibration, a name, \
 a line) and every remark on how translations read tells the project what its people \
 prefer. After such a choice, write what it shows as an active lesson with set_knowledge: \

@@ -395,7 +395,8 @@ pub enum JobAction {
 /// lines of a speaker.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum RevisionTarget {
-    Term(String),
+    /// The strings that contain any of these terms.
+    Terms(Vec<String>),
     Speaker(String),
 }
 
@@ -672,10 +673,11 @@ struct StartJobArgs {
 #[serde(deny_unknown_fields)]
 struct RevisionArgs {
     term: Option<String>,
+    #[serde(default)]
+    terms: Vec<String>,
     speaker: Option<String>,
     reason: String,
-    #[serde(default)]
-    quality: JobQuality,
+    quality: Option<JobQuality>,
 }
 
 #[derive(Deserialize)]
@@ -791,30 +793,39 @@ fn retry_units(jobs: &dyn JobControl, args: RetryArgs) -> Result<Value, ToolErro
 }
 
 fn propose_revision(jobs: &dyn JobControl, args: RevisionArgs) -> Result<Value, ToolError> {
-    let target = match (args.term, args.speaker) {
-        (Some(term), None) if !term.trim().is_empty() => {
-            RevisionTarget::Term(term.trim().to_owned())
-        }
-        (None, Some(speaker)) if !speaker.trim().is_empty() => {
-            RevisionTarget::Speaker(speaker.trim().to_ascii_uppercase())
-        }
-        _ => return Err(ToolError::new("give either a term or a speaker")),
+    let terms: Vec<String> = args
+        .term
+        .into_iter()
+        .chain(args.terms)
+        .map(|term| term.trim().to_owned())
+        .filter(|term| !term.is_empty())
+        .collect();
+    let (target, default_quality) = match (terms.is_empty(), args.speaker) {
+        // A changed rendering only needs the old one edited out.
+        (false, None) => (RevisionTarget::Terms(terms), JobQuality::Edit),
+        (true, Some(speaker)) if !speaker.trim().is_empty() => (
+            RevisionTarget::Speaker(speaker.trim().to_ascii_uppercase()),
+            JobQuality::Fast,
+        ),
+        _ => return Err(ToolError::new("give terms or a speaker, not both")),
     };
     let reason = args.reason.trim().to_owned();
     if reason.is_empty() {
         return Err(ToolError::new("give the reason for the revision"));
     }
-    Ok(match jobs.propose_revision(target, reason, args.quality)? {
-        ProposalOutcome::Pending { proposal_id } => json!({
-            "status": "awaitingApproval",
-            "proposalId": proposal_id,
-            "note": "The user sees the estimate and starts the job.",
-        }),
-        ProposalOutcome::Applied => json!({ "status": "started" }),
-        ProposalOutcome::Conflict { message } | ProposalOutcome::Failed { message } => {
-            json!({ "status": "failed", "errors": [message] })
-        }
-    })
+    Ok(
+        match jobs.propose_revision(target, reason, args.quality.unwrap_or(default_quality))? {
+            ProposalOutcome::Pending { proposal_id } => json!({
+                "status": "awaitingApproval",
+                "proposalId": proposal_id,
+                "note": "The user sees the estimate and starts the job.",
+            }),
+            ProposalOutcome::Applied => json!({ "status": "started" }),
+            ProposalOutcome::Conflict { message } | ProposalOutcome::Failed { message } => {
+                json!({ "status": "failed", "errors": [message] })
+            }
+        },
+    )
 }
 
 fn run_job_tool(
@@ -927,14 +938,15 @@ fn run_job_tool(
 fn revision_definition() -> ToolDefinition {
     ToolDefinition {
         name: "propose_revision",
-        description: "Proposes a job that translates again the translated strings that contain a term, or the lines of a speaker, which no person has settled: drafts, strings needing review, and reviewed ones whose translation is still the one a job wrote. Use it after the rendering of a name or game term, or a character's profile, changed, with the change as the reason; never for ordinary words or style, which the next jobs follow anyway. At most 1,000 strings; the user starts it.",
+        description: "Revises the translated strings that contain any of the given terms, or the lines of a speaker, which no person has settled: drafts, strings needing review, and reviewed ones whose translation is still the one a job wrote. Use it after the renderings of names or game terms, or a character's profile, changed, with the change as the reason; never for ordinary words or style, which the next work follows anyway. Give every changed term in one call: one revision, not one per term. Terms are edited in place (quality edit: the old wording replaced and agreement fixed, one cheap request per part); a speaker's lines are translated again. At most 1,000 strings.",
         parameters: json!({
             "type": "object",
             "properties": {
-                "term": { "type": "string", "description": "A source-language term." },
+                "terms": { "type": "array", "items": { "type": "string" }, "description": "Source-language terms whose rendering changed." },
+                "term": { "type": "string", "description": "One source-language term; terms takes several." },
                 "speaker": { "type": "string", "description": "A speaker label, such as URIANGER." },
-                "reason": { "type": "string", "description": "What changed and what the translation must do now; every chunk gets it as instructions." },
-                "quality": { "type": "string", "enum": ["fast", "careful"] },
+                "reason": { "type": "string", "description": "What changed and what the translation must do now, such as each term's old and new rendering; every chunk gets it as instructions." },
+                "quality": { "type": "string", "enum": ["edit", "fast", "careful"], "description": "Defaults to edit for terms and fast for a speaker." },
             },
             "required": ["reason"],
             "additionalProperties": false,

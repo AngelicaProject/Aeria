@@ -618,6 +618,11 @@ button.angelica-chip:hover { background: var(--hover); color: var(--fg); }
 .angelica-job-status.completed { background: var(--ok-soft); color: var(--ok); }
 .angelica-job-percent { flex: none; margin-left: auto; color: var(--fg-muted); font-variant-numeric: tabular-nums; }
 .angelica-job-actions { display: flex; flex: none; gap: 2px; }
+.localization-now { margin: 0; color: var(--fg-muted); font-size: var(--text-2xs); }
+.angelica-job.localization { gap: 4px; padding: 4px 8px; }
+.angelica-job.localization .angelica-job-toggle { gap: 6px; }
+.angelica-job.localization .angelica-job-percent { flex: none; color: var(--fg-muted); font-variant-numeric: tabular-nums; }
+.angelica-job.localization .angelica-job-flagged { flex: none; }
 .localization-cards { display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; min-width: 0; margin: 0; padding: 0; list-style: none; }
 .angelica-job.localization .angelica-job-head { gap: 6px; }
 .angelica-job.localization .angelica-job-actions { margin-left: auto; }

@@ -810,12 +810,20 @@ the job's conversation is deleted they are left out.
 
 #### Revisions
 
-A revision translates again the strings that a change of the project
-knowledge affects. Angelica proposes one with `propose_revision` in Ask and
-Auto-draft modes, for a source term (the strings whose source contains it,
-from the source index) or a speaker label (the speaker's lines across the
-game), at most 5,000 strings, with the change as the reason; the job's
-instructions say what is revised and why. Its scope lists the strings and
+A revision changes the strings that a change of the project knowledge
+affects. Angelica starts one with `propose_revision` where she may write,
+for one or more source terms (the strings whose source contains any of
+them, from the source index; she is told to settle every name first and
+revise all changed terms at once, never one revision per name) or a speaker
+label (the speaker's lines across the game), with the change as the reason;
+the job's instructions say what is revised and why. A revision of terms has
+the quality `edit`: no study, and one request per part that edits the
+current translations where the change applies (the new wording, agreement,
+case endings, and word order around it) and returns only the lines it
+changed; the structure checks follow, a changed line is written as final,
+and a line the edit left alone is not written at all. Its estimate is a
+sixth of a fast job's. A revision of a speaker is translated again with the
+fast quality. Its scope lists the strings and
 uses the `revise` filter, which takes every listed string no person has
 settled: drafts, strings needing review, and reviewed ones whose translation
 is still the one a job last wrote; untranslated strings are left to ordinary
@@ -963,7 +971,10 @@ The Angelica panel always shows the open project by area
 (`localization_project`): for names, actions, items, interface, lore, and
 quests and scenes, how many translatable strings there are, how many are
 translated, reviewed, and need review, summed from the project's sheets.
-It shows jobs as localizations (see
+Live localizations are listed as one line each (scope, progress, strings
+to review, and pause, resume, and cancel), under a line with how many run
+and how many strings they have left; a line opens to its progress,
+economy, areas, and details. It shows jobs as localizations (see
 [the localization](./localization-system.md#the-localization)). A
 localization's card shows its progress, its economy (tokens per written
 string, the cached share of its prompt tokens, strings written per minute

@@ -111,7 +111,7 @@ function JobProposalCard({ proposal, job, busy, onApply, onReject }: { proposal:
           {t("angelica.job.estimateValue", { tokens: job.estimate.estimatedTokens })}
           <span className="field-hint">{job.estimate.historyChunkTokens ? t("angelica.job.estimateHistory", { tokens: job.estimate.historyChunkTokens }) : t("angelica.job.estimateFormula")}</span>
         </dd>
-        <dt>{t("angelica.job.quality")}</dt><dd>{t(job.quality === "careful" ? "angelica.job.quality.careful" : "angelica.job.quality.fast")}</dd>
+        <dt>{t("angelica.job.quality")}</dt><dd>{t(`angelica.job.quality.${job.quality ?? "fast"}` as const)}</dd>
         {careful.length > 0 ? <><dt>{t("localization.carefulAreas")}</dt><dd>{careful.join(", ")}</dd></> : null}
         {job.instructions ? <><dt>{t("angelica.job.instructions")}</dt><dd>{job.instructions}</dd></> : null}
       </dl>

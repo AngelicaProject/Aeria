@@ -191,6 +191,10 @@ pub enum JobQuality {
     /// One writer for the whole unit, critics at the highest effort, and two
     /// full rechecks: for story quests whose scenes must hold together.
     Careful,
+    /// Existing translations are edited as the instructions say, one
+    /// request per part and nothing else: for a revision after a term's
+    /// rendering changed.
+    Edit,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -495,13 +499,17 @@ impl JobEstimate {
         }
     }
 
-    /// The estimate for a job of `quality`: a careful job writes each unit
-    /// in one piece and rechecks it twice with stronger critics, about twice
-    /// the tokens.
+    /// The estimate for a job of `quality`: a careful job rechecks each unit
+    /// twice with stronger critics, about twice the tokens; an edit sends one
+    /// request per part, about a sixth.
     #[must_use]
     pub fn with_quality(mut self, quality: JobQuality) -> Self {
-        if quality == JobQuality::Careful {
-            self.estimated_tokens = self.estimated_tokens.saturating_mul(2);
+        match quality {
+            JobQuality::Careful => {
+                self.estimated_tokens = self.estimated_tokens.saturating_mul(2);
+            }
+            JobQuality::Edit => self.estimated_tokens /= 6,
+            JobQuality::Fast => {}
         }
         self
     }

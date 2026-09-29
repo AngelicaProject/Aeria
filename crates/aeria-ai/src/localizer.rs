@@ -298,6 +298,8 @@ pub enum Finish {
     Final,
     /// A major problem is still open; a person should decide.
     NeedsReview(String),
+    /// An edit left the translation as it was; nothing is written.
+    Unchanged,
     /// No valid translation was produced.
     Rejected(String),
 }
@@ -1364,6 +1366,33 @@ impl Localization {
             .collect()
     }
 
+    /// An edit of each part's current translations as the unit's
+    /// instructions say.
+    #[must_use]
+    pub fn edit_requests(&self) -> Vec<Request> {
+        let system = self.localizer_system();
+        let target = &self.unit.target_language;
+        self.parts
+            .iter()
+            .enumerate()
+            .map(|(part, lines)| Request {
+                role: Role::Fix,
+                part: Some(part),
+                system: system.clone(),
+                user: format!(
+                    "Your task now: the lines {} are translated already; each shows its \
+                     current {target} translation in the unit above. The job instructions \
+                     describe a change, such as a new rendering of a name or term. Edit \
+                     only where the change applies: use the new wording, adjust agreement, \
+                     case endings, and word order around it, and change nothing else. \
+                     Output only the lines you change, as `L12: text`, one per line, or NO \
+                     CHANGES.",
+                    Self::ids(lines)
+                ),
+            })
+            .collect()
+    }
+
     /// Step 5: one fix per part with flagged lines.
     #[must_use]
     pub fn fix_requests(&self, flags: &[Flag]) -> Vec<Request> {
@@ -1627,6 +1656,59 @@ async fn fix(
         localization.accept_fix(request, flags, reply);
     }
     Ok(())
+}
+
+/// Edits a unit's current translations as its instructions say: one
+/// request per part, then the structure checks. A line the edit left alone
+/// is [`Finish::Unchanged`]; an edited one is final.
+///
+/// # Errors
+///
+/// Returns the first provider failure; nothing is written in that case.
+pub async fn edit(caller: &dyn Caller, unit: UnitOfWork) -> Result<LocalizeResult, ProviderError> {
+    let mut usage = Usage::default();
+    let mut localization = Localization::new(unit);
+    let current: BTreeMap<usize, String> = localization
+        .unit
+        .lines
+        .iter()
+        .enumerate()
+        .filter(|(_, line)| line.task.is_some())
+        .filter_map(|(index, line)| Some((index, line.current.clone()?)))
+        .collect();
+    localization.targets.clone_from(&current);
+    caller.step(Step::Writing);
+    let requests = localization.edit_requests();
+    let replies = call(caller, requests.clone(), &mut usage).await?;
+    for (request, reply) in requests.iter().zip(&replies) {
+        if let Some(part) = request.part {
+            localization.accept_written(part, reply);
+        }
+    }
+    let refused = correct_structure(caller, &mut localization, &mut usage).await?;
+    let outcomes = localization
+        .outcomes(&[], &refused)
+        .into_iter()
+        .map(|mut outcome| {
+            let index = localization
+                .unit
+                .lines
+                .iter()
+                .position(|line| line.task == Some(outcome.task));
+            if outcome.finish == Finish::Final
+                && index.and_then(|index| current.get(&index)) == outcome.target.as_ref()
+            {
+                outcome.finish = Finish::Unchanged;
+            }
+            outcome
+        })
+        .collect();
+    Ok(LocalizeResult {
+        outcomes,
+        contract: String::new(),
+        usage,
+        flags: Vec::new(),
+    })
 }
 
 /// Localizes one unit of work: contract, parallel writers (one request for
@@ -1937,6 +2019,9 @@ mod tests {
                             r#"{"flags": [{"line": "L1", "severity": "major", "problem": "Assumes a male player."}]}"#.to_owned()
                         }
                         Role::Fix if request.user.contains("Ты пришёл") => "NO CHANGES".to_owned(),
+                        Role::Fix if request.user.contains("Edit only where the change applies") => {
+                            "L1: Встреть Тристана Ночного Всполоха.".to_owned()
+                        }
                         _ => r#"{"flags": []}"#.to_owned(),
                     };
                     replies.push((
@@ -2101,6 +2186,31 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn an_edit_changes_only_what_it_returns() {
+        let mut first = line(LineKind::Speech("A".into()), "Meet Tristan.", Some(0));
+        first.current = Some("Встреть Тристана Ночного Огонька.".to_owned());
+        let mut second = line(LineKind::Speech("A".into()), "Good.", Some(1));
+        second.current = Some("Хорошо.".to_owned());
+        let caller = Script {
+            asked: Mutex::new(Vec::new()),
+            steps: Mutex::new(Vec::new()),
+            player_flag: false,
+        };
+        let result = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap()
+            .block_on(edit(&caller, unit(vec![first, second])))
+            .unwrap();
+        assert_eq!(caller.asked.lock().unwrap().as_slice(), [Role::Fix]);
+        assert_eq!(result.outcomes[0].finish, Finish::Final);
+        assert_eq!(
+            result.outcomes[0].target.as_deref(),
+            Some("Встреть Тристана Ночного Всполоха.")
+        );
+        assert_eq!(result.outcomes[1].finish, Finish::Unchanged);
     }
 
     #[test]

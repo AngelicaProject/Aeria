@@ -278,7 +278,7 @@ function JobInfo({ job }: { job: JobSummary }) {
       <dt>{t("angelica.job.sheets")}</dt><dd>{sheets}</dd>
       <dt>{t("angelica.job.strings")}</dt><dd>{t(jobFilterLabels[job.spec.scope.filter])}</dd>
       <dt>{t("angelica.job.model")}</dt><dd>{model}</dd>
-      <dt>{t("angelica.job.quality")}</dt><dd title={t("angelica.job.qualityHint")}>{t(job.spec.quality === "careful" ? "angelica.job.quality.careful" : "angelica.job.quality.fast")}</dd>
+      <dt>{t("angelica.job.quality")}</dt><dd title={t("angelica.job.qualityHint")}>{t(`angelica.job.quality.${job.spec.quality ?? "fast"}` as const)}</dd>
       {careful.length > 0 ? <><dt>{t("localization.carefulAreas")}</dt><dd>{careful.join(", ")}</dd></> : null}
       <dt>{t("angelica.job.tokenUse")}</dt><dd>{formatNumber(totalTokens(job.usage))}</dd>
       <dt title={t("angelica.job.cachedHint")}>{t("angelica.job.cached")}</dt><dd>{cachedShare(job)}</dd>
@@ -413,12 +413,17 @@ function LocalizationCard({ job, busy, act, retry, remove, focus, setFocus, onEr
     // Progress changes the areas; the timer keeps the speed current.
   }, [job.id, job.status, processed]);
 
+  const expanded = focus !== null;
   return (
-    <li className={`angelica-job localization ${job.status}`}>
+    <li className={`angelica-job localization ${job.status}${expanded ? " expanded" : ""}`}>
       <div className="angelica-job-head">
-        <span className="angelica-job-scope">{scope}</span>
-        <span className={`angelica-job-status ${job.status}`}>{t(statusLabels[job.status])}</span>
-        <span className="angelica-job-percent">{percent}</span>
+        <button className="angelica-job-toggle" type="button" aria-expanded={expanded} title={t(expanded ? "angelica.job.collapse" : "angelica.job.expand")} onClick={() => setFocus(expanded ? null : "problems")}>
+          <UiIcon icon={expanded ? "chevronDown" : "chevronRight"} size="xs" />
+          <span className="angelica-job-scope" title={scope}>{scope}</span>
+          <span className="angelica-job-percent">{percent}</span>
+          {job.counts.flagged > 0 ? <span className="angelica-job-flagged" title={t("angelica.job.flaggedHint")}>{t("localization.flaggedShort", { count: job.counts.flagged })}</span> : null}
+          {job.status !== "running" ? <span className={`angelica-job-status ${job.status}`}>{t(statusLabels[job.status])}</span> : null}
+        </button>
         <div className="angelica-job-actions">
           {job.status === "running" ? <IconButton icon="pause" label={t("angelica.job.pause")} disabled={busy} onClick={() => act("pause")} /> : null}
           {job.status === "paused" ? <IconButton icon="play" label={t("angelica.job.resume")} disabled={busy} onClick={() => act("resume")} /> : null}
@@ -433,21 +438,20 @@ function LocalizationCard({ job, busy, act, retry, remove, focus, setFocus, onEr
         <span className="problems" style={{ width: share(problems) }} />
         <span className="running" style={{ width: share(job.counts.running) }} />
       </div>
-      <div className="angelica-job-stats">
-        <span>{t("angelica.job.written", { written: jobWritten(job.counts), total: job.counts.total })}</span>
-        {job.counts.flagged > 0 ? <span className="angelica-job-flagged" title={t("angelica.job.flaggedHint")}>{t("angelica.job.flagged", { count: job.counts.flagged })}</span> : null}
-        {problems > 0 ? <span className="angelica-job-problems">{t("angelica.job.problems", { count: problems })}</span> : null}
-      </div>
-      <Economy job={job} overview={overview} />
       {job.status === "paused" && job.reason ? (
         <p className="angelica-job-reason" title={job.reason}><UiIcon icon="circleAlert" size="xs" /><span>{job.reason}</span></p>
       ) : null}
-      <Areas overview={overview} />
-      <button className="angelica-jobs-toggle" type="button" aria-expanded={focus !== null} onClick={() => setFocus(focus === null ? "problems" : null)}>
-        <UiIcon icon={focus !== null ? "chevronDown" : "chevronRight"} size="xs" />
-        <span>{t("localization.details")}</span>
-      </button>
-      {focus !== null ? <JobDetails job={job} busy={busy} retry={retry} tab={focus} setTab={setFocus} onError={onError} onReveal={onReveal} /> : null}
+      {expanded ? (
+        <>
+          <div className="angelica-job-stats">
+            <span>{t("angelica.job.written", { written: jobWritten(job.counts), total: job.counts.total })}</span>
+            {problems > 0 ? <span className="angelica-job-problems">{t("angelica.job.problems", { count: problems })}</span> : null}
+          </div>
+          <Economy job={job} overview={overview} />
+          <Areas overview={overview} />
+          <JobDetails job={job} busy={busy} retry={retry} tab={focus} setTab={setFocus} onError={onError} onReveal={onReveal} />
+        </>
+      ) : null}
     </li>
   );
 }
@@ -675,7 +679,12 @@ export function AngelicaJobs({ onError, onReveal, onAsk }: AngelicaJobsProps) {
         <div className="angelica-job-list">
           <ProjectState areas={project} />
           <Decisions decisions={decisions} busy={busy} onAsk={onAsk} choose={(term, rendering) => void choose(term, rendering)} acceptAll={(names) => void acceptAll(names)} review={(jobId) => setFocus(jobId, "problems")} />
-          {active.length > 0 ? <ul className="localization-cards">{active.map(card)}</ul> : null}
+          {active.length > 0 ? (
+            <>
+              <p className="localization-now">{t("localization.now", { count: active.length, left: active.reduce((sum, job) => sum + job.counts.pending + job.counts.running, 0) })}</p>
+              <ul className="localization-cards">{active.map(card)}</ul>
+            </>
+          ) : null}
           {past.length > 0 ? (
             <div className="localization-past">
               <div className="angelica-jobs-head">
