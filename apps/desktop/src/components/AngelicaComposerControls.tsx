@@ -9,15 +9,20 @@ import { UiIcon } from "../ui/primitives/UiIcon";
 
 export const modeLabels: Readonly<Record<AgentMode, MessageKey>> = {
   chat: "angelica.mode.chat",
+  work: "angelica.mode.work",
   ask: "angelica.mode.ask",
   autoDraft: "angelica.mode.autoDraft",
 };
 
 const modeHints: Readonly<Record<AgentMode, MessageKey>> = {
   chat: "angelica.mode.chatHint",
+  work: "angelica.mode.workHint",
   ask: "angelica.mode.askHint",
   autoDraft: "angelica.mode.autoDraftHint",
 };
+
+/** The modes offered; conversations of earlier modes keep theirs. */
+const OFFERED_MODES: readonly AgentMode[] = ["work", "chat"];
 
 export const effortLabels: Readonly<Record<ReasoningEffort, MessageKey>> = {
   minimal: "ai.effort.minimal",
@@ -42,7 +47,7 @@ export function ModeMenu({ mode, onChange }: { mode: AgentMode; onChange: (mode:
         <DropdownMenu.Content className="menu-content angelica-menu" side="top" align="start" sideOffset={6} collisionPadding={8}>
           <DropdownMenu.Label className="menu-label angelica-menu-label">{t("angelica.mode.label")}</DropdownMenu.Label>
           <DropdownMenu.RadioGroup value={mode} onValueChange={(value) => onChange(value as AgentMode)}>
-            {(Object.keys(modeLabels) as AgentMode[]).map((value) => (
+            {OFFERED_MODES.map((value) => (
               <DropdownMenu.RadioItem key={value} className="menu-item angelica-menu-item" value={value}>
                 <span className="menu-item-check"><DropdownMenu.ItemIndicator><UiIcon icon="check" size="xs" /></DropdownMenu.ItemIndicator></span>
                 <span className="angelica-menu-text">

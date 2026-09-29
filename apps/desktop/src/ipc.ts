@@ -3,6 +3,7 @@ import type {
   CheckWorkflowDto,
   LocalizationDecision,
   LocalizationOverview,
+  LocalizationProjectArea,
   MacroIdiomDto,
   MacroInsertionDto,
   MacroViewDto,
@@ -532,6 +533,10 @@ export function angelicaJobEvents(jobId: string): Promise<JobEvent[]> {
 
 export function localizationOverview(jobId: string): Promise<LocalizationOverview> {
   return call<LocalizationOverview>("localization_overview", { jobId });
+}
+
+export function localizationProject(): Promise<LocalizationProjectArea[]> {
+  return call<LocalizationProjectArea[]>("localization_project");
 }
 
 export function localizationDecisions(): Promise<LocalizationDecision[]> {

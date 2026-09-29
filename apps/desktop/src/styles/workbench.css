@@ -627,6 +627,14 @@ button.angelica-chip:hover { background: var(--hover); color: var(--fg); }
 .localization-area-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .localization-area-count { font-variant-numeric: tabular-nums; }
 .localization-decisions { display: grid; grid-template-columns: minmax(0, 1fr); gap: 4px; min-width: 0; padding: 6px 8px; border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--line)); border-radius: var(--radius-sm); background: var(--accent-soft); font-size: var(--text-xs); }
+.localization-decision-summary { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; min-width: 0; }
+.localization-decision-summary .button { height: 22px; padding: 0 8px; font-size: var(--text-2xs); }
+.localization-decision-summary .link-button { margin-left: auto; font-size: var(--text-2xs); }
+.localization-decision-title { font-weight: 600; }
+.localization-names { max-height: 320px; overflow-y: auto; }
+.localization-name { display: grid; grid-template-columns: minmax(0, 10em) minmax(0, 1fr); align-items: center; gap: 8px; min-width: 0; }
+.localization-name-term { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg-muted); }
+.localization-name .button { height: 22px; padding: 0 8px; font-size: var(--text-2xs); }
 .localization-decision-list { display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; min-width: 0; margin: 0; padding: 0; list-style: none; }
 .localization-decision { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 4px 8px; min-width: 0; }
 .localization-decision-text { flex: 1 1 12em; min-width: 0; }

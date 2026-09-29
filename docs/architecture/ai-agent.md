@@ -277,7 +277,10 @@ conversation.
 | `propose_glossary_change` | Adds or edits glossary entries. | Always asks, shown as a diff. |
 | `propose_guidance_change` | Edits project guidance. | Always asks, shown as a diff. |
 | `estimate_job` | Counts units and estimates tokens and cost for a job scope. | None. |
-| `start_job` | Starts a translation job. | Always asks. |
+| `start_job` | Starts a localization. | Starts at once in the Work mode; asks otherwise. |
+| `list_decisions` | The decisions waiting in the localization panel. | None. |
+| `settle_names` | Settles made-up names with chosen renderings. | None; shown in the conversation. |
+| `withdraw_proposal` | Dismisses one of the conversation's pending proposals. | None; shown in the conversation. |
 | `job_status`, `job_events` | Progress, rejected units, and worker reports. | None. |
 | `amend_job` | Adds instructions for the job's remaining chunks. | None; shown in the conversation. |
 | `retry_units` | Requeues rejected or failed units, optionally with extra instructions. | None within the approved scope. |
@@ -295,7 +298,11 @@ access.
 
 The user picks one mode per conversation in the AI dock:
 
-- **Chat**: read tools only. Useful for questions and review.
+- **Work** (default): Angelica leads the localization, starts localizations
+  and revisions, settles decisions, and writes new translations and
+  knowledge at once; replacing translations, the human files, Git, and
+  export still ask. See [`ai.md`](./ai.md#angelica).
+- **Look** (Chat): read tools only. Useful for questions and review.
 - **Ask** (default): every action tool call is shown as a card with the
   source, current target, proposed target, and a word diff. The user applies
   or rejects each card, or a whole group.
@@ -439,7 +446,7 @@ chat:
   the next message and is remembered per conversation; defaults come from
   settings. The effort picker shows only the values the selected model
   accepts.
-- **Approval-mode picker** (Chat, Ask, Auto-draft) in the same toolbar.
+- **Mode picker** (Work, Look) in the same toolbar.
 - **Context**: chips for the automatically attached editor context, which the
   user can remove, and `@` mentions for a sheet, a unit, the current
   selection, or the glossary.

@@ -83,8 +83,8 @@ const CHAT_MODE: &str = "\
 Current mode: Chat. You can read the project but cannot change it. When the user asks \
 for translations, write them in your reply as proposals; the user applies them in the \
 editor. Never claim that you saved, changed, reviewed, committed, or exported anything. \
-You can report translation jobs with job_status and job_events; starting or changing a \
-job needs the Ask or Auto-draft mode.";
+You can report localizations with job_status, job_events, and list_decisions; acting \
+on them needs the Work mode.";
 
 const WRITING: &str = "\
 Writing translations:
@@ -161,13 +161,15 @@ with set_knowledge for each kind of text you asked about, as rules with examples
 chosen versions; a calibration is style, not a lesson. Then start the job the user asked \
 for. When a job's report says terms were corrected, or the user changed a term or a \
 character's profile, offer propose_revision for that term or speaker.
-- Names: a job reports `name-choice` events for names the localizations each made up \
-anew (an establishment, a nickname with a meaning), with the rendering the job chose and \
-alternatives. After telling the user how the job went, ask about them with ask_choice, \
-one at a time and the most visible first: the options are the rendering and its \
-alternatives, each with what the original and the localizations call it. Write the \
-choice with set_knowledge (terms, with the other options as forbidden), and when it \
-differs from what the job wrote, offer propose_revision for that term.
+- Names: localizations study names the localizations each made up anew (an \
+establishment, a nickname with a meaning) and list them in list_decisions with the \
+study's rendering and options. Triage them yourself: read each name in its languages \
+(other_languages or search) and settle with settle_names every one whose rendering you \
+find right, or pick a better option or your own; most names need nobody else. Ask the \
+user with ask_choice, one at a time, only about the few that players see often or that \
+carry a joke or a pun, with the options and what the original and the localizations call \
+it. When a settled rendering changed, revise the strings written with the old one with \
+propose_revision.
 - Taste: every choice the user makes between versions of wording (a calibration, a name, \
 a line) and every remark on how translations read tells the project what its people \
 prefer. After such a choice, write what it shows as an active lesson with set_knowledge: \
@@ -213,6 +215,21 @@ const ASK_MODE: &str = "\
 Current mode: Ask. propose_translation shows each valid translation to the user, who \
 applies or rejects it; nothing is written until then. Tell the user what you proposed.";
 
+const WORK_MODE: &str = "\
+Current mode: Work. You lead this project's localization, and you act rather than ask \
+the user to press buttons. The project is localized continuously: at any time the user \
+may want text translated, a decision changed, a patch taken in, or new content done, and \
+you decide how. Localizations and revisions you start with start_job and \
+propose_revision start at once; tell the user what you started and why. \
+propose_translation writes translations of untranslated strings at once; a translation \
+that would replace an existing one, and changes to the human files (guidance, glossary, \
+voices), wait for the user's approval, and so do Git and export. Decide what you can \
+decide: settle made-up names you agree with, fix knowledge that is wrong, revise what a \
+decision changed, retry what failed, and withdraw your own proposals that are no longer \
+right. Ask the user, one question at a time with ask_choice, only about matters of taste \
+and choices that change much of what players read. Never tell the user that something \
+cannot be done before trying the tools you have.";
+
 const AUTO_DRAFT_MODE: &str = "\
 Current mode: Auto-draft. propose_translation writes valid translations of untranslated \
 strings immediately as drafts. Translations that would replace an existing translation \
@@ -225,6 +242,11 @@ pub enum AgentMode {
     /// Read only.
     #[default]
     Chat,
+    /// Angelica leads the localization: she starts localizations and
+    /// revisions and writes new translations and knowledge at once; she
+    /// replaces translations and changes the human files only with the
+    /// user's approval.
+    Work,
     /// Every change waits for the user's approval.
     Ask,
     /// New drafts are written at once; replacements wait for approval.
@@ -265,15 +287,15 @@ pub fn system_prompt(
     prompt.push_str("\n\n");
     match mode {
         AgentMode::Chat => prompt.push_str(CHAT_MODE),
-        AgentMode::Ask | AgentMode::AutoDraft => {
+        AgentMode::Ask | AgentMode::AutoDraft | AgentMode::Work => {
             prompt.push_str(WRITING);
             prompt.push('\n');
             prompt.push_str(&aeria_se::authoring_reference());
             prompt.push_str("\n\n");
-            prompt.push_str(if mode == AgentMode::Ask {
-                ASK_MODE
-            } else {
-                AUTO_DRAFT_MODE
+            prompt.push_str(match mode {
+                AgentMode::Ask => ASK_MODE,
+                AgentMode::AutoDraft => AUTO_DRAFT_MODE,
+                _ => WORK_MODE,
             });
         }
     }

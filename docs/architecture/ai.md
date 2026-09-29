@@ -155,13 +155,25 @@ provider the stored secret is the refresh token described above.
 Angelica is the built-in translation agent. The complete intended design is in
 [`ai-agent.md`](./ai-agent.md); this section describes what is implemented.
 
-Each message is sent in one of three modes, chosen in the panel:
+Each message is sent in a mode. The panel offers two, Work (the default) and
+Look; conversations of earlier versions keep Ask or Auto-draft:
 
 | Mode | Tools | Writes |
 | --- | --- | --- |
-| Chat | Read tools | None. |
-| Ask (default) | Read and write tools | Every valid translation waits as a proposal until the user applies it. |
-| Auto-draft | Read and write tools | A valid translation of an untranslated string is written at once as a draft; one that would replace a translation waits as a proposal. The string selected in the editor with unsaved edits is never written at once. |
+| Look (`chat`) | Read tools | None. |
+| Work | Read and write tools | Angelica leads the localization. Localizations and revisions she starts with `start_job` and `propose_revision` start at once (their proposal is recorded and applied as the user would apply it). A valid translation of an untranslated string is written at once as a draft; one that would replace a translation waits as a proposal, as do changes to the human files. The string selected in the editor with unsaved edits is never written at once. |
+| Ask | Read and write tools | Every valid translation and every localization waits as a proposal until the user applies it. |
+| Auto-draft | Read and write tools | Like Work for translations; localizations wait as proposals. |
+
+In every mode Angelica has `list_decisions`, the decisions of the
+localization panel. Where she may write she also has `settle_names`, which
+settles made-up names as the panel's choice does and returns which
+renderings changed, and `withdraw_proposal`, which dismisses one of the
+conversation's pending proposals. The Work mode's instructions tell her to
+decide what she can (names she agrees with, wrong knowledge, revisions a
+decision calls for, retries, her own outdated proposals) and to ask the user,
+one question at a time, only about matters of taste and choices that change
+much of what players read.
 
 Angelica never marks anything reviewed on her own, commits, pushes, syncs,
 applies a source update, or exports. She can suggest approvals, which the
@@ -582,15 +594,15 @@ design and the reasoning behind it are in
 what is implemented.
 
 Angelica has `estimate_job` in every mode and `job_status` and `job_events`
-to report on jobs. In Ask and Auto-draft modes she also has `start_job`,
+to report on jobs. In Work, Ask, and Auto-draft modes she also has `start_job`,
 `amend_job`, `retry_units`, `pause_job`, `resume_job`, and `cancel_job`.
 A job is presented to the user as a localization: one continuous process
 over a scope, from a few sheets to the whole project (no sheets and no
 patterns), which the user starts with one click and can pause and resume.
 Nobody sets its workers or a token limit.
-`start_job` never starts anything: it records a proposal with the scope,
-instructions, and the estimate. The user starts the localization from the
-proposal. A scope's `careful` patterns name sheets localized with quality
+`start_job` records a proposal with the scope, instructions, and the
+estimate; in the Work mode the proposal is applied at once and the
+localization starts, otherwise the user starts it from the proposal. A scope's `careful` patterns name sheets localized with quality
 careful inside a fast localization, such as the first main story quests.
 `start_job` can also name up to 4 images of its conversation, for example a
 screenshot showing where the strings appear; each is sent with the contract
@@ -947,7 +959,11 @@ no pending or running strings), and, once a chunk finished, a projection:
 the tokens used so far plus their average per finished chunk for each
 unfinished chunk.
 
-The Angelica panel shows jobs as localizations (see
+The Angelica panel always shows the open project by area
+(`localization_project`): for names, actions, items, interface, lore, and
+quests and scenes, how many translatable strings there are, how many are
+translated, reviewed, and need review, summed from the project's sheets.
+It shows jobs as localizations (see
 [the localization](./localization-system.md#the-localization)). A
 localization's card shows its progress, its economy (tokens per written
 string, the cached share of its prompt tokens, strings written per minute
@@ -956,7 +972,11 @@ by area (each sheet's domain from `sheet_domain`, with general text shown as
 interface), and details with its problems, events, facts, and, while it
 runs, the diagnostics of its lanes. Above the cards, the decisions waiting
 for a person are computed when the panel loads and after job events
-(`localization_decisions`): the domains a live localization still has
+(`localization_decisions`) and shown as one line of kinds with their counts
+(style, names, review, knowledge); one kind opens at a time, names as a
+table with the study's choice highlighted and an action that accepts every
+suggested rendering, and a link asks Angelica to sort the decisions out
+herself. The decisions are: the domains a live localization still has
 strings for whose style is uncalibrated (quest and cutscene sheets count as
 journal, objective, and dialogue); agent terms whose note has alternatives
 (`or: A / B`); the strings needing review of the live localizations and of

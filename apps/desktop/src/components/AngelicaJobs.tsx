@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
-import { angelicaJobControl, angelicaJobEvents, angelicaJobRemove, angelicaJobRetry, angelicaJobUnits, angelicaJobWorkers, angelicaJobs, localizationChooseName, localizationDecisions, localizationOverview, normalizeCommandError } from "../ipc";
+import { angelicaJobControl, angelicaJobEvents, angelicaJobRemove, angelicaJobRetry, angelicaJobUnits, angelicaJobWorkers, angelicaJobs, localizationChooseName, localizationDecisions, localizationOverview, localizationProject, normalizeCommandError } from "../ipc";
 import { formatElapsed, formatTokens, jobProblems, jobProgress, jobWritten, sortJobs, totalTokens, workerHealth, scopeText } from "../angelica";
-import type { CommandError, JobAction, JobEvent, JobFilter, JobStatus, JobSummary, JobUnit, JobUnitStatus, KnowledgeDomain, LocalizationDecision, LocalizationOverview, SourceBinding, UnitLocationDto, WorkerActivity, WorkerPhase, WorkerStep } from "../types";
+import type { CommandError, JobAction, JobEvent, JobFilter, JobStatus, JobSummary, JobUnit, JobUnitStatus, KnowledgeDomain, LocalizationDecision, LocalizationOverview, LocalizationProjectArea, SourceBinding, UnitLocationDto, WorkerActivity, WorkerPhase, WorkerStep } from "../types";
 import type { MessageKey } from "../i18n/translate";
 import { useI18n } from "../ui/i18n";
 import { IconButton } from "../ui/primitives/IconButton";
@@ -318,6 +318,31 @@ function formatMinutes(minutes: number, t: ReturnType<typeof useI18n>["t"]): str
   return hours > 0 ? t("localization.hoursMinutes", { hours, minutes: rounded % 60 }) : t("localization.minutes", { minutes: rounded });
 }
 
+/** How far each kind of text of the whole project is localized. */
+function ProjectState({ areas }: { areas: LocalizationProjectArea[] }) {
+  const { t, formatNumber } = useI18n();
+  if (areas.length === 0) return null;
+  return (
+    <ul className="localization-areas localization-project" aria-label={t("localization.project")}>
+      {areas.map((area) => {
+        const share = (count: number) => `${area.total === 0 ? 0 : (count / area.total) * 100}%`;
+        const plain = Math.max(0, area.translated - area.reviewed - area.needsReview);
+        return (
+          <li key={area.domain ?? "other"} className="localization-area" title={t("localization.projectHint", { reviewed: formatNumber(area.reviewed), review: formatNumber(area.needsReview), drafts: formatNumber(plain) })}>
+            <span className="localization-area-name">{area.domain ? t(domainLabels[area.domain]) : "—"}</span>
+            <span className="angelica-job-bar" aria-hidden="true">
+              <span className="drafted" style={{ width: share(area.reviewed) }} />
+              <span className="running" style={{ width: share(plain) }} />
+              <span className="flagged" style={{ width: share(area.needsReview) }} />
+            </span>
+            <span className="localization-area-count">{`${formatNumber(area.translated)} / ${formatNumber(area.total)}`}</span>
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
 /** Cost and pace: tokens per string, cache share, strings per minute, time left. */
 function Economy({ job, overview }: { job: JobSummary; overview: LocalizationOverview | null }) {
   const { t, formatNumber } = useI18n();
@@ -427,65 +452,98 @@ function LocalizationCard({ job, busy, act, retry, remove, focus, setFocus, onEr
   );
 }
 
-/** A made-up name with its options and a field for another one. */
-function NameDecision({ decision, busy, choose }: { decision: Extract<LocalizationDecision, { kind: "name" }>; busy: boolean; choose: (rendering: string) => void }) {
+/** A made-up name as a table row: the chosen rendering, the options, and a field for another one. */
+function NameRow({ decision, busy, choose }: { decision: Extract<LocalizationDecision, { kind: "name" }>; busy: boolean; choose: (rendering: string) => void }) {
   const { t } = useI18n();
   const [other, setOther] = useState("");
   return (
-    <div className="localization-decision">
-      <span className="localization-decision-text">{t("localization.decision.name", { term: decision.term })}</span>
-      <div className="localization-decision-options">
+    <li className="localization-name">
+      <span className="localization-name-term" title={decision.term}>{decision.term}</span>
+      <span className="localization-decision-options">
         {decision.options.map((option) => (
-          <button key={option} className={option === decision.rendering ? "button button-secondary" : "button button-ghost"} type="button" disabled={busy} onClick={() => choose(option)}>{option}</button>
+          <button key={option} className={option === decision.rendering ? "button button-secondary" : "button button-ghost"} type="button" disabled={busy} title={t("localization.decision.choose")} onClick={() => choose(option)}>{option}</button>
         ))}
         <input className="input" value={other} disabled={busy} placeholder={t("localization.decision.nameOther")} aria-label={t("localization.decision.nameOther")} onChange={(event) => setOther(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && other.trim()) choose(other.trim()); }} />
-      </div>
-    </div>
+      </span>
+    </li>
   );
 }
 
-/** Decisions that wait for a person, one at a time in the order they matter. */
-function Decisions({ decisions, busy, onAsk, choose, review }: { decisions: LocalizationDecision[]; busy: boolean; onAsk?: ((text: string) => void) | undefined; choose: (term: string, rendering: string) => void; review: (jobId: string) => void }) {
-  const { t } = useI18n();
-  const [open, setOpen] = useState(true);
+type DecisionGroup = "style" | "names" | "review" | "knowledge";
+
+const groupOf = (decision: LocalizationDecision): DecisionGroup =>
+  decision.kind === "calibrate" ? "style" : decision.kind === "name" ? "names" : decision.kind;
+
+const GROUPS: readonly DecisionGroup[] = ["style", "names", "review", "knowledge"];
+
+const groupLabels: Readonly<Record<DecisionGroup, MessageKey>> = {
+  style: "localization.group.style",
+  names: "localization.group.names",
+  review: "localization.group.review",
+  knowledge: "localization.group.knowledge",
+};
+
+/** Decisions that wait for a person, by kind: one kind open at a time. */
+function Decisions({ decisions, busy, onAsk, choose, acceptAll, review }: { decisions: LocalizationDecision[]; busy: boolean; onAsk?: ((text: string) => void) | undefined; choose: (term: string, rendering: string) => void; acceptAll: (names: Array<{ term: string; rendering: string }>) => void; review: (jobId: string) => void }) {
+  const { t, formatNumber } = useI18n();
+  const [group, setGroup] = useState<DecisionGroup | null>(null);
   if (decisions.length === 0) return null;
+  const counts = new Map<DecisionGroup, number>();
+  for (const decision of decisions) counts.set(groupOf(decision), (counts.get(groupOf(decision)) ?? 0) + (decision.kind === "review" ? decision.count : 1));
+  const present = GROUPS.filter((kind) => counts.has(kind));
+  const open = group !== null && counts.has(group) ? group : null;
+  const shown = open ? decisions.filter((decision) => groupOf(decision) === open) : [];
+  const names = shown.filter((decision): decision is Extract<LocalizationDecision, { kind: "name" }> => decision.kind === "name");
   return (
     <div className="localization-decisions">
-      <button className="angelica-jobs-toggle" type="button" aria-expanded={open} onClick={() => setOpen((value) => !value)}>
-        <UiIcon icon={open ? "chevronDown" : "chevronRight"} size="xs" />
-        <span>{t("localization.decisions", { count: decisions.length })}</span>
-      </button>
-      {open ? (
+      <div className="localization-decision-summary">
+        <span className="localization-decision-title">{t("localization.waiting")}</span>
+        {present.map((kind) => (
+          <button key={kind} className={kind === open ? "button button-secondary" : "button button-ghost"} type="button" aria-pressed={kind === open} onClick={() => setGroup(kind === open ? null : kind)}>
+            {`${t(groupLabels[kind])} ${formatNumber(counts.get(kind) ?? 0)}`}
+          </button>
+        ))}
+        {onAsk ? <button className="link-button" type="button" onClick={() => onAsk(t("localization.ask.triage"))}>{t("localization.triage")}</button> : null}
+      </div>
+      {open === "style" ? (
         <ul className="localization-decision-list">
-          {decisions.map((decision) => {
-            switch (decision.kind) {
-              case "calibrate": {
-                const domain = t(domainLabels[decision.domain]);
-                return (
-                  <li key={`calibrate-${decision.domain}`} className="localization-decision">
-                    <span className="localization-decision-text">{t("localization.decision.calibrate", { domain })}</span>
-                    {onAsk ? <button className="button button-secondary" type="button" onClick={() => onAsk(t("localization.ask.calibrate", { domain }))}>{t("localization.decision.calibrateAction")}</button> : null}
-                  </li>
-                );
-              }
-              case "name":
-                return <li key={`name-${decision.term}`}><NameDecision decision={decision} busy={busy} choose={(rendering) => choose(decision.term, rendering)} /></li>;
-              case "review":
-                return (
-                  <li key={`review-${decision.jobId}`} className="localization-decision">
-                    <span className="localization-decision-text">{t("localization.decision.review", { count: decision.count })}</span>
-                    <button className="button button-ghost" type="button" onClick={() => review(decision.jobId)}>{t("localization.decision.reviewAction")}</button>
-                  </li>
-                );
-              case "knowledge":
-                return (
-                  <li key={`knowledge-${decision.jobId}-${decision.message}`} className="localization-decision">
-                    <span className="localization-decision-text" title={decision.message}>{decision.message}</span>
-                    {onAsk ? <button className="button button-ghost" type="button" onClick={() => onAsk(t("localization.ask.knowledge", { message: decision.message }))}>{t("localization.decision.discuss")}</button> : null}
-                  </li>
-                );
-            }
-          })}
+          {shown.map((decision) => decision.kind === "calibrate" ? (
+            <li key={decision.domain} className="localization-decision">
+              <span className="localization-decision-text">{t(domainLabels[decision.domain])}</span>
+              {onAsk ? <button className="button button-ghost" type="button" onClick={() => onAsk(t("localization.ask.calibrate", { domain: t(domainLabels[decision.domain]) }))}>{t("localization.decision.calibrateAction")}</button> : null}
+            </li>
+          ) : null)}
+        </ul>
+      ) : null}
+      {open === "names" ? (
+        <>
+          <div className="localization-decision">
+            <span className="localization-decision-text field-hint">{t("localization.names.hint")}</span>
+            <button className="button button-secondary" type="button" disabled={busy} onClick={() => acceptAll(names.map((name) => ({ term: name.term, rendering: name.rendering })))}>{t("localization.names.acceptAll")}</button>
+          </div>
+          <ul className="localization-decision-list localization-names">
+            {names.map((decision) => <NameRow key={decision.term} decision={decision} busy={busy} choose={(rendering) => choose(decision.term, rendering)} />)}
+          </ul>
+        </>
+      ) : null}
+      {open === "review" ? (
+        <ul className="localization-decision-list">
+          {shown.map((decision) => decision.kind === "review" ? (
+            <li key={decision.jobId} className="localization-decision">
+              <span className="localization-decision-text">{t("localization.decision.review", { count: decision.count })}</span>
+              <button className="button button-ghost" type="button" onClick={() => review(decision.jobId)}>{t("localization.decision.reviewAction")}</button>
+            </li>
+          ) : null)}
+        </ul>
+      ) : null}
+      {open === "knowledge" ? (
+        <ul className="localization-decision-list">
+          {shown.map((decision) => decision.kind === "knowledge" ? (
+            <li key={`${decision.jobId}-${decision.message}`} className="localization-decision">
+              <span className="localization-decision-text" title={decision.message}>{decision.message}</span>
+              {onAsk ? <button className="button button-ghost" type="button" onClick={() => onAsk(t("localization.ask.knowledge", { message: decision.message }))}>{t("localization.decision.discuss")}</button> : null}
+            </li>
+          ) : null)}
         </ul>
       ) : null}
     </div>
@@ -497,6 +555,7 @@ export function AngelicaJobs({ onError, onReveal, onAsk }: AngelicaJobsProps) {
   const { t } = useI18n();
   const [jobs, setJobs] = useState<JobSummary[]>([]);
   const [decisions, setDecisions] = useState<LocalizationDecision[]>([]);
+  const [project, setProject] = useState<LocalizationProjectArea[]>([]);
   const [busy, setBusy] = useState(false);
   const [open, setOpen] = useState(true);
   const [showPast, setShowPast] = useState(false);
@@ -507,6 +566,7 @@ export function AngelicaJobs({ onError, onReveal, onAsk }: AngelicaJobsProps) {
   const load = useCallback(() => {
     void angelicaJobs().then(setJobs).catch((reason: unknown) => onError(normalizeCommandError(reason)));
     void localizationDecisions().then(setDecisions).catch(() => undefined);
+    void localizationProject().then(setProject).catch(() => undefined);
   }, [onError]);
 
   useEffect(() => {
@@ -548,6 +608,20 @@ export function AngelicaJobs({ onError, onReveal, onAsk }: AngelicaJobsProps) {
     }
   };
 
+  // Accepting the study's renderings changes nothing already written.
+  const acceptAll = async (names: Array<{ term: string; rendering: string }>) => {
+    setBusy(true);
+    try {
+      for (const name of names) await localizationChooseName(name.term, name.rendering);
+      const settled = new Set(names.map((name) => name.term));
+      setDecisions((current) => current.filter((decision) => !(decision.kind === "name" && settled.has(decision.term))));
+    } catch (reason) {
+      onError(normalizeCommandError(reason));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const choose = async (term: string, rendering: string) => {
     setBusy(true);
     try {
@@ -572,7 +646,7 @@ export function AngelicaJobs({ onError, onReveal, onAsk }: AngelicaJobsProps) {
   const sorted = sortJobs(jobs);
   const active = sorted.filter(isLive);
   const past = sorted.filter((job) => !isLive(job));
-  if (active.length === 0 && past.length === 0 && decisions.length === 0) return null;
+  if (active.length === 0 && past.length === 0 && decisions.length === 0 && project.length === 0) return null;
 
   const card = (job: JobSummary) => (
     <LocalizationCard
@@ -599,7 +673,8 @@ export function AngelicaJobs({ onError, onReveal, onAsk }: AngelicaJobsProps) {
       </div>
       {open ? (
         <div className="angelica-job-list">
-          <Decisions decisions={decisions} busy={busy} onAsk={onAsk} choose={(term, rendering) => void choose(term, rendering)} review={(jobId) => setFocus(jobId, "problems")} />
+          <ProjectState areas={project} />
+          <Decisions decisions={decisions} busy={busy} onAsk={onAsk} choose={(term, rendering) => void choose(term, rendering)} acceptAll={(names) => void acceptAll(names)} review={(jobId) => setFocus(jobId, "problems")} />
           {active.length > 0 ? <ul className="localization-cards">{active.map(card)}</ul> : null}
           {past.length > 0 ? (
             <div className="localization-past">

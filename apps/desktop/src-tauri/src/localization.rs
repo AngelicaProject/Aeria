@@ -12,7 +12,9 @@ use aeria_ai::jobs::{JobStatus, JobSummary, UnitStatus};
 use aeria_ai::knowledge::{self as knowledge_files, Domain, Knowledge, sheet_domain};
 use serde::Serialize;
 
-use crate::angelica::{now_unix_ms, repository_root};
+use aeria_ai::tools::{ProjectReader, SheetSummary};
+
+use crate::angelica::{DesktopReader, now_unix_ms, repository_root};
 use crate::commands::run_blocking;
 use crate::error::CommandError;
 use crate::jobs::job_store;
@@ -51,6 +53,50 @@ pub struct LocalizationOverview {
     pub areas: Vec<Area>,
     /// Translations written per minute over the last minutes.
     pub per_minute: f64,
+}
+
+/// How far one kind of text of the whole project is localized.
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectArea {
+    pub domain: Option<Domain>,
+    pub total: u64,
+    /// Translated, reviewed ones and those needing review included.
+    pub translated: u64,
+    pub reviewed: u64,
+    pub needs_review: u64,
+}
+
+/// The project's translatable strings by area, in the order a localization
+/// takes them.
+fn project_areas(sheets: &[SheetSummary]) -> Vec<ProjectArea> {
+    const ORDER: [Domain; 6] = [
+        Domain::Names,
+        Domain::Actions,
+        Domain::Items,
+        Domain::Interface,
+        Domain::Lore,
+        Domain::Dialogue,
+    ];
+    let mut areas: Vec<ProjectArea> = ORDER
+        .iter()
+        .map(|domain| ProjectArea {
+            domain: Some(*domain),
+            ..ProjectArea::default()
+        })
+        .collect();
+    for sheet in sheets.iter().filter(|sheet| sheet.translatable > 0) {
+        let domain = area_of(&sheet.name);
+        let Some(area) = areas.iter_mut().find(|area| area.domain == Some(domain)) else {
+            continue;
+        };
+        area.total += sheet.translatable;
+        area.translated += sheet.translated;
+        area.reviewed += sheet.reviewed;
+        area.needs_review += sheet.needs_review;
+    }
+    areas.retain(|area| area.total > 0);
+    areas
 }
 
 /// A decision that waits for a person.
@@ -185,7 +231,7 @@ fn live(job: &JobSummary) -> bool {
     matches!(job.status, JobStatus::Running | JobStatus::Paused)
 }
 
-fn decisions(app: &tauri::AppHandle) -> CommandResult<Vec<Decision>> {
+pub(crate) fn decisions(app: &tauri::AppHandle) -> CommandResult<Vec<Decision>> {
     let root = repository_root(app)?;
     let store = job_store(app)?;
     let knowledge = Knowledge::load(&root);
@@ -264,6 +310,22 @@ pub async fn localization_overview(
 }
 
 #[tauri::command(rename_all = "camelCase")]
+/// How far each kind of text of the open project is localized.
+///
+/// # Errors
+///
+/// Returns `noProjectOpen` or a read error.
+pub async fn localization_project(app: tauri::AppHandle) -> CommandResult<Vec<ProjectArea>> {
+    run_blocking(move || {
+        let sheets = DesktopReader { app }
+            .sheets()
+            .map_err(|error| CommandError::new("localizationProject", error.0))?;
+        Ok(project_areas(&sheets))
+    })
+    .await
+}
+
+#[tauri::command(rename_all = "camelCase")]
 /// The decisions that wait for a person across the project's localizations.
 ///
 /// # Errors
@@ -288,13 +350,22 @@ pub async fn localization_choose_name(
     term: String,
     rendering: String,
 ) -> CommandResult<bool> {
-    run_blocking(move || {
-        let root = repository_root(&app)?;
+    run_blocking(move || choose_name(&app, &term, &rendering)).await
+}
+
+/// Settles a made-up name (see [`localization_choose_name`]).
+pub(crate) fn choose_name(
+    app: &tauri::AppHandle,
+    term: &str,
+    rendering: &str,
+) -> CommandResult<bool> {
+    {
+        let root = repository_root(app)?;
         let knowledge = Knowledge::load(&root);
         let Some(entry) = knowledge
             .terms
             .iter()
-            .find(|entry| entry.term == term)
+            .find(|entry| entry.term.eq_ignore_ascii_case(term))
             .cloned()
         else {
             return Err(CommandError::new(
@@ -323,8 +394,7 @@ pub async fn localization_choose_name(
         knowledge_files::set_terms(&root, &[settled], true)
             .map_err(|message| CommandError::new("localizationKnowledge", message))?;
         Ok(changed)
-    })
-    .await
+    }
 }
 
 #[cfg(test)]
@@ -360,6 +430,35 @@ mod tests {
         assert_eq!(overview.areas[1].flagged, 1);
         assert_eq!(overview.areas[2].problems, 3);
         assert!((overview.per_minute - 2.5).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn the_project_is_summed_by_area_in_localization_order() {
+        let sheet = |name: &str, translatable, translated| SheetSummary {
+            name: name.to_owned(),
+            translatable,
+            translated,
+            reviewed: translated / 2,
+            needs_review: 0,
+        };
+        let areas = project_areas(&[
+            sheet("quest/000/SubFst000_00020", 20, 5),
+            sheet("Addon", 10, 10),
+            sheet("PlaceName", 4, 0),
+            sheet("Empty", 0, 0),
+        ]);
+        assert_eq!(
+            areas.iter().map(|area| area.domain).collect::<Vec<_>>(),
+            vec![
+                Some(Domain::Names),
+                Some(Domain::Interface),
+                Some(Domain::Dialogue)
+            ]
+        );
+        assert_eq!(
+            (areas[2].total, areas[2].translated, areas[2].reviewed),
+            (20, 5, 2)
+        );
     }
 
     #[test]

@@ -285,7 +285,7 @@ export function AngelicaPanel({ editorContext, onOpenSettings, onOpenGuide, onRe
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [queue, setQueue] = useState<QueuedMessage[]>([]);
   const [attachContext, setAttachContext] = useState(true);
-  const [mode, setMode] = useState<AgentMode>("ask");
+  const [mode, setMode] = useState<AgentMode>("work");
   const [proposals, setProposals] = useState<ProposalRecord[]>([]);
   const [settling, setSettling] = useState(false);
   const [error, setError] = useState<CommandError | null>(null);

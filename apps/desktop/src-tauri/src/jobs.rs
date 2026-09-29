@@ -349,9 +349,52 @@ pub(crate) struct DesktopJobs {
     pub(crate) app: tauri::AppHandle,
     pub(crate) store: ConversationStore,
     pub(crate) conversation_id: String,
+    /// Angelica works in the Work mode: a localization she proposes starts
+    /// at once instead of waiting for the user.
+    pub(crate) direct: bool,
 }
 
 impl DesktopJobs {
+    /// Records a job proposal in the conversation and returns its ID.
+    fn record_job_proposal(
+        &self,
+        summary: String,
+        proposal: JobProposal,
+    ) -> Result<String, ToolError> {
+        let state = self.app.state::<DesktopState>();
+        let _guard = state
+            .lock_proposals()
+            .map_err(|error| ToolError::new(error.message))?;
+        let mut records = self
+            .store
+            .load_proposals(&self.conversation_id)
+            .map_err(tool_error)?;
+        let id = aeria_ai::ProviderConfig::new_id();
+        records.push(ProposalRecord {
+            id: id.clone(),
+            file: None,
+            job: Some(proposal),
+            web: None,
+            review: None,
+            job_limit: None,
+            location: None,
+            source: String::new(),
+            target: summary,
+            expected: UnitState {
+                target: None,
+                review_state: None,
+            },
+            status: ProposalStatus::Pending,
+            message: None,
+            created_at_unix_ms: now_unix_ms(),
+        });
+        self.store
+            .save_proposals(&self.conversation_id, &records)
+            .map_err(tool_error)?;
+        announce_proposals(&self.app, &self.conversation_id);
+        Ok(id)
+    }
+
     /// Resolves image IDs against the images attached in this
     /// conversation. Images are refused when the jobs model does not
     /// accept them, since workers could not see them.
@@ -555,47 +598,34 @@ impl JobControl for DesktopJobs {
         if quality == JobQuality::Careful {
             summary.push_str(", careful");
         }
-        let proposal = JobProposal {
-            token_limit: estimate.token_limit(),
-            scope,
-            instructions,
-            images,
-            concurrency,
-            estimate,
-            quality,
-        };
-        let state = self.app.state::<DesktopState>();
-        let _guard = state
-            .lock_proposals()
-            .map_err(|error| ToolError::new(error.message))?;
-        let mut records = self
-            .store
-            .load_proposals(&self.conversation_id)
-            .map_err(tool_error)?;
-        let id = aeria_ai::ProviderConfig::new_id();
-        records.push(ProposalRecord {
-            id: id.clone(),
-            file: None,
-            job: Some(proposal),
-            web: None,
-            review: None,
-            job_limit: None,
-            location: None,
-            source: String::new(),
-            target: summary,
-            expected: UnitState {
-                target: None,
-                review_state: None,
+        let id = self.record_job_proposal(
+            summary,
+            JobProposal {
+                token_limit: estimate.token_limit(),
+                scope,
+                instructions,
+                images,
+                concurrency,
+                estimate,
+                quality,
             },
-            status: ProposalStatus::Pending,
-            message: None,
-            created_at_unix_ms: now_unix_ms(),
-        });
-        self.store
-            .save_proposals(&self.conversation_id, &records)
-            .map_err(tool_error)?;
-        announce_proposals(&self.app, &self.conversation_id);
-        Ok(ProposalOutcome::Pending { proposal_id: id })
+        )?;
+        if !self.direct {
+            return Ok(ProposalOutcome::Pending { proposal_id: id });
+        }
+        // In the Work mode the proposal is applied at once, as the user
+        // would, so the localization and its record stay the same.
+        let records = crate::angelica::settle_proposal(&self.app, &self.conversation_id, &id, true)
+            .map_err(|error| ToolError::new(error.message))?;
+        let settled = records.iter().find(|record| record.id == id);
+        Ok(match settled.map(|record| record.status) {
+            Some(ProposalStatus::Applied) => ProposalOutcome::Applied,
+            _ => ProposalOutcome::Failed {
+                message: settled
+                    .and_then(|record| record.message.clone())
+                    .unwrap_or_else(|| "the localization could not start".to_owned()),
+            },
+        })
     }
 
     fn jobs(&self) -> Result<Vec<JobSummary>, ToolError> {
@@ -701,6 +731,32 @@ impl JobControl for DesktopJobs {
     fn control(&self, job_id: &str, action: JobAction) -> Result<JobStatus, ToolError> {
         control_job(&self.app, job_id, action)
             .map(|job| job.status)
+            .map_err(|error| ToolError::new(error.message))
+    }
+
+    fn decisions(&self) -> Result<serde_json::Value, ToolError> {
+        let decisions = crate::localization::decisions(&self.app)
+            .map_err(|error| ToolError::new(error.message))?;
+        serde_json::to_value(decisions).map_err(|error| ToolError::new(error.to_string()))
+    }
+
+    fn settle_name(&self, term: &str, rendering: &str) -> Result<bool, ToolError> {
+        crate::localization::choose_name(&self.app, term, rendering)
+            .map_err(|error| ToolError::new(error.message))
+    }
+
+    fn withdraw(&self, proposal_id: &str) -> Result<(), ToolError> {
+        let records = self
+            .store
+            .load_proposals(&self.conversation_id)
+            .map_err(tool_error)?;
+        match records.iter().find(|record| record.id == proposal_id) {
+            Some(record) if record.status == ProposalStatus::Pending => {}
+            Some(_) => return Err(ToolError::new("the proposal is already settled")),
+            None => return Err(ToolError::new("no such proposal in this conversation")),
+        }
+        crate::angelica::settle_proposal(&self.app, &self.conversation_id, proposal_id, false)
+            .map(|_| ())
             .map_err(|error| ToolError::new(error.message))
     }
 }

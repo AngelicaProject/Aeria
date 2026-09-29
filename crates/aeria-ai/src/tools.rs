@@ -489,6 +489,35 @@ pub trait JobControl: Send + Sync {
     /// # Errors
     /// Returns an error for an unknown job or an impossible transition.
     fn control(&self, job_id: &str, action: JobAction) -> Result<JobStatus, ToolError>;
+
+    /// The decisions that wait for a person: uncalibrated kinds of text,
+    /// made-up names with their options, strings left for review, and
+    /// findings against the knowledge.
+    ///
+    /// # Errors
+    /// Returns an error when they cannot be read.
+    fn decisions(&self) -> Result<Value, ToolError> {
+        Err(ToolError::new("decisions are not available here"))
+    }
+
+    /// Settles a made-up name with a rendering; returns whether the
+    /// rendering changed.
+    ///
+    /// # Errors
+    /// Returns an error for a term the agent knowledge does not have.
+    fn settle_name(&self, term: &str, rendering: &str) -> Result<bool, ToolError> {
+        let _ = (term, rendering);
+        Err(ToolError::new("names cannot be settled here"))
+    }
+
+    /// Withdraws one of this conversation's pending proposals.
+    ///
+    /// # Errors
+    /// Returns an error for an unknown or settled proposal.
+    fn withdraw(&self, proposal_id: &str) -> Result<(), ToolError> {
+        let _ = proposal_id;
+        Err(ToolError::new("proposals cannot be withdrawn here"))
+    }
 }
 
 /// Most strings `job_status` lists per status.
@@ -509,6 +538,11 @@ pub fn job_tool_definitions(write: bool) -> Vec<ToolDefinition> {
     let mut estimate_properties = scope.as_object().cloned().unwrap_or_default();
     estimate_properties.insert("quality".to_owned(), json!({ "type": "string", "enum": ["fast", "careful"], "description": "fast (the default): parts of each unit written in parallel, fast enough for the whole game. careful: a high effort for every step and two full rechecks; about twice the tokens and slower, for main story quests or when the user asks." }));
     let mut tools = vec![
+        ToolDefinition {
+            name: "list_decisions",
+            description: "The decisions that wait for a person in the localization panel: kinds of text whose style no person chose, made-up names with the study's rendering and its options, strings the critics left for review per job, and findings against the project knowledge.",
+            parameters: json!({ "type": "object", "properties": {}, "additionalProperties": false }),
+        },
         ToolDefinition {
             name: "estimate_job",
             description: "Counts the strings, chunks, and approximate tokens a translation job over a scope would use at a quality. Changes nothing.",
@@ -568,6 +602,31 @@ pub fn job_tool_definitions(write: bool) -> Vec<ToolDefinition> {
             ToolDefinition { name: "pause_job", description: "Pauses a running job after its current chunks.", parameters: job_id.clone() },
             ToolDefinition { name: "resume_job", description: "Resumes a paused job.", parameters: job_id.clone() },
             ToolDefinition { name: "cancel_job", description: "Cancels a job. Translations already written stay.", parameters: job_id },
+            ToolDefinition {
+                name: "settle_names",
+                description: "Settles made-up names from list_decisions: each term takes the rendering you choose (the study's choice, one of its options, or your own), the other options become forbidden, and the name leaves the decisions. Returns which renderings changed; strings written with an old rendering can then be revised with propose_revision.",
+                parameters: json!({
+                    "type": "object",
+                    "properties": {
+                        "names": { "type": "array", "minItems": 1, "maxItems": 200, "items": { "type": "object", "properties": {
+                            "term": { "type": "string" },
+                            "rendering": { "type": "string" },
+                        }, "required": ["term", "rendering"], "additionalProperties": false } },
+                    },
+                    "required": ["names"],
+                    "additionalProperties": false,
+                }),
+            },
+            ToolDefinition {
+                name: "withdraw_proposal",
+                description: "Withdraws one of your pending proposals in this conversation, such as a job or glossary change that is no longer right, so you can propose a better one.",
+                parameters: json!({
+                    "type": "object",
+                    "properties": { "proposal_id": { "type": "string" } },
+                    "required": ["proposal_id"],
+                    "additionalProperties": false,
+                }),
+            },
         ]);
         tools.push(revision_definition());
     }
@@ -623,6 +682,29 @@ struct RevisionArgs {
 #[serde(deny_unknown_fields)]
 struct JobIdArgs {
     job_id: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct EmptyArgs {}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SettleName {
+    term: String,
+    rendering: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SettleNamesArgs {
+    names: Vec<SettleName>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WithdrawArgs {
+    proposal_id: String,
 }
 
 #[derive(Deserialize)]
@@ -741,13 +823,38 @@ fn run_job_tool(
     name: &str,
     arguments: &str,
 ) -> Result<Value, ToolError> {
-    let needs_write = !matches!(name, "estimate_job" | "job_status" | "job_events");
+    let needs_write = !matches!(
+        name,
+        "estimate_job" | "job_status" | "job_events" | "list_decisions"
+    );
     if needs_write && !write {
         return Err(ToolError::new(
             "changing jobs is not available in Chat mode",
         ));
     }
     match name {
+        "list_decisions" => {
+            let _: EmptyArgs = parse(arguments)?;
+            jobs.decisions()
+        }
+        "settle_names" => {
+            let args: SettleNamesArgs = parse(arguments)?;
+            let mut changed = Vec::new();
+            let mut failed = Vec::new();
+            for name in args.names {
+                match jobs.settle_name(&name.term, &name.rendering) {
+                    Ok(true) => changed.push(name.term),
+                    Ok(false) => {}
+                    Err(error) => failed.push(json!({ "term": name.term, "error": error.0 })),
+                }
+            }
+            Ok(json!({ "changed": changed, "failed": failed }))
+        }
+        "withdraw_proposal" => {
+            let args: WithdrawArgs = parse(arguments)?;
+            jobs.withdraw(&args.proposal_id)?;
+            Ok(json!({ "withdrawn": true }))
+        }
         "estimate_job" => {
             let args: ScopeArgs = parse(arguments)?;
             let scope = JobScope {
@@ -1412,7 +1519,8 @@ impl<'a> ReadTools<'a> {
                 run_search_tool(search, self.reader, name, arguments)
             }
             "estimate_job" | "start_job" | "job_status" | "job_events" | "amend_job"
-            | "retry_units" | "pause_job" | "resume_job" | "cancel_job" | "propose_revision" => {
+            | "retry_units" | "pause_job" | "resume_job" | "cancel_job" | "propose_revision"
+            | "list_decisions" | "settle_names" | "withdraw_proposal" => {
                 let Some(jobs) = self.jobs else {
                     return Err(ToolError::new("translation jobs are not available here"));
                 };

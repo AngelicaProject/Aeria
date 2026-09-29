@@ -633,7 +633,7 @@ export type UnitLocationDto = { sheet: string; row: number; subrow: number; colu
 
 export type EditorContextDto = { sheet: string | null; selection: UnitLocationDto | null; unsavedDraft: boolean };
 
-export type AgentMode = "chat" | "ask" | "autoDraft";
+export type AgentMode = "chat" | "work" | "ask" | "autoDraft";
 
 export type ProposalRecord = {
   id: string;
@@ -667,6 +667,9 @@ export type KnowledgeDomain = "general" | "journal" | "objective" | "system" | "
 
 /** One area of a localization: the strings of one kind of text. */
 export type LocalizationArea = { domain: KnowledgeDomain | null; total: number; done: number; flagged: number; problems: number };
+
+/** How far one kind of text of the whole project is localized. */
+export type LocalizationProjectArea = { domain: KnowledgeDomain | null; total: number; translated: number; reviewed: number; needsReview: number };
 
 /** How a localization goes: its areas in the order it takes them, and its speed. */
 export type LocalizationOverview = { areas: LocalizationArea[]; perMinute: number };

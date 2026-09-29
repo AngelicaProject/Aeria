@@ -743,7 +743,7 @@ impl DesktopWriter {
     /// Auto-draft writes only new translations, and never one the user is
     /// editing right now.
     fn writes_at_once(&self, proposal: &Proposal) -> bool {
-        self.mode == AgentMode::AutoDraft
+        matches!(self.mode, AgentMode::AutoDraft | AgentMode::Work)
             && proposal.expected.target.is_none()
             && !(self.editor.unsaved_draft
                 && self.editor.selection.as_ref().is_some_and(|selection| {
@@ -1006,6 +1006,7 @@ impl ToolExecutor for DesktopTools {
             app: self.app.clone(),
             store: self.store.clone(),
             conversation_id: self.conversation_id.clone(),
+            direct: self.mode == AgentMode::Work,
         };
         let name = call.name.clone();
         let arguments = call.arguments.clone();
@@ -1639,7 +1640,7 @@ fn apply_record(
 }
 
 /// Settles one pending proposal and returns the updated list.
-fn settle_proposal(
+pub(crate) fn settle_proposal(
     app: &tauri::AppHandle,
     conversation_id: &str,
     proposal_id: &str,
