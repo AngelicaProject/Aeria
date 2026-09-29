@@ -947,6 +947,27 @@ no pending or running strings), and, once a chunk finished, a projection:
 the tokens used so far plus their average per finished chunk for each
 unfinished chunk.
 
+The Angelica panel shows jobs as localizations (see
+[the localization](./localization-system.md#the-localization)). A
+localization's card shows its progress, its economy (tokens per written
+string, the cached share of its prompt tokens, strings written per minute
+over the last ten minutes, and the time left at that speed), its progress
+by area (each sheet's domain from `sheet_domain`, with general text shown as
+interface), and details with its problems, events, facts, and, while it
+runs, the diagnostics of its lanes. Above the cards, the decisions waiting
+for a person are computed when the panel loads and after job events
+(`localization_decisions`): the domains a live localization still has
+strings for whose style is uncalibrated (quest and cutscene sheets count as
+journal, objective, and dialogue); agent terms whose note has alternatives
+(`or: A / B`); the strings needing review of the live localizations and of
+the last completed one; and up to five `knowledge` findings of each live
+localization. Choosing a name (`localization_choose_name`) writes the term
+with the chosen rendering, forbids the other options, and removes the
+alternatives from its note; when the rendering changed, the panel asks
+Angelica to propose a revision of the strings already written. Calibrating
+and discussing a finding also go to Angelica as messages of the open
+conversation.
+
 When a job completes or pauses on its own, Aeria wakes Angelica: unless a
 turn is already running there, it adds an automatic `[Aeria]` message to the
 job's conversation and starts a turn with the conversation's last model and

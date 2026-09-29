@@ -1,6 +1,8 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
   CheckWorkflowDto,
+  LocalizationDecision,
+  LocalizationOverview,
   MacroIdiomDto,
   MacroInsertionDto,
   MacroViewDto,
@@ -528,16 +530,25 @@ export function angelicaJobEvents(jobId: string): Promise<JobEvent[]> {
   return call<JobEvent[]>("angelica_job_events", { jobId });
 }
 
+export function localizationOverview(jobId: string): Promise<LocalizationOverview> {
+  return call<LocalizationOverview>("localization_overview", { jobId });
+}
+
+export function localizationDecisions(): Promise<LocalizationDecision[]> {
+  return call<LocalizationDecision[]>("localization_decisions");
+}
+
+/** Settles a made-up name; resolves whether the rendering changed. */
+export function localizationChooseName(term: string, rendering: string): Promise<boolean> {
+  return call<boolean>("localization_choose_name", { term, rendering });
+}
+
 export function angelicaJobWorkers(jobId: string): Promise<WorkerActivity[]> {
   return call<WorkerActivity[]>("angelica_job_workers", { jobId });
 }
 
 export function angelicaJobControl(jobId: string, action: JobAction): Promise<JobSummary> {
   return call<JobSummary>("angelica_job_control", { jobId, action });
-}
-
-export function angelicaJobSetConcurrency(jobId: string, concurrency: number): Promise<JobSummary> {
-  return call<JobSummary>("angelica_job_set_concurrency", { jobId, concurrency });
 }
 
 export function angelicaJobSetLimit(jobId: string, tokenLimit: number, resume: boolean): Promise<JobSummary> {

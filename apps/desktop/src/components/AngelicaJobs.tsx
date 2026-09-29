@@ -1,18 +1,19 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
-import { angelicaJobControl, angelicaJobEvents, angelicaJobRemove, angelicaJobRetry, angelicaJobSetConcurrency, angelicaJobSetLimit, angelicaJobUnits, angelicaJobWorkers, angelicaJobs, normalizeCommandError } from "../ipc";
-import { atTokenLimit, formatElapsed, formatTokens, jobProblems, jobProgress, jobWritten, sortJobs, suggestedTokenLimit, totalTokens, workerHealth, scopeText } from "../angelica";
-import type { CommandError, JobAction, JobEvent, JobFilter, JobStatus, JobSummary, JobUnit, JobUnitStatus, SourceBinding, UnitLocationDto, WorkerActivity, WorkerPhase, WorkerStep } from "../types";
+import { angelicaJobControl, angelicaJobEvents, angelicaJobRemove, angelicaJobRetry, angelicaJobUnits, angelicaJobWorkers, angelicaJobs, localizationChooseName, localizationDecisions, localizationOverview, normalizeCommandError } from "../ipc";
+import { formatElapsed, formatTokens, jobProblems, jobProgress, jobWritten, sortJobs, totalTokens, workerHealth, scopeText } from "../angelica";
+import type { CommandError, JobAction, JobEvent, JobFilter, JobStatus, JobSummary, JobUnit, JobUnitStatus, KnowledgeDomain, LocalizationDecision, LocalizationOverview, SourceBinding, UnitLocationDto, WorkerActivity, WorkerPhase, WorkerStep } from "../types";
 import type { MessageKey } from "../i18n/translate";
 import { useI18n } from "../ui/i18n";
 import { IconButton } from "../ui/primitives/IconButton";
 import { Segmented } from "../ui/primitives/Segmented";
-import { Select } from "../ui/primitives/Select";
 import { UiIcon } from "../ui/primitives/UiIcon";
 
 type AngelicaJobsProps = {
   onError: (error: CommandError) => void;
   onReveal?: ((binding: SourceBinding) => void) | undefined;
+  /** Asks Angelica something in the open conversation. */
+  onAsk?: ((text: string) => void) | undefined;
 };
 
 const statusLabels: Readonly<Record<JobStatus, MessageKey>> = {
@@ -63,18 +64,32 @@ const stepLabels: Readonly<Record<WorkerStep, MessageKey>> = {
   rechecking: "angelica.worker.step.rechecking",
 };
 
-/** How often a running job's workers are polled while they are shown. */
+/** What each kind of text is called in the panel. */
+export const domainLabels: Readonly<Record<KnowledgeDomain, MessageKey>> = {
+  general: "localization.domain.general",
+  journal: "localization.domain.journal",
+  objective: "localization.domain.objective",
+  system: "localization.domain.system",
+  dialogue: "localization.domain.dialogue",
+  names: "localization.domain.names",
+  items: "localization.domain.items",
+  actions: "localization.domain.actions",
+  interface: "localization.domain.interface",
+  lore: "localization.domain.lore",
+};
+
+/** How often the diagnostics poll a running localization's lanes. */
 const WORKER_POLL_MS = 1000;
+/** How often a running localization's areas and speed are read again. */
+const OVERVIEW_POLL_MS = 10_000;
 
 type ProblemStatus = "rejected" | "failed" | "conflict" | "flagged";
 /** Outcomes that can be retried. */
 const PROBLEMS: ProblemStatus[] = ["rejected", "failed", "conflict"];
 /** Outcomes listed on the Problems tab: retryable ones and strings left for review. */
 const LISTED: ProblemStatus[] = [...PROBLEMS, "flagged"];
-/** Finished jobs listed below the ones that still run or wait. */
-const FINISHED_SHOWN = 3;
 
-type JobTab = "workers" | "problems" | "events" | "info";
+type DetailTab = "problems" | "events" | "info" | "diagnostics";
 
 const isLive = (job: JobSummary) => job.status === "running" || job.status === "paused";
 
@@ -85,6 +100,13 @@ function unitBinding(location: UnitLocationDto): SourceBinding {
 function unitAddress(location: UnitLocationDto): string {
   return `${location.sheet}:${location.row}:${location.subrow}:${location.column ?? 0}`;
 }
+
+/** The share of the job's prompt tokens its provider served from cache. */
+const cachedShare = (job: JobSummary): string => {
+  const prompt = job.usage.promptTokens;
+  const cached = job.usage.cachedPromptTokens ?? 0;
+  return prompt > 0 ? `${Math.round((cached / prompt) * 100)} %` : "—";
+};
 
 /** What a lane is doing right now, as one line. */
 function workerActivity(worker: WorkerActivity, now: number, t: ReturnType<typeof useI18n>["t"], studying: boolean): string {
@@ -127,15 +149,14 @@ function WorkerRow({ worker, now, studying }: { worker: WorkerActivity; now: num
         {working && worker.step ? <span title={t("angelica.worker.stepHint")}>{worker.round > 0 ? t("angelica.worker.step", { round: worker.round, max: worker.maxRounds, step: t(stepLabels[worker.step]) }) : t(stepLabels[worker.step])}</span> : null}
         {inChunk ? <span title={t("angelica.worker.unitsHint")}>{t("angelica.worker.units", { finished: worker.finishedUnits, total: worker.units })}</span> : null}
         {working && worker.chunkTokens > 0 ? <span>{t("angelica.worker.tokens", { tokens: formatTokens(worker.chunkTokens) })}</span> : null}
-        {worker.chunksDone > 0 ? <span title={t("angelica.worker.chunksDoneHint")}>{t("angelica.worker.chunksDone", { count: worker.chunksDone })}</span> : null}
         {worker.lastError ? <span className="angelica-job-problems" title={worker.lastError}>{t("angelica.worker.lastError")}</span> : null}
       </span>
     </li>
   );
 }
 
-/** Live activity of a job's workers; polled only while shown. */
-function JobWorkers({ job, busy, setConcurrency }: { job: JobSummary; busy: boolean; setConcurrency: SetConcurrency }) {
+/** The lanes of a running localization, for diagnosis; polled only while shown. */
+function Diagnostics({ job }: { job: JobSummary }) {
   const { t } = useI18n();
   const [workers, setWorkers] = useState<WorkerActivity[] | null>(null);
   const [now, setNow] = useState(() => Date.now());
@@ -154,27 +175,22 @@ function JobWorkers({ job, busy, setConcurrency }: { job: JobSummary; busy: bool
   }, [job.id]);
 
   if (workers === null) return null;
-  if (workers.length === 0) return <p className="angelica-job-empty">{t("angelica.job.noWorkers")}</p>;
-  const working = workers.filter((worker) => worker.phase !== "stopped");
-  const stopped = workers.length - working.length;
+  const working = workers.filter((worker) => worker.phase !== "stopped" && worker.phase !== "idle");
+  if (working.length === 0) return <p className="angelica-job-empty">{t("angelica.job.noWorkers")}</p>;
   const studying = workers.some((worker) => worker.step === "study" && worker.phase !== "idle" && worker.phase !== "stopped");
   return (
     <>
-      <div className="angelica-job-toolbar">
-        <p className="angelica-job-empty" title={t("angelica.job.workersHint")}>{t("angelica.worker.title", { active: working.length, total: workers.length })}</p>
-        <label className="angelica-job-concurrency">{t("angelica.job.concurrency")}<ConcurrencyControl job={job} busy={busy} setConcurrency={setConcurrency} /></label>
-      </div>
+      <p className="angelica-job-empty" title={t("localization.diagnosticsHint")}>{t("localization.scenesAtOnce", { count: working.length })}</p>
       <ul className="angelica-workers">
         {working.map((worker) => <WorkerRow key={worker.lane} worker={worker} now={now} studying={studying} />)}
       </ul>
-      {stopped > 0 && working.length > 0 ? <p className="angelica-job-empty">{t("angelica.worker.stoppedCount", { count: stopped })}</p> : null}
     </>
   );
 }
 
-function JobProblems({ job, busy, retry, onError, onReveal }: { job: JobSummary; busy: boolean; retry: (statuses: JobUnitStatus[]) => void } & AngelicaJobsProps) {
+function JobProblems({ job, busy, retry, only, onError, onReveal }: { job: JobSummary; busy: boolean; retry: (statuses: JobUnitStatus[]) => void; only?: ProblemStatus } & AngelicaJobsProps) {
   const { t, formatNumber } = useI18n();
-  const [filter, setFilter] = useState<ProblemStatus | "all">("all");
+  const [filter, setFilter] = useState<ProblemStatus | "all">(only ?? "all");
   const [units, setUnits] = useState<JobUnit[] | null>(null);
   const problems = jobProblems(job.counts) + job.counts.flagged;
   const statuses = useMemo(() => filter === "all" ? LISTED : [filter], [filter]);
@@ -187,7 +203,7 @@ function JobProblems({ job, busy, retry, onError, onReveal }: { job: JobSummary;
       .then((next) => { if (current) setUnits(next); })
       .catch((reason: unknown) => onError(normalizeCommandError(reason)));
     return () => { current = false; };
-    // Reload as the job finds more problems.
+    // Reload as the localization finds more problems.
   }, [job.id, statuses, problems, onError]);
 
   if (problems === 0) return <p className="angelica-job-empty">{t("angelica.job.noProblems")}</p>;
@@ -233,7 +249,7 @@ function JobEvents({ job, onError, onReveal }: { job: JobSummary } & AngelicaJob
       .then((next) => { if (current) setEvents([...next].reverse()); })
       .catch((reason: unknown) => onError(normalizeCommandError(reason)));
     return () => { current = false; };
-    // Reload as the job makes progress.
+    // Reload as the localization makes progress.
   }, [job.id, processed, job.status, onError]);
 
   if (events === null) return null;
@@ -252,146 +268,132 @@ function JobEvents({ job, onError, onReveal }: { job: JobSummary } & AngelicaJob
   );
 }
 
-type SetLimit = (tokenLimit: number, resume: boolean) => void;
-type SetConcurrency = (concurrency: number) => void;
-
-/** Most workers a job runs at once; matches the Rust limit. */
-const MAX_CONCURRENCY = 48;
-const concurrencyOptions = Array.from({ length: MAX_CONCURRENCY }, (_, index) => ({ value: String(index + 1), label: String(index + 1) }));
-
-/** How many workers a job runs; a running job follows within seconds. */
-function ConcurrencyControl({ job, busy, setConcurrency }: { job: JobSummary; busy: boolean; setConcurrency: SetConcurrency }) {
-  const { t } = useI18n();
-  return (
-    <Select
-      value={String(job.spec.concurrency)}
-      options={concurrencyOptions}
-      onChange={(value) => setConcurrency(Number(value))}
-      label={t("angelica.job.concurrency")}
-      title={t("angelica.job.concurrencyHint")}
-      disabled={busy || job.status === "cancelled"}
-      variant="quiet"
-    />
-  );
-}
-
-/** Whether the job will likely use more than its limit. */
-/** The share of the job's prompt tokens its provider served from cache. */
-const cachedShare = (job: JobSummary): string => {
-  const prompt = job.usage.promptTokens;
-  const cached = job.usage.cachedPromptTokens ?? 0;
-  return prompt > 0 ? `${Math.round((cached / prompt) * 100)} %` : "—";
-};
-
-const overLimit = (job: JobSummary) => job.projectedTokens !== null && job.projectedTokens > job.spec.tokenLimit;
-
-/** A new token limit for a job, prefilled with a suggestion. */
-function LimitEditor({ job, busy, resume, setLimit, onDone }: { job: JobSummary; busy: boolean; resume: boolean; setLimit: SetLimit; onDone?: () => void }) {
+function JobInfo({ job }: { job: JobSummary }) {
   const { t, formatNumber } = useI18n();
-  const [text, setText] = useState(() => formatNumber(suggestedTokenLimit(job)));
-  const value = Number(text.replace(/\D/g, ""));
-  const used = totalTokens(job.usage);
-  const valid = /\d/.test(text) && Number.isSafeInteger(value) && value > used;
-  const submit = () => {
-    if (!valid) return;
-    setLimit(value, resume);
-    onDone?.();
-  };
-  return (
-    <div className="angelica-job-limit-editor">
-      <input
-        className={valid ? "input" : "input invalid"}
-        inputMode="numeric"
-        value={text}
-        disabled={busy}
-        aria-label={t("angelica.job.limit")}
-        title={valid ? undefined : t("angelica.job.limitTooLow", { used })}
-        onChange={(event) => setText(event.target.value)}
-        onBlur={() => { if (valid) setText(formatNumber(value)); }}
-        onKeyDown={(event) => { if (event.key === "Enter") submit(); }}
-      />
-      <button className={resume ? "button button-secondary" : "button button-ghost"} type="button" disabled={busy || !valid} onClick={submit}>
-        {resume ? <><UiIcon icon="play" size="sm" />{t("angelica.job.resumeWithLimit")}</> : t("angelica.job.saveLimit")}
-      </button>
-    </div>
-  );
-}
-
-function JobInfo({ job, busy, setLimit, setConcurrency }: { job: JobSummary; busy: boolean; setLimit: SetLimit; setConcurrency: SetConcurrency }) {
-  const { t, formatNumber } = useI18n();
-  const sheets = scopeText(job.spec.scope) ?? t("angelica.job.allSheets");
+  const sheets = scopeText(job.spec.scope) ?? t("localization.wholeProject");
   const model = job.spec.model.effort ? `${job.spec.model.modelId} · ${job.spec.model.effort}` : job.spec.model.modelId;
+  const careful = job.spec.scope.careful ?? [];
   return (
     <dl className="angelica-job-facts">
       <dt>{t("angelica.job.sheets")}</dt><dd>{sheets}</dd>
       <dt>{t("angelica.job.strings")}</dt><dd>{t(jobFilterLabels[job.spec.scope.filter])}</dd>
       <dt>{t("angelica.job.model")}</dt><dd>{model}</dd>
       <dt>{t("angelica.job.quality")}</dt><dd title={t("angelica.job.qualityHint")}>{t(job.spec.quality === "careful" ? "angelica.job.quality.careful" : "angelica.job.quality.fast")}</dd>
-      <dt>{t("angelica.job.concurrency")}</dt><dd><ConcurrencyControl job={job} busy={busy} setConcurrency={setConcurrency} /></dd>
-      <dt>{t("angelica.job.tokenUse")}</dt><dd>{`${formatNumber(totalTokens(job.usage))} / ${formatNumber(job.spec.tokenLimit)}`}</dd>
+      {careful.length > 0 ? <><dt>{t("localization.carefulAreas")}</dt><dd>{careful.join(", ")}</dd></> : null}
+      <dt>{t("angelica.job.tokenUse")}</dt><dd>{formatNumber(totalTokens(job.usage))}</dd>
       <dt title={t("angelica.job.cachedHint")}>{t("angelica.job.cached")}</dt><dd>{cachedShare(job)}</dd>
-      {job.projectedTokens !== null ? <><dt>{t("angelica.job.projectionLabel")}</dt><dd title={t("angelica.job.projectionHint", { finished: job.finishedChunks, total: job.chunks })}>{formatNumber(job.projectedTokens)}</dd></> : null}
-      {job.status !== "cancelled" ? <><dt>{t("angelica.job.limit")}</dt><dd><LimitEditor key={job.spec.tokenLimit} job={job} busy={busy} resume={false} setLimit={setLimit} /></dd></> : null}
       {job.spec.instructions ? <><dt>{t("angelica.job.instructions")}</dt><dd>{job.spec.instructions}</dd></> : null}
     </dl>
   );
 }
 
-function JobDetails({ job, busy, retry, setLimit, setConcurrency, onError, onReveal }: { job: JobSummary; busy: boolean; retry: (statuses: JobUnitStatus[]) => void; setLimit: SetLimit; setConcurrency: SetConcurrency } & AngelicaJobsProps) {
+function JobDetails({ job, busy, retry, tab, setTab, onError, onReveal }: { job: JobSummary; busy: boolean; retry: (statuses: JobUnitStatus[]) => void; tab: DetailTab; setTab: (tab: DetailTab) => void } & AngelicaJobsProps) {
   const { t, formatNumber } = useI18n();
-  const problems = jobProblems(job.counts);
-  const [tab, setTab] = useState<JobTab>(() => job.status === "running" ? "workers" : problems > 0 ? "problems" : "info");
+  const problems = jobProblems(job.counts) + job.counts.flagged;
   const running = job.status === "running";
-  const shown: JobTab = tab === "workers" && !running ? (problems > 0 ? "problems" : "info") : tab;
+  const shown: DetailTab = tab === "diagnostics" && !running ? "problems" : tab;
   const options = [
-    ...(running ? [{ value: "workers" as const, label: t("angelica.job.tab.workers") }] : []),
     { value: "problems" as const, label: problems > 0 ? `${t("angelica.job.tab.problems")} ${formatNumber(problems)}` : t("angelica.job.tab.problems") },
     { value: "events" as const, label: t("angelica.job.tab.events") },
     { value: "info" as const, label: t("angelica.job.tab.info") },
+    ...(running ? [{ value: "diagnostics" as const, label: t("localization.diagnostics") }] : []),
   ];
   return (
     <div className="angelica-job-details">
       <Segmented value={shown} options={options} onChange={setTab} label={t("angelica.job.details")} />
       <div className="angelica-job-pane">
-        {shown === "workers" ? <JobWorkers job={job} busy={busy} setConcurrency={setConcurrency} /> : null}
         {shown === "problems" ? <JobProblems job={job} busy={busy} retry={retry} onError={onError} onReveal={onReveal} /> : null}
         {shown === "events" ? <JobEvents job={job} onError={onError} onReveal={onReveal} /> : null}
-        {shown === "info" ? <JobInfo job={job} busy={busy} setLimit={setLimit} setConcurrency={setConcurrency} /> : null}
+        {shown === "info" ? <JobInfo job={job} /> : null}
+        {shown === "diagnostics" ? <Diagnostics job={job} /> : null}
       </div>
     </div>
   );
 }
 
-type JobCardProps = {
+/** A duration in minutes as hours and minutes. */
+function formatMinutes(minutes: number, t: ReturnType<typeof useI18n>["t"]): string {
+  const rounded = Math.max(1, Math.round(minutes));
+  const hours = Math.floor(rounded / 60);
+  return hours > 0 ? t("localization.hoursMinutes", { hours, minutes: rounded % 60 }) : t("localization.minutes", { minutes: rounded });
+}
+
+/** Cost and pace: tokens per string, cache share, strings per minute, time left. */
+function Economy({ job, overview }: { job: JobSummary; overview: LocalizationOverview | null }) {
+  const { t, formatNumber } = useI18n();
+  const written = jobWritten(job.counts);
+  const remaining = job.counts.pending + job.counts.running;
+  const perMinute = overview?.perMinute ?? 0;
+  return (
+    <div className="localization-economy">
+      {written > 0 ? <span title={t("localization.perStringHint")}>{t("localization.perString", { tokens: formatNumber(Math.round(totalTokens(job.usage) / written)) })}</span> : null}
+      {job.usage.promptTokens > 0 ? <span title={t("angelica.job.cachedHint")}>{t("angelica.job.cachedFacts", { share: cachedShare(job) })}</span> : null}
+      {job.status === "running" && perMinute > 0 ? <span>{t("localization.speed", { count: formatNumber(Math.round(perMinute)) })}</span> : null}
+      {job.status === "running" && perMinute > 0 && remaining > 0 ? <span>{t("localization.left", { time: formatMinutes(remaining / perMinute, t) })}</span> : null}
+    </div>
+  );
+}
+
+/** The localization's kinds of text, in the order it takes them. */
+function Areas({ overview }: { overview: LocalizationOverview | null }) {
+  const { t, formatNumber } = useI18n();
+  if (!overview || overview.areas.length < 2) return null;
+  return (
+    <ul className="localization-areas">
+      {overview.areas.map((area) => {
+        const share = (count: number) => `${area.total === 0 ? 0 : (count / area.total) * 100}%`;
+        return (
+          <li key={area.domain ?? "other"} className="localization-area">
+            <span className="localization-area-name">{area.domain ? t(domainLabels[area.domain]) : "—"}</span>
+            <span className="angelica-job-bar" aria-hidden="true">
+              <span className="drafted" style={{ width: share(area.done) }} />
+              <span className="flagged" style={{ width: share(area.flagged) }} />
+              <span className="problems" style={{ width: share(area.problems) }} />
+            </span>
+            <span className="localization-area-count">{`${formatNumber(area.done + area.flagged)} / ${formatNumber(area.total)}`}</span>
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
+type CardProps = {
   job: JobSummary;
   busy: boolean;
-  expanded: boolean;
-  onToggle: () => void;
   act: (action: JobAction) => void;
   retry: (statuses: JobUnitStatus[]) => void;
-  setLimit: SetLimit;
-  setConcurrency: SetConcurrency;
   remove: () => void;
+  focus: DetailTab | null;
+  setFocus: (tab: DetailTab | null) => void;
 } & AngelicaJobsProps;
 
-function JobCard({ job, busy, expanded, onToggle, act, retry, setLimit, setConcurrency, remove, onError, onReveal }: JobCardProps) {
+function LocalizationCard({ job, busy, act, retry, remove, focus, setFocus, onError, onReveal }: CardProps) {
   const { t, locale } = useI18n();
-  const [raising, setRaising] = useState(false);
-  const limitPause = job.status === "paused" && atTokenLimit(job);
+  const [overview, setOverview] = useState<LocalizationOverview | null>(null);
   const problems = jobProblems(job.counts);
-  const tokens = totalTokens(job.usage);
-  const sheets = scopeText(job.spec.scope) ?? t("angelica.job.allSheets");
+  const scope = scopeText(job.spec.scope) ?? t("localization.wholeProject");
   const percent = new Intl.NumberFormat(locale, { style: "percent", maximumFractionDigits: 1 }).format(jobProgress(job.counts));
   const share = (count: number) => `${job.counts.total === 0 ? 0 : (count / job.counts.total) * 100}%`;
+  const processed = jobProgress(job.counts);
+
+  useEffect(() => {
+    let current = true;
+    const load = () => {
+      void localizationOverview(job.id).then((next) => { if (current) setOverview(next); }).catch(() => undefined);
+    };
+    load();
+    const timer = job.status === "running" ? window.setInterval(load, OVERVIEW_POLL_MS) : null;
+    return () => { current = false; if (timer !== null) window.clearInterval(timer); };
+    // Progress changes the areas; the timer keeps the speed current.
+  }, [job.id, job.status, processed]);
+
   return (
-    <li className={`angelica-job ${job.status}${expanded ? " expanded" : ""}`}>
+    <li className={`angelica-job localization ${job.status}`}>
       <div className="angelica-job-head">
-        <button className="angelica-job-toggle" type="button" aria-expanded={expanded} title={t(expanded ? "angelica.job.collapse" : "angelica.job.expand")} onClick={onToggle}>
-          <UiIcon icon={expanded ? "chevronDown" : "chevronRight"} size="xs" />
-          <span className="angelica-job-scope">{sheets}</span>
-          <span className={`angelica-job-status ${job.status}`}>{t(statusLabels[job.status])}</span>
-          <span className="angelica-job-percent">{percent}</span>
-        </button>
+        <span className="angelica-job-scope">{scope}</span>
+        <span className={`angelica-job-status ${job.status}`}>{t(statusLabels[job.status])}</span>
+        <span className="angelica-job-percent">{percent}</span>
         <div className="angelica-job-actions">
           {job.status === "running" ? <IconButton icon="pause" label={t("angelica.job.pause")} disabled={busy} onClick={() => act("pause")} /> : null}
           {job.status === "paused" ? <IconButton icon="play" label={t("angelica.job.resume")} disabled={busy} onClick={() => act("resume")} /> : null}
@@ -400,7 +402,7 @@ function JobCard({ job, busy, expanded, onToggle, act, retry, setLimit, setConcu
           {isLive(job) ? null : <IconButton icon="x" label={t("angelica.job.remove")} disabled={busy} onClick={remove} />}
         </div>
       </div>
-      <div className="angelica-job-bar" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(jobProgress(job.counts) * 100)}>
+      <div className="angelica-job-bar" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(processed * 100)}>
         <span className="drafted" style={{ width: share(job.counts.finished + job.counts.drafted) }} />
         <span className="flagged" style={{ width: share(job.counts.flagged) }} />
         <span className="problems" style={{ width: share(problems) }} />
@@ -410,51 +412,101 @@ function JobCard({ job, busy, expanded, onToggle, act, retry, setLimit, setConcu
         <span>{t("angelica.job.written", { written: jobWritten(job.counts), total: job.counts.total })}</span>
         {job.counts.flagged > 0 ? <span className="angelica-job-flagged" title={t("angelica.job.flaggedHint")}>{t("angelica.job.flagged", { count: job.counts.flagged })}</span> : null}
         {problems > 0 ? <span className="angelica-job-problems">{t("angelica.job.problems", { count: problems })}</span> : null}
-        {job.status === "running" ? <span title={t("angelica.job.workersHint")}>{t("angelica.job.workers", { active: job.activeWorkers, total: job.spec.concurrency })}</span> : null}
-        <span title={t("angelica.job.tokenLimit", { limit: job.spec.tokenLimit })}>
-          {t("angelica.job.limitFacts", { used: formatTokens(tokens), limit: formatTokens(job.spec.tokenLimit) })}
-        </span>
-        {job.usage.promptTokens > 0 ? <span title={t("angelica.job.cachedHint")}>{t("angelica.job.cachedFacts", { share: cachedShare(job) })}</span> : null}
-        {job.projectedTokens !== null && job.status !== "completed" ? (
-          <span className={overLimit(job) ? "angelica-job-over" : undefined} title={t("angelica.job.projectionHint", { finished: job.finishedChunks, total: job.chunks })}>
-            {t("angelica.job.projection", { tokens: formatTokens(job.projectedTokens) })}
-          </span>
-        ) : null}
       </div>
-      {job.status === "paused" && job.reason && !limitPause ? (
+      <Economy job={job} overview={overview} />
+      {job.status === "paused" && job.reason ? (
         <p className="angelica-job-reason" title={job.reason}><UiIcon icon="circleAlert" size="xs" /><span>{job.reason}</span></p>
       ) : null}
-      {limitPause ? (
-        <div className="angelica-job-limit">
-          <p className="angelica-job-reason"><UiIcon icon="circleAlert" size="xs" /><span>{t("angelica.job.limitReached")}</span></p>
-          <LimitEditor key={job.spec.tokenLimit} job={job} busy={busy} resume setLimit={setLimit} />
-        </div>
-      ) : job.status === "running" && overLimit(job) ? (
-        <div className="angelica-job-limit">
-          <p className="angelica-job-reason">
-            <UiIcon icon="triangleAlert" size="xs" /><span>{t("angelica.job.overLimit")}</span>
-            {raising ? null : <button className="link-button" type="button" onClick={() => setRaising(true)}>{t("angelica.job.raiseLimit")}</button>}
-          </p>
-          {raising ? <LimitEditor job={job} busy={busy} resume={false} setLimit={setLimit} onDone={() => setRaising(false)} /> : null}
-        </div>
-      ) : null}
-      {expanded ? <JobDetails job={job} busy={busy} retry={retry} setLimit={setLimit} setConcurrency={setConcurrency} onError={onError} onReveal={onReveal} /> : null}
+      <Areas overview={overview} />
+      <button className="angelica-jobs-toggle" type="button" aria-expanded={focus !== null} onClick={() => setFocus(focus === null ? "problems" : null)}>
+        <UiIcon icon={focus !== null ? "chevronDown" : "chevronRight"} size="xs" />
+        <span>{t("localization.details")}</span>
+      </button>
+      {focus !== null ? <JobDetails job={job} busy={busy} retry={retry} tab={focus} setTab={setFocus} onError={onError} onReveal={onReveal} /> : null}
     </li>
   );
 }
 
-/** The project's translation jobs, with their progress and controls. */
-export function AngelicaJobs({ onError, onReveal }: AngelicaJobsProps) {
+/** A made-up name with its options and a field for another one. */
+function NameDecision({ decision, busy, choose }: { decision: Extract<LocalizationDecision, { kind: "name" }>; busy: boolean; choose: (rendering: string) => void }) {
+  const { t } = useI18n();
+  const [other, setOther] = useState("");
+  return (
+    <div className="localization-decision">
+      <span className="localization-decision-text">{t("localization.decision.name", { term: decision.term })}</span>
+      <div className="localization-decision-options">
+        {decision.options.map((option) => (
+          <button key={option} className={option === decision.rendering ? "button button-secondary" : "button button-ghost"} type="button" disabled={busy} onClick={() => choose(option)}>{option}</button>
+        ))}
+        <input className="input" value={other} disabled={busy} placeholder={t("localization.decision.nameOther")} aria-label={t("localization.decision.nameOther")} onChange={(event) => setOther(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && other.trim()) choose(other.trim()); }} />
+      </div>
+    </div>
+  );
+}
+
+/** Decisions that wait for a person, one at a time in the order they matter. */
+function Decisions({ decisions, busy, onAsk, choose, review }: { decisions: LocalizationDecision[]; busy: boolean; onAsk?: ((text: string) => void) | undefined; choose: (term: string, rendering: string) => void; review: (jobId: string) => void }) {
+  const { t } = useI18n();
+  const [open, setOpen] = useState(true);
+  if (decisions.length === 0) return null;
+  return (
+    <div className="localization-decisions">
+      <button className="angelica-jobs-toggle" type="button" aria-expanded={open} onClick={() => setOpen((value) => !value)}>
+        <UiIcon icon={open ? "chevronDown" : "chevronRight"} size="xs" />
+        <span>{t("localization.decisions", { count: decisions.length })}</span>
+      </button>
+      {open ? (
+        <ul className="localization-decision-list">
+          {decisions.map((decision) => {
+            switch (decision.kind) {
+              case "calibrate": {
+                const domain = t(domainLabels[decision.domain]);
+                return (
+                  <li key={`calibrate-${decision.domain}`} className="localization-decision">
+                    <span className="localization-decision-text">{t("localization.decision.calibrate", { domain })}</span>
+                    {onAsk ? <button className="button button-secondary" type="button" onClick={() => onAsk(t("localization.ask.calibrate", { domain }))}>{t("localization.decision.calibrateAction")}</button> : null}
+                  </li>
+                );
+              }
+              case "name":
+                return <li key={`name-${decision.term}`}><NameDecision decision={decision} busy={busy} choose={(rendering) => choose(decision.term, rendering)} /></li>;
+              case "review":
+                return (
+                  <li key={`review-${decision.jobId}`} className="localization-decision">
+                    <span className="localization-decision-text">{t("localization.decision.review", { count: decision.count })}</span>
+                    <button className="button button-ghost" type="button" onClick={() => review(decision.jobId)}>{t("localization.decision.reviewAction")}</button>
+                  </li>
+                );
+              case "knowledge":
+                return (
+                  <li key={`knowledge-${decision.jobId}-${decision.message}`} className="localization-decision">
+                    <span className="localization-decision-text" title={decision.message}>{decision.message}</span>
+                    {onAsk ? <button className="button button-ghost" type="button" onClick={() => onAsk(t("localization.ask.knowledge", { message: decision.message }))}>{t("localization.decision.discuss")}</button> : null}
+                  </li>
+                );
+            }
+          })}
+        </ul>
+      ) : null}
+    </div>
+  );
+}
+
+/** The project's localizations: how they go, and what waits for a person. */
+export function AngelicaJobs({ onError, onReveal, onAsk }: AngelicaJobsProps) {
   const { t } = useI18n();
   const [jobs, setJobs] = useState<JobSummary[]>([]);
+  const [decisions, setDecisions] = useState<LocalizationDecision[]>([]);
   const [busy, setBusy] = useState(false);
   const [open, setOpen] = useState(true);
-  // Cards the user opened or closed; others follow their job's status.
-  const [toggled, setToggled] = useState<Readonly<Record<string, boolean>>>({});
+  const [showPast, setShowPast] = useState(false);
+  // The details a card shows, by job; closed when absent.
+  const [focus, setFocusState] = useState<Readonly<Record<string, DetailTab>>>({});
   const reloadTimer = useRef<number | null>(null);
 
   const load = useCallback(() => {
     void angelicaJobs().then(setJobs).catch((reason: unknown) => onError(normalizeCommandError(reason)));
+    void localizationDecisions().then(setDecisions).catch(() => undefined);
   }, [onError]);
 
   useEffect(() => {
@@ -462,7 +514,7 @@ export function AngelicaJobs({ onError, onReveal }: AngelicaJobsProps) {
     const subscription = listen<{ jobId: string }>("angelica://job", () => {
       // Lanes report often; one reload per short burst is enough.
       if (reloadTimer.current !== null) return;
-      reloadTimer.current = window.setTimeout(() => { reloadTimer.current = null; load(); }, 500);
+      reloadTimer.current = window.setTimeout(() => { reloadTimer.current = null; load(); }, 1000);
     });
     return () => {
       void subscription.then((unlisten) => unlisten());
@@ -496,47 +548,74 @@ export function AngelicaJobs({ onError, onReveal }: AngelicaJobsProps) {
     }
   };
 
+  const choose = async (term: string, rendering: string) => {
+    setBusy(true);
+    try {
+      const changed = await localizationChooseName(term, rendering);
+      setDecisions((current) => current.filter((decision) => !(decision.kind === "name" && decision.term === term)));
+      // Strings written with the old rendering are revised through Angelica.
+      if (changed) onAsk?.(t("localization.ask.revise", { term, rendering }));
+    } catch (reason) {
+      onError(normalizeCommandError(reason));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const setFocus = (jobId: string, tab: DetailTab | null) => setFocusState((current) => {
+    const next = { ...current };
+    if (tab === null) delete next[jobId];
+    else next[jobId] = tab;
+    return next;
+  });
+
   const sorted = sortJobs(jobs);
   const active = sorted.filter(isLive);
-  const finished = sorted.filter((job) => !isLive(job));
-  const shown = [...active, ...finished.slice(0, FINISHED_SHOWN)];
-  if (shown.length === 0) return null;
-  // Only a running job opens by itself, and only the first one.
-  const firstRunning = active.find((job) => job.status === "running")?.id;
-  const isExpanded = (job: JobSummary) => toggled[job.id] ?? job.id === firstRunning;
+  const past = sorted.filter((job) => !isLive(job));
+  if (active.length === 0 && past.length === 0 && decisions.length === 0) return null;
+
+  const card = (job: JobSummary) => (
+    <LocalizationCard
+      key={job.id}
+      job={job}
+      busy={busy}
+      act={(action) => void run(() => angelicaJobControl(job.id, action))}
+      retry={(statuses) => void run(() => angelicaJobRetry(job.id, statuses))}
+      remove={() => void removeJobs([job.id])}
+      focus={focus[job.id] ?? null}
+      setFocus={(tab) => setFocus(job.id, tab)}
+      onError={onError}
+      onReveal={onReveal}
+    />
+  );
 
   return (
     <section className={`angelica-jobs${open ? " open" : ""}`}>
       <div className="angelica-jobs-head">
         <button className="angelica-jobs-toggle" type="button" aria-expanded={open} onClick={() => setOpen((value) => !value)}>
           <UiIcon icon={open ? "chevronDown" : "chevronRight"} size="xs" />
-          <span>{t("angelica.jobs", { count: active.length })}</span>
+          <span>{t("localization.title")}</span>
         </button>
-        {finished.length > 0 ? (
-          <button className="button button-ghost" type="button" disabled={busy} onClick={() => void removeJobs(finished.map((job) => job.id))}>
-            {t("angelica.jobs.clearFinished", { count: finished.length })}
-          </button>
-        ) : null}
       </div>
       {open ? (
-        <ul className="angelica-job-list">
-          {shown.map((job) => (
-            <JobCard
-              key={job.id}
-              job={job}
-              busy={busy}
-              expanded={isExpanded(job)}
-              onToggle={() => setToggled((current) => ({ ...current, [job.id]: !isExpanded(job) }))}
-              act={(action) => void run(() => angelicaJobControl(job.id, action))}
-              retry={(statuses) => void run(() => angelicaJobRetry(job.id, statuses))}
-              setLimit={(tokenLimit, resume) => void run(() => angelicaJobSetLimit(job.id, tokenLimit, resume))}
-              setConcurrency={(concurrency) => void run(() => angelicaJobSetConcurrency(job.id, concurrency))}
-              remove={() => void removeJobs([job.id])}
-              onError={onError}
-              onReveal={onReveal}
-            />
-          ))}
-        </ul>
+        <div className="angelica-job-list">
+          <Decisions decisions={decisions} busy={busy} onAsk={onAsk} choose={(term, rendering) => void choose(term, rendering)} review={(jobId) => setFocus(jobId, "problems")} />
+          {active.length > 0 ? <ul className="localization-cards">{active.map(card)}</ul> : null}
+          {past.length > 0 ? (
+            <div className="localization-past">
+              <div className="angelica-jobs-head">
+                <button className="angelica-jobs-toggle" type="button" aria-expanded={showPast} onClick={() => setShowPast((value) => !value)}>
+                  <UiIcon icon={showPast ? "chevronDown" : "chevronRight"} size="xs" />
+                  <span>{t("localization.past", { count: past.length })}</span>
+                </button>
+                <button className="button button-ghost" type="button" disabled={busy} onClick={() => void removeJobs(past.map((job) => job.id))}>
+                  {t("angelica.jobs.clearFinished", { count: past.length })}
+                </button>
+              </div>
+              {showPast ? <ul className="localization-cards">{past.map(card)}</ul> : null}
+            </div>
+          ) : null}
+        </div>
       ) : null}
     </section>
   );

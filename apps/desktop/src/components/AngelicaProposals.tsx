@@ -94,7 +94,8 @@ export function AngelicaProposals({ proposals, busy, onApply, onReject, onReveal
 
 function JobProposalCard({ proposal, job, busy, onApply, onReject }: { proposal: ProposalRecord; job: JobProposal; busy: boolean; onApply: (ids: string[]) => void; onReject: (ids: string[]) => void }) {
   const { t } = useI18n();
-  const sheets = scopeText(job.scope) ?? t("angelica.job.allSheets");
+  const sheets = scopeText(job.scope) ?? t("localization.wholeProject");
+  const careful = job.scope.careful ?? [];
   return (
     <li className={`angelica-proposal angelica-job-proposal ${proposal.status}`}>
       <div className="angelica-proposal-head">
@@ -107,10 +108,11 @@ function JobProposalCard({ proposal, job, busy, onApply, onReject }: { proposal:
         <dt>{t("angelica.job.strings")}</dt><dd>{t(jobFilterLabels[job.scope.filter])}: {job.estimate.units}</dd>
         <dt>{t("angelica.job.estimate")}</dt>
         <dd>
-          {t("angelica.job.estimateValue", { chunks: job.estimate.chunks, tokens: job.estimate.estimatedTokens, limit: job.tokenLimit })}
+          {t("angelica.job.estimateValue", { tokens: job.estimate.estimatedTokens })}
           <span className="field-hint">{job.estimate.historyChunkTokens ? t("angelica.job.estimateHistory", { tokens: job.estimate.historyChunkTokens }) : t("angelica.job.estimateFormula")}</span>
         </dd>
-        <dt>{t("angelica.job.concurrency")}</dt><dd>{job.concurrency}</dd>
+        <dt>{t("angelica.job.quality")}</dt><dd>{t(job.quality === "careful" ? "angelica.job.quality.careful" : "angelica.job.quality.fast")}</dd>
+        {careful.length > 0 ? <><dt>{t("localization.carefulAreas")}</dt><dd>{careful.join(", ")}</dd></> : null}
         {job.instructions ? <><dt>{t("angelica.job.instructions")}</dt><dd>{job.instructions}</dd></> : null}
       </dl>
       <p className="field-hint">{t("angelica.job.proposalHint")}</p>

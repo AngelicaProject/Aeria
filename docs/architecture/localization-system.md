@@ -320,6 +320,38 @@ returns what a role needs in the form it reads best, bounded like the
 
 Tool quality is measured on the benchmark like prompts and models are.
 
+## The localization
+
+People do not manage workers, chunks, or token limits; they start a
+localization and steer it by deciding. A localization is one continuous
+process over a scope, from a few sheets to the whole project: interface,
+items, names, lore, quests, and cutscenes alike. It takes names and terms
+first, then actions and statuses, items, interface text, lore, and quests
+and cutscenes in the game's order of release, and runs until its scope is
+done; a person pauses and resumes it. How many scenes it works on at once is
+its own pace: it grows while the provider answers and halves when the
+provider fails. Quality is fast by default, and areas can be careful, such as
+the main story, inside the same localization.
+
+The localization panel shows, instead of workers:
+
+- **Progress by area**: each kind of text the scope has, with what is done,
+  what waits for review, and what failed, in the order the localization takes
+  them.
+- **Economy**: tokens per string written, the share of prompt tokens served
+  from the provider's cache, strings per minute, and the time left at that
+  speed.
+- **Decisions waiting for a person**: kinds of text the scope still has to
+  do whose style no person chose (calibrate, with Angelica), names the
+  localizations each made up anew (choose among the options or write another;
+  a changed name offers a revision through Angelica), strings the critics
+  left open (open the list), and findings against the knowledge (discuss with
+  Angelica). The localization never waits for them: it uses the study's style
+  and rendering until a person decides, and every decision becomes knowledge
+  or a taste lesson that the rest of the localization follows.
+- **Diagnostics**: what each scene in progress is doing, for finding
+  problems, folded away by default.
+
 ## Cost and speed
 
 - Model and effort are chosen per role. The localizer needs the strongest

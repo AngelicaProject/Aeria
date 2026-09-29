@@ -618,6 +618,23 @@ button.angelica-chip:hover { background: var(--hover); color: var(--fg); }
 .angelica-job-status.completed { background: var(--ok-soft); color: var(--ok); }
 .angelica-job-percent { flex: none; margin-left: auto; color: var(--fg-muted); font-variant-numeric: tabular-nums; }
 .angelica-job-actions { display: flex; flex: none; gap: 2px; }
+.localization-cards { display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; min-width: 0; margin: 0; padding: 0; list-style: none; }
+.angelica-job.localization .angelica-job-head { gap: 6px; }
+.angelica-job.localization .angelica-job-actions { margin-left: auto; }
+.localization-economy { display: flex; flex-wrap: wrap; gap: 2px 10px; min-width: 0; color: var(--fg-muted); font-variant-numeric: tabular-nums; }
+.localization-areas { display: grid; grid-template-columns: minmax(0, 1fr); gap: 3px; min-width: 0; margin: 0; padding: 0; list-style: none; }
+.localization-area { display: grid; grid-template-columns: minmax(0, 9em) minmax(0, 1fr) auto; align-items: center; gap: 8px; min-width: 0; color: var(--fg-muted); }
+.localization-area-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.localization-area-count { font-variant-numeric: tabular-nums; }
+.localization-decisions { display: grid; grid-template-columns: minmax(0, 1fr); gap: 4px; min-width: 0; padding: 6px 8px; border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--line)); border-radius: var(--radius-sm); background: var(--accent-soft); font-size: var(--text-xs); }
+.localization-decision-list { display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; min-width: 0; margin: 0; padding: 0; list-style: none; }
+.localization-decision { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 4px 8px; min-width: 0; }
+.localization-decision-text { flex: 1 1 12em; min-width: 0; }
+.localization-decision .button { height: 22px; padding: 0 8px; font-size: var(--text-2xs); }
+.localization-decision-options { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; min-width: 0; }
+.localization-decision-options .input { flex: 1 1 8em; min-width: 0; max-width: 14em; height: 22px; font-size: var(--text-2xs); }
+.localization-past { display: grid; grid-template-columns: minmax(0, 1fr); gap: 4px; min-width: 0; }
+.localization-past .angelica-jobs-head { padding: 0; }
 .angelica-job-bar { display: flex; height: 4px; overflow: hidden; border-radius: 2px; background: var(--line); }
 .angelica-job-bar > span { flex: none; height: 100%; transition: width 0.3s ease; }
 .angelica-job-bar > .drafted { background: var(--accent); }

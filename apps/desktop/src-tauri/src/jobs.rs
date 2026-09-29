@@ -2213,21 +2213,6 @@ pub async fn angelica_job_retry(
 }
 
 #[tauri::command(rename_all = "camelCase")]
-/// Changes how many workers a job runs at once.
-///
-/// # Errors
-///
-/// Returns `angelicaJobNotFound`, `angelicaJobInvalid` for a cancelled job,
-/// or a storage error.
-pub async fn angelica_job_set_concurrency(
-    app: tauri::AppHandle,
-    job_id: String,
-    concurrency: u8,
-) -> CommandResult<JobSummary> {
-    run_blocking(move || set_job_concurrency(&app, &job_id, concurrency)).await
-}
-
-#[tauri::command(rename_all = "camelCase")]
 /// Changes a job's token limit and, with `resume`, resumes it when paused.
 ///
 /// # Errors

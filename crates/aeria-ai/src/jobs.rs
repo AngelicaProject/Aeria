@@ -1151,6 +1151,47 @@ impl JobStore {
         Ok(sheets)
     }
 
+    /// How many of a job's strings each sheet has in each status, in the
+    /// job's order of sheets.
+    ///
+    /// # Errors
+    ///
+    /// Returns a storage error.
+    pub fn sheet_counts(&self, id: &str) -> Result<Vec<(String, UnitStatus, u64)>, JobError> {
+        let connection = self.open()?;
+        let mut statement = connection.prepare(
+            "SELECT sheet, status, COUNT(*) FROM job_units WHERE job_id = ?1 GROUP BY sheet, status ORDER BY MIN(seq)",
+        )?;
+        let rows = statement
+            .query_map(params![id], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, i64>(2)?,
+                ))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows
+            .into_iter()
+            .map(|(sheet, status, count)| (sheet, UnitStatus::parse(&status), to_u64(count)))
+            .collect())
+    }
+
+    /// How many translations a job wrote since a time, in Unix
+    /// milliseconds.
+    ///
+    /// # Errors
+    ///
+    /// Returns a storage error.
+    pub fn written_since(&self, id: &str, since_unix_ms: u64) -> Result<u64, JobError> {
+        let count: i64 = self.open()?.query_row(
+            "SELECT COUNT(*) FROM job_written WHERE job_id = ?1 AND created_ms >= ?2",
+            params![id, to_i64(since_unix_ms)],
+            |row| row.get(0),
+        )?;
+        Ok(to_u64(count))
+    }
+
     /// Whether a job has an event of a kind.
     ///
     /// # Errors
@@ -1583,6 +1624,25 @@ mod tests {
         };
         assert!(story.is_careful("quest/000/ManFst004_00124"));
         assert!(!story.is_careful("quest/000/SubFst004_00027"));
+    }
+
+    #[test]
+    fn sheets_count_their_strings_by_status() {
+        let (_directory, store) = store();
+        let units: Vec<_> = (0..3)
+            .map(|row| unit("Item", row, 10))
+            .chain((0..2).map(|row| unit("Addon", row, 10)))
+            .collect();
+        let job = store.create("c", &spec(), &units).expect("job");
+        let counts = store.sheet_counts(&job.id).expect("counts");
+        assert_eq!(
+            counts,
+            vec![
+                ("Item".to_owned(), UnitStatus::Pending, 3),
+                ("Addon".to_owned(), UnitStatus::Pending, 2)
+            ]
+        );
+        assert_eq!(store.written_since(&job.id, 0).expect("written"), 0);
     }
 
     #[test]

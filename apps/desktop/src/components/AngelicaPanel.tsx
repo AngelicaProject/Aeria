@@ -627,7 +627,7 @@ export function AngelicaPanel({ editorContext, onOpenSettings, onOpenGuide, onRe
         {notice ? <p className="field-hint">{t(notice)}</p> : null}
       </div>
 
-      <AngelicaJobs onError={setError} onReveal={onReveal} />
+      <AngelicaJobs onError={setError} onReveal={onReveal} onAsk={(text) => setQueue((current) => [...current, { text, images: [] }])} />
 
       <AngelicaProposals proposals={proposals} busy={settling} onApply={(ids) => void settle(ids, true)} onReject={(ids) => void settle(ids, false)} onReveal={onReveal} />
 

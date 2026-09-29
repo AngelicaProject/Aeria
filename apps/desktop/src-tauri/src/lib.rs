@@ -11,6 +11,7 @@ mod git;
 mod guide;
 mod job_workers;
 mod jobs;
+mod localization;
 mod macros;
 mod paths;
 mod project_changes;
@@ -85,9 +86,9 @@ pub use guide::{
 };
 pub use jobs::{
     angelica_job_control, angelica_job_events, angelica_job_remove, angelica_job_retry,
-    angelica_job_set_concurrency, angelica_job_set_limit, angelica_job_units, angelica_job_workers,
-    angelica_jobs,
+    angelica_job_set_limit, angelica_job_units, angelica_job_workers, angelica_jobs,
 };
+pub use localization::{localization_choose_name, localization_decisions, localization_overview};
 pub use state::{Activity, DesktopState};
 pub use updates::{
     AvailableUpdateDto, UpdateChannel, UpdateDownloadDto, UpdateStatusDto, Updates, update_check,
@@ -261,8 +262,10 @@ pub fn run() {
             angelica_job_retry,
             angelica_job_remove,
             angelica_job_set_limit,
-            angelica_job_set_concurrency,
             angelica_job_workers,
+            localization_overview,
+            localization_decisions,
+            localization_choose_name,
             project_guide,
             save_project_guidance,
             save_project_glossary,

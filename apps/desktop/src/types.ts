@@ -660,7 +660,23 @@ export type TranslationAppliedDto = { sourceBinding: SourceBinding; overlay: Tra
 
 export type JobFilter = "untranslated" | "needsReview" | "untranslatedAndDrafts" | "revise";
 
-export type JobScope = { sheets: string[]; filter: JobFilter; patterns?: string[]; exclude?: string[] };
+export type JobScope = { sheets: string[]; filter: JobFilter; patterns?: string[]; exclude?: string[]; careful?: string[] };
+
+/** A kind of text of the project knowledge. */
+export type KnowledgeDomain = "general" | "journal" | "objective" | "system" | "dialogue" | "names" | "items" | "actions" | "interface" | "lore";
+
+/** One area of a localization: the strings of one kind of text. */
+export type LocalizationArea = { domain: KnowledgeDomain | null; total: number; done: number; flagged: number; problems: number };
+
+/** How a localization goes: its areas in the order it takes them, and its speed. */
+export type LocalizationOverview = { areas: LocalizationArea[]; perMinute: number };
+
+/** A decision that waits for a person. */
+export type LocalizationDecision =
+  | { kind: "calibrate"; domain: KnowledgeDomain }
+  | { kind: "name"; term: string; rendering: string; options: string[] }
+  | { kind: "review"; jobId: string; count: number }
+  | { kind: "knowledge"; jobId: string; message: string };
 
 export type JobEstimate = {
   units: number;
