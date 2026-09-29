@@ -740,11 +740,16 @@ struct DesktopWriter {
 }
 
 impl DesktopWriter {
-    /// Auto-draft writes only new translations, and never one the user is
-    /// editing right now.
-    fn writes_at_once(&self, proposal: &Proposal) -> bool {
-        matches!(self.mode, AgentMode::AutoDraft | AgentMode::Work)
-            && proposal.expected.target.is_none()
+    /// Auto-draft writes only new translations; the Work mode also replaces
+    /// a translation an agent wrote and no person changed (`agent_written`).
+    /// Neither writes the string the user is editing right now.
+    fn writes_at_once(&self, proposal: &Proposal, agent_written: bool) -> bool {
+        let allowed = match self.mode {
+            AgentMode::AutoDraft => proposal.expected.target.is_none(),
+            AgentMode::Work => proposal.expected.target.is_none() || agent_written,
+            AgentMode::Chat | AgentMode::Ask => false,
+        };
+        allowed
             && !(self.editor.unsaved_draft
                 && self.editor.selection.as_ref().is_some_and(|selection| {
                     selection.sheet == proposal.location.sheet
@@ -780,6 +785,10 @@ impl ProjectWriter for DesktopWriter {
         let state = self.app.state::<DesktopState>();
         let mut outcomes = Vec::with_capacity(proposals.len());
         let mut pending = Vec::new();
+        // Which translations agents wrote comes from the jobs' record, where
+        // Angelica's own writes are kept too.
+        let jobs = crate::jobs::job_store(&self.app).ok();
+        let mut written = Vec::new();
         {
             let mut project = state
                 .lock_project()
@@ -788,7 +797,12 @@ impl ProjectWriter for DesktopWriter {
                 .as_mut()
                 .ok_or_else(|| ToolError::new("no project is open"))?;
             for proposal in proposals {
-                if !self.writes_at_once(&proposal) {
+                let agent_written = proposal.expected.target.as_deref().is_some_and(|target| {
+                    jobs.as_ref()
+                        .and_then(|store| store.written_target(&proposal.location).ok().flatten())
+                        .is_some_and(|written| written == target)
+                });
+                if !self.writes_at_once(&proposal, agent_written) {
                     let id = aeria_ai::ProviderConfig::new_id();
                     outcomes.push(ProposalOutcome::Pending {
                         proposal_id: id.clone(),
@@ -817,10 +831,17 @@ impl ProjectWriter for DesktopWriter {
                         &proposal.location,
                         &proposal.target,
                         &proposal.expected,
-                        false,
+                        agent_written,
                         None,
                     ) {
-                        Ok(()) => ProposalOutcome::Applied,
+                        Ok(()) => {
+                            written.push((
+                                proposal.location.clone(),
+                                proposal.source.clone(),
+                                proposal.target.clone(),
+                            ));
+                            ProposalOutcome::Applied
+                        }
                         Err(error @ AssistedWriteError::Conflict { .. }) => {
                             ProposalOutcome::Conflict {
                                 message: error.to_string(),
@@ -832,6 +853,11 @@ impl ProjectWriter for DesktopWriter {
                     },
                 );
             }
+        }
+        // What Angelica writes stays agent work: later revisions may change
+        // it, and learning never mistakes it for a person's edit.
+        if let Some(store) = &jobs {
+            let _ = store.add_written(&format!("angelica-{}", self.conversation_id), &written);
         }
         if !pending.is_empty() {
             let _guard = state

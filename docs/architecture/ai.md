@@ -161,7 +161,7 @@ Look; conversations of earlier versions keep Ask or Auto-draft:
 | Mode | Tools | Writes |
 | --- | --- | --- |
 | Look (`chat`) | Read tools | None. |
-| Work | Read and write tools | Angelica leads the localization. Localizations and revisions she starts with `start_job` and `propose_revision` start at once (their proposal is recorded and applied as the user would apply it). A valid translation of an untranslated string is written at once as a draft; one that would replace a translation waits as a proposal, as do changes to the human files. The string selected in the editor with unsaved edits is never written at once. |
+| Work | Read and write tools | Angelica leads the localization. Localizations and revisions she starts with `start_job` and `propose_revision` start at once (their proposal is recorded and applied as the user would apply it). A valid translation of an untranslated string, or of one whose current translation is the one an agent last wrote (recorded in the job store, where Angelica's own writes are recorded too, so later revisions may change them and learning never takes them for a person's edit), is written at once; one that would replace a translation a person wrote or changed waits as a proposal, as do changes to the human files. She is told to make changes of up to about 30 strings herself and to start a revision only for more. The string selected in the editor with unsaved edits is never written at once. |
 | Ask | Read and write tools | Every valid translation and every localization waits as a proposal until the user applies it. |
 | Auto-draft | Read and write tools | Like Work for translations; localizations wait as proposals. |
 
