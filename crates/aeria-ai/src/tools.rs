@@ -497,7 +497,9 @@ const MAX_JOB_UNITS_LISTED: usize = 50;
 #[must_use]
 pub fn job_tool_definitions(write: bool) -> Vec<ToolDefinition> {
     let scope = json!({
-        "sheets": { "type": "array", "items": { "type": "string" }, "description": "Exact sheet names; empty for every sheet of the project." },
+        "sheets": { "type": "array", "items": { "type": "string" }, "description": "Exact sheet names. With no sheets and no patterns, every sheet of the project." },
+        "patterns": { "type": "array", "items": { "type": "string" }, "description": "Sheet name patterns where * stands for any text, ignoring case, such as quest/* (every quest), quest/*/Man* (quests whose ID starts with Man), cut_scene/*, or *Name." },
+        "exclude": { "type": "array", "items": { "type": "string" }, "description": "Patterns of sheets to leave out, such as quest/*/Cls* when class quests get a job of their own." },
         "filter": { "type": "string", "enum": ["untranslated", "needsReview", "untranslatedAndDrafts"], "description": "Which strings: untranslated ones (default), ones needing review, or untranslated ones and existing drafts. Reviewed translations are never included." },
     });
     let job_id = json!({ "type": "object", "properties": { "job_id": { "type": "string" } }, "required": ["job_id"], "additionalProperties": false });
@@ -599,6 +601,10 @@ pub fn job_tool_definitions(write: bool) -> Vec<ToolDefinition> {
 struct ScopeArgs {
     #[serde(default)]
     sheets: Vec<String>,
+    #[serde(default)]
+    patterns: Vec<String>,
+    #[serde(default)]
+    exclude: Vec<String>,
     filter: Option<JobFilter>,
 }
 
@@ -607,6 +613,10 @@ struct ScopeArgs {
 struct StartJobArgs {
     #[serde(default)]
     sheets: Vec<String>,
+    #[serde(default)]
+    patterns: Vec<String>,
+    #[serde(default)]
+    exclude: Vec<String>,
     filter: Option<JobFilter>,
     #[serde(default)]
     instructions: String,
@@ -678,9 +688,9 @@ struct RetryArgs {
 
 fn start_job(jobs: &dyn JobControl, args: StartJobArgs) -> Result<Value, ToolError> {
     let scope = JobScope {
-        sheets: args.sheets,
-        filter: args.filter.unwrap_or(JobFilter::Untranslated),
-        units: Vec::new(),
+        patterns: args.patterns,
+        exclude: args.exclude,
+        ..JobScope::sheets(args.sheets, args.filter.unwrap_or(JobFilter::Untranslated))
     };
     let mut seen = std::collections::HashSet::new();
     let images: Vec<String> = args
@@ -773,9 +783,9 @@ fn run_job_tool(
         "estimate_job" => {
             let args: ScopeArgs = parse(arguments)?;
             let scope = JobScope {
-                sheets: args.sheets,
-                filter: args.filter.unwrap_or(JobFilter::Untranslated),
-                units: Vec::new(),
+                patterns: args.patterns,
+                exclude: args.exclude,
+                ..JobScope::sheets(args.sheets, args.filter.unwrap_or(JobFilter::Untranslated))
             };
             to_value(&jobs.estimate(&scope)?)
         }
@@ -1285,11 +1295,21 @@ impl<'a> ReadTools<'a> {
         let Some(root) = self.reader.knowledge_root() else {
             return;
         };
-        let sheets: Vec<String> = serde_json::from_str::<Value>(arguments)
-            .ok()
-            .and_then(|args| args.get("sheets").cloned())
-            .and_then(|sheets| serde_json::from_value(sheets).ok())
-            .unwrap_or_default();
+        let parsed: Value = serde_json::from_str(arguments).unwrap_or(Value::Null);
+        let list = |field: &str| -> Vec<String> {
+            parsed
+                .get(field)
+                .cloned()
+                .and_then(|value| serde_json::from_value(value).ok())
+                .unwrap_or_default()
+        };
+        // A pattern stands for the sheets its fixed start names.
+        let mut sheets = list("sheets");
+        sheets.extend(
+            list("patterns")
+                .into_iter()
+                .map(|pattern| pattern.split('*').next().unwrap_or_default().to_owned()),
+        );
         let mut domains: Vec<crate::knowledge::Domain> = Vec::new();
         let dialogue = [
             crate::knowledge::Domain::Journal,

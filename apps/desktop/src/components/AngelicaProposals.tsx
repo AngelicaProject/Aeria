@@ -1,3 +1,4 @@
+import { scopeText } from "../angelica";
 import { diffWords } from "../textDiff";
 import type { JobLimitProposal, JobProposal, ProposalRecord, SourceBinding } from "../types";
 import { useI18n } from "../ui/i18n";
@@ -93,7 +94,7 @@ export function AngelicaProposals({ proposals, busy, onApply, onReject, onReveal
 
 function JobProposalCard({ proposal, job, busy, onApply, onReject }: { proposal: ProposalRecord; job: JobProposal; busy: boolean; onApply: (ids: string[]) => void; onReject: (ids: string[]) => void }) {
   const { t } = useI18n();
-  const sheets = job.scope.sheets.length > 0 ? job.scope.sheets.join(", ") : t("angelica.job.allSheets");
+  const sheets = scopeText(job.scope) ?? t("angelica.job.allSheets");
   return (
     <li className={`angelica-proposal angelica-job-proposal ${proposal.status}`}>
       <div className="angelica-proposal-head">

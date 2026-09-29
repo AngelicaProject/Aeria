@@ -660,7 +660,7 @@ export type TranslationAppliedDto = { sourceBinding: SourceBinding; overlay: Tra
 
 export type JobFilter = "untranslated" | "needsReview" | "untranslatedAndDrafts" | "revise";
 
-export type JobScope = { sheets: string[]; filter: JobFilter };
+export type JobScope = { sheets: string[]; filter: JobFilter; patterns?: string[]; exclude?: string[] };
 
 export type JobEstimate = {
   units: number;

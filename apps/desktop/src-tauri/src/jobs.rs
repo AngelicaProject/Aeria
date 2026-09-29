@@ -182,15 +182,22 @@ fn enumerate_scope(app: &tauri::AppHandle, scope: &JobScope) -> Result<Vec<Scope
     if !scope.units.is_empty() {
         return reader.with_session(|session| Ok(listed_scope(session, scope, store.as_ref())));
     }
-    let sheets: Vec<String> = if scope.sheets.is_empty() {
+    // Named sheets are taken as named; patterns and "everything" read the
+    // project's sheets with translatable strings.
+    let sheets: Vec<String> = if scope.patterns.is_empty() && !scope.sheets.is_empty() {
+        scope
+            .sheets
+            .iter()
+            .filter(|sheet| scope.includes_sheet(sheet))
+            .cloned()
+            .collect()
+    } else {
         reader
             .sheets()?
             .into_iter()
-            .filter(|sheet| sheet.translatable > 0)
+            .filter(|sheet| sheet.translatable > 0 && scope.includes_sheet(&sheet.name))
             .map(|sheet| sheet.name)
             .collect()
-    } else {
-        scope.sheets.clone()
     };
     let mut units = Vec::new();
     for sheet in domain_order(sheets) {
@@ -467,9 +474,8 @@ impl JobControl for DesktopJobs {
             }
         }
         let scope = JobScope {
-            sheets,
-            filter: JobFilter::Revise,
             units: locations,
+            ..JobScope::sheets(sheets, JobFilter::Revise)
         };
         let revised = self.estimate(&scope)?.units;
         if revised == 0 {
@@ -518,10 +524,19 @@ impl JobControl for DesktopJobs {
         if estimate.units == 0 {
             return Err(ToolError::new("the scope has no strings to translate"));
         }
-        let sheets = if scope.sheets.is_empty() {
+        let sheets = if scope.covers_everything() {
             "every sheet".to_owned()
         } else {
-            scope.sheets.join(", ")
+            let mut named: Vec<String> = scope.sheets.iter().take(10).cloned().collect();
+            if scope.sheets.len() > 10 {
+                named.push(format!("{} more", scope.sheets.len() - 10));
+            }
+            named.extend(scope.patterns.iter().cloned());
+            let mut text = named.join(", ");
+            if !scope.exclude.is_empty() {
+                let _ = write!(text, " except {}", scope.exclude.join(", "));
+            }
+            text
         };
         let mut summary = format!(
             "Translate {} {} in {sheets}: {} chunks, about {} tokens",
@@ -877,6 +892,7 @@ struct JobRun {
     root: PathBuf,
     workers: Arc<WorkerBoard>,
     gate: Arc<RequestGate>,
+    learning: Arc<std::sync::Mutex<job_learning::LearningState>>,
 }
 
 impl JobRun {
@@ -909,6 +925,7 @@ pub(crate) fn spawn_runner(app: &tauri::AppHandle, job_id: &str) {
         root,
         workers: Arc::clone(&workers),
         gate: Arc::new(RequestGate::new(JOB_PARALLEL_REQUESTS)),
+        learning: Arc::default(),
     };
     app.state::<DesktopState>()
         .start_job_runner(job_id.to_owned(), workers, move || {
@@ -949,7 +966,7 @@ async fn learn_before_completion(run: &JobRun) -> Option<String> {
         .await
         .unwrap_or(false);
     if completing && run.project_open() {
-        job_learning::learn(run).await
+        job_learning::learn(run, 0).await
     } else {
         None
     }
@@ -1175,6 +1192,9 @@ async fn lane_loop(run: &JobRun, lane: usize) {
                     activity.chunks_done += 1;
                     activity.last_error = None;
                 });
+                // A long job learns as it goes, so later chunks use the
+                // lessons.
+                job_learning::learn_if_due(run, lane).await;
             }
             ChunkEnd::Retry(message) => {
                 failures += 1;
@@ -2231,11 +2251,7 @@ mod tests {
             status: JobStatus::Running,
             reason: None,
             spec: JobSpec {
-                scope: JobScope {
-                    sheets: Vec::new(),
-                    filter: JobFilter::Untranslated,
-                    units: Vec::new(),
-                },
+                scope: JobScope::sheets(Vec::new(), JobFilter::Untranslated),
                 instructions: String::new(),
                 model: aeria_ai::ModelSelection {
                     provider_id: "p".to_owned(),

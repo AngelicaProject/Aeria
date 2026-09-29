@@ -1,14 +1,17 @@
-//! Learning when a translation job finishes.
+//! Learning during and after a translation job.
 //!
-//! The mentor reads the job's findings, the translations people changed
-//! after agents wrote them, and the findings against the knowledge itself
-//! (see [`aeria_ai::learning`]). New lessons go on trial in the project's
-//! `aeria-knowledge/lessons.md` and are evaluated at once on up to two units
-//! the job translated: localized again with the lessons, without writing,
-//! and judged against what the job wrote. The job records a `lessons` event
-//! and learns once.
+//! Every [`LEARN_EVERY_CHUNKS`] finished chunks, and when the job
+//! completes, the mentor reads what is new since the job last learned: the
+//! job's findings, the translations people changed after agents wrote them,
+//! and the findings against the knowledge itself (see
+//! [`aeria_ai::learning`]). New lessons go on trial in the project's
+//! `aeria-knowledge/lessons.md`, so the chunks that follow use them, and
+//! every lesson still on trial is evaluated on up to two units the job
+//! translated: localized again with the lessons, without writing, and judged
+//! against what the job wrote. Each learning records a `lessons` event.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
+use std::sync::PoisonError;
 
 use aeria_ai::jobs::{JobStore, JobUnit, UnitStatus};
 use aeria_ai::knowledge::{self as knowledge_files, Knowledge, LessonStatus, sheet_domain};
@@ -28,23 +31,52 @@ pub(super) const LEARN_EVENT: &str = "lessons";
 const MIN_MAJOR_FINDINGS: usize = 5;
 /// Translations jobs wrote that are compared with the project for reactions.
 const REACTION_SCAN: usize = 3_000;
+/// Finished chunks between two learnings of a running job.
+const LEARN_EVERY_CHUNKS: u64 = 40;
 /// Units a job's new lessons are evaluated on.
 const EVALUATION_UNITS: usize = 2;
 /// Strings of one evaluation unit, at most.
 const EVALUATION_LINES: usize = 40;
+
+/// What a running job has already learned from, so each learning reads
+/// only what is new. Kept in memory while the runner runs.
+#[derive(Debug, Default)]
+pub(super) struct LearningState {
+    /// Findings already read.
+    findings_seen: usize,
+    /// The last job event already read.
+    events_seen: u64,
+    /// Reactions already read, by string and the person's text.
+    reactions_seen: BTreeSet<(String, String)>,
+    /// Finished chunks when the job last learned.
+    chunks_at: u64,
+    /// A learning is running.
+    running: bool,
+}
 
 /// What a job has to learn from.
 struct Material {
     findings: Vec<aeria_ai::jobs::Finding>,
     reactions: Vec<Reaction>,
     knowledge_findings: Vec<String>,
+    /// What to mark as read once the material was used.
+    findings_total: usize,
+    last_event: u64,
+    reaction_keys: Vec<(String, String)>,
 }
 
-fn material(run: &JobRun) -> Material {
+fn material(
+    run: &JobRun,
+    findings_seen: usize,
+    events_seen: u64,
+    reactions_seen: &BTreeSet<(String, String)>,
+) -> Material {
     let store: &JobStore = &run.store;
-    let findings = store.findings(&run.job_id).unwrap_or_default();
+    let all = store.findings(&run.job_id).unwrap_or_default();
+    let findings_total = all.len();
+    let findings = all.into_iter().skip(findings_seen).collect();
     let mut knowledge_findings = Vec::new();
-    let mut after = 0;
+    let mut after = events_seen;
     while let Ok(events) = store.events(&run.job_id, after) {
         let Some(last) = events.last() else {
             break;
@@ -61,6 +93,7 @@ fn material(run: &JobRun) -> Material {
     let reader = DesktopReader {
         app: run.app.clone(),
     };
+    let mut reaction_keys = Vec::new();
     let reactions = store
         .written(REACTION_SCAN)
         .unwrap_or_default()
@@ -79,7 +112,15 @@ fn material(run: &JobRun) -> Material {
                 .into_iter()
                 .find(|cell| Some(cell.column) == written.location.column)?
                 .target?;
-            (current.trim() != written.target.trim()).then_some(Reaction {
+            let key = (
+                serde_json::to_string(&written.location).unwrap_or_default(),
+                current.clone(),
+            );
+            if current.trim() == written.target.trim() || reactions_seen.contains(&key) {
+                return None;
+            }
+            reaction_keys.push(key);
+            Some(Reaction {
                 source: written.source,
                 agent: written.target,
                 person: current,
@@ -90,6 +131,25 @@ fn material(run: &JobRun) -> Material {
         findings,
         reactions,
         knowledge_findings,
+        findings_total,
+        last_event: after,
+        reaction_keys,
+    }
+}
+
+/// Learns when a running job finished [`LEARN_EVERY_CHUNKS`] chunks since
+/// it last learned; the lane that finds it due learns before its next chunk.
+pub(super) async fn learn_if_due(run: &JobRun, lane: usize) {
+    let finished = run
+        .with_store(|store, id| Ok(store.summary(id)?.finished_chunks))
+        .await
+        .unwrap_or(0);
+    let due = {
+        let state = run.learning.lock().unwrap_or_else(PoisonError::into_inner);
+        !state.running && finished >= state.chunks_at + LEARN_EVERY_CHUNKS
+    };
+    if due {
+        let _ = learn(run, lane).await;
     }
 }
 
@@ -144,22 +204,55 @@ fn evaluation_units(run: &JobRun) -> Vec<(UnitOfWork, BTreeMap<usize, String>)> 
         .collect()
 }
 
-/// Learns from a finished job: lessons on trial, term corrections, and an
-/// evaluation of the new lessons. Returns a summary for the job's report.
-pub(super) async fn learn(run: &JobRun) -> Option<String> {
-    let learned = run
-        .with_store(|store, id| store.has_event(id, LEARN_EVENT))
-        .await
-        .unwrap_or(true);
-    if learned {
-        return None;
-    }
-    let spec = run
-        .with_store(|store, id| Ok(store.summary(id)?.spec))
+/// Learns from what is new in a job: lessons on trial, term corrections, and
+/// an evaluation of the lessons on trial. Returns a summary for the job's
+/// report; `None` when another learning of the job is running.
+pub(super) async fn learn(run: &JobRun, lane: usize) -> Option<String> {
+    let (findings_seen, events_seen, reactions_seen) = {
+        let mut state = run.learning.lock().unwrap_or_else(PoisonError::into_inner);
+        if state.running {
+            return None;
+        }
+        state.running = true;
+        (
+            state.findings_seen,
+            state.events_seen,
+            state.reactions_seen.clone(),
+        )
+    };
+    let summary = learn_new(run, lane, findings_seen, events_seen, reactions_seen).await;
+    run.learning
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .running = false;
+    summary
+}
+
+async fn learn_new(
+    run: &JobRun,
+    lane: usize,
+    findings_seen: usize,
+    events_seen: u64,
+    reactions_seen: BTreeSet<(String, String)>,
+) -> Option<String> {
+    let (spec, finished) = run
+        .with_store(|store, id| {
+            let job = store.summary(id)?;
+            Ok((job.spec, job.finished_chunks))
+        })
         .await
         .ok()?;
     let read_run = run.clone();
-    let material = run_blocking(move || Ok(material(&read_run))).await.ok()?;
+    let material = run_blocking(move || {
+        Ok(material(
+            &read_run,
+            findings_seen,
+            events_seen,
+            &reactions_seen,
+        ))
+    })
+    .await
+    .ok()?;
     let majors = material
         .findings
         .iter()
@@ -169,13 +262,22 @@ pub(super) async fn learn(run: &JobRun) -> Option<String> {
         && material.reactions.is_empty()
         && material.knowledge_findings.is_empty()
     {
-        "nothing recurring to learn from".to_owned()
+        "nothing new and recurring to learn from".to_owned()
     } else {
-        match mentor(run, &spec, &material).await {
+        match mentor(run, &spec, &material, lane).await {
             Ok(summary) => summary,
             Err(error) => format!("learning failed: {error}"),
         }
     };
+    {
+        let mut state = run.learning.lock().unwrap_or_else(PoisonError::into_inner);
+        state.findings_seen = material.findings_total;
+        state.events_seen = material.last_event;
+        state
+            .reactions_seen
+            .extend(material.reaction_keys.iter().cloned());
+        state.chunks_at = finished;
+    }
     let message = summary.clone();
     let _ = run
         .with_store(move |store, id| store.add_event(id, LEARN_EVENT, &message, None))
@@ -187,8 +289,9 @@ async fn mentor(
     run: &JobRun,
     spec: &aeria_ai::jobs::JobSpec,
     material: &Material,
+    lane: usize,
 ) -> Result<String, String> {
-    let mut caller = JobCaller::for_job(run, spec, 0, format!("{}-learn", run.job_id))
+    let mut caller = JobCaller::for_job(run, spec, lane, format!("{}-learn", run.job_id))
         .await
         .map_err(|error| error.message)?;
     caller.background(Step::Learning);

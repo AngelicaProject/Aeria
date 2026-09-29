@@ -73,6 +73,74 @@ pub struct JobScope {
     /// Only these strings, when the list is not empty.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub units: Vec<UnitLocation>,
+    /// Sheets whose names match one of these patterns (`*` for any text,
+    /// ignoring case), besides `sheets`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub patterns: Vec<String>,
+    /// Sheets whose names match one of these patterns are left out.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub exclude: Vec<String>,
+}
+
+impl JobScope {
+    /// A scope of sheets and a filter, without patterns or a list.
+    #[must_use]
+    pub fn sheets(sheets: Vec<String>, filter: JobFilter) -> Self {
+        Self {
+            sheets,
+            filter,
+            units: Vec::new(),
+            patterns: Vec::new(),
+            exclude: Vec::new(),
+        }
+    }
+
+    /// Whether the scope names no sheets and no patterns: every sheet.
+    #[must_use]
+    pub fn covers_everything(&self) -> bool {
+        self.sheets.is_empty() && self.patterns.is_empty()
+    }
+
+    /// Whether a sheet of the project belongs to the scope by name.
+    #[must_use]
+    pub fn includes_sheet(&self, sheet: &str) -> bool {
+        let named = self.covers_everything()
+            || self.sheets.iter().any(|known| known == sheet)
+            || self
+                .patterns
+                .iter()
+                .any(|pattern| sheet_matches(pattern, sheet));
+        named
+            && !self
+                .exclude
+                .iter()
+                .any(|pattern| sheet_matches(pattern, sheet))
+    }
+}
+
+/// Whether a sheet name matches a pattern where `*` stands for any text,
+/// ignoring case; a pattern without `*` must be the whole name.
+#[must_use]
+pub fn sheet_matches(pattern: &str, sheet: &str) -> bool {
+    let pattern = pattern.trim().to_lowercase();
+    let sheet = sheet.to_lowercase();
+    let parts: Vec<&str> = pattern.split('*').collect();
+    if parts.len() == 1 {
+        return sheet == pattern;
+    }
+    let (first, last) = (parts[0], parts[parts.len() - 1]);
+    if !sheet.starts_with(first) || sheet.len() < first.len() + last.len() || !sheet.ends_with(last)
+    {
+        return false;
+    }
+    let mut rest = &sheet[first.len()..sheet.len() - last.len()];
+    for part in &parts[1..parts.len() - 1] {
+        match rest.find(part) {
+            Some(found) => rest = &rest[found + part.len()..],
+            None => return false,
+        }
+    }
+    true
 }
 
 /// What the user approved when starting a job.
@@ -1338,11 +1406,7 @@ mod tests {
 
     fn spec() -> JobSpec {
         JobSpec {
-            scope: JobScope {
-                sheets: vec!["Item".to_owned()],
-                filter: JobFilter::Untranslated,
-                units: Vec::new(),
-            },
+            scope: JobScope::sheets(vec!["Item".to_owned()], JobFilter::Untranslated),
             instructions: "Be brief.".to_owned(),
             model: ModelSelection {
                 provider_id: "p".to_owned(),
@@ -1448,6 +1512,26 @@ mod tests {
         let fourth = store.claim_chunk(&job.id).expect("claim").expect("chunk");
         assert_eq!(fourth[0].location.row, 2);
         assert!(store.claim_chunk(&job.id).expect("claim").is_none());
+    }
+
+    #[test]
+    fn scopes_take_sheets_by_name_pattern_and_leave_out_exclusions() {
+        assert!(sheet_matches("quest/*", "quest/000/ManFst004_00124"));
+        assert!(sheet_matches("quest/*/man*", "quest/000/ManFst004_00124"));
+        assert!(!sheet_matches("quest/*/man*", "quest/002/SubSea923_00246"));
+        assert!(sheet_matches("*Name", "BNpcName"));
+        assert!(!sheet_matches("Item", "ItemUICategory"));
+        assert!(sheet_matches("item*", "ItemUICategory"));
+        let scope = JobScope {
+            patterns: vec!["quest/*".to_owned()],
+            exclude: vec!["quest/*/Cls*".to_owned()],
+            ..JobScope::sheets(vec!["Addon".to_owned()], JobFilter::Untranslated)
+        };
+        assert!(scope.includes_sheet("quest/002/SubSea923_00246"));
+        assert!(!scope.includes_sheet("quest/002/ClsCul021_00254"));
+        assert!(scope.includes_sheet("Addon"));
+        assert!(!scope.includes_sheet("Item"));
+        assert!(JobScope::sheets(Vec::new(), JobFilter::Untranslated).includes_sheet("Item"));
     }
 
     #[test]

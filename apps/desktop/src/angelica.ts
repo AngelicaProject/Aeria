@@ -1,4 +1,4 @@
-import type { AgentEvent, AiModelSelection, AiProviderDto, AiUsage, ChatMessage, ImageRef, JobCounts, JobSummary, WorkerActivity } from "./types";
+import type { AgentEvent, AiModelSelection, AiProviderDto, AiUsage, ChatMessage, ImageRef, JobCounts, JobSummary, WorkerActivity, JobScope } from "./types";
 
 /** Angelica's fixed name. It is never localized. */
 export const ANGELICA = "Angelica";
@@ -208,6 +208,18 @@ export function parseReply(text: string): ReplyBlock[] {
 /** Strings a job wrote: final, needing review, or drafts of earlier jobs. */
 export function jobWritten(counts: JobCounts): number {
   return counts.finished + counts.flagged + counts.drafted;
+}
+
+/** A job scope as text: its sheets, then patterns, then what is left out;
+ * null when it covers every sheet. Long lists are shortened. */
+export function scopeText(scope: JobScope): string | null {
+  const patterns = scope.patterns ?? [];
+  if (scope.sheets.length === 0 && patterns.length === 0) return null;
+  const shown = scope.sheets.slice(0, 10);
+  const named = scope.sheets.length > 10 ? [...shown, `+${scope.sheets.length - 10}`] : shown;
+  const text = [...named, ...patterns].join(", ");
+  const exclude = scope.exclude ?? [];
+  return exclude.length > 0 ? `${text} − ${exclude.join(", ")}` : text;
 }
 
 /** Share of a job's strings with a final outcome, from 0 to 1. */

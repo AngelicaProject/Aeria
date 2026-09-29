@@ -576,9 +576,18 @@ and writer requests of every chunk.
 An image ID the conversation does not have is refused, and so are images
 while the jobs model does not accept them. The estimate does not include
 them.
+For a large request (the interface, all quests, the whole game) Angelica is
+instructed to plan the jobs herself: find the sheets with `list_sheets`,
+scope with patterns and exclusions, split names and terms first, main story
+quests careful, other quests fast, and the interface as its own job,
+calibrate each uncalibrated kind of text once, report the plan with the total
+estimate, and propose the jobs one after another.
 
-A scope is a list of sheets, or every sheet with translatable strings, and a
-filter: untranslated strings (the default), strings that need review, or
+A scope is a list of sheets, sheet name patterns, or every sheet with
+translatable strings, and a filter. A pattern matches a sheet name ignoring
+case, with `*` for any text (`quest/*`, `quest/*/Man*`, `*Name`); exclusion
+patterns leave matching sheets out, so one large request becomes several
+jobs without listing thousands of sheets. The filter is: untranslated strings (the default), strings that need review, or
 untranslated strings and drafts. Reviewed translations are never included,
 except by a revision (see [Revisions](#revisions)). A scope may instead list
 its strings; its sheets then only name them for the proposal.
@@ -752,13 +761,18 @@ recorded with its source, the latest one per string. Removing a job deletes
 its findings but keeps what it wrote, so later jobs still know which
 translations agents wrote.
 
-When a job is about to complete, it learns once and records a `lessons`
-event (`aeria-ai::learning`, driven by the desktop's `job_learning`). The
+A job learns every 40 finished chunks while it runs, and once more when it
+is about to complete; each learning records a `lessons` event
+(`aeria-ai::learning`, driven by the desktop's `job_learning`). The lane
+that finishes the 40th chunk learns before taking its next chunk, so the
+chunks that follow use the new lessons; only one learning of a job runs at a
+time. Each learning reads only what is new since the previous one while the
+runner runs (after a restart, the job's material is read again). The
 material is the job's findings, the findings against the knowledge itself,
 and reactions: translations whose current text differs from what a job last
 wrote (of the latest 3,000 such records), which a person changed. With
 fewer than five major findings, no reactions, and no findings against the
-knowledge, the job learns nothing. Otherwise a mentor request reads the
+knowledge, the learning adds nothing. Otherwise a mentor request reads the
 material and the project's lessons and returns at most five new lessons for
 problems that recur, each with an identifier, a text with an example, and
 optionally a domain, and corrections of agent terms with reasons. New

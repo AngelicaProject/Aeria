@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { angelicaJobControl, angelicaJobEvents, angelicaJobRemove, angelicaJobRetry, angelicaJobSetConcurrency, angelicaJobSetLimit, angelicaJobUnits, angelicaJobWorkers, angelicaJobs, normalizeCommandError } from "../ipc";
-import { atTokenLimit, formatElapsed, formatTokens, jobProblems, jobProgress, jobWritten, sortJobs, suggestedTokenLimit, totalTokens, workerHealth } from "../angelica";
+import { atTokenLimit, formatElapsed, formatTokens, jobProblems, jobProgress, jobWritten, sortJobs, suggestedTokenLimit, totalTokens, workerHealth, scopeText } from "../angelica";
 import type { CommandError, JobAction, JobEvent, JobFilter, JobStatus, JobSummary, JobUnit, JobUnitStatus, SourceBinding, UnitLocationDto, WorkerActivity, WorkerPhase, WorkerStep } from "../types";
 import type { MessageKey } from "../i18n/translate";
 import { useI18n } from "../ui/i18n";
@@ -307,7 +307,7 @@ function LimitEditor({ job, busy, resume, setLimit, onDone }: { job: JobSummary;
 
 function JobInfo({ job, busy, setLimit, setConcurrency }: { job: JobSummary; busy: boolean; setLimit: SetLimit; setConcurrency: SetConcurrency }) {
   const { t, formatNumber } = useI18n();
-  const sheets = job.spec.scope.sheets.length > 0 ? job.spec.scope.sheets.join(", ") : t("angelica.job.allSheets");
+  const sheets = scopeText(job.spec.scope) ?? t("angelica.job.allSheets");
   const model = job.spec.model.effort ? `${job.spec.model.modelId} · ${job.spec.model.effort}` : job.spec.model.modelId;
   return (
     <dl className="angelica-job-facts">
@@ -367,7 +367,7 @@ function JobCard({ job, busy, expanded, onToggle, act, retry, setLimit, setConcu
   const limitPause = job.status === "paused" && atTokenLimit(job);
   const problems = jobProblems(job.counts);
   const tokens = totalTokens(job.usage);
-  const sheets = job.spec.scope.sheets.length > 0 ? job.spec.scope.sheets.join(", ") : t("angelica.job.allSheets");
+  const sheets = scopeText(job.spec.scope) ?? t("angelica.job.allSheets");
   const percent = new Intl.NumberFormat(locale, { style: "percent", maximumFractionDigits: 1 }).format(jobProgress(job.counts));
   const share = (count: number) => `${job.counts.total === 0 ? 0 : (count / job.counts.total) * 100}%`;
   return (
