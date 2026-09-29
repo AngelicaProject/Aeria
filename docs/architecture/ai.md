@@ -279,7 +279,7 @@ returned to the model as `{"error": …}` results instead of ending the turn.
 | `read_rows` | One `page_translation_rows` page of at most 50 scanned source rows, optionally filtered by state, with the `nextAfter` cursor. |
 | `get_unit` | One source row, or one column of it, with translations, review states, notes, unit IDs, and context cells. |
 | `other_languages` | The same row's translatable strings, or one column, in the game's other client languages as macro text, each bounded like other cell text; `null` where a language has no such string. Context for intent (Japanese is the original), wording, and tag placement; the translation is still made from the source language. |
-| `dialogue_context` | For a line of a quest or cutscene sheet (see [Dialogue context](#dialogue-context)): the quest's name and translation, its journal entries and objectives (up to 24 each), up to 40 spoken lines before and after the line (8 and 4 by default), each with its key, speaker label, source, translation, and review state, the voice profiles of their speakers and the speakers without one, and optionally the line in the other client languages. |
+| `dialogue_context` | For a line of a quest or cutscene sheet, or without a line for the start of its scene (see [Dialogue context](#dialogue-context)): the quest's name and translation, its journal entries and objectives (up to 24 each), up to 40 spoken lines before and after the line (8 and 4 by default; from the start of the scene, the first 20), each with its key, speaker label, source, translation, and review state, the voice profiles of their speakers and the speakers without one, and optionally the line in the other client languages. |
 | `list_speakers` | Speaker labels of quest and cutscene speech, optionally containing a query or only those without a voice profile, the most lines first, up to 200 per page, each with its number of lines and whether it has a profile. |
 | `speaker_lines` | One speaker label's lines across every quest and cutscene with translations, each with its position among the speaker's lines, and the speaker's voice profile: a page of up to 30 lines, or with `spread` up to 30 lines sampled evenly across all of them (line `i × total / count`). An unknown label returns up to 20 labels that contain it: those that start with it first, then those with the most lines. |
 | `get_voices` | The voice profiles of given speaker labels, or every speaker label with a profile. |
@@ -370,9 +370,12 @@ the agent layer at once, without a proposal: style entries by domain, terms,
 character profiles, and lessons (active unless Angelica says otherwise), at
 most 50 of each kind per call; terms and speakers of the human files are
 skipped and listed. Her instructions tell her to write decisions the user
-makes at once, never to ask the user to write rules, and to calibrate the
-style by showing two or three versions of a short scene that differ on one
-axis at a time and writing the chosen style.
+makes at once and never to ask the user to write rules. To calibrate the
+style, she reads a scene from its start, picks 5 to 8 lines (a journal entry,
+an objective, and two or three distinct speakers), settles first what the
+evidence decides (address, gender, voice) and keeps it in every version, shows
+two or three complete versions that differ on one axis of taste at a time,
+and writes the chosen style for each kind of text the lines covered.
 
 ### Guidance and glossary
 
@@ -482,7 +485,9 @@ speaker labels, line order, and quest links never decide identity, validation,
 or writes.
 
 *Spoken lines* are speech and other lines; journal entries and objectives are
-not. `dialogue_context` returns neighbours only for a spoken line. The
+not. `dialogue_context` returns the spoken lines around any line, a journal
+entry or objective included, or the first spoken lines of the scene when no
+line is given. The
 instructions tell Angelica to read a line's scene when its meaning, tone, or
 addressee is unclear, to say when she inferred who is addressed, and that
 `dialogue_context` can show the line in the other client languages. How the

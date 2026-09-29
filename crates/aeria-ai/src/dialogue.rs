@@ -147,13 +147,13 @@ pub fn dialogue_tool_definitions() -> Vec<ToolDefinition> {
                 "type": "object",
                 "properties": {
                     "sheet": { "type": "string" },
-                    "row": { "type": "integer", "minimum": 0 },
+                    "row": { "type": "integer", "minimum": 0, "description": "Omit it for the start of the scene: the journal, objectives, and the first spoken lines." },
                     "subrow": { "type": "integer", "minimum": 0, "description": "Defaults to 0." },
                     "before": { "type": "integer", "minimum": 0, "maximum": MAX_NEIGHBOUR_LINES, "description": "Spoken lines before; defaults to 8." },
-                    "after": { "type": "integer", "minimum": 0, "maximum": MAX_NEIGHBOUR_LINES, "description": "Spoken lines after; defaults to 4." },
+                    "after": { "type": "integer", "minimum": 0, "maximum": MAX_NEIGHBOUR_LINES, "description": "Spoken lines after; defaults to 4, or 20 from the start of the scene." },
                     "other_languages": { "type": "boolean", "description": "Add the line in the game's other client languages." },
                 },
-                "required": ["sheet", "row"],
+                "required": ["sheet"],
                 "additionalProperties": false,
             }),
         },
@@ -331,7 +331,7 @@ fn voices_value<'a>(guide: &ProjectGuide, speakers: impl IntoIterator<Item = &'a
 #[serde(deny_unknown_fields)]
 pub(crate) struct DialogueArgs {
     sheet: String,
-    row: u32,
+    row: Option<u32>,
     subrow: Option<u16>,
     before: Option<usize>,
     after: Option<usize>,
@@ -355,18 +355,24 @@ pub(crate) fn dialogue_context(
     let dialogue = reader
         .dialogue(&args.sheet)?
         .ok_or_else(|| not_dialogue(&args.sheet))?;
-    let index = dialogue.position(args.row, subrow).ok_or_else(|| {
-        ToolError::new(format!(
-            "{}:{}:{subrow} is not a line with text in this sheet",
-            args.sheet, args.row
-        ))
-    })?;
-    let line = &dialogue.lines[index];
+    // Without a row, the scene is shown from its start.
+    let index = match args.row {
+        Some(row) => Some(dialogue.position(row, subrow).ok_or_else(|| {
+            ToolError::new(format!(
+                "{}:{row}:{subrow} is not a line with text in this sheet",
+                args.sheet
+            ))
+        })?),
+        None => None,
+    };
+    let line = index.map(|index| &dialogue.lines[index]);
     let mut result = json!({
         "sheet": args.sheet,
         "kind": dialogue.kind,
-        "line": line_value(reader, &args.sheet, line)?,
     });
+    if let Some(line) = line {
+        result["line"] = line_value(reader, &args.sheet, line)?;
+    }
     if let Some(quest) = dialogue.quest {
         result["quest"] = quest_value(reader, quest)?;
     }
@@ -383,35 +389,41 @@ pub(crate) fn dialogue_context(
             result[field] = json!(entries);
         }
     }
-    let mut speakers: Vec<&str> = line.speaker().into_iter().collect();
-    if line.is_spoken() {
-        let before =
-            dialogue.spoken_before(index, args.before.unwrap_or(8).min(MAX_NEIGHBOUR_LINES));
-        let after: Vec<&DialogueLine> = dialogue.lines[index + 1..]
+    // The spoken lines around the line, or the first ones of the scene;
+    // a journal entry or objective gets the spoken lines around its row.
+    let (before, after_start, after_count) = match index {
+        Some(index) => (
+            dialogue.spoken_before(index, args.before.unwrap_or(8).min(MAX_NEIGHBOUR_LINES)),
+            index + 1,
+            args.after.unwrap_or(4),
+        ),
+        None => (Vec::new(), 0, args.after.unwrap_or(20)),
+    };
+    let after: Vec<&DialogueLine> = dialogue.lines[after_start..]
+        .iter()
+        .filter(|line| line.is_spoken())
+        .take(after_count.min(MAX_NEIGHBOUR_LINES))
+        .collect();
+    let mut speakers: Vec<&str> = line.and_then(DialogueLine::speaker).into_iter().collect();
+    speakers.extend(
+        before
             .iter()
-            .filter(|line| line.is_spoken())
-            .take(args.after.unwrap_or(4).min(MAX_NEIGHBOUR_LINES))
-            .collect();
-        speakers.extend(
-            before
-                .iter()
-                .chain(&after)
-                .filter_map(|line| line.speaker()),
-        );
-        result["before"] = json!(
-            before
-                .iter()
-                .map(|line| line_value(reader, &args.sheet, line))
-                .collect::<Result<Vec<_>, _>>()?
-        );
-        result["after"] = json!(
-            after
-                .iter()
-                .map(|line| line_value(reader, &args.sheet, line))
-                .collect::<Result<Vec<_>, _>>()?
-        );
-    }
-    if args.other_languages {
+            .chain(&after)
+            .filter_map(|line| line.speaker()),
+    );
+    result["before"] = json!(
+        before
+            .iter()
+            .map(|line| line_value(reader, &args.sheet, line))
+            .collect::<Result<Vec<_>, _>>()?
+    );
+    result["after"] = json!(
+        after
+            .iter()
+            .map(|line| line_value(reader, &args.sheet, line))
+            .collect::<Result<Vec<_>, _>>()?
+    );
+    if let Some(line) = line.filter(|_| args.other_languages) {
         let languages: serde_json::Map<String, Value> = reader
             .other_languages(&args.sheet, line.row, line.subrow, line.column)?
             .into_iter()
@@ -1044,9 +1056,28 @@ mod tests {
             "dialogue_context",
             &json!({ "sheet": SHEET, "row": 0 }),
         );
-        assert!(
-            journal.get("before").is_none(),
-            "a journal entry has no neighbours"
+        let rows = |lines: &Value| -> Vec<u64> {
+            lines
+                .as_array()
+                .expect("lines")
+                .iter()
+                .map(|line| line["row"].as_u64().expect("row"))
+                .collect()
+        };
+        assert_eq!(journal["before"], json!([]));
+        assert_eq!(
+            rows(&journal["after"]),
+            [48, 49, 50, 51],
+            "a journal entry shows the spoken lines after it"
+        );
+
+        let start = run(&tools, "dialogue_context", &json!({ "sheet": SHEET }));
+        assert!(start.get("line").is_none());
+        assert_eq!(start["journal"][0]["source"], "Miounne has tasks.");
+        assert_eq!(
+            rows(&start["after"]),
+            [48, 49, 50, 51, 52],
+            "the scene from its start"
         );
 
         for arguments in [
