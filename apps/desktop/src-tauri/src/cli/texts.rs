@@ -107,6 +107,8 @@ sheets, such as `quest/*` or `*item*`; `--folders` lists folders such as quest/0
 - `aeria brief` — the translation rules; give it to every agent that translates.
 - `aeria write` / `aeria check` — write translations, or only check them.
 - `aeria find <text>` — search the source text, or translations with `--in translation`.
+- `aeria audit [<pattern>]` — deterministic checks of the translations: the same source translated differently, forbidden terms, broken macros, gender, machine phrasing, length. Fix agents' findings with `aeria write`; flag a person's.
+- `aeria review` — what waits for review; `aeria flag <address>… --reason <text>` marks translations for a person to decide.
 - Every command has `--help`, and `--json` for machine-readable output.
 
 ## Working on a large scope
@@ -127,3 +129,135 @@ settled entry.
 with `aeria write` and fix what comes back rejected.
 - The user reviews and commits the work in Aeria; do not commit or push unless asked.
 ";
+
+const BLOCK_BEGIN: &str = "<!-- aeria:begin -->";
+const BLOCK_END: &str = "<!-- aeria:end -->";
+
+/// Aeria's part of `AGENTS.md`: what any agent harness needs to find the
+/// command.
+const AGENTS_BLOCK: &str = "\
+## Aeria localization project
+
+This directory is an [Aeria](https://angelicaproject.github.io/Aeria/) project: a fan
+localization of FINAL FANTASY XIV. The game's text comes from the installed game; the
+project keeps the translations in `.aeria/` and its knowledge in `aeria-knowledge/`.
+Work on it with the `aeria` command:
+
+- Start with `aeria guide`: how the project is organized and how to work on it,
+  alone or with several agents.
+- Every agent that translates reads `aeria brief` first.
+- Read a scene with `aeria read <sheet>` and write translations with `aeria write`;
+  never edit `.aeria/` directly.
+- `aeria-knowledge/` is the project's documentation: follow it and keep it current.
+  Entries marked settled are a person's decisions; ask before changing them.
+- `aeria --help` lists every command.";
+
+/// Aeria's part of `CLAUDE.md`: Claude Code reads `CLAUDE.md` and imports
+/// `AGENTS.md` from it.
+const CLAUDE_BLOCK: &str = "@AGENTS.md";
+
+/// The skill that tells agent harnesses with skills how to localize with
+/// the command, as `SKILL.md`.
+pub(crate) const SKILL: &str = "\
+---
+name: aeria-localization
+description: Localize FINAL FANTASY XIV in an Aeria project with the aeria command: read scenes with every client language, write checked translations, keep the project knowledge, and split large scopes among subagents. Use in any directory with an .aeria folder, or when asked to translate or localize FFXIV text with Aeria.
+---
+
+# Localizing with Aeria
+
+An Aeria project is a directory with `.aeria/` (the translations) and
+`aeria-knowledge/` (style, terms, character voices, story, lessons). The `aeria`
+command reads the game and the project and writes checked translations; it works
+in the project directory, and an open Aeria window shows every write at once.
+
+1. Run `aeria guide` in the project and follow it; `aeria overview` shows what is
+   translated.
+2. Give every agent that translates the text of `aeria brief`, and one scene: a
+   quest or cutscene sheet, or a range of rows of another sheet.
+3. A translating agent reads its scene with `aeria read <sheet>` (add
+   `--untranslated` to see only what is left), writes with `aeria write` in blocks of
+   an `@address` line and the translation, and fixes what comes back REJECTED.
+4. Record decisions in `aeria-knowledge/` as you go; ask the user about matters of
+   taste and settled entries.
+5. Check the work with `aeria audit` and `aeria review`; flag what a person must
+   decide with `aeria flag`.
+
+Every command has `--help` and `--json`.
+";
+
+/// Puts Aeria's block into a file between its markers, keeping everything
+/// else. Returns whether the file changed.
+fn upsert_block(path: &std::path::Path, block: &str) -> Result<bool, String> {
+    let wrapped = format!("{BLOCK_BEGIN}\n{block}\n{BLOCK_END}");
+    let current = match std::fs::read_to_string(path) {
+        Ok(text) => Some(text),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => return Err(format!("{}: {error}", path.display())),
+    };
+    let next = match &current {
+        None => format!("{wrapped}\n"),
+        Some(text) => match (text.find(BLOCK_BEGIN), text.find(BLOCK_END)) {
+            (Some(begin), Some(end)) if begin < end => format!(
+                "{}{wrapped}{}",
+                &text[..begin],
+                &text[end + BLOCK_END.len()..]
+            ),
+            _ => format!("{}\n\n{wrapped}\n", text.trim_end()),
+        },
+    };
+    if current.as_deref() == Some(next.as_str()) {
+        return Ok(false);
+    }
+    std::fs::write(path, next).map_err(|error| format!("{}: {error}", path.display()))?;
+    Ok(true)
+}
+
+/// Writes Aeria's blocks into `AGENTS.md` and `CLAUDE.md` at the project
+/// root, and says what changed.
+pub(crate) fn init(root: &std::path::Path) -> Result<String, String> {
+    let mut report = String::new();
+    for (name, block) in [("AGENTS.md", AGENTS_BLOCK), ("CLAUDE.md", CLAUDE_BLOCK)] {
+        let changed = upsert_block(&root.join(name), block)?;
+        let _ = writeln!(
+            report,
+            "{name}: {}",
+            if changed {
+                "written"
+            } else {
+                "already current"
+            }
+        );
+    }
+    report.push_str(
+        "Agent harnesses that start in this directory now find the aeria command. Commit these files with the project so collaborators get them too.\n",
+    );
+    Ok(report)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn init_keeps_the_user_text_and_replaces_its_own_block() {
+        let directory = tempfile::tempdir().expect("directory");
+        let root = directory.path();
+        std::fs::write(root.join("AGENTS.md"), "# Our rules\nBe kind.\n").expect("agents");
+        init(root).expect("init");
+        let agents = std::fs::read_to_string(root.join("AGENTS.md")).expect("read");
+        assert!(agents.starts_with("# Our rules\nBe kind.\n\n<!-- aeria:begin -->"));
+        assert!(agents.contains("aeria guide"));
+        let claude = std::fs::read_to_string(root.join("CLAUDE.md")).expect("read");
+        assert_eq!(
+            claude,
+            "<!-- aeria:begin -->\n@AGENTS.md\n<!-- aeria:end -->\n"
+        );
+        assert!(
+            init(root)
+                .expect("again")
+                .contains("AGENTS.md: already current")
+        );
+        assert!(SKILL.starts_with("---\nname: aeria-localization\n"));
+    }
+}

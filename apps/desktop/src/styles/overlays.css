@@ -403,3 +403,12 @@
 .setting-stack { display: grid; gap: 6px; }
 .field-hint.is-warning { color: var(--warn); }
 .field-hint.is-error { color: var(--bad); }
+
+/* Connect agents */
+.agents-settings { display: grid; gap: 10px; }
+.agents-status { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.agents-status-line { display: grid; grid-template-columns: 16px 1fr; column-gap: 8px; align-items: center; color: var(--fg-muted); }
+.agents-status-line.done { color: var(--fg); }
+.agents-status-line.done svg { color: var(--ok); }
+.agents-status-line small { grid-column: 2; overflow-wrap: anywhere; }
+.agents-actions { display: flex; gap: 8px; }

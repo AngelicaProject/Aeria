@@ -17,6 +17,7 @@ import type {
   PublishedReleaseDto,
   ReleaseInput,
   TermInput,
+  AgentsStatusDto,
   ProjectKnowledgeDto,
   CommandError,
   CollaborationDto,
@@ -406,6 +407,15 @@ export function gitCloneRepository(url: string, parent: string | null): Promise<
 /** The folder that receives new and cloned projects when no other folder is chosen. */
 export function defaultProjectsDirectory(): Promise<string> {
   return call<string>("default_projects_directory_path");
+}
+
+export function agentsStatus(): Promise<AgentsStatusDto> {
+  return call<AgentsStatusDto>("agents_status");
+}
+
+/** Installs the aeria command, the skill, and the project's AGENTS.md. */
+export function agentsConnect(): Promise<AgentsStatusDto> {
+  return call<AgentsStatusDto>("agents_connect");
 }
 
 export function projectKnowledge(): Promise<ProjectKnowledgeDto> {

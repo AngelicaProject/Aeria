@@ -1,3 +1,4 @@
+mod agents;
 mod check_workflow;
 pub mod cli;
 mod commands;
@@ -22,6 +23,7 @@ mod updates;
 use serde::Serialize;
 use tauri::Manager;
 
+pub use agents::{AgentsStatusDto, SkillTargetDto, agents_connect, agents_status};
 pub use check_workflow::{
     CheckWorkflowDto, git_check_workflow, git_install_check_workflow, git_open_branch_settings,
 };
@@ -143,6 +145,7 @@ pub fn run() {
                 app.state::<DesktopState>().set_data_dir(data_dir);
             }
             sync::start_reload_watcher(app.handle());
+            std::thread::spawn(agents::refresh_installed_command);
             updates::start_background_checks(app.handle());
             Ok(())
         })
@@ -214,6 +217,8 @@ pub fn run() {
             git_remote_branches,
             git_set_upstream,
             git_finish_contribution,
+            agents_status,
+            agents_connect,
             project_knowledge,
             save_knowledge_style,
             save_knowledge_terms,

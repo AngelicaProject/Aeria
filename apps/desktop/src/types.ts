@@ -447,7 +447,7 @@ export type UnitHistoryDto = {
   reviewedBy: AttributionDto | null;
 };
 
-export type ProjectArea = "terms" | "knowledge" | "packSettings" | "fontSettings" | "fontFile" | "collaboration" | "gitAttributes" | "feedWorkflow" | "checkWorkflow";
+export type ProjectArea = "terms" | "knowledge" | "agentFiles" | "packSettings" | "fontSettings" | "fontFile" | "collaboration" | "gitAttributes" | "feedWorkflow" | "checkWorkflow";
 
 /** The GitHub workflow that runs aeria-check on pull requests. */
 export type CheckWorkflowDto = {
@@ -524,6 +524,19 @@ export type GitSyncDto = {
 export type GitFinishDto = {
   integration: GitIntegration;
   deletedBranch: string | null;
+};
+
+/** What is connected for agent harnesses such as Claude Code, Codex, and Hermes Agent. */
+export type AgentsStatusDto = {
+  /** Where the aeria command is installed for agents, when it is. */
+  commandPath: string | null;
+  commandCurrent: boolean;
+  onPath: boolean;
+  skills: { harness: string; path: string; installed: boolean; current: boolean }[];
+  /** The open project's AGENTS.md has Aeria's section; null without a project. */
+  projectFiles: boolean | null;
+  /** This build of Aeria has no aeria command to install. */
+  commandMissing: boolean;
 };
 
 /** One term of `aeria-knowledge/terms.csv`; `settled` when a person decided it. */

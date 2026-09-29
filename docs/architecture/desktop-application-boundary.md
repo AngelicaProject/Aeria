@@ -265,6 +265,13 @@ again. Project-wide attribution is cached in memory per repository root and
 `git*` error codes such as `gitUnavailable`, `gitIdentityMissing`,
 `gitMergeConflict`, `gitIncomingRejected`, and `gitInvalidSettings`.
 
+`agents_status` reports and `agents_connect` sets up what agent harnesses
+need (see [`agents.md`](./agents.md#discovery)); connecting fails with
+`agentsConnect` naming the step. They run in blocking workers; changing the
+user's `PATH` runs PowerShell's
+`[Environment]::SetEnvironmentVariable` with the value in an environment
+variable.
+
 `project_knowledge`, `save_knowledge_style`, `save_knowledge_terms`, and
 `save_knowledge_characters` read and write the
 [project knowledge](../formats/knowledge-v1.md) files for the editor dialog. A

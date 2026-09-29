@@ -557,13 +557,19 @@ Monokai Pro, Night Owl, Rosé Pine, Ayu, Solarized, Palenight, Kanagawa, and
 Everforest) mapped onto Aeria's layered tokens; Catppuccin, Aeria's own themes,
 and High Contrast Dark are also available.
 
-Settings open as a dialog with Appearance, Editor, Workflow, Game,
+Settings open as a dialog with Appearance, Editor, Workflow, Game, Agents,
 Project, Repository, Keyboard shortcuts, and About sections and a search across all settings. Theme, accent,
 Reduce transparency, interface zoom (webview zoom), editor text size, macro
 highlighting, control-character display, strings list density, and focusing the
 next target after Save & next are per-machine renderer preferences kept in local
 storage; they are never project data. Components consume semantic tokens from `ui/theme/tokens.css`, which
 derive surfaces, lines, and state colors from each theme's palette.
+
+The Agents section shows whether the `aeria` command is installed and on
+`PATH`, the skill of each agent harness found on this computer, and the open
+project's `AGENTS.md` and `CLAUDE.md`, with **Connect agents** (or **Update**
+when everything is in place) that sets them all up; see
+[`agents.md`](./agents.md#discovery).
 
 The Project section changes the open project's target language with the
 same picker as New project. A listed language is saved when chosen; a typed

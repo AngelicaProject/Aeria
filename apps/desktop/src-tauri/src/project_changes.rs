@@ -23,6 +23,8 @@ pub enum ProjectAreaDto {
     Terms,
     /// The other files of `aeria-knowledge/`.
     Knowledge,
+    /// `AGENTS.md` and `CLAUDE.md`, which agent harnesses read.
+    AgentFiles,
     PackSettings,
     FontSettings,
     FontFile,
@@ -86,6 +88,7 @@ const TERMS_PATH: &str = "aeria-knowledge/terms.csv";
 fn area_of(path: &str) -> Option<ProjectAreaDto> {
     Some(match path {
         TERMS_PATH => ProjectAreaDto::Terms,
+        "AGENTS.md" | "CLAUDE.md" => ProjectAreaDto::AgentFiles,
         PACK_SETTINGS_FILE => ProjectAreaDto::PackSettings,
         FONT_SETTINGS_FILE => ProjectAreaDto::FontSettings,
         COLLABORATION_FILE => ProjectAreaDto::Collaboration,
@@ -120,7 +123,9 @@ pub fn compare(
             Some(Vec::new())
         }
         ProjectAreaDto::Terms => glossary_details(before, after),
-        ProjectAreaDto::Knowledge | ProjectAreaDto::GitAttributes => text_details(before, after),
+        ProjectAreaDto::Knowledge | ProjectAreaDto::AgentFiles | ProjectAreaDto::GitAttributes => {
+            text_details(before, after)
+        }
         ProjectAreaDto::PackSettings
         | ProjectAreaDto::FontSettings
         | ProjectAreaDto::Collaboration => json_details(before, after),
@@ -380,6 +385,7 @@ pub fn checkpoint_message(
         let name = match change.area {
             ProjectAreaDto::Terms => "terms",
             ProjectAreaDto::Knowledge => "knowledge",
+            ProjectAreaDto::AgentFiles => "agent instructions",
             ProjectAreaDto::PackSettings => "pack settings",
             ProjectAreaDto::FontSettings | ProjectAreaDto::FontFile => "game fonts",
             ProjectAreaDto::Collaboration => "collaboration policy",

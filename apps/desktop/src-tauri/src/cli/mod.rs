@@ -11,6 +11,7 @@
 //! are answered without a server; `AERIA_NO_SERVER` runs a command
 //! in-process.
 
+mod audit;
 mod project;
 mod read;
 mod serve;
@@ -46,7 +47,12 @@ Commands:
   write       Write translations; each is checked, rejected ones say what to fix.
   check       The checks of `write`, without writing.
   find        Search the source text or the translations.
+  audit       Deterministic checks across the project: inconsistent translations,
+              forbidden terms, broken macros, gender, machine phrasing, length.
+  review      Translations waiting for review, and those whose source is gone.
+  flag        Mark translations for a person's review, with the reason.
   knowledge   Check the project knowledge in aeria-knowledge/.
+  init        Write AGENTS.md and CLAUDE.md so agent harnesses find the command.
 
 Options:
   --project <dir>  The project, or a directory inside it (default: the current directory).
@@ -136,6 +142,51 @@ takes a few minutes) or in the project's translations.
   --in <where>       source (default) or translation.
   --sheet <pattern>  Only sheets matching the pattern, as in `aeria overview`.
   --limit <n>        At most n matches (default 30).
+";
+
+const AUDIT_HELP: &str = "\
+aeria audit [<pattern>] [--check <name>[,<name>...]] [--limit <n>]
+
+Checks every translation, or those of the sheets matching the pattern, without a
+model: the same source translated differently (inconsistent), forbidden term variants
+(forbidden), broken macros or structure (structure), both genders written at once
+(both-genders), a source that varies with the player character's gender and a
+translation that does not (gender), a term whose translation does not seem to be
+used (terms), phrasing that reads machine-written (phrasing), and interface strings
+much longer than their source (long). Each finding names whose translation it is;
+fix an agent's with `aeria write`, and flag a person's with `aeria flag`.
+Exit status 1 when there are findings.
+
+  --check <names>  Only these checks, separated by commas.
+  --limit <n>      At most n findings shown per check (default 50).
+";
+
+const REVIEW_HELP: &str = "\
+aeria review [<pattern>] [--limit <n>]
+
+Translations marked as needing review, by a game update, an agent's flag, or a
+person, with their source, translation, and note, and the translations whose source
+a game update removed.
+
+  --limit <n>  At most n translations (default 100).
+";
+
+const FLAG_HELP: &str = "\
+aeria flag <address>... --reason <text>
+
+Marks translations as needing a person's review and adds \"[agent] <reason>\" to
+their note, for anything an agent should not decide alone: a person's translation
+that looks wrong, a choice of taste, a term to settle. Untranslated strings cannot be
+flagged; tell the user about them.
+";
+
+const INIT_HELP: &str = "\
+aeria init
+
+Writes AGENTS.md and CLAUDE.md at the project root, which agent harnesses such as
+Claude Code, Codex, and Hermes Agent read: they say this is an Aeria project and to
+start with `aeria guide`. Text of your own in those files is kept; Aeria's part
+between its markers is replaced.
 ";
 
 const KNOWLEDGE_HELP: &str = "\
@@ -472,6 +523,17 @@ fn command_line(args: &[String]) -> Result<CommandLine, String> {
     Ok(line)
 }
 
+pub(crate) use texts::SKILL;
+
+/// Writes Aeria's part of `AGENTS.md` and `CLAUDE.md` at a project root.
+///
+/// # Errors
+///
+/// Returns a description when a file cannot be written.
+pub(crate) fn write_agent_files(root: &Path) -> Result<String, String> {
+    texts::init(root)
+}
+
 /// Runs the command of the process arguments and returns its exit status.
 #[must_use]
 pub fn run() -> i32 {
@@ -666,6 +728,64 @@ fn dispatch(
             let clean = access.read(start, |project| Ok(read::knowledge(project, out)))?;
             Ok(if clean { OK } else { PARTIAL })
         }
+        "audit" => {
+            let parsed = Arguments::parse(rest, &["check", "limit"], &[])?;
+            let options = audit::AuditOptions {
+                pattern: parsed.positional.first().cloned(),
+                checks: parsed
+                    .value("check")
+                    .map(|names| {
+                        names
+                            .split(',')
+                            .filter(|name| !name.trim().is_empty())
+                            .map(audit::Check::parse)
+                            .collect::<Result<Vec<_>, _>>()
+                    })
+                    .transpose()?
+                    .unwrap_or_default(),
+                limit: parsed.limit(50)?,
+            };
+            let clean = access.read(start, |project| Ok(audit::audit(project, &options, out)))?;
+            Ok(if clean { OK } else { PARTIAL })
+        }
+        "review" => {
+            let parsed = Arguments::parse(rest, &["limit"], &[])?;
+            let options = audit::ReviewOptions {
+                pattern: parsed.positional.first().cloned(),
+                limit: parsed.limit(100)?,
+            };
+            access.read(start, |project| {
+                audit::review(project, &options, out);
+                Ok(())
+            })?;
+            Ok(OK)
+        }
+        "flag" => {
+            let parsed = Arguments::parse(rest, &["reason"], &[])?;
+            let reason = parsed
+                .value("reason")
+                .filter(|reason| !reason.trim().is_empty())
+                .ok_or("say why with --reason")?
+                .to_owned();
+            if parsed.positional.is_empty() {
+                return Err("name the strings to flag by their addresses".to_owned());
+            }
+            let addresses = parsed
+                .positional
+                .iter()
+                .map(|address| project::Address::parse(address))
+                .collect::<Result<Vec<_>, _>>()?;
+            let clean = access.write(start, |project| {
+                Ok(audit::flag(project, &addresses, &reason, out))
+            })?;
+            Ok(if clean { OK } else { PARTIAL })
+        }
+        "init" => {
+            Arguments::parse(rest, &[], &[])?;
+            let root = project::find_root(start)?;
+            out.text = texts::init(&root)?;
+            Ok(OK)
+        }
         other => Err(unknown(other)),
     }
 }
@@ -682,6 +802,10 @@ fn command_help(command: &str) -> Option<&'static str> {
         "check" => CHECK_HELP,
         "find" => FIND_HELP,
         "knowledge" => KNOWLEDGE_HELP,
+        "audit" => AUDIT_HELP,
+        "review" => REVIEW_HELP,
+        "flag" => FLAG_HELP,
+        "init" => INIT_HELP,
         "brief" => BRIEF_HELP,
         "guide" => GUIDE_HELP,
         _ => return None,
@@ -732,6 +856,10 @@ mod tests {
             "knowledge",
             "brief",
             "guide",
+            "audit",
+            "review",
+            "flag",
+            "init",
         ] {
             assert!(command_help(command).is_some(), "{command}");
             assert!(HELP.contains(command), "{command}");

@@ -151,6 +151,17 @@ permissions and calls the `update_*` commands.
 A published version is never rebuilt or re-tagged; fix problems with a new
 patch release.
 
+## The aeria command
+
+The installer and the portable build ship the `aeria` command for agents as
+`bin/aeria.exe` (see [`../architecture/agents.md`](../architecture/agents.md#discovery)).
+The release workflow builds `aeria-cli` after the application, copies it to
+`apps/desktop/src-tauri/binaries/aeria-cli.exe`, and bundles the installer
+with `src-tauri/tauri.agents.conf.json`, which adds it to the resources. It
+cannot be a resource of the ordinary configuration: the application's build
+checks that resources exist, and the command is built from the same package
+after it.
+
 ## Bundled Git
 
 Git is Aeria's collaboration layer and translators are not expected to

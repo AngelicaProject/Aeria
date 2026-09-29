@@ -1,6 +1,7 @@
 import { memo, useEffect, useState, type CSSProperties, type ReactNode } from "react";
 import { Dialog } from "radix-ui";
 import { appInfo } from "../ipc";
+import { AgentsSettings } from "./AgentsSettings";
 import { GameSettings } from "./GameSettings";
 import { TargetLanguageSetting } from "./ProjectSettings";
 import type { ProjectSummaryDto } from "../types";
@@ -25,13 +26,14 @@ export const accentPresets: readonly { value: string; label: MessageKey }[] = [
   { value: "#98c379", label: "settings.accent.green" },
 ];
 
-export type SettingsSection = "appearance" | "editor" | "workflow" | "game" | "project" | "repository" | "keyboard" | "about";
+export type SettingsSection = "appearance" | "editor" | "workflow" | "game" | "agents" | "project" | "repository" | "keyboard" | "about";
 
 const sections: ReadonlyArray<{ id: SettingsSection; label: MessageKey; icon: UiIconName }> = [
   { id: "appearance", label: "settings.section.appearance", icon: "palette" },
   { id: "editor", label: "settings.section.editor", icon: "languages" },
   { id: "workflow", label: "settings.section.workflow", icon: "arrowRight" },
   { id: "game", label: "settings.section.game", icon: "gamepad" },
+  { id: "agents", label: "settings.section.agents", icon: "sparkles" },
   { id: "project", label: "settings.section.project", icon: "languages" },
   { id: "repository", label: "settings.section.repository", icon: "gitBranch" },
   { id: "keyboard", label: "settings.section.keyboard", icon: "listFilter" },
@@ -188,6 +190,10 @@ export const SettingsDialog = memo(function SettingsDialog({ open, onOpenChange,
     {
       id: "game-installation", section: "game", title: t("settings.game.title"), description: t("settings.game.description"), keywords: t("settings.game.keywords"), wide: true,
       control: <GameSettings />,
+    },
+    {
+      id: "agents-connect", section: "agents", title: t("settings.agents.title"), description: t("settings.agents.description"), keywords: t("settings.agents.keywords"), wide: true,
+      control: <AgentsSettings />,
     },
     {
       id: "shortcuts", section: "keyboard", title: t("settings.shortcuts.title"), keywords: keyboardShortcuts.map((shortcut) => `${shortcut.keys} ${t(shortcut.action)}`).join(" "), wide: true,

@@ -111,10 +111,10 @@ translations is written in about 0.4 s.
 | `check` | The checks of `write`, without writing. |
 | `find <text>` | Strings whose source (the default; the first search builds the search index of the game version) or translation (`--in translation`) contains the text, ignoring case and tags; `--sheet` takes a pattern. |
 | `knowledge` | Checks the knowledge files and lists every problem with its file and line. |
-
-Not implemented yet: `audit` (project-wide deterministic checks such as
-inconsistent terms or address), `changes` (what a game update changed), and
-`flag` (mark strings for a person).
+| `audit [<pattern>]` | Deterministic checks of every translation, or those of matching sheets, grouped by check with whose translation each finding is: the same source translated differently (`inconsistent`), forbidden term variants (`forbidden`), a broken assisted structure (`structure`), both genders written at once (`both-genders`), a source with a `$gn4` condition and a translation without one (`gender`), a term whose translation does not seem to be used (`terms`), `machine_phrasing` (`phrasing`), and interface strings over 1.8 times their source and at least 24 characters (`long`). `--check` selects checks. Exit status 1 when there are findings. |
+| `review [<pattern>]` | Translations that need review, whoever marked them, with source, translation, and note, and the translations a game update detached. |
+| `flag <address>… --reason` | Marks translations as needing review and adds `[agent] <reason>` to their note, for what a person must decide; an untranslated string cannot be flagged. |
+| `init` | Writes Aeria's section into `AGENTS.md` and `CLAUDE.md` at the project root (see [Discovery](#discovery)). |
 
 ### Writing
 
@@ -164,7 +164,26 @@ reloads.
 
 Identity, source updates, merges, and export do not depend on agents.
 
-Discovery (not implemented yet): Aeria writes `AGENTS.md` and `CLAUDE.md` at
-the project root, which agent harnesses read, and can install an
-`aeria-localization` skill for harnesses that use skills and put `aeria` on
-`PATH`.
+## Discovery
+
+Agent harnesses find the command in three ways; Settings → Agents →
+**Connect agents** in the desktop sets up all three and shows their state:
+
+- **The command on `PATH`.** The installer and the portable build ship the
+  command as `bin/aeria.exe` beside the application (a development build has
+  `aeria-cli.exe` there). Connecting copies it to
+  `%LOCALAPPDATA%\Aeria\bin\aeria.exe` (`~/.local/bin/aeria` on Linux) and adds
+  that folder to the user's `PATH`; agents started afterwards find `aeria`. A
+  desktop that starts after an update refreshes the copy when agents were
+  connected.
+- **The skill.** `aeria-localization/SKILL.md` goes into the skill folder of
+  each harness whose home folder exists: `~/.claude/skills` (Claude Code),
+  `~/.codex/skills` (Codex), and `%LOCALAPPDATA%\hermes\skills` or
+  `$HERMES_HOME/skills` (Hermes Agent). It tells the agent to start with
+  `aeria guide` and how to split work among subagents.
+- **Project files.** `aeria init`, and connecting with a project open, write
+  Aeria's section between `<!-- aeria:begin -->` and `<!-- aeria:end -->` into
+  `AGENTS.md` (what the project is and which commands to start with) and
+  `CLAUDE.md` (which imports `AGENTS.md` for Claude Code), keeping any other
+  text. Checkpoints commit both files, so collaborators and their agents get
+  them.

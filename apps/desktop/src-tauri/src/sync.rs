@@ -220,6 +220,24 @@ impl Ledger {
             .map_err(|error| error.to_string())
     }
 
+    /// Every translation agents wrote, by location: one read for checks
+    /// across the whole project.
+    ///
+    /// # Errors
+    ///
+    /// Returns a description when the ledger cannot be read.
+    pub(crate) fn all(&self) -> Result<std::collections::HashMap<String, String>, String> {
+        let mut statement = self
+            .connection
+            .prepare("SELECT location, target FROM written")
+            .map_err(|error| error.to_string())?;
+        statement
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+            .map_err(|error| error.to_string())?
+            .collect::<Result<_, _>>()
+            .map_err(|error| error.to_string())
+    }
+
     /// Records translations agents wrote, as `(location, target)`.
     ///
     /// # Errors
