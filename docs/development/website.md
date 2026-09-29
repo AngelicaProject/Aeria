@@ -16,8 +16,8 @@ Pages at <https://angelicaproject.github.io/Aeria/>.
   language is Russian to `ru/`.
 - The page describes Aeria plainly, as a community tool for fan
   translations in any language; it is not written as product marketing.
-  Describe only what is implemented. The page is plain: one sentence on what
-  Aeria is, cards of what it does with a short name and one sentence each
+  Describe only what is implemented. The page is plain: the name, one sentence on what
+  Aeria is, a bulleted list of what it does, one concrete sentence per item
   (translation with agents, see
   [`../architecture/agents.md`](../architecture/agents.md), among them), the
   tag example, installing a translation in the game, and development links.

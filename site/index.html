@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Aeria — fan translations of FINAL FANTASY XIV</title>
-  <meta name="description" content="Aeria is a free, open-source app for fan translations of FINAL FANTASY XIV into any language.">
+  <meta name="description" content="Aeria is a free, open-source editor for fan translations of FINAL FANTASY XIV.">
   <meta property="og:title" content="Aeria">
   <meta property="og:description" content="A free editor for fan translations of FINAL FANTASY XIV into any language.">
   <meta property="og:image" content="icon.png">
@@ -35,8 +35,8 @@
     <main>
       <section class="opening">
         <div>
-          <h1>Fan translations of FINAL FANTASY&nbsp;XIV</h1>
-          <p class="lede">An app for fan translations of FINAL FANTASY&nbsp;XIV into any language. Free and open source.</p>
+          <h1>Aeria</h1>
+          <p class="lede">An editor for fan translations of FINAL FANTASY&nbsp;XIV. Free and open source.</p>
           <div class="downloads" data-mb="MB">
             <div class="dl" data-channel="stable">
               <div class="dl-info">
@@ -66,18 +66,17 @@
       </section>
 
       <section class="block" id="features">
-        <h2>What Aeria does</h2>
+        <h2>What it does</h2>
         <div class="body">
-          <div class="features">
-            <div class="feature"><h3>Text from the game</h3><p>Aeria reads the strings straight from your installed game, in all four of its languages at once.</p></div>
-            <div class="feature"><h3>Tags</h3><p>Instead of code you see hints like "if the character is female". A line with a broken tag can't be saved.</p></div>
-            <div class="feature"><h3>AI agents</h3><p>Claude Code, Codex, or Hermes Agent translate whole quests and check them against the Japanese original.</p></div>
-            <div class="feature"><h3>People have the last word</h3><p>Agents leave alone any line a person wrote or approved.</p></div>
-            <div class="feature"><h3>One style</h3><p>Terms, style, and the way each character talks are written down in the project, so the translation sounds the same everywhere.</p></div>
-            <div class="feature"><h3>Game updates</h3><p>After a patch the translation moves to the new version, and changed lines are marked for review.</p></div>
-            <div class="feature"><h3>Teamwork</h3><p>A project is a Git repository, so a regular one on GitHub is all it takes.</p></div>
-            <div class="feature"><h3>In the game</h3><p>The Harmonia plugin for Dalamud shows the finished translation in the game.</p></div>
-          </div>
+          <ul class="list">
+            <li>Opens the text straight from your game install, nothing to export.</li>
+            <li>Shows tags as hints like "if the character is female", and won't save a line with a broken tag.</li>
+            <li>Translate quests yourself or hand them to an AI agent: Claude Code, Codex, Hermes Agent. The agent sees the Japanese original and every official localization, not just the English.</li>
+            <li>Agents won't overwrite a line a person has edited.</li>
+            <li>Terms and the way each character talks are written down in the project, so the translation stays consistent from quest to quest.</li>
+            <li>Patches don't break the translation: Aeria moves it to the new game version and shows which lines changed.</li>
+            <li>Work as a team through a plain GitHub repository. Git is built in.</li>
+          </ul>
         </div>
       </section>
 
@@ -112,7 +111,7 @@
       <section class="block" id="harmonia">
         <h2>Installing a translation in the game</h2>
         <div class="body">
-          <p>The <a href="https://github.com/AngelicaProject/Harmonia">Harmonia</a> plugin for Dalamud shows the translation in the game.</p>
+          <p>Players install the finished translation with the <a href="https://github.com/AngelicaProject/Harmonia">Harmonia</a> plugin for Dalamud:</p>
           <ol class="steps">
             <li>Launch the game through <a href="https://goatcorp.github.io/">XIVLauncher</a> with Dalamud enabled.</li>
             <li>Open <code>/xlsettings</code> → Experimental → Custom Plugin Repositories, add this address, and save:
