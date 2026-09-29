@@ -32,8 +32,8 @@ use aeria_ai::localizer::{
 use aeria_ai::search::ProjectSearch;
 use aeria_ai::study::{contract_story, study_terms};
 use aeria_ai::tools::{
-    JobAction, JobControl, ProjectReader, ProposalOutcome, ReviewLabel, ToolError, UnitLocation,
-    UnitState,
+    JobAction, JobControl, ProjectReader, ProposalOutcome, ReviewLabel, RevisionTarget, ToolError,
+    UnitLocation, UnitState,
 };
 use aeria_ai::worker::{
     JobHost, PreparedUnit, UnitContext, WriteFailure, prepare_unit, unit_knowledge,
@@ -146,10 +146,39 @@ fn domain_order(mut sheets: Vec<String>) -> Vec<String> {
     sheets
 }
 
-/// Lists the strings a job over `scope` covers, in sheet and row order.
-/// Reviewed translations are never included.
+/// Whether a string in `state` belongs to a job with `filter`. A revision
+/// takes every string no person has settled: those without a reviewed
+/// translation, and reviewed ones whose translation is still the one a job
+/// wrote (`agent_written`).
+fn included(
+    filter: JobFilter,
+    state: Option<ReviewLabel>,
+    agent_written: impl FnOnce() -> bool,
+) -> bool {
+    match filter {
+        JobFilter::Untranslated => state.is_none(),
+        JobFilter::NeedsReview => state == Some(ReviewLabel::NeedsReview),
+        JobFilter::UntranslatedAndDrafts => matches!(state, None | Some(ReviewLabel::Draft)),
+        JobFilter::Revise => state != Some(ReviewLabel::Reviewed) || agent_written(),
+    }
+}
+
+/// Whether `target` is the translation a job last wrote at `location`.
+fn written_by_job(store: Option<&JobStore>, location: &UnitLocation, target: Option<&str>) -> bool {
+    store
+        .and_then(|store| store.written_target(location).ok().flatten())
+        .is_some_and(|written| Some(written.as_str()) == target)
+}
+
+/// Lists the strings a job over `scope` covers, in sheet and row order, or
+/// in the order of the scope's list. Strings a person reviewed are never
+/// included.
 fn enumerate_scope(app: &tauri::AppHandle, scope: &JobScope) -> Result<Vec<ScopedUnit>, ToolError> {
     let reader = DesktopReader { app: app.clone() };
+    let store = job_store(app).ok();
+    if !scope.units.is_empty() {
+        return reader.with_session(|session| Ok(listed_scope(session, scope, store.as_ref())));
+    }
     let sheets: Vec<String> = if scope.sheets.is_empty() {
         reader
             .sheets()?
@@ -165,7 +194,14 @@ fn enumerate_scope(app: &tauri::AppHandle, scope: &JobScope) -> Result<Vec<Scope
         let mut after: Option<(u32, u16)> = None;
         loop {
             let page = reader.with_session(|session| {
-                page_scope(session, &sheet, after, scope.filter, &mut units)
+                page_scope(
+                    session,
+                    &sheet,
+                    after,
+                    scope.filter,
+                    store.as_ref(),
+                    &mut units,
+                )
             })?;
             match page {
                 Some(next) => after = Some(next),
@@ -179,12 +215,60 @@ fn enumerate_scope(app: &tauri::AppHandle, scope: &JobScope) -> Result<Vec<Scope
     Ok(units)
 }
 
+/// The strings of a scope's list that its filter includes, in list order;
+/// unknown and repeated locations are left out.
+fn listed_scope(
+    session: &ProjectSession,
+    scope: &JobScope,
+    store: Option<&JobStore>,
+) -> Vec<ScopedUnit> {
+    let mut seen = BTreeSet::new();
+    let mut units = Vec::new();
+    for location in &scope.units {
+        let key = (
+            location.sheet.clone(),
+            location.row,
+            location.subrow,
+            location.column,
+        );
+        if !seen.insert(key) || units.len() >= aeria_ai::jobs::MAX_JOB_UNITS {
+            continue;
+        }
+        let Ok(Some(row)) = session_row(session, &location.sheet, location.row, location.subrow)
+        else {
+            continue;
+        };
+        let Some(cell) = row
+            .cells
+            .into_iter()
+            .find(|cell| Some(cell.column) == location.column)
+        else {
+            continue;
+        };
+        if !included(scope.filter, cell.review_state, || {
+            written_by_job(store, location, cell.target.as_deref())
+        }) {
+            continue;
+        }
+        units.push(ScopedUnit {
+            location: location.clone(),
+            expected: UnitState {
+                target: cell.target.clone(),
+                review_state: cell.review_state,
+            },
+            source_chars: cell.source.chars().count(),
+        });
+    }
+    units
+}
+
 /// Adds one page of a sheet's matching strings; returns the next cursor.
 fn page_scope(
     session: &ProjectSession,
     sheet: &str,
     after: Option<(u32, u16)>,
     filter: JobFilter,
+    store: Option<&JobStore>,
     units: &mut Vec<ScopedUnit>,
 ) -> Result<Option<(u32, u16)>, ToolError> {
     known_sheet(session, sheet)?;
@@ -201,30 +285,27 @@ fn page_scope(
             let state = cell
                 .translation
                 .as_ref()
-                .map(|overlay| overlay.review_state);
-            let included = match filter {
-                JobFilter::Untranslated => state.is_none(),
-                JobFilter::NeedsReview => state == Some(aeria_core::ReviewState::NeedsReview),
-                JobFilter::UntranslatedAndDrafts => {
-                    matches!(state, None | Some(aeria_core::ReviewState::Draft))
-                }
+                .map(|overlay| review_label(overlay.review_state));
+            let target = cell
+                .translation
+                .as_ref()
+                .map(|overlay| overlay.target_macro.clone());
+            let location = UnitLocation {
+                sheet: sheet.to_owned(),
+                row: row.row_id,
+                subrow: row.subrow_id,
+                column: Some(cell.source_binding.column_index()),
             };
-            if !included {
+            if !included(filter, state, || {
+                written_by_job(store, &location, target.as_deref())
+            }) {
                 continue;
             }
             units.push(ScopedUnit {
-                location: UnitLocation {
-                    sheet: sheet.to_owned(),
-                    row: row.row_id,
-                    subrow: row.subrow_id,
-                    column: Some(cell.source_binding.column_index()),
-                },
+                location,
                 expected: UnitState {
-                    target: cell
-                        .translation
-                        .as_ref()
-                        .map(|overlay| overlay.target_macro.clone()),
-                    review_state: state.map(review_label),
+                    target,
+                    review_state: state,
                 },
                 source_chars: cell.source_macro.chars().count(),
             });
@@ -240,6 +321,7 @@ fn filter_label(filter: JobFilter) -> &'static str {
         JobFilter::Untranslated => "untranslated strings",
         JobFilter::NeedsReview => "strings needing review",
         JobFilter::UntranslatedAndDrafts => "untranslated strings and drafts",
+        JobFilter::Revise => "strings no person settled",
     }
 }
 
@@ -289,7 +371,109 @@ impl DesktopJobs {
     }
 }
 
+/// Strings a revision covers, at most.
+const MAX_REVISION_STRINGS: usize = 5_000;
+
+/// The strings whose source contains a term, from the source index.
+fn term_locations(app: &tauri::AppHandle, term: &str) -> Result<Vec<UnitLocation>, ToolError> {
+    let search = DesktopSearch { app: app.clone() };
+    let mut locations = Vec::new();
+    loop {
+        let page = search.search_source(&aeria_ai::search::SearchQuery {
+            text: term.to_owned(),
+            sheet: None,
+            offset: u32::try_from(locations.len()).unwrap_or(u32::MAX),
+            limit: 50,
+        })?;
+        let more = page.more && !page.matches.is_empty();
+        locations.extend(page.matches.into_iter().map(|found| found.location));
+        if !more || locations.len() >= MAX_REVISION_STRINGS {
+            return Ok(locations);
+        }
+    }
+}
+
+/// A speaker's lines across the game, with the column of each line's text.
+fn speaker_locations(
+    app: &tauri::AppHandle,
+    speaker: &str,
+) -> Result<Vec<UnitLocation>, ToolError> {
+    let reader = DesktopReader { app: app.clone() };
+    let mut columns: BTreeMap<String, BTreeMap<(u32, u16), u32>> = BTreeMap::new();
+    let mut locations = Vec::new();
+    loop {
+        let (total, page) = reader.speaker_lines(speaker, locations.len(), 200)?;
+        if page.is_empty() {
+            return Ok(locations);
+        }
+        for mut location in page {
+            if !columns.contains_key(&location.sheet)
+                && let Ok(Some(dialogue)) = reader.dialogue(&location.sheet)
+            {
+                columns.insert(
+                    location.sheet.clone(),
+                    dialogue
+                        .lines
+                        .iter()
+                        .map(|line| ((line.row, line.subrow), line.column))
+                        .collect(),
+                );
+            }
+            location.column = columns
+                .get(&location.sheet)
+                .and_then(|lines| lines.get(&(location.row, location.subrow)).copied());
+            locations.push(location);
+        }
+        if locations.len() >= total || locations.len() >= MAX_REVISION_STRINGS {
+            return Ok(locations);
+        }
+    }
+}
+
 impl JobControl for DesktopJobs {
+    fn propose_revision(
+        &self,
+        target: RevisionTarget,
+        reason: String,
+        quality: JobQuality,
+    ) -> Result<ProposalOutcome, ToolError> {
+        let (what, locations) = match &target {
+            RevisionTarget::Term(term) => (
+                format!("strings with {term:?}"),
+                term_locations(&self.app, term)?,
+            ),
+            RevisionTarget::Speaker(speaker) => (
+                format!("lines of {speaker}"),
+                speaker_locations(&self.app, speaker)?,
+            ),
+        };
+        let locations: Vec<UnitLocation> = locations
+            .into_iter()
+            .filter(|location| location.column.is_some())
+            .collect();
+        if locations.is_empty() {
+            return Err(ToolError::new(format!("no {what} were found")));
+        }
+        let mut sheets: Vec<String> = Vec::new();
+        for location in &locations {
+            if !sheets.contains(&location.sheet) {
+                sheets.push(location.sheet.clone());
+            }
+        }
+        let scope = JobScope {
+            sheets,
+            filter: JobFilter::Revise,
+            units: locations,
+        };
+        self.propose(
+            scope,
+            format!("Revision of the {what}: {reason}"),
+            None,
+            &[],
+            quality,
+        )
+    }
+
     fn estimate(&self, scope: &JobScope) -> Result<JobEstimate, ToolError> {
         let units = enumerate_scope(&self.app, scope)?;
         Ok(JobEstimate::for_units(
@@ -1000,6 +1184,9 @@ async fn lane_loop(run: &JobRun, lane: usize) {
 /// The worker's view of the project for one job.
 struct DesktopJobHost {
     run: JobRun,
+    /// A revision may replace a reviewed translation a job wrote; the
+    /// scope admitted only those, and the write is compare-and-set.
+    replace_reviewed: bool,
 }
 
 impl DesktopJobHost {
@@ -1067,7 +1254,7 @@ impl JobHost for DesktopJobHost {
             location,
             target,
             expected,
-            false,
+            self.replace_reviewed,
             Some(review),
         )
         .map_err(|error| match error {
@@ -1093,12 +1280,17 @@ impl JobReader {
     fn reader(&self) -> Result<DesktopReader, ToolError> {
         DesktopJobHost {
             run: self.run.clone(),
+            replace_reviewed: false,
         }
         .reader()
     }
 }
 
 impl ProjectReader for JobReader {
+    fn knowledge_root(&self) -> Option<PathBuf> {
+        Some(self.run.root.clone())
+    }
+
     fn facts(&self) -> Result<aeria_ai::tools::ProjectFacts, ToolError> {
         self.reader()?.facts()
     }
@@ -1187,7 +1379,10 @@ fn prepare_chunk(run: &JobRun, units: &[JobUnit]) -> CommandResult<PreparedUnit>
     let job = run.store.summary(&run.job_id)?;
     Ok(prepare_unit(
         units,
-        &DesktopJobHost { run: run.clone() },
+        &DesktopJobHost {
+            run: run.clone(),
+            replace_reviewed: false,
+        },
         &reader,
         &Knowledge::load(&run.root),
         facts.as_ref(),
@@ -1439,7 +1634,14 @@ fn write_outcomes(
     outcomes: Vec<LineOutcome>,
     sources: &BTreeMap<usize, String>,
 ) -> Vec<(u64, UnitStatus, Option<String>)> {
-    let host = DesktopJobHost { run: run.clone() };
+    let host = DesktopJobHost {
+        run: run.clone(),
+        // A revision may replace the reviewed translations its scope admitted.
+        replace_reviewed: run
+            .store
+            .summary(&run.job_id)
+            .is_ok_and(|job| job.spec.scope.filter == JobFilter::Revise),
+    };
     let mut recorded = Vec::new();
     let mut written = Vec::new();
     for outcome in outcomes {
@@ -1911,12 +2113,30 @@ mod tests {
             }
             let mut after = None;
             while let Some(next) =
-                page_scope(session, &sheet.name, after, filter, &mut units).expect("page")
+                page_scope(session, &sheet.name, after, filter, None, &mut units).expect("page")
             {
                 after = Some(next);
             }
         }
         units
+    }
+
+    #[test]
+    fn a_revision_takes_what_no_person_settled() {
+        use ReviewLabel::{Draft, NeedsReview, Reviewed};
+        let agent = || true;
+        let person = || false;
+        assert!(included(JobFilter::Revise, None, person));
+        assert!(included(JobFilter::Revise, Some(Draft), person));
+        assert!(included(JobFilter::Revise, Some(NeedsReview), person));
+        assert!(included(JobFilter::Revise, Some(Reviewed), agent));
+        assert!(!included(JobFilter::Revise, Some(Reviewed), person));
+        assert!(!included(JobFilter::Untranslated, Some(Draft), agent));
+        assert!(included(
+            JobFilter::UntranslatedAndDrafts,
+            Some(Draft),
+            person
+        ));
     }
 
     #[test]
@@ -1979,6 +2199,7 @@ mod tests {
                 scope: JobScope {
                     sheets: Vec::new(),
                     filter: JobFilter::Untranslated,
+                    units: Vec::new(),
                 },
                 instructions: String::new(),
                 model: aeria_ai::ModelSelection {

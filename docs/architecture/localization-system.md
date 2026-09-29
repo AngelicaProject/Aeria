@@ -2,9 +2,10 @@
 
 > **Status: partly implemented.** The localizer and its critics run
 > [translation jobs](./ai.md#translation-jobs); [`ai.md`](./ai.md#the-localizer)
-> describes what is implemented, including project knowledge written by
-> agents, study, and learning with its evaluation. Propagation is a
-> proposal. The document
+> describes what is implemented: project knowledge written by agents,
+> study, learning with its evaluation, revisions, and calibration through
+> Angelica. Units of work for other domains follow sheet order in chunks of
+> 30 strings; grouping by series and collection is a proposal. The document
 > describes how Aeria's agents are to localize the whole game corpus so that
 > the result reads as if it was written in the target language, with people
 > reviewing by exception. Open decisions are listed in
@@ -308,19 +309,23 @@ changes quality: understanding before writing, and reading after it.
 2. **Knowledge and study** (implemented). The agent layer of project
    knowledge, researchers for style, characters, and terms, stories kept
    between units, and a consistency critic.
-3. **Consistency.** A critic of the unit against the project knowledge, and
-   knowledge changes from critics' flags.
-4. **Learning.** Mentor, benchmark, lesson evaluation, propagation,
-   calibration.
-5. **Other domains.** Units and localizer briefs for names, actions, items,
-   interface, and lore.
+3. **Learning and propagation** (implemented). Findings and people's
+   changes become lessons on trial, evaluated against what jobs wrote; term
+   corrections; revisions of the strings a knowledge change affects;
+   calibration and knowledge edits through Angelica.
+4. **Other domains** (partly implemented). Domain notes for writers, style
+   studied per domain, and names first. Next: units of work by series and
+   collection from sheet relations.
 
 ## Open questions
 
-- The serialized format of project knowledge and how its entries merge in
-  Git when several people or machines add entries at once.
-- Where draft-to-knowledge dependencies are stored so that propagation works
-  across machines.
+- How agent knowledge entries merge in Git when several people or machines
+  add entries at once.
+- Revisions find affected strings by term or speaker; recorded
+  draft-to-knowledge dependencies would make them exact, and would work for
+  style and lesson changes too.
+- What jobs wrote is recorded on one machine; reactions and revisions on
+  another machine do not see it.
 - Where a person's confirmation of a translation is recorded, so that it is
   protected from agent revision: in the workspace format (a new version) or
   derived from Git history.

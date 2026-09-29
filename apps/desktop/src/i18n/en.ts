@@ -529,6 +529,7 @@ export const en = {
   "angelica.job.filter.untranslated": "Untranslated",
   "angelica.job.filter.needsReview": "Needs review",
   "angelica.job.filter.untranslatedAndDrafts": "Untranslated and drafts",
+  "angelica.job.filter.revise": "Strings no person settled",
   "angelica.job.unit.pending": "Waiting",
   "angelica.job.unit.running": "In progress",
   "angelica.job.unit.drafted": "Drafted",

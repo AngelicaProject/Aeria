@@ -658,7 +658,7 @@ export type ProposalRecord = {
 
 export type TranslationAppliedDto = { sourceBinding: SourceBinding; overlay: TranslationOverlayDto };
 
-export type JobFilter = "untranslated" | "needsReview" | "untranslatedAndDrafts";
+export type JobFilter = "untranslated" | "needsReview" | "untranslatedAndDrafts" | "revise";
 
 export type JobScope = { sheets: string[]; filter: JobFilter };
 

@@ -359,6 +359,21 @@ the recorded one is marked reviewed, and a changed or missing string is
 skipped. The proposal's message states how many were approved and skipped.
 Translation jobs never propose approvals.
 
+### Project knowledge tools
+
+`get_knowledge`, offered in every mode, reads the
+[project knowledge](../formats/knowledge-v1.md): counts of every kind and
+the style, or the entries of one kind (style, terms, characters, story, or
+lessons) whose key or text contains a query, at most 100, with human entries
+marked locked. `set_knowledge`, offered in Ask and Auto-draft modes, writes
+the agent layer at once, without a proposal: style entries by domain, terms,
+character profiles, and lessons (active unless Angelica says otherwise), at
+most 50 of each kind per call; terms and speakers of the human files are
+skipped and listed. Her instructions tell her to write decisions the user
+makes at once, never to ask the user to write rules, and to calibrate the
+style by showing two or three versions of a short scene that differ on one
+axis at a time and writing the chosen style.
+
 ### Guidance and glossary
 
 Two optional, human-edited files at the repository root are shared through
@@ -541,7 +556,9 @@ them.
 
 A scope is a list of sheets, or every sheet with translatable strings, and a
 filter: untranslated strings (the default), strings that need review, or
-untranslated strings and drafts. Reviewed translations are never included.
+untranslated strings and drafts. Reviewed translations are never included,
+except by a revision (see [Revisions](#revisions)). A scope may instead list
+its strings; its sheets then only name them for the proposal.
 The string list is fixed when the job starts, together with each string's
 current target and review state. Sheets are taken in domain order: names
 first, since all other text refers to them, then actions and statuses, items,
@@ -679,6 +696,23 @@ counts as `flagged` with the flag as its message, and is reported as a job
 event. A string changed meanwhile is skipped as a conflict. The contract and
 writer requests carry the job's images when the model accepts images; after
 the job's conversation is deleted they are left out.
+
+#### Revisions
+
+A revision translates again the strings that a change of the project
+knowledge affects. Angelica proposes one with `propose_revision` in Ask and
+Auto-draft modes, for a source term (the strings whose source contains it,
+from the source index) or a speaker label (the speaker's lines across the
+game), at most 5,000 strings, with the change as the reason; the job's
+instructions say what is revised and why. Its scope lists the strings and
+uses the `revise` filter, which takes every listed string no person has
+settled: strings without a reviewed translation, and reviewed ones whose
+translation is still the one a job last wrote. A reviewed translation a
+person edited is never included. Writes of a revision may replace a
+reviewed translation, still compare-and-set against the state recorded when
+the job started. A reviewed translation a person approved without editing
+cannot yet be told apart from one an agent finalized, so a revision may
+include it.
 
 #### Learning
 

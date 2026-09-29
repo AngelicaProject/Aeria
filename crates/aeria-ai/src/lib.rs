@@ -18,6 +18,7 @@ pub mod guidance;
 pub mod images;
 pub mod jobs;
 pub mod knowledge;
+pub mod knowledge_tools;
 pub mod learning;
 pub mod localizer;
 pub mod prompt;

@@ -117,7 +117,10 @@ fn evaluation_units(run: &JobRun) -> Vec<(UnitOfWork, BTreeMap<usize, String>)> 
     let reader = JobReader { run: run.clone() };
     let facts = reader.facts().ok();
     let knowledge = Knowledge::load(&run.root);
-    let host = DesktopJobHost { run: run.clone() };
+    let host = DesktopJobHost {
+        run: run.clone(),
+        replace_reviewed: false,
+    };
     sheets
         .into_iter()
         .take(EVALUATION_UNITS)

@@ -367,6 +367,10 @@ pub(crate) fn session_row(
 }
 
 impl ProjectReader for DesktopReader {
+    fn knowledge_root(&self) -> Option<std::path::PathBuf> {
+        repository_root(&self.app).ok()
+    }
+
     fn facts(&self) -> Result<ProjectFacts, ToolError> {
         self.with_session(|session| Ok(session_facts(session)))
     }

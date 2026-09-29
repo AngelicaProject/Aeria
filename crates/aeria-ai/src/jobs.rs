@@ -56,6 +56,11 @@ pub enum JobFilter {
     NeedsReview,
     /// Untranslated strings and existing drafts, which are retranslated.
     UntranslatedAndDrafts,
+    /// The strings of the scope's list that no person has settled: those
+    /// without a reviewed translation, and reviewed ones whose translation
+    /// is still the one a job wrote. They are translated again, for example
+    /// after a term or a character's profile changed.
+    Revise,
 }
 
 /// The strings a job covers.
@@ -65,6 +70,9 @@ pub struct JobScope {
     /// Sheets to cover; empty means every sheet with translatable strings.
     pub sheets: Vec<String>,
     pub filter: JobFilter,
+    /// Only these strings, when the list is not empty.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub units: Vec<UnitLocation>,
 }
 
 /// What the user approved when starting a job.
@@ -1333,6 +1341,7 @@ mod tests {
             scope: JobScope {
                 sheets: vec!["Item".to_owned()],
                 filter: JobFilter::Untranslated,
+                units: Vec::new(),
             },
             instructions: "Be brief.".to_owned(),
             model: ModelSelection {

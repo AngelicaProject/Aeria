@@ -26,6 +26,7 @@ export const jobFilterLabels: Readonly<Record<JobFilter, MessageKey>> = {
   untranslated: "angelica.job.filter.untranslated",
   needsReview: "angelica.job.filter.needsReview",
   untranslatedAndDrafts: "angelica.job.filter.untranslatedAndDrafts",
+  revise: "angelica.job.filter.revise",
 };
 
 const unitLabels: Readonly<Record<JobUnitStatus, MessageKey>> = {

@@ -149,6 +149,12 @@ pub struct UnitLocation {
 
 /// Read access to the open project, implemented by the desktop.
 pub trait ProjectReader: Send + Sync {
+    /// The repository root whose project knowledge Angelica reads and
+    /// writes; `None` where knowledge is not available.
+    fn knowledge_root(&self) -> Option<std::path::PathBuf> {
+        None
+    }
+
     /// # Errors
     /// Returns an error when no project is open or it cannot be read.
     fn facts(&self) -> Result<ProjectFacts, ToolError>;
@@ -383,8 +389,33 @@ pub enum JobAction {
     Cancel,
 }
 
+/// What a revision job covers: the strings that contain a term, or the
+/// lines of a speaker.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum RevisionTarget {
+    Term(String),
+    Speaker(String),
+}
+
 /// Translation-job access for Angelica, implemented by the desktop.
 pub trait JobControl: Send + Sync {
+    /// Records a job for the user to start that translates again the
+    /// strings of `target` no person has settled, with `reason` as its
+    /// instructions.
+    ///
+    /// # Errors
+    /// Returns an error when the target has no such strings or the proposal
+    /// cannot be recorded.
+    fn propose_revision(
+        &self,
+        target: RevisionTarget,
+        reason: String,
+        quality: JobQuality,
+    ) -> Result<ProposalOutcome, ToolError> {
+        let _ = (target, reason, quality);
+        Err(ToolError::new("revision jobs are not available here"))
+    }
+
     /// Counts the strings a job over `scope` would cover.
     ///
     /// # Errors
@@ -556,8 +587,9 @@ pub fn job_tool_definitions(write: bool) -> Vec<ToolDefinition> {
             },
             ToolDefinition { name: "pause_job", description: "Pauses a running job after its current chunks.", parameters: job_id.clone() },
             ToolDefinition { name: "resume_job", description: "Resumes a paused job.", parameters: job_id.clone() },
-            ToolDefinition { name: "cancel_job", description: "Cancels a job. Drafts already written stay.", parameters: job_id },
+            ToolDefinition { name: "cancel_job", description: "Cancels a job. Translations already written stay.", parameters: job_id },
         ]);
+        tools.push(revision_definition());
     }
     tools
 }
@@ -581,6 +613,16 @@ struct StartJobArgs {
     concurrency: Option<u8>,
     #[serde(default)]
     images: Vec<String>,
+    #[serde(default)]
+    quality: JobQuality,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RevisionArgs {
+    term: Option<String>,
+    speaker: Option<String>,
+    reason: String,
     #[serde(default)]
     quality: JobQuality,
 }
@@ -638,6 +680,7 @@ fn start_job(jobs: &dyn JobControl, args: StartJobArgs) -> Result<Value, ToolErr
     let scope = JobScope {
         sheets: args.sheets,
         filter: args.filter.unwrap_or(JobFilter::Untranslated),
+        units: Vec::new(),
     };
     let mut seen = std::collections::HashSet::new();
     let images: Vec<String> = args
@@ -687,6 +730,33 @@ fn retry_units(jobs: &dyn JobControl, args: RetryArgs) -> Result<Value, ToolErro
     Ok(json!({ "requeued": requeued, "status": status }))
 }
 
+fn propose_revision(jobs: &dyn JobControl, args: RevisionArgs) -> Result<Value, ToolError> {
+    let target = match (args.term, args.speaker) {
+        (Some(term), None) if !term.trim().is_empty() => {
+            RevisionTarget::Term(term.trim().to_owned())
+        }
+        (None, Some(speaker)) if !speaker.trim().is_empty() => {
+            RevisionTarget::Speaker(speaker.trim().to_ascii_uppercase())
+        }
+        _ => return Err(ToolError::new("give either a term or a speaker")),
+    };
+    let reason = args.reason.trim().to_owned();
+    if reason.is_empty() {
+        return Err(ToolError::new("give the reason for the revision"));
+    }
+    Ok(match jobs.propose_revision(target, reason, args.quality)? {
+        ProposalOutcome::Pending { proposal_id } => json!({
+            "status": "awaitingApproval",
+            "proposalId": proposal_id,
+            "note": "The user sees the estimate and starts the job.",
+        }),
+        ProposalOutcome::Applied => json!({ "status": "started" }),
+        ProposalOutcome::Conflict { message } | ProposalOutcome::Failed { message } => {
+            json!({ "status": "failed", "errors": [message] })
+        }
+    })
+}
+
 fn run_job_tool(
     jobs: &dyn JobControl,
     write: bool,
@@ -705,10 +775,12 @@ fn run_job_tool(
             let scope = JobScope {
                 sheets: args.sheets,
                 filter: args.filter.unwrap_or(JobFilter::Untranslated),
+                units: Vec::new(),
             };
             to_value(&jobs.estimate(&scope)?)
         }
         "start_job" => start_job(jobs, parse(arguments)?),
+        "propose_revision" => propose_revision(jobs, parse(arguments)?),
         "job_status" => {
             let args: JobStatusArgs = parse(arguments)?;
             let all = jobs.jobs()?;
@@ -778,6 +850,25 @@ fn run_job_tool(
             Ok(json!({ "status": jobs.control(&args.job_id, action)? }))
         }
         other => Err(ToolError::new(format!("unknown tool {other:?}"))),
+    }
+}
+
+/// The definition of `propose_revision`.
+fn revision_definition() -> ToolDefinition {
+    ToolDefinition {
+        name: "propose_revision",
+        description: "Proposes a job that translates again the strings that contain a term, or the lines of a speaker, which no person has settled: strings without a reviewed translation and reviewed ones whose translation is still the one a job wrote. Use it after a term or a character's profile changed, with the change as the reason. The user starts it.",
+        parameters: json!({
+            "type": "object",
+            "properties": {
+                "term": { "type": "string", "description": "A source-language term." },
+                "speaker": { "type": "string", "description": "A speaker label, such as URIANGER." },
+                "reason": { "type": "string", "description": "What changed and what the translation must do now; every chunk gets it as instructions." },
+                "quality": { "type": "string", "enum": ["fast", "careful"] },
+            },
+            "required": ["reason"],
+            "additionalProperties": false,
+        }),
     }
 }
 
@@ -881,6 +972,7 @@ pub fn write_tool_definitions() -> Vec<ToolDefinition> {
         },
     ];
     tools.push(voice_change_definition());
+    tools.extend(crate::knowledge_tools::write_definitions());
     tools
 }
 
@@ -889,6 +981,7 @@ pub fn write_tool_definitions() -> Vec<ToolDefinition> {
 pub fn read_tool_definitions() -> Vec<ToolDefinition> {
     let mut tools = project_read_definitions();
     tools.extend(dialogue_tool_definitions());
+    tools.extend(crate::knowledge_tools::read_definitions());
     tools
 }
 
@@ -1185,6 +1278,24 @@ impl<'a> ReadTools<'a> {
         }
     }
 
+    /// Runs `get_knowledge`, or `set_knowledge` where changes are allowed.
+    fn knowledge_tool(&self, name: &str, arguments: &str) -> Result<Value, ToolError> {
+        if name == "set_knowledge" && self.writer.is_none() {
+            return Err(ToolError::new(
+                "changing the project is not available in Chat mode",
+            ));
+        }
+        let root = self
+            .reader
+            .knowledge_root()
+            .ok_or_else(|| ToolError::new("project knowledge is not available here"))?;
+        if name == "set_knowledge" {
+            crate::knowledge_tools::set_knowledge(&root, arguments)
+        } else {
+            crate::knowledge_tools::get_knowledge(&root, arguments)
+        }
+    }
+
     fn dispatch(&self, name: &str, arguments: &str) -> Result<Value, ToolError> {
         match name {
             "project_overview" => {
@@ -1224,6 +1335,7 @@ impl<'a> ReadTools<'a> {
                 Ok(json!({ "opened": location }))
             }
             "get_guidance" => Ok(self.get_guidance(&parse(arguments)?)),
+            "get_knowledge" | "set_knowledge" => self.knowledge_tool(name, arguments),
             "dialogue_context" => dialogue_context(self.reader, &self.guide(), &parse(arguments)?),
             "speaker_lines" => speaker_lines(self.reader, &self.guide(), &parse(arguments)?),
             "list_speakers" => list_speakers(self.reader, &self.guide(), &parse(arguments)?),
@@ -1239,7 +1351,7 @@ impl<'a> ReadTools<'a> {
             }
             "estimate_job" | "start_job" | "job_status" | "job_events" | "amend_job"
             | "retry_units" | "set_job_workers" | "raise_job_limit" | "pause_job"
-            | "resume_job" | "cancel_job" => {
+            | "resume_job" | "cancel_job" | "propose_revision" => {
                 let Some(jobs) = self.jobs else {
                     return Err(ToolError::new("translation jobs are not available here"));
                 };

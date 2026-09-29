@@ -534,6 +534,7 @@ export const ru: Catalog = {
   "angelica.job.filter.untranslated": "Непереведённые",
   "angelica.job.filter.needsReview": "Требуют проверки",
   "angelica.job.filter.untranslatedAndDrafts": "Непереведённые и черновики",
+  "angelica.job.filter.revise": "Строки, не закреплённые человеком",
   "angelica.job.unit.pending": "Ожидает",
   "angelica.job.unit.running": "В работе",
   "angelica.job.unit.drafted": "Черновик готов",
