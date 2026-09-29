@@ -147,9 +147,10 @@ fn domain_order(mut sheets: Vec<String>) -> Vec<String> {
 }
 
 /// Whether a string in `state` belongs to a job with `filter`. A revision
-/// takes every string no person has settled: those without a reviewed
-/// translation, and reviewed ones whose translation is still the one a job
-/// wrote (`agent_written`).
+/// takes every translated string no person has settled: drafts, strings
+/// needing review, and reviewed ones whose translation is still the one a
+/// job wrote (`agent_written`); untranslated strings are left to ordinary
+/// jobs.
 fn included(
     filter: JobFilter,
     state: Option<ReviewLabel>,
@@ -159,7 +160,9 @@ fn included(
         JobFilter::Untranslated => state.is_none(),
         JobFilter::NeedsReview => state == Some(ReviewLabel::NeedsReview),
         JobFilter::UntranslatedAndDrafts => matches!(state, None | Some(ReviewLabel::Draft)),
-        JobFilter::Revise => state != Some(ReviewLabel::Reviewed) || agent_written(),
+        JobFilter::Revise => {
+            state.is_some() && (state != Some(ReviewLabel::Reviewed) || agent_written())
+        }
     }
 }
 
@@ -371,8 +374,11 @@ impl DesktopJobs {
     }
 }
 
-/// Strings a revision covers, at most.
+/// Strings a revision reads, at most.
 const MAX_REVISION_STRINGS: usize = 5_000;
+/// Strings one revision may translate again, at most: more means the term
+/// is too common or the change belongs in an ordinary job.
+const MAX_REVISED_STRINGS: u64 = 1_000;
 
 /// The strings whose source contains a term, from the source index.
 fn term_locations(app: &tauri::AppHandle, term: &str) -> Result<Vec<UnitLocation>, ToolError> {
@@ -465,6 +471,17 @@ impl JobControl for DesktopJobs {
             filter: JobFilter::Revise,
             units: locations,
         };
+        let revised = self.estimate(&scope)?.units;
+        if revised == 0 {
+            return Err(ToolError::new(format!(
+                "none of the {what} has a translation that no person settled"
+            )));
+        }
+        if revised > MAX_REVISED_STRINGS {
+            return Err(ToolError::new(format!(
+                "{revised} translated {what} would be revised, more than {MAX_REVISED_STRINGS}: the term is too common for a revision; name a narrower term or speaker, or leave it to the next jobs"
+            )));
+        }
         self.propose(
             scope,
             format!("Revision of the {what}: {reason}"),
@@ -2141,7 +2158,10 @@ mod tests {
         use ReviewLabel::{Draft, NeedsReview, Reviewed};
         let agent = || true;
         let person = || false;
-        assert!(included(JobFilter::Revise, None, person));
+        assert!(
+            !included(JobFilter::Revise, None, agent),
+            "untranslated strings are not revised"
+        );
         assert!(included(JobFilter::Revise, Some(Draft), person));
         assert!(included(JobFilter::Revise, Some(NeedsReview), person));
         assert!(included(JobFilter::Revise, Some(Reviewed), agent));

@@ -646,10 +646,14 @@ in the target language, with examples. System text, player choices such as
 source index, uses the job's model, counts toward the job's tokens, and
 pauses the job with a reason when the provider fails.
 
-Before each chunk's contract, a researcher lists the unit's terminology the
-knowledge does not have (at most 40 terms), reads up to six existing
+The study first waits for the source index, up to three minutes, so that
+terms are decided from the project's existing translations. Before each
+chunk's contract, a researcher lists the unit's terminology the knowledge
+does not have (at most 40 terms; ordinary words, verbs, numbers, and levels
+are left out), reads up to six existing
 translations of each from the source index, and decides renderings; a
-second request checks them for grammar and meaning, and the checked terms
+second request checks them for grammar and meaning; forbidden variants that
+repeat the rendering or stand for "none" are dropped; and the checked terms
 are written to the agent layer with `study` in their note. The unit's
 knowledge is then read again. A term another chunk wrote meanwhile keeps
 that chunk's rendering.
@@ -668,7 +672,8 @@ job:
 0. **Terms**: the study of the unit's terms described above.
 1. **Contract**: one request reads the whole script and writes the decisions
    every writer shares: the story and tone (between `<story>` tags), a table
-   of address between
+   of address (from the project knowledge where it decides, otherwise from
+   the French and German) between
    speakers and toward the player character, genders, names and terms, and
    the form of journal entries, objectives, and system text.
 2. **Writing**: the chunk's strings are split into parts of at most 40, in
@@ -729,8 +734,10 @@ from the source index) or a speaker label (the speaker's lines across the
 game), at most 5,000 strings, with the change as the reason; the job's
 instructions say what is revised and why. Its scope lists the strings and
 uses the `revise` filter, which takes every listed string no person has
-settled: strings without a reviewed translation, and reviewed ones whose
-translation is still the one a job last wrote. A reviewed translation a
+settled: drafts, strings needing review, and reviewed ones whose translation
+is still the one a job last wrote; untranslated strings are left to ordinary
+jobs. A revision of more than 1,000 strings is refused as too broad, and so
+is one with nothing to revise. A reviewed translation a
 person edited is never included. Writes of a revision may replace a
 reviewed translation, still compare-and-set against the state recorded when
 the job started. A reviewed translation a person approved without editing
@@ -759,8 +766,9 @@ lessons are written to `lessons.md` on trial, with the mentor, the job, and
 the number of findings behind them; corrected terms replace agent terms
 (human terms are never changed).
 
-New lessons are then evaluated together on up to two units the job
-finished: the sheets with the most finished strings, quests and cutscenes
+Every lesson still on trial that was never evaluated, new ones included, is
+then evaluated together on up to two units the job finished; without a unit
+to compare, the lessons stay on trial for the next job: the sheets with the most finished strings, quests and cutscenes
 first, at most 40 strings each. Each unit is prepared again with the
 knowledge that now has the lessons, the job's translations are taken out of
 it as the baseline, and it is localized without writing. A judge compares

@@ -857,7 +857,7 @@ fn run_job_tool(
 fn revision_definition() -> ToolDefinition {
     ToolDefinition {
         name: "propose_revision",
-        description: "Proposes a job that translates again the strings that contain a term, or the lines of a speaker, which no person has settled: strings without a reviewed translation and reviewed ones whose translation is still the one a job wrote. Use it after a term or a character's profile changed, with the change as the reason. The user starts it.",
+        description: "Proposes a job that translates again the translated strings that contain a term, or the lines of a speaker, which no person has settled: drafts, strings needing review, and reviewed ones whose translation is still the one a job wrote. Use it after the rendering of a name or game term, or a character's profile, changed, with the change as the reason; never for ordinary words or style, which the next jobs follow anyway. At most 1,000 strings; the user starts it.",
         parameters: json!({
             "type": "object",
             "properties": {

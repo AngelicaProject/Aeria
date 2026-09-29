@@ -215,9 +215,17 @@ async fn mentor(
     }
     let corrected = knowledge_files::set_terms(&run.root, &reply.terms, true)?;
 
-    // New lessons are evaluated together on units the job translated.
+    // Lessons on trial that were never evaluated, new ones included, are
+    // evaluated together on units the job translated.
+    let pending: Vec<aeria_ai::knowledge::Lesson> = Knowledge::load(&run.root)
+        .lessons
+        .into_iter()
+        .filter(|lesson| {
+            lesson.status == LessonStatus::Trial && !lesson.meta.contains_key("evaluated")
+        })
+        .collect();
     let mut winners = Vec::new();
-    if !reply.lessons.is_empty() {
+    if !pending.is_empty() {
         let units_run = run.clone();
         let units = run_blocking(move || Ok(evaluation_units(&units_run)))
             .await
@@ -235,8 +243,12 @@ async fn mentor(
         .iter()
         .filter(|winner| **winner == Winner::Candidate)
         .count();
-    for lesson in &reply.lessons {
-        let mut lesson = lesson.clone();
+    for lesson in winners
+        .is_empty()
+        .then(Vec::new)
+        .unwrap_or_else(|| pending.clone())
+    {
+        let mut lesson = lesson;
         if let Some(status) = decided {
             lesson.status = status;
         }
@@ -257,8 +269,9 @@ async fn mentor(
         _ => "left on trial",
     };
     Ok(format!(
-        "{} new lesson(s) {outcome} after {} comparison(s), {} term(s) corrected, from {} finding(s) and {} change(s) by people",
+        "{} new lesson(s); {} lesson(s) on trial {outcome} after {} comparison(s); {} term(s) corrected; from {} finding(s) and {} change(s) by people",
         reply.lessons.len(),
+        pending.len(),
         winners.len(),
         corrected.len(),
         material.findings.len(),

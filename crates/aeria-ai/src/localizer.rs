@@ -592,8 +592,9 @@ impl Localization {
                  (under 120 words); it is kept for the units that follow.\n\
                  2. Address: one line per speaker and addressee in this unit, including the \
                  player character, as `SPEAKER → ADDRESSEE: <form of address in {target}>`, \
-                 decided from the project knowledge and the French and German; note where \
-                 the address changes on purpose.\n\
+                 taken from the project knowledge wherever it decides it (the style of each \
+                 kind of text, the characters' profiles), and only where it does not, from \
+                 the French and German; note where the address changes on purpose.\n\
                  3. Genders: each speaker's gender, and each person spoken about whose \
                  gender a {target} word would show.\n\
                  4. Names and terms: every name and term in the unit with its {target} \
@@ -891,7 +892,9 @@ impl Localization {
                  agrees with the player character (verbs, adjectives, participles, nouns for \
                  a person, pronouns) and every form of address. Flag a line when a word \
                  assumes the player character's gender without a condition on $gn4, when \
-                 address breaks the contract or the project knowledge, or when a speaker's \
+                 address breaks the project knowledge (which wins over the contract and the \
+                 French and German) or the contract where the knowledge says nothing, or when \
+                 a speaker's \
                  own gender is wrong.\n{FLAG_FORMAT}",
                 self.unit.knowledge.trim(),
                 self.contract

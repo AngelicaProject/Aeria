@@ -175,10 +175,12 @@ fn candidates_request(unit: &UnitOfWork) -> Request {
         system: research_system(&unit.target_language),
         user: format!(
             "{}\n{}\nList the terminology in these lines that must be translated the same way \
-             everywhere in the game: names of people, places, organizations, monsters, items, \
-             actions, statuses, crafting and game terms, interface labels, and fixed in-world \
-             expressions such as oaths. Skip ordinary words. Write each term as it appears in the \
-             {} lines. Output JSON only: {{\"terms\": [\"term\", …]}}",
+             everywhere in the game: names of people, places, organizations, monsters, and items, \
+             game-specific mechanics and crafting terms, interface names, and fixed in-world \
+             expressions such as oaths. Leave out ordinary words and phrases even when they recur: \
+             verbs such as deliver or speak, common nouns, numbers and levels, and instructions. \
+             Write each term as it appears in the {} lines, without an article. Output JSON only: \
+             {{\"terms\": [\"term\", …]}}",
             unit.title,
             unit_listing(unit),
             unit.source_language
@@ -200,7 +202,8 @@ fn decide_request(unit: &UnitOfWork, knowledge: &str, blocks: &str) -> Request {
              and a fire crystal are different items). Use the unit below and the other languages \
              to understand what each term is, and stay consistent with the project knowledge.\n\n\
              Output for each term exactly two lines:\n## <term as given>\n<rendering> | <kind and \
-             grammatical note> | <forbidden variants separated by ; or empty>\n\n\
+             grammatical note> | <wrong renderings to avoid, separated by ;, never the rendering \
+             itself; leave the field empty when there are none>\n\n\
              Project knowledge:\n{knowledge}\n\nUnit:\n{}\nTerms:\n{blocks}",
             unit_listing(unit)
         ),
@@ -223,6 +226,22 @@ fn check_request(target: &str, decided: &str) -> Request {
         ),
     }
 }
+
+/// Words models write for an empty list of forbidden variants.
+const PLACEHOLDERS: [&str; 12] = [
+    "none",
+    "empty",
+    "n/a",
+    "-",
+    "—",
+    "–",
+    "нет",
+    "пусто",
+    "пустое",
+    "не указано",
+    "отсутствует",
+    "—",
+];
 
 /// Reads `## term` / `rendering | note | forbidden` entries.
 #[must_use]
@@ -248,12 +267,18 @@ pub fn parse_decisions(reply: &str) -> Vec<GlossaryEntry> {
             .next()
             .filter(|note| !note.is_empty())
             .map(str::to_owned);
+        // A forbidden variant that is the rendering itself, or a word for
+        // "none", would forbid the term's own translation.
         let forbidden = fields
             .next()
             .map(|list| {
                 list.split(';')
-                    .map(str::trim)
-                    .filter(|item| !item.is_empty() && !item.eq_ignore_ascii_case("none"))
+                    .map(|item| item.trim().trim_matches(['«', '»', '"', '\'']).trim())
+                    .filter(|item| {
+                        !item.is_empty()
+                            && !item.to_lowercase().eq(&translation.to_lowercase())
+                            && !PLACEHOLDERS.contains(&item.to_lowercase().as_str())
+                    })
                     .map(str::to_owned)
                     .collect()
             })
@@ -302,6 +327,7 @@ pub async fn study_terms(
         let term = term.trim().to_owned();
         if term.is_empty()
             || term.chars().count() > 60
+            || term.chars().any(|c| c.is_ascii_digit())
             || knowledge.has_term(&term)
             || terms.iter().any(|known| known.eq_ignore_ascii_case(&term))
         {
@@ -442,7 +468,7 @@ mod tests {
     #[test]
     fn decisions_read_term_rendering_note_and_forbidden_variants() {
         let entries = parse_decisions(
-            "Here:\n## Fire Shard\nогненный осколок | предмет, м. р. | огненный кристалл; none\n\n## Crystal Braves\n\nКристальные храбрецы |  | \n## Empty\n",
+            "Here:\n## Fire Shard\nогненный осколок | предмет, м. р. | огненный кристалл; none; «огненный осколок»\n\n## Crystal Braves\n\nКристальные храбрецы |  | пусто\n## Empty\n",
         );
         assert_eq!(entries.len(), 2);
         assert_eq!(entries[0].translation, "огненный осколок");
@@ -450,6 +476,10 @@ mod tests {
         assert_eq!(entries[0].forbidden, vec!["огненный кристалл"]);
         assert_eq!(entries[1].term, "Crystal Braves");
         assert_eq!(entries[1].note, None);
+        assert!(
+            entries[1].forbidden.is_empty(),
+            "a placeholder is no variant"
+        );
     }
 
     #[test]

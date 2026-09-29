@@ -636,7 +636,7 @@ export const ru: Catalog = {
   "angelica.job.estimate": "Оценка",
   "angelica.job.estimateValue": "{chunks} частей, около {tokens} токенов; пауза на {limit}",
   "angelica.job.instructions": "Инструкции",
-  "angelica.job.proposalHint": "Исполнители пишут только черновики. Проверенные переводы не трогаются, а строки, изменившиеся за это время, пропускаются.",
+  "angelica.job.proposalHint": "Переводы без открытых замечаний критиков записываются как финальные, остальные — с пометкой «на проверку». Переводы, которые правил человек, не заменяются, а строки, изменившиеся за это время, пропускаются.",
   "angelica.job.start": "Запустить",
   "angelica.tool.navigateTo": "Открыть в редакторе",
   "angelica.tool.getGuidance": "Guidance и глоссарий",

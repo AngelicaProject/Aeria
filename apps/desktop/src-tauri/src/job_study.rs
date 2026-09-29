@@ -25,7 +25,7 @@ use aeria_ai::tools::ProjectReader;
 use super::{JobCaller, JobRun, futures_join};
 use crate::angelica::DesktopReader;
 use crate::commands::run_blocking;
-use crate::search::{DesktopSearch, prepare_source_index};
+use crate::search::{DesktopSearch, prepare_source_index, source_index};
 
 /// Most characters one job studies before its first chunk.
 const MAX_STUDIED_CHARACTERS: usize = 200;
@@ -35,6 +35,8 @@ const MIN_SPEAKER_LINES: usize = 3;
 const STYLE_SHEETS: usize = 40;
 /// Sheets of another domain read for its samples.
 const DOMAIN_SHEETS: usize = 10;
+/// Two-second waits for the source index before a job's study, at most.
+const INDEX_WAIT_ROUNDS: u32 = 90;
 /// The event that says a job studied its scope.
 pub(super) const STUDY_EVENT: &str = "study";
 
@@ -335,7 +337,15 @@ pub(super) async fn study_scope(run: &JobRun) -> Result<(), String> {
         .with_store(|store, id| Ok(store.summary(id)?.spec))
         .await
         .map_err(|error| error.message)?;
+    // Terms are decided from the project's existing translations, which
+    // the source index finds; the study waits for it, within reason.
     prepare_source_index(&run.app);
+    for _ in 0..INDEX_WAIT_ROUNDS {
+        if source_index(&run.app).is_ok() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+    }
     let mut caller = JobCaller::for_job(run, &spec, 0, format!("{}-study", run.job_id))
         .await
         .map_err(|error| error.message)?;

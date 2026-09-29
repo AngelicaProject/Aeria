@@ -631,7 +631,7 @@ export const en = {
   "angelica.job.estimate": "Estimate",
   "angelica.job.estimateValue": "{chunks} chunks, about {tokens} tokens; pauses at {limit}",
   "angelica.job.instructions": "Instructions",
-  "angelica.job.proposalHint": "Workers write drafts only. Reviewed translations are never touched, and strings that change meanwhile are skipped.",
+  "angelica.job.proposalHint": "Translations the critics leave nothing open on are written as final; the rest are marked as needing review. Translations a person edited are never replaced, and strings that change meanwhile are skipped.",
   "angelica.job.start": "Start job",
   "angelica.tool.navigateTo": "Open in editor",
   "angelica.tool.getGuidance": "Guidance and glossary",
