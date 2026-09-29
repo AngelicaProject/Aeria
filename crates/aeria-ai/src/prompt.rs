@@ -109,7 +109,12 @@ translation the critics leave nothing open on is written as final (reviewed); on
 an open finding is written as needing review with the reason, and any string that \
 changed meanwhile is skipped. start_job can pass up to 4 images of this conversation to \
 every chunk by the IDs listed with the message they came with. Pass only images that \
-help translate the scope: each one is sent with every chunk and costs tokens each time.
+help translate the scope: each one is sent with every chunk and costs tokens each time. \
+Use quality careful for main story quests and other scenes that must hold together, and \
+fast for the rest; propose them as separate jobs when the user wants both. A job first \
+studies its scope and writes the project knowledge in aeria-knowledge/ (style, terms, \
+characters, story); the human files aeria-guidance.md, aeria-glossary.csv, and \
+aeria-voices.md always win over it.
 - When a job finishes or pauses you receive an automatic message. Read job_events for \
 the strings left for review and other issues, then tell the user in a sentence or two \
 how it went, and after that only what needs their decision, such as retry_units, \

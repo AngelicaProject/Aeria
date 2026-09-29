@@ -21,13 +21,13 @@ use aeria_ai::chat::{ChatMessage, ChatRequest, StreamDelta};
 use aeria_ai::conversation::{ConversationStore, ProposalRecord, ProposalStatus};
 use aeria_ai::images::{ImagePayloads, ImageRef, message_images};
 use aeria_ai::jobs::{
-    JobError, JobEstimate, JobEvent, JobFilter, JobLimitProposal, JobProposal, JobScope, JobSpec,
-    JobStatus, JobStore, JobSummary, JobUnit, ScopedUnit, UnitStatus,
+    JobError, JobEstimate, JobEvent, JobFilter, JobLimitProposal, JobProposal, JobQuality,
+    JobScope, JobSpec, JobStatus, JobStore, JobSummary, JobUnit, ScopedUnit, UnitStatus,
 };
-use aeria_ai::knowledge::{Domain, Knowledge};
+use aeria_ai::knowledge::{Domain, Knowledge, sheet_domain};
 use aeria_ai::localizer::{
-    Caller, Finish, LineOutcome, LocalizeResult, Replies, Request as LocalizerRequest, Role, Step,
-    effort_for, localize,
+    Caller, Finish, LineOutcome, LocalizeOptions, LocalizeResult, Replies,
+    Request as LocalizerRequest, Role, Step, effort_for, localize,
 };
 use aeria_ai::search::ProjectSearch;
 use aeria_ai::study::{contract_story, study_terms};
@@ -128,6 +128,22 @@ fn notify(app: &tauri::AppHandle, job_id: &str) {
     );
 }
 
+/// Sheets in the order a job translates them: names first, since all other
+/// text refers to them, then mechanics, items, interface, lore, and quests
+/// and cutscenes last; the given order within each domain.
+fn domain_order(mut sheets: Vec<String>) -> Vec<String> {
+    let rank = |sheet: &String| match sheet_domain(sheet) {
+        Domain::Names => 0,
+        Domain::Actions => 1,
+        Domain::Items => 2,
+        Domain::Interface | Domain::General => 3,
+        Domain::Lore => 4,
+        Domain::Dialogue | Domain::Journal | Domain::Objective | Domain::System => 5,
+    };
+    sheets.sort_by_key(rank);
+    sheets
+}
+
 /// Lists the strings a job over `scope` covers, in sheet and row order.
 /// Reviewed translations are never included.
 fn enumerate_scope(app: &tauri::AppHandle, scope: &JobScope) -> Result<Vec<ScopedUnit>, ToolError> {
@@ -143,7 +159,7 @@ fn enumerate_scope(app: &tauri::AppHandle, scope: &JobScope) -> Result<Vec<Scope
         scope.sheets.clone()
     };
     let mut units = Vec::new();
-    for sheet in sheets {
+    for sheet in domain_order(sheets) {
         let mut after: Option<(u32, u16)> = None;
         loop {
             let page = reader.with_session(|session| {
@@ -286,9 +302,15 @@ impl JobControl for DesktopJobs {
         instructions: String,
         concurrency: Option<u8>,
         images: &[String],
+        quality: JobQuality,
     ) -> Result<ProposalOutcome, ToolError> {
         let images = self.conversation_images(images)?;
-        let estimate = self.estimate(&scope)?;
+        let mut estimate = self.estimate(&scope)?;
+        // A careful job writes each unit in one piece and rechecks it twice
+        // with stronger critics: about twice the tokens.
+        if quality == JobQuality::Careful {
+            estimate.estimated_tokens = estimate.estimated_tokens.saturating_mul(2);
+        }
         let concurrency = aeria_ai::jobs::job_concurrency(concurrency, estimate.chunks);
         if estimate.units == 0 {
             return Err(ToolError::new("the scope has no strings to translate"));
@@ -308,6 +330,9 @@ impl JobControl for DesktopJobs {
         if !images.is_empty() {
             let _ = write!(summary, ", with {} image(s) for every worker", images.len());
         }
+        if quality == JobQuality::Careful {
+            summary.push_str(", careful");
+        }
         let proposal = JobProposal {
             token_limit: estimate.token_limit(),
             scope,
@@ -315,6 +340,7 @@ impl JobControl for DesktopJobs {
             images,
             concurrency,
             estimate,
+            quality,
         };
         let state = self.app.state::<DesktopState>();
         let _guard = state
@@ -576,11 +602,66 @@ pub(crate) fn start_proposed_job(
             .concurrency
             .clamp(1, aeria_ai::jobs::MAX_CONCURRENCY),
         images: proposal.images.clone(),
+        quality: proposal.quality,
     };
     let job = job_store(app)?.create(conversation_id, &spec, &units)?;
     spawn_runner(app, &job.id);
     notify(app, &job.id);
     Ok(job.id)
+}
+
+/// Requests one job sends at once across all its lanes. Each lane's chunk
+/// sends its parts and critics in parallel; this keeps a job with many
+/// lanes within what a provider accepts.
+const JOB_PARALLEL_REQUESTS: usize = 24;
+/// How often a request waiting for a free slot looks again.
+const GATE_POLL: Duration = Duration::from_millis(50);
+
+/// A limit of requests in flight, shared by a job's lanes.
+#[derive(Debug)]
+struct RequestGate {
+    free: std::sync::Mutex<usize>,
+}
+
+/// A request's slot; dropping it frees the slot.
+struct GateSlot<'a> {
+    gate: &'a RequestGate,
+}
+
+impl RequestGate {
+    const fn new(slots: usize) -> Self {
+        Self {
+            free: std::sync::Mutex::new(slots),
+        }
+    }
+
+    /// Waits for a free slot and takes it.
+    async fn enter(&self) -> GateSlot<'_> {
+        loop {
+            {
+                let mut free = self
+                    .free
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                if *free > 0 {
+                    *free -= 1;
+                    return GateSlot { gate: self };
+                }
+            }
+            tokio::time::sleep(GATE_POLL).await;
+        }
+    }
+}
+
+impl Drop for GateSlot<'_> {
+    fn drop(&mut self) {
+        let mut free = self
+            .gate
+            .free
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        *free += 1;
+    }
 }
 
 /// One job's runner context. The store and root are fixed when the runner
@@ -592,6 +673,7 @@ struct JobRun {
     store: JobStore,
     root: PathBuf,
     workers: Arc<WorkerBoard>,
+    gate: Arc<RequestGate>,
 }
 
 impl JobRun {
@@ -623,6 +705,7 @@ pub(crate) fn spawn_runner(app: &tauri::AppHandle, job_id: &str) {
         store,
         root,
         workers: Arc::clone(&workers),
+        gate: Arc::new(RequestGate::new(JOB_PARALLEL_REQUESTS)),
     };
     app.state::<DesktopState>()
         .start_job_runner(job_id.to_owned(), workers, move || {
@@ -1097,6 +1180,8 @@ struct JobCaller {
     efforts: Vec<aeria_ai::ReasoningEffort>,
     /// The job's effort, a ceiling for every role.
     ceiling: Option<aeria_ai::ReasoningEffort>,
+    /// The job is careful: every role asks for a high effort.
+    careful: bool,
     session: String,
     images: Vec<ImageRef>,
     /// The images' data, loaded when the model accepts images.
@@ -1146,6 +1231,7 @@ impl JobCaller {
             model: model.id,
             efforts: model.reasoning_efforts,
             ceiling: spec.model.effort,
+            careful: spec.quality == JobQuality::Careful,
             session,
             images,
             payloads,
@@ -1172,7 +1258,7 @@ impl JobCaller {
         }];
         let chat = ChatRequest {
             model: &self.model,
-            effort: effort_for(request.role, &self.efforts, self.ceiling),
+            effort: effort_for(request.role, &self.efforts, self.ceiling, self.careful),
             system: &request.system,
             messages: &messages,
             tools: &[],
@@ -1187,6 +1273,8 @@ impl JobCaller {
             run.workers
                 .update(lane, |activity, now| activity.stream(reasoning, now));
         };
+        // All lanes of the job share one limit of requests in flight.
+        let _slot = self.run.gate.enter().await;
         let response = self
             .client
             .stream_chat(&self.endpoint, &session, &chat, &mut on_delta)
@@ -1491,7 +1579,10 @@ async fn run_chunk(run: &JobRun, spec: &JobSpec, units: Vec<JobUnit>, lane: usiz
         )
     });
     let addresses: Vec<String> = unit.lines.iter().map(|line| line.address.clone()).collect();
-    let result = localize(&caller, unit).await;
+    let options = LocalizeOptions {
+        careful: caller.careful,
+    };
+    let result = localize(&caller, unit, options).await;
     run.workers.set_phase(lane, WorkerPhase::Recording);
     if let Ok(result) = &result {
         let learn_run = run.clone();
@@ -1796,6 +1887,7 @@ mod tests {
                 token_limit: 1_000,
                 concurrency: 1,
                 images: Vec::new(),
+                quality: JobQuality::Fast,
             },
             created_at_unix_ms: 0,
             counts: aeria_ai::jobs::JobCounts::default(),

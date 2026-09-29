@@ -117,16 +117,30 @@ const fn effort_rank(effort: ReasoningEffort) -> i32 {
     }
 }
 
+/// How much work the localizer spends on a unit.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct LocalizeOptions {
+    /// One writer for the whole unit, every role at a high effort, and two
+    /// full rechecks instead of one of the changed lines.
+    pub careful: bool,
+}
+
 /// The effort to request for a role: the accepted effort nearest to the
-/// role's, the higher one on a tie, never above `ceiling` when one is set,
-/// or none when the model accepts none.
+/// role's (high for every role but structure corrections when `careful`),
+/// the higher one on a tie, never above `ceiling` when one is set, or none
+/// when the model accepts none.
 #[must_use]
 pub fn effort_for(
     role: Role,
     accepted: &[ReasoningEffort],
     ceiling: Option<ReasoningEffort>,
+    careful: bool,
 ) -> Option<ReasoningEffort> {
-    let wanted = effort_rank(role.wanted_effort());
+    let wanted = if careful && role != Role::Structure {
+        effort_rank(ReasoningEffort::High)
+    } else {
+        effort_rank(role.wanted_effort())
+    };
     let limit = ceiling.map_or(i32::MAX, effort_rank);
     let allowed: Vec<ReasoningEffort> = accepted
         .iter()
@@ -384,13 +398,20 @@ impl Localization {
     /// [`PART_LINES`], in script order.
     #[must_use]
     pub fn new(unit: UnitOfWork) -> Self {
+        Self::with_part_lines(unit, PART_LINES)
+    }
+
+    /// Prepares a unit whose job strings are split into parts of at most
+    /// `part_lines`.
+    #[must_use]
+    pub fn with_part_lines(unit: UnitOfWork, part_lines: usize) -> Self {
         let tasks: Vec<usize> = unit
             .lines
             .iter()
             .enumerate()
             .filter_map(|(index, line)| line.task.map(|_| index))
             .collect();
-        let count = tasks.len().div_ceil(PART_LINES).max(1);
+        let count = tasks.len().div_ceil(part_lines.max(1)).max(1);
         let size = tasks.len().div_ceil(count).max(1);
         let parts = tasks.chunks(size).map(<[usize]>::to_vec).collect();
         Self {
@@ -1180,7 +1201,8 @@ async fn fix(
 }
 
 /// Localizes one unit of work: contract, parallel writers, structure
-/// corrections, critics, fixes, and a recheck of what changed.
+/// corrections, critics, fixes, and a recheck of what changed; a careful
+/// unit has one writer and two full rechecks.
 ///
 /// # Errors
 ///
@@ -1188,9 +1210,15 @@ async fn fix(
 pub async fn localize(
     caller: &dyn Caller,
     unit: UnitOfWork,
+    options: LocalizeOptions,
 ) -> Result<LocalizeResult, ProviderError> {
     let mut usage = Usage::default();
-    let mut localization = Localization::new(unit);
+    let part_lines = if options.careful {
+        MAX_UNIT_LINES
+    } else {
+        PART_LINES
+    };
+    let mut localization = Localization::with_part_lines(unit, part_lines);
 
     caller.step(Step::Contract);
     let contract = call(caller, vec![localization.contract_request()], &mut usage).await?;
@@ -1216,21 +1244,33 @@ pub async fn localize(
     caller.step(Step::Rechecking);
     let mut touched = localization.changed_since(&before_fix);
     touched.extend(first.iter().map(|flag| flag.line));
-    let second: Vec<Flag> = review(caller, &localization, Some(&touched), &mut usage)
-        .await?
-        .into_iter()
-        .filter(|flag| flag.major)
-        .collect();
-    let before_second_fix = localization.snapshot();
-    fix(caller, &mut localization, &second, &mut usage).await?;
-    refused.extend(correct_structure(caller, &mut localization, &mut usage).await?);
-    // A major flag counts as settled when its line changed in the second
-    // fix; otherwise a person decides.
-    let changed = localization.changed_since(&before_second_fix);
-    let open: Vec<Flag> = second
-        .into_iter()
-        .filter(|flag| !changed.contains(&flag.line))
-        .collect();
+    let rechecks = if options.careful { 2 } else { 1 };
+    let mut open: Vec<Flag> = Vec::new();
+    for _ in 0..rechecks {
+        // A careful unit is read whole again; a fast one only where it
+        // changed or was flagged.
+        let scope = (!options.careful).then_some(&touched);
+        let found: Vec<Flag> = review(caller, &localization, scope, &mut usage)
+            .await?
+            .into_iter()
+            .filter(|flag| flag.major)
+            .collect();
+        let before_recheck_fix = localization.snapshot();
+        fix(caller, &mut localization, &found, &mut usage).await?;
+        refused.extend(correct_structure(caller, &mut localization, &mut usage).await?);
+        // A major flag counts as settled when its line changed in the fix
+        // that followed; otherwise a person decides.
+        let changed = localization.changed_since(&before_recheck_fix);
+        touched.clone_from(&changed);
+        touched.extend(found.iter().map(|flag| flag.line));
+        open = found
+            .into_iter()
+            .filter(|flag| !changed.contains(&flag.line))
+            .collect();
+        if open.is_empty() && changed.is_empty() {
+            break;
+        }
+    }
 
     Ok(LocalizeResult {
         outcomes: localization.outcomes(&open, &refused),
@@ -1277,30 +1317,34 @@ mod tests {
     #[test]
     fn efforts_follow_the_role_within_what_the_model_accepts() {
         use ReasoningEffort::{High, Low, Medium, Minimal};
+        let all = [Low, Medium, High];
+        assert_eq!(effort_for(Role::Writer, &all, None, false), Some(High));
+        assert_eq!(effort_for(Role::Fidelity, &all, None, false), Some(Low));
         assert_eq!(
-            effort_for(Role::Writer, &[Low, Medium, High], None),
+            effort_for(Role::Blind, &[Low, High], None, false),
             Some(High)
         );
         assert_eq!(
-            effort_for(Role::Fidelity, &[Low, Medium, High], None),
+            effort_for(Role::Writer, &[Minimal, Low], None, false),
             Some(Low)
         );
-        assert_eq!(effort_for(Role::Blind, &[Low, High], None), Some(High));
-        assert_eq!(effort_for(Role::Writer, &[Minimal, Low], None), Some(Low));
-        assert_eq!(effort_for(Role::Writer, &[], Some(High)), None);
+        assert_eq!(effort_for(Role::Writer, &[], Some(High), false), None);
         // The job's effort is a ceiling.
         assert_eq!(
-            effort_for(Role::Writer, &[Low, Medium, High], Some(Medium)),
+            effort_for(Role::Writer, &all, Some(Medium), false),
             Some(Medium)
         );
         assert_eq!(
-            effort_for(Role::Fidelity, &[Low, Medium, High], Some(Medium)),
+            effort_for(Role::Fidelity, &all, Some(Medium), false),
             Some(Low)
         );
         assert_eq!(
-            effort_for(Role::Writer, &[Medium, High], Some(Low)),
+            effort_for(Role::Writer, &[Medium, High], Some(Low), false),
             Some(Medium)
         );
+        // A careful unit asks every role but structure corrections for the most.
+        assert_eq!(effort_for(Role::Fidelity, &all, None, true), Some(High));
+        assert_eq!(effort_for(Role::Structure, &all, None, true), Some(Low));
     }
 
     #[test]
@@ -1457,6 +1501,10 @@ mod tests {
     }
 
     fn run(caller: &Script) -> LocalizeResult {
+        run_with(caller, LocalizeOptions::default())
+    }
+
+    fn run_with(caller: &Script, options: LocalizeOptions) -> LocalizeResult {
         let lines = vec![
             line(LineKind::Speech("A".into()), "You came.", Some(0)),
             line(LineKind::Speech("A".into()), "Good.", Some(1)),
@@ -1464,8 +1512,28 @@ mod tests {
         tokio::runtime::Builder::new_current_thread()
             .build()
             .unwrap()
-            .block_on(localize(caller, unit(lines)))
+            .block_on(localize(caller, unit(lines), options))
             .unwrap()
+    }
+
+    #[test]
+    fn a_careful_unit_is_read_whole_again_until_nothing_is_open() {
+        let caller = Script {
+            asked: Mutex::new(Vec::new()),
+            steps: Mutex::new(Vec::new()),
+            player_flag: true,
+        };
+        let result = run_with(&caller, LocalizeOptions { careful: true });
+        let asked = caller.asked.lock().unwrap().clone();
+        // One writer; a first review, then two full rechecks, each with a
+        // fix of the flag the player critic keeps raising.
+        assert_eq!(
+            asked.iter().filter(|role| **role == Role::Writer).count(),
+            1
+        );
+        assert_eq!(asked.iter().filter(|role| **role == Role::Blind).count(), 3);
+        assert_eq!(asked.iter().filter(|role| **role == Role::Fix).count(), 3);
+        assert!(matches!(result.outcomes[0].finish, Finish::NeedsReview(_)));
     }
 
     #[test]

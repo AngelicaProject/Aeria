@@ -672,9 +672,12 @@ export type JobEstimate = {
 
 export type JobLimitProposal = { jobId: string; tokenLimit: number; previousLimit: number; usedTokens: number; projectedTokens: number | null };
 
-export type JobProposal = { scope: JobScope; instructions: string; concurrency: number; estimate: JobEstimate; tokenLimit: number };
+/** How much work the localizer spends on each unit of a job. */
+export type JobQuality = "fast" | "careful";
 
-export type JobSpec = { scope: JobScope; instructions: string; model: AiModelSelection; tokenLimit: number; concurrency: number };
+export type JobProposal = { scope: JobScope; instructions: string; concurrency: number; estimate: JobEstimate; tokenLimit: number; quality?: JobQuality };
+
+export type JobSpec = { scope: JobScope; instructions: string; model: AiModelSelection; tokenLimit: number; concurrency: number; quality?: JobQuality };
 
 export type JobStatus = "running" | "paused" | "completed" | "cancelled";
 

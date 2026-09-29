@@ -83,6 +83,22 @@ pub struct JobSpec {
     /// Images of the job's conversation sent to every worker.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub images: Vec<ImageRef>,
+    /// How much work the localizer spends on each unit.
+    #[serde(default)]
+    pub quality: JobQuality,
+}
+
+/// How much work the localizer spends on each unit of a job.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum JobQuality {
+    /// Parts written in parallel and one recheck of what changed: the
+    /// default, fast enough for the whole game.
+    #[default]
+    Fast,
+    /// One writer for the whole unit, critics at the highest effort, and two
+    /// full rechecks: for story quests whose scenes must hold together.
+    Careful,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -381,6 +397,8 @@ pub struct JobProposal {
     pub concurrency: u8,
     pub estimate: JobEstimate,
     pub token_limit: u64,
+    #[serde(default)]
+    pub quality: JobQuality,
 }
 
 /// A higher token limit for a job, proposed by Angelica.
@@ -1122,6 +1140,7 @@ mod tests {
             token_limit: 1000,
             concurrency: 2,
             images: Vec::new(),
+            quality: JobQuality::Fast,
         }
     }
 

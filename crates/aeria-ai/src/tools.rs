@@ -18,8 +18,8 @@ use crate::guidance::{
 };
 use crate::images::MAX_JOB_IMAGES;
 use crate::jobs::{
-    JobEstimate, JobEvent, JobFilter, JobScope, JobStatus, JobSummary, JobUnit, MAX_CONCURRENCY,
-    UnitStatus,
+    JobEstimate, JobEvent, JobFilter, JobQuality, JobScope, JobStatus, JobSummary, JobUnit,
+    MAX_CONCURRENCY, UnitStatus,
 };
 use crate::search::{ProjectSearch, run_search_tool};
 
@@ -393,7 +393,8 @@ pub trait JobControl: Send + Sync {
 
     /// Records a job for the user to start. `concurrency` is Angelica's
     /// choice of workers, if she made one; `images` are IDs of images in
-    /// the conversation for every worker.
+    /// the conversation for every worker; `quality` is how much work the
+    /// localizer spends on each unit.
     ///
     /// # Errors
     /// Returns an error for an image the conversation does not have, or
@@ -404,6 +405,7 @@ pub trait JobControl: Send + Sync {
         instructions: String,
         concurrency: Option<u8>,
         images: &[String],
+        quality: JobQuality,
     ) -> Result<ProposalOutcome, ToolError>;
 
     /// Lists the project's jobs, newest first.
@@ -495,6 +497,7 @@ pub fn job_tool_definitions(write: bool) -> Vec<ToolDefinition> {
         start_properties.insert("instructions".to_owned(), json!({ "type": "string", "description": "Instructions for every chunk of the job: style, terminology, anything the user asked for." }));
         start_properties.insert("images".to_owned(), json!({ "type": "array", "items": { "type": "string" }, "maxItems": MAX_JOB_IMAGES, "description": "IDs of images in this conversation that every chunk should see, such as a screenshot showing where the strings appear. Each image is sent with every chunk." }));
         start_properties.insert("concurrency".to_owned(), json!({ "type": "integer", "minimum": 1, "maximum": MAX_CONCURRENCY, "description": "Workers translating chunks at once. Omit it to let Aeria choose: 16 for jobs of 100 chunks or more, otherwise 8, never more than the chunks. Choose fewer only when the provider reported rate limits or the user asks; set_job_workers changes it while the job runs." }));
+        start_properties.insert("quality".to_owned(), json!({ "type": "string", "enum": ["fast", "careful"], "description": "fast (the default): parts of each unit written in parallel, fast enough for the whole game. careful: one writer per unit, stronger critics, and two full rechecks; slower and costlier, for story quests whose scenes must hold together." }));
         tools.extend([
             ToolDefinition {
                 name: "start_job",
@@ -578,6 +581,8 @@ struct StartJobArgs {
     concurrency: Option<u8>,
     #[serde(default)]
     images: Vec<String>,
+    #[serde(default)]
+    quality: JobQuality,
 }
 
 #[derive(Deserialize)]
@@ -651,6 +656,7 @@ fn start_job(jobs: &dyn JobControl, args: StartJobArgs) -> Result<Value, ToolErr
         args.concurrency
             .map(|concurrency| concurrency.clamp(1, MAX_CONCURRENCY)),
         &images,
+        args.quality,
     )?;
     Ok(match outcome {
         ProposalOutcome::Pending { proposal_id } => json!({
@@ -2363,9 +2369,15 @@ mod tests {
             instructions: String,
             concurrency: Option<u8>,
             images: &[String],
+            quality: JobQuality,
         ) -> Result<ProposalOutcome, ToolError> {
+            let careful = if quality == JobQuality::Careful {
+                " careful"
+            } else {
+                ""
+            };
             self.calls.lock().expect("lock").push(format!(
-                "propose {:?} {instructions} {concurrency:?} {images:?}",
+                "propose {:?} {instructions} {concurrency:?} {images:?}{careful}",
                 scope.sheets
             ));
             Ok(ProposalOutcome::Pending {

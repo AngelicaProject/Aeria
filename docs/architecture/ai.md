@@ -543,7 +543,10 @@ A scope is a list of sheets, or every sheet with translatable strings, and a
 filter: untranslated strings (the default), strings that need review, or
 untranslated strings and drafts. Reviewed translations are never included.
 The string list is fixed when the job starts, together with each string's
-current target and review state. Strings are grouped in order into chunks,
+current target and review state. Sheets are taken in domain order: names
+first, since all other text refers to them, then actions and statuses, items,
+interface text, lore, and quests and cutscenes last, keeping the given order
+within a domain. Strings are grouped in order into chunks,
 never across sheets. A quest or cutscene sheet is one scene, so its strings in
 the job are one chunk of up to 240 strings; a larger one is split into chunks
 of even size. Other sheets are grouped into chunks of at most 30 strings and
@@ -619,7 +622,8 @@ knowledge itself is wrong are recorded as `knowledge` job events.
 #### Steps
 
 The localizer runs six steps; the requests of a step run in parallel, at
-most 8 at a time per chunk:
+most 8 at a time per chunk and at most 24 at a time across all lanes of a
+job:
 
 0. **Terms**: the study of the unit's terms described above.
 1. **Contract**: one request reads the whole script and writes the decisions
@@ -657,6 +661,14 @@ character, medium for the contract, the blind reader, the consistency
 check, and fixes, low for the
 fidelity check and structure corrections. The jobs effort from the settings
 is a ceiling for every role.
+
+A job has a quality, chosen by Angelica with `start_job` and shown on the
+job card: `fast` (the default) as described above, or `careful`, for story
+quests whose scenes must hold together. A careful unit is written by one
+writer, every role but structure corrections asks for a high effort, and the
+recheck reads the whole unit again, twice, fixing its major findings each
+time. A careful job's estimate, and so its token limit, is twice a fast
+one's.
 
 Nothing is written until the unit is done. Each translation is then written
 through `ProjectSession::set_assisted_target` against the recorded state,

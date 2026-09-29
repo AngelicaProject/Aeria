@@ -313,6 +313,7 @@ function JobInfo({ job, busy, setLimit, setConcurrency }: { job: JobSummary; bus
       <dt>{t("angelica.job.sheets")}</dt><dd>{sheets}</dd>
       <dt>{t("angelica.job.strings")}</dt><dd>{t(jobFilterLabels[job.spec.scope.filter])}</dd>
       <dt>{t("angelica.job.model")}</dt><dd>{model}</dd>
+      <dt>{t("angelica.job.quality")}</dt><dd title={t("angelica.job.qualityHint")}>{t(job.spec.quality === "careful" ? "angelica.job.quality.careful" : "angelica.job.quality.fast")}</dd>
       <dt>{t("angelica.job.concurrency")}</dt><dd><ConcurrencyControl job={job} busy={busy} setConcurrency={setConcurrency} /></dd>
       <dt>{t("angelica.job.tokenUse")}</dt><dd>{`${formatNumber(totalTokens(job.usage))} / ${formatNumber(job.spec.tokenLimit)}`}</dd>
       {job.projectedTokens !== null ? <><dt>{t("angelica.job.projectionLabel")}</dt><dd title={t("angelica.job.projectionHint", { finished: job.finishedChunks, total: job.chunks })}>{formatNumber(job.projectedTokens)}</dd></> : null}
