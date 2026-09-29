@@ -1,30 +1,18 @@
 # Project Knowledge Format v1
 
-Status: **implemented in `aeria-ai`**.
+Status: **implemented in `aeria-knowledge`**.
 
 Project knowledge is what a project decided about style, terms, characters,
-and story, and the lessons its agents learned. It has two layers, both
-committed with the project and shared through Git. How Aeria uses them is
-described in [`../architecture/localization-system.md`](../architecture/localization-system.md#project-knowledge).
+and story, and the lessons it learned. It is the `aeria-knowledge` directory
+at the project root, next to `.aeria/`. It is committed with the project and
+shared through Git like any other file, and it is not part of the Workspace
+Format. People and agents edit its files directly. How Aeria uses it is
+described in [`../architecture/agents.md`](../architecture/agents.md#project-knowledge).
 
-## Layers
-
-- **Human**: `aeria-guidance.md`, `aeria-glossary.csv`
-  ([Glossary Format v1](./glossary-v1.md)), and `aeria-voices.md`
-  ([Voice Profiles Format v1](./voices-v1.md)) at the project root. People
-  write them. Agents never change them, so their entries are locked.
-- **Agents**: the files of the `aeria-knowledge` directory at the project
-  root. Aeria's agents write them without asking; people may edit them too.
-
-Where both layers have an entry for the same glossary term (compared
-ignoring case) or speaker label, the human entry is used and the agent entry
-is ignored. Agents never write an entry for a term or label the human layer
-has.
-
-## Agent files
+## Files
 
 Every file is optional, UTF-8 with an optional leading BOM that is ignored,
-at most 4 MiB, with CRLF or LF line endings. Aeria writes LF.
+at most 8 MiB, with CRLF or LF line endings. Aeria writes LF.
 
 | File | Format | Entries |
 | --- | --- | --- |
@@ -34,13 +22,18 @@ at most 4 MiB, with CRLF or LF line endings. Aeria writes LF.
 | `story.md` | Sections | One per quest or cutscene sheet, keyed by the sheet name |
 | `lessons.md` | Sections | One per lesson, keyed by a short identifier |
 
-A file that cannot be read, or rows and profiles the referenced formats
-exclude, are reported as project knowledge problems and left out; the rest
-of the knowledge is used.
+A file that cannot be read is reported and left out. Rows and profiles the
+referenced formats exclude, `style.md` sections with an unknown domain, and
+lessons with an unknown domain are reported with their line; the rest of the
+knowledge is used.
 
-A term the study decided for a name the localizations each made up anew
-has `or: A / B` in its note: the alternatives a person may choose instead.
-The note is text for people and models; nothing parses it.
+## Settled entries
+
+An entry a person decided is **settled**: agents follow it and do not change
+it without asking a person. A term is settled by its `settled` column (see
+[Glossary Format v1](./glossary-v1.md)); a section or a character profile by
+`settled=yes` in its metadata line. The desktop's knowledge editor marks a
+term settled when a person edits it.
 
 ## Sections
 
@@ -55,44 +48,25 @@ The first non-blank line of a section may be a metadata line:
 
 ```markdown
 ## journal
-<!-- aeria: source=study; updated=2026-09-29 -->
+<!-- aeria: settled=yes -->
 Journal entries speak to the player character with «вы» and avoid words
 that agree with the player character's gender.
 ```
 
 The metadata line is `<!-- aeria:` followed by `name=value` pairs separated
-by `;` and `-->`. Names and values are trimmed. Names Aeria does not use are
-kept when it rewrites the file and have no effect.
+by `;` and `-->`. Names and values are trimmed. `settled` is settled when its
+value is `yes`, `true`, or `1`, ignoring case. Other names are for people and
+have no effect.
 
 ### Domains
 
 `style.md` keys are the text domains: `general`, `journal`, `objective`,
-`system`, `dialogue`, `names`, `items`, `actions`, `interface`, and `lore`. A
-section with another key is kept and not used.
+`system`, `dialogue`, `names`, `items`, `actions`, `interface`, and `lore`.
+`general` holds the conventions for all text. A section with another key is
+reported and not used.
 
 ### Lessons
 
-A lesson's metadata may name:
-
-- `status`: `trial` (the default: proposed from findings and in use until it
-  is evaluated), `active` (kept after an evaluation or by a person), or
-  `dropped` (did not help; kept so it is not proposed again and never used).
-- `domain`: the domain the lesson applies to; without it the lesson applies
-  to all text.
-- `findings`, `job`, `effect`, and `evaluated`: its provenance and measured
-  effect, for people.
-
-A lesson whose identifier starts with `taste-` records what a person
-preferred when choosing between versions of wording; Angelica writes it as
-`active`. The prefix is a convention for people; such lessons are read like
-any other.
-
-## Writing
-
-Aeria rewrites an agent file whole: it reads the current file, applies the
-change, writes the result to `.<file>.partial` in the same directory, syncs
-it, and renames it over the file. Writes within one Aeria process are
-serialized, so parallel job workers never lose each other's entries.
-Section files are written with a `# Style`, `# Story`, or `# Lessons` title
-and a line for people, then the sections in order, each with its metadata
-line when it has metadata.
+A lesson's metadata may name `domain`, the domain the lesson applies to;
+without it, or with `general`, the lesson applies to all text. A lesson that
+no longer helps is deleted.

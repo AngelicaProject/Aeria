@@ -1,15 +1,11 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
   CheckWorkflowDto,
-  LocalizationDecision,
-  LocalizationOverview,
-  LocalizationProjectArea,
   MacroIdiomDto,
   MacroInsertionDto,
   MacroViewDto,
   UpdateChannel,
   UpdateStatusDto,
-  AgentMode,
   ExportOverviewDto,
   FontPreviewSizeDto,
   ProjectChangeDto,
@@ -20,26 +16,9 @@ import type {
   PackSettings,
   PublishedReleaseDto,
   ReleaseInput,
-  GlossaryEntryInput,
-  ProjectGuideDto,
-  JobAction,
-  JobEvent,
-  JobSummary,
-  WorkerActivity,
-  JobUnit,
-  JobUnitStatus,
-  ProposalRecord,
-  AiConnectionCheckDto,
-  AiModelConfig,
-  ChatGptLoginDto,
-  ConversationDto,
-  ConversationSummaryDto,
-  EditorContextDto,
-  AiModelSelection,
-  AiProviderInput,
-  AiSettingsDto,
+  TermInput,
+  ProjectKnowledgeDto,
   CommandError,
-  ReasoningEffort,
   CollaborationDto,
   DetachedUnitDto,
   GameOpenResultDto,
@@ -429,159 +408,20 @@ export function defaultProjectsDirectory(): Promise<string> {
   return call<string>("default_projects_directory_path");
 }
 
-export function aiSettings(): Promise<AiSettingsDto> {
-  return call<AiSettingsDto>("ai_settings");
+export function projectKnowledge(): Promise<ProjectKnowledgeDto> {
+  return call<ProjectKnowledgeDto>("project_knowledge");
 }
 
-export function aiSaveProvider(provider: AiProviderInput): Promise<AiSettingsDto> {
-  return call<AiSettingsDto>("ai_save_provider", { provider });
+export function saveKnowledgeStyle(expected: string | null, text: string): Promise<ProjectKnowledgeDto> {
+  return call<ProjectKnowledgeDto>("save_knowledge_style", { expected, text });
 }
 
-export function aiRemoveProvider(providerId: string): Promise<AiSettingsDto> {
-  return call<AiSettingsDto>("ai_remove_provider", { providerId });
+export function saveKnowledgeCharacters(expected: string | null, text: string): Promise<ProjectKnowledgeDto> {
+  return call<ProjectKnowledgeDto>("save_knowledge_characters", { expected, text });
 }
 
-export function aiSetApiKey(providerId: string, apiKey: string): Promise<AiSettingsDto> {
-  return call<AiSettingsDto>("ai_set_api_key", { providerId, apiKey });
-}
-
-export function aiClearApiKey(providerId: string): Promise<AiSettingsDto> {
-  return call<AiSettingsDto>("ai_clear_api_key", { providerId });
-}
-
-export function aiSetAgentModel(selection: AiModelSelection | null): Promise<AiSettingsDto> {
-  return call<AiSettingsDto>("ai_set_agent_model", { selection });
-}
-
-export function aiSetWorkerModel(selection: AiModelSelection | null): Promise<AiSettingsDto> {
-  return call<AiSettingsDto>("ai_set_worker_model", { selection });
-}
-
-export function aiSetWebDomains(domains: string[]): Promise<AiSettingsDto> {
-  return call<AiSettingsDto>("ai_set_web_domains", { domains });
-}
-
-export function aiListRemoteModels(providerId: string): Promise<AiModelConfig[]> {
-  return call<AiModelConfig[]>("ai_list_remote_models", { providerId });
-}
-
-export function aiChatGptLoginStart(providerId: string): Promise<ChatGptLoginDto> {
-  return call<ChatGptLoginDto>("ai_chatgpt_login_start", { providerId });
-}
-
-export function aiChatGptLoginCancel(loginId: string): Promise<void> {
-  return call<void>("ai_chatgpt_login_cancel", { loginId });
-}
-
-export function aiTestConnection(providerId: string, modelId: string, effort: ReasoningEffort | null): Promise<AiConnectionCheckDto> {
-  return call<AiConnectionCheckDto>("ai_test_connection", { providerId, modelId, effort });
-}
-
-export function angelicaConversations(): Promise<ConversationSummaryDto[]> {
-  return call<ConversationSummaryDto[]>("angelica_conversations");
-}
-
-export function angelicaConversation(conversationId: string): Promise<ConversationDto> {
-  return call<ConversationDto>("angelica_conversation", { conversationId });
-}
-
-export function angelicaDeleteConversation(conversationId: string): Promise<void> {
-  return call<void>("angelica_delete_conversation", { conversationId });
-}
-
-export function angelicaCancel(conversationId: string): Promise<void> {
-  return call<void>("angelica_cancel", { conversationId });
-}
-
-/** Sends a message; `images` are base64 PNG or JPEG files. */
-export function angelicaSend(conversationId: string | null, text: string, images: readonly string[], model: AiModelSelection, editor: EditorContextDto | null, mode: AgentMode): Promise<ConversationDto> {
-  return call<ConversationDto>("angelica_send", { conversationId, text, images, model, editor, mode });
-}
-
-/** One conversation image as a `data:` URL. */
-export function angelicaImage(conversationId: string, imageId: string): Promise<string> {
-  return call<string>("angelica_image", { conversationId, imageId });
-}
-
-export function angelicaProposals(conversationId: string): Promise<ProposalRecord[]> {
-  return call<ProposalRecord[]>("angelica_proposals", { conversationId });
-}
-
-export function angelicaApplyProposal(conversationId: string, proposalId: string): Promise<ProposalRecord[]> {
-  return call<ProposalRecord[]>("angelica_apply_proposal", { conversationId, proposalId });
-}
-
-export function angelicaRejectProposal(conversationId: string, proposalId: string): Promise<ProposalRecord[]> {
-  return call<ProposalRecord[]>("angelica_reject_proposal", { conversationId, proposalId });
-}
-
-export function angelicaDraft(sourceBinding: SourceBinding): Promise<{ target: string }> {
-  return call<{ target: string }>("angelica_draft", { sourceBinding });
-}
-
-export function angelicaJobs(): Promise<JobSummary[]> {
-  return call<JobSummary[]>("angelica_jobs");
-}
-
-export function angelicaJobUnits(jobId: string, statuses: JobUnitStatus[]): Promise<JobUnit[]> {
-  return call<JobUnit[]>("angelica_job_units", { jobId, statuses });
-}
-
-export function angelicaJobEvents(jobId: string): Promise<JobEvent[]> {
-  return call<JobEvent[]>("angelica_job_events", { jobId });
-}
-
-export function localizationOverview(jobId: string): Promise<LocalizationOverview> {
-  return call<LocalizationOverview>("localization_overview", { jobId });
-}
-
-export function localizationProject(): Promise<LocalizationProjectArea[]> {
-  return call<LocalizationProjectArea[]>("localization_project");
-}
-
-export function localizationDecisions(): Promise<LocalizationDecision[]> {
-  return call<LocalizationDecision[]>("localization_decisions");
-}
-
-/** Settles a made-up name; resolves whether the rendering changed. */
-export function localizationChooseName(term: string, rendering: string): Promise<boolean> {
-  return call<boolean>("localization_choose_name", { term, rendering });
-}
-
-export function angelicaJobWorkers(jobId: string): Promise<WorkerActivity[]> {
-  return call<WorkerActivity[]>("angelica_job_workers", { jobId });
-}
-
-export function angelicaJobControl(jobId: string, action: JobAction): Promise<JobSummary> {
-  return call<JobSummary>("angelica_job_control", { jobId, action });
-}
-
-export function angelicaJobSetLimit(jobId: string, tokenLimit: number, resume: boolean): Promise<JobSummary> {
-  return call<JobSummary>("angelica_job_set_limit", { jobId, tokenLimit, resume });
-}
-
-export function angelicaJobRemove(jobId: string): Promise<void> {
-  return call<void>("angelica_job_remove", { jobId });
-}
-
-export function angelicaJobRetry(jobId: string, statuses: JobUnitStatus[]): Promise<JobSummary> {
-  return call<JobSummary>("angelica_job_retry", { jobId, statuses });
-}
-
-export function projectGuide(): Promise<ProjectGuideDto> {
-  return call<ProjectGuideDto>("project_guide");
-}
-
-export function saveProjectGuidance(expected: string | null, text: string): Promise<ProjectGuideDto> {
-  return call<ProjectGuideDto>("save_project_guidance", { expected, text });
-}
-
-export function saveProjectVoices(expected: string | null, text: string): Promise<ProjectGuideDto> {
-  return call<ProjectGuideDto>("save_project_voices", { expected, text });
-}
-
-export function saveProjectGlossary(expected: string | null, entries: GlossaryEntryInput[]): Promise<ProjectGuideDto> {
-  return call<ProjectGuideDto>("save_project_glossary", { expected, entries });
+export function saveKnowledgeTerms(expected: string | null, entries: TermInput[]): Promise<ProjectKnowledgeDto> {
+  return call<ProjectKnowledgeDto>("save_knowledge_terms", { expected, entries });
 }
 
 export function exportOverview(): Promise<ExportOverviewDto> {

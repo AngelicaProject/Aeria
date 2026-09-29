@@ -447,7 +447,7 @@ export type UnitHistoryDto = {
   reviewedBy: AttributionDto | null;
 };
 
-export type ProjectArea = "glossary" | "guidance" | "packSettings" | "fontSettings" | "fontFile" | "collaboration" | "gitAttributes" | "feedWorkflow" | "checkWorkflow";
+export type ProjectArea = "terms" | "knowledge" | "packSettings" | "fontSettings" | "fontFile" | "collaboration" | "gitAttributes" | "feedWorkflow" | "checkWorkflow";
 
 /** The GitHub workflow that runs aeria-check on pull requests. */
 export type CheckWorkflowDto = {
@@ -526,266 +526,26 @@ export type GitFinishDto = {
   deletedBranch: string | null;
 };
 
-export type AiProviderKind = "openCodeGo" | "openRouter" | "custom" | "chatGpt";
-export type ReasoningEffort = "minimal" | "low" | "medium" | "high" | "xhigh";
-export type ApiKeyState = "stored" | "missing" | "unavailable";
+/** One term of `aeria-knowledge/terms.csv`; `settled` when a person decided it. */
+export type GlossaryEntry = { term: string; translation: string; note?: string; forbidden?: string[]; settled?: boolean };
 
-export type AiModelConfig = {
-  id: string;
-  contextWindow: number | null;
-  reasoningEfforts: ReasoningEffort[];
-  /** Whether the model accepts images; omitted when it does not. */
-  vision?: boolean;
-};
+export type TermInput = { term: string; translation: string; note: string | null; forbidden: string[]; settled: boolean };
 
-export type AiHeaderConfig = { name: string; value: string };
-
-export type AiProviderDto = {
-  id: string;
-  kind: AiProviderKind;
-  name: string;
-  baseUrl: string;
-  models: AiModelConfig[];
-  sessionHeader: string | null;
-  headers: AiHeaderConfig[];
-  apiKey: ApiKeyState;
-};
-
-export type AiProviderPresetDto = {
-  kind: AiProviderKind;
-  name: string;
-  baseUrl: string | null;
-  sessionHeader: string | null;
-};
-
-export type AiModelSelection = {
-  providerId: string;
-  modelId: string;
-  effort: ReasoningEffort | null;
-};
-
-export type AiSettingsDto = {
-  providers: AiProviderDto[];
-  agentModel: AiModelSelection | null;
-  /** The model for translation-job workers; Angelica's model when null. */
-  workerModel: AiModelSelection | null;
-  /** Domains whose pages Angelica reads without asking. */
-  webDomains: string[];
-  presets: AiProviderPresetDto[];
-};
-
-export type AiProviderInput = {
-  id: string | null;
-  kind: AiProviderKind;
-  name: string;
-  baseUrl: string;
-  models: AiModelConfig[];
-  sessionHeader: string | null;
-  headers: AiHeaderConfig[];
-};
-
-export type ChatGptLoginDto = { loginId: string; userCode: string; verificationUrl: string; browserOpened: boolean };
-
-export type ChatGptLoginEventDto = { loginId: string; providerId: string; succeeded: boolean; code: string | null; message: string | null };
-
-export type AiConnectionCheckDto = {
-  latencyMs: number;
-  model: string | null;
-};
-
-export type ChatToolCall = { id: string; name: string; arguments: string };
-
-/** An image attached to a message, stored beside its conversation. */
-export type ImageRef = { id: string; format: "png" | "jpeg"; width: number; height: number };
-
-export type ChatMessage =
-  | { role: "user"; content: string; automatic?: boolean; images?: ImageRef[] }
-  | { role: "assistant"; content: string; reasoning?: string; toolCalls?: ChatToolCall[] }
-  | { role: "tool"; toolCallId: string; name: string; content: string };
-
-export type AiUsage = { promptTokens: number; completionTokens: number; cachedPromptTokens?: number };
-
-export type ConversationDto = {
-  id: string;
-  title: string;
-  model: AiModelSelection | null;
-  messages: ChatMessage[];
-  usage: AiUsage;
-  running: boolean;
-};
-
-export type ConversationSummaryDto = { id: string; title: string; updatedAtUnixMs: number; running: boolean };
-
-export type AgentEvent =
-  | { type: "textDelta"; text: string }
-  | { type: "reasoningDelta"; text: string }
-  | { type: "responseFinished" }
-  | { type: "toolStarted"; id: string; name: string; arguments: string }
-  | { type: "toolFinished"; id: string; name: string; content: string; isError: boolean }
-  | ({ type: "usage" } & AiUsage)
-  | { type: "turnFinished"; outcome: "completed" | "roundLimit"; usage: AiUsage }
-  | { type: "turnFailed"; code: string; message: string }
-  | { type: "turnCancelled" };
-
-export type AngelicaEventDto = { conversationId: string; event: AgentEvent };
-
-export type UnitLocationDto = { sheet: string; row: number; subrow: number; column: number | null };
-
-export type EditorContextDto = { sheet: string | null; selection: UnitLocationDto | null; unsavedDraft: boolean };
-
-export type AgentMode = "chat" | "work" | "ask" | "autoDraft";
-
-export type ProposalRecord = {
-  id: string;
-  /** The changed project file; null for a translation. */
-  file: "guidance" | "glossary" | "voices" | null;
-  /** A job to start; `target` then holds its one-line summary. */
-  job?: JobProposal | null;
-  /** A domain Angelica asked to read; `target` then holds the link. */
-  web?: string | null;
-  /** Translations Angelica suggests marking reviewed; `target` holds her reason. */
-  review?: { reason: string; items: { location: UnitLocationDto; source: string; target: string }[] } | null;
-  /** A new token limit for a job; `target` holds its one-line summary. */
-  jobLimit?: JobLimitProposal | null;
-  location: UnitLocationDto | null;
-  source: string;
-  target: string;
-  expected: { target: string | null; reviewState: ReviewState | null };
-  status: "pending" | "applied" | "rejected" | "conflict" | "failed";
-  message: string | null;
-  createdAtUnixMs: number;
-};
-
-export type TranslationAppliedDto = { sourceBinding: SourceBinding; overlay: TranslationOverlayDto };
-
-export type JobFilter = "untranslated" | "needsReview" | "untranslatedAndDrafts" | "revise";
-
-export type JobScope = { sheets: string[]; filter: JobFilter; patterns?: string[]; exclude?: string[]; careful?: string[] };
-
-/** A kind of text of the project knowledge. */
-export type KnowledgeDomain = "general" | "journal" | "objective" | "system" | "dialogue" | "names" | "items" | "actions" | "interface" | "lore";
-
-/** One area of a localization: the strings of one kind of text. */
-export type LocalizationArea = { domain: KnowledgeDomain | null; total: number; done: number; flagged: number; problems: number };
-
-/** How far one kind of text of the whole project is localized. */
-export type LocalizationProjectArea = { domain: KnowledgeDomain | null; total: number; translated: number; reviewed: number; needsReview: number };
-
-/** How a localization goes: its areas in the order it takes them, and its speed. */
-export type LocalizationOverview = { areas: LocalizationArea[]; perMinute: number };
-
-/** A decision that waits for a person. */
-export type LocalizationDecision =
-  | { kind: "calibrate"; domain: KnowledgeDomain }
-  | { kind: "name"; term: string; rendering: string; options: string[] }
-  | { kind: "review"; jobId: string; count: number }
-  | { kind: "knowledge"; jobId: string; message: string };
-
-export type JobEstimate = {
-  units: number;
-  chunks: number;
-  estimatedTokens: number;
-  /** Average tokens per chunk of earlier jobs with the same model, when the estimate uses it. */
-  historyChunkTokens?: number;
-};
-
-export type JobLimitProposal = { jobId: string; tokenLimit: number; previousLimit: number; usedTokens: number; projectedTokens: number | null };
-
-/** How much work the localizer spends on each unit of a job. */
-export type JobQuality = "fast" | "careful" | "edit";
-
-export type JobProposal = { scope: JobScope; instructions: string; concurrency: number; estimate: JobEstimate; tokenLimit: number; quality?: JobQuality };
-
-export type JobSpec = { scope: JobScope; instructions: string; model: AiModelSelection; tokenLimit: number; concurrency: number; quality?: JobQuality };
-
-export type JobStatus = "running" | "paused" | "completed" | "cancelled";
-
-export type JobUnitStatus = "pending" | "running" | "drafted" | "finished" | "flagged" | "rejected" | "failed" | "conflict";
-
-export type JobCounts = { total: number; pending: number; running: number; drafted: number; finished: number; flagged: number; rejected: number; failed: number; conflict: number };
-
-export type JobSummary = {
-  id: string;
-  conversationId: string;
-  status: JobStatus;
-  /** Why a paused job paused. */
-  reason: string | null;
-  spec: JobSpec;
-  createdAtUnixMs: number;
-  counts: JobCounts;
-  /** Chunks being translated right now, one per busy worker. */
-  activeWorkers: number;
-  usage: AiUsage;
-  chunks: number;
-  /** Chunks with no pending or running strings. */
-  finishedChunks: number;
-  /** Tokens the whole job will likely use; null until a chunk finished. */
-  projectedTokens: number | null;
-};
-
-export type JobUnit = {
-  seq: number;
-  chunk: number;
-  location: UnitLocationDto;
-  status: JobUnitStatus;
-  attempts: number;
-  message: string | null;
-  expected: { target: string | null; reviewState: ReviewState | null };
-};
-
-export type JobEvent = { seq: number; createdAtUnixMs: number; kind: string; message: string; location: UnitLocationDto | null };
-
-export type JobAction = "pause" | "resume" | "cancel";
-
-export type WorkerPhase = "idle" | "preparing" | "waiting" | "reasoning" | "writing" | "recording" | "backoff" | "stopped";
-
-/** The localizer step a lane is on. */
-export type WorkerStep = "study" | "learning" | "terms" | "contract" | "writing" | "voicing" | "reviewing" | "fixing" | "rechecking";
-
-/** What one lane of a running job is doing; live state, never stored. */
-export type WorkerActivity = {
-  lane: number;
-  phase: WorkerPhase;
-  chunk: number | null;
-  sheet: string | null;
-  units: number;
-  finishedUnits: number;
-  /** The localizer step, while a chunk runs. */
-  step: WorkerStep | null;
-  /** The step's number, from 1, and the number of steps. */
-  round: number;
-  maxRounds: number;
-  /** Requests of the current step that have not answered yet. */
-  requests: number;
-  chunkTokens: number;
-  chunksDone: number;
-  phaseStartedUnixMs: number;
-  lastActivityUnixMs: number;
-  retryAtUnixMs: number | null;
-  lastError: string | null;
-  /** The first and last source row of the current chunk. */
-  firstRow: number | null;
-  lastRow: number | null;
-};
-
-export type GlossaryEntry = { term: string; translation: string; note?: string; forbidden?: string[] };
-
-export type GlossaryEntryInput = { term: string; translation: string; note: string | null; forbidden: string[] };
-
-export type ProjectGuideDto = {
-  /** The guidance text; null when the file does not exist. */
-  guidance: string | null;
-  /** The glossary file's exact content, sent back when saving. */
-  glossaryText: string | null;
+/** The project's style, terms, and character voices in `aeria-knowledge/`. */
+export type ProjectKnowledgeDto = {
+  /** `style.md`; null when the file does not exist. */
+  style: string | null;
+  /** `terms.csv` exactly as read, sent back when saving. */
+  termsText: string | null;
   entries: GlossaryEntry[];
   diagnostics: { line: number; message: string }[];
-  guidanceError: string | null;
-  glossaryError: string | null;
-  /** The voice profile text; null when the file does not exist. */
-  voices: string | null;
-  /** Profiles the voice file ignores, with the reason. */
-  voiceDiagnostics: { line: number; message: string }[];
-  voicesError: string | null;
+  /** `characters.md`; null when the file does not exist. */
+  characters: string | null;
+  /** Profiles the characters file ignores, with the reason. */
+  characterDiagnostics: { line: number; message: string }[];
+  styleError: string | null;
+  termsError: string | null;
+  charactersError: string | null;
 };
 
 /** Project-shared pack identity in aeria-pack.json. */

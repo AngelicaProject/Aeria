@@ -1,113 +1,129 @@
-//! The project guidance, glossary, and voice profile editor.
+//! The project knowledge editor: the style, terms, and character voices in
+//! `aeria-knowledge/` (see `docs/formats/knowledge-v1.md`).
 //!
-//! The user edits `aeria-guidance.md`, `aeria-glossary.csv`, and
-//! `aeria-voices.md` directly. A
-//! save replaces a file only if it still has the content the editor loaded,
-//! so a change made meanwhile by hand, by Git, or through an approved
-//! Angelica proposal is never overwritten.
+//! A save replaces a file only if it still has the content the editor
+//! loaded, so a change made meanwhile by hand, by Git, or by an agent is
+//! never overwritten.
 
-use aeria_ai::guidance::{
-    GlossaryDiagnostic, GlossaryEntry, MAX_GUIDANCE_BYTES, ProjectFile, parse_glossary,
-    read_project_file, write_glossary,
+use std::path::{Path, PathBuf};
+
+use aeria_knowledge::knowledge::read_file;
+use aeria_knowledge::{
+    GlossaryDiagnostic, GlossaryEntry, KnowledgeFile, MAX_KNOWLEDGE_BYTES, VoiceDiagnostic,
+    parse_glossary, parse_voices, write_glossary,
 };
-use aeria_ai::voices::{MAX_VOICES_BYTES, VoiceDiagnostic, parse_voices};
 use serde::{Deserialize, Serialize};
+use tauri::Manager;
 
-use crate::angelica::{apply_file_change, repository_root};
 use crate::commands::run_blocking;
 use crate::error::CommandError;
+use crate::state::DesktopState;
 
 type CommandResult<T> = Result<T, CommandError>;
 
 /// The files as the editor shows them.
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ProjectGuideDto {
-    /// The guidance text; `None` when the file does not exist.
-    pub guidance: Option<String>,
-    /// The glossary file's exact content, sent back when saving.
-    pub glossary_text: Option<String>,
+pub struct ProjectKnowledgeDto {
+    /// `style.md`; `None` when the file does not exist.
+    pub style: Option<String>,
+    /// `terms.csv` exactly as read, sent back when saving.
+    pub terms_text: Option<String>,
     pub entries: Vec<GlossaryEntry>,
-    /// Rows excluded from the glossary, with the reason.
+    /// Rows excluded from the terms, with the reason.
     pub diagnostics: Vec<GlossaryDiagnostic>,
+    /// `characters.md`; `None` when the file does not exist.
+    pub characters: Option<String>,
+    /// Profiles the characters file ignores, with the reason.
+    pub character_diagnostics: Vec<VoiceDiagnostic>,
     /// Why a file cannot be used at all.
-    pub guidance_error: Option<String>,
-    pub glossary_error: Option<String>,
-    /// The voice profile text; `None` when the file does not exist.
-    pub voices: Option<String>,
-    /// Profiles the voice file ignores, with the reason.
-    pub voice_diagnostics: Vec<VoiceDiagnostic>,
-    pub voices_error: Option<String>,
+    pub style_error: Option<String>,
+    pub terms_error: Option<String>,
+    pub characters_error: Option<String>,
 }
 
-/// One edited glossary entry.
+/// One edited term.
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct GlossaryEntryInput {
+pub struct TermInput {
     pub term: String,
     pub translation: String,
     #[serde(default)]
     pub note: Option<String>,
     #[serde(default)]
     pub forbidden: Vec<String>,
+    #[serde(default)]
+    pub settled: bool,
 }
 
-fn guide_error(message: impl Into<String>) -> CommandError {
-    CommandError::new("projectGuideInvalid", message)
+fn knowledge_error(message: impl Into<String>) -> CommandError {
+    CommandError::new("projectKnowledgeInvalid", message)
 }
 
-fn load(root: &std::path::Path) -> ProjectGuideDto {
-    let mut dto = ProjectGuideDto {
-        guidance: None,
-        glossary_text: None,
+fn repository_root(app: &tauri::AppHandle) -> CommandResult<PathBuf> {
+    let state = app.state::<DesktopState>();
+    let project = state.lock_project()?;
+    let session = project.as_ref().ok_or_else(CommandError::no_project)?;
+    Ok(session.repository_root().to_owned())
+}
+
+fn load(root: &Path) -> ProjectKnowledgeDto {
+    let mut dto = ProjectKnowledgeDto {
+        style: None,
+        terms_text: None,
         entries: Vec::new(),
         diagnostics: Vec::new(),
-        guidance_error: None,
-        glossary_error: None,
-        voices: None,
-        voice_diagnostics: Vec::new(),
-        voices_error: None,
+        characters: None,
+        character_diagnostics: Vec::new(),
+        style_error: None,
+        terms_error: None,
+        characters_error: None,
     };
-    match read_project_file(root, ProjectFile::Guidance) {
-        Ok(text) => dto.guidance = text,
-        Err(message) => dto.guidance_error = Some(message),
+    match read_file(root, KnowledgeFile::Style) {
+        Ok(text) => dto.style = text,
+        Err(message) => dto.style_error = Some(message),
     }
-    match read_project_file(root, ProjectFile::Glossary) {
+    match read_file(root, KnowledgeFile::Terms) {
         Ok(Some(text)) => {
             match parse_glossary(text.as_bytes()) {
                 Ok(glossary) => {
                     dto.entries = glossary.entries;
                     dto.diagnostics = glossary.diagnostics;
                 }
-                Err(error) => dto.glossary_error = Some(error.to_string()),
+                Err(error) => dto.terms_error = Some(error.to_string()),
             }
-            dto.glossary_text = Some(text);
+            dto.terms_text = Some(text);
         }
         Ok(None) => {}
-        Err(message) => dto.glossary_error = Some(message),
+        Err(message) => dto.terms_error = Some(message),
     }
-    match read_project_file(root, ProjectFile::Voices) {
+    match read_file(root, KnowledgeFile::Characters) {
         Ok(text) => {
-            dto.voice_diagnostics = text
+            dto.character_diagnostics = text
                 .as_deref()
                 .map(|text| parse_voices(text).diagnostics)
                 .unwrap_or_default();
-            dto.voices = text;
+            dto.characters = text;
         }
-        Err(message) => dto.voices_error = Some(message),
+        Err(message) => dto.characters_error = Some(message),
     }
     dto
 }
 
-/// Checks edited voice profiles: every profile must be usable.
-fn check_voices(text: &str) -> CommandResult<()> {
-    if text.len() as u64 > MAX_VOICES_BYTES {
-        return Err(guide_error(format!(
-            "the voice profiles are larger than {MAX_VOICES_BYTES} bytes"
+fn check_size(text: &str) -> CommandResult<()> {
+    if text.len() as u64 > MAX_KNOWLEDGE_BYTES {
+        return Err(knowledge_error(format!(
+            "the file would be larger than {MAX_KNOWLEDGE_BYTES} bytes"
         )));
     }
+    Ok(())
+}
+
+/// Checks edited character voices: every profile must be usable.
+fn check_characters(text: &str) -> CommandResult<()> {
+    check_size(text)?;
     match parse_voices(text).diagnostics.first() {
-        Some(problem) => Err(guide_error(format!(
+        Some(problem) => Err(knowledge_error(format!(
             "line {}: {}",
             problem.line, problem.message
         ))),
@@ -115,9 +131,9 @@ fn check_voices(text: &str) -> CommandResult<()> {
     }
 }
 
-/// The canonical glossary file for edited entries. Every entry must be
-/// valid: the written file is parsed again and must exclude nothing.
-fn glossary_file(entries: Vec<GlossaryEntryInput>) -> CommandResult<String> {
+/// The canonical terms file for edited entries. Every entry must be valid:
+/// the written file is parsed again and must exclude nothing.
+fn terms_file(entries: Vec<TermInput>) -> CommandResult<String> {
     let entries: Vec<GlossaryEntry> = entries
         .into_iter()
         .map(|entry| GlossaryEntry {
@@ -133,13 +149,15 @@ fn glossary_file(entries: Vec<GlossaryEntryInput>) -> CommandResult<String> {
                 .map(|variant| variant.trim().to_owned())
                 .filter(|variant| !variant.is_empty())
                 .collect(),
+            settled: entry.settled,
         })
         .collect();
     let text = write_glossary(&entries);
-    let parsed = parse_glossary(text.as_bytes()).map_err(|error| guide_error(error.message))?;
+    check_size(&text)?;
+    let parsed = parse_glossary(text.as_bytes()).map_err(|error| knowledge_error(error.message))?;
     if let Some(problem) = parsed.diagnostics.first() {
         // Line 1 is the header, so entry N is on line N + 1.
-        return Err(guide_error(format!(
+        return Err(knowledge_error(format!(
             "entry {}: {}",
             problem.line.saturating_sub(1),
             problem.message
@@ -148,55 +166,72 @@ fn glossary_file(entries: Vec<GlossaryEntryInput>) -> CommandResult<String> {
     Ok(text)
 }
 
+/// Replaces a knowledge file if it still has the content the change was
+/// made against, through a temporary file and rename.
 fn save(
-    root: &std::path::Path,
-    file: ProjectFile,
+    root: &Path,
+    file: KnowledgeFile,
     expected: Option<&str>,
     content: &str,
-) -> CommandResult<ProjectGuideDto> {
-    apply_file_change(root, file, expected, content).map_err(|(status, message)| {
-        let code = if status == aeria_ai::conversation::ProposalStatus::Conflict {
-            "projectGuideConflict"
-        } else {
-            "projectGuideWrite"
-        };
-        CommandError::new(code, message)
+) -> CommandResult<ProjectKnowledgeDto> {
+    let current = read_file(root, file)
+        .map_err(|message| CommandError::new("projectKnowledgeWrite", message))?;
+    if current.as_deref() != expected {
+        return Err(CommandError::new(
+            "projectKnowledgeConflict",
+            format!("{} changed after it was loaded", file.relative_path()),
+        ));
+    }
+    let path = file.path(root);
+    let directory = path.parent().unwrap_or(root);
+    let partial = directory.join(format!(".{}.partial", file.file_name()));
+    let write = || -> std::io::Result<()> {
+        std::fs::create_dir_all(directory)?;
+        let mut handle = std::fs::File::create(&partial)?;
+        std::io::Write::write_all(&mut handle, content.as_bytes())?;
+        handle.sync_all()?;
+        drop(handle);
+        std::fs::rename(&partial, &path)
+    };
+    write().map_err(|error| {
+        let _ = std::fs::remove_file(&partial);
+        CommandError::new(
+            "projectKnowledgeWrite",
+            format!("{}: {error}", file.relative_path()),
+        )
     })?;
     Ok(load(root))
 }
 
 #[tauri::command(rename_all = "camelCase")]
-/// Reads the project guidance and glossary.
+/// Reads the project's style, terms, and character voices.
 ///
 /// # Errors
 ///
 /// Returns `noProjectOpen`.
-pub async fn project_guide(app: tauri::AppHandle) -> CommandResult<ProjectGuideDto> {
+pub async fn project_knowledge(app: tauri::AppHandle) -> CommandResult<ProjectKnowledgeDto> {
     run_blocking(move || Ok(load(&repository_root(&app)?))).await
 }
 
 #[tauri::command(rename_all = "camelCase")]
-/// Replaces the guidance if the file still has the `expected` content
-/// (`None` when it did not exist).
+/// Replaces `style.md` if it still has the `expected` content (`None` when
+/// it did not exist).
 ///
 /// # Errors
 ///
-/// Returns `projectGuideInvalid` for text over 64 KiB,
-/// `projectGuideConflict` when the file changed, or `projectGuideWrite`.
-pub async fn save_project_guidance(
+/// Returns `projectKnowledgeInvalid` for a file that is too large,
+/// `projectKnowledgeConflict` when the file changed, or
+/// `projectKnowledgeWrite`.
+pub async fn save_knowledge_style(
     app: tauri::AppHandle,
     expected: Option<String>,
     text: String,
-) -> CommandResult<ProjectGuideDto> {
-    if text.len() as u64 > MAX_GUIDANCE_BYTES {
-        return Err(guide_error(format!(
-            "the guidance is larger than {MAX_GUIDANCE_BYTES} bytes"
-        )));
-    }
+) -> CommandResult<ProjectKnowledgeDto> {
+    check_size(&text)?;
     run_blocking(move || {
         save(
             &repository_root(&app)?,
-            ProjectFile::Guidance,
+            KnowledgeFile::Style,
             expected.as_deref(),
             &text,
         )
@@ -205,24 +240,25 @@ pub async fn save_project_guidance(
 }
 
 #[tauri::command(rename_all = "camelCase")]
-/// Writes the glossary in canonical form if the file still has the
-/// `expected` content. Rows the file excluded are not kept; the editor
-/// confirms that with the user first.
+/// Writes `terms.csv` in canonical form if it still has the `expected`
+/// content. Rows the file excluded are not kept; the editor confirms that
+/// with the user first.
 ///
 /// # Errors
 ///
-/// Returns `projectGuideInvalid` for an invalid entry,
-/// `projectGuideConflict` when the file changed, or `projectGuideWrite`.
-pub async fn save_project_glossary(
+/// Returns `projectKnowledgeInvalid` for an invalid entry,
+/// `projectKnowledgeConflict` when the file changed, or
+/// `projectKnowledgeWrite`.
+pub async fn save_knowledge_terms(
     app: tauri::AppHandle,
     expected: Option<String>,
-    entries: Vec<GlossaryEntryInput>,
-) -> CommandResult<ProjectGuideDto> {
+    entries: Vec<TermInput>,
+) -> CommandResult<ProjectKnowledgeDto> {
     run_blocking(move || {
-        let text = glossary_file(entries)?;
+        let text = terms_file(entries)?;
         save(
             &repository_root(&app)?,
-            ProjectFile::Glossary,
+            KnowledgeFile::Terms,
             expected.as_deref(),
             &text,
         )
@@ -231,24 +267,24 @@ pub async fn save_project_glossary(
 }
 
 #[tauri::command(rename_all = "camelCase")]
-/// Replaces the voice profiles if the file still has the `expected`
-/// content (`None` when it did not exist).
+/// Replaces `characters.md` if it still has the `expected` content (`None`
+/// when it did not exist).
 ///
 /// # Errors
 ///
-/// Returns `projectGuideInvalid` for text over 256 KiB or with a profile
-/// that would be ignored, `projectGuideConflict` when the file changed, or
-/// `projectGuideWrite`.
-pub async fn save_project_voices(
+/// Returns `projectKnowledgeInvalid` for a file that is too large or has a
+/// profile that would be ignored, `projectKnowledgeConflict` when the file
+/// changed, or `projectKnowledgeWrite`.
+pub async fn save_knowledge_characters(
     app: tauri::AppHandle,
     expected: Option<String>,
     text: String,
-) -> CommandResult<ProjectGuideDto> {
-    check_voices(&text)?;
+) -> CommandResult<ProjectKnowledgeDto> {
+    check_characters(&text)?;
     run_blocking(move || {
         save(
             &repository_root(&app)?,
-            ProjectFile::Voices,
+            KnowledgeFile::Characters,
             expected.as_deref(),
             &text,
         )
@@ -260,68 +296,71 @@ pub async fn save_project_voices(
 mod tests {
     use super::*;
 
-    fn entry(term: &str, translation: &str) -> GlossaryEntryInput {
-        GlossaryEntryInput {
+    fn entry(term: &str, translation: &str) -> TermInput {
+        TermInput {
             term: term.to_owned(),
             translation: translation.to_owned(),
             note: Some("  ".to_owned()),
             forbidden: vec![" Хай ".to_owned(), String::new()],
+            settled: true,
         }
     }
 
     #[test]
-    fn edited_glossaries_are_canonical_and_complete() {
-        let text = glossary_file(vec![
+    fn edited_terms_are_canonical_and_complete() {
+        let text = terms_file(vec![
             entry(" Aether ", "Эфир"),
             entry("Crystal", "Кристалл"),
         ])
         .expect("valid");
         assert_eq!(
             text,
-            "term,translation,note,forbidden\nAether,Эфир,,Хай\nCrystal,Кристалл,,Хай\n"
+            "term,translation,note,forbidden,settled\nAether,Эфир,,Хай,yes\nCrystal,Кристалл,,Хай,yes\n"
         );
-        let duplicate = glossary_file(vec![entry("Aether", "Эфир"), entry("aether", "Эфир")])
+        let duplicate = terms_file(vec![entry("Aether", "Эфир"), entry("aether", "Эфир")])
             .expect_err("duplicate");
         assert!(
             duplicate.message.starts_with("entry 2:"),
             "{}",
             duplicate.message
         );
-        assert!(glossary_file(vec![entry("Aether", " ")]).is_err());
+        assert!(terms_file(vec![entry("Aether", " ")]).is_err());
     }
 
     #[test]
     fn saves_refuse_to_overwrite_changed_files() {
         let directory = tempfile::tempdir().expect("directory");
         let root = directory.path();
-        let saved = save(root, ProjectFile::Guidance, None, "Be brief.\n").expect("create");
-        assert_eq!(saved.guidance.as_deref(), Some("Be brief.\n"));
-        let conflict = save(root, ProjectFile::Guidance, None, "Other.\n").expect_err("changed");
-        assert_eq!(conflict.code, "projectGuideConflict");
+        let saved =
+            save(root, KnowledgeFile::Style, None, "## general\nBe brief.\n").expect("create");
+        assert_eq!(saved.style.as_deref(), Some("## general\nBe brief.\n"));
+        let conflict = save(root, KnowledgeFile::Style, None, "Other.\n").expect_err("changed");
+        assert_eq!(conflict.code, "projectKnowledgeConflict");
 
-        let text = glossary_file(vec![entry("Aether", "Эфир")]).expect("valid");
-        let saved = save(root, ProjectFile::Glossary, None, &text).expect("glossary");
+        let text = terms_file(vec![entry("Aether", "Эфир")]).expect("valid");
+        let saved = save(root, KnowledgeFile::Terms, None, &text).expect("terms");
         assert_eq!(saved.entries.len(), 1);
-        assert_eq!(saved.glossary_text.as_deref(), Some(text.as_str()));
+        assert!(saved.entries[0].settled);
+        assert_eq!(saved.terms_text.as_deref(), Some(text.as_str()));
         assert!(saved.diagnostics.is_empty());
     }
 
     #[test]
-    fn voice_profiles_are_saved_only_when_every_profile_is_usable() {
+    fn characters_are_saved_only_when_every_profile_is_usable() {
         let directory = tempfile::tempdir().expect("directory");
         let root = directory.path();
         let text = "## URIANGER\nАрхаичная речь.\n";
-        check_voices(text).expect("valid");
-        let saved = save(root, ProjectFile::Voices, None, text).expect("saved");
-        assert_eq!(saved.voices.as_deref(), Some(text));
-        assert!(saved.voice_diagnostics.is_empty());
-        let invalid = check_voices("## Urianger Augurelle\nText.\n").expect_err("label");
+        check_characters(text).expect("valid");
+        let saved = save(root, KnowledgeFile::Characters, None, text).expect("saved");
+        assert_eq!(saved.characters.as_deref(), Some(text));
+        assert!(saved.character_diagnostics.is_empty());
+        let invalid = check_characters("## Urianger Augurelle\nText.\n").expect_err("label");
         assert!(
             invalid.message.starts_with("line 1:"),
             "{}",
             invalid.message
         );
-        let conflict = save(root, ProjectFile::Voices, None, text).expect_err("changed");
-        assert_eq!(conflict.code, "projectGuideConflict");
+        let conflict = save(root, KnowledgeFile::Characters, None, text).expect_err("changed");
+        assert_eq!(conflict.code, "projectKnowledgeConflict");
     }
 }

@@ -9,7 +9,7 @@ members = [
   "crates/aeria-workspace",
   "crates/aeria-rebase",
   "crates/aeria-search",
-  "crates/aeria-ai",
+  "crates/aeria-knowledge",
   "crates/aeria-git",
   "crates/aeria-export",
   "crates/aeria-fonts",

@@ -24,18 +24,12 @@ A dependency should have a concrete current use, a maintenance story, and compat
 
 Likely UI-level dependencies such as Tailwind, Radix primitives, CodeMirror, docking/layout libraries, and Git/SQLite Rust crates should be added when the first feature that needs them is implemented, after checking their current stable versions and licenses.
 
-## AI provider dependencies
+## Knowledge dependencies
 
-`aeria-ai` uses:
+`aeria-knowledge` uses `csv` (Unlicense OR MIT) to read and write the
+project's terms, and `serde` and `thiserror`, matching `aeria-projects`.
 
-- `reqwest` (MIT OR Apache-2.0) with only `http2`, `json`, `system-proxy`, and `rustls-no-provider`: the provider HTTP client. It is already in the desktop dependency graph through Tauri.
-- `rustls` (Apache-2.0 OR ISC OR MIT) with the `ring` crypto provider, installed once by the client, so builds need neither OpenSSL nor the `aws-lc` toolchain. Certificates are checked with the platform verifier.
-- `keyring` (MIT OR Apache-2.0) with its default platform stores: Windows Credential Manager, the Secret Service on Linux, and the macOS Keychain.
-- `base64` (MIT OR Apache-2.0): reads the claims of ChatGPT access tokens.
-- `csv` (Unlicense OR MIT): reads and writes the project glossary.
-- `html2text` (MIT): renders web pages Angelica reads as plain text.
-- `rusqlite` (MIT) with `bundled`: the local translation-job store. The bundled SQLite needs only a C compiler, which the Windows and Linux toolchains already provide.
-- `fs2`, `uuid`, `serde_json`, and `thiserror`, matching `aeria-projects`.
+## Source, search, and export dependencies
 
 `aeria-sqpack` uses `crc32fast` (MIT OR Apache-2.0) for the CRC-32 path
 hashes of SqPack indexes and `flate2` (MIT OR Apache-2.0) to inflate SqPack
@@ -48,9 +42,9 @@ terminology candidate in the game's text in one pass.
 
 The bundled SQLite is built without `SQLITE_ENABLE_MEMORY_MANAGEMENT`, which
 `libsqlite3-sys` enables by default: with it, every connection shares one page
-cache behind a global mutex, and parallel translation-memory searches of job
-workers spin on that mutex (a search took about 2.7 s of CPU on each of 12
-threads instead of 0.3 s). `.cargo/config.toml` passes
+cache behind a global mutex, and parallel translation-memory searches spin on
+that mutex (a search took about 2.7 s of CPU on each of 12 threads instead of
+0.3 s). `.cargo/config.toml` passes
 `LIBSQLITE3_FLAGS=-USQLITE_ENABLE_MEMORY_MANAGEMENT` to the build script, so
 every Cargo build, including the Tauri build and CI, gets it. Aeria does not
 use `sqlite3_release_memory` or heap limits, the only features that flag
@@ -71,15 +65,21 @@ MIT). The bundled recommended fonts in `crates/aeria-fonts/presets/`
 (Cormorant SC, Oswald, Unbounded) are SIL Open Font License 1.1 and ship with
 their license texts; the OFL allows bundling them with software.
 
-`aeria-publish` uses `reqwest`, `rustls` with `ring`, and `keyring` with the
-same versions and features as `aeria-ai`, plus `getrandom` (MIT OR
-Apache-2.0), already in the graph through `p256`, to draw signing keys from the
-operating system random source.
+`aeria-publish` uses:
 
-The desktop adds `tauri-plugin-opener` (Apache-2.0 OR MIT) to open the ChatGPT
-sign-in page from Rust, and `tokio` with only `rt` and `time`, already part of
-the Tauri runtime, to pace sign-in polling and to run a translation job's
-lanes as one abortable task set.
+- `reqwest` (MIT OR Apache-2.0) with only `http2`, `json`, `system-proxy`, and
+  `rustls-no-provider`: the GitHub HTTP client. It is already in the desktop
+  dependency graph through Tauri.
+- `rustls` (Apache-2.0 OR ISC OR MIT) with the `ring` crypto provider, so
+  builds need neither OpenSSL nor the `aws-lc` toolchain.
+- `keyring` (MIT OR Apache-2.0) with its default platform stores: Windows
+  Credential Manager, the Secret Service on Linux, and the macOS Keychain.
+- `getrandom` (MIT OR Apache-2.0), already in the graph through `p256`, to draw
+  signing keys from the operating system random source.
+
+The desktop adds `tauri-plugin-opener` (Apache-2.0 OR MIT) to open GitHub
+pages from Rust, and `tokio` with only `rt` and `time`, already part of the
+Tauri runtime, to pace background update checks.
 
 ## Application update dependencies
 
@@ -87,7 +87,7 @@ The desktop crate uses `tauri-plugin-updater` (Apache-2.0 OR MIT) with only
 `rustls-tls`, the standard Tauri updater: it reads the release feed, verifies
 installer signatures with `minisign-verify` (MIT), and runs the NSIS
 installer. Its TLS stack is the `rustls` with `ring` already used by
-`aeria-ai`. `semver` (MIT OR Apache-2.0), already in the graph through Tauri,
+`aeria-publish`. `semver` (MIT OR Apache-2.0), already in the graph through Tauri,
 orders versions across the stable and nightly feeds.
 
 ## Renderer UI dependencies

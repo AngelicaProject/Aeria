@@ -98,7 +98,7 @@ permissions and calls the `update_*` commands.
   launch or a newer version; the title-bar button brings it back. Nothing is
   installed without the user's request.
 - **Never interrupting.** Installing waits while the editor holds an unsaved
-  draft or a save is in flight, and while Angelica translates, a Git
+  draft or a save is in flight, and while a Git
   synchronization, commit, or branch change runs, or a pack is exported or
   published. The backend enforces the same
   rule for its own work (`updateBusy`) and keeps new synchronization and

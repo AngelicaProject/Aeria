@@ -12,7 +12,7 @@ test("rows round-trip entries and trim edits", () => {
   const rows = rowsFromEntries(entries);
   assert.equal(rows[0].forbidden, "Этер; Эйтер");
   assert.deepEqual(inputsFromRows([{ ...rows[1], term: " Crystal ", note: "  ", forbidden: " ; a ;" }]), [
-    { term: "Crystal", translation: "Кристалл", note: null, forbidden: ["a"] },
+    { term: "Crystal", translation: "Кристалл", note: null, forbidden: ["a"], settled: false },
   ]);
   assert.equal(rowsChanged(rows, entries), false);
   assert.equal(rowsChanged([{ ...rows[0], translation: "Эфир " }, rows[1]], entries), false);

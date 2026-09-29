@@ -134,7 +134,7 @@ a translated name that is merely unique must never act as an identity key.
 
 Quest sheets (`quest/…/<ID>`) and cutscene sheets (`cut_scene/…/<ID>`) with
 row keys describe their rows in the keys. This structure is context for
-translators (the editor's scene view) and Angelica; it never affects
+translators (the editor's scene view) and agents; it never affects
 identity, permission, or any persisted data.
 
 `GameSource::dialogue` returns the rows of such a sheet that have text, in row

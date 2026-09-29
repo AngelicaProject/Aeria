@@ -12,8 +12,8 @@ use std::process::Command;
 use aeria_core::{ReviewState, TranslationUnitId};
 use aeria_git::{
     CollaborationSettings, ConflictResolution, ContributionStatus, FONT_SETTINGS_FILE, FONTS_DIR,
-    GLOSSARY_FILE, GUIDANCE_FILE, GitError, GitExecutable, GitRepository, IntegrateOutcome,
-    PACK_SETTINGS_FILE, RecordVersion, UnitChangeKind,
+    GitError, GitExecutable, GitRepository, IntegrateOutcome, KNOWLEDGE_DIR, PACK_SETTINGS_FILE,
+    RecordVersion, UnitChangeKind,
 };
 use tempfile::TempDir;
 
@@ -857,8 +857,13 @@ fn project_files_are_committed_only_by_checkpoints() {
     fs::write(root.join(FONT_SETTINGS_FILE), "{}\n").expect("fonts");
     fs::create_dir_all(root.join(FONTS_DIR)).expect("dir");
     fs::write(root.join(FONTS_DIR).join("a.ttf"), [0u8, 1, 2]).expect("font");
-    fs::write(root.join(GLOSSARY_FILE), "term,translation\n").expect("glossary");
-    fs::write(root.join(GUIDANCE_FILE), "Use ты.\n").expect("guidance");
+    fs::create_dir_all(root.join(KNOWLEDGE_DIR)).expect("knowledge");
+    fs::write(
+        root.join(KNOWLEDGE_DIR).join("terms.csv"),
+        "term,translation\n",
+    )
+    .expect("terms");
+    fs::write(root.join(KNOWLEDGE_DIR).join("style.md"), "Use ты.\n").expect("style");
     repository
         .set_collaboration(&CollaborationSettings {
             main_branch: Some("main".to_owned()),
@@ -881,7 +886,9 @@ fn project_files_are_committed_only_by_checkpoints() {
     assert_eq!(outcome.commit.subject, "Update project settings");
     assert!(repository.status().expect("status").files.is_empty());
     assert_eq!(
-        repository.file_at("HEAD", GUIDANCE_FILE).expect("show"),
+        repository
+            .file_at("HEAD", "aeria-knowledge/style.md")
+            .expect("show"),
         Some("Use ты.\n".as_bytes().to_vec())
     );
     assert_eq!(

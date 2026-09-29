@@ -1,27 +1,26 @@
 # Voice Profiles Format v1
 
-Status: **implemented in `aeria-ai`**.
+Status: **implemented in `aeria-knowledge`**.
 
 Voice Profiles Format v1 describes how characters speak in the target
-language. It is a single optional file, `aeria-voices.md`, in the project
-root next to `.aeria/`. It is committed with the project, reviewed and merged
-through Git like any other file, and meant to be edited by hand. It is not
-part of the Workspace Format.
+language. It is the format of `aeria-knowledge/characters.md`, part of the
+[project knowledge](./knowledge-v1.md). It is committed with the project,
+reviewed and merged through Git like any other file, and meant to be edited
+by hand, by agents, or in the desktop's knowledge editor. It is not part of
+the Workspace Format.
 
 How Aeria uses it is described in
-[`../architecture/ai.md`](../architecture/ai.md#voice-profiles).
+[`../architecture/agents.md`](../architecture/agents.md#project-knowledge).
 
 ## Absence
 
-A missing file means the project has no voice profiles. Aeria creates the file
-only when the user approves a voice profile change or saves the voice profile
-editor.
+A missing file means the project has no character voices.
 
 ## Encoding
 
 - UTF-8 Markdown, with an optional leading BOM that is ignored.
 - CRLF and LF line endings are both accepted.
-- At most 256 KiB.
+- At most 8 MiB.
 
 ## Profiles
 
@@ -64,13 +63,14 @@ A label that an earlier profile already names is ignored in the later
 profile and reported; the later profile keeps its other labels. Ignored
 profiles do not make the file invalid; the remaining profiles are used.
 
-## Canonical form
+## Settled profiles
 
-When Aeria writes the file after an approved change, it keeps the text before
-the first profile and each profile's text, trimmed, in the existing order with
-new profiles appended. Each profile is written as `## ` and its labels in upper
-case joined with `, `, a blank line, its text, and a blank line; the file ends
-with one LF. A profile whose labels were all removed is dropped. Aeria refuses
-to apply an Angelica change to a file that has ignored profiles, because a
-rewrite would change what they mean, and the voice profile editor refuses to
-save text with ignored profiles.
+The first non-blank line of a profile's text may be a metadata line, as in
+[section files](./knowledge-v1.md#sections). A profile with `settled=yes`
+there is settled: a person decided it, and agents do not change it without
+asking. The metadata line is not part of the profile's text.
+
+## Saving
+
+The desktop's knowledge editor saves the text as written and refuses text with
+ignored profiles.

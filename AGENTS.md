@@ -24,7 +24,7 @@ Then load the canonical project documentation for the affected area:
 - Source update / rebase: `docs/architecture/rebase.md` and `docs/architecture/rebase-safety.md`
 - Git collaboration inside Aeria: `docs/architecture/git.md` and `docs/formats/collaboration-v1.md`
 - Search and translation memory: `docs/architecture/search.md`
-- Translation assistance: `docs/architecture/ai.md`
+- Localization with agents, project knowledge, the `aeria` command: `docs/architecture/agents.md` and `docs/formats/knowledge-v1.md`
 - Runtime pack export: `docs/architecture/export.md` and `docs/formats/pack-v1.md`
 - Rust implementation: `docs/development/rust.md`
 - Frontend implementation: `docs/development/frontend.md`

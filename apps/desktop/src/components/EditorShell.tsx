@@ -4,7 +4,6 @@ import { Effect, getCurrentWindow } from "@tauri-apps/api/window";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { listen } from "@tauri-apps/api/event";
 import {
-  angelicaDraft,
   closeProject,
   gitPendingChanges,
   normalizeCommandError,
@@ -16,8 +15,6 @@ import {
 } from "../ipc";
 import { bindingKey, rowKey } from "../binding";
 import type {
-  TranslationAppliedDto,
-  EditorContextDto,
   CommandError,
   ProjectSheetDto,
   ProjectSummaryDto,
@@ -52,8 +49,6 @@ import { ExportDialog } from "./ExportDialog";
 import { ProjectGuideDialog, type ProjectGuideTab } from "./ProjectGuideDialog";
 import { WorkbenchToolDock, toolTitle, type WorkbenchTool } from "./WorkbenchToolDock";
 import { CommitView } from "./GitHistory";
-import { LocalizationView } from "./AngelicaJobs";
-import { onAngelicaAsk, onOpenLocalization } from "../angelicaAsk";
 import type { GitCommitDto } from "../types";
 import { detachedPanelTitle, type DetachedPanel } from "./DetachedToolWindow";
 import { displayPathName } from "../pathDisplay";
@@ -163,7 +158,7 @@ function scannedPast(loader: SheetLoader, target: RowTarget): boolean {
 
 function panelTitle(panelId: string | null): MessageKey {
   if (panelId === "sheets") return "workbench.panel.sheets";
-  if (panelId === "search" || panelId === "ai" || panelId === "git") return toolTitle(panelId);
+  if (panelId === "search" || panelId === "git") return toolTitle(panelId);
   return "workbench.panel.generic";
 }
 
@@ -257,7 +252,7 @@ export function EditorShell({
   const [lensFilter, setLensFilter] = useState<OccurrenceFilter>(emptyOccurrenceFilter);
   const [progress, setProgress] = useState<readonly SheetProgressDto[]>([]);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [guide, setGuide] = useState<{ open: boolean; tab: ProjectGuideTab }>({ open: false, tab: "glossary" });
+  const [guide, setGuide] = useState<{ open: boolean; tab: ProjectGuideTab }>({ open: false, tab: "terms" });
   const openGuide = useCallback((tab: ProjectGuideTab) => setGuide({ open: true, tab }), []);
   const setGuideOpen = useCallback((open: boolean) => {
     setGuide((current) => ({ ...current, open }));
@@ -596,10 +591,6 @@ export function EditorShell({
     }
   }, [beginSheetLoad, documentTabs, requestDiscardConfirmation, t]);
 
-  const openLocalizationView = useCallback(() => {
-    setDocumentTabs((current) => reduceDocumentTabs(current, { type: "openLocalization", label: t("localization.title") }));
-  }, [t]);
-
   const openCommit = useCallback(async (commit: GitCommitDto) => {
     const active = documentTabs.tabs.find((document) => document.id === documentTabs.activeId);
     if (active?.kind === "sheet" && !(await requestDiscardConfirmation(t("workbench.discard.changeSheet")))) return;
@@ -853,7 +844,6 @@ export function EditorShell({
     void revealString(binding.sheetName, { rowId: binding.rowId, subrowId: binding.subrowId, columnIndex: binding.columnIndex });
   }, [revealString]);
 
-  // Angelica's navigate_to tool asks the editor to show one occurrence.
   const stableRevealBinding = useStableCallback(revealBinding);
   // A jump to a cutscene opens its sheet's scene there.
   const [sceneTarget, setSceneTarget] = useState<{ sheet: string; path: string } | null>(null);
@@ -863,27 +853,6 @@ export function EditorShell({
   });
   const clearSceneTarget = useCallback(() => setSceneTarget(null), []);
   const stableWorkspaceChanged = useStableCallback(handleWorkspaceChanged);
-  const revealBindingRef = useRef(revealBinding);
-  revealBindingRef.current = revealBinding;
-  useEffect(() => {
-    const subscription = listen<SourceBinding>("angelica://navigate", ({ payload }) => revealBindingRef.current(payload));
-    return () => { void subscription.then((unlisten) => unlisten()); };
-  }, []);
-
-  // Translations Angelica writes patch their cell like an ordinary save.
-  const applyOverlayRef = useRef(applyOverlay);
-  applyOverlayRef.current = applyOverlay;
-  useEffect(() => {
-    const subscription = listen<TranslationAppliedDto>("angelica://translation-applied", ({ payload }) => applyOverlayRef.current(payload.sourceBinding, payload.overlay));
-    return () => { void subscription.then((unlisten) => unlisten()); };
-  }, []);
-
-  const angelicaContext = useMemo<EditorContextDto>(() => ({
-    sheet: selectedSheetName,
-    selection: selectedBinding ? { sheet: selectedBinding.sheetName, row: selectedBinding.rowId, subrow: selectedBinding.subrowId, column: selectedBinding.columnIndex } : null,
-    unsavedDraft: dirty,
-  }), [dirty, selectedBinding, selectedSheetName]);
-
   const openPalette = useCallback((input: string) => {
     setPalette((current) => ({ open: true, input, key: current.key + 1 }));
   }, []);
@@ -913,16 +882,7 @@ export function EditorShell({
   const approve = useStableCallback((...args: Parameters<typeof handleApprove>) => void handleApprove(...args));
   const saveNote = useStableCallback((...args: Parameters<typeof handleSaveNote>) => void handleSaveNote(...args));
   const changeReview = useStableCallback((...args: Parameters<typeof handleReviewChange>) => void handleReviewChange(...args));
-  const draftWithAngelica = useStableCallback(async (cell: TranslationCellDto) => {
-    try {
-      return (await angelicaDraft(cell.sourceBinding)).target;
-    } catch (reason) {
-      showError(t("editor.draftFailed"), reason);
-      return null;
-    }
-  });
   const restoreTarget = useStableCallback((target: string) => void handleRestoreTarget(target));
-  const openAiSettings = useCallback(() => openSettings("ai"), [openSettings]);
   const openRepositorySettings = useCallback(() => openSettings("repository"), [openSettings]);
   const pendingState = useMemo(() => ({ changes: pendingChanges, refresh: refreshPendingChanges }), [pendingChanges, refreshPendingChanges]);
 
@@ -955,7 +915,7 @@ export function EditorShell({
   const handlePanelMove = useCallback((panelId: string, region: string) => {
     if (region !== "left" && region !== "right" && region !== "bottom") return;
     setDockLayoutState((current) => reduceDockLayout(current, { type: "move", panelId, region }));
-    if (panelId === "ai" || panelId === "git") setActiveTool(panelId);
+    if (panelId === "git") setActiveTool(panelId);
     setRegionVisible(region === "left" ? "leftDock" : region === "right" ? "rightDock" : "bottomPanel", true);
   }, [setRegionVisible]);
 
@@ -973,17 +933,12 @@ export function EditorShell({
     } else {
       setDockLayoutState((current) => reduceDockLayout(current, { type: "activate", panelId }));
     }
-    if (panelId === "ai" || panelId === "git") setActiveTool(panelId);
+    if (panelId === "git") setActiveTool(panelId);
     setRegionVisible(regionId, true);
   }, [dockLayoutState.placements, layout.regions, regionPanelId, setRegionVisible]);
 
-  // Angelica's panel opens the localization view; the view's questions for
-  // Angelica show her panel, which takes them from the queue.
-  useEffect(() => onOpenLocalization(openLocalizationView), [openLocalizationView]);
-  useEffect(() => onAngelicaAsk(() => showPanel("ai", "right", false)), [showPanel]);
-
   const panelMoveTargets = useCallback((panelId: string, currentRegion: DockRegion): Array<{ id: string; label: string }> => {
-    const restricted = bottomPanelIds.has(panelId) || panelId === "ai" || panelId === "git";
+    const restricted = bottomPanelIds.has(panelId) || panelId === "git";
     return (["left", "right", "bottom"] as const)
       .filter((region) => region !== currentRegion && (!restricted || region !== "left"))
       .map((region) => ({ id: region, label: t(moveTargetLabels[region]) }));
@@ -1094,10 +1049,9 @@ export function EditorShell({
     pinned: document.pinned,
     preview: document.preview,
     dirty: document.dirty,
-    icon: document.kind === "commit" ? "gitCommit" : document.kind === "localization" ? "languages" : "table2",
+    icon: document.kind === "commit" ? "gitCommit" : "table2",
   }));
   const activeCommitId = documentTabs.tabs.find((document) => document.id === documentTabs.activeId)?.commitId ?? null;
-  const localizationActive = documentTabs.tabs.find((document) => document.id === documentTabs.activeId)?.kind === "localization";
 
   const sheetHeaderActions = <>
     <IconButton icon={hideEmptySheets ? "eyeOff" : "eye"} label={t(hideEmptySheets ? "workbench.showEmptySheets" : "workbench.hideEmptySheets")} pressed={hideEmptySheets} disabled={closing} onClick={() => setHideEmptySheets((current) => !current)} />
@@ -1110,13 +1064,13 @@ export function EditorShell({
     if (panelId === "sheets") {
       return <SheetSidebar sheets={project.sheets} selectedSheetName={selectedSheetName} disabled={closing} active={active} hideEmpty={hideEmptySheets} onHideEmptyChange={setHideEmptySheets} filterOpen={sheetFilterOpen} onFilterOpenChange={setSheetFilterOpen} onOpenFilter={focusSheetFilter} quickFindSignal={quickFindSignal} revealSignal={revealSheetSignal} collapseSignal={collapseSheetsSignal} onSelect={handleSheetSelect} progress={progressBySheet} />;
     }
-    const tool: WorkbenchTool = panelId === "git" ? "git" : panelId === "search" ? "search" : "ai";
-    return <WorkbenchToolDock activeTool={tool} selectedBinding={selectedBinding} onOpenCommit={stableOpenCommit} selectedCommitId={activeCommitId} onOpenRepositorySettings={openRepositorySettings} projectRevision={projectRevision} selectedUnitId={selectedUnitId} workspaceRevision={workspaceRevision} onWorkspaceChanged={stableWorkspaceChanged} pending={pendingState} onRevealBinding={stableRevealBinding} editorContext={angelicaContext} onOpenSettings={openAiSettings} onOpenGuide={openGuide} />;
+    const tool: WorkbenchTool = panelId === "search" ? "search" : "git";
+    return <WorkbenchToolDock activeTool={tool} selectedBinding={selectedBinding} onOpenCommit={stableOpenCommit} selectedCommitId={activeCommitId} onOpenRepositorySettings={openRepositorySettings} projectRevision={projectRevision} selectedUnitId={selectedUnitId} workspaceRevision={workspaceRevision} onWorkspaceChanged={stableWorkspaceChanged} pending={pendingState} onRevealBinding={stableRevealBinding} />;
   };
 
   const renderDock = (region: "left" | "right", panelId: string | null, open: boolean) => {
     const id = panelId ?? (region === "left" ? "sheets" : activeTool);
-    const floatable = id === "ai" || id === "git" || id === "search";
+    const floatable = id === "git" || id === "search";
     return (
       <DockPanel
         panelId={id}
@@ -1175,8 +1129,9 @@ export function EditorShell({
         { kind: "command", id: "copy-source", label: t("menu.copySource"), ...(selectedRow ? { onSelect: () => editorRef.current?.copySource() } : {}) },
         { kind: "command", id: "revert", label: t("menu.revert"), ...(dirty ? { onSelect: () => editorRef.current?.revert() } : {}) },
         { kind: "separator", id: "translation-sep-1" },
-        { kind: "command", id: "glossary", label: t("menu.glossary"), onSelect: () => openGuide("glossary") },
-        { kind: "command", id: "guidance", label: t("menu.guidance"), onSelect: () => openGuide("guidance") },
+        { kind: "command", id: "terms", label: t("menu.terms"), onSelect: () => openGuide("terms") },
+        { kind: "command", id: "style", label: t("menu.style"), onSelect: () => openGuide("style") },
+        { kind: "command", id: "characters", label: t("menu.characters"), onSelect: () => openGuide("characters") },
       ],
     },
     {
@@ -1198,7 +1153,6 @@ export function EditorShell({
         { kind: "command", id: "sheets", label: t("workbench.panel.sheets"), shortcut: "Ctrl+B", checked: isPanelShown("sheets"), onSelect: () => showPanel("sheets", "left") },
         { kind: "command", id: "search", label: t("workbench.tool.search"), checked: isPanelShown("search"), onSelect: () => showPanel("search", "left") },
         { kind: "command", id: "git", label: t("workbench.tool.git"), checked: isPanelShown("git"), onSelect: () => showPanel("git", "right") },
-        { kind: "command", id: "ai", label: t("workbench.tool.ai"), checked: isPanelShown("ai"), onSelect: () => showPanel("ai", "right") },
         { kind: "command", id: "bottom", label: t("menu.bottomPanel"), shortcut: "Ctrl+J", checked: bottomOpen, onSelect: () => dispatchLayout({ type: "toggleRegion", regionId: "bottomPanel" }) },
         { kind: "separator", id: "view-sep-1" },
         { kind: "command", id: "filter-sheets", label: t("workbench.filterSheets"), shortcut: "Ctrl+F", onSelect: handleQuickFind },
@@ -1240,12 +1194,12 @@ export function EditorShell({
     { id: "view-sheets", category: category.view, title: t("command.toggleSheets"), shortcut: "Ctrl+B", icon: "table2", run: () => showPanel("sheets", "left") },
     { id: "view-search", category: category.view, title: t("command.toggleSearch"), icon: "search", run: () => showPanel("search", "left") },
     { id: "view-git", category: category.view, title: t("command.toggleGit"), icon: "gitBranch", run: () => showPanel("git", "right") },
-    { id: "view-ai", category: category.view, title: t("command.toggleAi"), icon: "sparkles", run: () => showPanel("ai", "right") },
     { id: "view-bottom", category: category.view, title: t("command.toggleBottom"), shortcut: "Ctrl+J", icon: "panelBottom", run: () => dispatchLayout({ type: "toggleRegion", regionId: "bottomPanel" }) },
     { id: "view-filter-sheets", category: category.view, title: t("workbench.filterSheets"), shortcut: "Ctrl+F", icon: "search", run: handleQuickFind },
     { id: "view-reveal-sheet", category: category.view, title: t("workbench.revealSheet"), icon: "locateFixed", enabled: selectedSheetName !== null, run: () => { showPanel("sheets", "left", false); setRevealSheetSignal((current) => current + 1); } },
-    { id: "project-glossary", category: category.translation, title: t("menu.glossary"), icon: "languages", run: () => openGuide("glossary") },
-    { id: "project-guidance", category: category.translation, title: t("menu.guidance"), icon: "messageSquare", run: () => openGuide("guidance") },
+    { id: "project-terms", category: category.translation, title: t("menu.terms"), icon: "languages", run: () => openGuide("terms") },
+    { id: "project-style", category: category.translation, title: t("menu.style"), icon: "messageSquare", run: () => openGuide("style") },
+    { id: "project-characters", category: category.translation, title: t("menu.characters"), icon: "messageSquare", run: () => openGuide("characters") },
     { id: "git-open", category: category.git, title: t("command.showChanges"), icon: "gitBranch", run: () => showPanel("git", "right", false) },
     { id: "prefs-settings", category: category.preferences, title: t("command.openSettings"), shortcut: "Ctrl+,", icon: "settings", run: () => openSettings() },
     { id: "prefs-theme", category: category.preferences, title: t("settings.theme.title"), icon: "palette", run: () => openSettings("appearance") },
@@ -1298,7 +1252,6 @@ export function EditorShell({
           items={[
             { id: "sheets", label: t("workbench.panel.sheets"), icon: "table2", shortcut: "Ctrl+B", active: isPanelShown("sheets"), onSelect: () => showPanel("sheets", "left") },
             { id: "search", label: t("workbench.tool.search"), icon: "search", active: isPanelShown("search"), onSelect: () => showPanel("search", "left") },
-            { id: "localization", label: t("localization.title"), icon: "languages", active: localizationActive, onSelect: openLocalizationView },
           ]}
           footer={[{ id: "settings", label: t("common.settings"), icon: "settings", shortcut: "Ctrl+,", onSelect: () => openSettings() }]}
         />
@@ -1315,9 +1268,7 @@ export function EditorShell({
               onPin={handleDocumentPin}
               onReorder={(documentId, beforeDocumentId) => setDocumentTabs((current) => reduceDocumentTabs(current, { type: "reorder", id: documentId, beforeId: beforeDocumentId }))}
             />
-            {localizationActive ? (
-              <LocalizationView onError={(error) => setEditorError({ title: t("localization.title"), error })} onReveal={stableRevealBinding} />
-            ) : activeCommitId ? (
+            {activeCommitId ? (
               <CommitView commitId={activeCommitId} onRevealBinding={stableRevealBinding} />
             ) : !selectedSheetName ? (
               <div className="document-empty empty-state">
@@ -1357,7 +1308,6 @@ export function EditorShell({
                 <ResizeHandle axis="y" label={t("workbench.resizeEditor")} {...resizeProps("editor", "--editor-height", -1)} />
                 <TranslationEditor
                   ref={editorRef}
-                  onDraftWithAngelica={draftWithAngelica}
                   key={selectedRow ? rowKey(selectedRow) : "empty-editor"}
                   row={selectedRow}
                   selectedBinding={selectedBinding}
@@ -1410,7 +1360,6 @@ export function EditorShell({
           side="right"
           items={[
             { id: "git", label: t("workbench.tool.git"), icon: "gitBranch", active: isPanelShown("git"), onSelect: () => showPanel("git", "right") },
-            { id: "ai", label: t("workbench.tool.ai"), icon: "sparkles", active: isPanelShown("ai"), onSelect: () => showPanel("ai", "right") },
           ]}
         />
       </div>

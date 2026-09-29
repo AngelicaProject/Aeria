@@ -1,0 +1,19 @@
+[package]
+name = "aeria-knowledge"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Project knowledge: style, terms, characters, story, and lessons, and the rules of a good translation."
+
+[dependencies]
+csv = "1.4.0"
+serde = { version = "1.0.229", features = ["derive"] }
+thiserror = "2.0.20"
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+tempfile = "3.27.0"

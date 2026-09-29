@@ -37,7 +37,6 @@ export type DockLayoutAction =
 export const dockPanelDefinitions: readonly DockPanelDefinition[] = [
   { id: "sheets", allowedRegions: ["left", "right", "bottom"], singleton: true },
   { id: "search", allowedRegions: ["left", "right", "bottom"], singleton: true, floatable: true },
-  { id: "ai", allowedRegions: ["right", "bottom"], singleton: true, floatable: true },
   { id: "git", allowedRegions: ["right", "bottom"], singleton: true, floatable: true },
   { id: "tasks", allowedRegions: ["bottom", "right"], singleton: true, floatable: true },
   { id: "gitChanges", allowedRegions: ["bottom", "right"], singleton: true, floatable: true },
@@ -47,7 +46,7 @@ export const dockPanelDefinitions: readonly DockPanelDefinition[] = [
 export const initialDockLayout: DockLayoutState = {
   groups: [
     { id: "left-main", region: "left", panelIds: ["sheets", "search"], activePanelId: "sheets" },
-    { id: "right-main", region: "right", panelIds: ["git", "ai"], activePanelId: "git" },
+    { id: "right-main", region: "right", panelIds: ["git"], activePanelId: "git" },
     { id: "bottom-main", region: "bottom", panelIds: ["tasks", "gitChanges", "diagnostics"], activePanelId: "tasks" },
   ],
   placements: dockPanelDefinitions.map((definition) => ({

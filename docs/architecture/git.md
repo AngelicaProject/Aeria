@@ -123,13 +123,13 @@ never invents an author.
 A checkpoint stages and commits only Aeria-managed paths (`git commit
 --only`): `.aeria/` and the project files `.gitattributes`,
 `aeria-collaboration.json`, `aeria-pack.json`, `aeria-fonts.json`, the
-`fonts/` directory of source fonts, `aeria-glossary.csv`,
-`aeria-guidance.md`, and the feed workflow
+`fonts/` directory of source fonts, the `aeria-knowledge/` directory of
+[project knowledge](../formats/knowledge-v1.md), and the feed workflow
 `.github/workflows/harmonia-feed.yml` (`PROJECT_PATHS`). Unrelated staged or modified files are
 left untouched and listed in Settings → Repository as other files. A blank
 message is replaced by a deterministic summary: the translation-unit changes,
 for example `Translate 3 strings, update 1 translation (Addon, Quest)`,
-followed by the changed project areas (`; update glossary, game fonts`), or
+followed by the changed project areas (`; update terms, game fonts`), or
 `Update glossary, pack settings` when no translation changed.
 
 Whether a checkpoint first moves to a contribution branch follows the

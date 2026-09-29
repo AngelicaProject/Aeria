@@ -31,7 +31,6 @@ Authoritative for:
 - rebase decisions
 - Git operations and status
 - export correctness
-- AI job orchestration and validation
 
 ### React renderer
 
@@ -50,7 +49,7 @@ Three places hold data, with distinct roles:
 
 - **Installed game**: the source, read directly and never written; see [`source.md`](./source.md).
 - **Git workspace**: canonical user-authored translation/project state.
-- **Local SQLite/cache**: rebuildable indexes, the sheet catalog, search data, AI jobs, and other machine-local acceleration/state.
+- **Local SQLite/cache**: rebuildable indexes, the sheet catalog, search data, and other machine-local acceleration/state.
 
 Deleting local cache must never delete a user's translation work.
 
@@ -63,7 +62,7 @@ Deleting local cache must never delete a user's translation work.
 - `aeria-workspace`: versioned translation workspace model, deterministic serialization, and application of planned source updates.
 - `aeria-rebase`: deterministic source update planning.
 - `aeria-search`: local indexing, source search, translation memory, and query services.
-- `aeria-ai`: provider-neutral AI orchestration and validated batch jobs.
+- `aeria-knowledge`: the project knowledge in `aeria-knowledge/` (style, terms, character voices, story, lessons): reading, checking, and selecting what a scene needs, and the rules every translation follows. Aeria has no built-in model; external agents localize (see [`agents.md`](./agents.md)).
 - `aeria-git`: repository operations and semantic Git integration, including HTTPS host credentials from the Git credential helper for forge adapters, and the merge check workflow template.
 - `aeria-export`: Harmonia pack generation: unit selection, validation, the Pack Format v1 writer, signing, transport compression, and feed entries, and Pack Settings v1. String encoding is injected (`StringEncoder`); production uses the `aeria-se` codec.
 - `aeria-fonts`: glyphs for game fonts that lack target-language characters: Font Settings v1, the supported game font sizes and their native metrics, the bundled recommended source fonts, rasterization, and the optional `FONTS` pack section. `aeria-export` writes the section into the pack.

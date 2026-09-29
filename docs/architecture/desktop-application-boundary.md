@@ -113,8 +113,7 @@ defaults.
 `DesktopState` records the work an update must not interrupt. Mutating Git
 commands (checkpoint, commit, sync, branch switch, finishing or merging a
 contribution, clone) hold a `Sync` activity guard and pack export and
-publication an `Export` guard for their whole run; Angelica turns,
-and translation-job runners are read from their own registries. `update_install` runs through `DesktopState::while_idle`, which
+publication an `Export` guard for their whole run. `update_install` runs through `DesktopState::while_idle`, which
 fails with `updateBusy` while any of them runs and holds the activity lock
 while the installer starts, so no guarded operation begins in between. The
 renderer additionally reports unsaved editor drafts and saves in flight to
@@ -266,108 +265,14 @@ again. Project-wide attribution is cached in memory per repository root and
 `git*` error codes such as `gitUnavailable`, `gitIdentityMissing`,
 `gitMergeConflict`, `gitIncomingRejected`, and `gitInvalidSettings`.
 
-AI provider commands (`ai_settings`, `ai_save_provider`, `ai_remove_provider`,
-`ai_set_api_key`, `ai_clear_api_key`, `ai_set_agent_model`,
-`ai_list_remote_models`, and `ai_test_connection`) manage the local provider
-settings and OS-stored keys described in [`ai.md`](./ai.md#provider-boundary).
-They do not require an open project. Settings and secret-store access run in
-blocking workers; provider requests are async, use one shared HTTP client in
-`DesktopState`, and hold no desktop lock. A key is accepted from the renderer
-but never returned: provider DTOs report only `apiKey` as `stored`, `missing`,
-or `unavailable`. `ai_test_connection` sends one minimal Chat Completions
-request for any model ID and effort, so a model can be probed before it is
-saved or an effort enabled. Failures map to stable `ai*` codes such as
-`aiApiKeyMissing`, `aiUnauthorized`, `aiEndpointNotFound`, `aiRateLimited`,
-`aiInvalidSettings`, and `aiSecretStoreUnavailable`.
-
-`ai_chatgpt_login_start` starts the ChatGPT device sign-in for a ChatGPT
-provider, opens the sign-in page in the default browser through the opener
-plugin, and returns the code to show. Polling and the token exchange run in a
-registered async task; the result arrives as an `ai://chatgpt-login` event
-with the provider ID and either success or a typed error.
-`ai_chatgpt_login_cancel` stops a waiting sign-in. Provider commands resolve a
-ChatGPT provider's endpoint through the in-memory access-token cache in
-`DesktopState`, whose async lock also serializes token refreshes.
-
-Angelica commands (`angelica_conversations`, `angelica_conversation`,
-`angelica_image`, `angelica_send`, `angelica_cancel`, and
-`angelica_delete_conversation`) work on the active project's conversations
-described in [`ai.md`](./ai.md#angelica).
-`angelica_send` validates the model selection against the AI settings,
-checks and stores the message's base64 images (see
-[`ai.md`](./ai.md#images)), appends the user message, stores the
-conversation, and returns it before the turn runs; at most one turn runs per
-conversation (`angelicaBusy`). A turn for a model that accepts images loads
-the conversation's image files once before its first request.
-`angelica_image` returns one image of a conversation as a `data:` URL for
-display (`angelicaImageNotFound` when the conversation has no such image or
-its file is gone). The turn
-is an async task registered in `DesktopState` before it can start, so it can
-always be found and stopped. It holds no desktop lock; each tool runs in a
-blocking worker that locks the project only for its own read. Progress
-reaches the renderer as `angelica://event` events carrying the conversation
-ID and one of `textDelta`, `reasoningDelta`, `responseFinished`,
-`toolStarted`, `toolFinished`, `usage`, `turnFinished`, `turnFailed`, or
-`turnCancelled`. `angelica_cancel` aborts the task and emits `turnCancelled`.
-The `navigate_to` tool resolves its location to one translatable occurrence
-and emits `angelica://navigate` with that `SourceBinding`, which the editor
-reveals.
-
-`angelica_send` takes the conversation's mode. In Ask and Auto-draft modes
-the write tools run in the same blocking workers; immediate writes hold the
-project lock, and new proposals are appended under a separate proposal lock
-and announced with `angelica://proposals`. `angelica_proposals`,
-`angelica_apply_proposal`, and `angelica_reject_proposal` list and settle a
-conversation's proposals; applying writes through
-`ProjectSession::set_assisted_target` with the user's approval to replace a
-reviewed string. Every write emits `angelica://translation-applied` with the
-binding and its new `TranslationOverlayDto`. Guidance and glossary proposals
-are applied to the repository root by the same command. `angelica_draft` produces one
-draft with the default model and returns it without saving
-(`aiNoAgentModel`, `angelicaUntaggable`, and `angelicaDraftRejected` are its
-own errors).
-
-A job proposal is applied by starting the job: `angelica_apply_proposal`
-enumerates the scope under the project lock, creates the job in the
-project's job store, and starts its runner; the proposal's message holds the
-job ID. A runner is an async task registered per job in `DesktopState`; its
-lanes run in a Tokio join set, so aborting the runner aborts them. The runner
-keeps the job store and repository root it started with, and workers read and
-write only while that project is still open. Worker tools run in blocking
-workers that lock the project only for their own reads and writes, and every
-written draft emits `angelica://translation-applied`. Job changes emit
-`angelica://job` with the job ID. `angelica_jobs`, `angelica_job_units`,
-`angelica_job_events`, `angelica_job_control` (pause, resume, cancel),
-`angelica_job_retry` (requeue strings with given statuses and resume), and
-`angelica_job_workers` (each lane's live activity, kept with the runner's
-registration in `DesktopState` and empty once the runner ends) serve
-the renderer; `ai_set_worker_model` sets the jobs model. When a job
-completes or pauses on its own, the runner starts an automatic Angelica turn
-in the job's conversation unless one is running.
-
-Angelica's search tools and job workers' translation memory use
-`DesktopSearch`. The source index of the active game source is built by a
-background blocking task registered in `DesktopState` (building, ready, or
-failed per source language and game version), from the session's shared
-`GameSource`; see
-[`search.md`](./search.md#desktop-use).
-
-`project_guide`, `save_project_guidance`, and `save_project_glossary` read
-and write the repository's guidance and glossary for the editor dialog. A save
-goes through the same compare-and-rename write as an approved file proposal,
-so a file changed since it was loaded is reported as `projectGuideConflict`
-and not overwritten; an invalid glossary entry is `projectGuideInvalid`.
-
-`fetch_url` runs in the turn's async task rather than a blocking worker,
-with a separate HTTP client (no automatic redirects) kept in `DesktopState`.
-Applying a web-access proposal updates the AI settings under their file lock
-and then wakes Angelica. `ai_set_web_domains` replaces the allowed domains;
-entries may be domains or links and are normalized, sorted, and
-deduplicated.
-
-Applying a review proposal holds the project lock while it compares each
-recorded target with the workspace and calls `set_review_state`, emitting
-`angelica://translation-applied` for every approved string.
+`project_knowledge`, `save_knowledge_style`, `save_knowledge_terms`, and
+`save_knowledge_characters` read and write the
+[project knowledge](../formats/knowledge-v1.md) files for the editor dialog. A
+save replaces the file through a temporary file and rename only if it still
+has the content the dialog loaded, so a file changed since, by hand, by Git,
+or by an agent, is reported as `projectKnowledgeConflict` and not
+overwritten; an invalid entry or a file over the size limit is
+`projectKnowledgeInvalid`.
 
 Commands that require an active project report `noProjectOpen` before
 validating project-scoped payload such as translation-unit IDs.

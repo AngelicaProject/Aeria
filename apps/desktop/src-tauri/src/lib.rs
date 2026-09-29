@@ -1,5 +1,3 @@
-mod ai;
-mod angelica;
 mod check_workflow;
 mod commands;
 mod dto;
@@ -9,37 +7,19 @@ mod fonts;
 mod games;
 mod git;
 mod guide;
-mod job_workers;
-mod jobs;
-mod localization;
 mod macros;
 mod paths;
 mod project_changes;
 mod scene;
-mod search;
 mod source;
 mod state;
 #[cfg(test)]
 mod test_support;
 mod updates;
-mod web;
 
 use serde::Serialize;
 use tauri::Manager;
 
-pub use ai::{
-    AiConnectionCheckDto, AiProviderDto, AiProviderInputDto, AiProviderPresetDto, AiSettingsDto,
-    ApiKeyStateDto, ChatGptLoginDto, ChatGptLoginEventDto, ai_chatgpt_login_cancel,
-    ai_chatgpt_login_start, ai_clear_api_key, ai_list_remote_models, ai_remove_provider,
-    ai_save_provider, ai_set_agent_model, ai_set_api_key, ai_set_web_domains, ai_set_worker_model,
-    ai_settings, ai_test_connection,
-};
-pub use angelica::{
-    AngelicaDraftDto, AngelicaEventDto, ConversationDto, ConversationSummaryDto,
-    TranslationAppliedDto, angelica_apply_proposal, angelica_cancel, angelica_conversation,
-    angelica_conversations, angelica_delete_conversation, angelica_draft, angelica_image,
-    angelica_proposals, angelica_reject_proposal, angelica_send,
-};
 pub use check_workflow::{
     CheckWorkflowDto, git_check_workflow, git_install_check_workflow, git_open_branch_settings,
 };
@@ -81,15 +61,8 @@ pub use git::{
     git_unit_history,
 };
 pub use guide::{
-    GlossaryEntryInput, ProjectGuideDto, project_guide, save_project_glossary,
-    save_project_guidance, save_project_voices,
-};
-pub use jobs::{
-    angelica_job_control, angelica_job_events, angelica_job_remove, angelica_job_retry,
-    angelica_job_set_limit, angelica_job_units, angelica_job_workers, angelica_jobs,
-};
-pub use localization::{
-    localization_choose_name, localization_decisions, localization_overview, localization_project,
+    ProjectKnowledgeDto, TermInput, project_knowledge, save_knowledge_characters,
+    save_knowledge_style, save_knowledge_terms,
 };
 pub use state::{Activity, DesktopState};
 pub use updates::{
@@ -235,44 +208,10 @@ pub fn run() {
             git_remote_branches,
             git_set_upstream,
             git_finish_contribution,
-            ai_settings,
-            ai_save_provider,
-            ai_remove_provider,
-            ai_set_api_key,
-            ai_clear_api_key,
-            ai_set_agent_model,
-            ai_set_worker_model,
-            ai_set_web_domains,
-            ai_list_remote_models,
-            ai_test_connection,
-            ai_chatgpt_login_start,
-            ai_chatgpt_login_cancel,
-            angelica_conversations,
-            angelica_conversation,
-            angelica_delete_conversation,
-            angelica_image,
-            angelica_cancel,
-            angelica_send,
-            angelica_proposals,
-            angelica_apply_proposal,
-            angelica_reject_proposal,
-            angelica_draft,
-            angelica_jobs,
-            angelica_job_units,
-            angelica_job_events,
-            angelica_job_control,
-            angelica_job_retry,
-            angelica_job_remove,
-            angelica_job_set_limit,
-            angelica_job_workers,
-            localization_overview,
-            localization_project,
-            localization_decisions,
-            localization_choose_name,
-            project_guide,
-            save_project_guidance,
-            save_project_glossary,
-            save_project_voices,
+            project_knowledge,
+            save_knowledge_style,
+            save_knowledge_terms,
+            save_knowledge_characters,
             export_overview,
             export_save_settings,
             export_generate_key,

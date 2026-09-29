@@ -68,19 +68,14 @@ seconds for the English client.
 
 The result is a heuristic: ordinary capitalized words, such as interface
 labels or the pronoun *I*, can rank high. Choosing terminology is left to
-the translator or Angelica. The desktop computes the list on first use for a
-game data key and keeps the last one in memory.
+the translator or an agent.
 
 ## Desktop use
 
-The desktop builds the active project's index in a background worker the
-first time Angelica needs it or a message is sent to her; requests made
-meanwhile report that the index is being built. A failed build is reported
-once and retried on the next request. Building uses the session's shared game
-source, so it never holds the project lock; searches take the lock only to
-add workspace translations, and are refused when the project changed in the
-meantime. Indexes of game versions no longer in use stay on disk until the
-user clears application data.
+No desktop feature uses the index yet; the `aeria` command will (see
+[`agents.md`](./agents.md#the-aeria-command)). Indexes are kept per source
+language and game version in application data; those of game versions no
+longer in use stay on disk until the user clears application data.
 
 Translation memory is the similar sources that have a non-empty bound
 translation in the workspace, with the translation and its review state.

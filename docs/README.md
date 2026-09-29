@@ -21,7 +21,7 @@ Documentation is maintained with the code it describes and is the source of trut
 | Change translation identity or source updates | [`architecture/identity.md`](./architecture/identity.md), [`architecture/rebase.md`](./architecture/rebase.md) |
 | Change workspace persistence | [`architecture/workspace.md`](./architecture/workspace.md), [`formats/workspace-v3.md`](./formats/workspace-v3.md) |
 | Change Git collaboration behavior in Aeria | [`architecture/git.md`](./architecture/git.md) |
-| Change translation assistance | [`architecture/ai.md`](./architecture/ai.md), [`architecture/localization-system.md`](./architecture/localization-system.md), [`formats/glossary-v1.md`](./formats/glossary-v1.md), [`formats/voices-v1.md`](./formats/voices-v1.md), [`formats/knowledge-v1.md`](./formats/knowledge-v1.md) |
+| Change localization with agents or the project knowledge | [`architecture/agents.md`](./architecture/agents.md), [`formats/knowledge-v1.md`](./formats/knowledge-v1.md), [`formats/glossary-v1.md`](./formats/glossary-v1.md), [`formats/voices-v1.md`](./formats/voices-v1.md) |
 | Change export behavior | [`architecture/export.md`](./architecture/export.md), [`formats/pack-v1.md`](./formats/pack-v1.md), [`formats/feed-v1.md`](./formats/feed-v1.md), [`formats/pack-settings-v1.md`](./formats/pack-settings-v1.md), [`formats/font-settings-v1.md`](./formats/font-settings-v1.md) |
 | Implement Rust or frontend code | [`development/README.md`](./development/README.md) |
 | Add or upgrade a dependency | [`development/dependencies.md`](./development/dependencies.md) |

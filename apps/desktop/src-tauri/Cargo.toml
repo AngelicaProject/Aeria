@@ -18,11 +18,11 @@ path = "src/main.rs"
 tauri-build = { version = "2.6.3", features = [] }
 
 [dependencies]
-aeria-ai = { path = "../../../crates/aeria-ai" }
 aeria-core = { path = "../../../crates/aeria-core" }
 aeria-export = { path = "../../../crates/aeria-export" }
 aeria-fonts = { path = "../../../crates/aeria-fonts" }
 aeria-git = { path = "../../../crates/aeria-git" }
+aeria-knowledge = { path = "../../../crates/aeria-knowledge" }
 aeria-projects = { path = "../../../crates/aeria-projects" }
 aeria-publish = { path = "../../../crates/aeria-publish" }
 aeria-rebase = { path = "../../../crates/aeria-rebase" }

@@ -184,8 +184,8 @@ export function TranslationChangeGroups({ changes, selectedUnitId, onRevealBindi
 }
 
 const areaInfo: Record<ProjectArea, { icon: UiIconName; title: MessageKey; order: number }> = {
-  glossary: { icon: "languages", title: "git.area.glossary", order: 0 },
-  guidance: { icon: "messageSquare", title: "git.area.guidance", order: 1 },
+  terms: { icon: "languages", title: "git.area.terms", order: 0 },
+  knowledge: { icon: "messageSquare", title: "git.area.knowledge", order: 1 },
   packSettings: { icon: "arrowUpRight", title: "git.area.packSettings", order: 2 },
   fontSettings: { icon: "palette", title: "git.area.fonts", order: 3 },
   fontFile: { icon: "palette", title: "git.area.fonts", order: 3 },

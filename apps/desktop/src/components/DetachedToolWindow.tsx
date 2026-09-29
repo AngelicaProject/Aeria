@@ -9,14 +9,14 @@ import { WindowChrome } from "./WindowChrome";
 import { WorkbenchToolDock, toolTitle, type WorkbenchTool } from "./WorkbenchToolDock";
 import { displayPathName } from "../pathDisplay";
 
-export type DetachedPanel = "search" | "ai" | "git" | "tasks" | "gitChanges" | "diagnostics";
+export type DetachedPanel = "search" | "git" | "tasks" | "gitChanges" | "diagnostics";
 
 export function isDetachedPanel(value: string | null): value is DetachedPanel {
-  return value === "search" || value === "ai" || value === "git" || value === "tasks" || value === "gitChanges" || value === "diagnostics";
+  return value === "search" || value === "git" || value === "tasks" || value === "gitChanges" || value === "diagnostics";
 }
 
 export function detachedPanelTitle(panel: DetachedPanel): MessageKey {
-  if (panel === "search" || panel === "ai" || panel === "git") return toolTitle(panel);
+  if (panel === "search" || panel === "git") return toolTitle(panel);
   return bottomPanelTabs.find((tab) => tab.id === panel)!.label;
 }
 
@@ -30,7 +30,7 @@ export function DetachedToolWindow({ panel }: { panel: DetachedPanel }) {
     void currentProject().then(setProject).catch((caughtError: unknown) => setError(normalizeCommandError(caughtError)));
   }, []);
 
-  const tool = panel === "search" || panel === "ai" || panel === "git";
+  const tool = panel === "search" || panel === "git";
 
   return (
     <main className="detached-shell">

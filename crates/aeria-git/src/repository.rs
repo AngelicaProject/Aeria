@@ -18,22 +18,19 @@ pub const PACK_SETTINGS_FILE: &str = "aeria-pack.json";
 pub const FONT_SETTINGS_FILE: &str = "aeria-fonts.json";
 /// The project directory of source fonts named by the font settings.
 pub const FONTS_DIR: &str = "fonts";
-/// The project glossary, owned by `aeria-ai`.
-pub const GLOSSARY_FILE: &str = "aeria-glossary.csv";
-/// The project translation guidance, owned by `aeria-ai`.
-pub const GUIDANCE_FILE: &str = "aeria-guidance.md";
+/// The project knowledge directory, owned by `aeria-knowledge`.
+pub const KNOWLEDGE_DIR: &str = "aeria-knowledge";
 /// The feed workflow, owned by `aeria-publish`. It builds the update feed on
 /// GitHub from released packs, so it belongs to the project like its settings.
 pub const FEED_WORKFLOW_FILE: &str = ".github/workflows/harmonia-feed.yml";
 /// Every project path a checkpoint commits besides `.aeria/`.
-pub const PROJECT_PATHS: [&str; 9] = [
+pub const PROJECT_PATHS: [&str; 8] = [
     ATTRIBUTES_FILE,
     COLLABORATION_FILE,
     PACK_SETTINGS_FILE,
     FONT_SETTINGS_FILE,
     FONTS_DIR,
-    GLOSSARY_FILE,
-    GUIDANCE_FILE,
+    KNOWLEDGE_DIR,
     FEED_WORKFLOW_FILE,
     crate::workflow::CHECK_WORKFLOW_FILE,
 ];

@@ -90,8 +90,6 @@ type TranslationEditorProps = {
   /** Returns true once when the target should take focus after navigation. */
   takeFocusRequest: () => boolean;
   checkpoint: CheckpointBaseline | null;
-  /** Drafts a translation with Angelica; resolves to `null` when it failed. */
-  onDraftWithAngelica?: ((cell: TranslationCellDto) => Promise<string | null>) | undefined;
   /** Bumps when the string's history may have changed (save, checkpoint, sync). */
   historyRevision?: number | undefined;
 };
@@ -164,7 +162,6 @@ const TranslationEditorImpl = forwardRef<TranslationEditorHandle, TranslationEdi
   onNavigate,
   takeFocusRequest,
   checkpoint,
-  onDraftWithAngelica,
   historyRevision = 0,
 }, ref) {
   const { t } = useI18n();
@@ -280,18 +277,6 @@ const TranslationEditorImpl = forwardRef<TranslationEditorHandle, TranslationEdi
     if (selectedCell && !cellBusy) updateDraft(selectedCell, "target", selectedCell.sourceMacro);
   }, [cellBusy, selectedCell, updateDraft]);
 
-  const [drafting, setDrafting] = useState(false);
-  const draftWithAngelica = useCallback(async () => {
-    if (!selectedCell || cellBusy || !onDraftWithAngelica) return;
-    const cell = selectedCell;
-    setDrafting(true);
-    try {
-      const target = await onDraftWithAngelica(cell);
-      if (target !== null) updateDraft(cell, "target", target);
-    } finally {
-      setDrafting(false);
-    }
-  }, [cellBusy, onDraftWithAngelica, selectedCell, updateDraft]);
 
   useImperativeHandle(ref, () => ({ saveTarget, approve, revert, copySource }), [approve, copySource, revert, saveTarget]);
 
@@ -359,7 +344,6 @@ const TranslationEditorImpl = forwardRef<TranslationEditorHandle, TranslationEdi
             <span className="chip">{sourceLanguage.toUpperCase()}</span>
             {selectedCell.formattingOnly ? <span className="chip" title={t("list.formattingHint")}>{t("list.kind.formatting")}</span> : null}
             <span className="spacer" />
-            {onDraftWithAngelica ? <IconButton icon="sparkles" label={drafting ? t("editor.drafting") : t("editor.draftWithAngelica")} disabled={cellBusy || drafting} onClick={() => void draftWithAngelica()} /> : null}
             <IconButton icon="copyPlus" label={t("editor.copySource")} disabled={cellBusy} onClick={copySource} />
             <PaneModeSwitch value={sourceMode} onChange={(mode) => setPreference("sourcePaneMode", mode)} />
           </div>

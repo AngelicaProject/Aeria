@@ -2,15 +2,10 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
-use aeria_ai::OpenAiCompatibleClient;
-use aeria_ai::chatgpt::AccessToken;
-use aeria_ai::search::GlossaryCandidate;
 use aeria_git::{GitExecutable, UnitAttribution};
 use aeria_workspace::ProjectSession;
 
 use crate::error::CommandError;
-use crate::job_workers::WorkerBoard;
-use crate::search::IndexState;
 
 /// The one authoritative project session owned by the desktop process.
 pub struct DesktopState {
@@ -18,23 +13,6 @@ pub struct DesktopState {
     registry: Mutex<()>,
     git: OnceLock<GitExecutable>,
     attribution: Mutex<Option<AttributionCache>>,
-    ai_client: OnceLock<OpenAiCompatibleClient>,
-    web_client: OnceLock<aeria_ai::web::WebClient>,
-    angelica_turns: Mutex<Vec<(String, tauri::async_runtime::JoinHandle<()>)>>,
-    /// Cached ChatGPT access tokens by provider ID. The async lock also
-    /// serializes token refreshes.
-    chatgpt_tokens: tauri::async_runtime::Mutex<Vec<(String, AccessToken)>>,
-    chatgpt_login: Mutex<Option<(String, tauri::async_runtime::JoinHandle<()>)>>,
-    /// Serializes read-modify-write of conversation proposal files.
-    proposals: Mutex<()>,
-    /// Running translation jobs by job ID, with their workers' activity.
-    job_runners: Mutex<Vec<JobRunner>>,
-    /// Job stores opened in this process; interrupted jobs are paused once.
-    job_stores: Mutex<Vec<PathBuf>>,
-    /// Source search indexes by game data key.
-    search_indexes: Mutex<Vec<(String, IndexState)>>,
-    /// Glossary candidates of the last source they were found for.
-    glossary_candidates: Mutex<Option<(String, Arc<[GlossaryCandidate]>)>>,
     /// Running synchronization and export operations, which an application
     /// update must not interrupt.
     activities: Mutex<Vec<(u64, Activity)>>,
@@ -45,8 +23,6 @@ pub struct DesktopState {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum Activity {
-    /// Angelica turns and translation jobs.
-    Translation,
     /// Git operations that fetch, push, commit, or change the working tree.
     Sync,
     /// Pack export and publication.
@@ -75,12 +51,6 @@ pub(crate) struct AttributionCache {
     pub units: Arc<Vec<UnitAttribution>>,
 }
 
-struct JobRunner {
-    job_id: String,
-    handle: tauri::async_runtime::JoinHandle<()>,
-    workers: Arc<WorkerBoard>,
-}
-
 impl DesktopState {
     /// Creates an application state with no project open.
     #[must_use]
@@ -90,16 +60,6 @@ impl DesktopState {
             registry: Mutex::new(()),
             git: OnceLock::new(),
             attribution: Mutex::new(None),
-            ai_client: OnceLock::new(),
-            web_client: OnceLock::new(),
-            angelica_turns: Mutex::new(Vec::new()),
-            chatgpt_tokens: tauri::async_runtime::Mutex::const_new(Vec::new()),
-            chatgpt_login: Mutex::new(None),
-            proposals: Mutex::new(()),
-            job_runners: Mutex::new(Vec::new()),
-            job_stores: Mutex::new(Vec::new()),
-            search_indexes: Mutex::new(Vec::new()),
-            glossary_candidates: Mutex::new(None),
             activities: Mutex::new(Vec::new()),
             next_activity_id: AtomicU64::new(1),
         }
@@ -115,7 +75,7 @@ impl DesktopState {
     /// Returns the running activities, each once, in a stable order.
     pub(crate) fn running_activities(&self) -> Vec<Activity> {
         let activities = self.lock_activities();
-        self.running_with(&activities)
+        Self::running_with(&activities)
     }
 
     /// Runs `operation` only when no activity runs. Synchronization and
@@ -127,7 +87,7 @@ impl DesktopState {
     /// `operation`.
     pub(crate) fn while_idle<T>(&self, operation: impl FnOnce() -> T) -> Result<T, CommandError> {
         let activities = self.lock_activities();
-        let running = self.running_with(&activities);
+        let running = Self::running_with(&activities);
         if !running.is_empty() {
             let names: Vec<_> = running
                 .iter()
@@ -147,18 +107,9 @@ impl DesktopState {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
-    fn running_with(&self, tracked: &[(u64, Activity)]) -> Vec<Activity> {
+    fn running_with(tracked: &[(u64, Activity)]) -> Vec<Activity> {
         let tracks = |wanted: Activity| tracked.iter().any(|(_, activity)| *activity == wanted);
-        let translating = self
-            .angelica_turns
-            .lock()
-            .is_ok_and(|turns| !turns.is_empty())
-            || self
-                .job_runners
-                .lock()
-                .is_ok_and(|runners| !runners.is_empty());
         [
-            (Activity::Translation, translating),
             (Activity::Sync, tracks(Activity::Sync)),
             (Activity::Export, tracks(Activity::Export)),
         ]
@@ -178,218 +129,6 @@ impl DesktopState {
             .get()
             .cloned()
             .unwrap_or_else(GitExecutable::system)
-    }
-
-    /// Returns the shared AI provider HTTP client, creating it on first use.
-    /// The client is cheap to clone and holds no project state.
-    pub(crate) fn ai_client(&self) -> Result<OpenAiCompatibleClient, CommandError> {
-        if let Some(client) = self.ai_client.get() {
-            return Ok(client.clone());
-        }
-        let client = OpenAiCompatibleClient::new()?;
-        Ok(self.ai_client.get_or_init(|| client).clone())
-    }
-
-    /// Returns the web page client, creating it on first use.
-    pub(crate) fn web_client(&self) -> Result<aeria_ai::web::WebClient, CommandError> {
-        if let Some(client) = self.web_client.get() {
-            return Ok(client.clone());
-        }
-        let client = aeria_ai::web::WebClient::new()
-            .map_err(|error| CommandError::new("aiClient", error.to_string()))?;
-        Ok(self.web_client.get_or_init(|| client).clone())
-    }
-
-    pub(crate) const fn chatgpt_tokens(
-        &self,
-    ) -> &tauri::async_runtime::Mutex<Vec<(String, AccessToken)>> {
-        &self.chatgpt_tokens
-    }
-
-    /// Registers the one waiting ChatGPT sign-in, replacing an earlier one.
-    pub(crate) fn start_chatgpt_login(
-        &self,
-        login_id: String,
-        spawn: impl FnOnce() -> tauri::async_runtime::JoinHandle<()>,
-    ) {
-        if let Ok(mut login) = self.chatgpt_login.lock() {
-            if let Some((_, previous)) = login.take() {
-                previous.abort();
-            }
-            *login = Some((login_id, spawn()));
-        }
-    }
-
-    pub(crate) fn finish_chatgpt_login(&self, login_id: &str) {
-        if let Ok(mut login) = self.chatgpt_login.lock()
-            && login.as_ref().is_some_and(|(id, _)| id == login_id)
-        {
-            *login = None;
-        }
-    }
-
-    pub(crate) fn cancel_chatgpt_login(&self, login_id: &str) {
-        if let Ok(mut login) = self.chatgpt_login.lock()
-            && login.as_ref().is_some_and(|(id, _)| id == login_id)
-            && let Some((_, handle)) = login.take()
-        {
-            handle.abort();
-        }
-    }
-
-    /// Registers a conversation's running turn. The task is spawned while
-    /// the registry is locked, so it cannot finish before it is registered.
-    /// Returns `false`, without spawning, when the conversation is busy.
-    pub(crate) fn start_angelica_turn(
-        &self,
-        conversation_id: String,
-        spawn: impl FnOnce() -> tauri::async_runtime::JoinHandle<()>,
-    ) -> bool {
-        let Ok(mut turns) = self.angelica_turns.lock() else {
-            return false;
-        };
-        if turns.iter().any(|(id, _)| *id == conversation_id) {
-            return false;
-        }
-        turns.push((conversation_id, spawn()));
-        true
-    }
-
-    pub(crate) fn angelica_turn_running(&self, conversation_id: &str) -> bool {
-        self.angelica_turns
-            .lock()
-            .is_ok_and(|turns| turns.iter().any(|(id, _)| id == conversation_id))
-    }
-
-    /// Forgets a turn that ended on its own.
-    pub(crate) fn finish_angelica_turn(&self, conversation_id: &str) {
-        if let Ok(mut turns) = self.angelica_turns.lock() {
-            turns.retain(|(id, _)| id != conversation_id);
-        }
-    }
-
-    /// Stops a running turn. Returns whether one was running.
-    pub(crate) fn cancel_angelica_turn(&self, conversation_id: &str) -> bool {
-        let Ok(mut turns) = self.angelica_turns.lock() else {
-            return false;
-        };
-        let Some(position) = turns.iter().position(|(id, _)| id == conversation_id) else {
-            return false;
-        };
-        let (_, handle) = turns.remove(position);
-        handle.abort();
-        true
-    }
-
-    /// Returns `true` the first time a job store path is used.
-    pub(crate) fn first_job_store_use(&self, path: &std::path::Path) -> bool {
-        let Ok(mut stores) = self.job_stores.lock() else {
-            return false;
-        };
-        if stores.iter().any(|known| known == path) {
-            return false;
-        }
-        stores.push(path.to_owned());
-        true
-    }
-
-    /// Registers a job's runner, spawned while the registry is locked.
-    /// Returns `false`, without spawning, when the job already runs.
-    pub(crate) fn start_job_runner(
-        &self,
-        job_id: String,
-        workers: Arc<WorkerBoard>,
-        spawn: impl FnOnce() -> tauri::async_runtime::JoinHandle<()>,
-    ) -> bool {
-        let Ok(mut runners) = self.job_runners.lock() else {
-            return false;
-        };
-        if runners.iter().any(|runner| runner.job_id == job_id) {
-            return false;
-        }
-        runners.push(JobRunner {
-            job_id,
-            handle: spawn(),
-            workers,
-        });
-        true
-    }
-
-    /// Forgets a runner that ended on its own.
-    pub(crate) fn finish_job_runner(&self, job_id: &str) {
-        if let Ok(mut runners) = self.job_runners.lock() {
-            runners.retain(|runner| runner.job_id != job_id);
-        }
-    }
-
-    /// Aborts a job's runner, if it runs.
-    pub(crate) fn stop_job_runner(&self, job_id: &str) {
-        if let Ok(mut runners) = self.job_runners.lock()
-            && let Some(position) = runners.iter().position(|runner| runner.job_id == job_id)
-        {
-            runners.remove(position).handle.abort();
-        }
-    }
-
-    /// The workers' activity of a running job.
-    pub(crate) fn job_workers(&self, job_id: &str) -> Option<Arc<WorkerBoard>> {
-        let runners = self.job_runners.lock().ok()?;
-        runners
-            .iter()
-            .find(|runner| runner.job_id == job_id)
-            .map(|runner| Arc::clone(&runner.workers))
-    }
-
-    pub(crate) fn search_index(&self, source_key: &str) -> Option<IndexState> {
-        let indexes = self.search_indexes.lock().ok()?;
-        indexes
-            .iter()
-            .find(|(id, _)| id == source_key)
-            .map(|(_, state)| state.clone())
-    }
-
-    pub(crate) fn set_search_index(&self, source_key: &str, state: IndexState) {
-        if let Ok(mut indexes) = self.search_indexes.lock() {
-            indexes.retain(|(id, _)| id != source_key);
-            indexes.push((source_key.to_owned(), state));
-        }
-    }
-
-    pub(crate) fn forget_search_index(&self, source_key: &str) {
-        if let Ok(mut indexes) = self.search_indexes.lock() {
-            indexes.retain(|(id, _)| id != source_key);
-        }
-    }
-
-    /// Marks a source's index as building. Returns `false` when it already
-    /// has a state, so only one build starts.
-    pub(crate) fn claim_search_build(&self, source_key: &str) -> bool {
-        let Ok(mut indexes) = self.search_indexes.lock() else {
-            return false;
-        };
-        if indexes.iter().any(|(id, _)| id == source_key) {
-            return false;
-        }
-        indexes.push((source_key.to_owned(), IndexState::Building));
-        true
-    }
-
-    pub(crate) fn glossary_candidates(&self, source_key: &str) -> Option<Arc<[GlossaryCandidate]>> {
-        let cache = self.glossary_candidates.lock().ok()?;
-        cache
-            .as_ref()
-            .filter(|(key, _)| key == source_key)
-            .map(|(_, candidates)| Arc::clone(candidates))
-    }
-
-    pub(crate) fn set_glossary_candidates(
-        &self,
-        source_key: &str,
-        candidates: Arc<[GlossaryCandidate]>,
-    ) {
-        if let Ok(mut cache) = self.glossary_candidates.lock() {
-            *cache = Some((source_key.to_owned(), candidates));
-        }
     }
 
     pub(crate) fn cached_attribution(
@@ -416,12 +155,6 @@ impl DesktopState {
         self.project
             .lock()
             .map_err(|_| CommandError::internal_state("desktop project state lock is poisoned"))
-    }
-
-    pub(crate) fn lock_proposals(&self) -> Result<MutexGuard<'_, ()>, CommandError> {
-        self.proposals
-            .lock()
-            .map_err(|_| CommandError::internal_state("Angelica proposal lock is poisoned"))
     }
 
     pub(crate) fn lock_registry(&self) -> Result<MutexGuard<'_, ()>, CommandError> {
