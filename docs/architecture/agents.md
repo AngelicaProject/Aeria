@@ -94,6 +94,8 @@ translations is written in about 0.4 s.
   `Start-Process` on Windows: a process started directly would inherit the
   command's standard output and error, and the agent's harness, which reads
   them until they close, would wait for the server to exit.
+- The server's working directory is `agents/`, never the project, so the
+  project folder can be moved or deleted while a server runs.
 - Reads run in parallel. Writes take the project's write lock and run one at
   a time. Before each request the server compares the stamp with the last one
   it took in and reloads the workspace when another process wrote.

@@ -197,6 +197,12 @@ pub(crate) fn serve(root: &Path) -> i32 {
     let Ok(Some(files)) = env.project_files(root) else {
         return 2;
     };
+    // A process's working directory cannot be moved or deleted on Windows;
+    // the server inherits the agent's, which is often the project. Requests
+    // carry their own directory.
+    if let Some(directory) = files.path_with_extension("server").parent() {
+        let _ = std::env::set_current_dir(directory);
+    }
     let build = std::env::var(SERVE_BUILD_VARIABLE).unwrap_or_else(|_| build_id());
     let pid = std::process::id();
     let project = match Project::open(root, &env) {
