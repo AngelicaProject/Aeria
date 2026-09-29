@@ -8,7 +8,7 @@
 //! or when the provider keeps failing, and wakes Angelica in its
 //! conversation when it pauses or finishes.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 use std::future::Future;
 use std::path::PathBuf;
@@ -21,7 +21,7 @@ use aeria_ai::chat::{ChatMessage, ChatRequest, StreamDelta};
 use aeria_ai::conversation::{ConversationStore, ProposalRecord, ProposalStatus};
 use aeria_ai::images::{ImagePayloads, ImageRef, message_images};
 use aeria_ai::jobs::{
-    JobError, JobEstimate, JobEvent, JobFilter, JobLimitProposal, JobProposal, JobQuality,
+    Finding, JobError, JobEstimate, JobEvent, JobFilter, JobLimitProposal, JobProposal, JobQuality,
     JobScope, JobSpec, JobStatus, JobStore, JobSummary, JobUnit, ScopedUnit, UnitStatus,
 };
 use aeria_ai::knowledge::{Domain, Knowledge, sheet_domain};
@@ -58,6 +58,8 @@ use crate::state::DesktopState;
 
 type CommandResult<T> = Result<T, CommandError>;
 
+#[path = "job_learning.rs"]
+mod job_learning;
 #[path = "job_study.rs"]
 mod job_study;
 
@@ -733,6 +735,25 @@ async fn runner_state(run: &JobRun) -> Option<(u8, bool)> {
 /// aborting the runner aborts them too. When the job's worker count grows,
 /// the missing lanes start; lanes above a smaller count stop by themselves
 /// after their current chunk.
+/// Learns from a job that is about to complete, so its report says what it
+/// learned; `None` when the job does not complete now.
+async fn learn_before_completion(run: &JobRun) -> Option<String> {
+    let completing = run
+        .with_store(|store, id| {
+            let job = store.summary(id)?;
+            Ok(job.status == JobStatus::Running
+                && job.counts.running == 0
+                && job.counts.pending == 0)
+        })
+        .await
+        .unwrap_or(false);
+    if completing && run.project_open() {
+        job_learning::learn(run).await
+    } else {
+        None
+    }
+}
+
 async fn run_job(run: JobRun) {
     let mut concurrency = runner_state(&run).await.map_or(1, |(count, _)| count);
     run.workers.reset(u32::from(concurrency));
@@ -784,8 +805,9 @@ async fn run_job(run: JobRun) {
         }
     }
 
+    let learned = learn_before_completion(&run).await;
     let finished = run
-        .with_store(|store, id| {
+        .with_store(move |store, id| {
             let job = store.summary(id)?;
             if job.status != JobStatus::Running || job.counts.running > 0 {
                 return Ok(None);
@@ -800,6 +822,10 @@ async fn run_job(run: JobRun) {
                 "finished: {} final, {} need review, {} rejected, {} failed, {} skipped because they changed",
                 counts.finished + counts.drafted, counts.flagged, counts.rejected, counts.failed, counts.conflict
             );
+            let message = match &learned {
+                Some(learned) => format!("{message}; learned: {learned}"),
+                None => message,
+            };
             store.add_event(id, "completed", &message, None)?;
             Ok(Some(Some((job.conversation_id, message))))
         })
@@ -1405,53 +1431,64 @@ fn interrupted(error: ProviderError) -> (ChunkEnd, (UnitStatus, Option<String>))
 
 /// Writes the localizer's results: a final translation as reviewed, one
 /// with an open finding as needing review, and records why a string was
-/// not written.
+/// not written. Written translations are recorded with their sources, so
+/// later jobs know which translations agents wrote.
 fn write_outcomes(
     run: &JobRun,
     units: &[JobUnit],
     outcomes: Vec<LineOutcome>,
+    sources: &BTreeMap<usize, String>,
 ) -> Vec<(u64, UnitStatus, Option<String>)> {
     let host = DesktopJobHost { run: run.clone() };
-    outcomes
-        .into_iter()
-        .filter_map(|outcome| {
-            let unit = units.get(outcome.task)?;
-            let (review, status, message) = match &outcome.finish {
-                Finish::Rejected(reason) => {
-                    return Some((unit.seq, UnitStatus::Rejected, Some(reason.clone())));
+    let mut recorded = Vec::new();
+    let mut written = Vec::new();
+    for outcome in outcomes {
+        let Some(unit) = units.get(outcome.task) else {
+            continue;
+        };
+        let (review, status, message) = match &outcome.finish {
+            Finish::Rejected(reason) => {
+                recorded.push((unit.seq, UnitStatus::Rejected, Some(reason.clone())));
+                continue;
+            }
+            Finish::Final => (ReviewLabel::Reviewed, UnitStatus::Finished, None),
+            Finish::NeedsReview(reason) => (
+                ReviewLabel::NeedsReview,
+                UnitStatus::Flagged,
+                Some(reason.clone()),
+            ),
+        };
+        let Some(target) = outcome.target.as_deref() else {
+            recorded.push((
+                unit.seq,
+                UnitStatus::Rejected,
+                Some("no translation was produced".to_owned()),
+            ));
+            continue;
+        };
+        recorded.push(
+            match host.write(&unit.location, target, &unit.expected, review) {
+                Ok(()) => {
+                    if let Some(reason) = &message {
+                        host.report(&format!("needs review: {reason}"), Some(&unit.location));
+                    }
+                    written.push((
+                        unit.location.clone(),
+                        sources.get(&outcome.task).cloned().unwrap_or_default(),
+                        target.to_owned(),
+                    ));
+                    (unit.seq, status, message)
                 }
-                Finish::Final => (ReviewLabel::Reviewed, UnitStatus::Finished, None),
-                Finish::NeedsReview(reason) => (
-                    ReviewLabel::NeedsReview,
-                    UnitStatus::Flagged,
-                    Some(reason.clone()),
-                ),
-            };
-            let Some(target) = outcome.target.as_deref() else {
-                return Some((
-                    unit.seq,
-                    UnitStatus::Rejected,
-                    Some("no translation was produced".to_owned()),
-                ));
-            };
-            Some(
-                match host.write(&unit.location, target, &unit.expected, review) {
-                    Ok(()) => {
-                        if let Some(reason) = &message {
-                            host.report(&format!("needs review: {reason}"), Some(&unit.location));
-                        }
-                        (unit.seq, status, message)
-                    }
-                    Err(WriteFailure::Conflict(message)) => {
-                        (unit.seq, UnitStatus::Conflict, Some(message))
-                    }
-                    Err(WriteFailure::Failed(message)) => {
-                        (unit.seq, UnitStatus::Failed, Some(message))
-                    }
-                },
-            )
-        })
-        .collect()
+                Err(WriteFailure::Conflict(message)) => {
+                    (unit.seq, UnitStatus::Conflict, Some(message))
+                }
+                Err(WriteFailure::Failed(message)) => (unit.seq, UnitStatus::Failed, Some(message)),
+            },
+        );
+    }
+    // The record helps learning; a busy store never fails the chunk.
+    let _ = run.store.add_written(&run.job_id, &written);
+    recorded
 }
 
 /// A script line's address, `sheet:row:subrow:column`, as a location.
@@ -1466,14 +1503,22 @@ fn address_location(address: &str) -> Option<UnitLocation> {
     })
 }
 
-/// What a finished unit leaves in the project knowledge and the job's
-/// events: its story, for the units of its sheet that follow, and the
-/// critics' findings against the knowledge itself, for Angelica.
+/// A script line as learning sees it: its address, its source, and the
+/// chunk string it translates.
+struct LineRecord {
+    address: String,
+    source: String,
+    task: Option<usize>,
+}
+
+/// What a finished unit leaves for learning: its story, for the units of
+/// its sheet that follow; the critics' findings, for the mentor; and the
+/// findings against the knowledge itself, for Angelica.
 fn keep_learning(
     run: &JobRun,
     sheet: &str,
     dialogue: bool,
-    addresses: &[String],
+    lines: &[LineRecord],
     result: &LocalizeResult,
 ) {
     if dialogue && let Some(story) = contract_story(&result.contract) {
@@ -1497,16 +1542,61 @@ fn keep_learning(
             aeria_ai::knowledge::Section::new(sheet, &text).with("source", "localizer"),
         );
     }
+    let targets: BTreeMap<usize, &str> = result
+        .outcomes
+        .iter()
+        .filter_map(|outcome| Some((outcome.task, outcome.target.as_deref()?)))
+        .collect();
+    let mut findings = Vec::new();
     for flag in &result.flags {
+        let Some(line) = lines.get(flag.line) else {
+            continue;
+        };
+        let location = address_location(&line.address);
         if flag.problem.starts_with("KNOWLEDGE") {
-            let location = addresses
-                .get(flag.line)
-                .and_then(|address| address_location(address));
             let _ = run
                 .store
                 .add_event(&run.job_id, "knowledge", &flag.problem, location.as_ref());
         }
+        findings.push(Finding {
+            role: flag.role.as_str().to_owned(),
+            major: flag.major,
+            problem: flag.problem.clone(),
+            location,
+            source: line.source.clone(),
+            target: line
+                .task
+                .and_then(|task| targets.get(&task))
+                .map(|target| (*target).to_owned())
+                .unwrap_or_default(),
+        });
     }
+    let _ = run.store.add_findings(&run.job_id, &findings);
+}
+
+/// Decides the unit's terms the knowledge lacks and, when some were
+/// written, reads the unit's knowledge again.
+async fn study_unit_terms(
+    run: &JobRun,
+    caller: &JobCaller,
+    unit: &mut aeria_ai::localizer::UnitOfWork,
+) -> Result<(), ProviderError> {
+    caller.step(Step::Terms);
+    let host = job_study::DesktopKnowledge {
+        app: run.app.clone(),
+        root: run.root.clone(),
+    };
+    let written = study_terms(caller, &host, unit).await?;
+    if !written.is_empty() {
+        let root = run.root.clone();
+        let studied = unit.clone();
+        if let Ok(text) =
+            run_blocking(move || Ok(unit_knowledge(&Knowledge::load(&root), &studied))).await
+        {
+            unit.knowledge = text;
+        }
+    }
+    Ok(())
 }
 
 /// Localizes one claimed chunk and records the outcomes.
@@ -1550,26 +1640,19 @@ async fn run_chunk(run: &JobRun, spec: &JobSpec, units: Vec<JobUnit>, lane: usiz
 
     // Terms the knowledge lacks are decided before the contract, so the
     // unit is written with them.
-    caller.step(Step::Terms);
-    let host = job_study::DesktopKnowledge {
-        app: run.app.clone(),
-        root: run.root.clone(),
-    };
-    match study_terms(&caller, &host, &unit).await {
-        Ok(written) if !written.is_empty() => {
-            let root = run.root.clone();
-            let studied = unit.clone();
-            if let Ok(text) =
-                run_blocking(move || Ok(unit_knowledge(&Knowledge::load(&root), &studied))).await
-            {
-                unit.knowledge = text;
-            }
-        }
-        Ok(_) => {}
-        Err(error) => {
-            run.workers.set_phase(lane, WorkerPhase::Recording);
-            return finish_chunk(run, &units, lane, outcomes, Err(error), caller.spent()).await;
-        }
+    if let Err(error) = study_unit_terms(run, &caller, &mut unit).await {
+        run.workers.set_phase(lane, WorkerPhase::Recording);
+        let usage = caller.spent();
+        return finish_chunk(
+            run,
+            &units,
+            lane,
+            outcomes,
+            Err(error),
+            usage,
+            BTreeMap::new(),
+        )
+        .await;
     }
     let sheet = unit.sheet.clone();
     let dialogue = unit.domains.iter().any(|domain| {
@@ -1578,7 +1661,20 @@ async fn run_chunk(run: &JobRun, spec: &JobSpec, units: Vec<JobUnit>, lane: usiz
             Domain::Dialogue | Domain::Journal | Domain::Objective | Domain::System
         )
     });
-    let addresses: Vec<String> = unit.lines.iter().map(|line| line.address.clone()).collect();
+    let records: Vec<LineRecord> = unit
+        .lines
+        .iter()
+        .map(|line| LineRecord {
+            address: line.address.clone(),
+            source: line.source.clone(),
+            task: line.task,
+        })
+        .collect();
+    let sources: BTreeMap<usize, String> = unit
+        .lines
+        .iter()
+        .filter_map(|line| Some((line.task?, line.source.clone())))
+        .collect();
     let options = LocalizeOptions {
         careful: caller.careful,
     };
@@ -1588,12 +1684,12 @@ async fn run_chunk(run: &JobRun, spec: &JobSpec, units: Vec<JobUnit>, lane: usiz
         let learn_run = run.clone();
         let learned = result.clone();
         let _ = run_blocking(move || {
-            keep_learning(&learn_run, &sheet, dialogue, &addresses, &learned);
+            keep_learning(&learn_run, &sheet, dialogue, &records, &learned);
             Ok(())
         })
         .await;
     }
-    finish_chunk(run, &units, lane, outcomes, result, caller.spent()).await
+    finish_chunk(run, &units, lane, outcomes, result, caller.spent(), sources).await
 }
 
 /// Writes a localized chunk's results, or returns its strings to the queue
@@ -1605,6 +1701,7 @@ async fn finish_chunk(
     mut outcomes: Vec<(u64, UnitStatus, Option<String>)>,
     result: Result<LocalizeResult, ProviderError>,
     usage: aeria_ai::chat::Usage,
+    sources: BTreeMap<usize, String>,
 ) -> ChunkEnd {
     let end =
         match result {
@@ -1612,7 +1709,12 @@ async fn finish_chunk(
                 let write_run = run.clone();
                 let write_units = units.to_vec();
                 let written = run_blocking(move || {
-                    Ok(write_outcomes(&write_run, &write_units, result.outcomes))
+                    Ok(write_outcomes(
+                        &write_run,
+                        &write_units,
+                        result.outcomes,
+                        &sources,
+                    ))
                 })
                 .await
                 .unwrap_or_default();

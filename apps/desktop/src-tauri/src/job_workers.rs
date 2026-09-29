@@ -44,6 +44,8 @@ pub enum WorkerPhase {
 pub enum WorkerStep {
     /// The study of the job's scope, before its first chunk.
     Study,
+    /// Learning from the finished job.
+    Learning,
     Terms,
     Contract,
     Writing,
@@ -56,6 +58,7 @@ impl From<Step> for WorkerStep {
     fn from(step: Step) -> Self {
         match step {
             Step::Study => Self::Study,
+            Step::Learning => Self::Learning,
             Step::Terms => Self::Terms,
             Step::Contract => Self::Contract,
             Step::Writing => Self::Writing,
@@ -69,7 +72,7 @@ impl From<Step> for WorkerStep {
 impl WorkerStep {
     const fn number(self) -> u32 {
         match self {
-            Self::Study => 0,
+            Self::Study | Self::Learning => 0,
             Self::Terms => 1,
             Self::Contract => 2,
             Self::Writing => 3,

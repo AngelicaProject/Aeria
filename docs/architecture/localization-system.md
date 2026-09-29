@@ -3,7 +3,8 @@
 > **Status: partly implemented.** The localizer and its critics run
 > [translation jobs](./ai.md#translation-jobs); [`ai.md`](./ai.md#the-localizer)
 > describes what is implemented, including project knowledge written by
-> agents and study. Learning and propagation are a proposal. The document
+> agents, study, and learning with its evaluation. Propagation is a
+> proposal. The document
 > describes how Aeria's agents are to localize the whole game corpus so that
 > the result reads as if it was written in the target language, with people
 > reviewing by exception. Open decisions are listed in

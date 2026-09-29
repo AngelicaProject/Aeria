@@ -71,6 +71,10 @@ pub enum Role {
     Research,
     /// Study of a unit's terms.
     Terms,
+    /// Lessons from findings and reactions.
+    Mentor,
+    /// Comparison of two versions of a unit.
+    Judge,
 }
 
 impl Role {
@@ -88,6 +92,8 @@ impl Role {
             Self::Fix => "fix",
             Self::Research => "research",
             Self::Terms => "terms",
+            Self::Mentor => "mentor",
+            Self::Judge => "judge",
         }
     }
 
@@ -95,13 +101,14 @@ impl Role {
     /// player character need the most, the fidelity check the least.
     const fn wanted_effort(self) -> ReasoningEffort {
         match self {
-            Self::Writer | Self::Player => ReasoningEffort::High,
+            Self::Writer | Self::Player | Self::Mentor => ReasoningEffort::High,
             Self::Contract
             | Self::Blind
             | Self::Consistency
             | Self::Fix
             | Self::Research
-            | Self::Terms => ReasoningEffort::Medium,
+            | Self::Terms
+            | Self::Judge => ReasoningEffort::Medium,
             Self::Structure | Self::Fidelity => ReasoningEffort::Low,
         }
     }
@@ -306,6 +313,8 @@ pub enum Step {
     Study,
     /// The study of a unit's terms, before its contract.
     Terms,
+    /// Learning from a finished job.
+    Learning,
     Contract,
     Writing,
     Reviewing,

@@ -52,6 +52,7 @@ const phaseLabels: Readonly<Record<WorkerPhase, MessageKey>> = {
 
 const stepLabels: Readonly<Record<WorkerStep, MessageKey>> = {
   study: "angelica.worker.step.study",
+  learning: "angelica.worker.step.learning",
   terms: "angelica.worker.step.terms",
   contract: "angelica.worker.step.contract",
   writing: "angelica.worker.step.writing",

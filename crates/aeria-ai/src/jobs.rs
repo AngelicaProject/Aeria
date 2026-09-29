@@ -272,6 +272,31 @@ pub struct JobEvent {
     pub location: Option<UnitLocation>,
 }
 
+/// A critic's finding on a line a job translated, kept for learning.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Finding {
+    /// The critic that raised it, such as `blind` or `player`.
+    pub role: String,
+    pub major: bool,
+    pub problem: String,
+    pub location: Option<UnitLocation>,
+    pub source: String,
+    /// The final translation of the line.
+    pub target: String,
+}
+
+/// A translation a job wrote, the latest one per string.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Written {
+    pub location: UnitLocation,
+    pub job_id: String,
+    pub created_at_unix_ms: u64,
+    pub source: String,
+    pub target: String,
+}
+
 /// A string selected for a job, with its source size for chunking.
 #[derive(Clone, Debug)]
 pub struct ScopedUnit {
@@ -492,6 +517,25 @@ CREATE TABLE IF NOT EXISTS job_events (
     message TEXT NOT NULL,
     location TEXT,
     PRIMARY KEY (job_id, seq)
+);
+CREATE TABLE IF NOT EXISTS job_findings (
+    job_id TEXT NOT NULL,
+    seq INTEGER NOT NULL,
+    created_ms INTEGER NOT NULL,
+    role TEXT NOT NULL,
+    major INTEGER NOT NULL,
+    problem TEXT NOT NULL,
+    location TEXT,
+    source TEXT NOT NULL,
+    target TEXT NOT NULL,
+    PRIMARY KEY (job_id, seq)
+);
+CREATE TABLE IF NOT EXISTS job_written (
+    location TEXT PRIMARY KEY,
+    job_id TEXT NOT NULL,
+    created_ms INTEGER NOT NULL,
+    source TEXT NOT NULL,
+    target TEXT NOT NULL
 );
 ";
 
@@ -1026,6 +1070,162 @@ impl JobStore {
         Ok(())
     }
 
+    /// Records critics' findings on a job's lines.
+    ///
+    /// # Errors
+    ///
+    /// Returns a storage error.
+    pub fn add_findings(&self, id: &str, findings: &[Finding]) -> Result<(), JobError> {
+        if findings.is_empty() {
+            return Ok(());
+        }
+        let mut connection = self.open()?;
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        {
+            let next: i64 = transaction.query_row(
+                "SELECT COALESCE(MAX(seq), 0) FROM job_findings WHERE job_id = ?1",
+                params![id],
+                |row| row.get(0),
+            )?;
+            let mut insert = transaction.prepare(
+                "INSERT INTO job_findings (job_id, seq, created_ms, role, major, problem, location, source, target) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            )?;
+            let now = to_i64(now_unix_ms());
+            for (offset, finding) in findings.iter().enumerate() {
+                insert.execute(params![
+                    id,
+                    next + i64::try_from(offset).unwrap_or(i64::MAX) + 1,
+                    now,
+                    finding.role,
+                    finding.major,
+                    finding.problem,
+                    finding
+                        .location
+                        .as_ref()
+                        .map(|location| serde_json::to_string(location).unwrap_or_default()),
+                    finding.source,
+                    finding.target,
+                ])?;
+            }
+        }
+        transaction.commit()?;
+        Ok(())
+    }
+
+    /// A job's findings, in the order they were recorded.
+    ///
+    /// # Errors
+    ///
+    /// Returns a storage error.
+    pub fn findings(&self, id: &str) -> Result<Vec<Finding>, JobError> {
+        let connection = self.open()?;
+        let mut statement = connection.prepare(
+            "SELECT role, major, problem, location, source, target FROM job_findings WHERE job_id = ?1 ORDER BY seq",
+        )?;
+        let findings = statement
+            .query_map(params![id], |row| {
+                Ok(Finding {
+                    role: row.get(0)?,
+                    major: row.get(1)?,
+                    problem: row.get(2)?,
+                    location: row
+                        .get::<_, Option<String>>(3)?
+                        .and_then(|text| serde_json::from_str(&text).ok()),
+                    source: row.get(4)?,
+                    target: row.get(5)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(findings)
+    }
+
+    /// Records translations a job wrote, replacing earlier records of the
+    /// same strings.
+    ///
+    /// # Errors
+    ///
+    /// Returns a storage error.
+    pub fn add_written(
+        &self,
+        id: &str,
+        written: &[(UnitLocation, String, String)],
+    ) -> Result<(), JobError> {
+        if written.is_empty() {
+            return Ok(());
+        }
+        let mut connection = self.open()?;
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        {
+            let mut upsert = transaction.prepare(
+                "INSERT INTO job_written (location, job_id, created_ms, source, target) VALUES (?1, ?2, ?3, ?4, ?5)
+                 ON CONFLICT(location) DO UPDATE SET job_id = excluded.job_id, created_ms = excluded.created_ms, source = excluded.source, target = excluded.target",
+            )?;
+            let now = to_i64(now_unix_ms());
+            for (location, source, target) in written {
+                upsert.execute(params![
+                    serde_json::to_string(location).unwrap_or_default(),
+                    id,
+                    now,
+                    source,
+                    target,
+                ])?;
+            }
+        }
+        transaction.commit()?;
+        Ok(())
+    }
+
+    /// The translations jobs wrote, newest first, at most `limit`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a storage error.
+    pub fn written(&self, limit: usize) -> Result<Vec<Written>, JobError> {
+        let connection = self.open()?;
+        let mut statement = connection.prepare(
+            "SELECT location, job_id, created_ms, source, target FROM job_written ORDER BY created_ms DESC LIMIT ?1",
+        )?;
+        let written = statement
+            .query_map(params![i64::try_from(limit).unwrap_or(i64::MAX)], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, i64>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
+                ))
+            })?
+            .collect::<Result<Vec<_>, _>>()?
+            .into_iter()
+            .filter_map(|(location, job_id, created, source, target)| {
+                Some(Written {
+                    location: serde_json::from_str(&location).ok()?,
+                    job_id,
+                    created_at_unix_ms: to_u64(created),
+                    source,
+                    target,
+                })
+            })
+            .collect();
+        Ok(written)
+    }
+
+    /// The translation a job last wrote for a string, if any.
+    ///
+    /// # Errors
+    ///
+    /// Returns a storage error.
+    pub fn written_target(&self, location: &UnitLocation) -> Result<Option<String>, JobError> {
+        Ok(self
+            .open()?
+            .query_row(
+                "SELECT target FROM job_written WHERE location = ?1",
+                params![serde_json::to_string(location).unwrap_or_default()],
+                |row| row.get(0),
+            )
+            .optional()?)
+    }
+
     /// Lists events after `after_seq`, at most 200.
     ///
     /// # Errors
@@ -1099,6 +1299,9 @@ impl JobStore {
         }
         transaction.execute("DELETE FROM job_units WHERE job_id = ?1", params![id])?;
         transaction.execute("DELETE FROM job_events WHERE job_id = ?1", params![id])?;
+        // What the job wrote stays: it tells later jobs which translations
+        // agents wrote and which a person changed since.
+        transaction.execute("DELETE FROM job_findings WHERE job_id = ?1", params![id])?;
         transaction.execute("DELETE FROM jobs WHERE id = ?1", params![id])?;
         transaction.commit()?;
         Ok(())
@@ -1236,6 +1439,58 @@ mod tests {
         let fourth = store.claim_chunk(&job.id).expect("claim").expect("chunk");
         assert_eq!(fourth[0].location.row, 2);
         assert!(store.claim_chunk(&job.id).expect("claim").is_none());
+    }
+
+    #[test]
+    fn findings_and_written_translations_are_kept_for_learning() {
+        let directory = tempfile::tempdir().expect("temp");
+        let store = JobStore::new(directory.path().join("jobs.sqlite3"));
+        let job = store
+            .create("c1", &spec(), &[unit("Item", 1, 10)])
+            .expect("job");
+        let location = UnitLocation {
+            sheet: "Item".to_owned(),
+            row: 1,
+            subrow: 0,
+            column: Some(0),
+        };
+        let finding = Finding {
+            role: "blind".to_owned(),
+            major: true,
+            problem: "Reads as a translation.".to_owned(),
+            location: Some(location.clone()),
+            source: "Potion".to_owned(),
+            target: "Зелье".to_owned(),
+        };
+        store
+            .add_findings(&job.id, &[finding.clone(), finding.clone()])
+            .expect("findings");
+        assert_eq!(store.findings(&job.id).expect("read").len(), 2);
+
+        store
+            .add_written(
+                &job.id,
+                &[(location.clone(), "Potion".to_owned(), "Зелье".to_owned())],
+            )
+            .expect("written");
+        store
+            .add_written(
+                &job.id,
+                &[(location.clone(), "Potion".to_owned(), "Эликсир".to_owned())],
+            )
+            .expect("rewritten");
+        assert_eq!(
+            store.written_target(&location).expect("target").as_deref(),
+            Some("Эликсир")
+        );
+        assert_eq!(store.written(10).expect("all").len(), 1);
+
+        store
+            .set_status(&job.id, JobStatus::Cancelled, None)
+            .expect("cancel");
+        store.remove(&job.id).expect("remove");
+        assert!(store.findings(&job.id).expect("gone").is_empty());
+        assert_eq!(store.written(10).expect("kept").len(), 1);
     }
 
     #[test]

@@ -680,6 +680,42 @@ event. A string changed meanwhile is skipped as a conflict. The contract and
 writer requests carry the job's images when the model accepts images; after
 the job's conversation is deleted they are left out.
 
+#### Learning
+
+After each unit, the critics' first-round findings are recorded with the
+line's source and final translation, and every translation the job wrote is
+recorded with its source, the latest one per string. Removing a job deletes
+its findings but keeps what it wrote, so later jobs still know which
+translations agents wrote.
+
+When a job is about to complete, it learns once and records a `lessons`
+event (`aeria-ai::learning`, driven by the desktop's `job_learning`). The
+material is the job's findings, the findings against the knowledge itself,
+and reactions: translations whose current text differs from what a job last
+wrote (of the latest 3,000 such records), which a person changed. With
+fewer than five major findings, no reactions, and no findings against the
+knowledge, the job learns nothing. Otherwise a mentor request reads the
+material and the project's lessons and returns at most five new lessons for
+problems that recur, each with an identifier, a text with an example, and
+optionally a domain, and corrections of agent terms with reasons. New
+lessons are written to `lessons.md` on trial, with the mentor, the job, and
+the number of findings behind them; corrected terms replace agent terms
+(human terms are never changed).
+
+New lessons are then evaluated together on up to two units the job
+finished: the sheets with the most finished strings, quests and cutscenes
+first, at most 40 strings each. Each unit is prepared again with the
+knowledge that now has the lessons, the job's translations are taken out of
+it as the baseline, and it is localized without writing. A judge compares
+the new translations with the baseline in both orders, with every client
+language; a unit counts as won when the new version wins more orders than
+it loses. When the units won more often than they lost, the lessons become
+`active`; when they lost more often, `dropped`; otherwise they stay on
+trial. Each lesson records the date and the result of its evaluation. The
+job's completion report adds what it learned. Learning counts toward the
+job's tokens; a failure is reported in the event and never stops the job
+from completing.
+
 Jobs are machine-local application data, one SQLite database per project in
 `<app-data>/jobs/<key>.sqlite3` with the conversation key. A job records its
 conversation, specification (scope, instructions, worker model, token limit,

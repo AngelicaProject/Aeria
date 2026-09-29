@@ -546,6 +546,7 @@ export const ru: Catalog = {
   "angelica.worker.step": "Шаг {round} из {max}: {step}",
   "angelica.worker.stepHint": "Перед первой частью задача изучает свой объём: стиль каждого вида текста и персонажей без профиля. Затем часть проходит шесть шагов: термины, которых нет в знаниях проекта, контракт с решениями, общими для всех писателей, параллельное написание частей, критики каждой части, правка отмеченного и перепроверка изменённых строк.",
   "angelica.worker.step.study": "изучение",
+  "angelica.worker.step.learning": "обучение",
   "angelica.worker.step.terms": "термины",
   "angelica.worker.step.contract": "контракт",
   "angelica.worker.step.writing": "написание",
