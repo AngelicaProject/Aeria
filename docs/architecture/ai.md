@@ -658,42 +658,46 @@ strings.
 
 #### Study
 
-Before a job's first chunk, its runner studies the job's scope once and
-records a `study` event (`aeria-ai::study`, driven by the desktop's
-`job_study`). For each text domain of the scope whose agent style entry is
-missing, and for `general`, a researcher reads up to 40 samples spread over
-the scope (the lines of up to 40 quest and cutscene sheets, or the first
-rows of up to 10 sheets of another domain) in every client language and
-writes the domain's style entry. For each speaker label with at least three
-lines in the scope's quests and cutscenes and no profile in either layer,
-the most lines first and at most 200, a researcher reads up to 30 of the
-speaker's lines sampled evenly across the game with their other languages
-and writes a voice sheet: who the character is in the original and their
-gender, how each localization plays them (quoting its markers), four to six
+Before a job's first chunk, its runner studies the style of the job's
+scope once and records a `study` event (`aeria-ai::study`, driven by the
+desktop's `job_study`). For each text domain of the scope whose agent style
+entry is missing, and for `general`, a researcher reads up to 40 samples
+spread over the scope (the lines of up to 40 quest and cutscene sheets, or
+the first rows of up to 10 sheets of another domain) in every client
+language and writes the domain's style entry. The study starts building the
+source index without waiting for it, uses the job's model, counts toward the
+job's tokens, and pauses the job with a reason when the provider fails.
+
+Characters are studied by the chunks that need them, so a job starts
+writing within minutes however many speakers its scope has (a scope of 59
+quests had 121, which took 16 minutes to study before the first chunk).
+Before each chunk's contract, and at the same time as its terms, the
+chunk studies the speakers of its scene with at least two lines there, no
+profile in either layer, and no other chunk of the job studying them, the
+most lines first and at most six. A researcher reads up to 30 of a speaker's
+lines sampled evenly across the game with their other languages and writes
+a voice sheet: who the character is in the original and their gender, how
+each localization plays them (quoting its markers), four to six
 target-language devices that give the same portrait at the same strength,
 what flattens or caricatures them, their address from the French and
-German, and three of their most marked lines in the target language. System text, player choices such as
-`Q1`, and labels without letters are skipped. The study starts building the
-source index, uses the job's model, counts toward the job's tokens, and
-pauses the job with a reason when the provider fails.
+German, and three of their most marked lines in the target language. System
+text, player choices such as `Q1`, and labels without letters are skipped.
 
-The study first waits for the source index, up to three minutes, so that
-terms are decided from the project's existing translations. Before each
-chunk's contract, a researcher lists the unit's terminology the knowledge
-does not have (at most 40 terms; ordinary words, verbs, numbers, and levels
-are left out), reads up to six existing
-translations of each from the source index, and decides renderings; a
-second request checks them for grammar and meaning; forbidden variants that
-repeat the rendering or stand for "none" are dropped; and the checked terms
-are written to the agent layer with `study` in their note. The researcher
-compares each name in every language: a person's name keeps the project's
-rendering or is transliterated, while a name the localizations each made up
-anew (an establishment, a place or nickname with a meaning) gets a rendering
-inspired by all of them and up to two alternatives. The alternatives are
-kept in the term's note as `or: A / B`, and the job records a `name-choice`
-event for each such name. The unit's
-knowledge is then read again. A term another chunk wrote meanwhile keeps
-that chunk's rendering.
+The terms of a chunk are studied by one request: it lists the unit's
+terminology the knowledge does not have (ordinary words, verbs, numbers, and
+levels are left out), reading the translations of similar strings the unit's
+lines carry from the source index, and decides and checks each rendering
+for grammar and meaning. At most 40 new terms are kept, each once; forbidden
+variants that repeat the rendering or stand for "none" are dropped; and the
+terms are written to the agent layer with `study` in their note. The
+researcher compares each name in every language: a person's name keeps the
+project's rendering or is transliterated, while a name the localizations
+each made up anew (an establishment, a place or nickname with a meaning)
+gets a rendering inspired by all of them and up to two alternatives. The
+alternatives are kept in the term's note as `or: A / B`, and the job
+records a `name-choice` event for each such name. When terms or profiles
+were written, the unit's knowledge is read again. A term another chunk wrote
+meanwhile keeps that chunk's rendering.
 
 After a quest or cutscene unit, the story part of its contract is added to
 the sheet's entry in `story.md` (kept to its last 3,000 characters), so the
@@ -703,10 +707,13 @@ knowledge itself is wrong are recorded as `knowledge` job events.
 #### Steps
 
 The localizer runs seven steps; the requests of a step run in parallel, at
-most 8 at a time per chunk and at most 24 at a time across all lanes of a
-job:
+most 8 at a time per chunk and at most 96 at a time across all lanes of a
+job. A unit's time is set by how many requests it waits for one after the
+other, each about a minute with reasoning, so a fast unit of one part waits
+for six: terms and speakers, writing with its contract, versions,
+selection, critics, and fixes.
 
-0. **Terms**: the study of the unit's terms described above.
+0. **Terms**: the study of the unit's terms and speakers described above.
 1. **Contract**: one request reads the whole script and writes the decisions
    every writer shares: the story and tone (between `<story>` tags), a table
    of address (from the project knowledge where it decides, otherwise from
@@ -717,7 +724,9 @@ job:
 2. **Writing**: the chunk's strings are split into parts of at most 40, in
    order and of even size, and each part is written by its own request,
    which sees the whole script and the contract and rereads its text before
-   answering. Replies are lines of the form `L12: text`.
+   answering. Replies are lines of the form `L12: text`. A fast unit of one
+   part has no separate contract: its writer writes the contract first, then
+   a `=== LINES ===` marker, then the lines.
 3. **Voice**: one request per part with spoken lines chooses the lines that
    carry character (a marked voice, a joke, an oath, pomp, strong emotion)
    and writes three clearly different versions of each with the probability
@@ -745,10 +754,12 @@ job:
    list for the target language (Russian: officialese, bookish links,
    common calques, several colons and dashes in one line, two «который»).
 5. **Fixes**: one request per part with flags corrects the flagged lines;
-   changes to other lines are ignored.
-6. **Recheck**: the critics read the changed and flagged lines again; a
-   remaining major flag gets one more fix. A line whose major flag was not
-   changed by that fix needs review.
+   changes to other lines are ignored. In a fast unit a major flag counts as
+   settled when the fix changed its line; a line the fix left alone needs
+   review.
+6. **Recheck**, careful units only: the critics read the whole unit again; a
+   major flag gets one more fix, and a line whose major flag that fix did
+   not change needs review.
 
 After writing and after each fix, every line is checked as it would be
 written: structure against the assisted structure policy, a speaker label or
@@ -758,8 +769,8 @@ go back for correction up to twice; a line still refused is rejected.
 
 Each role has the reasoning effort that served it best, clamped to the
 efforts the model accepts: high for writers and the check of the player
-character and the versions, medium for the contract, the selector, the
-blind reader, the consistency check, and fixes, low for the
+character, medium for the contract, the versions, the selector, the blind
+reader, the consistency check, and fixes, low for the
 fidelity check and structure corrections. The jobs effort from the settings
 is a ceiling for every role.
 
@@ -854,9 +865,9 @@ or Angelica's default model. Settings show an effort choice for jobs even
 while they use Angelica's model; choosing an effort there stores Angelica's
 current model with that effort as the jobs model.
 
-Concurrency is 1 to 16 workers. When Angelica does not choose, a job of 100
-chunks or more gets 16 and a smaller one 8; either way a job never gets more
-workers than chunks. The proposal shows the count. The user can change it on
+Concurrency is 1 to 48 workers. When Angelica does not choose, a job of 48
+chunks or more gets 48 and a smaller one 24; either way a job never gets
+more workers than chunks. The proposal shows the count. The user can change it on
 the job card and Angelica with `set_job_workers` (for example after rate-limit
 errors), for a job that was not cancelled; this changes speed, not the
 strings or the token limit.

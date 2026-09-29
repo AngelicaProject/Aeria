@@ -23,12 +23,14 @@ pub const CHUNK_UNITS: usize = 30;
 pub const DIALOGUE_CHUNK_UNITS: usize = crate::localizer::MAX_UNIT_LINES;
 /// Most source characters in one chunk of a sheet that is not dialogue.
 pub const CHUNK_SOURCE_CHARS: usize = 12_000;
-/// Most workers one job runs at once.
-pub const MAX_CONCURRENCY: u8 = 16;
+/// Most workers one job runs at once. A unit waits on a few sequential
+/// requests that each take about a minute, so throughput comes from many
+/// units at once.
+pub const MAX_CONCURRENCY: u8 = 48;
 /// Workers a job runs when Angelica does not choose.
-pub const DEFAULT_CONCURRENCY: u8 = 8;
+pub const DEFAULT_CONCURRENCY: u8 = 24;
 /// Chunks from which a job runs [`MAX_CONCURRENCY`] workers by default.
-pub const LARGE_JOB_CHUNKS: u64 = 100;
+pub const LARGE_JOB_CHUNKS: u64 = 48;
 
 /// Workers for a job of `chunks` chunks: `requested` or, without it,
 /// [`MAX_CONCURRENCY`] for large jobs and [`DEFAULT_CONCURRENCY`] otherwise;
@@ -1695,14 +1697,17 @@ mod tests {
             5,
             "never more than the chunks"
         );
-        assert_eq!(job_concurrency(Some(40), 500), MAX_CONCURRENCY);
+        assert_eq!(job_concurrency(Some(200), 500), MAX_CONCURRENCY);
         assert_eq!(job_concurrency(Some(0), 500), 1);
 
         let (_directory, store) = store();
         let units: Vec<_> = (0..3).map(|row| unit("Item", row, 10)).collect();
         let job = store.create("c", &spec(), &units).expect("job");
         assert_eq!(
-            store.set_concurrency(&job.id, 40).expect("set").concurrency,
+            store
+                .set_concurrency(&job.id, 200)
+                .expect("set")
+                .concurrency,
             MAX_CONCURRENCY
         );
         assert_eq!(

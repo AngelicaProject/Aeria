@@ -256,7 +256,7 @@ type SetLimit = (tokenLimit: number, resume: boolean) => void;
 type SetConcurrency = (concurrency: number) => void;
 
 /** Most workers a job runs at once; matches the Rust limit. */
-const MAX_CONCURRENCY = 16;
+const MAX_CONCURRENCY = 48;
 const concurrencyOptions = Array.from({ length: MAX_CONCURRENCY }, (_, index) => ({ value: String(index + 1), label: String(index + 1) }));
 
 /** How many workers a job runs; a running job follows within seconds. */

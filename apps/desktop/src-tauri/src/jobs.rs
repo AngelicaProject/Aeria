@@ -835,7 +835,7 @@ pub(crate) fn start_proposed_job(
 /// Requests one job sends at once across all its lanes. Each lane's chunk
 /// sends its parts and critics in parallel; this keeps a job with many
 /// lanes within what a provider accepts.
-const JOB_PARALLEL_REQUESTS: usize = 24;
+const JOB_PARALLEL_REQUESTS: usize = 96;
 /// How often a request waiting for a free slot looks again.
 const GATE_POLL: Duration = Duration::from_millis(50);
 
@@ -897,6 +897,7 @@ struct JobRun {
     workers: Arc<WorkerBoard>,
     gate: Arc<RequestGate>,
     learning: Arc<std::sync::Mutex<job_learning::LearningState>>,
+    studied: Arc<job_study::StudiedSpeakers>,
 }
 
 impl JobRun {
@@ -930,6 +931,7 @@ pub(crate) fn spawn_runner(app: &tauri::AppHandle, job_id: &str) {
         workers: Arc::clone(&workers),
         gate: Arc::new(RequestGate::new(JOB_PARALLEL_REQUESTS)),
         learning: Arc::default(),
+        studied: Arc::default(),
     };
     app.state::<DesktopState>()
         .start_job_runner(job_id.to_owned(), workers, move || {
@@ -1836,8 +1838,15 @@ fn keep_learning(
 /// for.
 const NAME_CHOICE_EVENT: &str = "name-choice";
 
-/// Decides the unit's terms the knowledge lacks and, when some were
-/// written, reads the unit's knowledge again.
+/// What one of a unit's two studies returned.
+enum Studied {
+    Terms(Result<aeria_ai::study::TermStudy, ProviderError>),
+    Characters(Result<usize, ProviderError>),
+}
+
+/// Decides the unit's terms the knowledge lacks and studies its speakers
+/// without a profile, at the same time, and when anything was written,
+/// reads the unit's knowledge again.
 async fn study_unit_terms(
     run: &JobRun,
     caller: &JobCaller,
@@ -1845,10 +1854,26 @@ async fn study_unit_terms(
 ) -> Result<(), ProviderError> {
     caller.step(Step::Terms);
     let host = job_study::DesktopKnowledge {
-        app: run.app.clone(),
         root: run.root.clone(),
     };
-    let study = study_terms(caller, &host, unit).await?;
+    // The unit's speakers without a profile are studied at the same time
+    // as its terms.
+    let studied = futures_join(vec![
+        Box::pin(async { Studied::Terms(study_terms(caller, &host, unit).await) })
+            as Pin<Box<dyn Future<Output = Studied> + Send + '_>>,
+        Box::pin(async {
+            Studied::Characters(job_study::study_unit_characters(run, caller, unit).await)
+        }),
+    ])
+    .await;
+    let mut study = aeria_ai::study::TermStudy::default();
+    let mut characters = 0;
+    for result in studied {
+        match result {
+            Studied::Terms(result) => study = result?,
+            Studied::Characters(result) => characters = result?,
+        }
+    }
     // A made-up name a person may want otherwise is reported, so Angelica
     // can offer the choice when the job reports.
     for choice in &study.choices {
@@ -1862,7 +1887,7 @@ async fn study_unit_terms(
             .with_store(move |store, id| store.add_event(id, NAME_CHOICE_EVENT, &message, None))
             .await;
     }
-    if !study.written.is_empty() {
+    if !study.written.is_empty() || characters > 0 {
         let root = run.root.clone();
         let studied = unit.clone();
         if let Ok(text) =

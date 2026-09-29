@@ -1,22 +1,23 @@
 //! Study for translation jobs.
 //!
-//! Before a job's first chunk, its runner studies the job's scope: the style
-//! of every text domain the scope has and the agent knowledge lacks, and
-//! the characters who speak in the scope's quests and cutscenes without a
-//! profile. Each chunk then studies its own terms before its contract (see
-//! [`aeria_ai::study`]). Knowledge is written to the agent layer of the
-//! project (see [`aeria_ai::knowledge`]); a job studies its scope once and
-//! records a `study` event.
+//! Before a job's first chunk, its runner studies the style of every text
+//! domain the scope has and the agent knowledge lacks; a job does this once
+//! and records a `study` event. Each chunk then studies, at the same time,
+//! its own terms and the speakers of its scene who have no profile, before
+//! its contract (see [`aeria_ai::study`]), so a job starts writing within
+//! minutes whatever the number of its characters. Knowledge is written to
+//! the agent layer of the project (see [`aeria_ai::knowledge`]).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
+use std::sync::{Mutex, PoisonError};
 
 use aeria_ai::dialogue::LineRole;
 use aeria_ai::guidance::GlossaryEntry;
 use aeria_ai::knowledge::{
     self as knowledge_files, Domain, Knowledge, KnowledgeFile, Section, sheet_domain,
 };
-use aeria_ai::search::{ProjectSearch, SearchQuery};
+use aeria_ai::localizer::{LineKind, UnitOfWork};
 use aeria_ai::study::{
     CHARACTER_SAMPLES, KnowledgeHost, STYLE_SAMPLES, Sample, study_characters, study_style,
 };
@@ -25,53 +26,31 @@ use aeria_ai::tools::ProjectReader;
 use super::{JobCaller, JobRun, futures_join};
 use crate::angelica::DesktopReader;
 use crate::commands::run_blocking;
-use crate::search::{DesktopSearch, prepare_source_index, source_index};
+use crate::search::prepare_source_index;
 
-/// Most characters one job studies before its first chunk.
-const MAX_STUDIED_CHARACTERS: usize = 200;
-/// Lines a speaker needs in the scope to be studied.
-const MIN_SPEAKER_LINES: usize = 3;
+/// Most speakers one chunk studies before its contract.
+const MAX_UNIT_CHARACTERS: usize = 6;
+/// Lines a speaker needs in a chunk's scene to be studied.
+const MIN_SPEAKER_LINES: usize = 2;
 /// Dialogue sheets read for the samples of the dialogue domains.
 const STYLE_SHEETS: usize = 40;
 /// Sheets of another domain read for its samples.
 const DOMAIN_SHEETS: usize = 10;
-/// Two-second waits for the source index before a job's study, at most.
-const INDEX_WAIT_ROUNDS: u32 = 90;
 /// The event that says a job studied its scope.
 pub(super) const STUDY_EVENT: &str = "study";
 
 /// Project knowledge as the job's researchers see it.
 pub(super) struct DesktopKnowledge {
-    pub(super) app: tauri::AppHandle,
     pub(super) root: PathBuf,
 }
+
+/// Speakers a running job's chunks are studying or studied, so two chunks
+/// never study the same speaker. Kept in memory while the runner runs.
+pub(super) type StudiedSpeakers = Mutex<BTreeSet<String>>;
 
 impl KnowledgeHost for DesktopKnowledge {
     fn knowledge(&self) -> Knowledge {
         Knowledge::load(&self.root)
-    }
-
-    fn concordance(&self, term: &str, limit: usize) -> Vec<(String, String)> {
-        let query = SearchQuery {
-            text: term.to_owned(),
-            sheet: None,
-            offset: 0,
-            limit: u32::try_from(limit * 4).unwrap_or(u32::MAX),
-        };
-        // The index may still be building; the study then goes without it.
-        DesktopSearch {
-            app: self.app.clone(),
-        }
-        .search_source(&query)
-        .map(|found| {
-            found
-                .matches
-                .into_iter()
-                .filter_map(|found| found.target.map(|target| (found.source, target)))
-                .take(limit)
-                .collect()
-        })
-        .unwrap_or_default()
     }
 
     fn set_terms(&self, entries: &[GlossaryEntry]) -> Result<Vec<String>, String> {
@@ -92,7 +71,6 @@ struct StudyPlan {
     target: String,
     knowledge: String,
     styles: Vec<(Domain, Vec<Sample>)>,
-    characters: Vec<(String, usize, Vec<Sample>)>,
 }
 
 fn evidence(
@@ -145,27 +123,16 @@ fn is_character(label: &str) -> bool {
 }
 
 /// Candidate samples of the dialogue domains, by address, from a spread of
-/// the scope's dialogue sheets, and the scope's speakers with their number
-/// of lines.
+/// the scope's dialogue sheets.
 fn dialogue_candidates(
     reader: &DesktopReader,
     sheets: &[&String],
-) -> (BTreeMap<Domain, Vec<Sample>>, BTreeMap<String, usize>) {
+) -> BTreeMap<Domain, Vec<Sample>> {
     let mut by_domain: BTreeMap<Domain, Vec<Sample>> = BTreeMap::new();
-    let mut speakers: BTreeMap<String, usize> = BTreeMap::new();
-    let read_sheets: Vec<&String> = spread(sheets, STYLE_SHEETS);
-    for sheet in sheets {
+    for sheet in spread(sheets, STYLE_SHEETS) {
         let Ok(Some(dialogue)) = reader.dialogue(sheet) else {
             continue;
         };
-        for line in &dialogue.lines {
-            if let LineRole::Speech(speaker) = &line.role {
-                *speakers.entry(speaker.clone()).or_default() += 1;
-            }
-        }
-        if !read_sheets.contains(sheet) {
-            continue;
-        }
         for line in &dialogue.lines {
             by_domain
                 .entry(line_domain(&line.role))
@@ -180,7 +147,7 @@ fn dialogue_candidates(
                 });
         }
     }
-    (by_domain, speakers)
+    by_domain
 }
 
 /// Candidate samples of other domains, by address: the first rows of a few
@@ -278,7 +245,7 @@ fn plan(app: &tauri::AppHandle, root: &std::path::Path, sheets: &[String]) -> St
     let (dialogue_sheets, other_sheets): (Vec<&String>, Vec<&String>) = sheets
         .iter()
         .partition(|sheet| sheet_domain(sheet) == Domain::Dialogue);
-    let (mut by_domain, speakers) = dialogue_candidates(&reader, &dialogue_sheets);
+    let mut by_domain = dialogue_candidates(&reader, &dialogue_sheets);
     domain_candidates(&reader, &other_sheets, &mut by_domain);
 
     let styles = std::iter::once(Domain::General)
@@ -298,7 +265,39 @@ fn plan(app: &tauri::AppHandle, root: &std::path::Path, sheets: &[String]) -> St
         })
         .collect();
 
-    let mut wanted: Vec<(String, usize)> = speakers
+    StudyPlan {
+        knowledge: knowledge.prompt_for(&Domain::ALL, std::iter::empty(), std::iter::empty(), &[]),
+        target,
+        styles,
+    }
+}
+
+/// Studies the speakers of a chunk's scene who have at least
+/// [`MIN_SPEAKER_LINES`] lines in it, no profile, and no other chunk
+/// studying them, the most lines first and at most [`MAX_UNIT_CHARACTERS`].
+/// Returns how many profiles were written.
+///
+/// # Errors
+///
+/// Returns the provider failure of the study.
+pub(super) async fn study_unit_characters(
+    run: &JobRun,
+    caller: &JobCaller,
+    unit: &UnitOfWork,
+) -> Result<usize, aeria_ai::client::ProviderError> {
+    let mut counts: BTreeMap<String, usize> = BTreeMap::new();
+    for line in &unit.lines {
+        if let LineKind::Speech(speaker) = &line.kind {
+            *counts.entry(speaker.clone()).or_default() += 1;
+        }
+    }
+    let knowledge = {
+        let root = run.root.clone();
+        run_blocking(move || Ok(Knowledge::load(&root)))
+            .await
+            .unwrap_or_else(|_| Knowledge::load(&run.root))
+    };
+    let mut wanted: Vec<(String, usize)> = counts
         .into_iter()
         .filter(|(label, count)| {
             *count >= MIN_SPEAKER_LINES
@@ -307,20 +306,35 @@ fn plan(app: &tauri::AppHandle, root: &std::path::Path, sheets: &[String]) -> St
         })
         .collect();
     wanted.sort_by_key(|(_, count)| std::cmp::Reverse(*count));
-    wanted.truncate(MAX_STUDIED_CHARACTERS);
-    let characters = wanted
-        .into_iter()
-        .filter_map(|(label, _)| {
-            speaker_samples(&reader, &label).map(|(total, lines)| (label, total, lines))
-        })
-        .collect();
-
-    StudyPlan {
-        knowledge: knowledge.prompt_for(&Domain::ALL, std::iter::empty(), std::iter::empty(), &[]),
-        target,
-        styles,
-        characters,
+    let claimed: Vec<String> = {
+        let mut studied = run.studied.lock().unwrap_or_else(PoisonError::into_inner);
+        wanted
+            .into_iter()
+            .map(|(label, _)| label)
+            .filter(|label| studied.insert(label.clone()))
+            .take(MAX_UNIT_CHARACTERS)
+            .collect()
+    };
+    if claimed.is_empty() {
+        return Ok(0);
     }
+    let app = run.app.clone();
+    let speakers = run_blocking(move || {
+        let reader = DesktopReader { app };
+        Ok(claimed
+            .into_iter()
+            .filter_map(|label| {
+                speaker_samples(&reader, &label).map(|(total, lines)| (label, total, lines))
+            })
+            .collect::<Vec<_>>())
+    })
+    .await
+    .unwrap_or_default();
+    let host = DesktopKnowledge {
+        root: run.root.clone(),
+    };
+    let text = knowledge.prompt_for(&Domain::ALL, std::iter::empty(), std::iter::empty(), &[]);
+    study_characters(caller, &host, &unit.target_language, &text, &speakers).await
 }
 
 /// Studies a job's scope once, before its first chunk. Returns why the job
@@ -337,15 +351,9 @@ pub(super) async fn study_scope(run: &JobRun) -> Result<(), String> {
         .with_store(|store, id| Ok(store.summary(id)?.spec))
         .await
         .map_err(|error| error.message)?;
-    // Terms are decided from the project's existing translations, which
-    // the source index finds; the study waits for it, within reason.
+    // The source index gives chunks the translations of similar strings;
+    // it builds while the job runs.
     prepare_source_index(&run.app);
-    for _ in 0..INDEX_WAIT_ROUNDS {
-        if source_index(&run.app).is_ok() {
-            break;
-        }
-        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-    }
     let mut caller = JobCaller::for_job(run, &spec, 0, format!("{}-study", run.job_id))
         .await
         .map_err(|error| error.message)?;
@@ -359,7 +367,6 @@ pub(super) async fn study_scope(run: &JobRun) -> Result<(), String> {
         .await
         .map_err(|error| error.message)?;
     let host = DesktopKnowledge {
-        app: run.app.clone(),
         root: run.root.clone(),
     };
     let styles = futures_join(
@@ -388,18 +395,8 @@ pub(super) async fn study_scope(run: &JobRun) -> Result<(), String> {
             Err(error) => return Err(format!("the study of the job's scope failed: {error}")),
         }
     }
-    let characters = study_characters(
-        &caller,
-        &host,
-        &study.target,
-        &study.knowledge,
-        &study.characters,
-    )
-    .await
-    .map_err(|error| format!("the study of the job's characters failed: {error}"))?;
     let usage = caller.spent();
-    let message =
-        format!("studied the style of {domains} text domains and {characters} characters");
+    let message = format!("studied the style of {domains} text domains");
     run.with_store(move |store, id| {
         store.add_usage(id, usage)?;
         store.add_event(id, STUDY_EVENT, &message, None)

@@ -8,10 +8,9 @@
 //!   voice sheet: who the character is in the Japanese, how each
 //!   localization makes them sound, the target-language devices that give
 //!   the same portrait, address, and gender.
-//! - **Terms**: before a unit is localized, a researcher lists the unit's
-//!   terminology the knowledge does not have, reads how the project already
-//!   translates each term, decides renderings, and a second request checks
-//!   them for grammar before they are written. Names of people keep the
+//! - **Terms**: before a unit is localized, one request lists the unit's
+//!   terminology the knowledge does not have and decides and checks each
+//!   rendering, reading how the project translated similar strings. Names of people keep the
 //!   project's rendering; a name that the localizations each invented anew
 //!   (an establishment, a nickname with a meaning) gets a rendering and up
 //!   to two alternatives a person can choose instead.
@@ -22,8 +21,6 @@
 //! never changed (see [`crate::knowledge`]).
 
 use std::fmt::Write as _;
-
-use serde::Deserialize;
 
 use crate::client::ProviderError;
 use crate::guidance::GlossaryEntry;
@@ -36,8 +33,6 @@ pub const STYLE_SAMPLES: usize = 40;
 pub const CHARACTER_SAMPLES: usize = 30;
 /// Terms one unit's study decides, at most.
 const MAX_TERMS_PER_UNIT: usize = 40;
-/// Existing translations shown for each term.
-const CONCORDANCE_LINES: usize = 6;
 
 const EVIDENCE: &str = "\
 FINAL FANTASY XIV is written in Japanese; the English, German, and French texts are three \
@@ -76,10 +71,6 @@ fn samples_text(samples: &[Sample]) -> String {
 pub trait KnowledgeHost: Send + Sync {
     /// The project knowledge as it is now.
     fn knowledge(&self) -> Knowledge;
-
-    /// Translated strings whose source contains `term`, as `(source,
-    /// translation)` pairs; empty when the project cannot be searched.
-    fn concordance(&self, term: &str, limit: usize) -> Vec<(String, String)>;
 
     /// Adds agent terms and returns the terms written.
     ///
@@ -178,74 +169,59 @@ fn unit_listing(unit: &UnitOfWork) -> String {
                 let _ = writeln!(text, "  {code}: {evidence}");
             }
         }
+        // Translations of similar strings show how the project already
+        // renders the names and terms they share.
+        for memory in line.memory.iter().take(2) {
+            let _ = writeln!(
+                text,
+                "  project translation of a similar string: {} → {}",
+                memory.source, memory.target
+            );
+        }
     }
     text
 }
 
-fn candidates_request(unit: &UnitOfWork) -> Request {
-    Request {
-        role: Role::Terms,
-        part: None,
-        system: research_system(&unit.target_language),
-        user: format!(
-            "{}\n{}\nList the terminology in these lines that must be translated the same way \
-             everywhere in the game: names of people, places, organizations, monsters, and items, \
-             game-specific mechanics and crafting terms, interface names, and fixed in-world \
-             expressions such as oaths. Leave out ordinary words and phrases even when they recur: \
-             verbs such as deliver or speak, common nouns, numbers and levels, and instructions. \
-             Write each term as it appears in the {} lines, without an article. Output JSON only: \
-             {{\"terms\": [\"term\", …]}}",
-            unit.title,
-            unit_listing(unit),
-            unit.source_language
-        ),
-    }
-}
-
-fn decide_request(unit: &UnitOfWork, knowledge: &str, blocks: &str) -> Request {
+/// One request that lists the unit's terminology the knowledge lacks and
+/// decides and checks each rendering, so a unit waits for one answer.
+fn terms_request(unit: &UnitOfWork) -> Request {
     let target = &unit.target_language;
     Request {
         role: Role::Terms,
         part: None,
         system: research_system(target),
         user: format!(
-            "For each term below, decide its {target} rendering for the whole game. The lines \
-             under each term show how the project already translates it; they are machine drafts \
-             that may be wrong. Keep a rendering that is correct and already common, so the \
-             project stays consistent, and replace one that is wrong (for example, a fire shard \
-             and a fire crystal are different items). Use the unit below and the other languages \
-             to understand what each term is, and stay consistent with the project knowledge.\n\
+            "{}\n{}\nList the terminology in these lines that must be translated the same way \
+             everywhere in the game and that the project knowledge below does not have yet: \
+             names of people, places, organizations, monsters, and items, game-specific mechanics \
+             and crafting terms, interface names, and fixed in-world expressions such as oaths. \
+             Leave out ordinary words and phrases even when they recur: verbs such as deliver or \
+             speak, common nouns, numbers and levels, and instructions. Write each term as it \
+             appears in the {} lines, without an article.\n\
+             Decide each term's {target} rendering for the whole game. Translations of similar \
+             strings are the project's earlier work: keep a rendering they use when it is \
+             correct, and replace one that is wrong (a fire shard and a fire crystal are \
+             different items). Use the other languages to understand what each term is.\n\
              Names: compare the name in every language of the unit. A person's name or a \
              transliterated name keeps the project's rendering or is transliterated. Where the \
              localizations each made up their own name (an establishment, a place or a nickname \
              with a meaning, such as a tavern the Japanese calls the drowned dolphin, the English \
-             the Drowning Wench, and the German drowned sorrow), decide a {target} name that works \
-             for its players and is not unintentionally funny, inspired by all of them, and give \
-             two alternatives a person could choose instead.\n\n\
-             Output for each term exactly two lines:\n## <term as given>\n<rendering> | <kind and \
-             grammatical note> | <wrong renderings to avoid, separated by ;, never the rendering \
-             itself; leave the field empty when there are none> | <for a made-up name only: two \
-             alternatives separated by ;>\n\n\
-             Project knowledge:\n{knowledge}\n\nUnit:\n{}\nTerms:\n{blocks}",
-            unit_listing(unit)
-        ),
-    }
-}
-
-fn check_request(target: &str, decided: &str) -> Request {
-    Request {
-        role: Role::Terms,
-        part: None,
-        system: format!(
-            "You are a {target} editor checking terminology decisions of a game localization."
-        ),
-        user: format!(
-            "Check each rendering below, and each alternative after the last |. It must be \
-             grammatical, natural {target} that a player accepts as a name or term in a fantasy \
-             game, match what the term is, suit a person where the term is a name, and not be \
-             unintentionally funny. For example, an organization's name needs a proper noun \
-             phrase whose words agree. Fix the entries that fail and keep the others. Output the \
-             complete list in the same format and nothing else.\n\n{decided}"
+             the Drowning Wench, and the German drowned sorrow), decide a {target} name that \
+             works for its players, inspired by all of them, and give two alternatives a person \
+             could choose instead.\n\
+             Every rendering and alternative must be grammatical, natural {target} that a player \
+             accepts in a fantasy game, match what the term is, suit a person where the term is a \
+             name, and not be unintentionally funny; an organization's name needs a proper noun \
+             phrase whose words agree.\n\n\
+             Output for each term exactly two lines, and nothing else:\n## <term as given>\n\
+             <rendering> | <kind and grammatical note> | <wrong renderings to avoid, separated by \
+             ;, never the rendering itself; leave the field empty when there are none> | <for a \
+             made-up name only: two alternatives separated by ;>\n\n\
+             Project knowledge:\n{}",
+            unit.title,
+            unit_listing(unit),
+            unit.source_language,
+            unit.knowledge
         ),
     }
 }
@@ -367,20 +343,6 @@ fn parse_decisions_with_choices(reply: &str) -> (Vec<GlossaryEntry>, Vec<NameCho
     (entries, choices)
 }
 
-fn parse_candidates(reply: &str) -> Vec<String> {
-    #[derive(Deserialize)]
-    struct Reply {
-        #[serde(default)]
-        terms: Vec<String>,
-    }
-    let (Some(start), Some(end)) = (reply.find('{'), reply.rfind('}')) else {
-        return Vec::new();
-    };
-    serde_json::from_str::<Reply>(&reply[start..=end])
-        .map(|reply| reply.terms)
-        .unwrap_or_default()
-}
-
 /// Decides the terms of a unit the knowledge does not have yet and writes
 /// them. Returns the terms written and the made-up names a person may
 /// choose another rendering for.
@@ -393,54 +355,24 @@ pub async fn study_terms(
     host: &dyn KnowledgeHost,
     unit: &UnitOfWork,
 ) -> Result<TermStudy, ProviderError> {
-    let replies = caller.call_all(vec![candidates_request(unit)]).await?;
+    let replies = caller.call_all(vec![terms_request(unit)]).await?;
     let knowledge = host.knowledge();
-    let mut terms: Vec<String> = Vec::new();
-    for term in parse_candidates(&replies[0].0) {
-        let term = term.trim().to_owned();
-        if term.is_empty()
-            || term.chars().count() > 60
-            || term.chars().any(|c| c.is_ascii_digit())
-            || knowledge.has_term(&term)
-            || terms.iter().any(|known| known.eq_ignore_ascii_case(&term))
-        {
-            continue;
-        }
-        terms.push(term);
-        if terms.len() >= MAX_TERMS_PER_UNIT {
-            break;
-        }
-    }
-    if terms.is_empty() {
-        return Ok(TermStudy::default());
-    }
-    let mut blocks = String::new();
-    for term in &terms {
-        let uses = host.concordance(term, CONCORDANCE_LINES);
-        let _ = writeln!(blocks, "### {term}");
-        if uses.is_empty() {
-            blocks.push_str("  (not translated elsewhere in the project yet)\n");
-        }
-        for (source, target) in uses {
-            let _ = writeln!(blocks, "  source: {source}\n  translation: {target}");
-        }
-    }
-    let knowledge_text = unit.knowledge.as_str();
-    let decided = caller
-        .call_all(vec![decide_request(unit, knowledge_text, &blocks)])
-        .await?;
-    let checked = caller
-        .call_all(vec![check_request(&unit.target_language, &decided[0].0)])
-        .await?;
-    let (mut entries, mut choices) = parse_decisions_with_choices(&checked[0].0);
-    if entries.is_empty() {
-        (entries, choices) = parse_decisions_with_choices(&decided[0].0);
-    }
-    // Only the terms asked about are written.
+    let (mut entries, mut choices) = parse_decisions_with_choices(&replies[0].0);
+    // Only new, plausible terms are written, each once.
+    let mut seen: Vec<String> = Vec::new();
     entries.retain(|entry| {
-        terms
-            .iter()
-            .any(|term| term.eq_ignore_ascii_case(&entry.term))
+        let term = entry.term.trim();
+        let key = term.to_lowercase();
+        let keep = !term.is_empty()
+            && term.chars().count() <= 60
+            && !term.chars().any(|c| c.is_ascii_digit())
+            && !knowledge.has_term(term)
+            && !seen.contains(&key)
+            && seen.len() < MAX_TERMS_PER_UNIT;
+        if keep {
+            seen.push(key);
+        }
+        keep
     });
     choices.retain(|choice| {
         entries
@@ -609,16 +541,6 @@ mod tests {
                 &crate::knowledge::AgentTexts::default(),
             )
         }
-        fn concordance(&self, term: &str, _: usize) -> Vec<(String, String)> {
-            if term == "Fire Shard" {
-                vec![(
-                    "Bring a fire shard.".to_owned(),
-                    "Принеси огненный кристалл.".to_owned(),
-                )]
-            } else {
-                Vec::new()
-            }
-        }
         fn set_terms(&self, entries: &[GlossaryEntry]) -> Result<Vec<String>, String> {
             self.written.lock().unwrap().extend(entries.iter().cloned());
             Ok(entries.iter().map(|entry| entry.term.clone()).collect())
@@ -641,13 +563,7 @@ mod tests {
                 let mut replies = Vec::new();
                 for request in requests {
                     self.asked.lock().unwrap().push(request.user.clone());
-                    let reply = if request.user.contains("Output JSON only") {
-                        r#"{"terms": ["Fire Shard", "aether", "Lyngsath", "fire shard"]}"#
-                    } else if request.user.contains("Check each rendering") {
-                        "## Fire Shard\nогненный осколок | предмет | огненный кристалл\n## Lyngsath\nЛингсат | имя |\n## Stranger\nчужой | |"
-                    } else {
-                        "## Fire Shard\nогненный кристалл | предмет |\n## Lyngsath\nЛингсат | имя |"
-                    };
+                    let reply = "## Fire Shard\nогненный осколок | предмет | огненный кристалл\n## Aether\nэфир | |\n## Lyngsath\nЛингсат | имя |\n## fire shard\nосколок | |\n## Level 5\nуровень 5 | |";
                     replies.push((reply.to_owned(), Usage::default()));
                 }
                 Ok(replies)
@@ -656,7 +572,7 @@ mod tests {
     }
 
     #[test]
-    fn term_study_skips_known_terms_and_writes_the_checked_decisions() {
+    fn term_study_writes_new_terms_once_in_one_request() {
         let unit = UnitOfWork {
             title: "Quest".to_owned(),
             sheet: "quest/000/Test".to_owned(),
@@ -695,7 +611,7 @@ mod tests {
         assert_eq!(entries[0].translation, "огненный осколок");
         assert_eq!(entries[0].note.as_deref(), Some("предмет; study"));
         let asked = caller.asked.lock().unwrap().clone();
-        assert!(asked[1].contains("Принеси огненный кристалл."));
-        assert!(!asked[1].contains("### aether"));
+        assert_eq!(asked.len(), 1, "one request per unit");
+        assert!(asked[0].contains("Bring a fire shard"));
     }
 }

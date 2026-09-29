@@ -533,7 +533,7 @@ pub fn job_tool_definitions(write: bool) -> Vec<ToolDefinition> {
         let mut start_properties = scope.as_object().cloned().unwrap_or_default();
         start_properties.insert("instructions".to_owned(), json!({ "type": "string", "description": "Instructions for every chunk of the job: style, terminology, anything the user asked for." }));
         start_properties.insert("images".to_owned(), json!({ "type": "array", "items": { "type": "string" }, "maxItems": MAX_JOB_IMAGES, "description": "IDs of images in this conversation that every chunk should see, such as a screenshot showing where the strings appear. Each image is sent with every chunk." }));
-        start_properties.insert("concurrency".to_owned(), json!({ "type": "integer", "minimum": 1, "maximum": MAX_CONCURRENCY, "description": "Workers translating chunks at once. Omit it to let Aeria choose: 16 for jobs of 100 chunks or more, otherwise 8, never more than the chunks. Choose fewer only when the provider reported rate limits or the user asks; set_job_workers changes it while the job runs." }));
+        start_properties.insert("concurrency".to_owned(), json!({ "type": "integer", "minimum": 1, "maximum": MAX_CONCURRENCY, "description": "Workers translating chunks at once. Omit it to let Aeria choose: 48 for jobs of 48 chunks or more, otherwise 24, never more than the chunks. Choose fewer only when the provider reported rate limits or the user asks; set_job_workers changes it while the job runs." }));
         start_properties.insert("quality".to_owned(), json!({ "type": "string", "enum": ["fast", "careful"], "description": "fast (the default): parts of each unit written in parallel, fast enough for the whole game. careful: one writer per unit, stronger critics, and two full rechecks; slower and costlier, for story quests whose scenes must hold together." }));
         tools.extend([
             ToolDefinition {
@@ -2750,9 +2750,9 @@ mod tests {
             "{}",
             retried.content
         );
-        let workers = tools.execute("set_job_workers", r#"{"job_id":"j1","concurrency":30}"#);
+        let workers = tools.execute("set_job_workers", r#"{"job_id":"j1","concurrency":90}"#);
         assert!(
-            workers.content.contains("\"concurrency\":16"),
+            workers.content.contains("\"concurrency\":48"),
             "{}",
             workers.content
         );
@@ -2771,12 +2771,12 @@ mod tests {
             [
                 "estimate Untranslated",
                 "estimate Untranslated",
-                "propose [\"Item\"] Formal. Some(16) []",
+                "propose [\"Item\"] Formal. Some(20) []",
                 "propose [\"Item\"]  None [\"a\"]",
                 "amend Keep names in Latin.",
                 "retry [Rejected, Failed]",
                 "control Resume",
-                "workers 16",
+                "workers 48",
                 "limit 900000",
             ]
         );

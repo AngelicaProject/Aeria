@@ -28,8 +28,9 @@
 //!    and a consistency check against the knowledge; a cheap scan adds minor
 //!    flags for machine-written phrasing in languages Aeria has a list for.
 //! 6. **Fix**: flagged lines of each part are corrected in parallel; only
-//!    flagged lines may change.
-//! 7. **Recheck**: the critics read the changed and flagged lines again; a
+//!    flagged lines may change. In a fast unit, a major flag whose line
+//!    the fix did not change leaves the line needing review.
+//! 7. **Recheck** (careful units only): the critics read the changed and flagged lines again; a
 //!    remaining major flag is fixed once more, and a line whose major flag
 //!    was not fixed needs review.
 //!
@@ -116,8 +117,9 @@ impl Role {
     /// player character need the most, the fidelity check the least.
     const fn wanted_effort(self) -> ReasoningEffort {
         match self {
-            Self::Writer | Self::Variants | Self::Player | Self::Mentor => ReasoningEffort::High,
+            Self::Writer | Self::Player | Self::Mentor => ReasoningEffort::High,
             Self::Contract
+            | Self::Variants
             | Self::Select
             | Self::Blind
             | Self::Consistency
@@ -420,6 +422,9 @@ would notice it. Minor: a better wording exists. Go through every line you are a
 check; flag only real problems, and an empty list is the right answer when there are none. \
 Do not rewrite lines.";
 
+/// Separates the contract from the lines in a combined reply.
+const LINES_MARKER: &str = "=== LINES ===";
+
 const LINE_FORMAT: &str = "\
 Output exactly one line per string, in the form `L12: text`, each on a single line (line \
 breaks of the source stay <br>). Nothing else.";
@@ -635,6 +640,43 @@ impl Localization {
                 self.script()
             ),
         }
+    }
+
+    /// Step 1 and 2 at once for a unit of one part: the writer states the
+    /// contract, for the critics and the story, and then writes the lines.
+    #[must_use]
+    pub fn contract_and_write_request(&self) -> Request {
+        let contract = self.contract_request();
+        let lines = Self::ids(&self.parts[0]);
+        Request {
+            role: Role::Writer,
+            part: Some(0),
+            system: contract.system,
+            user: format!(
+                "{}\n\nOne writer translates this unit: first write the contract as asked, \
+                 as notes for yourself and the critics; then a line `{LINES_MARKER}`; then \
+                 write these lines in {}: {lines}. Write them as one continuous scene, \
+                 following your contract. Before answering, reread your text as a player \
+                 would and fix what sounds translated, stiff, or out of character, and every \
+                 word that assumes the player character's gender; do this in your head. After \
+                 the marker: {LINE_FORMAT}\n\n{MARKED}",
+                contract.user.replace(
+                    "Several writers will translate the lines marked `translate` in parallel, \
+                     and they must agree on every decision. Write the contract they all \
+                     follow",
+                    "Write the contract of this unit"
+                ),
+                self.unit.target_language
+            ),
+        }
+    }
+
+    /// Takes the reply of [`Self::contract_and_write_request`]: the
+    /// contract before the marker and the lines after it.
+    pub fn accept_contract_and_written(&mut self, reply: &str) {
+        let (contract, lines) = reply.split_once(LINES_MARKER).unwrap_or(("", reply));
+        self.set_contract(contract);
+        self.accept_written(0, lines);
     }
 
     /// Records the contract.
@@ -1576,10 +1618,10 @@ async fn fix(
     Ok(())
 }
 
-/// Localizes one unit of work: contract, parallel writers, structure
-/// corrections, versions of the lines with character and a choice among
-/// them, critics, fixes, and a recheck of what changed; a careful unit has
-/// one writer and two full rechecks.
+/// Localizes one unit of work: contract, parallel writers (one request for
+/// both when a fast unit has one part), structure corrections, versions of
+/// the lines with character and a choice among them, critics, and fixes; a
+/// careful unit has one writer and two full rechecks.
 ///
 /// # Errors
 ///
@@ -1597,16 +1639,29 @@ pub async fn localize(
     };
     let mut localization = Localization::with_part_lines(unit, part_lines);
 
-    caller.step(Step::Contract);
-    let contract = call(caller, vec![localization.contract_request()], &mut usage).await?;
-    localization.set_contract(&contract[0]);
+    if localization.parts().len() == 1 && !options.careful {
+        // One writer states the contract and writes: one request fewer to
+        // wait for, which is most of a short unit's time.
+        caller.step(Step::Writing);
+        let replies = call(
+            caller,
+            vec![localization.contract_and_write_request()],
+            &mut usage,
+        )
+        .await?;
+        localization.accept_contract_and_written(&replies[0]);
+    } else {
+        caller.step(Step::Contract);
+        let contract = call(caller, vec![localization.contract_request()], &mut usage).await?;
+        localization.set_contract(&contract[0]);
 
-    caller.step(Step::Writing);
-    let requests = localization.write_requests();
-    let replies = call(caller, requests.clone(), &mut usage).await?;
-    for (request, reply) in requests.iter().zip(&replies) {
-        if let Some(part) = request.part {
-            localization.accept_written(part, reply);
+        caller.step(Step::Writing);
+        let requests = localization.write_requests();
+        let replies = call(caller, requests.clone(), &mut usage).await?;
+        for (request, reply) in requests.iter().zip(&replies) {
+            if let Some(part) = request.part {
+                localization.accept_written(part, reply);
+            }
         }
     }
     let mut refused = correct_structure(caller, &mut localization, &mut usage).await?;
@@ -1621,11 +1676,20 @@ pub async fn localize(
     fix(caller, &mut localization, &first, &mut usage).await?;
     refused.extend(correct_structure(caller, &mut localization, &mut usage).await?);
 
-    caller.step(Step::Rechecking);
+    // A fast unit trusts its fix: a major flag counts as settled when its
+    // line changed, and a line the fix left alone needs review. A careful
+    // unit is read whole again, twice.
     let mut touched = localization.changed_since(&before_fix);
+    let mut open: Vec<Flag> = first
+        .iter()
+        .filter(|flag| flag.major && !touched.contains(&flag.line))
+        .cloned()
+        .collect();
     touched.extend(first.iter().map(|flag| flag.line));
-    let rechecks = if options.careful { 2 } else { 1 };
-    let mut open: Vec<Flag> = Vec::new();
+    let rechecks = if options.careful { 2 } else { 0 };
+    if rechecks > 0 {
+        caller.step(Step::Rechecking);
+    }
     for _ in 0..rechecks {
         // A careful unit is read whole again; a fast one only where it
         // changed or was flagged.
@@ -1856,7 +1920,10 @@ mod tests {
                     self.asked.lock().unwrap().push(request.role);
                     let reply = match request.role {
                         Role::Contract => "Address: A → player: ты".to_owned(),
-                        Role::Writer => "L1: Ты пришёл.\nL2: Хорошо.".to_owned(),
+                        Role::Writer => {
+                            "Address: A → player: ты\n=== LINES ===\nL1: Ты пришёл.\nL2: Хорошо."
+                                .to_owned()
+                        }
                         Role::Player if self.player_flag => {
                             r#"{"flags": [{"line": "L1", "severity": "major", "problem": "Assumes a male player."}]}"#.to_owned()
                         }
@@ -1932,10 +1999,11 @@ mod tests {
         );
         assert_eq!(result.outcomes[0].target.as_deref(), Some("Ты пришёл."));
         let asked = caller.asked.lock().unwrap().clone();
+        // A fast unit of one part writes its contract with its lines and
+        // is not rechecked.
         assert_eq!(
             asked,
             vec![
-                Role::Contract,
                 Role::Writer,
                 Role::Variants,
                 Role::Blind,
@@ -1943,17 +2011,10 @@ mod tests {
                 Role::Player
             ]
         );
-        assert_eq!(result.usage.prompt_tokens, 60);
+        assert_eq!(result.usage.prompt_tokens, 50);
         assert_eq!(
             caller.steps.lock().unwrap().clone(),
-            vec![
-                Step::Contract,
-                Step::Writing,
-                Step::Voicing,
-                Step::Reviewing,
-                Step::Fixing,
-                Step::Rechecking
-            ]
+            vec![Step::Writing, Step::Voicing, Step::Reviewing, Step::Fixing]
         );
     }
 
