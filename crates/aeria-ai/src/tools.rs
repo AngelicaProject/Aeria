@@ -21,7 +21,7 @@ use crate::guidance::{
 use crate::images::MAX_JOB_IMAGES;
 use crate::jobs::{
     JobEstimate, JobEvent, JobFilter, JobQuality, JobScope, JobStatus, JobSummary, JobUnit,
-    MAX_CONCURRENCY, UnitStatus,
+    UnitStatus,
 };
 use crate::search::{ProjectSearch, run_search_tool};
 
@@ -502,6 +502,7 @@ pub fn job_tool_definitions(write: bool) -> Vec<ToolDefinition> {
         "sheets": { "type": "array", "items": { "type": "string" }, "description": "Exact sheet names. With no sheets and no patterns, every sheet of the project." },
         "patterns": { "type": "array", "items": { "type": "string" }, "description": "Sheet name patterns where * stands for any text, ignoring case, such as quest/* (every quest), quest/*/Man* (quests whose ID starts with Man), cut_scene/*, or *Name." },
         "exclude": { "type": "array", "items": { "type": "string" }, "description": "Patterns of sheets to leave out, such as quest/*/Cls* when class quests get a job of their own." },
+        "careful": { "type": "array", "items": { "type": "string" }, "description": "Patterns of sheets localized with quality careful inside the job, such as quest/*/Man* for the first main story quests; other sheets use the job's quality." },
         "filter": { "type": "string", "enum": ["untranslated", "needsReview", "untranslatedAndDrafts"], "description": "Which strings: untranslated ones (default), ones needing review, or untranslated ones and existing drafts. Reviewed translations are never included." },
     });
     let job_id = json!({ "type": "object", "properties": { "job_id": { "type": "string" } }, "required": ["job_id"], "additionalProperties": false });
@@ -533,7 +534,6 @@ pub fn job_tool_definitions(write: bool) -> Vec<ToolDefinition> {
         let mut start_properties = scope.as_object().cloned().unwrap_or_default();
         start_properties.insert("instructions".to_owned(), json!({ "type": "string", "description": "Instructions for every chunk of the job: style, terminology, anything the user asked for." }));
         start_properties.insert("images".to_owned(), json!({ "type": "array", "items": { "type": "string" }, "maxItems": MAX_JOB_IMAGES, "description": "IDs of images in this conversation that every chunk should see, such as a screenshot showing where the strings appear. Each image is sent with every chunk." }));
-        start_properties.insert("concurrency".to_owned(), json!({ "type": "integer", "minimum": 1, "maximum": MAX_CONCURRENCY, "description": "Workers translating chunks at once. Omit it to let Aeria choose: 48 for jobs of 48 chunks or more, otherwise 24, never more than the chunks. Choose fewer only when the provider reported rate limits or the user asks; set_job_workers changes it while the job runs." }));
         start_properties.insert("quality".to_owned(), json!({ "type": "string", "enum": ["fast", "careful"], "description": "fast (the default): parts of each unit written in parallel, fast enough for the whole game. careful: a high effort for every step and two full rechecks; about twice the tokens and slower, for main story quests or when the user asks." }));
         tools.extend([
             ToolDefinition {
@@ -565,32 +565,6 @@ pub fn job_tool_definitions(write: bool) -> Vec<ToolDefinition> {
                     "additionalProperties": false,
                 }),
             },
-            ToolDefinition {
-                name: "raise_job_limit",
-                description: "Proposes a new token limit for a job, for example when it paused at its limit or its projectedTokens exceed it. The user approves the limit; a job paused at its limit then resumes.",
-                parameters: json!({
-                    "type": "object",
-                    "properties": {
-                        "job_id": { "type": "string" },
-                        "token_limit": { "type": "integer", "minimum": 1, "description": "The new limit for the whole job, above the tokens already used; base it on projectedTokens with some headroom." },
-                    },
-                    "required": ["job_id", "token_limit"],
-                    "additionalProperties": false,
-                }),
-            },
-            ToolDefinition {
-                name: "set_job_workers",
-                description: "Changes how many workers a job runs at once, 1 to 16, for example fewer after rate-limit errors. Workers above the new count stop after their current chunk; new ones start within seconds.",
-                parameters: json!({
-                    "type": "object",
-                    "properties": {
-                        "job_id": { "type": "string" },
-                        "concurrency": { "type": "integer", "minimum": 1, "maximum": MAX_CONCURRENCY },
-                    },
-                    "required": ["job_id", "concurrency"],
-                    "additionalProperties": false,
-                }),
-            },
             ToolDefinition { name: "pause_job", description: "Pauses a running job after its current chunks.", parameters: job_id.clone() },
             ToolDefinition { name: "resume_job", description: "Resumes a paused job.", parameters: job_id.clone() },
             ToolDefinition { name: "cancel_job", description: "Cancels a job. Translations already written stay.", parameters: job_id },
@@ -609,6 +583,8 @@ struct ScopeArgs {
     patterns: Vec<String>,
     #[serde(default)]
     exclude: Vec<String>,
+    #[serde(default)]
+    careful: Vec<String>,
     filter: Option<JobFilter>,
     quality: Option<JobQuality>,
 }
@@ -622,10 +598,11 @@ struct StartJobArgs {
     patterns: Vec<String>,
     #[serde(default)]
     exclude: Vec<String>,
+    #[serde(default)]
+    careful: Vec<String>,
     filter: Option<JobFilter>,
     #[serde(default)]
     instructions: String,
-    concurrency: Option<u8>,
     #[serde(default)]
     images: Vec<String>,
     #[serde(default)]
@@ -646,20 +623,6 @@ struct RevisionArgs {
 #[serde(deny_unknown_fields)]
 struct JobIdArgs {
     job_id: String,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct WorkersArgs {
-    job_id: String,
-    concurrency: u8,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct LimitArgs {
-    job_id: String,
-    token_limit: u64,
 }
 
 #[derive(Deserialize)]
@@ -695,6 +658,7 @@ fn start_job(jobs: &dyn JobControl, args: StartJobArgs) -> Result<Value, ToolErr
     let scope = JobScope {
         patterns: args.patterns,
         exclude: args.exclude,
+        careful: args.careful,
         ..JobScope::sheets(args.sheets, args.filter.unwrap_or(JobFilter::Untranslated))
     };
     let mut seen = std::collections::HashSet::new();
@@ -711,8 +675,7 @@ fn start_job(jobs: &dyn JobControl, args: StartJobArgs) -> Result<Value, ToolErr
     let outcome = jobs.propose(
         scope,
         args.instructions.trim().to_owned(),
-        args.concurrency
-            .map(|concurrency| concurrency.clamp(1, MAX_CONCURRENCY)),
+        None,
         &images,
         args.quality,
     )?;
@@ -790,6 +753,7 @@ fn run_job_tool(
             let scope = JobScope {
                 patterns: args.patterns,
                 exclude: args.exclude,
+                careful: args.careful,
                 ..JobScope::sheets(args.sheets, args.filter.unwrap_or(JobFilter::Untranslated))
             };
             to_value(
@@ -839,26 +803,6 @@ fn run_job_tool(
             Ok(json!({ "amended": true }))
         }
         "retry_units" => retry_units(jobs, parse(arguments)?),
-        "set_job_workers" => {
-            let args: WorkersArgs = parse(arguments)?;
-            let concurrency =
-                jobs.set_concurrency(&args.job_id, args.concurrency.clamp(1, MAX_CONCURRENCY))?;
-            Ok(json!({ "concurrency": concurrency }))
-        }
-        "raise_job_limit" => {
-            let args: LimitArgs = parse(arguments)?;
-            Ok(match jobs.propose_limit(&args.job_id, args.token_limit)? {
-                ProposalOutcome::Pending { proposal_id } => json!({
-                    "status": "awaitingApproval",
-                    "proposalId": proposal_id,
-                    "note": "The user approves the new limit; a job paused at its limit then resumes.",
-                }),
-                ProposalOutcome::Applied => json!({ "status": "applied" }),
-                ProposalOutcome::Conflict { message } | ProposalOutcome::Failed { message } => {
-                    json!({ "status": "failed", "errors": [message] })
-                }
-            })
-        }
         "pause_job" | "resume_job" | "cancel_job" => {
             let args: JobIdArgs = parse(arguments)?;
             let action = match name {
@@ -1468,8 +1412,7 @@ impl<'a> ReadTools<'a> {
                 run_search_tool(search, self.reader, name, arguments)
             }
             "estimate_job" | "start_job" | "job_status" | "job_events" | "amend_job"
-            | "retry_units" | "set_job_workers" | "raise_job_limit" | "pause_job"
-            | "resume_job" | "cancel_job" | "propose_revision" => {
+            | "retry_units" | "pause_job" | "resume_job" | "cancel_job" | "propose_revision" => {
                 let Some(jobs) = self.jobs else {
                     return Err(ToolError::new("translation jobs are not available here"));
                 };
@@ -2727,7 +2670,7 @@ mod tests {
         let tools = ReadTools::with_writer(&reader, &writer).with_jobs(&jobs);
         let started = tools.execute(
             "start_job",
-            r#"{"sheets":["Item"],"instructions":" Formal. ","concurrency":20}"#,
+            r#"{"sheets":["Item"],"instructions":" Formal. "}"#,
         );
         assert!(
             started.content.contains("awaitingApproval"),
@@ -2750,37 +2693,24 @@ mod tests {
             "{}",
             retried.content
         );
-        let workers = tools.execute("set_job_workers", r#"{"job_id":"j1","concurrency":90}"#);
-        assert!(
-            workers.content.contains("\"concurrency\":48"),
-            "{}",
-            workers.content
-        );
-        let raised = tools.execute("raise_job_limit", r#"{"job_id":"j1","token_limit":900000}"#);
-        assert!(
-            raised.content.contains("awaitingApproval"),
-            "{}",
-            raised.content
-        );
-        assert!(
-            chat.execute("raise_job_limit", r#"{"job_id":"j1","token_limit":900000}"#)
-                .is_error
-        );
         assert_eq!(
             jobs.calls.lock().expect("lock").as_slice(),
             [
                 "estimate Untranslated",
                 "estimate Untranslated",
-                "propose [\"Item\"] Formal. Some(20) []",
+                "propose [\"Item\"] Formal. None []",
                 "propose [\"Item\"]  None [\"a\"]",
                 "amend Keep names in Latin.",
                 "retry [Rejected, Failed]",
                 "control Resume",
-                "workers 48",
-                "limit 900000",
             ]
         );
         assert!(ReadTools::new(&reader).execute("job_status", "{}").is_error);
+        assert!(
+            tools
+                .execute("set_job_workers", r#"{"job_id":"j1","concurrency":9}"#)
+                .is_error
+        );
     }
 
     #[test]

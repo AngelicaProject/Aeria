@@ -82,6 +82,10 @@ pub struct JobScope {
     /// Sheets whose names match one of these patterns are left out.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub exclude: Vec<String>,
+    /// Sheets whose names match one of these patterns are localized with
+    /// quality careful, whatever the job's quality.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub careful: Vec<String>,
 }
 
 impl JobScope {
@@ -94,7 +98,17 @@ impl JobScope {
             units: Vec::new(),
             patterns: Vec::new(),
             exclude: Vec::new(),
+            careful: Vec::new(),
         }
+    }
+
+    /// Whether a sheet of the scope is localized with quality careful by
+    /// its [`Self::careful`] patterns.
+    #[must_use]
+    pub fn is_careful(&self, sheet: &str) -> bool {
+        self.careful
+            .iter()
+            .any(|pattern| sheet_matches(pattern, sheet))
     }
 
     /// Whether the scope names no sheets and no patterns: every sheet.
@@ -1563,6 +1577,12 @@ mod tests {
         assert!(scope.includes_sheet("Addon"));
         assert!(!scope.includes_sheet("Item"));
         assert!(JobScope::sheets(Vec::new(), JobFilter::Untranslated).includes_sheet("Item"));
+        let story = JobScope {
+            careful: vec!["quest/*/Man*".to_owned()],
+            ..JobScope::sheets(Vec::new(), JobFilter::Untranslated)
+        };
+        assert!(story.is_careful("quest/000/ManFst004_00124"));
+        assert!(!story.is_careful("quest/000/SubFst004_00027"));
     }
 
     #[test]

@@ -583,11 +583,15 @@ what is implemented.
 
 Angelica has `estimate_job` in every mode and `job_status` and `job_events`
 to report on jobs. In Ask and Auto-draft modes she also has `start_job`,
-`amend_job`, `retry_units`, `set_job_workers`, `raise_job_limit`, `pause_job`, `resume_job`, and
-`cancel_job`.
-`start_job` never starts anything: it records a job proposal with the scope,
-instructions, concurrency, the estimate, and a token limit of twice
-the estimate (at least 200,000). The user starts the job from the proposal.
+`amend_job`, `retry_units`, `pause_job`, `resume_job`, and `cancel_job`.
+A job is presented to the user as a localization: one continuous process
+over a scope, from a few sheets to the whole project (no sheets and no
+patterns), which the user starts with one click and can pause and resume.
+Nobody sets its workers or a token limit.
+`start_job` never starts anything: it records a proposal with the scope,
+instructions, and the estimate. The user starts the localization from the
+proposal. A scope's `careful` patterns name sheets localized with quality
+careful inside a fast localization, such as the first main story quests.
 `start_job` can also name up to 4 images of its conversation, for example a
 screenshot showing where the strings appear; each is sent with the contract
 and writer requests of every chunk.
@@ -595,11 +599,9 @@ An image ID the conversation does not have is refused, and so are images
 while the jobs model does not accept them. The estimate does not include
 them.
 For a large request (the interface, all quests, the whole game) Angelica is
-instructed to plan the jobs herself: find the sheets with `list_sheets`,
-scope with patterns and exclusions, split names and terms first, main story
-quests careful, other quests fast, and the interface as its own job,
-calibrate each uncalibrated kind of text once, report the plan with the total
-estimate, and propose the jobs one after another.
+instructed to propose one localization of the whole scope, never stages the
+user starts one by one, and to leave calibrations of kinds of text the
+localization reaches later in the decisions list.
 
 A scope is a list of sheets, sheet name patterns, or every sheet with
 translatable strings, and a filter. A pattern matches a sheet name ignoring
@@ -782,8 +784,7 @@ contract, every role but structure corrections asks for a high effort, and
 the recheck reads the whole unit again, twice, fixing its major findings
 each time. (Careful units were once written by one writer each; a scene of
 a hundred lines or more then made one request that outlasted the rest of
-its job.) A careful job's estimate, and so its token limit, is twice a fast
-one's.
+its job.) A careful job's estimate is twice a fast one's.
 
 Nothing is written until the unit is done. Each translation is then written
 through `ProjectSession::set_assisted_target` against the recorded state,
@@ -858,8 +859,9 @@ from completing.
 
 Jobs are machine-local application data, one SQLite database per project in
 `<app-data>/jobs/<key>.sqlite3` with the conversation key. A job records its
-conversation, specification (scope, instructions, worker model, token limit,
-concurrency, and the references of its images), status (`running`, `paused` with a reason, `completed`,
+conversation, specification (scope, instructions, worker model, a token
+limit kept only in the record, the concurrency ceiling, and the references
+of its images), status (`running`, `paused` with a reason, `completed`,
 `cancelled`), token usage, events, and each string's chunk, status
 (`pending`, `running`, `finished`, `flagged`, `rejected`, `failed`,
 `conflict`, and `drafted` for jobs of earlier versions),
@@ -868,23 +870,21 @@ or Angelica's default model. Settings show an effort choice for jobs even
 while they use Angelica's model; choosing an effort there stores Angelica's
 current model with that effort as the jobs model.
 
-Concurrency is 1 to 48 workers. When Angelica does not choose, a job of 48
-chunks or more gets 48 and a smaller one 24; either way a job never gets
-more workers than chunks. The proposal shows the count. The user can change it on
-the job card and Angelica with `set_job_workers` (for example after rate-limit
-errors), for a job that was not cancelled; this changes speed, not the
-strings or the token limit.
-
-A running job has `concurrency` lanes. Every two seconds the runner reads the
-job's count and starts missing lanes when it grew; a lane above a lowered
-count stops before claiming its next chunk. Each lane claims the next chunk,
-checks first that the job's project is still open, and pauses the job when
-the token limit is reached or when, after 40 finished strings, more than 30 %
-were rejected. A network, timeout, rate-limit, or unavailable failure returns
-the chunk's strings to the queue and waits (20 seconds times the failures in
-a row); the third failure in a row pauses the job, as does a rejected key.
-Other provider errors fail the chunk's strings. An interrupted chunk writes
-nothing.
+A job works on up to 48 chunks at once (its concurrency, a ceiling of 48 for
+jobs of 48 chunks or more and 24 otherwise, never more than its chunks).
+How many it works on is its pace, which nobody sets: a job starts with 16,
+adds one for every two chunks finished, and halves, to no fewer than two,
+when a chunk returns for a provider failure such as a rate limit. The
+runner checks the pace every two seconds and starts missing lanes; a lane
+above a lowered pace stops before claiming its next chunk. Each lane claims
+the next chunk, checks first that the job's project is still open, and
+pauses the job when, after 40 finished strings, more than 30 % were
+rejected. Spending never pauses a job: a provider's own usage limit stops
+it through its failures. A network, timeout, rate-limit, or unavailable
+failure returns the chunk's strings to the queue and waits (20 seconds times
+the failures in a row); the third failure in a row pauses the job, as does a
+rejected key. Other provider errors fail the chunk's strings. An interrupted
+chunk writes nothing.
 Pausing or cancelling returns claimed strings to the queue; a job left
 running when Aeria closed is paused the next time its project's jobs are
 read. Rejected, failed, and skipped strings can be queued again.
@@ -945,14 +945,7 @@ paused or cancelled first.
 A job's summary includes its chunk count, its finished chunks (chunks with
 no pending or running strings), and, once a chunk finished, a projection:
 the tokens used so far plus their average per finished chunk for each
-unfinished chunk. The card shows the projection and warns when it exceeds
-the limit. The user can change the limit of a job that was not cancelled to
-any value above the tokens already used; a job paused at its limit shows a
-limit field prefilled with the projection plus a quarter (rounded up to
-10,000) and resumes with the new limit. Angelica cannot change a limit
-herself: `raise_job_limit` records a proposal with the job's use,
-projection, current and new limit, and approving it sets the limit and
-resumes a job that paused at its old one.
+unfinished chunk.
 
 When a job completes or pauses on its own, Aeria wakes Angelica: unless a
 turn is already running there, it adds an automatic `[Aeria]` message to the

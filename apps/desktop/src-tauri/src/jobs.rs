@@ -832,6 +832,51 @@ pub(crate) fn start_proposed_job(
     Ok(job.id)
 }
 
+/// Scenes a job works on when it starts; the pace grows from here.
+const START_LANES: usize = 16;
+/// Scenes a job keeps working on even while the provider struggles.
+const MIN_LANES: usize = 2;
+/// Chunks finished in a row that add one scene to the pace.
+const GROW_AFTER: u32 = 2;
+
+/// How many scenes a running job works on at once. Nobody sets it: it
+/// grows by one every [`GROW_AFTER`] finished chunks and halves when the
+/// provider fails, never above the job's concurrency, which is a ceiling.
+#[derive(Debug)]
+pub(super) struct Pace {
+    target: usize,
+    successes: u32,
+}
+
+impl Default for Pace {
+    fn default() -> Self {
+        Self {
+            target: START_LANES,
+            successes: 0,
+        }
+    }
+}
+
+impl Pace {
+    /// The scenes to work on now, within `ceiling`.
+    fn lanes(&self, ceiling: usize) -> usize {
+        self.target.clamp(1, ceiling.max(1))
+    }
+
+    fn succeeded(&mut self, ceiling: usize) {
+        self.successes += 1;
+        if self.successes >= GROW_AFTER {
+            self.successes = 0;
+            self.target = (self.target + 1).min(ceiling.max(1));
+        }
+    }
+
+    fn failed(&mut self) {
+        self.successes = 0;
+        self.target = (self.target / 2).max(MIN_LANES);
+    }
+}
+
 /// Requests one job sends at once across all its lanes. Each lane's chunk
 /// sends its parts and critics in parallel; this keeps a job with many
 /// lanes within what a provider accepts.
@@ -898,6 +943,7 @@ struct JobRun {
     gate: Arc<RequestGate>,
     learning: Arc<std::sync::Mutex<job_learning::LearningState>>,
     studied: Arc<job_study::StudiedSpeakers>,
+    pace: Arc<std::sync::Mutex<Pace>>,
 }
 
 impl JobRun {
@@ -932,6 +978,7 @@ pub(crate) fn spawn_runner(app: &tauri::AppHandle, job_id: &str) {
         gate: Arc::new(RequestGate::new(JOB_PARALLEL_REQUESTS)),
         learning: Arc::default(),
         studied: Arc::default(),
+        pace: Arc::default(),
     };
     app.state::<DesktopState>()
         .start_job_runner(job_id.to_owned(), workers, move || {
@@ -943,22 +990,31 @@ pub(crate) fn spawn_runner(app: &tauri::AppHandle, job_id: &str) {
 const CONCURRENCY_CHECK: Duration = Duration::from_secs(2);
 
 /// The job's worker count and whether it still runs.
+/// The lanes a job should run now, by its pace within its concurrency, and
+/// whether it is running.
 async fn runner_state(run: &JobRun) -> Option<(u8, bool)> {
-    run.with_store(|store, id| {
-        let job = store.summary(id)?;
-        Ok((
-            job.spec.concurrency.max(1),
-            job.status == JobStatus::Running,
-        ))
-    })
-    .await
-    .ok()
+    let (ceiling, running) = run
+        .with_store(|store, id| {
+            let job = store.summary(id)?;
+            Ok((
+                usize::from(job.spec.concurrency.max(1)),
+                job.status == JobStatus::Running,
+            ))
+        })
+        .await
+        .ok()?;
+    let lanes = run
+        .pace
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .lanes(ceiling);
+    Some((u8::try_from(lanes).unwrap_or(u8::MAX), running))
 }
 
 /// Runs a job's lanes until none has work. Lanes run in a join set, so
-/// aborting the runner aborts them too. When the job's worker count grows,
-/// the missing lanes start; lanes above a smaller count stop by themselves
-/// after their current chunk.
+/// aborting the runner aborts them too. When the job's pace grows, the
+/// missing lanes start; lanes above a smaller pace stop by themselves after
+/// their current chunk.
 /// Learns from a job that is about to complete, so its report says what it
 /// learned; `None` when the job does not complete now.
 async fn learn_before_completion(run: &JobRun) -> Option<String> {
@@ -1114,14 +1170,10 @@ enum ChunkEnd {
     Stop(String),
 }
 
-/// Why a job must pause before its next chunk, if it must.
+/// Why a job must pause before its next chunk, if it must. Spending is
+/// not a reason: a provider's own usage limit stops a job through its
+/// failures, and the job card shows what it costs.
 fn pause_reason(job: &JobSummary) -> Option<String> {
-    if job.usage.prompt_tokens + job.usage.completion_tokens >= job.spec.token_limit {
-        return Some(format!(
-            "the token limit of {} was reached",
-            job.spec.token_limit
-        ));
-    }
     let processed = job.counts.processed();
     (processed >= REJECTION_SAMPLE && job.counts.rejected * 10 > processed * 3).then(|| {
         format!(
@@ -1146,11 +1198,16 @@ async fn lane_loop(run: &JobRun, lane: usize) {
             pause_with_reason(run, "the project was closed".to_owned()).await;
             return;
         }
+        let pace = run.pace.clone();
         let claimed = run
             .with_store(move |store, id| {
                 let job = store.summary(id)?;
-                // A lane above a lowered worker count stops here.
-                if job.status != JobStatus::Running || lane >= usize::from(job.spec.concurrency) {
+                let lanes = pace
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .lanes(usize::from(job.spec.concurrency));
+                // A lane above a lowered pace stops here.
+                if job.status != JobStatus::Running || lane >= lanes {
                     return Ok(Ok(None));
                 }
                 if let Some(reason) = pause_reason(&job) {
@@ -1191,9 +1248,14 @@ async fn lane_loop(run: &JobRun, lane: usize) {
                 activity.start_chunk(chunk, &sheet, rows, count, now);
             });
         }
+        let ceiling = usize::from(spec.concurrency);
         match run_chunk(run, &spec, units, lane).await {
             ChunkEnd::Done => {
                 failures = 0;
+                run.pace
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .succeeded(ceiling);
                 run.workers.update(lane, |activity, _| {
                     activity.chunks_done += 1;
                     activity.last_error = None;
@@ -1204,6 +1266,10 @@ async fn lane_loop(run: &JobRun, lane: usize) {
             }
             ChunkEnd::Retry(message) => {
                 failures += 1;
+                run.pace
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .failed();
                 if failures >= MAX_PROVIDER_FAILURES {
                     pause_with_reason(run, format!("the provider keeps failing: {message}")).await;
                     return;
@@ -1908,14 +1974,21 @@ async fn run_chunk(run: &JobRun, spec: &JobSpec, units: Vec<JobUnit>, lane: usiz
         .iter()
         .map(|unit| (unit.seq, UnitStatus::Pending, None))
         .collect();
-    let caller = match JobCaller::for_job(run, spec, lane, format!("{}-{chunk}", run.job_id)).await
+    let mut caller =
+        match JobCaller::for_job(run, spec, lane, format!("{}-{chunk}", run.job_id)).await {
+            Ok(caller) => caller,
+            Err(error) => {
+                record_chunk(run, released, aeria_ai::chat::Usage::default()).await;
+                return ChunkEnd::Stop(error.message);
+            }
+        };
+    // A sheet the scope marks careful is localized carefully in any job.
+    if units
+        .first()
+        .is_some_and(|unit| spec.scope.is_careful(&unit.location.sheet))
     {
-        Ok(caller) => caller,
-        Err(error) => {
-            record_chunk(run, released, aeria_ai::chat::Usage::default()).await;
-            return ChunkEnd::Stop(error.message);
-        }
-    };
+        caller.careful = true;
+    }
     let prepare_run = run.clone();
     let prepare_units = units.clone();
     let prepared = match run_blocking(move || prepare_chunk(&prepare_run, &prepare_units)).await {
@@ -2315,7 +2388,7 @@ mod tests {
     }
 
     #[test]
-    fn pauses_follow_the_token_limit_and_the_rejection_share() {
+    fn pauses_follow_the_rejection_share_not_the_tokens() {
         let mut job = JobSummary {
             id: "j".to_owned(),
             conversation_id: "c".to_owned(),
@@ -2351,6 +2424,24 @@ mod tests {
         job.counts.rejected = 0;
         job.usage.prompt_tokens = 900;
         job.usage.completion_tokens = 100;
-        assert!(pause_reason(&job).expect("tokens").contains("token limit"));
+        assert_eq!(pause_reason(&job), None, "spending never pauses a job");
+    }
+
+    #[test]
+    fn the_pace_grows_with_finished_chunks_and_halves_on_failures() {
+        let mut pace = Pace::default();
+        assert_eq!(pace.lanes(48), START_LANES);
+        assert_eq!(pace.lanes(4), 4, "the job's concurrency is a ceiling");
+        for _ in 0..GROW_AFTER * 3 {
+            pace.succeeded(48);
+        }
+        assert_eq!(pace.lanes(48), START_LANES + 3);
+        pace.failed();
+        let grown = START_LANES + 3;
+        assert_eq!(pace.lanes(48), grown / 2);
+        for _ in 0..10 {
+            pace.failed();
+        }
+        assert_eq!(pace.lanes(48), MIN_LANES);
     }
 }
