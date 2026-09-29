@@ -898,7 +898,19 @@ active workers, the chunks being translated right now.
 
 A chunk's outcomes and token usage are recorded when the chunk ends. Usage is
 summed as each request finishes, so a chunk the provider interrupts still
-records the tokens it spent.
+records the tokens it spent. Usage includes the prompt tokens the provider
+served from its prompt cache (`cached_tokens` in the Responses and Chat
+Completions usage details), and the job card shows their share of the prompt
+tokens.
+
+Prompt tokens were four fifths of a job's tokens, most of them the same
+rules, knowledge, and script sent again with every request. Every request
+about a unit except the blind reader's therefore has the same system
+message: the rules, the unit's knowledge, and the whole script with every
+client language. Each role's task, the contract, and the lines it concerns
+follow in the user message. The requests of a chunk share one session and
+prompt cache key, so after the first request the provider can serve that
+prefix from its cache, which providers bill and limit at a fraction.
 
 While a runner runs, each lane also reports its live activity: the chunk,
 sheet, and first and last row it translates, its phase (claiming a chunk,

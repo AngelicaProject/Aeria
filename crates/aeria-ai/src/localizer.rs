@@ -483,7 +483,11 @@ impl Localization {
         format!("L{}", line + 1)
     }
 
-    /// The system message shared by the contract, writers, and fixes.
+    /// The system message every request about the unit starts with, but
+    /// the blind reader's: the rules, the knowledge, and the whole script.
+    /// It is the same for each request of a unit, so a provider's prompt
+    /// cache serves it after the first request instead of billing it again;
+    /// each role's task follows in the user message.
     fn localizer_system(&self) -> String {
         let unit = &self.unit;
         let mut system = format!(
@@ -516,6 +520,14 @@ impl Localization {
                 unit.knowledge.trim()
             );
         }
+        let _ = write!(
+            system,
+            "\n\nThe unit: {} — {} lines, in order. Lines marked `translate` are the job's; \
+             the others are context.\n\n{}",
+            unit.title,
+            unit.lines.len(),
+            self.script()
+        );
         system
     }
 
@@ -614,9 +626,9 @@ impl Localization {
             part: None,
             system: self.localizer_system(),
             user: format!(
-                "{} — {} lines.\n\n{}\n\nSeveral writers will translate the lines marked \
-                 `translate` in parallel, and they must agree on every decision. Write the \
-                 contract they all follow, in English with {target} renderings:\n\
+                "Several writers will translate the lines marked `translate` in parallel, and \
+                 they must agree on every decision. Write the contract they all follow, in \
+                 English with {target} renderings:\n\
                  1. Story, between <story> and </story>: what happens and what the player \
                  learns, tone per character, jokes, wordplay, and callbacks that span lines \
                  (under 120 words); it is kept for the units that follow.\n\
@@ -634,10 +646,7 @@ impl Localization {
                  6. Voices: for each speaker, the two or three devices that make them sound \
                  like themselves in {target} in this unit, from their profiles and from how \
                  the original and the localizations make them sound.\n\
-                 Leave out sections that do not apply.",
-                self.unit.title,
-                self.unit.lines.len(),
-                self.script()
+                 Leave out sections that do not apply."
             ),
         }
     }
@@ -661,9 +670,8 @@ impl Localization {
                  word that assumes the player character's gender; do this in your head. After \
                  the marker: {LINE_FORMAT}\n\n{MARKED}",
                 contract.user.replace(
-                    "Several writers will translate the lines marked `translate` in parallel, \
-                     and they must agree on every decision. Write the contract they all \
-                     follow",
+                    "Several writers will translate the lines marked `translate` in parallel, and \
+                     they must agree on every decision. Write the contract they all follow",
                     "Write the contract of this unit"
                 ),
                 self.unit.target_language
@@ -688,7 +696,6 @@ impl Localization {
     #[must_use]
     pub fn write_requests(&self) -> Vec<Request> {
         let system = self.localizer_system();
-        let script = self.script();
         self.parts
             .iter()
             .enumerate()
@@ -697,7 +704,7 @@ impl Localization {
                 part: Some(part),
                 system: system.clone(),
                 user: format!(
-                    "{script}\n\nContract for this unit, shared with the writers of the other \
+                    "Contract for this unit, shared with the writers of the other \
                      parts; follow it exactly:\n{}\n\n{MARKED}\n\nWrite these lines in {}: \
                      {}. Write them as one continuous scene with the lines around them. Before \
                      answering, reread your text as a player would and fix what sounds \
@@ -912,18 +919,17 @@ impl Localization {
         Request {
             role: Role::Fidelity,
             part: Some(part),
-            system: format!(
-                "You compare {} game text with its {} source, line by line.",
-                self.unit.target_language, self.unit.source_language
-            ),
+            system: self.localizer_system(),
             user: format!(
-                "{body}\nFor each line, flag it when the translation says something its own \
+                "Your task now: compare the {} text of these lines with their {} source, \
+                 line by line.\n\n{body}\nFor each line, flag it when the translation says something its own \
                  source line does not say (for example content of another line or another \
                  language version), repeats what another line says, reveals what the line \
                  hides (such as a name behind ???), loses or changes the meaning, drops a \
                  joke, oath, hint, or callback, or misreads who speaks to whom. Free rewording \
                  that keeps meaning and tone is correct, and so are particles, idiom, slang, \
-                 and a speaker's voice devices.\n{FLAG_FORMAT}"
+                 and a speaker's voice devices.\n{FLAG_FORMAT}",
+                self.unit.target_language, self.unit.source_language
             ),
         }
     }
@@ -952,14 +958,12 @@ impl Localization {
         Request {
             role: Role::Player,
             part: Some(part),
-            system: format!(
-                "You check {} game text for the player character's gender and for forms of \
-                 address.",
-                self.unit.target_language
-            ),
+            system: self.localizer_system(),
             user: format!(
-                "{PLAYER_CHARACTER}\n\nProject knowledge:\n{}\n\nContract of this unit \
-                 (address, genders, names):\n{}\n\n{body}\n{MARKED} French past tenses with \
+                "Your task now: check the {} text of these lines for the player character's \
+                 gender and for forms of address, by the rules on the player character above.\n\n\
+                 Contract of this unit (address, genders, names):\n{}\n\n{body}\n{MARKED} French \
+                 past tenses with \
                  avoir do not agree, so check every line: every word that refers to or \
                  agrees with the player character (verbs, adjectives, participles, nouns for \
                  a person, pronouns) and every form of address. Flag a line when a word \
@@ -969,8 +973,7 @@ impl Localization {
                  a speaker's \
                  own gender is wrong, or when words do not agree with the person they are \
                  about, in each branch of a condition.\n{FLAG_FORMAT}",
-                self.unit.knowledge.trim(),
-                self.contract
+                self.unit.target_language, self.contract
             ),
         }
     }
@@ -993,21 +996,18 @@ impl Localization {
         Request {
             role: Role::Consistency,
             part: Some(part),
-            system: format!(
-                "You check {} game text against the project's decisions: its terms, its \
-                 characters' voices, its style, and the lessons it learned.",
-                self.unit.target_language
-            ),
+            system: self.localizer_system(),
             user: format!(
-                "Project knowledge:\n{}\n\nContract of this unit:\n{}\n\n{body}\nFlag lines that \
+                "Your task now: check the {} text of these lines against the project's \
+                 decisions above: its terms, its characters' voices, its style, and the lessons \
+                 it learned.\n\nContract of this unit:\n{}\n\n{body}\nFlag lines that \
                  contradict the project knowledge or the contract: a term or name rendered \
                  otherwise than the terms say or than elsewhere in these lines, a forbidden \
                  variant, a character who does not sound like their profile, a line that breaks \
                  the style of its kind of text, or one that repeats a mistake a lesson describes. \
                  When the knowledge itself seems wrong, such as an ungrammatical term, flag the \
                  line and start the problem with KNOWLEDGE:.\n{FLAG_FORMAT}",
-                self.unit.knowledge.trim(),
-                self.contract
+                self.unit.target_language, self.contract
             ),
         }
     }
@@ -1085,22 +1085,13 @@ impl Localization {
                 let mut text = String::new();
                 for index in &spoken {
                     let line = &self.unit.lines[*index];
-                    let _ = write!(
+                    let _ = writeln!(
                         text,
-                        "{} {}\n  now: {}\n  {}: {}",
+                        "{} {}: {}",
                         Self::id(*index),
                         line.kind.label(),
-                        self.targets.get(index).map_or("", String::as_str),
-                        self.unit.source_language,
-                        line.source
+                        self.targets.get(index).map_or("", String::as_str)
                     );
-                    for (code, evidence) in &line.evidence {
-                        let _ = write!(text, "\n  {code}: {evidence}");
-                    }
-                    for legend in &line.legends {
-                        let _ = write!(text, "\n  macro: {legend}");
-                    }
-                    text.push('\n');
                 }
                 Some(Request {
                     role: Role::Variants,
@@ -1108,7 +1099,8 @@ impl Localization {
                     system: system.clone(),
                     user: format!(
                         "Contract of this unit:\n{}\n\nThe {target} of the spoken lines of this \
-                         part, with every text of each line:\n{text}\nChoose the lines that \
+                         part (every text of each line is in the unit above):\n{text}\nChoose \
+                         the lines that \
                          carry character: a marked voice, a joke, an oath, pomp, clumsiness, \
                          strong emotion, a tic. Skip plain lines. For each chosen line write \
                          three clearly different {target} versions that differ in wording and \
@@ -1228,9 +1220,6 @@ impl Localization {
                         self.unit.source_language,
                         line.source
                     );
-                    for (code, evidence) in &line.evidence {
-                        let _ = write!(text, "\n  {code}: {evidence}");
-                    }
                     for (option, version) in options.iter().enumerate() {
                         let _ = write!(text, "\n  {}: {version}", option_label(option));
                     }
@@ -1933,6 +1922,7 @@ mod tests {
                         Usage {
                             prompt_tokens: 10,
                             completion_tokens: 1,
+                            cached_prompt_tokens: 0,
                         },
                     ));
                 }
@@ -2054,6 +2044,41 @@ mod tests {
             localization.target(0),
             Some("Ну <if $gn4>пришла<else>пришёл</if> же!")
         );
+    }
+
+    #[test]
+    fn every_request_but_the_blind_reader_starts_alike_for_the_prompt_cache() {
+        let mut localization = Localization::with_part_lines(
+            unit(vec![
+                line(LineKind::Speech("A".into()), "You came.", Some(0)),
+                line(LineKind::Speech("A".into()), "Good.", Some(1)),
+            ]),
+            1,
+        );
+        localization.set_contract("Address: A → player: ты");
+        localization.accept_written(0, "L1: Ты пришёл.");
+        localization.accept_written(1, "L2: Хорошо.");
+        let mut requests = vec![localization.contract_request()];
+        requests.extend(localization.write_requests());
+        requests.extend(localization.variant_requests());
+        requests.extend(localization.critic_requests(None));
+        let shared = &requests[0].system;
+        assert!(
+            shared.contains("L1 A — translate"),
+            "the script is in the prefix"
+        );
+        for request in &requests {
+            if request.role == Role::Blind {
+                assert_ne!(&request.system, shared);
+            } else {
+                assert_eq!(&request.system, shared, "{:?}", request.role);
+                assert!(
+                    !request.user.contains("L1 A — translate"),
+                    "{:?}",
+                    request.role
+                );
+            }
+        }
     }
 
     #[test]

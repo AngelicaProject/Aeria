@@ -231,6 +231,10 @@ impl ResponsesAccumulator {
                             .get("output_tokens")
                             .and_then(Value::as_u64)
                             .unwrap_or(0),
+                        cached_prompt_tokens: usage
+                            .pointer("/input_tokens_details/cached_tokens")
+                            .and_then(Value::as_u64)
+                            .unwrap_or(0),
                     });
                 }
                 self.completed = true;
@@ -374,7 +378,7 @@ mod tests {
             json!({ "type": "response.output_text.delta", "delta": "Смотрю" }),
             json!({ "type": "response.function_call_arguments.delta", "delta": "{}" }),
             json!({ "type": "response.output_item.done", "item": { "type": "function_call", "call_id": "c9", "name": "list_sheets", "arguments": "" } }),
-            json!({ "type": "response.completed", "response": { "status": "completed", "model": "gpt-5.5", "usage": { "input_tokens": 40, "output_tokens": 7 } } }),
+            json!({ "type": "response.completed", "response": { "status": "completed", "model": "gpt-5.5", "usage": { "input_tokens": 40, "output_tokens": 7, "input_tokens_details": { "cached_tokens": 32 } } } }),
         ])
         .expect("stream");
         assert_eq!(response.content, "Смотрю");
@@ -386,7 +390,8 @@ mod tests {
             response.usage,
             Some(Usage {
                 prompt_tokens: 40,
-                completion_tokens: 7
+                completion_tokens: 7,
+                cached_prompt_tokens: 32,
             })
         );
         assert_eq!(model.as_deref(), Some("gpt-5.5"));

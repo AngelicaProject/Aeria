@@ -276,6 +276,13 @@ function ConcurrencyControl({ job, busy, setConcurrency }: { job: JobSummary; bu
 }
 
 /** Whether the job will likely use more than its limit. */
+/** The share of the job's prompt tokens its provider served from cache. */
+const cachedShare = (job: JobSummary): string => {
+  const prompt = job.usage.promptTokens;
+  const cached = job.usage.cachedPromptTokens ?? 0;
+  return prompt > 0 ? `${Math.round((cached / prompt) * 100)} %` : "—";
+};
+
 const overLimit = (job: JobSummary) => job.projectedTokens !== null && job.projectedTokens > job.spec.tokenLimit;
 
 /** A new token limit for a job, prefilled with a suggestion. */
@@ -322,6 +329,7 @@ function JobInfo({ job, busy, setLimit, setConcurrency }: { job: JobSummary; bus
       <dt>{t("angelica.job.quality")}</dt><dd title={t("angelica.job.qualityHint")}>{t(job.spec.quality === "careful" ? "angelica.job.quality.careful" : "angelica.job.quality.fast")}</dd>
       <dt>{t("angelica.job.concurrency")}</dt><dd><ConcurrencyControl job={job} busy={busy} setConcurrency={setConcurrency} /></dd>
       <dt>{t("angelica.job.tokenUse")}</dt><dd>{`${formatNumber(totalTokens(job.usage))} / ${formatNumber(job.spec.tokenLimit)}`}</dd>
+      <dt title={t("angelica.job.cachedHint")}>{t("angelica.job.cached")}</dt><dd>{cachedShare(job)}</dd>
       {job.projectedTokens !== null ? <><dt>{t("angelica.job.projectionLabel")}</dt><dd title={t("angelica.job.projectionHint", { finished: job.finishedChunks, total: job.chunks })}>{formatNumber(job.projectedTokens)}</dd></> : null}
       {job.status !== "cancelled" ? <><dt>{t("angelica.job.limit")}</dt><dd><LimitEditor key={job.spec.tokenLimit} job={job} busy={busy} resume={false} setLimit={setLimit} /></dd></> : null}
       {job.spec.instructions ? <><dt>{t("angelica.job.instructions")}</dt><dd>{job.spec.instructions}</dd></> : null}

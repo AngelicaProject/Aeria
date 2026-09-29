@@ -170,12 +170,17 @@ impl ChatRequest<'_> {
 pub struct Usage {
     pub prompt_tokens: u64,
     pub completion_tokens: u64,
+    /// Prompt tokens the provider served from its prompt cache, part of
+    /// `prompt_tokens`; providers bill and limit them at a fraction.
+    #[serde(default)]
+    pub cached_prompt_tokens: u64,
 }
 
 impl Usage {
     pub fn add(&mut self, other: Self) {
         self.prompt_tokens += other.prompt_tokens;
         self.completion_tokens += other.completion_tokens;
+        self.cached_prompt_tokens += other.cached_prompt_tokens;
     }
 }
 
@@ -281,6 +286,10 @@ impl StreamAccumulator {
                     .unwrap_or(0),
                 completion_tokens: usage
                     .get("completion_tokens")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0),
+                cached_prompt_tokens: usage
+                    .pointer("/prompt_tokens_details/cached_tokens")
                     .and_then(Value::as_u64)
                     .unwrap_or(0),
             });
@@ -429,7 +438,8 @@ mod tests {
             response.usage,
             Some(Usage {
                 prompt_tokens: 12,
-                completion_tokens: 3
+                completion_tokens: 3,
+                cached_prompt_tokens: 0,
             })
         );
         assert_eq!(

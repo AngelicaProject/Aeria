@@ -400,6 +400,7 @@ mod tests {
             usage: Usage {
                 prompt_tokens: 1,
                 completion_tokens: 2,
+                cached_prompt_tokens: 0,
             },
         })
         .expect("usage");

@@ -603,7 +603,7 @@ export type ChatMessage =
   | { role: "assistant"; content: string; reasoning?: string; toolCalls?: ChatToolCall[] }
   | { role: "tool"; toolCallId: string; name: string; content: string };
 
-export type AiUsage = { promptTokens: number; completionTokens: number };
+export type AiUsage = { promptTokens: number; completionTokens: number; cachedPromptTokens?: number };
 
 export type ConversationDto = {
   id: string;

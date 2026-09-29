@@ -580,7 +580,8 @@ CREATE TABLE IF NOT EXISTS jobs (
     spec TEXT NOT NULL,
     created_ms INTEGER NOT NULL,
     prompt_tokens INTEGER NOT NULL DEFAULT 0,
-    completion_tokens INTEGER NOT NULL DEFAULT 0
+    completion_tokens INTEGER NOT NULL DEFAULT 0,
+    cached_tokens INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS job_units (
     job_id TEXT NOT NULL,
@@ -655,6 +656,16 @@ impl JobStore {
         connection.busy_timeout(std::time::Duration::from_secs(10))?;
         connection.execute_batch("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;")?;
         connection.execute_batch(SCHEMA)?;
+        // Stores created before cached prompt tokens were counted get the
+        // column; the count starts at zero for their jobs.
+        let has_cached = connection
+            .prepare("SELECT 1 FROM pragma_table_info('jobs') WHERE name = 'cached_tokens'")?
+            .exists([])?;
+        if !has_cached {
+            connection.execute_batch(
+                "ALTER TABLE jobs ADD COLUMN cached_tokens INTEGER NOT NULL DEFAULT 0;",
+            )?;
+        }
         Ok(connection)
     }
 
@@ -739,7 +750,7 @@ impl JobStore {
         let connection = self.open()?;
         let row = connection
             .query_row(
-                "SELECT conversation_id, status, reason, spec, created_ms, prompt_tokens, completion_tokens FROM jobs WHERE id = ?1",
+                "SELECT conversation_id, status, reason, spec, created_ms, prompt_tokens, completion_tokens, cached_tokens FROM jobs WHERE id = ?1",
                 params![id],
                 |row| {
                     Ok((
@@ -750,6 +761,7 @@ impl JobStore {
                         row.get::<_, i64>(4)?,
                         row.get::<_, i64>(5)?,
                         row.get::<_, i64>(6)?,
+                        row.get::<_, i64>(7)?,
                     ))
                 },
             )
@@ -790,6 +802,7 @@ impl JobStore {
         let usage = Usage {
             prompt_tokens: to_u64(row.5),
             completion_tokens: to_u64(row.6),
+            cached_prompt_tokens: to_u64(row.7),
         };
         Ok(JobSummary {
             active_workers: to_u64(active_workers),
@@ -937,8 +950,13 @@ impl JobStore {
     /// Returns a storage error.
     pub fn add_usage(&self, id: &str, usage: Usage) -> Result<(), JobError> {
         self.open()?.execute(
-            "UPDATE jobs SET prompt_tokens = prompt_tokens + ?2, completion_tokens = completion_tokens + ?3 WHERE id = ?1",
-            params![id, to_i64(usage.prompt_tokens), to_i64(usage.completion_tokens)],
+            "UPDATE jobs SET prompt_tokens = prompt_tokens + ?2, completion_tokens = completion_tokens + ?3, cached_tokens = cached_tokens + ?4 WHERE id = ?1",
+            params![
+                id,
+                to_i64(usage.prompt_tokens),
+                to_i64(usage.completion_tokens),
+                to_i64(usage.cached_prompt_tokens)
+            ],
         )?;
         Ok(())
     }
@@ -1660,6 +1678,7 @@ mod tests {
                 Usage {
                     prompt_tokens: 50_000,
                     completion_tokens: 10_000,
+                    cached_prompt_tokens: 0,
                 },
             )
             .expect("usage");
@@ -1734,6 +1753,7 @@ mod tests {
                 Usage {
                     prompt_tokens: 900,
                     completion_tokens: 100,
+                    cached_prompt_tokens: 0,
                 },
             )
             .expect("usage");
@@ -1787,6 +1807,7 @@ mod tests {
                 Usage {
                     prompt_tokens: 10,
                     completion_tokens: 5,
+                    cached_prompt_tokens: 0,
                 },
             )
             .expect("usage");
