@@ -235,9 +235,7 @@ impl WorkspaceStore {
     pub fn non_canonical_files(&self) -> Result<Vec<PathBuf>, WorkspaceStoreError> {
         let workspace = self.load()?;
         let layout = self.inspect_existing_layout()?;
-        let read = |path: &Path| {
-            fs::read(path).map_err(|source| io_error("read workspace file", path, source))
-        };
+        let read = |path: &Path| read_file(path, "read workspace file");
         let mut files = Vec::new();
         if read(&layout.manifest_path)?
             != canonical_manifest_bytes(&workspace, &layout.manifest_path)?
@@ -876,7 +874,7 @@ fn managed_path_state(
 
 fn hash_managed_file(path: &Path) -> Result<[u8; 32], WorkspaceStoreError> {
     let mut file =
-        File::open(path).map_err(|source| io_error("hash managed workspace file", path, source))?;
+        open_file(path).map_err(|source| io_error("hash managed workspace file", path, source))?;
     let mut hasher = Sha256::new();
     let mut buffer = vec![0_u8; 64 * 1024].into_boxed_slice();
     loop {
@@ -1077,7 +1075,7 @@ fn read_shard(
 ) -> Result<Vec<TranslationUnit>, WorkspaceStoreError> {
     #[cfg(test)]
     READ_SHARD_COUNT.fetch_add(1, Ordering::SeqCst);
-    let file = File::open(path).map_err(|source| io_error("open unit shard", path, source))?;
+    let file = open_file(path).map_err(|source| io_error("open unit shard", path, source))?;
     decode_shard(BufReader::new(file), path, shard, shard_name)
 }
 
@@ -1670,13 +1668,22 @@ fn atomic_publish(
             source: io::Error::other("test failpoint before atomic publication"),
         });
     }
-    temporary
-        .persist(target_path)
-        .map(|_| ())
-        .map_err(|source| WorkspaceStoreError::AtomicPublication {
-            path: target_path.to_owned(),
-            source: source.error,
+    // Replacing a file another process has open fails on Windows until
+    // that process closes it; the staged file is kept for the next attempt.
+    let mut staged = Some(temporary);
+    retry_transient(|| {
+        let Some(temporary) = staged.take() else {
+            return Err(io::Error::other("the staged file was already published"));
+        };
+        temporary.persist(target_path).map(|_| ()).map_err(|error| {
+            staged = Some(error.file);
+            error.error
         })
+    })
+    .map_err(|source| WorkspaceStoreError::AtomicPublication {
+        path: target_path.to_owned(),
+        source,
+    })
 }
 
 fn write_staging_file(path: &Path, bytes: &[u8]) -> Result<(), WorkspaceStoreError> {
@@ -1699,8 +1706,42 @@ fn remove_directory_if_empty(path: &Path) {
     let _ = fs::remove_dir(path);
 }
 
+/// Attempts of a file operation that another process briefly blocks.
+const TRANSIENT_ATTEMPTS: u32 = 20;
+/// The wait after the first blocked attempt; each later one waits longer.
+const TRANSIENT_BACKOFF: std::time::Duration = std::time::Duration::from_millis(25);
+
+/// Whether an error is Windows refusing a file another process has open
+/// right now, such as a reader, a sync client, or a virus scanner: access
+/// denied or a sharing or lock violation. It passes when that process
+/// closes the file.
+fn is_transient(error: &io::Error) -> bool {
+    matches!(error.raw_os_error(), Some(5 | 32 | 33))
+        || error.kind() == io::ErrorKind::PermissionDenied
+}
+
+/// Runs a file operation again while it fails transiently (see
+/// [`is_transient`]), for about two seconds at most.
+fn retry_transient<T>(mut operation: impl FnMut() -> io::Result<T>) -> io::Result<T> {
+    let mut attempt = 1;
+    loop {
+        match operation() {
+            Err(error) if is_transient(&error) && attempt < TRANSIENT_ATTEMPTS => {
+                std::thread::sleep(TRANSIENT_BACKOFF * attempt.min(4));
+                attempt += 1;
+            }
+            result => return result,
+        }
+    }
+}
+
+/// Opens a file for reading, waiting out a process that briefly blocks it.
+fn open_file(path: &Path) -> io::Result<File> {
+    retry_transient(|| File::open(path))
+}
+
 fn read_file(path: &Path, operation: &'static str) -> Result<Vec<u8>, WorkspaceStoreError> {
-    let mut file = File::open(path).map_err(|source| io_error(operation, path, source))?;
+    let mut file = open_file(path).map_err(|source| io_error(operation, path, source))?;
     let mut bytes = Vec::new();
     file.read_to_end(&mut bytes)
         .map_err(|source| io_error(operation, path, source))?;

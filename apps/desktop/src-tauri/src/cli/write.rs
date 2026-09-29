@@ -6,7 +6,7 @@ use std::fmt::Write as _;
 use aeria_core::ReviewState;
 use aeria_knowledge::Knowledge;
 use aeria_knowledge::rules::machine_phrasing;
-use aeria_workspace::AssistedExpectation;
+use aeria_workspace::{AssistedExpectation, AssistedWriteError};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
@@ -89,6 +89,10 @@ pub(crate) enum Outcome {
     Rejected { reasons: Vec<String> },
     /// The string is not an agent's to change.
     Skipped { reason: String },
+    /// The translation passed its checks but could not be saved, for
+    /// example because the disk refused the write; writing it again may
+    /// succeed.
+    Failed { reason: String },
     /// The string already has this translation.
     Unchanged,
 }
@@ -235,13 +239,24 @@ pub(crate) fn write(
         let result = project
             .session
             .set_assisted_target(&binding, &entry.text, &expected, false)
-            .map_err(|error| error.to_string())
+            .map_err(|error| match error {
+                AssistedWriteError::Structure { messages } => {
+                    Outcome::Rejected { reasons: messages }
+                }
+                other => Outcome::Failed {
+                    reason: other.to_string(),
+                },
+            })
             .and_then(|id| {
                 if options.needs_review {
                     project
                         .session
                         .set_review_state(id, ReviewState::NeedsReview)
-                        .map_err(|error| error.to_string())
+                        .map_err(|error| Outcome::Failed {
+                            reason: format!(
+                                "written as a draft, but not marked for review: {error}"
+                            ),
+                        })
                 } else {
                     Ok(())
                 }
@@ -255,20 +270,18 @@ pub(crate) fn write(
                 }
                 outcomes.push((address, Outcome::Ok { advice }));
             }
-            Err(reason) => outcomes.push((
-                address,
-                Outcome::Rejected {
-                    reasons: vec![reason],
-                },
-            )),
+            Err(outcome) => outcomes.push((address, outcome)),
         }
     }
+    // The translations are written either way; an open Aeria window then
+    // shows them once it reopens the project.
     if !written.is_empty()
         && let Some(files) = &project.files
+        && let Err(error) = files.touch_stamp()
     {
-        files.touch_stamp().map_err(|error| {
-            format!("the translations were written, but open Aeria windows were not told: {error}")
-        })?;
+        eprintln!(
+            "aeria: the translations were written, but an open Aeria window may show them only after it reopens the project: {error}"
+        );
     }
     let rejected = outcomes
         .iter()
@@ -278,17 +291,22 @@ pub(crate) fn write(
         .iter()
         .filter(|(_, outcome)| matches!(outcome, Outcome::Skipped { .. }))
         .count();
+    let failed = outcomes
+        .iter()
+        .filter(|(_, outcome)| matches!(outcome, Outcome::Failed { .. }))
+        .count();
     if out.json {
         out.json_value(&json!({
             "written": if options.dry_run { 0 } else { written.len() },
             "rejected": rejected,
             "skipped": skipped,
+            "failed": failed,
             "results": outcomes
                 .iter()
                 .map(|(address, outcome)| json!({ "at": address, "result": outcome }))
                 .collect::<Vec<_>>(),
         }));
-        return Ok(rejected == 0);
+        return Ok(rejected == 0 && failed == 0);
     }
     for (address, outcome) in &outcomes {
         match outcome {
@@ -310,6 +328,12 @@ pub(crate) fn write(
             Outcome::Skipped { reason } => {
                 let _ = writeln!(out.text, "skipped @{address}: {reason}");
             }
+            Outcome::Failed { reason } => {
+                let _ = writeln!(
+                    out.text,
+                    "FAILED @{address}: not saved ({reason}); write it again"
+                );
+            }
             Outcome::Unchanged => {
                 let _ = writeln!(out.text, "unchanged @{address}");
             }
@@ -321,11 +345,16 @@ pub(crate) fn write(
         .count();
     let _ = writeln!(
         out.text,
-        "{} {ok} · rejected {rejected} · skipped {skipped}{}",
+        "{} {ok} · rejected {rejected} · skipped {skipped}{}{}",
         if options.dry_run {
             "would write"
         } else {
             "written"
+        },
+        if failed > 0 {
+            format!(" · failed {failed}")
+        } else {
+            String::new()
         },
         if rejected > 0 {
             " — fix the rejected lines and write them again"
@@ -333,7 +362,7 @@ pub(crate) fn write(
             ""
         }
     );
-    Ok(rejected == 0)
+    Ok(rejected == 0 && failed == 0)
 }
 
 #[cfg(test)]

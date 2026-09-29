@@ -45,7 +45,8 @@ Options:
   -h, --help       Help; `aeria <command> --help` for one command.
   --version        The version of Aeria.
 
-Exit status: 0 done, 1 done with rejected translations or knowledge problems, 2 error.
+Exit status: 0 done, 1 done with rejected or failed translations or knowledge problems,
+2 error.
 ";
 
 const OVERVIEW_HELP: &str = "\
@@ -103,12 +104,17 @@ seems missing or phrasing that reads machine-written, comes back with written on
 Written translations are drafts.
 
   --needs-review   Mark written translations as needing a person's review.
+
+`aeria check` takes the same input and writes nothing: a dry run. A line reported
+FAILED passed its checks but could not be saved, for example because the disk refused
+the write; write it again. Several agents may write at once: writes wait for each other.
 ";
 
 const CHECK_HELP: &str = "\
 aeria check [<file>] [--at <address> --text <translation>]
 
-The checks of `aeria write`, input in the same form, without writing anything.
+The checks of `aeria write`, input in the same form, without writing anything: a dry
+run of a write.
 ";
 
 const FIND_HELP: &str = "\

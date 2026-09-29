@@ -68,7 +68,7 @@ from the current directory (or `--project`) to the directory with `.aeria/`,
 and the game installation, caches, and application data the desktop uses.
 Output is compact text by default and one JSON value with `--json`. The tool
 and every command have `--help`. Exit status: 0 done, 1 done with rejected
-translations or knowledge problems, 2 error.
+or failed translations or knowledge problems, 2 error.
 
 | Command | Purpose |
 | --- | --- |
@@ -94,6 +94,10 @@ inconsistent terms or address), `changes` (what a game update changed), and
   source, or, for Russian, writes both genders at once such as `готов(а)`.
   The write itself is compare-and-set against the state the command read. An
   invalid or structurally unsafe translation is never stored.
+- A translation that passed its checks but could not be saved, for example
+  because the disk refused the write, is reported as failed rather than
+  rejected; writing it again may succeed. A stamp that cannot be replaced
+  after a write is a warning: the translations are written.
 - Advice does not block a write: a term of the source whose translation does
   not seem to be used, a source that varies with the player character's
   gender and a translation that does not, a French or German line that varies

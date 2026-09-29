@@ -80,7 +80,19 @@ impl ProjectFiles {
             .map_or(0, |duration| duration.as_nanos());
         let partial = self.stamp.with_extension("stamp.partial");
         fs::write(&partial, format!("{now}-{}", std::process::id()))?;
-        fs::rename(&partial, &self.stamp)
+        // A reader of the stamp briefly blocks replacing it on Windows.
+        let mut attempt = 0;
+        loop {
+            match fs::rename(&partial, &self.stamp) {
+                Err(error)
+                    if attempt < 20 && error.kind() == std::io::ErrorKind::PermissionDenied =>
+                {
+                    attempt += 1;
+                    std::thread::sleep(std::time::Duration::from_millis(25 * attempt.min(4)));
+                }
+                result => return result,
+            }
+        }
     }
 
     /// Opens the ledger of agent translations, creating it when missing.

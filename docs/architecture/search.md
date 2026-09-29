@@ -36,9 +36,15 @@ rebuilt. A cancelled or failed build leaves no index.
   scan the plain text for a case-insensitive (ASCII) substring instead. Hits
   are ranked by BM25, then by index order, up to 200 per page, optionally for
   one sheet.
-- **Similar sources**: up to 16 of the text's longest distinct words (or
-  evenly spread trigrams) find up to 300 candidates, which are ranked by
-  similarity. Similarity is the Dice coefficient of the plain texts'
+- **Similar sources**: of the text's 12 longest distinct words, the 6 in the
+  fewest indexed strings (from the index's `fts5vocab` counts) find up to 100
+  candidates; words in more than 20,000 strings are left out unless the text
+  has nothing else, since ranking their matches costs far more than they tell
+  (an OR over "the" takes about 170 ms, over rare words 1–7 ms). Texts in
+  languages indexed by trigrams use up to 16 evenly spread trigrams.
+  `SourceIndex::similar_search` keeps one connection and the word counts it
+  looked up for many texts, such as every line of a scene. Candidates are
+  ranked by similarity. Similarity is the Dice coefficient of the plain texts'
   lowercased character bigrams, with whitespace runs as one space; identical
   texts score 1. Candidates below 0.5 are dropped.
 - **Translation text**: `text_contains` matches a translation's plain text

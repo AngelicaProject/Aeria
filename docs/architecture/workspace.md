@@ -151,7 +151,11 @@ binding not owned by another bound unit.
 
 Canonical file replacements are written to a temporary file outside the
 managed `.aeria/` namespace and published with a cross-platform atomic file
-replacement. Initialization stages the complete directory and publishes it
+replacement. On Windows a replacement, and opening a workspace file, fails
+while another process briefly holds the file, such as a reader in another
+process, a sync client, or a virus scanner; both are retried for about two
+seconds while they fail with access denied or a sharing or lock violation.
+Initialization stages the complete directory and publishes it
 only after serialization succeeds. The atomicity guarantee is per file. A
 source update publishes the manifest last, so an interruption leaves the
 previous game version in place and the update is planned again on the next

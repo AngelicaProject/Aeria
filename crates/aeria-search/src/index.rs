@@ -5,7 +5,8 @@
 //! index over the plain text. It is built from the game, is never project
 //! data, and can be deleted and rebuilt at any time.
 
-use std::collections::BTreeSet;
+use std::cell::RefCell;
+use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 
 use aeria_source::{GameSource, SheetLookup, SourceError};
@@ -19,11 +20,19 @@ pub const INDEX_FORMAT: &str = "2";
 /// Most hits one search returns.
 pub const MAX_SEARCH_LIMIT: u32 = 200;
 /// Candidates read from the full-text index before similarity ranking.
-const SIMILAR_CANDIDATES: u32 = 300;
+const SIMILAR_CANDIDATES: u32 = 100;
 /// Least similarity for a translation-memory match.
 pub const MIN_SIMILARITY: f64 = 0.5;
-/// Words or trigrams of a text used to find similar strings.
+/// Trigrams of a text used to find similar strings.
 const SIMILAR_TERMS: usize = 16;
+/// The longest words of a text whose frequency is looked up to find similar
+/// strings.
+const SIMILAR_WORDS_EXAMINED: usize = 12;
+/// The rarest words of a text a similar-string search uses.
+const SIMILAR_WORDS: usize = 6;
+/// Words in more strings than this are too common to find similar strings
+/// by: ranking their matches costs far more than they tell.
+const COMMON_WORD_STRINGS: i64 = 20_000;
 
 /// Index errors.
 #[derive(Debug, thiserror::Error)]
@@ -384,7 +393,7 @@ impl SourceIndex {
                         .cmp(&left.chars().count())
                         .then(left.cmp(right))
                 });
-                distinct.truncate(SIMILAR_TERMS);
+                distinct.truncate(SIMILAR_WORDS_EXAMINED);
                 distinct
             }
             Tokenizer::Trigram => {
@@ -404,7 +413,100 @@ impl SourceIndex {
 
     /// Translatable strings similar to a source string, most similar first,
     /// excluding the given location. Candidates come from the full-text index
-    /// and are ranked by [`similarity`] of their plain text.
+    /// and are ranked by [`similarity`] of their plain text. For several
+    /// strings, [`Self::similar_search`] reuses one connection and what it
+    /// learned about word frequencies.
+    ///
+    /// # Errors
+    ///
+    /// Returns a storage error.
+    pub fn similar(
+        &self,
+        source: &str,
+        exclude: Option<(&str, u32, u16, u32)>,
+        limit: usize,
+    ) -> Result<Vec<SimilarSource>, SearchError> {
+        self.similar_search()?.similar(source, exclude, limit)
+    }
+
+    /// A search for strings similar to many sources, such as every line of
+    /// a scene.
+    ///
+    /// # Errors
+    ///
+    /// Returns a storage error.
+    pub fn similar_search(&self) -> Result<SimilarSearch<'_>, SearchError> {
+        let connection = self.connect()?;
+        if self.tokenizer == Tokenizer::Words {
+            connection.execute_batch(
+                "CREATE VIRTUAL TABLE temp.cells_vocab USING fts5vocab(main, cells_fts, row)",
+            )?;
+        }
+        Ok(SimilarSearch {
+            index: self,
+            connection,
+            strings_with: RefCell::new(HashMap::new()),
+        })
+    }
+}
+
+/// Finds strings similar to sources over one connection; see
+/// [`SourceIndex::similar_search`].
+pub struct SimilarSearch<'a> {
+    index: &'a SourceIndex,
+    connection: Connection,
+    /// How many strings contain a word, as looked up so far.
+    strings_with: RefCell<HashMap<String, i64>>,
+}
+
+impl SimilarSearch<'_> {
+    /// How many indexed strings contain a word.
+    fn strings_with(&self, word: &str) -> Result<i64, SearchError> {
+        if let Some(count) = self.strings_with.borrow().get(word) {
+            return Ok(*count);
+        }
+        let count = self
+            .connection
+            .query_row(
+                "SELECT doc FROM temp.cells_vocab WHERE term = ?1",
+                params![word.to_lowercase()],
+                |row| row.get(0),
+            )
+            .optional()?
+            .unwrap_or(0);
+        self.strings_with
+            .borrow_mut()
+            .insert(word.to_owned(), count);
+        Ok(count)
+    }
+
+    /// The terms a search for strings similar to `plain` uses: for words,
+    /// the rarest of its longest words, leaving out words too common to
+    /// tell strings apart unless the text has nothing else.
+    fn terms(&self, plain: &str) -> Result<Vec<String>, SearchError> {
+        let candidates = self.index.similar_terms(plain);
+        if self.index.tokenizer != Tokenizer::Words {
+            return Ok(candidates);
+        }
+        let mut counted = candidates
+            .into_iter()
+            .map(|word| Ok((self.strings_with(&word)?, word)))
+            .collect::<Result<Vec<_>, SearchError>>()?;
+        counted.sort();
+        let rare: Vec<String> = counted
+            .iter()
+            .filter(|(count, _)| *count <= COMMON_WORD_STRINGS)
+            .take(SIMILAR_WORDS)
+            .map(|(_, word)| word.clone())
+            .collect();
+        if !rare.is_empty() {
+            return Ok(rare);
+        }
+        Ok(counted.into_iter().take(2).map(|(_, word)| word).collect())
+    }
+
+    /// Translatable strings similar to a source string; see
+    /// [`SourceIndex::similar`].
     ///
     /// # Errors
     ///
@@ -416,7 +518,7 @@ impl SourceIndex {
         limit: usize,
     ) -> Result<Vec<SimilarSource>, SearchError> {
         let plain = plain_text(source);
-        let terms = self.similar_terms(&plain);
+        let terms = self.terms(&plain)?;
         if terms.is_empty() {
             return Ok(Vec::new());
         }
@@ -425,10 +527,9 @@ impl SourceIndex {
             .map(|term| fts_term(term))
             .collect::<Vec<_>>()
             .join(" OR ");
-        let connection = self.connect()?;
         // Rank in the full-text index first and read only the best cells:
         // joining before the limit reads the text of every match.
-        let mut statement = connection.prepare(
+        let mut statement = self.connection.prepare_cached(
             "SELECT c.sheet, c.row_id, c.subrow_id, c.column_index, c.macro, c.plain
              FROM (SELECT rowid AS id, bm25(cells_fts) AS score FROM cells_fts
                    WHERE cells_fts MATCH ?1 ORDER BY score, rowid LIMIT ?2) best

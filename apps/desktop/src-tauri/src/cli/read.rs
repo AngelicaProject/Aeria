@@ -5,7 +5,7 @@ use std::fmt::Write as _;
 
 use aeria_core::ReviewState;
 use aeria_knowledge::{Domain, Knowledge, sheet_domain};
-use aeria_search::{SourceIndex, SourceQuery, Tokenizer};
+use aeria_search::{SimilarSearch, SourceIndex, SourceQuery, Tokenizer};
 use serde::Serialize;
 use serde_json::json;
 
@@ -355,7 +355,7 @@ fn search_index_or_build(project: &Project) -> Result<SourceIndex, String> {
     .map_err(|error| format!("the search index could not be built: {error}"))
 }
 
-fn similar(project: &Project, index: &SourceIndex, line: &SheetLine) -> Vec<Similar> {
+fn similar(project: &Project, index: &SimilarSearch<'_>, line: &SheetLine) -> Vec<Similar> {
     let address = &line.address;
     let Ok(candidates) = index.similar(
         &line.source,
@@ -430,6 +430,7 @@ pub(crate) fn read(
     } else {
         None
     };
+    let searcher = index.as_ref().and_then(|index| index.similar_search().ok());
     let mut domains: Vec<Domain> = Vec::new();
     let mut speakers: Vec<&str> = Vec::new();
     let mut lines = Vec::with_capacity(selected.len());
@@ -459,7 +460,7 @@ pub(crate) fn read(
                 .unwrap_or_default(),
             context: line.context.clone(),
             // Similar translations help only where the line may be written.
-            similar: index
+            similar: searcher
                 .as_ref()
                 .filter(|_| now.as_ref().is_none_or(Current::replaceable))
                 .map(|index| similar(project, index, line))
