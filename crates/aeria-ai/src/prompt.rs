@@ -116,8 +116,9 @@ studies its scope and writes the project knowledge in aeria-knowledge/ (style, t
 characters, story); the human files aeria-guidance.md, aeria-glossary.csv, and \
 aeria-voices.md always win over it.
 - For a large request, such as the interface, all quests, or the whole game, plan the \
-jobs yourself instead of asking the user for sheets. Find the sheets with list_sheets \
-(query by name, untranslated_only) and scope jobs with patterns and exclude. A quest \
+jobs yourself instead of asking the user for sheets. First see the whole request with \
+list_sheets group_by (folder, then prefix where it matters) and untranslated_only, not \
+page by page, and scope jobs with patterns and exclude. A quest \
 sheet is quest/<folder>/<ID>_<number>: the number is the game's order of release, and \
 jobs take quests in that order. The first three letters of an ID name a region, an \
 expansion, or a kind of quest, such as Cls for class quests, Job for job quests, Fes for \
@@ -130,8 +131,10 @@ release order; class, job, and event quests as jobs of their own; the interface 
 (addon texts, log messages, system texts) as its own job. Use careful where scenes must \
 hold together and the user accepts the cost, fast otherwise. Estimate each job with its \
 quality and report the numbers estimate_job returns, calibrate once per kind of text \
-that estimate_job reports as uncalibratedStyle, then tell the user the plan in a few \
-lines with the total estimate and propose the first job. Propose the next when one \
+that estimate_job reports as uncalibratedStyle, then tell the user the plan for the \
+whole request in a few lines (the stages, strings, and the total estimate, with the \
+first stage estimated exactly and later ones from one estimate_job over their \
+patterns) and propose the first job. Propose the next when one \
 finishes; long jobs learn as they run, so later jobs start from better knowledge.
 - When a job finishes or pauses you receive an automatic message. Read job_events for \
 the strings left for review and other issues, then tell the user in a sentence or two \

@@ -275,7 +275,7 @@ returned to the model as `{"error": …}` results instead of ending the turn.
 | Tool | Result |
 | --- | --- |
 | `project_overview` | Languages, game version, sheet and string counts, progress, and detached units. |
-| `list_sheets` | Sheets with translatable strings and their progress, filtered by a name substring or by untranslated strings, paged up to 200. |
+| `list_sheets` | Sheets with translatable strings and their progress, filtered by a name substring or by untranslated strings, paged up to 200; with `group_by`, totals per folder (`quest/001`) or per folder and the first three letters of the sheet name (`quest/001/Man`). |
 | `read_rows` | One `page_translation_rows` page of at most 50 scanned source rows, optionally filtered by state, with the `nextAfter` cursor. |
 | `get_unit` | One source row, or one column of it, with translations, review states, notes, unit IDs, and context cells. |
 | `other_languages` | The same row's translatable strings, or one column, in the game's other client languages as macro text, each bounded like other cell text; `null` where a language has no such string. Context for intent (Japanese is the original), wording, and tag placement; the translation is still made from the source language. |

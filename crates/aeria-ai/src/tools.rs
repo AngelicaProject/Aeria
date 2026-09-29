@@ -5,6 +5,8 @@
 //! over the active project session. Invalid calls return an error result to
 //! the model instead of failing the conversation.
 
+use std::collections::HashMap;
+
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -1003,6 +1005,24 @@ pub fn read_tool_definitions() -> Vec<ToolDefinition> {
     tools
 }
 
+fn list_sheets_definition() -> ToolDefinition {
+    ToolDefinition {
+        name: "list_sheets",
+        description: "Sheets that contain translatable strings, with per-sheet progress. Filter by a name substring; results are paged. With group_by, totals per group of sheets instead, for an overview of a large part of the game in one call.",
+        parameters: json!({
+            "type": "object",
+            "properties": {
+                "query": { "type": "string", "description": "Case-insensitive substring of the sheet name." },
+                "untranslated_only": { "type": "boolean", "description": "Only sheets with untranslated strings." },
+                "group_by": { "type": "string", "enum": ["folder", "prefix"], "description": "folder: totals per folder, such as quest/001; sheets without a folder are one group. prefix: per folder and the first three letters of the sheet's own name, such as quest/001/Man." },
+                "offset": { "type": "integer", "minimum": 0 },
+                "limit": { "type": "integer", "minimum": 1, "maximum": 200, "description": "Defaults to 50." },
+            },
+            "additionalProperties": false,
+        }),
+    }
+}
+
 /// The read tools over the project's strings and files.
 fn project_read_definitions() -> Vec<ToolDefinition> {
     let location = |description: &str| {
@@ -1024,20 +1044,7 @@ fn project_read_definitions() -> Vec<ToolDefinition> {
             description: "Languages, game version, sheet count, and overall translation progress of the open project.",
             parameters: json!({ "type": "object", "properties": {}, "additionalProperties": false }),
         },
-        ToolDefinition {
-            name: "list_sheets",
-            description: "Sheets that contain translatable strings, with per-sheet progress. Filter by a name substring; results are paged.",
-            parameters: json!({
-                "type": "object",
-                "properties": {
-                    "query": { "type": "string", "description": "Case-insensitive substring of the sheet name." },
-                    "untranslated_only": { "type": "boolean", "description": "Only sheets with untranslated strings." },
-                    "offset": { "type": "integer", "minimum": 0 },
-                    "limit": { "type": "integer", "minimum": 1, "maximum": 200, "description": "Defaults to 50." },
-                },
-                "additionalProperties": false,
-            }),
-        },
+        list_sheets_definition(),
         ToolDefinition {
             name: "read_rows",
             description: "Reads source rows of one sheet in order with their translations. `limit` counts scanned source rows, so fewer rows can come back; continue from `nextAfter`.",
@@ -1117,9 +1124,41 @@ struct ListSheetsArgs {
     query: Option<String>,
     #[serde(default)]
     untranslated_only: bool,
+    group_by: Option<SheetGroup>,
     #[serde(default)]
     offset: usize,
     limit: Option<usize>,
+}
+
+#[derive(Clone, Copy, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+enum SheetGroup {
+    Folder,
+    Prefix,
+}
+
+impl SheetGroup {
+    /// The group of a sheet: its folder, or its folder and the first three
+    /// letters of its own name.
+    fn of(self, sheet: &str) -> String {
+        let (folder, name) = sheet.rsplit_once('/').unwrap_or(("(no folder)", sheet));
+        match self {
+            Self::Folder => folder.to_owned(),
+            Self::Prefix => format!("{folder}/{}", name.chars().take(3).collect::<String>()),
+        }
+    }
+}
+
+/// Totals of a group of sheets.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SheetGroupSummary {
+    group: String,
+    sheets: u64,
+    translatable: u64,
+    translated: u64,
+    reviewed: u64,
+    needs_review: u64,
 }
 
 #[derive(Clone, Copy, Deserialize, Eq, PartialEq)]
@@ -1556,6 +1595,36 @@ impl<'a> ReadTools<'a> {
             .filter(|sheet| !args.untranslated_only || sheet.translated < sheet.translatable)
             .collect();
         let limit = args.limit.unwrap_or(50).clamp(1, 200);
+        if let Some(group_by) = args.group_by {
+            let mut groups: Vec<SheetGroupSummary> = Vec::new();
+            let mut index: HashMap<String, usize> = HashMap::new();
+            for sheet in &matching {
+                let key = group_by.of(&sheet.name);
+                let at = *index.entry(key.clone()).or_insert_with(|| {
+                    groups.push(SheetGroupSummary {
+                        group: key,
+                        sheets: 0,
+                        translatable: 0,
+                        translated: 0,
+                        reviewed: 0,
+                        needs_review: 0,
+                    });
+                    groups.len() - 1
+                });
+                let group = &mut groups[at];
+                group.sheets += 1;
+                group.translatable += sheet.translatable;
+                group.translated += sheet.translated;
+                group.reviewed += sheet.reviewed;
+                group.needs_review += sheet.needs_review;
+            }
+            groups.sort_by(|a, b| a.group.cmp(&b.group));
+            let total = groups.len();
+            let page: Vec<_> = groups.into_iter().skip(args.offset).take(limit).collect();
+            let next_offset =
+                (args.offset + page.len() < total).then_some(args.offset + page.len());
+            return Ok(json!({ "total": total, "groups": page, "nextOffset": next_offset }));
+        }
         let total = matching.len();
         let page: Vec<_> = matching.into_iter().skip(args.offset).take(limit).collect();
         let next_offset = (args.offset + page.len() < total).then_some(args.offset + page.len());
@@ -2164,6 +2233,13 @@ mod tests {
         assert_eq!(value["total"], 1);
         let (value, _) = run(&reader, "list_sheets", r#"{"limit":1}"#);
         assert_eq!(value["nextOffset"], 1);
+        let (value, _) = run(&reader, "list_sheets", r#"{"group_by":"folder"}"#);
+        assert_eq!(value["total"], 2);
+        assert_eq!(value["groups"][0]["group"], "(no folder)");
+        assert_eq!(value["groups"][1]["group"], "Quest");
+        let (value, _) = run(&reader, "list_sheets", r#"{"group_by":"prefix"}"#);
+        assert_eq!(value["groups"][1]["group"], "Quest/Mai");
+        assert_eq!(value["groups"][1]["sheets"], 1);
     }
 
     #[test]
