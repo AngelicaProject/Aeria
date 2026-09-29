@@ -16,7 +16,6 @@ use aeria_ai::guidance::GlossaryEntry;
 use aeria_ai::knowledge::{
     self as knowledge_files, Domain, Knowledge, KnowledgeFile, Section, sheet_domain,
 };
-use aeria_ai::localizer::Caller as _;
 use aeria_ai::search::{ProjectSearch, SearchQuery};
 use aeria_ai::study::{
     CHARACTER_SAMPLES, KnowledgeHost, STYLE_SAMPLES, Sample, study_characters, study_style,
@@ -337,10 +336,10 @@ pub(super) async fn study_scope(run: &JobRun) -> Result<(), String> {
         .await
         .map_err(|error| error.message)?;
     prepare_source_index(&run.app);
-    let caller = JobCaller::for_job(run, &spec, 0, format!("{}-study", run.job_id))
+    let mut caller = JobCaller::for_job(run, &spec, 0, format!("{}-study", run.job_id))
         .await
         .map_err(|error| error.message)?;
-    caller.step(aeria_ai::localizer::Step::Study);
+    caller.background(aeria_ai::localizer::Step::Study);
     let sheets = run
         .with_store(aeria_ai::jobs::JobStore::sheets)
         .await

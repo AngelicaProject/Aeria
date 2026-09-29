@@ -170,6 +170,21 @@ impl WorkerActivity {
         self.chunk_tokens = 0;
     }
 
+    /// Starts work outside a chunk, such as the study of the job's scope or
+    /// learning after it: no chunk, sheet, or strings are shown.
+    pub fn start_background(&mut self, step: WorkerStep, now: u64) {
+        self.set_phase(WorkerPhase::Waiting, now);
+        self.chunk = None;
+        self.sheet = None;
+        self.first_row = None;
+        self.last_row = None;
+        self.units = 0;
+        self.finished_units = 0;
+        self.requests = 0;
+        self.chunk_tokens = 0;
+        self.set_step(step, now);
+    }
+
     /// Moves to a localizer step.
     pub fn set_step(&mut self, step: WorkerStep, now: u64) {
         self.step = Some(step);
@@ -303,6 +318,22 @@ mod tests {
         );
         lane.start_chunk(5, "Item", (1, 1), 1, 60);
         assert_eq!((lane.chunk_tokens, lane.retry_at_unix_ms), (0, None));
+    }
+
+    #[test]
+    fn background_work_forgets_the_last_chunk() {
+        let mut lane = WorkerActivity::new(1, 0);
+        lane.start_chunk(4, "quest/000/Test", (3, 90), 42, 10);
+        lane.answered(500, 20);
+        lane.start_background(WorkerStep::Learning, 30);
+        assert_eq!(
+            (lane.chunk, lane.sheet.as_deref(), lane.units),
+            (None, None, 0)
+        );
+        assert_eq!(
+            (lane.step, lane.round, lane.chunk_tokens),
+            (Some(WorkerStep::Learning), 0, 0)
+        );
     }
 
     #[test]

@@ -188,10 +188,10 @@ async fn mentor(
     spec: &aeria_ai::jobs::JobSpec,
     material: &Material,
 ) -> Result<String, String> {
-    let caller = JobCaller::for_job(run, spec, 0, format!("{}-learn", run.job_id))
+    let mut caller = JobCaller::for_job(run, spec, 0, format!("{}-learn", run.job_id))
         .await
         .map_err(|error| error.message)?;
-    caller.step(Step::Learning);
+    caller.background(Step::Learning);
     let knowledge = Knowledge::load(&run.root);
     let target = JobReader { run: run.clone() }
         .facts()

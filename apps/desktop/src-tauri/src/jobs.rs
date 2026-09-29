@@ -1403,6 +1403,9 @@ struct JobCaller {
     ceiling: Option<aeria_ai::ReasoningEffort>,
     /// The job is careful: every role asks for a high effort.
     careful: bool,
+    /// Work outside a chunk keeps its step on the lane; the localizer's own
+    /// steps are not shown.
+    background: bool,
     session: String,
     images: Vec<ImageRef>,
     /// The images' data, loaded when the model accepts images.
@@ -1453,6 +1456,7 @@ impl JobCaller {
             efforts: model.reasoning_efforts,
             ceiling: spec.model.effort,
             careful: spec.quality == JobQuality::Careful,
+            background: false,
             session,
             images,
             payloads,
@@ -1510,6 +1514,14 @@ impl JobCaller {
         Ok((response.content, usage))
     }
 
+    /// Shows `step` on the lane for work outside a chunk and keeps it there.
+    fn background(&mut self, step: Step) {
+        self.background = true;
+        self.run.workers.update(self.lane, |activity, now| {
+            activity.start_background(step.into(), now);
+        });
+    }
+
     fn spent(&self) -> aeria_ai::chat::Usage {
         self.spent.lock().map(|spent| *spent).unwrap_or_default()
     }
@@ -1545,6 +1557,9 @@ impl Caller for JobCaller {
     }
 
     fn step(&self, step: Step) {
+        if self.background {
+            return;
+        }
         self.run.workers.update(self.lane, |activity, now| {
             activity.set_step(step.into(), now);
         });

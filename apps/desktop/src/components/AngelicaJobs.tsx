@@ -101,7 +101,8 @@ function WorkerRow({ worker, now }: { worker: WorkerActivity; now: number }) {
   const { t } = useI18n();
   const health = workerHealth(worker, now);
   const timed = worker.phase !== "stopped" && worker.phase !== "backoff";
-  const inChunk = worker.chunk !== null && worker.phase !== "idle" && worker.phase !== "stopped" && worker.phase !== "backoff";
+  const working = worker.phase !== "idle" && worker.phase !== "stopped" && worker.phase !== "backoff";
+  const inChunk = worker.chunk !== null && working;
   const rows = worker.firstRow === null || worker.lastRow === null ? null
     : worker.firstRow === worker.lastRow ? String(worker.firstRow) : `${worker.firstRow}–${worker.lastRow}`;
   return (
@@ -115,15 +116,13 @@ function WorkerRow({ worker, now }: { worker: WorkerActivity; now: number }) {
       {health === "active" ? null : <span className="angelica-worker-silence" title={t("angelica.worker.silentHint")}>{t("angelica.worker.silence", { time: formatElapsed(now - worker.lastActivityUnixMs) })}</span>}
       <span className="angelica-worker-meta">
         {inChunk ? (
-          <>
-            <span title={t("angelica.worker.chunkHint", { chunk: String((worker.chunk ?? 0) + 1) })}>
-              {rows ? t("angelica.worker.rows", { sheet: worker.sheet ?? "", rows }) : worker.sheet}
-            </span>
-            {worker.step ? <span title={t("angelica.worker.stepHint")}>{worker.round > 0 ? t("angelica.worker.step", { round: worker.round, max: worker.maxRounds, step: t(stepLabels[worker.step]) }) : t(stepLabels[worker.step])}</span> : null}
-            <span title={t("angelica.worker.unitsHint")}>{t("angelica.worker.units", { finished: worker.finishedUnits, total: worker.units })}</span>
-            {worker.chunkTokens > 0 ? <span>{t("angelica.worker.tokens", { tokens: formatTokens(worker.chunkTokens) })}</span> : null}
-          </>
+          <span title={t("angelica.worker.chunkHint", { chunk: String((worker.chunk ?? 0) + 1) })}>
+            {rows ? t("angelica.worker.rows", { sheet: worker.sheet ?? "", rows }) : worker.sheet}
+          </span>
         ) : null}
+        {working && worker.step ? <span title={t("angelica.worker.stepHint")}>{worker.round > 0 ? t("angelica.worker.step", { round: worker.round, max: worker.maxRounds, step: t(stepLabels[worker.step]) }) : t(stepLabels[worker.step])}</span> : null}
+        {inChunk ? <span title={t("angelica.worker.unitsHint")}>{t("angelica.worker.units", { finished: worker.finishedUnits, total: worker.units })}</span> : null}
+        {working && worker.chunkTokens > 0 ? <span>{t("angelica.worker.tokens", { tokens: formatTokens(worker.chunkTokens) })}</span> : null}
         {worker.chunksDone > 0 ? <span title={t("angelica.worker.chunksDoneHint")}>{t("angelica.worker.chunksDone", { count: worker.chunksDone })}</span> : null}
         {worker.lastError ? <span className="angelica-job-problems" title={worker.lastError}>{t("angelica.worker.lastError")}</span> : null}
       </span>
