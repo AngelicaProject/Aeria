@@ -14,13 +14,22 @@
 //!    parallel; every writer sees the whole unit and the contract.
 //! 3. **Structure**: every line is checked as it would be written; refused
 //!    lines go back once or twice for correction.
-//! 4. **Critics**: three narrow critics read each part in parallel: a blind
+//! 4. **Voice**: for the spoken lines of each part that carry character (a
+//!    marked voice, a joke, an oath, strong emotion), one request writes three
+//!    clearly different versions, one of them unusual; versions that break
+//!    the line's structure or drop a gender condition are discarded, and a
+//!    selector picks per line among the written line and the versions, by the
+//!    project's knowledge and taste. Models write the most typical wording
+//!    when asked for one; asking for several and choosing is what brings
+//!    back the less usual, livelier line.
+//! 5. **Critics**: narrow critics read each part in parallel: a blind
 //!    reader who sees only the target text, a fidelity check against the
-//!    source line, and a check of the player character's gender and of
-//!    address.
-//! 5. **Fix**: flagged lines of each part are corrected in parallel; only
+//!    source line, a check of the player character's gender and of address,
+//!    and a consistency check against the knowledge; a cheap scan adds minor
+//!    flags for machine-written phrasing in languages Aeria has a list for.
+//! 6. **Fix**: flagged lines of each part are corrected in parallel; only
 //!    flagged lines may change.
-//! 6. **Recheck**: the critics read the changed and flagged lines again; a
+//! 7. **Recheck**: the critics read the changed and flagged lines again; a
 //!    remaining major flag is fixed once more, and a line whose major flag
 //!    was not fixed needs review.
 //!
@@ -42,7 +51,7 @@ use crate::client::ProviderError;
 use crate::knowledge::Domain;
 use crate::provider::ReasoningEffort;
 use crate::search::MemoryMatch;
-use crate::style::{PLAYER_CHARACTER, TRANSLATION_STYLE};
+use crate::style::{PLAYER_CHARACTER, TRANSLATION_STYLE, living_language, machine_phrasing};
 use crate::tools::{ContextCell, ReviewLabel};
 
 /// Strings one part writer translates, about.
@@ -67,6 +76,10 @@ pub enum Role {
     Player,
     Consistency,
     Fix,
+    /// Different versions of lines with character.
+    Variants,
+    /// The choice among a line's versions.
+    Select,
     /// Study of style and characters.
     Research,
     /// Study of a unit's terms.
@@ -90,6 +103,8 @@ impl Role {
             Self::Player => "player",
             Self::Consistency => "consistency",
             Self::Fix => "fix",
+            Self::Variants => "variants",
+            Self::Select => "select",
             Self::Research => "research",
             Self::Terms => "terms",
             Self::Mentor => "mentor",
@@ -101,8 +116,9 @@ impl Role {
     /// player character need the most, the fidelity check the least.
     const fn wanted_effort(self) -> ReasoningEffort {
         match self {
-            Self::Writer | Self::Player | Self::Mentor => ReasoningEffort::High,
+            Self::Writer | Self::Variants | Self::Player | Self::Mentor => ReasoningEffort::High,
             Self::Contract
+            | Self::Select
             | Self::Blind
             | Self::Consistency
             | Self::Fix
@@ -317,6 +333,8 @@ pub enum Step {
     Learning,
     Contract,
     Writing,
+    /// Versions of the lines with character and the choice among them.
+    Voicing,
     Reviewing,
     Fixing,
     Rechecking,
@@ -333,12 +351,15 @@ pub struct Localization {
 }
 
 const EVIDENCE: &str = "\
-FINAL FANTASY XIV is written in Japanese; the English, German, and French texts are \
-professional localizations. You get the source language you translate and the others as \
-evidence. The Japanese shows intent, tone, and how a character really speaks (first-person \
-pronoun, sentence endings, politeness). French and German show decisions the English hides: \
-tu/vous and du/Sie between speakers and toward the player character, the gender of \
-speakers and of the player character, and register. Use them as evidence, not as rules.
+FINAL FANTASY XIV is written in Japanese; the English, German, and French texts are three \
+finished localizations, and each made its own creative choices: names, jokes, and how \
+characters sound (accent, dialect, class, pomp, tics). This localization is another one: \
+the Japanese shows what the writers meant and how a character speaks (first-person pronoun, \
+sentence endings, politeness); the localizations show how each made the line work for its \
+players, including decisions the English hides: tu/vous and du/Sie between speakers and \
+toward the player character, genders, and register. Make your own choices for your \
+players from all of them; copy none, and never make a character flatter than the original \
+and the localizations make them.
 Content comes only from the source line. Never move a word, detail, sentence, or example \
 from another language into a line, even when the Japanese says more or something else; the \
 other languages decide only tone, voice, address, gender, and how to read an ambiguous \
@@ -378,11 +399,12 @@ fn domain_notes(domains: &[Domain]) -> String {
             Domain::Lore => {
                 "Lore: literary text in the voice of its writer, in-world and never modern."
             }
-            Domain::General
-            | Domain::Journal
-            | Domain::Objective
-            | Domain::System
-            | Domain::Dialogue => continue,
+            Domain::Journal | Domain::Objective => {
+                "Journal entries and objectives: prefer a phrasing in which nothing agrees with \
+                 the player character's gender (present tense, an imperative, an impersonal \
+                 turn); use a condition on $gn4 only where no natural neutral phrasing exists."
+            }
+            Domain::General | Domain::System | Domain::Dialogue => continue,
         };
         notes.push_str("- ");
         notes.push_str(note);
@@ -468,6 +490,9 @@ impl Localization {
             unit.target_language,
             aeria_se::authoring_reference()
         );
+        if let Some(living) = living_language(&unit.target_language) {
+            let _ = write!(system, "\n\n{living}");
+        }
         let notes = domain_notes(&unit.domains);
         if !notes.is_empty() {
             let _ = write!(system, "\n\nKinds of text in this unit:\n{notes}");
@@ -601,6 +626,9 @@ impl Localization {
                  rendering, from the project knowledge where it has one and from the \
                  lines already translated.\n\
                  5. Journal entries, objectives, and system text: the form each uses.\n\
+                 6. Voices: for each speaker, the two or three devices that make them sound \
+                 like themselves in {target} in this unit, from their profiles and from how \
+                 the original and the localizations make them sound.\n\
                  Leave out sections that do not apply.",
                 self.unit.title,
                 self.unit.lines.len(),
@@ -849,9 +877,11 @@ impl Localization {
             user: format!(
                 "{body}\nFor each line, flag it when the translation says something its own \
                  source line does not say (for example content of another line or another \
-                 language version), loses or changes the meaning, drops a joke, oath, hint, or \
-                 callback, or misreads who speaks to whom. Free rewording that keeps meaning \
-                 and tone is correct.\n{FLAG_FORMAT}"
+                 language version), repeats what another line says, reveals what the line \
+                 hides (such as a name behind ???), loses or changes the meaning, drops a \
+                 joke, oath, hint, or callback, or misreads who speaks to whom. Free rewording \
+                 that keeps meaning and tone is correct, and so are particles, idiom, slang, \
+                 and a speaker's voice devices.\n{FLAG_FORMAT}"
             ),
         }
     }
@@ -895,7 +925,8 @@ impl Localization {
                  address breaks the project knowledge (which wins over the contract and the \
                  French and German) or the contract where the knowledge says nothing, or when \
                  a speaker's \
-                 own gender is wrong.\n{FLAG_FORMAT}",
+                 own gender is wrong, or when words do not agree with the person they are \
+                 about, in each branch of a condition.\n{FLAG_FORMAT}",
                 self.unit.knowledge.trim(),
                 self.contract
             ),
@@ -979,6 +1010,302 @@ impl Localization {
                     major: item.severity.eq_ignore_ascii_case("major"),
                     problem: item.problem.trim().to_owned(),
                     hint: item.hint.filter(|hint| !hint.trim().is_empty()),
+                })
+            })
+            .collect()
+    }
+
+    /// Whether a job line is spoken and has a written target, so it may get
+    /// versions.
+    fn voiced(&self, index: usize) -> bool {
+        matches!(self.unit.lines[index].kind, LineKind::Speech(ref speaker) if !speaker.starts_with("SYSTEM"))
+            && self.targets.contains_key(&index)
+    }
+
+    /// Step 4a: per part, one request for different versions of the spoken
+    /// lines with character.
+    #[must_use]
+    pub fn variant_requests(&self) -> Vec<Request> {
+        let system = self.localizer_system();
+        let target = &self.unit.target_language;
+        self.parts
+            .iter()
+            .enumerate()
+            .filter_map(|(part, lines)| {
+                let spoken: Vec<usize> = lines
+                    .iter()
+                    .copied()
+                    .filter(|line| self.voiced(*line))
+                    .collect();
+                if spoken.is_empty() {
+                    return None;
+                }
+                let mut text = String::new();
+                for index in &spoken {
+                    let line = &self.unit.lines[*index];
+                    let _ = write!(
+                        text,
+                        "{} {}\n  now: {}\n  {}: {}",
+                        Self::id(*index),
+                        line.kind.label(),
+                        self.targets.get(index).map_or("", String::as_str),
+                        self.unit.source_language,
+                        line.source
+                    );
+                    for (code, evidence) in &line.evidence {
+                        let _ = write!(text, "\n  {code}: {evidence}");
+                    }
+                    for legend in &line.legends {
+                        let _ = write!(text, "\n  macro: {legend}");
+                    }
+                    text.push('\n');
+                }
+                Some(Request {
+                    role: Role::Variants,
+                    part: Some(part),
+                    system: system.clone(),
+                    user: format!(
+                        "Contract of this unit:\n{}\n\nThe {target} of the spoken lines of this \
+                         part, with every text of each line:\n{text}\nChoose the lines that \
+                         carry character: a marked voice, a joke, an oath, pomp, clumsiness, \
+                         strong emotion, a tic. Skip plain lines. For each chosen line write \
+                         three clearly different {target} versions that differ in wording and \
+                         approach, not in a word or two; each keeps the line's meaning, names, \
+                         address, macros, and every condition on $gn4, and adds nothing. For \
+                         each, estimate the probability that a typical translator would write \
+                         something like it; at least one version has a probability below 0.15: \
+                         an unusual choice that a gifted writer might make and that is still \
+                         right. Output JSON only: {{\"lines\": [{{\"line\": \"L12\", \
+                         \"versions\": [{{\"text\": \"…\", \"p\": 0.4}}]}}]}}",
+                        self.contract
+                    ),
+                })
+            })
+            .collect()
+    }
+
+    /// Reads a variants reply: the versions of each line of the request's
+    /// part that can be written as they are (the structure holds, a gender
+    /// condition of the written line is kept) and differ from it.
+    #[must_use]
+    pub fn parse_variants(&self, request: &Request, reply: &str) -> BTreeMap<usize, Vec<String>> {
+        #[derive(Deserialize)]
+        struct Reply {
+            #[serde(default)]
+            lines: Vec<Item>,
+        }
+        #[derive(Deserialize)]
+        struct Item {
+            line: String,
+            #[serde(default)]
+            versions: Vec<Version>,
+        }
+        #[derive(Deserialize)]
+        struct Version {
+            #[serde(default)]
+            text: String,
+        }
+        let Some(part) = request.part else {
+            return BTreeMap::new();
+        };
+        let (Some(start), Some(end)) = (reply.find('{'), reply.rfind('}')) else {
+            return BTreeMap::new();
+        };
+        let Ok(parsed) = serde_json::from_str::<Reply>(&reply[start..=end]) else {
+            return BTreeMap::new();
+        };
+        let mut found = BTreeMap::new();
+        for item in parsed.lines {
+            let Some(index) = item
+                .line
+                .trim()
+                .trim_start_matches('L')
+                .parse::<usize>()
+                .ok()
+                .and_then(|number| number.checked_sub(1))
+                .filter(|index| self.parts[part].contains(index) && self.voiced(*index))
+            else {
+                continue;
+            };
+            let mut versions: Vec<String> = Vec::new();
+            for version in item.versions {
+                let text = version.text.trim().to_owned();
+                if !text.is_empty()
+                    && !versions.contains(&text)
+                    && self.targets.get(&index) != Some(&text)
+                    && self.version_holds(index, &text)
+                {
+                    versions.push(text);
+                }
+            }
+            if !versions.is_empty() {
+                found.insert(index, versions);
+            }
+        }
+        found
+    }
+
+    /// Whether a version of a line could replace its written target: the
+    /// same checks as a written line, and a condition on $gn4 in the written
+    /// target is not dropped.
+    fn version_holds(&self, index: usize, text: &str) -> bool {
+        let line = &self.unit.lines[index];
+        let keeps_gender = !self
+            .targets
+            .get(&index)
+            .is_some_and(|target| target.contains("$gn4"))
+            || text.contains("$gn4");
+        keeps_gender
+            && leading_label(text, line).is_none()
+            && (!text.contains('→') || line.source.contains('→'))
+            && aeria_se::check_assisted_structure(&line.source, text).is_ok()
+    }
+
+    /// Step 4b: per part, one request that picks among each line's written
+    /// target and its versions. The written target is not always the first
+    /// option, so position does not favour it.
+    #[must_use]
+    pub fn select_requests(&self, versions: &BTreeMap<usize, Vec<String>>) -> Vec<Request> {
+        let system = self.localizer_system();
+        let target = &self.unit.target_language;
+        self.parts
+            .iter()
+            .enumerate()
+            .filter_map(|(part, lines)| {
+                let mut text = String::new();
+                for index in lines {
+                    let Some(options) = self.options(*index, versions) else {
+                        continue;
+                    };
+                    let line = &self.unit.lines[*index];
+                    let _ = write!(
+                        text,
+                        "{} {}\n  {}: {}",
+                        Self::id(*index),
+                        line.kind.label(),
+                        self.unit.source_language,
+                        line.source
+                    );
+                    for (code, evidence) in &line.evidence {
+                        let _ = write!(text, "\n  {code}: {evidence}");
+                    }
+                    for (option, version) in options.iter().enumerate() {
+                        let _ = write!(text, "\n  {}: {version}", option_label(option));
+                    }
+                    text.push('\n');
+                }
+                (!text.is_empty()).then(|| Request {
+                    role: Role::Select,
+                    part: Some(part),
+                    system: system.clone(),
+                    user: format!(
+                        "Contract of this unit:\n{}\n\nFor each line below, pick the version \
+                         that should appear in the {target} game. First it must be right: the \
+                         line's meaning with nothing added, the project's names and terms, \
+                         address, and gender agreement in every branch. Then prefer the one \
+                         a player enjoys most as this character's line: natural {target}, the \
+                         speaker's voice at the strength the original has, without extra \
+                         attitude or embellishment. Prefer a less usual version when it is at \
+                         least as good. The project's lessons describe what its people chose \
+                         before; follow them.\n\n{text}\nOutput JSON only: {{\"picks\": \
+                         [{{\"line\": \"L12\", \"pick\": \"B\"}}]}}",
+                        self.contract
+                    ),
+                })
+            })
+            .collect()
+    }
+
+    /// A line's options in the order a selector sees them: the written
+    /// target and its versions, rotated by the line's index.
+    fn options(
+        &self,
+        index: usize,
+        versions: &BTreeMap<usize, Vec<String>>,
+    ) -> Option<Vec<String>> {
+        let written = self.targets.get(&index)?;
+        let others = versions.get(&index).filter(|others| !others.is_empty())?;
+        let mut options = vec![written.clone()];
+        options.extend(others.iter().cloned());
+        let shift = index % options.len();
+        options.rotate_left(shift);
+        Some(options)
+    }
+
+    /// Takes a selector's picks for the lines of its request's part.
+    pub fn accept_selection(
+        &mut self,
+        request: &Request,
+        versions: &BTreeMap<usize, Vec<String>>,
+        reply: &str,
+    ) {
+        #[derive(Deserialize)]
+        struct Reply {
+            #[serde(default)]
+            picks: Vec<Pick>,
+        }
+        #[derive(Deserialize)]
+        struct Pick {
+            line: String,
+            pick: String,
+        }
+        let Some(part) = request.part else {
+            return;
+        };
+        let (Some(start), Some(end)) = (reply.find('{'), reply.rfind('}')) else {
+            return;
+        };
+        let Ok(parsed) = serde_json::from_str::<Reply>(&reply[start..=end]) else {
+            return;
+        };
+        for pick in parsed.picks {
+            let Some(index) = pick
+                .line
+                .trim()
+                .trim_start_matches('L')
+                .parse::<usize>()
+                .ok()
+                .and_then(|number| number.checked_sub(1))
+                .filter(|index| self.parts[part].contains(index))
+            else {
+                continue;
+            };
+            let Some(options) = self.options(index, versions) else {
+                continue;
+            };
+            let chosen = pick
+                .pick
+                .trim()
+                .chars()
+                .next()
+                .map(|c| c.to_ascii_uppercase())
+                .and_then(|c| (c as usize).checked_sub('A' as usize))
+                .and_then(|option| options.get(option));
+            if let Some(chosen) = chosen {
+                self.targets.insert(index, chosen.clone());
+            }
+        }
+    }
+
+    /// Minor flags for machine-written phrasing in written lines, from a
+    /// cheap scan; only for target languages Aeria has a list for.
+    #[must_use]
+    pub fn phrasing_flags(&self) -> Vec<Flag> {
+        self.parts
+            .iter()
+            .flatten()
+            .filter_map(|index| {
+                let target = self.targets.get(index)?;
+                let found = machine_phrasing(&self.unit.target_language, target);
+                (!found.is_empty()).then(|| Flag {
+                    line: *index,
+                    role: Role::Blind,
+                    major: false,
+                    problem: format!("Reads machine-written: {}.", found.join(", ")),
+                    hint: Some(
+                        "Rewrite it the way this speaker would say it, keeping the meaning."
+                            .to_owned(),
+                    ),
                 })
             })
             .collect()
@@ -1106,6 +1433,14 @@ impl Localization {
     }
 }
 
+/// The label of the option at `index` in a selection: A, B, C, …
+fn option_label(index: usize) -> char {
+    u8::try_from(index)
+        .ok()
+        .and_then(|index| b'A'.checked_add(index))
+        .map_or('?', char::from)
+}
+
 /// A speaker label or role marker at the start of a written line, such as
 /// `ALISAIE:` or `[objective]:`.
 fn leading_label(target: &str, line: &ScriptLine) -> Option<String> {
@@ -1191,11 +1526,40 @@ async fn review(
 ) -> Result<Vec<Flag>, ProviderError> {
     let requests = localization.critic_requests(only);
     let replies = call(caller, requests.clone(), usage).await?;
-    Ok(requests
+    let mut flags: Vec<Flag> = requests
         .iter()
         .zip(&replies)
         .flat_map(|(request, reply)| localization.parse_flags(request, reply))
-        .collect())
+        .collect();
+    // The first review also flags machine-written phrasing, as minor
+    // problems the fix rewrites and that never hold a line for review.
+    if only.is_none() {
+        flags.extend(localization.phrasing_flags());
+    }
+    Ok(flags)
+}
+
+/// Versions of the lines with character and the selector's choice.
+async fn voice(
+    caller: &dyn Caller,
+    localization: &mut Localization,
+    usage: &mut Usage,
+) -> Result<(), ProviderError> {
+    let requests = localization.variant_requests();
+    let replies = call(caller, requests.clone(), usage).await?;
+    let mut versions = BTreeMap::new();
+    for (request, reply) in requests.iter().zip(&replies) {
+        versions.extend(localization.parse_variants(request, reply));
+    }
+    if versions.is_empty() {
+        return Ok(());
+    }
+    let requests = localization.select_requests(&versions);
+    let replies = call(caller, requests.clone(), usage).await?;
+    for (request, reply) in requests.iter().zip(&replies) {
+        localization.accept_selection(request, &versions, reply);
+    }
+    Ok(())
 }
 
 async fn fix(
@@ -1213,8 +1577,9 @@ async fn fix(
 }
 
 /// Localizes one unit of work: contract, parallel writers, structure
-/// corrections, critics, fixes, and a recheck of what changed; a careful
-/// unit has one writer and two full rechecks.
+/// corrections, versions of the lines with character and a choice among
+/// them, critics, fixes, and a recheck of what changed; a careful unit has
+/// one writer and two full rechecks.
 ///
 /// # Errors
 ///
@@ -1245,6 +1610,9 @@ pub async fn localize(
         }
     }
     let mut refused = correct_structure(caller, &mut localization, &mut usage).await?;
+
+    caller.step(Step::Voicing);
+    voice(caller, &mut localization, &mut usage).await?;
 
     caller.step(Step::Reviewing);
     let first = review(caller, &localization, None, &mut usage).await?;
@@ -1569,22 +1937,77 @@ mod tests {
             vec![
                 Role::Contract,
                 Role::Writer,
+                Role::Variants,
                 Role::Blind,
                 Role::Fidelity,
                 Role::Player
             ]
         );
-        assert_eq!(result.usage.prompt_tokens, 50);
+        assert_eq!(result.usage.prompt_tokens, 60);
         assert_eq!(
             caller.steps.lock().unwrap().clone(),
             vec![
                 Step::Contract,
                 Step::Writing,
+                Step::Voicing,
                 Step::Reviewing,
                 Step::Fixing,
                 Step::Rechecking
             ]
         );
+    }
+
+    #[test]
+    fn versions_that_hold_are_offered_and_the_selector_picks_one() {
+        let mut localization = Localization::new(unit(vec![
+            line(LineKind::Speech("A".into()), "You came.", Some(0)),
+            line(LineKind::Journal, "A arrives.", Some(1)),
+        ]));
+        localization.accept_written(0, "L1: <if $gn4>Пришла<else>Пришёл</if>.\nL2: А приходит.");
+        let requests = localization.variant_requests();
+        assert_eq!(requests.len(), 1);
+        assert!(requests[0].user.contains("L1 A"));
+        assert!(
+            !requests[0].user.contains("L2 [journal"),
+            "journal lines get no versions"
+        );
+        let versions = localization.parse_variants(
+            &requests[0],
+            r#"{"lines": [{"line": "L1", "versions": [
+                {"text": "Явился.", "p": 0.5},
+                {"text": "Ну <if $gn4>пришла<else>пришёл</if> же!", "p": 0.1},
+                {"text": "A: <if $gn4>Ты<else>Ты</if>.", "p": 0.1}]},
+                {"line": "L2", "versions": [{"text": "Идёт.", "p": 0.2}]}]}"#,
+        );
+        // Dropping the gender condition, a speaker label, and a journal
+        // line are all refused.
+        assert_eq!(versions.len(), 1);
+        assert_eq!(versions[&0], ["Ну <if $gn4>пришла<else>пришёл</if> же!"]);
+        let select = localization.select_requests(&versions);
+        assert_eq!(select.len(), 1);
+        // Index 0 is not rotated: A is the written line, B the version.
+        localization.accept_selection(
+            &select[0],
+            &versions,
+            r#"{"picks": [{"line": "L1", "pick": "B"}]}"#,
+        );
+        assert_eq!(
+            localization.target(0),
+            Some("Ну <if $gn4>пришла<else>пришёл</if> же!")
+        );
+    }
+
+    #[test]
+    fn machine_written_phrasing_is_a_minor_flag() {
+        let mut localization = Localization::new(unit(vec![line(
+            LineKind::Speech("A".into()),
+            "You are registered.",
+            Some(0),
+        )]));
+        localization.accept_written(0, "L1: Регистрация является завершённой.");
+        let flags = localization.phrasing_flags();
+        assert_eq!(flags.len(), 1);
+        assert!(!flags[0].major);
     }
 
     #[test]

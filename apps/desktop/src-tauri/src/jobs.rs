@@ -1832,6 +1832,10 @@ fn keep_learning(
     let _ = run.store.add_findings(&run.job_id, &findings);
 }
 
+/// The job event of a made-up name a person may choose another rendering
+/// for.
+const NAME_CHOICE_EVENT: &str = "name-choice";
+
 /// Decides the unit's terms the knowledge lacks and, when some were
 /// written, reads the unit's knowledge again.
 async fn study_unit_terms(
@@ -1844,8 +1848,21 @@ async fn study_unit_terms(
         app: run.app.clone(),
         root: run.root.clone(),
     };
-    let written = study_terms(caller, &host, unit).await?;
-    if !written.is_empty() {
+    let study = study_terms(caller, &host, unit).await?;
+    // A made-up name a person may want otherwise is reported, so Angelica
+    // can offer the choice when the job reports.
+    for choice in &study.choices {
+        let message = format!(
+            "{} → {} (or: {})",
+            choice.term,
+            choice.rendering,
+            choice.alternatives.join(" / ")
+        );
+        let _ = run
+            .with_store(move |store, id| store.add_event(id, NAME_CHOICE_EVENT, &message, None))
+            .await;
+    }
+    if !study.written.is_empty() {
         let root = run.root.clone();
         let studied = unit.clone();
         if let Ok(text) =

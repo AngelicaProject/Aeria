@@ -721,7 +721,7 @@ export type JobAction = "pause" | "resume" | "cancel";
 export type WorkerPhase = "idle" | "preparing" | "waiting" | "reasoning" | "writing" | "recording" | "backoff" | "stopped";
 
 /** The localizer step a lane is on. */
-export type WorkerStep = "study" | "learning" | "terms" | "contract" | "writing" | "reviewing" | "fixing" | "rechecking";
+export type WorkerStep = "study" | "learning" | "terms" | "contract" | "writing" | "voicing" | "reviewing" | "fixing" | "rechecking";
 
 /** What one lane of a running job is doing; live state, never stored. */
 export type WorkerActivity = {

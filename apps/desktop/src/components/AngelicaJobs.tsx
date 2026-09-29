@@ -57,6 +57,7 @@ const stepLabels: Readonly<Record<WorkerStep, MessageKey>> = {
   terms: "angelica.worker.step.terms",
   contract: "angelica.worker.step.contract",
   writing: "angelica.worker.step.writing",
+  voicing: "angelica.worker.step.voicing",
   reviewing: "angelica.worker.step.reviewing",
   fixing: "angelica.worker.step.fixing",
   rechecking: "angelica.worker.step.rechecking",

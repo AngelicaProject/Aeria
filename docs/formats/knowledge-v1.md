@@ -38,6 +38,10 @@ A file that cannot be read, or rows and profiles the referenced formats
 exclude, are reported as project knowledge problems and left out; the rest
 of the knowledge is used.
 
+A term the study decided for a name the localizations each made up anew
+has `or: A / B` in its note: the alternatives a person may choose instead.
+The note is text for people and models; nothing parses it.
+
 ## Sections
 
 A section file is Markdown. A line that starts with `## ` starts a section;
@@ -77,6 +81,11 @@ A lesson's metadata may name:
   to all text.
 - `findings`, `job`, `effect`, and `evaluated`: its provenance and measured
   effect, for people.
+
+A lesson whose identifier starts with `taste-` records what a person
+preferred when choosing between versions of wording; Angelica writes it as
+`active`. The prefix is a convention for people; such lessons are read like
+any other.
 
 ## Writing
 

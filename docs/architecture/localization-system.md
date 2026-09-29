@@ -112,14 +112,26 @@ model choice.
 
 ## Evidence languages as annotation
 
-English hides decisions the target language must make: the gender of the
-speaker and the addressee, formal or informal address, a character's
-register and age, dialect. The game's Japanese original and its German and
-French localizations have already made most of these decisions, by
-professionals, for every line:
+The project is another localization of the game, a peer of the English,
+French, and German ones, not a translation of one of them. Each of them made
+its own creative choices: the tavern 溺れた海豚亭 ("the drowned dolphin") is
+the Drowning Wench in English, the Dauphin noyé in French, and Zur
+Ertränkten Sorge ("drowned sorrow") in German, and each plays its
+characters with its own devices (a written accent, dialect words, oaths,
+pomp). The project reads the Japanese for what the writers meant and the
+localizations for how each made it work, then makes its own choices; it
+copies none of them and never makes a character flatter than they are in
+the original and the localizations. The source language remains the working
+text for what a line says.
 
-- **Japanese** shows the voice: the first-person pronoun (俺, 僕, 私, わし,
-  あたし, 拙者), sentence endings, and the level of politeness.
+The evidence languages also settle decisions the source leaves open: the
+gender of the speaker and the addressee, formal or informal address, a
+character's register and age, dialect:
+
+- **Japanese** shows the voice as written: the first-person pronoun (俺, 僕,
+  私, わし, あたし, 拙者), sentence endings, and the level of politeness.
+- **The localizations** show how the voice was played for their players:
+  the markers each uses and the portrait its players get.
 - **French and German** show address and gender: `tu`/`vous` and `du`/`Sie`
   for each pair of speakers and for the player character, and gendered
   agreement of adjectives and participles. A French condition on `$gn4`,
@@ -176,8 +188,10 @@ category of items by representative rows.
 1. **Names and terms**: candidates from
    [terminology candidates](./search.md#terminology-candidates), decided with
    the evidence languages and the project's transliteration style.
-2. **Characters**: every speaker with enough lines, most lines first, with
-   voice from Japanese and address and gender from French and German.
+2. **Characters**: every speaker with enough lines, most lines first, as a
+   voice sheet: who the character is in the original, how each localization
+   plays them, the target-language devices that give the same portrait at
+   the same strength, and address and gender from French and German.
 3. **Style**: one entry per text domain, from calibration.
 
 Study runs again for text a source update adds.
@@ -223,10 +237,38 @@ what matters for quality and speed, and the implemented localizer follows it
 - **Content from the source only.** The other languages decide tone, voice,
   address, and gender; a writer that took content from the Japanese was the
   most frequent fidelity error before this rule.
+- **Versions, then a choice.** Asked for one line, a model writes the most
+  typical wording; preference training favors the familiar, so the result
+  reads correct and flat. For the spoken lines with character, one request
+  per part writes three clearly different versions, one of them unusual,
+  and a selector picks among them and the written line by the project's
+  knowledge and taste. On three test scenes, versions won most of a
+  person's blind choices on lines with a marked voice (a stutter, an oath,
+  a colorful speaker), while plain lines and journal entries did not gain.
+  Versions that break the line's structure or drop a gender condition never
+  reach the selector.
 
 Line hygiene is checked when lines are submitted: a speaker label at the start
 of a line, two versions joined by an arrow, and a repeat of the previous line
 were the defects the prototype saw in long units.
+
+## Taste
+
+Models judge style unlike readers: on the test scenes, a selector agreed
+with a person's blind choices about as often as chance allows, and showing
+it the person's earlier choices as examples did not help. Rules inferred
+from those choices did help. So the project's taste is kept as rules: every
+choice a person makes between versions of wording (a calibration, a name, a
+line) and every remark on how translations read becomes an active lesson
+with an id starting with `taste-`, with the chosen and the rejected wording
+as its example. Writers and selectors follow these lessons, and people steer
+the whole localization by choosing, never by writing prompts.
+
+Names the localizations each made up anew are such choices. The term study
+decides a rendering from all four languages with two alternatives; the job
+records a `name-choice` event and keeps working with its rendering;
+Angelica then asks, one name at a time, and a different choice becomes the
+term and a revision of what the job wrote.
 
 ## Critics
 
@@ -241,7 +283,11 @@ lower effort found more than one broad critic at a high effort:
 | Player and address | Source, French, German, and target, with the knowledge and contract | Words that assume the player character's gender, address that breaks the contract, a speaker's wrong gender |
 
 The blind reader is the main defence against translationese: a reader who
-cannot see the source is not anchored to it. French and German conditions on
+cannot see the source is not anchored to it. A cheap scan adds minor flags
+for phrasing that makes text read machine-written, where Aeria has a list
+for the target language (for Russian: officialese, bookish links in speech,
+common calques, and lines built on several colons and dashes); the fix
+rewrites them, and they never hold a line for review. French and German conditions on
 `$gn4` mark lines that vary with the player character's gender, but only
 about half of them: French past tenses with *avoir* do not agree, while
 Russian ones do, so the check reads every line.

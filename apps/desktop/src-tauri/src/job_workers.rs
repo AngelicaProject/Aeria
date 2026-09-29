@@ -14,7 +14,7 @@ use serde::Serialize;
 use crate::angelica::now_unix_ms;
 
 /// Steps of the localizer, for "step N of M".
-pub const LOCALIZER_STEPS: u32 = 6;
+pub const LOCALIZER_STEPS: u32 = 7;
 
 /// What one lane is doing.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
@@ -49,6 +49,8 @@ pub enum WorkerStep {
     Terms,
     Contract,
     Writing,
+    /// Versions of the lines with character and the choice among them.
+    Voicing,
     Reviewing,
     Fixing,
     Rechecking,
@@ -62,6 +64,7 @@ impl From<Step> for WorkerStep {
             Step::Terms => Self::Terms,
             Step::Contract => Self::Contract,
             Step::Writing => Self::Writing,
+            Step::Voicing => Self::Voicing,
             Step::Reviewing => Self::Reviewing,
             Step::Fixing => Self::Fixing,
             Step::Rechecking => Self::Rechecking,
@@ -76,9 +79,10 @@ impl WorkerStep {
             Self::Terms => 1,
             Self::Contract => 2,
             Self::Writing => 3,
-            Self::Reviewing => 4,
-            Self::Fixing => 5,
-            Self::Rechecking => 6,
+            Self::Voicing => 4,
+            Self::Reviewing => 5,
+            Self::Fixing => 6,
+            Self::Rechecking => 7,
         }
     }
 }

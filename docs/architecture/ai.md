@@ -219,13 +219,21 @@ writing".
   user's decision.
 - **Original text**, in Angelica's and every worker's system message: the
   game is written in Japanese, and the English, German, and French texts are
-  localizations. The project translates from its source language; the
-  Japanese shows intent. When the two differ, the project guidance decides
-  which to follow; without guidance the source's content is kept.
+  three localizations that each made their own creative choices (names,
+  jokes, how characters sound). The project is another localization: the
+  Japanese shows intent, the localizations show how each made it work, and
+  the project makes its own choices rather than copying one of them. The
+  source language is the working text for what a line says; when it and
+  the Japanese differ, the project guidance decides which to follow, and
+  without guidance the source's content is kept.
 - **Translation style**, in Angelica's, every worker's, and Draft with
   Angelica's system message: translate meaning and tone in the target
-  language's own syntax and punctuation, avoid translationese, keep the
-  line's register without adding or flattening anything, and reread each
+  language's own syntax and punctuation, avoid translationese and the known
+  reasons machine-written text reads dry (written register in speech,
+  officialese, the safest word, missing particles, one rhythm and one shape
+  line after line, smoothed-out irony or rudeness, one-to-one transfer),
+  keep the line's register without adding or flattening anything, and
+  reread each
   translation as the player sees it before submitting.
 - **Player character**, in Angelica's, every worker's, and Draft with
   Angelica's system message: players choose their character's gender, so a
@@ -394,6 +402,16 @@ manner shows), each with two or three complete versions of the same few
 lines, keeping what the evidence decides (address, gender, voice) the same
 in every version. After the last answer she writes a style entry for each
 kind of text she asked about and starts the job the user asked for.
+
+After a job reports `name-choice` events, Angelica asks about those names
+with `ask_choice`, one at a time and the most visible first, each option
+with what the original and the localizations call the name; she writes the
+choice as a term with the other options forbidden and offers
+`propose_revision` when it differs from what the job wrote. After any choice
+between versions of wording, or a remark on how translations read, she
+writes what it shows as an active lesson whose id starts with `taste-`, one
+concrete rule with the chosen and rejected wording as its example; the
+localizer's selector follows these lessons.
 
 ### Guidance and glossary
 
@@ -650,9 +668,11 @@ writes the domain's style entry. For each speaker label with at least three
 lines in the scope's quests and cutscenes and no profile in either layer,
 the most lines first and at most 200, a researcher reads up to 30 of the
 speaker's lines sampled evenly across the game with their other languages
-and writes a profile: who the character is and their gender, their voice in
-the Japanese, their address from the French and German, and how they sound
-in the target language, with examples. System text, player choices such as
+and writes a voice sheet: who the character is in the original and their
+gender, how each localization plays them (quoting its markers), four to six
+target-language devices that give the same portrait at the same strength,
+what flattens or caricatures them, their address from the French and
+German, and three of their most marked lines in the target language. System text, player choices such as
 `Q1`, and labels without letters are skipped. The study starts building the
 source index, uses the job's model, counts toward the job's tokens, and
 pauses the job with a reason when the provider fails.
@@ -665,7 +685,13 @@ are left out), reads up to six existing
 translations of each from the source index, and decides renderings; a
 second request checks them for grammar and meaning; forbidden variants that
 repeat the rendering or stand for "none" are dropped; and the checked terms
-are written to the agent layer with `study` in their note. The unit's
+are written to the agent layer with `study` in their note. The researcher
+compares each name in every language: a person's name keeps the project's
+rendering or is transliterated, while a name the localizations each made up
+anew (an establishment, a place or nickname with a meaning) gets a rendering
+inspired by all of them and up to two alternatives. The alternatives are
+kept in the term's note as `or: A / B`, and the job records a `name-choice`
+event for each such name. The unit's
 knowledge is then read again. A term another chunk wrote meanwhile keeps
 that chunk's rendering.
 
@@ -676,7 +702,7 @@ knowledge itself is wrong are recorded as `knowledge` job events.
 
 #### Steps
 
-The localizer runs six steps; the requests of a step run in parallel, at
+The localizer runs seven steps; the requests of a step run in parallel, at
 most 8 at a time per chunk and at most 24 at a time across all lanes of a
 job:
 
@@ -685,23 +711,42 @@ job:
    every writer shares: the story and tone (between `<story>` tags), a table
    of address (from the project knowledge where it decides, otherwise from
    the French and German) between
-   speakers and toward the player character, genders, names and terms, and
-   the form of journal entries, objectives, and system text.
+   speakers and toward the player character, genders, names and terms, the
+   form of journal entries, objectives, and system text, and the two or
+   three devices that make each speaker sound like themselves.
 2. **Writing**: the chunk's strings are split into parts of at most 40, in
    order and of even size, and each part is written by its own request,
    which sees the whole script and the contract and rereads its text before
    answering. Replies are lines of the form `L12: text`.
-3. **Critics**: three requests per part check its lines. A blind reader sees
+3. **Voice**: one request per part with spoken lines chooses the lines that
+   carry character (a marked voice, a joke, an oath, pomp, strong emotion)
+   and writes three clearly different versions of each with the probability
+   that a typical translator would write it, at least one below 0.15.
+   Journal entries, objectives, and system text get none. A version is kept
+   only when it differs from the written line, passes the same checks as a
+   written line, and keeps a condition on `$gn4` the written line has. One
+   request per part then picks, per line, among the written line and its
+   versions (in an order rotated by the line, so the written line is not
+   always first): meaning with nothing added, names, address, and agreement
+   first, then the speaker's voice at the original's strength, following the
+   project's lessons.
+4. **Critics**: three requests per part check its lines. A blind reader sees
    only the target text (with the contract and four lines before the part);
    a fidelity check compares each line with its source; a check of the player
    character and address sees the source, French, German, and target with
    the knowledge and the contract; when the unit has knowledge, a
    consistency check compares the lines with its terms, characters, style,
    and lessons. Each returns flags with a line, a severity, a problem, and a
-   hint.
-4. **Fixes**: one request per part with flags corrects the flagged lines;
+   hint. The fidelity check also flags a line that repeats another line or
+   reveals what the line hides, such as a name behind `???`, and accepts
+   particles, idiom, slang, and voice devices; the player check also flags
+   words that do not agree in a branch of a condition. The first review adds
+   minor flags from a scan for machine-written phrasing where Aeria has a
+   list for the target language (Russian: officialese, bookish links,
+   common calques, several colons and dashes in one line, two «который»).
+5. **Fixes**: one request per part with flags corrects the flagged lines;
    changes to other lines are ignored.
-5. **Recheck**: the critics read the changed and flagged lines again; a
+6. **Recheck**: the critics read the changed and flagged lines again; a
    remaining major flag gets one more fix. A line whose major flag was not
    changed by that fix needs review.
 
@@ -713,8 +758,8 @@ go back for correction up to twice; a line still refused is rejected.
 
 Each role has the reasoning effort that served it best, clamped to the
 efforts the model accepts: high for writers and the check of the player
-character, medium for the contract, the blind reader, the consistency
-check, and fixes, low for the
+character and the versions, medium for the contract, the selector, the
+blind reader, the consistency check, and fixes, low for the
 fidelity check and structure corrections. The jobs effort from the settings
 is a ceiling for every role.
 
@@ -845,7 +890,7 @@ While a runner runs, each lane also reports its live activity: the chunk,
 sheet, and first and last row it translates, its phase (claiming a chunk,
 loading context, waiting for the provider, reasoning, writing, recording
 results, waiting to retry, or stopped), the localizer step it is on (contract,
-writing, critics, fixes, or recheck) and how many of the step's requests have
+writing, voice, critics, fixes, or recheck) and how many of the step's requests have
 not answered yet, its strings written and tokens used in the chunk, its
 chunks done, and when it last changed or received anything from the
 provider. Strings count as written when the unit is done, because the

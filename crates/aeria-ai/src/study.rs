@@ -4,13 +4,17 @@
 //! - **Style**: one researcher per text domain reads samples of the domain in
 //!   every client language and writes the domain's style entry.
 //! - **Characters**: one researcher per speaker label reads the speaker's
-//!   lines sampled across the game and writes a profile: gender, voice from
-//!   the Japanese, address from the French and German, and how the character
-//!   sounds in the target language.
+//!   lines sampled across the game in every client language and writes a
+//!   voice sheet: who the character is in the Japanese, how each
+//!   localization makes them sound, the target-language devices that give
+//!   the same portrait, address, and gender.
 //! - **Terms**: before a unit is localized, a researcher lists the unit's
 //!   terminology the knowledge does not have, reads how the project already
 //!   translates each term, decides renderings, and a second request checks
-//!   them for grammar before they are written.
+//!   them for grammar before they are written. Names of people keep the
+//!   project's rendering; a name that the localizations each invented anew
+//!   (an establishment, a nickname with a meaning) gets a rendering and up
+//!   to two alternatives a person can choose instead.
 //!
 //! Researchers read evidence and write knowledge through a
 //! [`KnowledgeHost`]; they send requests through the localizer's
@@ -36,11 +40,14 @@ const MAX_TERMS_PER_UNIT: usize = 40;
 const CONCORDANCE_LINES: usize = 6;
 
 const EVIDENCE: &str = "\
-FINAL FANTASY XIV is written in Japanese; the English, German, and French texts are \
-professional localizations. The Japanese shows intent and how characters really speak \
-(first-person pronoun, sentence endings, politeness); French and German show decisions the \
-English hides (tu/vous and du/Sie, gender agreement, register). A device of one localization, \
-such as an English written accent, is that localization's choice, not the character's.";
+FINAL FANTASY XIV is written in Japanese; the English, German, and French texts are three \
+finished localizations, and each made its own creative choices: names, jokes, and how \
+characters sound. The Japanese shows intent and how characters speak (first-person \
+pronoun, sentence endings, politeness); each localization shows how it made that work for \
+its players (a written accent, dialect words, oaths, pomp, tics) and decisions the \
+original leaves open (tu/vous and du/Sie, gender agreement, register). This project is \
+another localization: it makes its own choices from all of them, copies none, and never \
+makes a character flatter than the original and the localizations make them.";
 
 /// A line read as evidence: its label, its source, and the other client
 /// languages.
@@ -138,15 +145,22 @@ pub fn character_request(
         system: research_system(target),
         user: format!(
             "Speaker label {speaker}: {total} lines in the game; {} sampled evenly across them \
-             below. Write this character's profile for {target} translators, under 250 words, as \
+             below. Write this character's voice sheet for {target} writers, under 300 words, as \
              plain text without a heading:\n\
-             - Who this is, if the lines tell, and gender, with the evidence.\n\
-             - Voice: how the character speaks in the Japanese (first-person pronoun, endings, \
-             politeness, dialect) and where the English invents a device the Japanese lacks.\n\
+             - Who this is and how the original conceives them (first-person pronoun, endings, \
+             politeness, dialect, temperament), with gender and its evidence.\n\
+             - How the localizations play them: what each does to make the voice (quote its \
+             markers: accent spelling, dialect words, oaths, pomp, tics, rhythm) and what its \
+             players imagine.\n\
+             - Voice in {target}: four to six concrete devices that give a {target} player the \
+             portrait at the strength the character has (vocabulary such as colloquial, trade \
+             jargon, archaic, or bookish words and oaths of the same strength; syntax; particles \
+             and interjections; forms of address; tics), each with where it appears and a short \
+             example. No misspelled words for an accent; stutters and drawn-out words stay.\n\
+             - What flattens or caricatures the character.\n\
              - Address of the player character and of others, from French tu/vous and German \
              du/Sie, and whether it changes.\n\
-             - How the character sounds in {target}: register, vocabulary, syntax; what to avoid.\n\
-             - Two or three example lines in {target}.\n\
+             - Three of the most marked lines in {target}, as marked as the original.\n\
              Stay consistent with the project knowledge.\n\nProject knowledge:\n{knowledge}\n\n\
              Lines:\n{}",
             samples.len(),
@@ -160,7 +174,7 @@ fn unit_listing(unit: &UnitOfWork) -> String {
     for line in &unit.lines {
         let _ = writeln!(text, "- {}", line.source);
         for (code, evidence) in &line.evidence {
-            if matches!(code.as_str(), "ja" | "fr") {
+            if matches!(code.as_str(), "ja" | "fr" | "de") {
                 let _ = writeln!(text, "  {code}: {evidence}");
             }
         }
@@ -200,10 +214,18 @@ fn decide_request(unit: &UnitOfWork, knowledge: &str, blocks: &str) -> Request {
              that may be wrong. Keep a rendering that is correct and already common, so the \
              project stays consistent, and replace one that is wrong (for example, a fire shard \
              and a fire crystal are different items). Use the unit below and the other languages \
-             to understand what each term is, and stay consistent with the project knowledge.\n\n\
+             to understand what each term is, and stay consistent with the project knowledge.\n\
+             Names: compare the name in every language of the unit. A person's name or a \
+             transliterated name keeps the project's rendering or is transliterated. Where the \
+             localizations each made up their own name (an establishment, a place or a nickname \
+             with a meaning, such as a tavern the Japanese calls the drowned dolphin, the English \
+             the Drowning Wench, and the German drowned sorrow), decide a {target} name that works \
+             for its players and is not unintentionally funny, inspired by all of them, and give \
+             two alternatives a person could choose instead.\n\n\
              Output for each term exactly two lines:\n## <term as given>\n<rendering> | <kind and \
              grammatical note> | <wrong renderings to avoid, separated by ;, never the rendering \
-             itself; leave the field empty when there are none>\n\n\
+             itself; leave the field empty when there are none> | <for a made-up name only: two \
+             alternatives separated by ;>\n\n\
              Project knowledge:\n{knowledge}\n\nUnit:\n{}\nTerms:\n{blocks}",
             unit_listing(unit)
         ),
@@ -218,11 +240,12 @@ fn check_request(target: &str, decided: &str) -> Request {
             "You are a {target} editor checking terminology decisions of a game localization."
         ),
         user: format!(
-            "Check each rendering below. It must be grammatical, natural {target} that a player \
-             accepts as a name or term in a fantasy game, match what the term is, and suit a \
-             person where the term is a name. For example, an organization's name needs a proper \
-             noun phrase whose words agree. Fix the entries that fail and keep the others. Output \
-             the complete list in the same format and nothing else.\n\n{decided}"
+            "Check each rendering below, and each alternative after the last |. It must be \
+             grammatical, natural {target} that a player accepts as a name or term in a fantasy \
+             game, match what the term is, suit a person where the term is a name, and not be \
+             unintentionally funny. For example, an organization's name needs a proper noun \
+             phrase whose words agree. Fix the entries that fail and keep the others. Output the \
+             complete list in the same format and nothing else.\n\n{decided}"
         ),
     }
 }
@@ -243,9 +266,33 @@ const PLACEHOLDERS: [&str; 12] = [
     "—",
 ];
 
+/// A made-up name a person can choose another rendering for.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct NameChoice {
+    pub term: String,
+    pub rendering: String,
+    pub alternatives: Vec<String>,
+}
+
+/// What a unit's term study wrote.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct TermStudy {
+    /// Terms written to the knowledge.
+    pub written: Vec<String>,
+    /// Written names with alternatives for a person to choose from.
+    pub choices: Vec<NameChoice>,
+}
+
 /// Reads `## term` / `rendering | note | forbidden` entries.
 #[must_use]
 pub fn parse_decisions(reply: &str) -> Vec<GlossaryEntry> {
+    parse_decisions_with_choices(reply).0
+}
+
+/// Reads `## term` / `rendering | note | forbidden | alternatives` entries,
+/// with the alternatives of made-up names.
+fn parse_decisions_with_choices(reply: &str) -> (Vec<GlossaryEntry>, Vec<NameChoice>) {
+    let mut choices = Vec::new();
     let mut entries = Vec::new();
     let mut term: Option<String> = None;
     for line in reply.lines() {
@@ -283,7 +330,32 @@ pub fn parse_decisions(reply: &str) -> Vec<GlossaryEntry> {
                     .collect()
             })
             .unwrap_or_default();
+        let alternatives: Vec<String> = fields
+            .next()
+            .map(|list| {
+                list.split(';')
+                    .map(|item| item.trim().trim_matches(['«', '»', '"', '\'']).trim())
+                    .filter(|item| {
+                        !item.is_empty()
+                            && item.to_lowercase()
+                                != translation
+                                    .trim_matches(['«', '»', '"', '\''])
+                                    .to_lowercase()
+                            && !PLACEHOLDERS.contains(&item.to_lowercase().as_str())
+                    })
+                    .take(2)
+                    .map(str::to_owned)
+                    .collect()
+            })
+            .unwrap_or_default();
         if !current.is_empty() && !translation.is_empty() {
+            if !alternatives.is_empty() {
+                choices.push(NameChoice {
+                    term: current.clone(),
+                    rendering: translation.clone(),
+                    alternatives,
+                });
+            }
             entries.push(GlossaryEntry {
                 term: current,
                 translation,
@@ -292,7 +364,7 @@ pub fn parse_decisions(reply: &str) -> Vec<GlossaryEntry> {
             });
         }
     }
-    entries
+    (entries, choices)
 }
 
 fn parse_candidates(reply: &str) -> Vec<String> {
@@ -310,7 +382,8 @@ fn parse_candidates(reply: &str) -> Vec<String> {
 }
 
 /// Decides the terms of a unit the knowledge does not have yet and writes
-/// them. Returns the terms written.
+/// them. Returns the terms written and the made-up names a person may
+/// choose another rendering for.
 ///
 /// # Errors
 ///
@@ -319,7 +392,7 @@ pub async fn study_terms(
     caller: &dyn Caller,
     host: &dyn KnowledgeHost,
     unit: &UnitOfWork,
-) -> Result<Vec<String>, ProviderError> {
+) -> Result<TermStudy, ProviderError> {
     let replies = caller.call_all(vec![candidates_request(unit)]).await?;
     let knowledge = host.knowledge();
     let mut terms: Vec<String> = Vec::new();
@@ -339,7 +412,7 @@ pub async fn study_terms(
         }
     }
     if terms.is_empty() {
-        return Ok(Vec::new());
+        return Ok(TermStudy::default());
     }
     let mut blocks = String::new();
     for term in &terms {
@@ -359,9 +432,9 @@ pub async fn study_terms(
     let checked = caller
         .call_all(vec![check_request(&unit.target_language, &decided[0].0)])
         .await?;
-    let mut entries = parse_decisions(&checked[0].0);
+    let (mut entries, mut choices) = parse_decisions_with_choices(&checked[0].0);
     if entries.is_empty() {
-        entries = parse_decisions(&decided[0].0);
+        (entries, choices) = parse_decisions_with_choices(&decided[0].0);
     }
     // Only the terms asked about are written.
     entries.retain(|entry| {
@@ -369,15 +442,28 @@ pub async fn study_terms(
             .iter()
             .any(|term| term.eq_ignore_ascii_case(&entry.term))
     });
+    choices.retain(|choice| {
+        entries
+            .iter()
+            .any(|entry| entry.term == choice.term && entry.translation == choice.rendering)
+    });
     for entry in &mut entries {
-        let note = entry.note.take().unwrap_or_default();
+        let mut note = entry.note.take().unwrap_or_default();
+        if let Some(choice) = choices.iter().find(|choice| choice.term == entry.term) {
+            if !note.is_empty() {
+                note.push_str("; ");
+            }
+            let _ = write!(note, "or: {}", choice.alternatives.join(" / "));
+        }
         entry.note = Some(if note.is_empty() {
             "study".to_owned()
         } else {
             format!("{note}; study")
         });
     }
-    Ok(host.set_terms(&entries).unwrap_or_default())
+    let written = host.set_terms(&entries).unwrap_or_default();
+    choices.retain(|choice| written.contains(&choice.term));
+    Ok(TermStudy { written, choices })
 }
 
 /// Writes one domain's style from its samples.
@@ -479,6 +565,24 @@ mod tests {
         assert!(
             entries[1].forbidden.is_empty(),
             "a placeholder is no variant"
+        );
+    }
+
+    #[test]
+    fn made_up_names_keep_up_to_two_alternatives() {
+        let (entries, choices) = parse_decisions_with_choices(
+            "## Drowning Wench\n«Утопленная русалка» | таверна | Тонущая девка | Залитое горе; «Утопленная русалка»; none\n## Baderon\nБадерон | имя | |\n",
+        );
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].translation, "«Утопленная русалка»");
+        assert_eq!(entries[0].forbidden, vec!["Тонущая девка"]);
+        assert_eq!(
+            choices,
+            vec![NameChoice {
+                term: "Drowning Wench".to_owned(),
+                rendering: "«Утопленная русалка»".to_owned(),
+                alternatives: vec!["Залитое горе".to_owned()],
+            }]
         );
     }
 
@@ -585,7 +689,8 @@ mod tests {
             .unwrap()
             .block_on(study_terms(&caller, &host, &unit))
             .unwrap();
-        assert_eq!(written, vec!["Fire Shard", "Lyngsath"]);
+        assert_eq!(written.written, vec!["Fire Shard", "Lyngsath"]);
+        assert!(written.choices.is_empty());
         let entries = host.written.lock().unwrap().clone();
         assert_eq!(entries[0].translation, "огненный осколок");
         assert_eq!(entries[0].note.as_deref(), Some("предмет; study"));
