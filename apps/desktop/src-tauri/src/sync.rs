@@ -63,10 +63,17 @@ impl ProjectFiles {
         self.lock.parent().unwrap_or_else(|| Path::new("."))
     }
 
+    /// Another file of the project in the same folder, such as
+    /// `<key>.server`.
+    #[must_use]
+    pub(crate) fn path_with_extension(&self, extension: &str) -> PathBuf {
+        self.lock.with_extension(extension)
+    }
+
     /// The stamp of the last write by a command, if any.
     #[must_use]
     pub(crate) fn stamp(&self) -> Option<String> {
-        fs::read_to_string(&self.stamp).ok()
+        retry_busy(|| fs::read_to_string(&self.stamp)).ok()
     }
 
     /// Replaces the stamp. Call while holding the [`WriteLock`].
@@ -78,21 +85,11 @@ impl ProjectFiles {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map_or(0, |duration| duration.as_nanos());
-        let partial = self.stamp.with_extension("stamp.partial");
+        let partial = self
+            .stamp
+            .with_extension(format!("stamp.{}", std::process::id()));
         fs::write(&partial, format!("{now}-{}", std::process::id()))?;
-        // A reader of the stamp briefly blocks replacing it on Windows.
-        let mut attempt = 0;
-        loop {
-            match fs::rename(&partial, &self.stamp) {
-                Err(error)
-                    if attempt < 20 && error.kind() == std::io::ErrorKind::PermissionDenied =>
-                {
-                    attempt += 1;
-                    std::thread::sleep(std::time::Duration::from_millis(25 * attempt.min(4)));
-                }
-                result => return result,
-            }
-        }
+        replace_file(&partial, &self.stamp)
     }
 
     /// Opens the ledger of agent translations, creating it when missing.
@@ -121,11 +118,71 @@ impl ProjectFiles {
     }
 }
 
+/// Runs a file operation again while Windows refuses it because another
+/// process has the file open right now (access denied, or a sharing or lock
+/// violation), for about two seconds at most.
+fn retry_busy<T>(mut operation: impl FnMut() -> std::io::Result<T>) -> std::io::Result<T> {
+    let mut attempt = 1_u32;
+    loop {
+        match operation() {
+            Err(error)
+                if attempt < 20
+                    && (matches!(error.raw_os_error(), Some(5 | 32 | 33))
+                        || error.kind() == std::io::ErrorKind::PermissionDenied) =>
+            {
+                std::thread::sleep(std::time::Duration::from_millis(
+                    25 * u64::from(attempt.min(4)),
+                ));
+                attempt += 1;
+            }
+            result => return result,
+        }
+    }
+}
+
+/// Replaces `target` with `staged` atomically, waiting out a process that
+/// briefly holds `target`.
+///
+/// # Errors
+///
+/// Returns the I/O error of the last attempt.
+pub(crate) fn replace_file(staged: &Path, target: &Path) -> std::io::Result<()> {
+    retry_busy(|| fs::rename(staged, target)).inspect_err(|_| {
+        let _ = fs::remove_file(staged);
+    })
+}
+
+/// An exclusive lock on a file, released when dropped.
+#[derive(Debug)]
+pub(crate) struct FileLock {
+    _file: File,
+}
+
+impl FileLock {
+    /// Waits for and takes the lock on `path`, creating the file.
+    ///
+    /// # Errors
+    ///
+    /// Returns an I/O error when the file cannot be opened or locked.
+    pub(crate) fn acquire(path: &Path) -> std::io::Result<Self> {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let file = File::options()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(path)?;
+        file.lock()?;
+        Ok(Self { _file: file })
+    }
+}
+
 /// An exclusive lock on a project's workspace writes, released when
 /// dropped.
 #[derive(Debug)]
 pub(crate) struct WriteLock {
-    _file: File,
+    _lock: FileLock,
 }
 
 impl WriteLock {
@@ -135,14 +192,9 @@ impl WriteLock {
     ///
     /// Returns an I/O error when the lock file cannot be opened or locked.
     pub(crate) fn acquire(files: &ProjectFiles) -> std::io::Result<Self> {
-        fs::create_dir_all(files.directory())?;
-        let file = File::options()
-            .create(true)
-            .truncate(false)
-            .write(true)
-            .open(&files.lock)?;
-        file.lock()?;
-        Ok(Self { _file: file })
+        Ok(Self {
+            _lock: FileLock::acquire(&files.lock)?,
+        })
     }
 }
 

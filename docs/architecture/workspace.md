@@ -155,6 +155,12 @@ replacement. On Windows a replacement, and opening a workspace file, fails
 while another process briefly holds the file, such as a reader in another
 process, a sync client, or a virus scanner; both are retried for about two
 seconds while they fail with access denied or a sharing or lock violation.
+`persist_units` persists several units at once: it validates them against
+the session cache or the files, serializes each affected shard once, and
+publishes the shards on up to eight threads, since publishing mostly waits
+for the disk to sync each file. Units are spread over 256 shards by ID, so a
+batch of a hundred translations touches most of its shards. A failed shard
+keeps its previous content and invalidates the session cache.
 Initialization stages the complete directory and publishes it
 only after serialization succeeds. The atomicity guarantee is per file. A
 source update publishes the manifest last, so an interruption leaves the

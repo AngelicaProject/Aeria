@@ -272,7 +272,18 @@ impl DesktopState {
         if let Some(files) = &files {
             self.take_in_command_writes(files, session)?;
         }
-        write(session)
+        let result = write(session)?;
+        // `aeria` servers keep the workspace in memory too; the stamp tells
+        // them to reload. The desktop's own stamp is taken in already.
+        if let Some(files) = &files
+            && files.touch_stamp().is_ok()
+        {
+            *self
+                .seen_stamp
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = Some((root, files.stamp()));
+        }
+        Ok(result)
     }
 
     pub(crate) fn lock_registry(&self) -> Result<MutexGuard<'_, ()>, CommandError> {

@@ -21,7 +21,9 @@ mod read;
 mod session;
 mod update;
 
-pub use mutation::{AssistedExpectation, AssistedWriteError, TranslationMutationError};
+pub use mutation::{
+    AssistedExpectation, AssistedWrite, AssistedWriteError, TranslationMutationError,
+};
 pub use persistence::{
     FORMAT_VERSION as WORKSPACE_FORMAT_VERSION, WorkspaceStore, WorkspaceStoreError,
     decode_unit_record, decode_unit_shard, encode_unit_shard, unit_shard_path,

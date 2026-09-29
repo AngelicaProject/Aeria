@@ -46,6 +46,7 @@ dependencies = [
  "aeria-sqpack",
  "aeria-workspace",
  "dirs",
+ "getrandom 0.4.3",
  "rusqlite",
  "semver",
  "serde",

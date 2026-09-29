@@ -70,6 +70,37 @@ Output is compact text by default and one JSON value with `--json`. The tool
 and every command have `--help`. Exit status: 0 done, 1 done with rejected
 or failed translations or knowledge problems, 2 error.
 
+### The project server
+
+A command is a thin client of the project's server, a background process of
+the same executable (`__serve`) that keeps the game, the workspace, and the
+caches open: the sheets' strings, the other client languages, the knowledge
+(read again when a file changes), the search index with its word counts, and
+similar strings per source text. With a running server a command takes about
+30 ms; `read` of a 126-line quest with similar translations not yet looked up
+takes about 0.6 s, as the lookups run on four threads, and a batch of 100
+translations is written in about 0.4 s.
+
+- The first command for a project starts the server and waits until it has
+  opened the project (about 2 s for a project of 25,000 translations);
+  `agents/<key>.server` in application data names its loopback port, a
+  random token every request carries, its process, and the build of the
+  executable. A command from another build makes the old server stop and
+  starts a new one. A server stops after 15 minutes without requests. One
+  command at a time starts a server (`agents/<key>.spawn` is locked while it
+  does).
+- The server runs from a copy of the executable in `agents/`, so a rebuild or
+  an update can always replace `aeria`. It is started through
+  `Start-Process` on Windows: a process started directly would inherit the
+  command's standard output and error, and the agent's harness, which reads
+  them until they close, would wait for the server to exit.
+- Reads run in parallel. Writes take the project's write lock and run one at
+  a time. Before each request the server compares the stamp with the last one
+  it took in and reloads the workspace when another process wrote.
+- Help and version need no server. When no server can be started, and with
+  `AERIA_NO_SERVER` set, a command opens the project itself.
+- `AERIA_TRACE` prints how long opening the project takes.
+
 | Command | Purpose |
 | --- | --- |
 | `guide` | How the project is organized, the knowledge files, the commands, and how to work on a large scope with several agents. |
@@ -117,11 +148,11 @@ Per project, keyed by a hash of its canonical root, application data holds
 `agents/<key>.lock`, `agents/<key>.stamp`, and `agents/<key>.sqlite3`:
 
 - A write takes an exclusive lock on the lock file for its whole run: the
-  command before it opens the project, the desktop around each translation,
-  note, and review change. Writes of parallel agents and of the desktop never
+  server around each write, a command without a server before it opens the
+  project, and the desktop around each translation, note, and review change. Writes of parallel agents and of the desktop never
   interleave, and each starts from the workspace the previous one left.
-- A command that wrote translations replaces the stamp before it releases the
-  lock. The desktop compares the stamp with the one its session took in,
+- A command that wrote translations, and the desktop after each of its
+  writes, replaces the stamp before releasing the lock. The desktop compares the stamp with the one its session took in,
   before each of its writes and every 1.5 seconds; after a change it reloads
   the workspace under the lock and emits `project://workspace-reloaded`, on
   which the editor reloads the open sheet and the progress.

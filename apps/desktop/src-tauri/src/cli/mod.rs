@@ -4,17 +4,26 @@
 //! directory to read the game and the project and to write checked
 //! translations (see `docs/architecture/agents.md`). It works on the project
 //! files directly; an open Aeria window reloads after its writes.
+//!
+//! A command is a thin client: it hands its arguments to the project's server
+//! (see [`serve`]), which keeps the game, the workspace, and every cache open
+//! between commands, and prints what the server answers. Help and version
+//! are answered without a server; `AERIA_NO_SERVER` runs a command
+//! in-process.
 
 mod project;
 mod read;
+mod serve;
 mod texts;
 mod write;
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt::Write as _;
 use std::io::{IsTerminal, Read as _, Write as _};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use project::{Env, Project};
+use serde::{Deserialize, Serialize};
 
 /// Exit status: done.
 const OK: i32 = 0;
@@ -153,11 +162,13 @@ How the project is organized, the project knowledge, the commands, and how to wo
 a large scope with several agents.
 ";
 
-/// A command's output: text, or one JSON value with `--json`.
+/// A command's output: text, or one JSON value with `--json`, and warnings
+/// for standard error.
 pub(crate) struct Output {
     pub json: bool,
     pub text: String,
     value: Option<serde_json::Value>,
+    warnings: Vec<String>,
 }
 
 impl Output {
@@ -166,6 +177,7 @@ impl Output {
             json,
             text: String::new(),
             value: None,
+            warnings: Vec::new(),
         }
     }
 
@@ -173,14 +185,98 @@ impl Output {
         self.value = Some(value.clone());
     }
 
-    fn print(self) {
-        let mut stdout = std::io::stdout().lock();
-        let text = match self.value {
+    pub(crate) fn warn(&mut self, warning: &str) {
+        self.warnings.push(warning.to_owned());
+    }
+
+    fn response(self, code: i32) -> Response {
+        let stdout = match self.value {
             Some(value) => serde_json::to_string_pretty(&value).unwrap_or_default() + "\n",
             None => self.text,
         };
-        let _ = stdout.write_all(text.as_bytes());
-        let _ = stdout.flush();
+        Response {
+            stdout,
+            stderr: self
+                .warnings
+                .iter()
+                .fold(String::new(), |mut stderr, warning| {
+                    let _ = writeln!(stderr, "aeria: {warning}");
+                    stderr
+                }),
+            code,
+        }
+    }
+}
+
+/// One command as the client hands it over.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub(crate) struct Request {
+    /// The client's working directory; relative paths are resolved there.
+    pub cwd: PathBuf,
+    pub args: Vec<String>,
+    /// Standard input, for `write` and `check` without a file.
+    pub stdin: Option<String>,
+}
+
+/// What a command printed and its exit status.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub(crate) struct Response {
+    pub stdout: String,
+    pub stderr: String,
+    pub code: i32,
+}
+
+impl Response {
+    fn failed(message: &str) -> Self {
+        Self {
+            stdout: String::new(),
+            stderr: format!("aeria: {message}\n"),
+            code: FAILED,
+        }
+    }
+}
+
+/// How a command reaches the project.
+pub(crate) enum Access<'a> {
+    /// Opens the project for this command alone.
+    Direct(&'a Env),
+    /// The project a server keeps open.
+    Served(&'a serve::Server),
+}
+
+impl Access<'_> {
+    fn read<T>(
+        &self,
+        start: &Path,
+        read: impl FnOnce(&Project) -> Result<T, String>,
+    ) -> Result<T, String> {
+        match self {
+            Self::Direct(env) => read(&Project::open(start, env)?),
+            Self::Served(server) => server.read(read),
+        }
+    }
+
+    /// A write opens the project under the write lock, so it starts from the
+    /// workspace every earlier writer left.
+    fn write<T>(
+        &self,
+        start: &Path,
+        write: impl FnOnce(&mut Project) -> Result<T, String>,
+    ) -> Result<T, String> {
+        match self {
+            Self::Direct(env) => {
+                let _lock = env
+                    .project_files(start)?
+                    .as_ref()
+                    .map(crate::sync::WriteLock::acquire)
+                    .transpose()
+                    .map_err(|error| {
+                        format!("the project's write lock cannot be taken: {error}")
+                    })?;
+                write(&mut Project::open(start, env)?)
+            }
+            Self::Served(server) => server.write(write),
+        }
     }
 }
 
@@ -274,8 +370,9 @@ fn row_range(text: &str) -> Result<(u32, u32), String> {
     }
 }
 
-/// The translations a `write` or `check` gets.
-fn entries(args: &Arguments) -> Result<Vec<write::Entry>, String> {
+/// The translations a `write` or `check` gets: `--at`/`--text`, a file,
+/// or standard input.
+fn entries(args: &Arguments, request: &Request) -> Result<Vec<write::Entry>, String> {
     if let Some(address) = args.value("at") {
         let text = args.value("text").ok_or("--at needs --text")?;
         return Ok(vec![write::Entry {
@@ -284,21 +381,15 @@ fn entries(args: &Arguments) -> Result<Vec<write::Entry>, String> {
         }]);
     }
     let input = match args.positional.first().map(String::as_str) {
-        Some("-") | None => {
-            let mut stdin = std::io::stdin();
-            if stdin.is_terminal() {
-                return Err(
-                    "give the translations in a file, on standard input, or with --at and --text"
-                        .to_owned(),
-                );
-            }
-            let mut input = String::new();
-            stdin
-                .read_to_string(&mut input)
-                .map_err(|error| format!("standard input: {error}"))?;
-            input
+        Some("-") | None => request
+            .stdin
+            .clone()
+            .ok_or("give the translations in a file, on standard input, or with --at and --text")?,
+        Some(path) => {
+            let path = request.cwd.join(path);
+            std::fs::read_to_string(&path)
+                .map_err(|error| format!("{}: {error}", path.display()))?
         }
-        Some(path) => std::fs::read_to_string(path).map_err(|error| format!("{path}: {error}"))?,
     };
     let entries = write::parse_entries(&input)?;
     if entries.is_empty() {
@@ -307,62 +398,62 @@ fn entries(args: &Arguments) -> Result<Vec<write::Entry>, String> {
     Ok(entries)
 }
 
-/// Runs the command with the process arguments and returns its exit status.
-#[must_use]
-pub fn run() -> i32 {
-    let args: Vec<String> = std::env::args().skip(1).collect();
-    match run_with(&args, &Env::standalone()) {
-        Ok(code) => code,
-        Err(message) => {
-            eprintln!("aeria: {message}");
-            FAILED
-        }
-    }
+/// The global options of a command line and where its command starts.
+struct CommandLine {
+    project: Option<PathBuf>,
+    json: bool,
+    command: Option<String>,
+    rest: Vec<String>,
+    /// `--help`, `--version`, or help for one command, answered locally.
+    local: Option<String>,
 }
 
-#[allow(clippy::too_many_lines)] // one dispatch
-fn run_with(args: &[String], env: &Env) -> Result<i32, String> {
-    // Global options come before the command.
-    let mut project_dir: Option<PathBuf> = None;
-    let mut json = false;
+fn command_line(args: &[String]) -> Result<CommandLine, String> {
+    let mut line = CommandLine {
+        project: None,
+        json: false,
+        command: None,
+        rest: Vec::new(),
+        local: None,
+    };
     let mut index = 0;
     while let Some(arg) = args.get(index) {
         match arg.as_str() {
             "--project" => {
-                project_dir = Some(PathBuf::from(
+                line.project = Some(PathBuf::from(
                     args.get(index + 1).ok_or("--project needs a directory")?,
                 ));
                 index += 2;
             }
             "--json" => {
-                json = true;
+                line.json = true;
                 index += 1;
             }
             "--version" | "-V" => {
-                println!("aeria {}", env!("CARGO_PKG_VERSION"));
-                return Ok(OK);
+                line.local = Some(format!("aeria {}\n", env!("CARGO_PKG_VERSION")));
+                return Ok(line);
             }
             "-h" | "--help" | "help" => {
                 let topic = args.get(index + 1).map(String::as_str);
-                print!("{}", topic.and_then(command_help).unwrap_or(HELP));
-                return Ok(OK);
+                line.local = Some(topic.and_then(command_help).unwrap_or(HELP).to_owned());
+                return Ok(line);
             }
             other if other.starts_with("--project=") => {
-                project_dir = Some(PathBuf::from(&other["--project=".len()..]));
+                line.project = Some(PathBuf::from(&other["--project=".len()..]));
                 index += 1;
             }
             _ => break,
         }
     }
     let Some(command) = args.get(index) else {
-        print!("{HELP}");
-        return Ok(OK);
+        line.local = Some(HELP.to_owned());
+        return Ok(line);
     };
-    let rest: Vec<String> = args[index + 1..]
+    line.rest = args[index + 1..]
         .iter()
         .filter(|arg| {
             if *arg == "--json" {
-                json = true;
+                line.json = true;
                 false
             } else {
                 true
@@ -370,43 +461,150 @@ fn run_with(args: &[String], env: &Env) -> Result<i32, String> {
         })
         .cloned()
         .collect();
-    if rest.iter().any(|arg| arg == "--help" || arg == "-h") {
-        print!("{}", command_help(command).ok_or_else(|| unknown(command))?);
-        return Ok(OK);
+    if line.rest.iter().any(|arg| arg == "--help" || arg == "-h") {
+        line.local = Some(
+            command_help(command)
+                .ok_or_else(|| unknown(command))?
+                .to_owned(),
+        );
     }
-    let start = project_dir.unwrap_or_else(|| PathBuf::from("."));
-    let mut out = Output::new(json);
-    let code = match command.as_str() {
+    line.command = Some(command.clone());
+    Ok(line)
+}
+
+/// Runs the command of the process arguments and returns its exit status.
+#[must_use]
+pub fn run() -> i32 {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.first().map(String::as_str) == Some("__serve") {
+        let root = args
+            .get(1)
+            .map(PathBuf::from)
+            .or_else(|| std::env::var_os(serve::SERVE_ROOT_VARIABLE).map(PathBuf::from));
+        return root.map_or(FAILED, |root| serve::serve(&root));
+    }
+    let response = client(&args);
+    let _ = std::io::stdout().write_all(response.stdout.as_bytes());
+    let _ = std::io::stdout().flush();
+    let _ = std::io::stderr().write_all(response.stderr.as_bytes());
+    response.code
+}
+
+/// Answers locally what needs no project, and hands the rest to the
+/// project's server, or runs it in-process when no server can be used.
+fn client(args: &[String]) -> Response {
+    let line = match command_line(args) {
+        Ok(line) => line,
+        Err(message) => return Response::failed(&message),
+    };
+    if let Some(text) = line.local {
+        return Response {
+            stdout: text,
+            stderr: String::new(),
+            code: OK,
+        };
+    }
+    let cwd = std::env::current_dir().unwrap_or_default();
+    let reads_input = matches!(line.command.as_deref(), Some("write" | "check"))
+        && !line
+            .rest
+            .iter()
+            .any(|arg| arg == "--at" || arg.starts_with("--at="))
+        && line
+            .rest
+            .iter()
+            .filter(|arg| !arg.starts_with("--"))
+            .all(|arg| arg == "-");
+    let stdin = if reads_input && !std::io::stdin().is_terminal() {
+        let mut input = String::new();
+        if let Err(error) = std::io::stdin().read_to_string(&mut input) {
+            return Response::failed(&format!("standard input: {error}"));
+        }
+        Some(input)
+    } else {
+        None
+    };
+    let request = Request {
+        cwd: cwd.clone(),
+        args: args.to_vec(),
+        stdin,
+    };
+    let start = cwd.join(line.project.unwrap_or_default());
+    if std::env::var_os("AERIA_NO_SERVER").is_none()
+        && let Ok(root) = project::find_root(&start)
+        && let Some(response) = serve::request(&root, &request)
+    {
+        return response;
+    }
+    execute(&request, &Access::Direct(&Env::standalone()))
+}
+
+/// Runs one command against the project and returns what it printed.
+pub(crate) fn execute(request: &Request, access: &Access<'_>) -> Response {
+    let line = match command_line(&request.args) {
+        Ok(line) => line,
+        Err(message) => return Response::failed(&message),
+    };
+    if let Some(text) = line.local {
+        return Response {
+            stdout: text,
+            stderr: String::new(),
+            code: OK,
+        };
+    }
+    let Some(command) = line.command.clone() else {
+        return Response::failed("no command");
+    };
+    let start = request.cwd.join(line.project.clone().unwrap_or_default());
+    let mut out = Output::new(line.json);
+    match dispatch(&command, &line.rest, request, &start, access, &mut out) {
+        Ok(code) => out.response(code),
+        Err(message) => {
+            let mut response = out.response(FAILED);
+            response.stdout.clear();
+            let _ = writeln!(response.stderr, "aeria: {message}");
+            response
+        }
+    }
+}
+
+#[allow(clippy::too_many_lines)] // one dispatch
+fn dispatch(
+    command: &str,
+    rest: &[String],
+    request: &Request,
+    start: &Path,
+    access: &Access<'_>,
+    out: &mut Output,
+) -> Result<i32, String> {
+    match command {
         "guide" => {
-            Arguments::parse(&rest, &[], &[])?;
-            let project = Project::open(&start, env)?;
-            out.text = texts::guide(&project);
-            OK
+            Arguments::parse(rest, &[], &[])?;
+            out.text = access.read(start, |project| Ok(texts::guide(project)))?;
+            Ok(OK)
         }
         "brief" => {
-            Arguments::parse(&rest, &[], &[])?;
-            let project = Project::open(&start, env)?;
-            out.text = texts::brief(&project);
-            OK
+            Arguments::parse(rest, &[], &[])?;
+            out.text = access.read(start, |project| Ok(texts::brief(project)))?;
+            Ok(OK)
         }
         "overview" => {
-            let parsed = Arguments::parse(&rest, &["limit"], &["folders", "untranslated"])?;
-            let project = Project::open(&start, env)?;
-            read::overview(
-                &project,
-                &read::OverviewOptions {
-                    pattern: parsed.positional.first().cloned(),
-                    folders: parsed.switch("folders"),
-                    untranslated: parsed.switch("untranslated"),
-                    limit: parsed.limit(100)?,
-                },
-                &mut out,
-            );
-            OK
+            let parsed = Arguments::parse(rest, &["limit"], &["folders", "untranslated"])?;
+            let options = read::OverviewOptions {
+                pattern: parsed.positional.first().cloned(),
+                folders: parsed.switch("folders"),
+                untranslated: parsed.switch("untranslated"),
+                limit: parsed.limit(100)?,
+            };
+            access.read(start, |project| {
+                read::overview(project, &options, out);
+                Ok(())
+            })?;
+            Ok(OK)
         }
         "read" => {
             let parsed = Arguments::parse(
-                &rest,
+                rest,
                 &["rows", "limit"],
                 &["untranslated", "no-knowledge", "no-similar"],
             )?;
@@ -415,43 +613,36 @@ fn run_with(args: &[String], env: &Env) -> Result<i32, String> {
                 .first()
                 .ok_or("name the sheet to read; `aeria overview <pattern>` lists sheets")?
                 .clone();
-            let project = Project::open(&start, env)?;
-            read::read(
-                &project,
-                &read::ReadOptions {
-                    sheet,
-                    rows: parsed.value("rows").map(row_range).transpose()?,
-                    untranslated: parsed.switch("untranslated"),
-                    limit: parsed.limit(400)?,
-                    knowledge: !parsed.switch("no-knowledge"),
-                    memory: !parsed.switch("no-similar"),
-                },
-                &mut out,
-            )?;
-            OK
-        }
-        "write" | "check" => {
-            let dry_run = command == "check";
-            let parsed = if dry_run {
-                Arguments::parse(&rest, &["at", "text"], &[])?
-            } else {
-                Arguments::parse(&rest, &["at", "text"], &["needs-review"])?
+            let options = read::ReadOptions {
+                sheet,
+                rows: parsed.value("rows").map(row_range).transpose()?,
+                untranslated: parsed.switch("untranslated"),
+                limit: parsed.limit(400)?,
+                knowledge: !parsed.switch("no-knowledge"),
+                memory: !parsed.switch("no-similar"),
             };
-            let entries = entries(&parsed)?;
-            let clean = write::write(
-                &start,
-                env,
-                &entries,
-                &write::WriteOptions {
-                    dry_run,
-                    needs_review: parsed.switch("needs-review"),
-                },
-                &mut out,
-            )?;
-            if clean { OK } else { PARTIAL }
+            access.read(start, |project| read::read(project, &options, out))?;
+            Ok(OK)
+        }
+        "check" => {
+            let parsed = Arguments::parse(rest, &["at", "text"], &[])?;
+            let entries = entries(&parsed, request)?;
+            let clean = access.read(start, |project| write::check(project, &entries, out))?;
+            Ok(if clean { OK } else { PARTIAL })
+        }
+        "write" => {
+            let parsed = Arguments::parse(rest, &["at", "text"], &["needs-review"])?;
+            let entries = entries(&parsed, request)?;
+            let options = write::WriteOptions {
+                needs_review: parsed.switch("needs-review"),
+            };
+            let clean = access.write(start, |project| {
+                write::write(project, &entries, &options, out)
+            })?;
+            Ok(if clean { OK } else { PARTIAL })
         }
         "find" => {
-            let parsed = Arguments::parse(&rest, &["in", "sheet", "limit"], &[])?;
+            let parsed = Arguments::parse(rest, &["in", "sheet", "limit"], &[])?;
             let text = parsed.positional.join(" ");
             if text.trim().is_empty() {
                 return Err("give the text to find".to_owned());
@@ -461,32 +652,22 @@ fn run_with(args: &[String], env: &Env) -> Result<i32, String> {
                 "translation" | "translations" | "target" => read::FindIn::Translation,
                 other => return Err(format!("--in {other:?}: use source or translation")),
             };
-            let project = Project::open(&start, env)?;
-            read::find(
-                &project,
-                &read::FindOptions {
-                    text,
-                    within,
-                    sheet: parsed.value("sheet").map(str::to_owned),
-                    limit: parsed.limit(30)?,
-                },
-                &mut out,
-            )?;
-            OK
+            let options = read::FindOptions {
+                text,
+                within,
+                sheet: parsed.value("sheet").map(str::to_owned),
+                limit: parsed.limit(30)?,
+            };
+            access.read(start, |project| read::find(project, &options, out))?;
+            Ok(OK)
         }
         "knowledge" => {
-            Arguments::parse(&rest, &[], &[])?;
-            let project = Project::open(&start, env)?;
-            if read::knowledge(&project, &mut out) {
-                OK
-            } else {
-                PARTIAL
-            }
+            Arguments::parse(rest, &[], &[])?;
+            let clean = access.read(start, |project| Ok(read::knowledge(project, out)))?;
+            Ok(if clean { OK } else { PARTIAL })
         }
-        other => return Err(unknown(other)),
-    };
-    out.print();
-    Ok(code)
+        other => Err(unknown(other)),
+    }
 }
 
 fn unknown(command: &str) -> String {
@@ -556,8 +737,19 @@ mod tests {
             assert!(HELP.contains(command), "{command}");
         }
         let env = Env::default();
-        assert_eq!(run_with(&strings(&["--help"]), &env).expect("help"), OK);
-        assert!(run_with(&strings(&["nonsense"]), &env).is_err());
+        let run = |args: &[&str]| {
+            execute(
+                &Request {
+                    cwd: PathBuf::from("."),
+                    args: strings(args),
+                    stdin: None,
+                },
+                &Access::Direct(&env),
+            )
+        };
+        assert_eq!(run(&["--help"]).code, OK);
+        assert!(run(&["--help"]).stdout.contains("Commands:"));
+        assert_eq!(run(&["nonsense"]).code, FAILED);
     }
 
     /// A Russian project over the synthetic game, with its own data folder.
@@ -588,7 +780,16 @@ mod tests {
     fn run_in(root: &std::path::Path, env: &Env, args: &[&str]) -> i32 {
         let mut all = vec!["--project".to_owned(), root.to_string_lossy().into_owned()];
         all.extend(strings(args));
-        run_with(&all, env).expect("runs")
+        let response = execute(
+            &Request {
+                cwd: PathBuf::from("."),
+                args: all,
+                stdin: None,
+            },
+            &Access::Direct(env),
+        );
+        assert!(response.code != FAILED, "{}", response.stderr);
+        response.code
     }
 
     #[test]

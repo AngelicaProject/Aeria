@@ -1,5 +1,7 @@
 //! Transactional application-level translation mutations.
 
+use std::collections::BTreeMap;
+
 use aeria_core::{ReviewState, SourceBinding, SourceFacts, TranslationUnit, TranslationUnitId};
 use aeria_source::{SheetLookup, SourceCell};
 use thiserror::Error;
@@ -63,6 +65,30 @@ pub enum AssistedWriteError {
     /// The unit is reviewed and the write was not approved to replace it.
     #[error("the string is reviewed; replacing it needs explicit approval")]
     Reviewed,
+
+    /// The translation passed its checks, but its shard could not be
+    /// published; nothing of that shard's batch was written.
+    #[error("the translation could not be saved: {message}")]
+    NotSaved { message: String },
+}
+
+/// One translation of a batch of assisted writes.
+#[derive(Clone, Debug)]
+pub struct AssistedWrite {
+    pub source_binding: SourceBinding,
+    pub target_macro: String,
+    /// The state the translation was produced against (compare-and-set).
+    pub expected: AssistedExpectation,
+    /// A review state to set with the target; `None` leaves the draft
+    /// state an update gives.
+    pub review_state: Option<ReviewState>,
+}
+
+/// How a batch changed one unit in memory, to undo it when its shard
+/// cannot be published.
+enum Undo {
+    Created(TranslationUnitId),
+    Updated(TranslationUnit),
 }
 
 impl ProjectSession {
@@ -170,6 +196,139 @@ impl ProjectSession {
 }
 
 impl ProjectSession {
+    /// Writes a batch of assisted translations: each with the checks of
+    /// [`Self::set_assisted_target`], and every changed shard published once
+    /// instead of once per translation. A translation that fails its checks
+    /// is left out; when a shard cannot be published, every translation of
+    /// that shard is undone and reported as not saved. The result is in the
+    /// order of `writes`.
+    #[must_use]
+    pub fn set_assisted_targets(
+        &mut self,
+        writes: &[AssistedWrite],
+        replace_reviewed: bool,
+    ) -> Vec<Result<TranslationUnitId, AssistedWriteError>> {
+        let mut results = Vec::with_capacity(writes.len());
+        let mut undo: BTreeMap<TranslationUnitId, Undo> = BTreeMap::new();
+        for write in writes {
+            results.push(self.apply_assisted(write, replace_reviewed, &mut undo));
+        }
+        let ids: Vec<TranslationUnitId> = undo.keys().copied().collect();
+        let failed: Vec<(u8, String)> = match self.store.persist_units(&self.workspace, &ids) {
+            Ok(published) => published
+                .into_iter()
+                .filter_map(|(shard, result)| result.err().map(|error| (shard, error.to_string())))
+                .collect(),
+            // Nothing was published.
+            Err(error) => {
+                let message = error.to_string();
+                let mut shards: Vec<u8> = ids.iter().map(|id| id.as_bytes()[0]).collect();
+                shards.dedup();
+                shards
+                    .into_iter()
+                    .map(|shard| (shard, message.clone()))
+                    .collect()
+            }
+        };
+        for (shard, message) in failed {
+            let ids: Vec<TranslationUnitId> = ids
+                .iter()
+                .copied()
+                .filter(|id| id.as_bytes()[0] == shard)
+                .collect();
+            for id in &ids {
+                match undo.remove(id) {
+                    Some(Undo::Created(id)) => {
+                        let _ = self.workspace.remove_unit(id);
+                    }
+                    Some(Undo::Updated(previous)) => self.workspace.restore_unit(previous),
+                    None => {}
+                }
+            }
+            for result in &mut results {
+                if result.as_ref().is_ok_and(|written| ids.contains(written)) {
+                    *result = Err(AssistedWriteError::NotSaved {
+                        message: message.clone(),
+                    });
+                }
+            }
+        }
+        results
+    }
+
+    /// Checks one assisted write and applies it in memory only, recording
+    /// how to undo it.
+    fn apply_assisted(
+        &mut self,
+        write: &AssistedWrite,
+        replace_reviewed: bool,
+        undo: &mut BTreeMap<TranslationUnitId, Undo>,
+    ) -> Result<TranslationUnitId, AssistedWriteError> {
+        let binding = &write.source_binding;
+        let target = write.target_macro.as_str();
+        if target.trim().is_empty() {
+            return Err(TranslationMutationError::EmptyTarget.into());
+        }
+        let facts = self.translatable_facts(binding)?;
+        aeria_se::check_assisted_structure(facts.text(), target).map_err(|errors| {
+            AssistedWriteError::Structure {
+                messages: errors.into_iter().map(|error| error.message).collect(),
+            }
+        })?;
+        let current = self.assisted_state(binding);
+        if current != write.expected {
+            return Err(AssistedWriteError::Conflict { current });
+        }
+        if current.review_state == Some(ReviewState::Reviewed) && !replace_reviewed {
+            return Err(AssistedWriteError::Reviewed);
+        }
+        let existing = self
+            .workspace
+            .unit_by_source_binding(binding)
+            .map(TranslationUnit::id);
+        let id =
+            match existing {
+                None => {
+                    self.workspace
+                        .require_source_language(&self.source)
+                        .map_err(TranslationMutationError::from)?;
+                    let id = self
+                        .workspace
+                        .create_unit(facts, target)
+                        .map_err(TranslationMutationError::from)?;
+                    undo.entry(id).or_insert(Undo::Created(id));
+                    id
+                }
+                Some(id) => {
+                    self.verify_current_source(id)?;
+                    let previous = self.workspace.unit(id).cloned().ok_or(
+                        TranslationMutationError::Workspace(WorkspaceError::UnitNotFound { id }),
+                    )?;
+                    if previous.target_macro() != target {
+                        self.workspace
+                            .update_target(id, target)
+                            .map_err(TranslationMutationError::from)?;
+                        undo.entry(id).or_insert(Undo::Updated(previous));
+                    }
+                    id
+                }
+            };
+        if let Some(review_state) = write.review_state
+            && self
+                .workspace
+                .unit(id)
+                .is_some_and(|unit| unit.review_state() != review_state)
+        {
+            if let Some(previous) = self.workspace.unit(id).cloned() {
+                undo.entry(id).or_insert(Undo::Updated(previous));
+            }
+            self.workspace
+                .update_review_state(id, review_state)
+                .map_err(TranslationMutationError::from)?;
+        }
+        Ok(id)
+    }
+
     /// Creates or updates the translation unit at one verified source binding.
     ///
     /// A missing unit is created with a stable ID derived from the game's

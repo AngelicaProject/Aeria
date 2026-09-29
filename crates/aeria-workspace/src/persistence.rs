@@ -502,32 +502,63 @@ impl WorkspaceStore {
     /// Returns an error when the managed namespace is unsafe or its manifest
     /// does not match the workspace, the requested unit is absent, canonical
     /// serialization fails, or atomic publication fails.
-    #[allow(clippy::too_many_lines)]
     pub fn persist_unit(
         &self,
         workspace: &Workspace,
         id: TranslationUnitId,
     ) -> Result<(), WorkspaceStoreError> {
+        match self.persist_units(workspace, &[id])?.pop() {
+            Some((_, result)) => result,
+            None => Ok(()),
+        }
+    }
+
+    /// [`Self::persist_unit`] for several units at once: every shard they
+    /// belong to is serialized once and the shards are published in
+    /// parallel. Returns the publication result of each shard, in shard
+    /// order; each shard is atomic on its own, and a shard that failed keeps
+    /// its previous content.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error, with nothing published, when the managed namespace
+    /// is unsafe or its manifest does not match the workspace, a unit is
+    /// absent or conflicts with the persisted state, or serialization fails.
+    #[allow(clippy::too_many_lines)]
+    pub fn persist_units(
+        &self,
+        workspace: &Workspace,
+        ids: &[TranslationUnitId],
+    ) -> Result<ShardResults, WorkspaceStoreError> {
         let trace = PerfTrace::new();
-        let replacement = workspace
-            .unit(id)
-            .cloned()
-            .ok_or(WorkspaceStoreError::Domain(WorkspaceError::UnitNotFound {
-                id,
-            }))?;
-        let shard = id.as_bytes()[0];
-        let target_path = self
+        let mut by_shard: BTreeMap<u8, Vec<TranslationUnit>> = BTreeMap::new();
+        for id in ids {
+            let unit = workspace
+                .unit(*id)
+                .cloned()
+                .ok_or(WorkspaceStoreError::Domain(WorkspaceError::UnitNotFound {
+                    id: *id,
+                }))?;
+            by_shard.entry(id.as_bytes()[0]).or_default().push(unit);
+        }
+        if by_shard.is_empty() {
+            return Ok(Vec::new());
+        }
+        let units_directory = self
             .repository_root
             .join(AERIA_DIRECTORY)
-            .join(UNITS_DIRECTORY)
-            .join(shard_name(shard));
+            .join(UNITS_DIRECTORY);
+        let target_paths: Vec<PathBuf> = by_shard
+            .keys()
+            .map(|shard| units_directory.join(shard_name(*shard)))
+            .collect();
         let cached = self.take_session_cache();
         let (layout, persisted_metadata, mut all_persisted_units, checked_paths) =
             if let Some(cache) = cached {
                 if let Err(error) = verify_cached_managed_paths(
                     &cache.managed_paths,
                     &cache.layout.manifest_path,
-                    &target_path,
+                    &target_paths,
                 ) {
                     self.invalidate_session_cache();
                     return Err(error);
@@ -555,90 +586,141 @@ impl WorkspaceStore {
             &layout.manifest_path,
         )?;
 
-        let mut persisted_units = BTreeMap::new();
-        if using_cache {
-            for (unit_id, unit) in &all_persisted_units {
-                if unit_id.as_bytes()[0] == shard {
-                    persisted_units.insert(*unit_id, unit.clone());
+        let mut shard_bytes: Vec<(u8, Vec<u8>)> = Vec::with_capacity(by_shard.len());
+        for (shard, replacements) in &by_shard {
+            let shard = *shard;
+            let target_path = units_directory.join(shard_name(shard));
+            let mut persisted_units = BTreeMap::new();
+            if using_cache {
+                for (unit_id, unit) in &all_persisted_units {
+                    if unit_id.as_bytes()[0] == shard {
+                        persisted_units.insert(*unit_id, unit.clone());
+                    }
+                }
+            } else if let Some(shard_file) = layout.shards.iter().find(|file| file.shard == shard) {
+                for unit in read_shard(&shard_file.path, shard, &shard_file.name)? {
+                    persisted_units.insert(unit.id(), unit);
                 }
             }
-        }
-        if !using_cache
-            && let Some(shard_file) = layout.shards.iter().find(|file| file.shard == shard)
-        {
-            for unit in read_shard(&shard_file.path, shard, &shard_file.name)? {
-                persisted_units.insert(unit.id(), unit);
+            validate_unique_shard_bindings(&persisted_units, &target_path)?;
+            for replacement in replacements {
+                if let Some(persisted) = persisted_units.get(&replacement.id()) {
+                    require_persisted_identity(persisted, replacement, &target_path)?;
+                } else if using_cache {
+                    require_new_binding_is_unowned_cached(
+                        &all_persisted_units,
+                        replacement,
+                        &target_path,
+                    )?;
+                } else {
+                    require_new_binding_is_unowned(
+                        &layout,
+                        shard,
+                        &persisted_units,
+                        replacement,
+                        &target_path,
+                    )?;
+                }
             }
-        }
-        validate_unique_shard_bindings(&persisted_units, &target_path)?;
-        if let Some(persisted) = persisted_units.get(&id) {
-            require_persisted_identity(persisted, &replacement, &target_path)?;
-        } else if using_cache {
-            require_new_binding_is_unowned_cached(
-                &all_persisted_units,
-                &replacement,
-                &target_path,
-            )?;
-        } else {
-            require_new_binding_is_unowned(
-                &layout,
+            for replacement in replacements {
+                persisted_units.insert(replacement.id(), replacement.clone());
+            }
+            shard_bytes.push((
                 shard,
-                &persisted_units,
-                &replacement,
-                &target_path,
-            )?;
+                canonical_units_bytes(persisted_units.values(), &target_path)?,
+            ));
         }
-        persisted_units.insert(id, replacement.clone());
-        let bytes = canonical_units_bytes(persisted_units.values(), &target_path)?;
         trace.mark("workspace.persist-unit.serialize");
 
         let created_units_path = layout.units_path.is_none();
         let units_path = if let Some(path) = &layout.units_path {
             path.clone()
         } else {
-            let path = self
-                .repository_root
-                .join(AERIA_DIRECTORY)
-                .join(UNITS_DIRECTORY);
-            fs::create_dir(&path)
-                .map_err(|source| io_error("create workspace units directory", &path, source))?;
-            ensure_directory(&path)?;
-            path
+            fs::create_dir(&units_directory).map_err(|source| {
+                io_error("create workspace units directory", &units_directory, source)
+            })?;
+            ensure_directory(&units_directory)?;
+            units_directory.clone()
         };
         ensure_directory(&self.repository_root.join(AERIA_DIRECTORY))?;
         ensure_directory(&units_path)?;
-        let target_path = units_path.join(shard_name(shard));
-        let published_path = target_path.clone();
-        let result = ensure_optional_regular_file(&target_path)
-            .and_then(|()| atomic_publish(&self.repository_root, &target_path, &bytes));
-        if result.is_err() && created_units_path {
-            remove_directory_if_empty(&units_path);
-        }
-        if result.is_err() {
+
+        // Publishing is mostly waiting for the disk to sync each file, so
+        // shards are published on several threads.
+        let threads = shard_bytes.len().clamp(1, PUBLISH_THREADS);
+        let chunk = shard_bytes.len().div_ceil(threads);
+        let repository_root = &self.repository_root;
+        let units_path_ref = &units_path;
+        let results: ShardResults = std::thread::scope(|scope| {
+            let handles: Vec<_> = shard_bytes
+                .chunks(chunk)
+                .map(|part| {
+                    scope.spawn(move || {
+                        part.iter()
+                            .map(|(shard, bytes)| {
+                                let target_path = units_path_ref.join(shard_name(*shard));
+                                let result =
+                                    ensure_optional_regular_file(&target_path).and_then(|()| {
+                                        atomic_publish(repository_root, &target_path, bytes)
+                                    });
+                                (*shard, result)
+                            })
+                            .collect::<Vec<_>>()
+                    })
+                })
+                .collect();
+            handles
+                .into_iter()
+                .flat_map(|handle| {
+                    handle.join().unwrap_or_else(|_| {
+                        vec![(
+                            0,
+                            Err(WorkspaceStoreError::AtomicPublication {
+                                path: units_path_ref.clone(),
+                                source: io::Error::other("a publishing thread failed"),
+                            }),
+                        )]
+                    })
+                })
+                .collect()
+        });
+        let all_published = results.iter().all(|(_, result)| result.is_ok());
+        if !all_published {
+            if created_units_path && results.iter().all(|(_, result)| result.is_err()) {
+                remove_directory_if_empty(&units_path);
+            }
             self.invalidate_session_cache();
-            return result;
+            trace.mark("workspace.persist-unit.publish");
+            return Ok(results);
         }
 
         let mut published_layout = layout;
         published_layout.units_path = Some(units_path.clone());
-        if !published_layout
-            .shards
-            .iter()
-            .any(|file| file.shard == shard)
-        {
-            published_layout.shards.push(ShardFile {
-                shard,
-                name: shard_name(shard),
-                path: target_path,
-            });
-            published_layout
+        let mut published_paths = Vec::with_capacity(by_shard.len());
+        for shard in by_shard.keys() {
+            let target_path = units_path.join(shard_name(*shard));
+            published_paths.push(target_path.clone());
+            if !published_layout
                 .shards
-                .sort_by(|left, right| left.name.cmp(&right.name));
+                .iter()
+                .any(|file| file.shard == *shard)
+            {
+                published_layout.shards.push(ShardFile {
+                    shard: *shard,
+                    name: shard_name(*shard),
+                    path: target_path,
+                });
+            }
         }
+        published_layout
+            .shards
+            .sort_by(|left, right| left.name.cmp(&right.name));
         if let Some(checked_paths) = checked_paths {
-            all_persisted_units.insert(id, replacement);
+            for replacement in by_shard.into_values().flatten() {
+                all_persisted_units.insert(replacement.id(), replacement);
+            }
             if let Ok(managed_paths) =
-                refresh_managed_paths(&checked_paths, &published_layout, &published_path)
+                refresh_managed_paths(&checked_paths, &published_layout, &published_paths)
             {
                 self.replace_session_cache(PersistenceCache {
                     layout: published_layout,
@@ -649,7 +731,7 @@ impl WorkspaceStore {
             }
         }
         trace.mark("workspace.persist-unit.publish");
-        Ok(())
+        Ok(results)
     }
 
     fn take_session_cache(&self) -> Option<PersistenceCache> {
@@ -813,7 +895,7 @@ fn capture_managed_paths(
 fn refresh_managed_paths(
     checked: &[ManagedPathState],
     layout: &ExistingLayout,
-    published: &Path,
+    published: &[PathBuf],
 ) -> Result<Vec<ManagedPathState>, WorkspaceStoreError> {
     let aeria_path = layout
         .manifest_path
@@ -834,7 +916,7 @@ fn refresh_managed_paths(
             let previous = checked
                 .iter()
                 .find(|state| state.path == *path)
-                .filter(|state| path != published && state.exists && !state.is_dir);
+                .filter(|state| !published.contains(path) && state.exists && !state.is_dir);
             previous.map_or_else(|| managed_path_state(path, true), |state| Ok(state.clone()))
         })
         .collect()
@@ -892,7 +974,7 @@ fn hash_managed_file(path: &Path) -> Result<[u8; 32], WorkspaceStoreError> {
 fn verify_cached_managed_paths(
     cached_paths: &[ManagedPathState],
     manifest_path: &Path,
-    target_path: &Path,
+    target_paths: &[PathBuf],
 ) -> Result<(), WorkspaceStoreError> {
     if cached_paths.is_empty() {
         return Err(WorkspaceStoreError::ExternalChange {
@@ -912,7 +994,7 @@ fn verify_cached_managed_paths(
         }
         if cached.exists
             && !cached.is_dir
-            && (cached.path == manifest_path || cached.path == target_path)
+            && (cached.path == manifest_path || target_paths.contains(&cached.path))
         {
             let Some(expected_hash) = cached.content_hash else {
                 return Err(WorkspaceStoreError::ExternalChange {
@@ -1705,6 +1787,12 @@ fn remove_directory_if_empty(path: &Path) {
     };
     let _ = fs::remove_dir(path);
 }
+
+/// The publication result of each shard of a write, in shard order.
+pub type ShardResults = Vec<(u8, Result<(), WorkspaceStoreError>)>;
+
+/// Threads that publish the shards of one write.
+const PUBLISH_THREADS: usize = 8;
 
 /// Attempts of a file operation that another process briefly blocks.
 const TRANSIENT_ATTEMPTS: u32 = 20;

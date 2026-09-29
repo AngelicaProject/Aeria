@@ -1,10 +1,15 @@
 //! Opening a project without the desktop, and the strings of its sheets as
 //! the command shows them.
 
+use std::collections::HashMap;
+use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, OnceLock, PoisonError};
+use std::time::SystemTime;
 
 use aeria_core::{ReviewState, SourceBinding};
+use aeria_knowledge::{Knowledge, KnowledgeFile};
+use aeria_search::{SimilarSearch, SimilarSource, SourceIndex, Tokenizer};
 use aeria_source::{GameSource, LineRole, SheetLookup, SourceSheet};
 use aeria_workspace::{ProjectSession, ProjectSessionError, WorkspaceStore};
 use serde::Serialize;
@@ -16,6 +21,21 @@ use crate::sync::{Ledger, ProjectFiles};
 
 /// The directory that marks a project root.
 const WORKSPACE_DIRECTORY: &str = ".aeria";
+
+/// Phase timings on standard error when `AERIA_TRACE` is set.
+pub(crate) struct Trace(Option<std::time::Instant>);
+
+impl Trace {
+    pub(crate) fn start() -> Self {
+        Self(std::env::var_os("AERIA_TRACE").map(|_| std::time::Instant::now()))
+    }
+
+    pub(crate) fn mark(&self, what: &str) {
+        if let Some(start) = self.0 {
+            eprintln!("aeria trace: {what} at {} ms", start.elapsed().as_millis());
+        }
+    }
+}
 
 /// Where the command finds Aeria's data, caches, and the game.
 #[derive(Clone, Debug, Default)]
@@ -59,18 +79,36 @@ impl Env {
     }
 }
 
-/// An open project.
+/// Similar sources looked up per source text.
+const SIMILAR_LOOKUP: usize = 60;
+
+/// The size and time of each knowledge file, to tell when to read them again.
+type KnowledgeStamp = Vec<Option<(u64, SystemTime)>>;
+
+/// An open project, and what the command learned about it: in a server
+/// process these caches live as long as the project is open.
 pub(crate) struct Project {
     pub session: ProjectSession,
     /// The shared files of the project; `None` when the data folder is
     /// unknown.
     pub files: Option<ProjectFiles>,
     pub data_dir: Option<PathBuf>,
+    knowledge: Mutex<Option<(KnowledgeStamp, Arc<Knowledge>)>>,
+    index: OnceLock<Option<SourceIndex>>,
+    /// How many indexed strings contain each word.
+    word_counts: OnceLock<Option<Arc<HashMap<String, i64>>>>,
+    /// Idle similar-string searchers, each with its own connection.
+    searchers: Mutex<Vec<SimilarSearch>>,
+    /// Similar sources by source text; the game's text does not change while
+    /// the project is open.
+    similar: Mutex<HashMap<String, Arc<Vec<SimilarSource>>>>,
+    /// The strings of sheets, in order; also game data.
+    sheets: Mutex<HashMap<String, Arc<Vec<SheetLine>>>>,
 }
 
 /// The project root: `start` or the nearest parent with an `.aeria`
 /// directory.
-fn find_root(start: &Path) -> Result<PathBuf, String> {
+pub(crate) fn find_root(start: &Path) -> Result<PathBuf, String> {
     let start =
         std::fs::canonicalize(start).map_err(|error| format!("{}: {error}", start.display()))?;
     start
@@ -89,6 +127,7 @@ impl Project {
     /// Opens the project at or above `start` against the game installation
     /// chosen in Aeria's settings.
     pub(crate) fn open(start: &Path, env: &Env) -> Result<Self, String> {
+        let trace = Trace::start();
         let root = find_root(start)?;
         let metadata = WorkspaceStore::new(&root)
             .read_metadata()
@@ -97,21 +136,164 @@ impl Project {
         let game_path = env.game_path()?;
         let source: Arc<GameSource> =
             open_game_at(&game_path, metadata.source_language()).map_err(|error| error.message)?;
+        trace.mark("game opened");
         if let Some(cache) = &env.cache_dir {
             load_catalog_with_cache(cache, &source).map_err(|error| error.message)?;
         }
+        trace.mark("catalog loaded");
         let session = ProjectSession::open(&root, source).map_err(|error| match error {
             ProjectSessionError::SourceUpdateRequired { .. } => format!(
                 "the project was made for another game version; open it in Aeria and update it first ({error})"
             ),
             other => other.to_string(),
         })?;
+        trace.mark("workspace opened");
         let files = data_dir.as_ref().map(|dir| ProjectFiles::new(dir, &root));
         Ok(Self {
             session,
             files,
             data_dir,
+            knowledge: Mutex::new(None),
+            index: OnceLock::new(),
+            word_counts: OnceLock::new(),
+            searchers: Mutex::new(Vec::new()),
+            similar: Mutex::new(HashMap::new()),
+            sheets: Mutex::new(HashMap::new()),
         })
+    }
+
+    /// The project knowledge, read again only when a file changed.
+    pub(crate) fn knowledge(&self) -> Arc<Knowledge> {
+        let stamp: KnowledgeStamp = KnowledgeFile::ALL
+            .iter()
+            .map(|file| {
+                std::fs::metadata(file.path(self.root()))
+                    .ok()
+                    .and_then(|metadata| Some((metadata.len(), metadata.modified().ok()?)))
+            })
+            .collect();
+        let mut cached = self
+            .knowledge
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if let Some((seen, knowledge)) = cached.as_ref()
+            && *seen == stamp
+        {
+            return Arc::clone(knowledge);
+        }
+        let knowledge = Arc::new(Knowledge::load(self.root()));
+        *cached = Some((stamp, Arc::clone(&knowledge)));
+        knowledge
+    }
+
+    fn search_key(&self) -> String {
+        let source = self.session.source();
+        format!("{}/{}", source.language(), source.version())
+    }
+
+    fn search_index_path(&self) -> Option<PathBuf> {
+        use sha2::{Digest, Sha256};
+        let digest = Sha256::digest(self.search_key().as_bytes());
+        let name = digest[..16]
+            .iter()
+            .fold(String::with_capacity(32), |mut name, byte| {
+                let _ = write!(name, "{byte:02x}");
+                name
+            });
+        self.data_dir
+            .as_ref()
+            .map(|dir| dir.join("search").join(format!("{name}.sqlite3")))
+    }
+
+    /// The search index of the project's game data, when it was built.
+    pub(crate) fn search_index(&self) -> Option<&SourceIndex> {
+        self.index
+            .get_or_init(|| {
+                SourceIndex::open(self.search_index_path()?, &self.search_key())
+                    .ok()
+                    .flatten()
+            })
+            .as_ref()
+    }
+
+    /// The search index, built first when missing: building reads every
+    /// sheet of the game once. `notice` is told before a build.
+    pub(crate) fn search_index_or_build(
+        &self,
+        notice: &mut dyn FnMut(&str),
+    ) -> Result<SourceIndex, String> {
+        if let Some(index) = self.search_index() {
+            return Ok(index.clone());
+        }
+        let path = self
+            .search_index_path()
+            .ok_or("Aeria's data folder is unknown, so there is no search index")?;
+        notice("building the search index of this game version once; this takes a few minutes");
+        let source = self.session.source_handle();
+        SourceIndex::build(
+            path,
+            &self.search_key(),
+            Tokenizer::for_language(source.language().code()),
+            &source,
+            &|| true,
+        )
+        .map_err(|error| format!("the search index could not be built: {error}"))
+    }
+
+    fn word_counts(&self) -> Option<Arc<HashMap<String, i64>>> {
+        self.word_counts
+            .get_or_init(|| {
+                self.search_index()
+                    .and_then(|index| index.word_counts().ok())
+                    .map(Arc::new)
+            })
+            .clone()
+    }
+
+    /// Loads what the first commands would otherwise wait for: the search
+    /// index and its word counts, and the knowledge.
+    pub(crate) fn warm(&self) {
+        let _ = self.word_counts();
+        let _ = self.knowledge();
+    }
+
+    /// Strings of the game similar to a source text, most similar first;
+    /// empty without a search index.
+    pub(crate) fn similar_sources(&self, source: &str) -> Arc<Vec<SimilarSource>> {
+        if let Some(found) = self
+            .similar
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(source)
+        {
+            return Arc::clone(found);
+        }
+        let Some(index) = self.search_index() else {
+            return Arc::new(Vec::new());
+        };
+        let searcher = self
+            .searchers
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .pop()
+            .map_or_else(|| index.similar_search_with(self.word_counts()), Ok);
+        let Ok(searcher) = searcher else {
+            return Arc::new(Vec::new());
+        };
+        let found = Arc::new(
+            searcher
+                .similar(source, None, SIMILAR_LOOKUP)
+                .unwrap_or_default(),
+        );
+        self.searchers
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(searcher);
+        self.similar
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(source.to_owned(), Arc::clone(&found));
+        found
     }
 
     pub(crate) fn root(&self) -> &Path {
@@ -298,7 +480,25 @@ pub(crate) struct SheetLine {
 
 /// The translatable strings of a sheet in order: a quest or cutscene in the
 /// order of its dialogue, any other sheet in row order.
-pub(crate) fn sheet_lines(project: &Project, sheet: &str) -> Result<Vec<SheetLine>, String> {
+pub(crate) fn sheet_lines(project: &Project, sheet: &str) -> Result<Arc<Vec<SheetLine>>, String> {
+    if let Some(lines) = project
+        .sheets
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .get(sheet)
+    {
+        return Ok(Arc::clone(lines));
+    }
+    let lines = Arc::new(read_sheet_lines(project, sheet)?);
+    project
+        .sheets
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .insert(sheet.to_owned(), Arc::clone(&lines));
+    Ok(lines)
+}
+
+fn read_sheet_lines(project: &Project, sheet: &str) -> Result<Vec<SheetLine>, String> {
     let game = project.sheet(sheet)?;
     let source = project.session.source();
     if let Some(dialogue) = source.dialogue(sheet).map_err(|error| error.to_string())? {

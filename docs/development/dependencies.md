@@ -81,6 +81,8 @@ The desktop adds `dirs` (MIT OR Apache-2.0), already in the graph through
 Tauri, to find Aeria's data and cache folders from the `aeria` command, which
 runs without Tauri's path resolver; `rusqlite` (MIT) with `bundled`, the same
 version as `aeria-search`, for the ledger of agent translations;
+`getrandom` (MIT OR Apache-2.0), already in the graph through `p256`, for the
+token of the `aeria` project server;
 `tauri-plugin-opener` (Apache-2.0 OR MIT) to open GitHub
 pages from Rust, and `tokio` with only `rt` and `time`, already part of the
 Tauri runtime, to pace background update checks.

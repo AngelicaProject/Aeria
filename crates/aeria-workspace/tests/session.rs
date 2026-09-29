@@ -10,7 +10,7 @@ use aeria_rebase::UnitUpdateOutcome;
 use aeria_source::SourceLanguage;
 use aeria_sqpack::testing::TextSheet;
 use aeria_workspace::{
-    AssistedExpectation, AssistedWriteError, ProjectSession, ProjectSessionError,
+    AssistedExpectation, AssistedWrite, AssistedWriteError, ProjectSession, ProjectSessionError,
     SourceUpdateRequirement, TranslationMutationError, TranslationReadError, TranslationRowCursor,
     WorkspaceError,
 };
@@ -480,6 +480,52 @@ fn assisted_targets_follow_the_structure_policy_and_compare_and_set() {
         session.source_macro(&binding(1, 9)),
         Err(TranslationMutationError::SourceNotTranslatable { .. })
     ));
+}
+
+#[test]
+fn a_batch_of_assisted_targets_writes_what_passes_its_checks_at_once() {
+    let game = game(
+        V1,
+        &[(SHEET, &texts(&[(1, "Hello"), (2, "Bye"), (3, "Yes")]))],
+    );
+    let repository = tempfile::tempdir().expect("repository");
+    let mut session =
+        ProjectSession::initialize(repository.path(), game.handle(), "ru").expect("initialize");
+    let untranslated = AssistedExpectation {
+        target: None,
+        review_state: None,
+    };
+    let write = |row: u32, target: &str, review: Option<ReviewState>| AssistedWrite {
+        source_binding: binding(row, 0),
+        target_macro: target.to_owned(),
+        expected: untranslated.clone(),
+        review_state: review,
+    };
+    let results = session.set_assisted_targets(
+        &[
+            write(1, "Привет", None),
+            write(2, "<i>Пока", None),
+            write(3, "Да", Some(ReviewState::NeedsReview)),
+        ],
+        false,
+    );
+    assert!(results[0].is_ok());
+    assert!(matches!(
+        results[1],
+        Err(AssistedWriteError::Structure { .. })
+    ));
+    assert!(results[2].is_ok());
+
+    let reopened = ProjectSession::open(repository.path(), game.handle()).expect("reopen");
+    assert_eq!(
+        reopened.assisted_state(&binding(1, 0)).target.as_deref(),
+        Some("Привет")
+    );
+    assert_eq!(reopened.assisted_state(&binding(2, 0)).target, None);
+    assert_eq!(
+        reopened.assisted_state(&binding(3, 0)).review_state,
+        Some(ReviewState::NeedsReview)
+    );
 }
 
 #[test]

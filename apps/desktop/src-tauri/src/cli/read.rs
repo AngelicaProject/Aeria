@@ -4,8 +4,8 @@ use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
 use aeria_core::ReviewState;
-use aeria_knowledge::{Domain, Knowledge, sheet_domain};
-use aeria_search::{SimilarSearch, SourceIndex, SourceQuery, Tokenizer};
+use aeria_knowledge::{Domain, sheet_domain};
+use aeria_search::SourceQuery;
 use serde::Serialize;
 use serde_json::json;
 
@@ -178,7 +178,7 @@ pub(crate) fn overview(project: &Project, options: &OverviewOptions, out: &mut O
             folders.entry(folder).or_default().add(sheet);
         }
     }
-    let knowledge = Knowledge::load(project.root());
+    let knowledge = project.knowledge();
     if out.json {
         out.json_value(&json!({
             "root": project.root_display(),
@@ -280,7 +280,6 @@ struct Similar {
 
 /// Most similar translations shown per line.
 const SIMILAR_PER_LINE: usize = 2;
-const SIMILAR_CANDIDATES: usize = 60;
 
 fn quest_title(project: &Project, sheet: &str) -> Option<String> {
     let (row, subrow) = project.session.source().quest_row(sheet).ok().flatten()?;
@@ -302,71 +301,25 @@ fn line_domain(sheet: &str, kind: &LineKind) -> Domain {
     }
 }
 
-/// The search index of the project's game data, when it was built.
-pub(crate) fn search_index(project: &Project) -> Option<(String, SourceIndex)> {
-    let key = search_key(project);
-    let path = search_index_path(project, &key)?;
-    SourceIndex::open(&path, &key)
-        .ok()
-        .flatten()
-        .map(|index| (key, index))
-}
-
-fn search_key(project: &Project) -> String {
-    let source = project.session.source();
-    format!("{}/{}", source.language(), source.version())
-}
-
-fn search_index_path(project: &Project, key: &str) -> Option<std::path::PathBuf> {
-    use sha2::{Digest, Sha256};
-    let digest = Sha256::digest(key.as_bytes());
-    let name = digest[..16]
-        .iter()
-        .fold(String::with_capacity(32), |mut name, byte| {
-            let _ = write!(name, "{byte:02x}");
-            name
-        });
-    project
-        .data_dir
-        .as_ref()
-        .map(|dir| dir.join("search").join(format!("{name}.sqlite3")))
-}
-
-/// The project's search index, built first when missing. Building reads
-/// every sheet of the game once.
-fn search_index_or_build(project: &Project) -> Result<SourceIndex, String> {
-    if let Some((_, index)) = search_index(project) {
-        return Ok(index);
-    }
-    let key = search_key(project);
-    let path = search_index_path(project, &key)
-        .ok_or_else(|| "Aeria's data folder is unknown, so there is no search index".to_owned())?;
-    eprintln!(
-        "aeria: building the search index of this game version once; this takes a few minutes…"
-    );
-    let source = project.session.source_handle();
-    SourceIndex::build(
-        path,
-        &key,
-        Tokenizer::for_language(source.language().code()),
-        &source,
-        &|| true,
-    )
-    .map_err(|error| format!("the search index could not be built: {error}"))
-}
-
-fn similar(project: &Project, index: &SimilarSearch<'_>, line: &SheetLine) -> Vec<Similar> {
+fn similar(project: &Project, line: &SheetLine) -> Vec<Similar> {
     let address = &line.address;
-    let Ok(candidates) = index.similar(
-        &line.source,
-        Some((&address.sheet, address.row, address.subrow, address.column)),
-        SIMILAR_CANDIDATES,
-    ) else {
-        return Vec::new();
-    };
+    let candidates = project.similar_sources(&line.source);
     let mut seen = std::collections::HashSet::new();
     candidates
-        .into_iter()
+        .iter()
+        .filter(|candidate| {
+            (
+                candidate.hit.sheet.as_str(),
+                candidate.hit.row,
+                candidate.hit.subrow,
+                candidate.hit.column,
+            ) != (
+                address.sheet.as_str(),
+                address.row,
+                address.subrow,
+                address.column,
+            )
+        })
         .filter_map(|candidate| {
             let found = Address {
                 sheet: candidate.hit.sheet.clone(),
@@ -387,13 +340,41 @@ fn similar(project: &Project, index: &SimilarSearch<'_>, line: &SheetLine) -> Ve
             Some(Similar {
                 address: found.to_string(),
                 similarity: (candidate.score * 100.0).round() / 100.0,
-                source: candidate.hit.source,
+                source: candidate.hit.source.clone(),
                 target: target.to_owned(),
                 review: unit.review_state(),
             })
         })
         .take(SIMILAR_PER_LINE)
         .collect()
+}
+
+/// Threads that look up similar strings for one read.
+const SIMILAR_THREADS: usize = 4;
+
+/// Looks up the similar strings of the lines an agent may write, on several
+/// threads, so the listing finds them cached.
+fn prefetch_similar(project: &Project, lines: &[&SheetLine], ledger: Option<&crate::sync::Ledger>) {
+    let sources: Vec<&str> = lines
+        .iter()
+        .filter(|line| {
+            current(&project.session, ledger, &line.address).is_none_or(|now| now.replaceable())
+        })
+        .map(|line| line.source.as_str())
+        .collect();
+    if sources.len() < 8 {
+        return;
+    }
+    let chunk = sources.len().div_ceil(SIMILAR_THREADS);
+    std::thread::scope(|scope| {
+        for part in sources.chunks(chunk) {
+            scope.spawn(move || {
+                for source in part {
+                    let _ = project.similar_sources(source);
+                }
+            });
+        }
+    });
 }
 
 #[allow(clippy::too_many_lines)] // one listing
@@ -425,14 +406,11 @@ pub(crate) fn read(
     let next_row = (selected.len() > options.limit).then(|| selected[options.limit].address.row);
     selected.truncate(options.limit);
 
-    let index = if options.memory {
-        search_index(project).map(|(_, index)| index)
-    } else {
-        None
-    };
-    let searcher = index.as_ref().and_then(|index| index.similar_search().ok());
     let mut domains: Vec<Domain> = Vec::new();
     let mut speakers: Vec<&str> = Vec::new();
+    if options.memory {
+        prefetch_similar(project, &selected, ledger.as_ref());
+    }
     let mut lines = Vec::with_capacity(selected.len());
     for line in &selected {
         let domain = line_domain(&options.sheet, &line.kind);
@@ -460,18 +438,18 @@ pub(crate) fn read(
                 .unwrap_or_default(),
             context: line.context.clone(),
             // Similar translations help only where the line may be written.
-            similar: searcher
-                .as_ref()
-                .filter(|_| now.as_ref().is_none_or(Current::replaceable))
-                .map(|index| similar(project, index, line))
-                .unwrap_or_default(),
+            similar: if options.memory && now.as_ref().is_none_or(Current::replaceable) {
+                similar(project, line)
+            } else {
+                Vec::new()
+            },
             current: now,
             gender_varies,
         });
     }
     let title = quest_title(project, &options.sheet);
     let knowledge = options.knowledge.then(|| {
-        Knowledge::load(project.root()).scene_slice(
+        project.knowledge().scene_slice(
             &domains,
             selected.iter().map(|line| line.source.as_str()),
             speakers.iter().copied(),
@@ -659,8 +637,16 @@ fn find_translations(project: &Project, options: &FindOptions) -> (Vec<Found>, b
 
 /// Source strings containing the text, from the search index, and whether
 /// more follow.
-fn find_source(project: &Project, options: &FindOptions) -> Result<(Vec<Found>, bool), String> {
-    let index = search_index_or_build(project)?;
+fn find_source(
+    project: &Project,
+    options: &FindOptions,
+    out: &mut Output,
+) -> Result<(Vec<Found>, bool), String> {
+    let mut notices = Vec::new();
+    let index = project.search_index_or_build(&mut |notice| notices.push(notice.to_owned()))?;
+    for notice in notices {
+        out.warn(&notice);
+    }
     // A sheet pattern with wildcards filters the hits; a plain name narrows
     // the search itself.
     let exact_sheet = options
@@ -720,7 +706,7 @@ pub(crate) fn find(
 ) -> Result<(), String> {
     let (found, more) = match options.within {
         FindIn::Translation => find_translations(project, options),
-        FindIn::Source => find_source(project, options)?,
+        FindIn::Source => find_source(project, options, out)?,
     };
     if out.json {
         out.json_value(&json!({ "matches": found, "more": more }));
@@ -753,7 +739,7 @@ pub(crate) fn find(
 // ---------------------------------------------------------------- knowledge
 
 pub(crate) fn knowledge(project: &Project, out: &mut Output) -> bool {
-    let knowledge = Knowledge::load(project.root());
+    let knowledge = project.knowledge();
     let settled_terms = knowledge
         .terms
         .entries

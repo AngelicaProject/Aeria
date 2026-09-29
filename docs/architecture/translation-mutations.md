@@ -70,6 +70,17 @@ addition to every `set_target` check, it:
 The written target is a draft, as for any target change. A refused write
 changes nothing in memory or on disk.
 
+`ProjectSession::set_assisted_targets(writes, replace_reviewed)` writes a
+batch of `AssistedWrite`s (binding, target, expected state, and an optional
+review state to set with the target). Each is checked as by
+`set_assisted_target` and applied in memory; a refused one is left out with
+its error. The changed units are then persisted with
+`WorkspaceStore::persist_units`: each changed shard is serialized once and
+the shards are published in parallel, each atomically. When a shard cannot be
+published, every unit of it is restored in memory and reported as
+`NotSaved`; the other shards stay written. Results are in the order of
+`writes`.
+
 ## Notes and review state
 
 `set_note` and `set_review_state` operate only on existing units. Notes may be

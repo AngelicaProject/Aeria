@@ -8,6 +8,7 @@
 use std::cell::RefCell;
 use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use aeria_source::{GameSource, SheetLookup, SourceError};
 use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
@@ -20,7 +21,7 @@ pub const INDEX_FORMAT: &str = "2";
 /// Most hits one search returns.
 pub const MAX_SEARCH_LIMIT: u32 = 200;
 /// Candidates read from the full-text index before similarity ranking.
-const SIMILAR_CANDIDATES: u32 = 100;
+const SIMILAR_CANDIDATES: u32 = 40;
 /// Least similarity for a translation-memory match.
 pub const MIN_SIMILARITY: f64 = 0.5;
 /// Trigrams of a text used to find similar strings.
@@ -29,7 +30,7 @@ const SIMILAR_TERMS: usize = 16;
 /// strings.
 const SIMILAR_WORDS_EXAMINED: usize = 12;
 /// The rarest words of a text a similar-string search uses.
-const SIMILAR_WORDS: usize = 6;
+const SIMILAR_WORDS: usize = 4;
 /// Words in more strings than this are too common to find similar strings
 /// by: ranking their matches costs far more than they tell.
 const COMMON_WORD_STRINGS: i64 = 20_000;
@@ -435,7 +436,44 @@ impl SourceIndex {
     /// # Errors
     ///
     /// Returns a storage error.
-    pub fn similar_search(&self) -> Result<SimilarSearch<'_>, SearchError> {
+    pub fn similar_search(&self) -> Result<SimilarSearch, SearchError> {
+        self.similar_search_with(None)
+    }
+
+    /// How many indexed strings contain each word, for
+    /// [`Self::similar_search_with`]: read once, it answers every word of
+    /// every later search without a query. Empty for trigram indexes.
+    ///
+    /// # Errors
+    ///
+    /// Returns a storage error.
+    pub fn word_counts(&self) -> Result<HashMap<String, i64>, SearchError> {
+        if self.tokenizer != Tokenizer::Words {
+            return Ok(HashMap::new());
+        }
+        let connection = self.connect()?;
+        connection.execute_batch(
+            "CREATE VIRTUAL TABLE temp.cells_vocab USING fts5vocab(main, cells_fts, row)",
+        )?;
+        let mut statement = connection.prepare("SELECT term, doc FROM temp.cells_vocab")?;
+        let counts = statement
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+            })?
+            .collect::<Result<HashMap<_, _>, _>>()?;
+        Ok(counts)
+    }
+
+    /// A [`Self::similar_search`] that takes word frequencies from
+    /// `counts`, as [`Self::word_counts`] read them, when given.
+    ///
+    /// # Errors
+    ///
+    /// Returns a storage error.
+    pub fn similar_search_with(
+        &self,
+        counts: Option<Arc<HashMap<String, i64>>>,
+    ) -> Result<SimilarSearch, SearchError> {
         let connection = self.connect()?;
         if self.tokenizer == Tokenizer::Words {
             connection.execute_batch(
@@ -443,8 +481,9 @@ impl SourceIndex {
             )?;
         }
         Ok(SimilarSearch {
-            index: self,
+            index: self.clone(),
             connection,
+            counts,
             strings_with: RefCell::new(HashMap::new()),
         })
     }
@@ -452,16 +491,21 @@ impl SourceIndex {
 
 /// Finds strings similar to sources over one connection; see
 /// [`SourceIndex::similar_search`].
-pub struct SimilarSearch<'a> {
-    index: &'a SourceIndex,
+pub struct SimilarSearch {
+    index: SourceIndex,
     connection: Connection,
+    /// How many strings contain each word of the index, when read.
+    counts: Option<Arc<HashMap<String, i64>>>,
     /// How many strings contain a word, as looked up so far.
     strings_with: RefCell<HashMap<String, i64>>,
 }
 
-impl SimilarSearch<'_> {
+impl SimilarSearch {
     /// How many indexed strings contain a word.
     fn strings_with(&self, word: &str) -> Result<i64, SearchError> {
+        if let Some(counts) = &self.counts {
+            return Ok(counts.get(&word.to_lowercase()).copied().unwrap_or(0));
+        }
         if let Some(count) = self.strings_with.borrow().get(word) {
             return Ok(*count);
         }

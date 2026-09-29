@@ -6,13 +6,12 @@ use std::fmt::Write as _;
 use aeria_core::ReviewState;
 use aeria_knowledge::Knowledge;
 use aeria_knowledge::rules::machine_phrasing;
-use aeria_workspace::{AssistedExpectation, AssistedWriteError};
+use aeria_workspace::{AssistedExpectation, AssistedWrite, AssistedWriteError};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use super::Output;
-use super::project::{Address, Author, Env, Project, current, other_languages, source_of};
-use crate::sync::WriteLock;
+use super::project::{Address, Author, Project, current, other_languages, source_of};
 
 /// One translation to write.
 #[derive(Clone, Debug)]
@@ -152,126 +151,175 @@ fn check_text(
 }
 
 pub(crate) struct WriteOptions {
-    /// Check only; nothing is written.
-    pub dry_run: bool,
     /// Mark written translations as needing review instead of drafts.
     pub needs_review: bool,
 }
 
-#[allow(clippy::too_many_lines)] // one pass over the entries
-pub(crate) fn write(
-    start: &std::path::Path,
-    env: &Env,
-    entries: &[Entry],
-    options: &WriteOptions,
-    out: &mut Output,
-) -> Result<bool, String> {
-    // A write opens the project under the lock, so it starts from the
-    // workspace every earlier writer left.
-    let (mut project, _lock) = if options.dry_run {
-        (Project::open(start, env)?, None)
-    } else {
-        let lock = env
-            .project_files(start)?
-            .as_ref()
-            .map(WriteLock::acquire)
-            .transpose()
-            .map_err(|error| format!("the project's write lock cannot be taken: {error}"))?;
-        (Project::open(start, env)?, lock)
-    };
+/// A translation that passed its checks, ready to be written.
+/// What judging one translation gave: ready to write, or an outcome.
+type Judged = Vec<(String, Result<Pending, Outcome>)>;
+
+struct Pending {
+    entry: usize,
+    advice: Vec<String>,
+    expected: AssistedExpectation,
+}
+
+/// Judges translations without writing: each either passes with its advice
+/// or ends with an outcome. A later translation of the same string replaces
+/// an earlier one in the batch.
+fn judge(project: &Project, entries: &[Entry]) -> Result<Judged, String> {
     let target_language = project
         .target_language()
         .ok_or("the project has no target language yet; set it in Aeria's project settings")?;
-    let knowledge = Knowledge::load(project.root());
-    let mut ledger = project.ledger();
-    let mut outcomes: Vec<(String, Outcome)> = Vec::with_capacity(entries.len());
-    let mut written: Vec<(String, String)> = Vec::new();
-    for entry in entries {
+    let knowledge = project.knowledge();
+    let ledger = project.ledger();
+    let last: std::collections::HashMap<&Address, usize> = entries
+        .iter()
+        .enumerate()
+        .map(|(index, entry)| (&entry.address, index))
+        .collect();
+    let mut judged = Vec::with_capacity(entries.len());
+    for (index, entry) in entries.iter().enumerate() {
         let address = entry.address.to_string();
-        let source = match source_of(&project, &entry.address) {
+        if last.get(&entry.address) != Some(&index) {
+            continue;
+        }
+        let source = match source_of(project, &entry.address) {
             Ok(source) => source,
             Err(reason) => {
-                outcomes.push((
+                judged.push((
                     address,
-                    Outcome::Rejected {
+                    Err(Outcome::Rejected {
                         reasons: vec![reason],
-                    },
+                    }),
                 ));
                 continue;
             }
         };
         let now = current(&project.session, ledger.as_ref(), &entry.address);
         if let Some(now) = &now {
-            if now.target == entry.text {
-                outcomes.push((address, Outcome::Unchanged));
-                continue;
-            }
-            if now.review == ReviewState::Reviewed {
-                outcomes.push((
-                    address,
-                    Outcome::Skipped {
-                        reason: "reviewed; a person confirmed this translation".to_owned(),
-                    },
-                ));
-                continue;
-            }
-            if now.author == Author::Person {
-                outcomes.push((address, Outcome::Skipped {
+            let skip = if now.target == entry.text {
+                Some(Outcome::Unchanged)
+            } else if now.review == ReviewState::Reviewed {
+                Some(Outcome::Skipped {
+                    reason: "reviewed; a person confirmed this translation".to_owned(),
+                })
+            } else if now.author == Author::Person {
+                Some(Outcome::Skipped {
                     reason: "a person wrote or changed this translation; tell the user instead of replacing it".to_owned(),
-                }));
+                })
+            } else {
+                None
+            };
+            if let Some(outcome) = skip {
+                judged.push((address, Err(outcome)));
                 continue;
             }
         }
-        let (reasons, advice) = check_text(&project, &knowledge, &target_language, entry, &source);
+        let (reasons, advice) = check_text(project, &knowledge, &target_language, entry, &source);
         if !reasons.is_empty() {
-            outcomes.push((address, Outcome::Rejected { reasons }));
+            judged.push((address, Err(Outcome::Rejected { reasons })));
             continue;
         }
-        if options.dry_run {
-            outcomes.push((address, Outcome::Ok { advice }));
-            continue;
-        }
-        let expected = AssistedExpectation {
-            target: now.as_ref().map(|now| now.target.clone()),
-            review_state: now.as_ref().map(|now| now.review),
-        };
-        let binding = entry.address.binding();
-        let result = project
-            .session
-            .set_assisted_target(&binding, &entry.text, &expected, false)
-            .map_err(|error| match error {
-                AssistedWriteError::Structure { messages } => {
-                    Outcome::Rejected { reasons: messages }
-                }
-                other => Outcome::Failed {
-                    reason: other.to_string(),
+        judged.push((
+            address,
+            Ok(Pending {
+                entry: index,
+                advice,
+                expected: AssistedExpectation {
+                    target: now.as_ref().map(|now| now.target.clone()),
+                    review_state: now.as_ref().map(|now| now.review),
                 },
-            })
-            .and_then(|id| {
-                if options.needs_review {
-                    project
-                        .session
-                        .set_review_state(id, ReviewState::NeedsReview)
-                        .map_err(|error| Outcome::Failed {
-                            reason: format!(
-                                "written as a draft, but not marked for review: {error}"
-                            ),
-                        })
-                } else {
-                    Ok(())
-                }
-            });
-        match result {
-            Ok(()) => {
-                written.push((address.clone(), entry.text.clone()));
-                // Later entries in this batch see the text as the agent's.
-                if let Some(ledger) = ledger.as_mut() {
-                    let _ = ledger.record(&[(address.clone(), entry.text.clone())]);
-                }
-                outcomes.push((address, Outcome::Ok { advice }));
+            }),
+        ));
+    }
+    Ok(judged)
+}
+
+/// Checks translations without writing them.
+pub(crate) fn check(
+    project: &Project,
+    entries: &[Entry],
+    out: &mut Output,
+) -> Result<bool, String> {
+    let outcomes: Vec<(String, Outcome)> = judge(project, entries)?
+        .into_iter()
+        .map(|(address, judged)| match judged {
+            Ok(pending) => (
+                address,
+                Outcome::Ok {
+                    advice: pending.advice,
+                },
+            ),
+            Err(outcome) => (address, outcome),
+        })
+        .collect();
+    Ok(report(&outcomes, true, 0, out))
+}
+
+/// Writes translations that pass their checks.
+pub(crate) fn write(
+    project: &mut Project,
+    entries: &[Entry],
+    options: &WriteOptions,
+    out: &mut Output,
+) -> Result<bool, String> {
+    let judged = judge(project, entries)?;
+    let mut ledger = project.ledger();
+    // Every translation that passed is written in one batch, so each shard
+    // is published once.
+    let mut outcomes: Vec<(String, Option<Outcome>)> = Vec::with_capacity(judged.len());
+    let mut batch = Vec::new();
+    let mut pending_at = Vec::new();
+    for (address, judged) in judged {
+        match judged {
+            Ok(pending) => {
+                let entry = &entries[pending.entry];
+                batch.push(AssistedWrite {
+                    source_binding: entry.address.binding(),
+                    target_macro: entry.text.clone(),
+                    expected: pending.expected.clone(),
+                    review_state: options.needs_review.then_some(ReviewState::NeedsReview),
+                });
+                pending_at.push((outcomes.len(), pending));
+                outcomes.push((address, None));
             }
-            Err(outcome) => outcomes.push((address, outcome)),
+            Err(outcome) => outcomes.push((address, Some(outcome))),
         }
+    }
+    let results = project.session.set_assisted_targets(&batch, false);
+    let mut written: Vec<(String, String)> = Vec::new();
+    for ((index, pending), result) in pending_at.into_iter().zip(results) {
+        let outcome = match result {
+            Ok(_) => {
+                written.push((
+                    outcomes[index].0.clone(),
+                    entries[pending.entry].text.clone(),
+                ));
+                Outcome::Ok {
+                    advice: pending.advice,
+                }
+            }
+            Err(AssistedWriteError::Structure { messages }) => {
+                Outcome::Rejected { reasons: messages }
+            }
+            Err(other) => Outcome::Failed {
+                reason: other.to_string(),
+            },
+        };
+        outcomes[index].1 = Some(outcome);
+    }
+    let outcomes: Vec<(String, Outcome)> = outcomes
+        .into_iter()
+        .filter_map(|(address, outcome)| outcome.map(|outcome| (address, outcome)))
+        .collect();
+    if let Some(ledger) = ledger.as_mut()
+        && let Err(error) = ledger.record(&written)
+    {
+        out.warn(&format!(
+            "the translations were written, but the record of which are agents' failed ({error}); they may count as a person's"
+        ));
     }
     // The translations are written either way; an open Aeria window then
     // shows them once it reopens the project.
@@ -279,10 +327,15 @@ pub(crate) fn write(
         && let Some(files) = &project.files
         && let Err(error) = files.touch_stamp()
     {
-        eprintln!(
-            "aeria: the translations were written, but an open Aeria window may show them only after it reopens the project: {error}"
-        );
+        out.warn(&format!(
+            "the translations were written, but an open Aeria window may show them only after it reopens the project: {error}"
+        ));
     }
+    Ok(report(&outcomes, false, written.len(), out))
+}
+
+/// Prints outcomes; returns whether none was rejected or failed.
+fn report(outcomes: &[(String, Outcome)], dry_run: bool, written: usize, out: &mut Output) -> bool {
     let rejected = outcomes
         .iter()
         .filter(|(_, outcome)| matches!(outcome, Outcome::Rejected { .. }))
@@ -297,7 +350,7 @@ pub(crate) fn write(
         .count();
     if out.json {
         out.json_value(&json!({
-            "written": if options.dry_run { 0 } else { written.len() },
+            "written": written,
             "rejected": rejected,
             "skipped": skipped,
             "failed": failed,
@@ -306,12 +359,12 @@ pub(crate) fn write(
                 .map(|(address, outcome)| json!({ "at": address, "result": outcome }))
                 .collect::<Vec<_>>(),
         }));
-        return Ok(rejected == 0 && failed == 0);
+        return rejected == 0 && failed == 0;
     }
-    for (address, outcome) in &outcomes {
+    for (address, outcome) in outcomes {
         match outcome {
             Outcome::Ok { advice } => {
-                let verb = if options.dry_run { "ok" } else { "written" };
+                let verb = if dry_run { "ok" } else { "written" };
                 if advice.is_empty() {
                     let _ = writeln!(out.text, "{verb} @{address}");
                 } else {
@@ -346,11 +399,7 @@ pub(crate) fn write(
     let _ = writeln!(
         out.text,
         "{} {ok} · rejected {rejected} · skipped {skipped}{}{}",
-        if options.dry_run {
-            "would write"
-        } else {
-            "written"
-        },
+        if dry_run { "would write" } else { "written" },
         if failed > 0 {
             format!(" · failed {failed}")
         } else {
@@ -362,7 +411,7 @@ pub(crate) fn write(
             ""
         }
     );
-    Ok(rejected == 0 && failed == 0)
+    rejected == 0 && failed == 0
 }
 
 #[cfg(test)]
