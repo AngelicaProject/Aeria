@@ -1,4 +1,5 @@
 mod check_workflow;
+pub mod cli;
 mod commands;
 mod dto;
 mod error;
@@ -13,6 +14,7 @@ mod project_changes;
 mod scene;
 mod source;
 mod state;
+mod sync;
 #[cfg(test)]
 mod test_support;
 mod updates;
@@ -137,6 +139,10 @@ pub fn run() {
             paths::migrate_legacy_directories(app.handle());
             app.state::<DesktopState>()
                 .set_git(git::resolve_git(app.handle()));
+            if let Ok(data_dir) = paths::AeriaPaths::aeria_data_dir(app.handle()) {
+                app.state::<DesktopState>().set_data_dir(data_dir);
+            }
+            sync::start_reload_watcher(app.handle());
             updates::start_background_checks(app.handle());
             Ok(())
         })

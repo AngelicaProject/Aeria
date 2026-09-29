@@ -544,6 +544,7 @@ fn replace_project(
     let root = replacement.repository_root().to_owned();
     let mut project = state.lock_project()?;
     *project = Some(replacement);
+    state.reset_stamp(Some(&root));
     drop(project);
     crate::git::refresh_merge_driver(state, &root);
     Ok(summary)
@@ -607,6 +608,7 @@ pub fn close_project(state: State<'_, DesktopState>) -> CommandResult<()> {
 pub(crate) fn close_project_with_state(state: &DesktopState) -> CommandResult<()> {
     let mut project = state.lock_project()?;
     *project = None;
+    state.reset_stamp(None);
     Ok(())
 }
 
@@ -809,12 +811,12 @@ pub(crate) fn set_translation_target_with_state(
     target_macro: &str,
 ) -> CommandResult<TranslationOverlayDto> {
     let source_binding = SourceBinding::from(source_binding);
-    let mut project = state.lock_project()?;
-    let project = project.as_mut().ok_or_else(CommandError::no_project)?;
-    project
-        .set_target(&source_binding, target_macro)
-        .map_err(CommandError::from)
-        .and_then(|id| translation_overlay(project, id))
+    state.write_project(|project| {
+        project
+            .set_target(&source_binding, target_macro)
+            .map_err(CommandError::from)
+            .and_then(|id| translation_overlay(project, id))
+    })
 }
 
 fn translation_overlay(
@@ -863,13 +865,13 @@ pub(crate) fn set_translation_note_with_state(
     translation_unit_id: &str,
     note: Option<String>,
 ) -> CommandResult<TranslationOverlayDto> {
-    let mut project = state.lock_project()?;
-    let project = project.as_mut().ok_or_else(CommandError::no_project)?;
-    let translation_unit_id = parse_translation_unit_id(translation_unit_id)?;
-    project
-        .set_note(translation_unit_id, note)
-        .map_err(CommandError::from)
-        .and_then(|()| translation_overlay(project, translation_unit_id))
+    state.write_project(|project| {
+        let translation_unit_id = parse_translation_unit_id(translation_unit_id)?;
+        project
+            .set_note(translation_unit_id, note)
+            .map_err(CommandError::from)
+            .and_then(|()| translation_overlay(project, translation_unit_id))
+    })
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -897,14 +899,14 @@ pub(crate) fn set_translation_review_state_with_state(
     translation_unit_id: &str,
     review_state: ReviewStateDto,
 ) -> CommandResult<TranslationOverlayDto> {
-    let mut project = state.lock_project()?;
-    let project = project.as_mut().ok_or_else(CommandError::no_project)?;
-    let translation_unit_id = parse_translation_unit_id(translation_unit_id)?;
-    let review_state: ReviewState = review_state.into();
-    project
-        .set_review_state(translation_unit_id, review_state)
-        .map_err(CommandError::from)
-        .and_then(|()| translation_overlay(project, translation_unit_id))
+    state.write_project(|project| {
+        let translation_unit_id = parse_translation_unit_id(translation_unit_id)?;
+        let review_state: ReviewState = review_state.into();
+        project
+            .set_review_state(translation_unit_id, review_state)
+            .map_err(CommandError::from)
+            .and_then(|()| translation_overlay(project, translation_unit_id))
+    })
 }
 
 pub(crate) fn parse_translation_unit_id(value: &str) -> CommandResult<TranslationUnitId> {

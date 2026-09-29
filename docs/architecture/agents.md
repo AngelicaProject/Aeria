@@ -55,47 +55,81 @@ with their file and line and left out; the rest of the knowledge is used.
   check for officialese, bookish links, calques, and stacked explanations.
 
 The project knowledge takes precedence over the style defaults. The rules
-reach agents through the `aeria` command.
+reach agents through `aeria brief`.
 
 ## The `aeria` command
 
-Status: **proposal, being implemented.**
-
-`aeria` is a console command that an agent runs in the project directory.
-It works on the project files directly; the desktop does not need to be
-open. Output is compact text by default and JSON on request. Every command and
-the tool itself have `--help`.
+`aeria` is a console command that an agent runs in a project directory. It is
+the `aeria-cli` binary of the desktop package (`apps/desktop/src-tauri/src/cli`),
+which shares the desktop's game detection, sheet catalog cache, and
+workspace code; it opens no window. It works on the project files directly;
+the desktop does not need to be open. It finds the project root by walking up
+from the current directory (or `--project`) to the directory with `.aeria/`,
+and the game installation, caches, and application data the desktop uses.
+Output is compact text by default and one JSON value with `--json`. The tool
+and every command have `--help`. Exit status: 0 done, 1 done with rejected
+translations or knowledge problems, 2 error.
 
 | Command | Purpose |
 | --- | --- |
-| `overview` | Areas and sheets of the project with their progress; sheet search by name or pattern. |
-| `read` | A scene of strings: speaker, source, the other client languages, macro legends, row context, the current translation and who wrote it, marks where a line varies with the player character's gender, similar translations, and the knowledge the scene needs. |
-| `write` | Writes a batch of translations. Each is checked; rejected ones come back with the reason. |
-| `check` | The checks of `write` without writing. |
-| `find` | Searches the source, the translations, and the other client languages. |
-| `brief` | The translation rules and the project facts, for subagents. |
-| `guide` | How the project is organized and how to work on it. |
+| `guide` | How the project is organized, the knowledge files, the commands, and how to work on a large scope with several agents. |
+| `brief` | The [translation rules](#translation-rules), the project's languages, the macro authoring reference of [`strings.md`](./strings.md), and how to write with the command, for every agent that translates. |
+| `overview` | Languages, game version, progress, and areas of the project (quests, cutscenes, and the non-dialogue domains), and the state of the knowledge; with a pattern (`quest/*`, `item`), the matching sheets and their progress; `--folders` groups sheets by folder. |
+| `read <sheet>` | A scene: the translatable strings of a quest or cutscene in the order of its dialogue, or of another sheet in row order, with `--rows` and `--untranslated` to narrow it. Each string has its address `@sheet:row:subrow:column`, its kind or speaker, its state (untranslated, or whose translation it is and its review state; `(keep)` marks one an agent may not replace), the source, the other client languages, the legends of its macros, the row's other cells, a mark where the French or German line varies with the player character's gender and the source does not, and, for strings an agent may write, up to two similar translated strings from the search index when it exists. Before the lines comes the knowledge slice they need: style of their domains, lessons, the terms in them, their speakers' voices, and the story of the sheet. |
+| `write` | Writes translations from a file, standard input, or `--at`/`--text`: blocks of an `@address` line and the translation, or JSON Lines. See the invariants below. `--needs-review` marks them as needing review; otherwise they are drafts. |
+| `check` | The checks of `write`, without writing. |
+| `find <text>` | Strings whose source (the default; the first search builds the search index of the game version) or translation (`--in translation`) contains the text, ignoring case and tags; `--sheet` takes a pattern. |
+| `knowledge` | Checks the knowledge files and lists every problem with its file and line. |
 
-Later: `audit` (project-wide deterministic checks such as inconsistent terms or
-address), `changes` (what a game update changed), and `flag` (mark strings for
-a person).
+Not implemented yet: `audit` (project-wide deterministic checks such as
+inconsistent terms or address), `changes` (what a game update changed), and
+`flag` (mark strings for a person).
 
-Invariants:
+### Writing
 
-- A write is checked before anything is stored: the assisted structure policy
-  of [`strings.md`](./strings.md), forbidden term variants, and the unit's
-  expected state (compare-and-set). An invalid or structurally unsafe
-  translation is never stored.
+- Every translation is checked before anything is stored. It is rejected when
+  it is empty, has a line break its source does not have (the game's line
+  break is `<br>`), breaks the assisted structure policy of
+  [`strings.md`](./strings.md), uses a forbidden variant of a term of its
+  source, or, for Russian, writes both genders at once such as `готов(а)`.
+  The write itself is compare-and-set against the state the command read. An
+  invalid or structurally unsafe translation is never stored.
+- Advice does not block a write: a term of the source whose translation does
+  not seem to be used, a source that varies with the player character's
+  gender and a translation that does not, a French or German line that varies
+  where the source does not, and `machine_phrasing`.
 - An agent writes an untranslated string or replaces a translation an agent
-  wrote. A translation a person wrote or changed, and a reviewed one, is never
-  replaced; it is reported instead. Which translations an agent wrote is kept
-  per project in local application data, with the text it wrote: a person's
-  later edit changes the text, so the translation becomes the person's.
-- Writes from several processes, such as parallel subagents and the desktop,
-  are serialized per project, and a writer reloads the workspace before it
-  writes. The desktop reloads the open project when the files change on disk.
-- Identity, source updates, merges, and export do not depend on agents.
+  wrote that is not reviewed. A translation a person wrote or changed, and a
+  reviewed one, is skipped and reported. Which translations agents wrote is
+  kept per project in a ledger (see
+  [Sharing a project between processes](#sharing-a-project-between-processes)):
+  a translation is an agent's while its text is the one recorded, so a
+  person's later edit makes it theirs. Translations written before the ledger
+  existed count as a person's.
 
-Discovery: Aeria writes `AGENTS.md` and `CLAUDE.md` at the project root, which
-agent harnesses read, and can install an `aeria-localization` skill for
-harnesses that use skills and put `aeria` on `PATH`.
+### Sharing a project between processes
+
+Per project, keyed by a hash of its canonical root, application data holds
+`agents/<key>.lock`, `agents/<key>.stamp`, and `agents/<key>.sqlite3`:
+
+- A write takes an exclusive lock on the lock file for its whole run: the
+  command before it opens the project, the desktop around each translation,
+  note, and review change. Writes of parallel agents and of the desktop never
+  interleave, and each starts from the workspace the previous one left.
+- A command that wrote translations replaces the stamp before it releases the
+  lock. The desktop compares the stamp with the one its session took in,
+  before each of its writes and every 1.5 seconds; after a change it reloads
+  the workspace under the lock and emits `project://workspace-reloaded`, on
+  which the editor reloads the open sheet and the progress.
+- The ledger is SQLite (the `written` table: location, target, time).
+
+Git operations in the desktop do not take the lock; synchronizing while agents
+write can make the desktop's next write fail on the changed workspace until it
+reloads.
+
+Identity, source updates, merges, and export do not depend on agents.
+
+Discovery (not implemented yet): Aeria writes `AGENTS.md` and `CLAUDE.md` at
+the project root, which agent harnesses read, and can install an
+`aeria-localization` skill for harnesses that use skills and put `aeria` on
+`PATH`.

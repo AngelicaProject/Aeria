@@ -40,6 +40,24 @@ impl<R: tauri::Runtime> AeriaPaths for tauri::AppHandle<R> {
     }
 }
 
+/// The bundle identifier, which named the data folder of earlier versions.
+const LEGACY_FOLDER: &str = "org.angelicaproject.aeria";
+
+/// The data folder without a running application, for the `aeria` command:
+/// the same folder [`AeriaPaths::aeria_data_dir`] resolves.
+pub(crate) fn standalone_data_dir() -> Option<PathBuf> {
+    let base = dirs::data_dir()?;
+    Some(choose_data_dir(
+        base.join(APP_FOLDER),
+        &base.join(LEGACY_FOLDER),
+    ))
+}
+
+/// The cache folder without a running application.
+pub(crate) fn standalone_cache_dir() -> Option<PathBuf> {
+    Some(dirs::cache_dir()?.join(APP_FOLDER))
+}
+
 /// Uses the legacy folder only while it still holds data that was not moved.
 fn choose_data_dir(current: PathBuf, legacy: &Path) -> PathBuf {
     if !current.exists() && legacy.is_dir() && legacy != current {

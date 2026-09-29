@@ -493,7 +493,8 @@ changes (which open in the editor), and project file changes.
 Dialogs that write project files (export, fonts, project knowledge)
 refresh the dock when they close. A sync, branch switch, or finished
 contribution that changed the workspace reloads the current sheet and
-progress.
+progress, as does a write of an agent through the `aeria` command (see
+[`agents.md`](./agents.md#sharing-a-project-between-processes)).
 
 ## String history
 

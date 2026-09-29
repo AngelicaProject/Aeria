@@ -274,6 +274,16 @@ or by an agent, is reported as `projectKnowledgeConflict` and not
 overwritten; an invalid entry or a file over the size limit is
 `projectKnowledgeInvalid`.
 
+`set_translation_target`, `set_translation_note`, and
+`set_translation_review_state` write through `DesktopState::write_project`:
+it takes the project's cross-process write lock before the project mutex,
+reloads the workspace when an `aeria` command wrote it since the session last
+took its writes in, and then runs the write. A lock that cannot be taken is
+`projectLock`. A background thread started at setup compares the command
+stamp every 1.5 seconds, reloads under the same lock order, and emits
+`project://workspace-reloaded`. See
+[`agents.md`](./agents.md#sharing-a-project-between-processes).
+
 Commands that require an active project report `noProjectOpen` before
 validating project-scoped payload such as translation-unit IDs.
 

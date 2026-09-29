@@ -45,6 +45,8 @@ dependencies = [
  "aeria-source",
  "aeria-sqpack",
  "aeria-workspace",
+ "dirs",
+ "rusqlite",
  "semver",
  "serde",
  "serde_json",

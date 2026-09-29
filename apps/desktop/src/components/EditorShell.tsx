@@ -853,6 +853,12 @@ export function EditorShell({
   });
   const clearSceneTarget = useCallback(() => setSceneTarget(null), []);
   const stableWorkspaceChanged = useStableCallback(handleWorkspaceChanged);
+  // Agents write through the `aeria` command; the backend reloads the
+  // workspace after their writes and the open sheet follows.
+  useEffect(() => {
+    const subscription = listen("project://workspace-reloaded", () => stableWorkspaceChanged());
+    return () => { void subscription.then((unlisten) => unlisten()); };
+  }, [stableWorkspaceChanged]);
   const openPalette = useCallback((input: string) => {
     setPalette((current) => ({ open: true, input, key: current.key + 1 }));
   }, []);
