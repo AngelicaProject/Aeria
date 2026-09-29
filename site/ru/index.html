@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Aeria — фанатские переводы FINAL FANTASY XIV</title>
-  <meta name="description" content="Aeria — бесплатный редактор, в котором сообщество переводит FINAL FANTASY XIV на свой язык, вручную или с помощью ИИ-агентов.">
+  <meta name="description" content="Aeria — бесплатная программа для фанатского перевода FINAL FANTASY XIV на любой язык, вручную или с ИИ-агентами.">
   <meta property="og:title" content="Aeria">
   <meta property="og:description" content="Бесплатный редактор фанатских переводов FINAL FANTASY XIV на любой язык.">
   <meta property="og:image" content="../icon.png">
@@ -18,9 +18,8 @@
     <header class="masthead">
       <a class="wordmark" href="./">Aeria</a>
       <nav aria-label="Навигация">
-        <a href="#agents">Агенты</a>
-        <a href="#editor">Возможности</a>
-        <a href="#harmonia">Harmonia</a>
+        <a href="#features">Возможности</a>
+        <a href="#harmonia">Установка в игру</a>
         <a href="#status">Разработка</a>
         <a class="keep" href="https://github.com/AngelicaProject/Aeria">GitHub</a>
         <a class="lang" href="../" hreflang="en" lang="en" data-lang="en">English</a>
@@ -31,7 +30,7 @@
       <section class="opening">
         <div>
           <h1>Фанатские переводы FINAL FANTASY&nbsp;XIV</h1>
-          <p class="lede">Aeria — редактор, в котором сообщество переводит FINAL FANTASY&nbsp;XIV на свой язык. Переводить можно вручную или поручить работу ИИ&#8209;агентам.</p>
+          <p class="lede">Aeria — программа для фанатского перевода FINAL FANTASY&nbsp;XIV на любой язык.</p>
           <div class="downloads" data-mb="МБ">
             <div class="dl" data-channel="stable">
               <div class="dl-info">
@@ -60,12 +59,19 @@
         <img class="art" src="../icon.png" width="240" height="240" alt="Арт Aeria: рисунок тушью — спящее лицо под прядями белых волос">
       </section>
 
-      <section class="block" id="agents">
-        <h2>Перевод с ИИ&#8209;агентами</h2>
+      <section class="block" id="features">
+        <h2>Что умеет Aeria</h2>
         <div class="body">
-          <p class="lead">Aeria работает с Claude Code, Codex и Hermes Agent, подключаются они в настройках. Агент читает квест целиком, в том порядке, в каком его видит игрок, и у каждой реплики видит японский оригинал и три официальные локализации.</p>
-          <p>С именами и шутками это особенно помогает. Трактир 溺れた海豚亭, «утонувший дельфин», в английской версии называется Drowning Wench, во французской Dauphin noyé, в немецкой Zur Ertränkten Sorge. Агент сравнит все три, придумает название для своего языка и дальше будет писать его одинаково во всём проекте.</p>
-          <p>Большой объём агент раздаёт помощникам, и они переводят параллельно. Готовые строки сразу появляются в редакторе. То, что написал или одобрил человек, агенты не меняют.</p>
+          <ul class="features">
+            <li>Берёт текст прямо из установленной игры.</li>
+            <li>Показывает игровые теги подсказками вроде «если персонаж — женщина» и не даёт их сломать.</li>
+            <li>Работает с ИИ&#8209;агентами: Claude Code, Codex, Hermes Agent. Агенты переводят квесты целиком и видят японский оригинал и официальные локализации.</li>
+            <li>Не даёт агентам менять строки, которые написал или одобрил человек.</li>
+            <li>Хранит термины, стиль и голоса персонажей проекта, чтобы перевод звучал одинаково.</li>
+            <li>После патча переносит перевод на новую версию игры и отмечает изменённые строки.</li>
+            <li>Хранит проект в Git: для работы командой достаточно GitHub.</li>
+            <li>Собирает готовый перевод для плагина Harmonia.</li>
+          </ul>
         </div>
       </section>
 
@@ -94,38 +100,13 @@
               <dd><b>Все теги на месте</b> во всех трёх переводах</dd>
             </div>
           </dl>
-          <p>Числа, имена и выделения игра подставляет сама, через теги. Теги можно переставлять, чтобы фраза звучала по-русски или по-испански, но строку с потерянным или сломанным тегом Aeria не сохранит.</p>
-        </div>
-      </section>
-
-      <section class="block" id="editor">
-        <h2>Редактор</h2>
-        <div class="body">
-          <p>Вместо служебной разметки редактор пишет «если персонаж — женщина», а цветной текст показывает тем цветом, что и игра. Искать можно сразу по всему тексту игры.</p>
-          <p>Термины, заметки о стиле и описания того, как говорят персонажи, лежат в проекте рядом с переводом. Ими пользуются все, кто переводит, включая агентов.</p>
-        </div>
-      </section>
-
-      <section class="block" id="patches">
-        <h2>Обновления игры</h2>
-        <div class="body">
-          <p>После патча Aeria сама переносит перевод на новую версию и отмечает строки, которые поменяли разработчики. Если строка изменилась так сильно, что уже непонятно, к чему относится перевод, она ждёт проверки.</p>
-          <p>Пак, который уже стоит у игроков, продолжает работать. Изменённые строки до следующего обновления просто показываются на языке оригинала.</p>
-        </div>
-      </section>
-
-      <section class="block" id="team">
-        <h2>Совместная работа</h2>
-        <div class="body">
-          <p>Проект хранится в обычном Git-репозитории, на GitHub или где угодно ещё. Git встроен в Aeria, и в обычный день нужны две кнопки, «Сохранить» и «Синхронизировать». Большим командам пригодятся ветки и пулл-реквесты.</p>
-          <p>По каждой строке видно, кто и когда её менял. Регистрироваться нигде не нужно.</p>
         </div>
       </section>
 
       <section class="block" id="harmonia">
-        <h2>Harmonia</h2>
+        <h2>Как поставить перевод в игру</h2>
         <div class="body">
-          <p>В игре перевод показывает <a href="https://github.com/AngelicaProject/Harmonia">Harmonia</a>, плагин для Dalamud. Aeria сама выкладывает пак в релизы на GitHub, а игроки ставят его так:</p>
+          <p>Перевод в игре показывает плагин <a href="https://github.com/AngelicaProject/Harmonia">Harmonia</a> для Dalamud.</p>
           <ol class="steps">
             <li>Запустите игру через <a href="https://goatcorp.github.io/">XIVLauncher</a> с включённым Dalamud.</li>
             <li>Откройте <code>/xlsettings</code> → Experimental → Custom Plugin Repositories, добавьте адрес репозитория и сохраните настройки:
@@ -141,7 +122,7 @@
       <section class="block" id="status">
         <h2>Разработка</h2>
         <div class="body">
-          <p>Aeria пока в ранней разработке. Сейчас есть только версия для Windows, версия для Linux появится позже. Об ошибках и идеях можно написать в Issues на GitHub, пулл-реквесты тоже принимаются.</p>
+          <p>Aeria в ранней разработке и пока есть только для Windows. Об ошибках и идеях пишите в Issues на GitHub.</p>
           <ul class="links">
             <li><a href="https://github.com/AngelicaProject/Aeria/releases">Релизы</a></li>
             <li><a href="https://github.com/AngelicaProject/Aeria/issues">Issues</a></li>

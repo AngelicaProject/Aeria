@@ -168,3 +168,7 @@ footer p { max-width: 60em; margin: 12px 0 0; }
   section.block { grid-template-columns: 1fr; gap: 20px; padding: 40px 0; }
   .line { grid-template-columns: 1fr; gap: 2px; }
 }
+
+ul.features { margin: 0; padding-left: 1.2em; max-width: 38em; }
+ul.features li { padding: 4px 0 4px 4px; }
+ul.features li::marker { color: var(--faint); }
