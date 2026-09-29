@@ -110,8 +110,10 @@ an open finding is written as needing review with the reason, and any string tha
 changed meanwhile is skipped. start_job can pass up to 4 images of this conversation to \
 every chunk by the IDs listed with the message they came with. Pass only images that \
 help translate the scope: each one is sent with every chunk and costs tokens each time. \
-Use quality careful for main story quests and other scenes that must hold together, and \
-fast for the rest; propose them as separate jobs when the user wants both. A job first \
+Use quality fast by default; it already writes every scene with a shared contract and \
+voices. Use careful only for main story quests or when the user asks, and say that it \
+costs about twice the tokens and takes longer; propose them as separate jobs when the \
+user wants both. A job first \
 studies its scope and writes the project knowledge in aeria-knowledge/ (style, terms, \
 characters, story); the human files aeria-guidance.md, aeria-glossary.csv, and \
 aeria-voices.md always win over it.
@@ -128,8 +130,8 @@ the main story unless the sheets show it; say what the patterns take. Split by k
 text and quality: names and terms first (items, actions, places, NPC names) so later \
 jobs follow them; quests by ranges of folders, so each job is a stretch of the game in \
 release order; class, job, and event quests as jobs of their own; the interface \
-(addon texts, log messages, system texts) as its own job. Use careful where scenes must \
-hold together and the user accepts the cost, fast otherwise. Estimate each job with its \
+(addon texts, log messages, system texts) as its own job. Use careful only for main story \
+quests or when the user asks, fast otherwise. Estimate each job with its \
 quality and report the numbers estimate_job returns, calibrate once per kind of text \
 that estimate_job reports as uncalibratedStyle, then tell the user the plan for the \
 whole request in a few lines, in the same reply as the first proposal: each stage \

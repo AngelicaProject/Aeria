@@ -506,7 +506,7 @@ pub fn job_tool_definitions(write: bool) -> Vec<ToolDefinition> {
     });
     let job_id = json!({ "type": "object", "properties": { "job_id": { "type": "string" } }, "required": ["job_id"], "additionalProperties": false });
     let mut estimate_properties = scope.as_object().cloned().unwrap_or_default();
-    estimate_properties.insert("quality".to_owned(), json!({ "type": "string", "enum": ["fast", "careful"], "description": "fast (the default): parts of each unit written in parallel, fast enough for the whole game. careful: one writer per unit, stronger critics, and two full rechecks; slower and costlier, for story quests whose scenes must hold together." }));
+    estimate_properties.insert("quality".to_owned(), json!({ "type": "string", "enum": ["fast", "careful"], "description": "fast (the default): parts of each unit written in parallel, fast enough for the whole game. careful: a high effort for every step and two full rechecks; about twice the tokens and slower, for main story quests or when the user asks." }));
     let mut tools = vec![
         ToolDefinition {
             name: "estimate_job",
@@ -534,7 +534,7 @@ pub fn job_tool_definitions(write: bool) -> Vec<ToolDefinition> {
         start_properties.insert("instructions".to_owned(), json!({ "type": "string", "description": "Instructions for every chunk of the job: style, terminology, anything the user asked for." }));
         start_properties.insert("images".to_owned(), json!({ "type": "array", "items": { "type": "string" }, "maxItems": MAX_JOB_IMAGES, "description": "IDs of images in this conversation that every chunk should see, such as a screenshot showing where the strings appear. Each image is sent with every chunk." }));
         start_properties.insert("concurrency".to_owned(), json!({ "type": "integer", "minimum": 1, "maximum": MAX_CONCURRENCY, "description": "Workers translating chunks at once. Omit it to let Aeria choose: 48 for jobs of 48 chunks or more, otherwise 24, never more than the chunks. Choose fewer only when the provider reported rate limits or the user asks; set_job_workers changes it while the job runs." }));
-        start_properties.insert("quality".to_owned(), json!({ "type": "string", "enum": ["fast", "careful"], "description": "fast (the default): parts of each unit written in parallel, fast enough for the whole game. careful: one writer per unit, stronger critics, and two full rechecks; slower and costlier, for story quests whose scenes must hold together." }));
+        start_properties.insert("quality".to_owned(), json!({ "type": "string", "enum": ["fast", "careful"], "description": "fast (the default): parts of each unit written in parallel, fast enough for the whole game. careful: a high effort for every step and two full rechecks; about twice the tokens and slower, for main story quests or when the user asks." }));
         tools.extend([
             ToolDefinition {
                 name: "start_job",

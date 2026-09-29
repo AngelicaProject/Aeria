@@ -776,10 +776,13 @@ is a ceiling for every role.
 
 A job has a quality, chosen by Angelica with `start_job` and shown on the
 job card: `fast` (the default) as described above, or `careful`, for story
-quests whose scenes must hold together. A careful unit is written by one
-writer, every role but structure corrections asks for a high effort, and the
-recheck reads the whole unit again, twice, fixing its major findings each
-time. A careful job's estimate, and so its token limit, is twice a fast
+main story quests or when the user asks; Angelica uses `fast` otherwise. A
+careful unit is written in parts like a fast one, after a separate
+contract, every role but structure corrections asks for a high effort, and
+the recheck reads the whole unit again, twice, fixing its major findings
+each time. (Careful units were once written by one writer each; a scene of
+a hundred lines or more then made one request that outlasted the rest of
+its job.) A careful job's estimate, and so its token limit, is twice a fast
 one's.
 
 Nothing is written until the unit is done. Each translation is then written

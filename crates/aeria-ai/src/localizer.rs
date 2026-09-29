@@ -145,8 +145,8 @@ const fn effort_rank(effort: ReasoningEffort) -> i32 {
 /// How much work the localizer spends on a unit.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct LocalizeOptions {
-    /// One writer for the whole unit, every role at a high effort, and two
-    /// full rechecks instead of one of the changed lines.
+    /// Every role at a high effort, a separate contract, and two full
+    /// rechecks of the unit.
     pub careful: bool,
 }
 
@@ -1621,7 +1621,8 @@ async fn fix(
 /// Localizes one unit of work: contract, parallel writers (one request for
 /// both when a fast unit has one part), structure corrections, versions of
 /// the lines with character and a choice among them, critics, and fixes; a
-/// careful unit has one writer and two full rechecks.
+/// careful unit asks every role for a high effort and is rechecked whole,
+/// twice.
 ///
 /// # Errors
 ///
@@ -1632,12 +1633,9 @@ pub async fn localize(
     options: LocalizeOptions,
 ) -> Result<LocalizeResult, ProviderError> {
     let mut usage = Usage::default();
-    let part_lines = if options.careful {
-        MAX_UNIT_LINES
-    } else {
-        PART_LINES
-    };
-    let mut localization = Localization::with_part_lines(unit, part_lines);
+    // Careful units are split into parts too: one writer for a scene of a
+    // hundred lines or more was the slowest request of a job.
+    let mut localization = Localization::new(unit);
 
     if localization.parts().len() == 1 && !options.careful {
         // One writer states the contract and writes: one request fewer to
