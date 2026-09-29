@@ -370,12 +370,28 @@ the agent layer at once, without a proposal: style entries by domain, terms,
 character profiles, and lessons (active unless Angelica says otherwise), at
 most 50 of each kind per call; terms and speakers of the human files are
 skipped and listed. Her instructions tell her to write decisions the user
-makes at once and never to ask the user to write rules. To calibrate the
-style, she reads a scene from its start, picks 5 to 8 lines (a journal entry,
-an objective, and two or three distinct speakers), settles first what the
-evidence decides (address, gender, voice) and keeps it in every version, shows
-two or three complete versions that differ on one axis of taste at a time,
-and writes the chosen style for each kind of text the lines covered.
+makes at once and never to ask the user to write rules.
+
+`ask_choice`, offered in every mode, asks the user one question with 2 to 4
+options (a label, A to D by default, and a text in Markdown) and changes
+nothing. The panel shows the question under Angelica's work with each option
+as a button and a button to answer in one's own words, which focuses the
+composer; choosing an option sends "Option A" (localized) as the next
+message, and a question counts as answered once any user message follows
+it. Her instructions tell her to ask one question at a time and end her turn
+after asking.
+
+`estimate_job` and `start_job` add `uncalibratedStyle`: the kinds of text of
+the scope (journal, objectives, and dialogue for quests and cutscenes, or
+the domain of another sheet) whose style no person chose, that is, whose
+agent entry is missing or was written by the study. When it is not empty,
+Angelica first asks whether to calibrate; to calibrate she asks one question
+per matter of taste (journal and objectives; how close and how colorful
+dialogue is, on the scene's most distinctive speakers; how strongly a marked
+manner shows), each with two or three complete versions of the same few
+lines, keeping what the evidence decides (address, gender, voice) the same
+in every version. After the last answer she writes a style entry for each
+kind of text she asked about and starts the job the user asked for.
 
 ### Guidance and glossary
 

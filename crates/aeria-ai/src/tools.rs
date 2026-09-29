@@ -982,6 +982,7 @@ pub fn read_tool_definitions() -> Vec<ToolDefinition> {
     let mut tools = project_read_definitions();
     tools.extend(dialogue_tool_definitions());
     tools.extend(crate::knowledge_tools::read_definitions());
+    tools.push(crate::ask::definition());
     tools
 }
 
@@ -1278,6 +1279,56 @@ impl<'a> ReadTools<'a> {
         }
     }
 
+    /// Adds the kinds of text of a job's scope whose style no person chose,
+    /// so Angelica can offer a calibration first.
+    fn add_style_hint(&self, value: &mut Value, arguments: &str) {
+        let Some(root) = self.reader.knowledge_root() else {
+            return;
+        };
+        let sheets: Vec<String> = serde_json::from_str::<Value>(arguments)
+            .ok()
+            .and_then(|args| args.get("sheets").cloned())
+            .and_then(|sheets| serde_json::from_value(sheets).ok())
+            .unwrap_or_default();
+        let mut domains: Vec<crate::knowledge::Domain> = Vec::new();
+        let dialogue = [
+            crate::knowledge::Domain::Journal,
+            crate::knowledge::Domain::Objective,
+            crate::knowledge::Domain::Dialogue,
+        ];
+        if sheets.is_empty() {
+            domains.extend(dialogue);
+        }
+        for sheet in &sheets {
+            let domain = crate::knowledge::sheet_domain(sheet);
+            let found: &[crate::knowledge::Domain] = if domain == crate::knowledge::Domain::Dialogue
+            {
+                &dialogue
+            } else {
+                std::slice::from_ref(&domain)
+            };
+            for domain in found {
+                if !domains.contains(domain) {
+                    domains.push(*domain);
+                }
+            }
+        }
+        let missing = crate::knowledge::Knowledge::load(&root).uncalibrated(&domains);
+        if let Some(object) = value.as_object_mut()
+            && !missing.is_empty()
+        {
+            object.insert(
+                "uncalibratedStyle".to_owned(),
+                json!(
+                    missing
+                        .iter()
+                        .map(|domain| domain.as_str())
+                        .collect::<Vec<_>>()
+                ),
+            );
+        }
+    }
+
     /// Runs `get_knowledge`, or `set_knowledge` where changes are allowed.
     fn knowledge_tool(&self, name: &str, arguments: &str) -> Result<Value, ToolError> {
         if name == "set_knowledge" && self.writer.is_none() {
@@ -1336,6 +1387,7 @@ impl<'a> ReadTools<'a> {
             }
             "get_guidance" => Ok(self.get_guidance(&parse(arguments)?)),
             "get_knowledge" | "set_knowledge" => self.knowledge_tool(name, arguments),
+            "ask_choice" => crate::ask::ask_choice(arguments),
             "dialogue_context" => dialogue_context(self.reader, &self.guide(), &parse(arguments)?),
             "speaker_lines" => speaker_lines(self.reader, &self.guide(), &parse(arguments)?),
             "list_speakers" => list_speakers(self.reader, &self.guide(), &parse(arguments)?),
@@ -1355,7 +1407,11 @@ impl<'a> ReadTools<'a> {
                 let Some(jobs) = self.jobs else {
                     return Err(ToolError::new("translation jobs are not available here"));
                 };
-                run_job_tool(jobs, self.writer.is_some(), name, arguments)
+                let mut value = run_job_tool(jobs, self.writer.is_some(), name, arguments)?;
+                if matches!(name, "estimate_job" | "start_job") {
+                    self.add_style_hint(&mut value, arguments);
+                }
+                Ok(value)
             }
             "validate_target"
             | "propose_translation"

@@ -604,6 +604,24 @@ impl Knowledge {
         self.story.iter().find(|section| section.key == sheet)
     }
 
+    /// Domains among `domains` whose style no person has chosen yet: the
+    /// agent entry is missing or was written by the study.
+    #[must_use]
+    pub fn uncalibrated(&self, domains: &[Domain]) -> Vec<Domain> {
+        domains
+            .iter()
+            .copied()
+            .filter(|domain| {
+                self.style(*domain).is_none_or(|section| {
+                    section
+                        .meta
+                        .get("source")
+                        .is_none_or(|source| source == "study")
+                })
+            })
+            .collect()
+    }
+
     /// Lessons in use: active ones and those on trial.
     #[must_use]
     pub fn lessons_in_use(&self) -> Vec<&Lesson> {

@@ -263,11 +263,35 @@ export type ActivityStep =
   | { kind: "tool"; item: Extract<TranscriptItem, { kind: "tool" }> };
 
 /** What the conversation shows: messages, replies, and folded activity. */
+/** One option of a question Angelica asked with ask_choice. */
+export type ChoiceOption = { label: string; text: string };
+
 export type TranscriptBlock =
   | { kind: "user"; key: string; text: string; images: MessageImage[] }
   | { kind: "notice"; key: string; text: string }
   | { kind: "reply"; key: string; text: string }
-  | { kind: "activity"; key: string; steps: ActivityStep[]; live: boolean };
+  | { kind: "activity"; key: string; steps: ActivityStep[]; live: boolean }
+  /** A question for the user; answered once a user message follows it. */
+  | { kind: "choice"; key: string; question: string; options: ChoiceOption[]; answered: boolean };
+
+/** The question and options of an ask_choice call, or null when its
+ * arguments cannot be read. Options without a label get A, B, C, D. */
+export function choiceOf(argumentsText: string): { question: string; options: ChoiceOption[] } | null {
+  try {
+    const value = JSON.parse(argumentsText) as { question?: unknown; options?: unknown };
+    if (typeof value.question !== "string" || !Array.isArray(value.options)) return null;
+    const options: ChoiceOption[] = [];
+    value.options.forEach((option: unknown, index: number) => {
+      const entry = option as { label?: unknown; text?: unknown };
+      if (typeof entry.text !== "string") return;
+      const label = typeof entry.label === "string" && entry.label.trim() ? entry.label.trim() : String.fromCharCode(65 + index);
+      options.push({ label, text: entry.text });
+    });
+    return options.length > 0 ? { question: value.question, options } : null;
+  } catch {
+    return null;
+  }
+}
 
 /**
  * Folds reasoning and tool calls between two replies into one activity
@@ -290,6 +314,11 @@ export function groupTranscript(items: readonly TranscriptItem[], running: boole
       blocks.push(item.kind === "user" ? { kind: "user", key: item.key, text: item.text, images: item.images } : { kind: "notice", key: item.key, text: item.text });
     } else if (item.kind === "tool") {
       step(item.key, { kind: "tool", item });
+      const choice = item.name === "ask_choice" && item.result !== null && !item.isError ? choiceOf(item.arguments) : null;
+      if (choice) {
+        activity = null;
+        blocks.push({ kind: "choice", key: `c-${item.key}`, ...choice, answered: false });
+      }
     } else {
       if (item.reasoning.trim()) step(item.key, { kind: "reasoning", key: `r-${item.key}`, text: item.reasoning });
       if (item.text) {
@@ -300,6 +329,13 @@ export function groupTranscript(items: readonly TranscriptItem[], running: boole
   }
   const last = blocks.at(-1);
   if (running && last?.kind === "activity") last.live = true;
+  // A question is answered by any user message after it.
+  let answered = false;
+  for (let index = blocks.length - 1; index >= 0; index -= 1) {
+    const block = blocks[index]!;
+    if (block.kind === "user") answered = true;
+    else if (block.kind === "choice") block.answered = answered;
+  }
   return blocks;
 }
 

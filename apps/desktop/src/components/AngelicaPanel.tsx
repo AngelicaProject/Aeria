@@ -51,6 +51,10 @@ const toolLabels: Readonly<Record<string, MessageKey>> = {
   raise_job_limit: "angelica.tool.raiseJobLimit",
   set_job_workers: "angelica.tool.setJobWorkers",
   cancel_job: "angelica.tool.cancelJob",
+  propose_revision: "angelica.tool.proposeRevision",
+  get_knowledge: "angelica.tool.getKnowledge",
+  set_knowledge: "angelica.tool.setKnowledge",
+  ask_choice: "angelica.tool.askChoice",
 };
 
 /** A message waiting to be sent after the running turn. */
@@ -176,7 +180,33 @@ function MessageThumb({ conversationId, image, onOpen }: { conversationId: strin
   );
 }
 
-function TranscriptEntry({ block, conversationId, onOpenImage }: { block: TranscriptBlock; conversationId: string | null; onOpenImage: (url: string) => void }) {
+/** A question Angelica asked, with its options as buttons and a way to
+ * answer in one's own words. */
+function ChoiceCard({ block, disabled, onChoose, onOther }: { block: Extract<TranscriptBlock, { kind: "choice" }>; disabled: boolean; onChoose: (label: string) => void; onOther: () => void }) {
+  const { t } = useI18n();
+  const closed = disabled || block.answered;
+  return (
+    <div className={block.answered ? "angelica-choice answered" : "angelica-choice"}>
+      <div className="angelica-choice-question"><Reply text={block.question} /></div>
+      <div className="angelica-choice-options">
+        {block.options.map((option) => (
+          <button key={option.label} className="angelica-choice-option" type="button" disabled={closed} onClick={() => onChoose(option.label)}>
+            <span className="angelica-choice-label">{option.label}</span>
+            <span className="angelica-choice-text"><Reply text={option.text} /></span>
+          </button>
+        ))}
+        <button className="angelica-choice-option other" type="button" disabled={closed} onClick={onOther}>
+          <span className="angelica-choice-label"><UiIcon icon="messageSquare" size="xs" /></span>
+          <span className="angelica-choice-text">{t("angelica.choice.other")}</span>
+        </button>
+      </div>
+    </div>
+  );
+}
+
+type ChoiceActions = { disabled: boolean; onChoose: (label: string) => void; onOther: () => void };
+
+function TranscriptEntry({ block, conversationId, onOpenImage, choice }: { block: TranscriptBlock; conversationId: string | null; onOpenImage: (url: string) => void; choice: ChoiceActions }) {
   if (block.kind === "user") {
     return (
       <div className="angelica-user">
@@ -191,6 +221,7 @@ function TranscriptEntry({ block, conversationId, onOpenImage }: { block: Transc
   }
   if (block.kind === "notice") return <div className="angelica-notice"><UiIcon icon="info" size="xs" />{block.text.replace(/^\[Aeria\]\s*/, "")}</div>;
   if (block.kind === "activity") return <ActivityBlock block={block} />;
+  if (block.kind === "choice") return <ChoiceCard block={block} {...choice} />;
   return <div className="angelica-assistant"><Reply text={block.text} /></div>;
 }
 
@@ -455,6 +486,14 @@ export function AngelicaPanel({ editorContext, onOpenSettings, onOpenGuide, onRe
     void send(next!);
   }, [queue, running, send]);
 
+  // An option is answered like a message; "other" leaves the answer to the
+  // user, in the composer.
+  const choiceActions: ChoiceActions = {
+    disabled: running || !model,
+    onChoose: (label) => { void send({ text: t("angelica.choice.answer", { label }), images: [] }); },
+    onOther: () => inputRef.current?.focus(),
+  };
+
   const acceptsImages = model !== null && modelAcceptsImages(settings?.providers ?? [], model);
   const imagesBlocked = attachments.length > 0 && !acceptsImages;
 
@@ -583,7 +622,7 @@ export function AngelicaPanel({ editorContext, onOpenSettings, onOpenGuide, onRe
               {suggestionKeys.map((key) => <button key={key} className="button button-ghost" type="button" disabled={!model} onClick={() => void send({ text: t(key), images: [] })}>{t(key)}</button>)}
             </div>
           </div>
-        ) : blocks.map((block) => <TranscriptEntry key={block.key} block={block} conversationId={conversation?.id ?? null} onOpenImage={setViewing} />)}
+        ) : blocks.map((block) => <TranscriptEntry key={block.key} block={block} conversationId={conversation?.id ?? null} onOpenImage={setViewing} choice={choiceActions} />)}
         {running ? <WorkingLine startedAt={turnStartedAt} tokens={turnTokens} phase={phase} lastActivityAt={lastActivityAt} /> : null}
         {notice ? <p className="field-hint">{t(notice)}</p> : null}
       </div>

@@ -7,6 +7,7 @@ import {
   applyAgentEvent,
   formatElapsed,
   formatTokens,
+  choiceOf,
   groupTranscript,
   isQuietWait,
   workingPhase,
@@ -113,6 +114,18 @@ test("automatic messages from Aeria are shown as notices", () => {
     { role: "user", content: "[Aeria] Job j1 finished", automatic: true },
   ]);
   assert.deepEqual(items.map((item) => item.kind), ["user", "notice"]);
+});
+
+test("a question becomes a choice that the next user message answers", () => {
+  const call = (id) => ({ role: "assistant", content: "", toolCalls: [{ id, name: "ask_choice", arguments: JSON.stringify({ question: "Which?", options: [{ text: "one" }, { label: "X", text: "two" }] }) }] });
+  const result = (id) => ({ role: "tool", toolCallId: id, name: "ask_choice", content: JSON.stringify({ status: "asked" }) });
+  const open = groupTranscript(transcriptFromMessages([{ role: "user", content: "Calibrate" }, call("c1"), result("c1")]), false);
+  const choice = open.find((block) => block.kind === "choice");
+  assert.deepEqual(choice.options, [{ label: "A", text: "one" }, { label: "X", text: "two" }]);
+  assert.equal(choice.answered, false);
+  const answered = groupTranscript(transcriptFromMessages([call("c1"), result("c1"), { role: "user", content: "Option X" }]), false);
+  assert.equal(answered.find((block) => block.kind === "choice").answered, true);
+  assert.equal(choiceOf("not json"), null);
 });
 
 test("job progress counts final outcomes and problems", () => {
