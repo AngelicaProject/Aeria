@@ -52,6 +52,8 @@ import { ExportDialog } from "./ExportDialog";
 import { ProjectGuideDialog, type ProjectGuideTab } from "./ProjectGuideDialog";
 import { WorkbenchToolDock, toolTitle, type WorkbenchTool } from "./WorkbenchToolDock";
 import { CommitView } from "./GitHistory";
+import { LocalizationView } from "./AngelicaJobs";
+import { onAngelicaAsk, onOpenLocalization } from "../angelicaAsk";
 import type { GitCommitDto } from "../types";
 import { detachedPanelTitle, type DetachedPanel } from "./DetachedToolWindow";
 import { displayPathName } from "../pathDisplay";
@@ -594,6 +596,10 @@ export function EditorShell({
     }
   }, [beginSheetLoad, documentTabs, requestDiscardConfirmation, t]);
 
+  const openLocalizationView = useCallback(() => {
+    setDocumentTabs((current) => reduceDocumentTabs(current, { type: "openLocalization", label: t("localization.title") }));
+  }, [t]);
+
   const openCommit = useCallback(async (commit: GitCommitDto) => {
     const active = documentTabs.tabs.find((document) => document.id === documentTabs.activeId);
     if (active?.kind === "sheet" && !(await requestDiscardConfirmation(t("workbench.discard.changeSheet")))) return;
@@ -971,6 +977,11 @@ export function EditorShell({
     setRegionVisible(regionId, true);
   }, [dockLayoutState.placements, layout.regions, regionPanelId, setRegionVisible]);
 
+  // Angelica's panel opens the localization view; the view's questions for
+  // Angelica show her panel, which takes them from the queue.
+  useEffect(() => onOpenLocalization(openLocalizationView), [openLocalizationView]);
+  useEffect(() => onAngelicaAsk(() => showPanel("ai", "right", false)), [showPanel]);
+
   const panelMoveTargets = useCallback((panelId: string, currentRegion: DockRegion): Array<{ id: string; label: string }> => {
     const restricted = bottomPanelIds.has(panelId) || panelId === "ai" || panelId === "git";
     return (["left", "right", "bottom"] as const)
@@ -1083,9 +1094,10 @@ export function EditorShell({
     pinned: document.pinned,
     preview: document.preview,
     dirty: document.dirty,
-    icon: document.kind === "commit" ? "gitCommit" : "table2",
+    icon: document.kind === "commit" ? "gitCommit" : document.kind === "localization" ? "languages" : "table2",
   }));
   const activeCommitId = documentTabs.tabs.find((document) => document.id === documentTabs.activeId)?.commitId ?? null;
+  const localizationActive = documentTabs.tabs.find((document) => document.id === documentTabs.activeId)?.kind === "localization";
 
   const sheetHeaderActions = <>
     <IconButton icon={hideEmptySheets ? "eyeOff" : "eye"} label={t(hideEmptySheets ? "workbench.showEmptySheets" : "workbench.hideEmptySheets")} pressed={hideEmptySheets} disabled={closing} onClick={() => setHideEmptySheets((current) => !current)} />
@@ -1286,6 +1298,7 @@ export function EditorShell({
           items={[
             { id: "sheets", label: t("workbench.panel.sheets"), icon: "table2", shortcut: "Ctrl+B", active: isPanelShown("sheets"), onSelect: () => showPanel("sheets", "left") },
             { id: "search", label: t("workbench.tool.search"), icon: "search", active: isPanelShown("search"), onSelect: () => showPanel("search", "left") },
+            { id: "localization", label: t("localization.title"), icon: "languages", active: localizationActive, onSelect: openLocalizationView },
           ]}
           footer={[{ id: "settings", label: t("common.settings"), icon: "settings", shortcut: "Ctrl+,", onSelect: () => openSettings() }]}
         />
@@ -1302,7 +1315,9 @@ export function EditorShell({
               onPin={handleDocumentPin}
               onReorder={(documentId, beforeDocumentId) => setDocumentTabs((current) => reduceDocumentTabs(current, { type: "reorder", id: documentId, beforeId: beforeDocumentId }))}
             />
-            {activeCommitId ? (
+            {localizationActive ? (
+              <LocalizationView onError={(error) => setEditorError({ title: t("localization.title"), error })} onReveal={stableRevealBinding} />
+            ) : activeCommitId ? (
               <CommitView commitId={activeCommitId} onRevealBinding={stableRevealBinding} />
             ) : !selectedSheetName ? (
               <div className="document-empty empty-state">

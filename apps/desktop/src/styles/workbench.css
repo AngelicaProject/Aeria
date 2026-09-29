@@ -618,6 +618,19 @@ button.angelica-chip:hover { background: var(--hover); color: var(--fg); }
 .angelica-job-status.completed { background: var(--ok-soft); color: var(--ok); }
 .angelica-job-percent { flex: none; margin-left: auto; color: var(--fg-muted); font-variant-numeric: tabular-nums; }
 .angelica-job-actions { display: flex; flex: none; gap: 2px; }
+.localization-view { flex: 1; min-height: 0; overflow-y: auto; padding: 16px 20px 24px; }
+.localization-view .angelica-jobs { max-width: 920px; max-height: none; margin: 0 auto; border-top: 0; }
+.localization-view .angelica-job-list { overflow: visible; padding: 0; gap: 12px; }
+.localization-view .angelica-jobs-head { padding: 0 0 8px; }
+.localization-view .angelica-jobs-toggle { font-size: var(--text-sm); }
+.localization-view .angelica-job, .localization-view .localization-decisions { font-size: var(--text-sm); padding: 10px 12px; }
+.localization-view .localization-area { grid-template-columns: minmax(0, 14em) minmax(0, 1fr) 9em; }
+.localization-view .localization-area-count { text-align: right; }
+.localization-view .localization-names { max-height: none; }
+.localization-status { display: flex; flex: none; align-items: center; gap: 6px; min-width: 0; margin: 0 10px 6px; padding: 4px 8px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--panel-raised); color: var(--fg-muted); font: inherit; font-size: var(--text-xs); text-align: left; cursor: pointer; }
+.localization-status:hover { color: var(--fg); border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); }
+.localization-status > span:first-of-type { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.localization-status-open { flex: none; color: var(--accent-text); }
 .localization-now { margin: 0; color: var(--fg-muted); font-size: var(--text-2xs); }
 .angelica-job.localization { gap: 4px; padding: 4px 8px; }
 .angelica-job.localization .angelica-job-toggle { gap: 6px; }

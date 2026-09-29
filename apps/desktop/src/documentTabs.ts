@@ -1,7 +1,7 @@
 export type SheetDocumentTab = {
   id: string;
-  /** `commit` shows one commit of the project history. */
-  kind: "sheet" | "commit";
+  /** `commit` shows one commit of the project history; `localization` the project's localization. */
+  kind: "sheet" | "commit" | "localization";
   /** Empty for a commit. */
   sheetName: string;
   /** The commit id of a commit tab. */
@@ -20,6 +20,7 @@ export type DocumentTabsState = {
 export type DocumentTabsAction =
   | { type: "openSheet"; sheetName: string; pin?: boolean }
   | { type: "openCommit"; commitId: string; label: string }
+  | { type: "openLocalization"; label: string }
   | { type: "activate"; id: string }
   | { type: "pin"; id: string }
   | { type: "setDirty"; id: string; dirty: boolean }
@@ -31,6 +32,9 @@ export const initialDocumentTabsState: DocumentTabsState = { tabs: [], activeId:
 export function documentIdForSheet(sheetName: string): string {
   return `sheet:${sheetName}`;
 }
+
+/** The one localization tab of a project. */
+export const LOCALIZATION_DOCUMENT_ID = "localization";
 
 export function documentIdForCommit(commitId: string): string {
   return `commit:${commitId}`;
@@ -85,6 +89,11 @@ export function reduceDocumentTabs(
         return { tabs, activeId: id };
       }
       return { tabs: [...state.tabs, tab], activeId: id };
+    }
+    case "openLocalization": {
+      if (state.tabs.some((tab) => tab.id === LOCALIZATION_DOCUMENT_ID)) return { ...state, activeId: LOCALIZATION_DOCUMENT_ID };
+      const tab: SheetDocumentTab = { id: LOCALIZATION_DOCUMENT_ID, kind: "localization", sheetName: "", label: action.label, pinned: true, preview: false, dirty: false };
+      return { tabs: [tab, ...state.tabs], activeId: tab.id };
     }
     case "activate":
       return state.tabs.some((tab) => tab.id === action.id) ? { ...state, activeId: action.id } : state;

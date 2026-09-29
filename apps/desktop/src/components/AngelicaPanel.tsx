@@ -5,7 +5,8 @@ import { ANGELICA, activitySummary, applyAgentEvent, contextFill, formatElapsed,
 import { ImageAttachError, MAX_IMAGES_PER_MESSAGE, prepareImage, transferredImages, type PreparedImage } from "../imageAttachments";
 import type { AgentMode, ProposalRecord, SourceBinding } from "../types";
 import { ModeMenu, ModelMenu, SelectionToggle } from "./AngelicaComposerControls";
-import { AngelicaJobs } from "./AngelicaJobs";
+import { LocalizationStatus } from "./LocalizationStatus";
+import { onAngelicaAsk, openLocalization, takeAngelicaAsks } from "../angelicaAsk";
 import { AngelicaProposals } from "./AngelicaProposals";
 import type { AgentEvent, AiModelSelection, AiSettingsDto, AiUsage, AngelicaEventDto, CommandError, ConversationDto, ConversationSummaryDto, EditorContextDto, ReasoningEffort } from "../types";
 import type { MessageKey } from "../i18n/translate";
@@ -284,6 +285,17 @@ export function AngelicaPanel({ editorContext, onOpenSettings, onOpenGuide, onRe
   const [viewing, setViewing] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [queue, setQueue] = useState<QueuedMessage[]>([]);
+
+  // Messages from the localization view join the queue, also those sent
+  // while the panel was closed.
+  useEffect(() => {
+    const take = () => {
+      const asks = takeAngelicaAsks();
+      if (asks.length > 0) setQueue((current) => [...current, ...asks.map((text) => ({ text, images: [] }))]);
+    };
+    take();
+    return onAngelicaAsk(take);
+  }, []);
   const [attachContext, setAttachContext] = useState(true);
   const [mode, setMode] = useState<AgentMode>("work");
   const [proposals, setProposals] = useState<ProposalRecord[]>([]);
@@ -627,7 +639,7 @@ export function AngelicaPanel({ editorContext, onOpenSettings, onOpenGuide, onRe
         {notice ? <p className="field-hint">{t(notice)}</p> : null}
       </div>
 
-      <AngelicaJobs onError={setError} onReveal={onReveal} onAsk={(text) => setQueue((current) => [...current, { text, images: [] }])} />
+      <LocalizationStatus onOpen={openLocalization} />
 
       <AngelicaProposals proposals={proposals} busy={settling} onApply={(ids) => void settle(ids, true)} onReject={(ids) => void settle(ids, false)} onReveal={onReveal} />
 

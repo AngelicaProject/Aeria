@@ -4,6 +4,7 @@ import { angelicaJobControl, angelicaJobEvents, angelicaJobRemove, angelicaJobRe
 import { formatElapsed, formatTokens, jobProblems, jobProgress, jobWritten, sortJobs, totalTokens, workerHealth, scopeText } from "../angelica";
 import type { CommandError, JobAction, JobEvent, JobFilter, JobStatus, JobSummary, JobUnit, JobUnitStatus, KnowledgeDomain, LocalizationDecision, LocalizationOverview, LocalizationProjectArea, SourceBinding, UnitLocationDto, WorkerActivity, WorkerPhase, WorkerStep } from "../types";
 import type { MessageKey } from "../i18n/translate";
+import { askAngelica } from "../angelicaAsk";
 import { useI18n } from "../ui/i18n";
 import { IconButton } from "../ui/primitives/IconButton";
 import { Segmented } from "../ui/primitives/Segmented";
@@ -550,6 +551,16 @@ function Decisions({ decisions, busy, onAsk, choose, acceptAll, review }: { deci
           ) : null)}
         </ul>
       ) : null}
+    </div>
+  );
+}
+
+/** The project's localization as a workbench view: the project by area,
+ * the decisions that wait, and the work in progress. */
+export function LocalizationView({ onError, onReveal }: Omit<AngelicaJobsProps, "onAsk">) {
+  return (
+    <div className="localization-view">
+      <AngelicaJobs onError={onError} onReveal={onReveal} onAsk={askAngelica} />
     </div>
   );
 }

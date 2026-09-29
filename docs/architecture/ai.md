@@ -170,6 +170,7 @@ localization panel. Where she may write she also has `settle_names`, which
 settles made-up names as the panel's choice does and returns which
 renderings changed, and `withdraw_proposal`, which dismisses one of the
 conversation's pending proposals. The Work mode's instructions tell her to
+work as a colleague: answer a question or an open request with a recommendation, its size, and its cost, and start work that spends real tokens only when the user asked for it or agreed; within work the user asked for, to
 decide what she can (names she agrees with, wrong knowledge, revisions a
 decision calls for, retries, her own outdated proposals) and to ask the user,
 one question at a time, only about matters of taste and choices that change
@@ -967,7 +968,7 @@ no pending or running strings), and, once a chunk finished, a projection:
 the tokens used so far plus their average per finished chunk for each
 unfinished chunk.
 
-The Angelica panel always shows the open project by area
+The localization is a document tab of the workbench, opened from the left activity rail or from Angelica's panel, which shows only one line while localizations run (how many and how many strings they have left) with a link to the tab. The tab's actions that need Angelica (calibrating, discussing a finding, sorting out the decisions) queue a message for her and show her panel, which sends it even when it was closed. The tab always shows the open project by area
 (`localization_project`): for names, actions, items, interface, lore, and
 quests and scenes, how many translatable strings there are, how many are
 translated, reviewed, and need review, summed from the project's sheets.

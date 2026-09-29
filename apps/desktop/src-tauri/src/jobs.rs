@@ -634,6 +634,8 @@ impl JobControl for DesktopJobs {
         // would, so the localization and its record stay the same.
         let records = crate::angelica::settle_proposal(&self.app, &self.conversation_id, &id, true)
             .map_err(|error| ToolError::new(error.message))?;
+        // The panel shows the proposal as applied, not as waiting.
+        announce_proposals(&self.app, &self.conversation_id);
         let settled = records.iter().find(|record| record.id == id);
         Ok(match settled.map(|record| record.status) {
             Some(ProposalStatus::Applied) => ProposalOutcome::Applied,
@@ -773,8 +775,9 @@ impl JobControl for DesktopJobs {
             None => return Err(ToolError::new("no such proposal in this conversation")),
         }
         crate::angelica::settle_proposal(&self.app, &self.conversation_id, proposal_id, false)
-            .map(|_| ())
-            .map_err(|error| ToolError::new(error.message))
+            .map_err(|error| ToolError::new(error.message))?;
+        announce_proposals(&self.app, &self.conversation_id);
+        Ok(())
     }
 }
 
