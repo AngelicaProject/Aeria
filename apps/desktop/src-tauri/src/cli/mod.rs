@@ -110,6 +110,8 @@ macro text; write <br> where the game breaks the line.
   Ну наконец-то! Тебя уже заждались.
 
 JSON Lines work too: {\"at\": \"<address>\", \"text\": \"<translation>\"} per line.
+Prefer standard input (`aeria write -`); a file belongs in the system's temporary
+folder, never in the project, and is deleted after the write.
 
 Each translation is checked: its macros and structure against the source, forbidden
 term variants, and forms that write both genders at once. A rejected one is not

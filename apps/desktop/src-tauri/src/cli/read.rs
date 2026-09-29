@@ -188,6 +188,7 @@ pub(crate) fn overview(project: &Project, options: &OverviewOptions, out: &mut O
             "total": total,
             "areas": areas,
             "folders": if options.folders { Some(&folders) } else { None },
+            "strayFiles": stray_files(project.root()),
             "knowledgeProblems": knowledge.problems,
         }));
         return;
@@ -221,6 +222,14 @@ pub(crate) fn overview(project: &Project, options: &OverviewOptions, out: &mut O
     for problem in &knowledge.problems {
         let _ = writeln!(out.text, "  problem: {problem}");
     }
+    let strays = stray_files(project.root());
+    if !strays.is_empty() {
+        let _ = writeln!(
+            out.text,
+            "\nFiles in the project root that look temporary: {}. Temporary files belong in the system's temporary folder; delete these if nothing needs them.",
+            strays.join(", ")
+        );
+    }
     if options.folders {
         let _ = writeln!(out.text, "\nFolders:");
         for (name, counts) in &folders {
@@ -232,6 +241,30 @@ pub(crate) fn overview(project: &Project, options: &OverviewOptions, out: &mut O
             "\n`aeria overview --folders` lists folders such as quest/000; `aeria overview <pattern>` lists sheets."
         );
     }
+}
+
+/// Files at the project root that look like an agent's temporary files:
+/// batches, lists, and JSON Lines that are not part of the project.
+fn stray_files(root: &std::path::Path) -> Vec<String> {
+    const TEMPORARY: [&str; 6] = ["batch", "jsonl", "txt", "tmp", "csv", "tsv"];
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return Vec::new();
+    };
+    let mut strays: Vec<String> = entries
+        .flatten()
+        .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_file()))
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .filter(|name| {
+            std::path::Path::new(name)
+                .extension()
+                .and_then(|extension| extension.to_str())
+                .is_some_and(|extension| {
+                    TEMPORARY.contains(&extension.to_ascii_lowercase().as_str())
+                })
+        })
+        .collect();
+    strays.sort();
+    strays
 }
 
 // ---------------------------------------------------------------- read

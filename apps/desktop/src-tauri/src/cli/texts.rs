@@ -17,9 +17,11 @@ speaker, source, the other client languages, macros, the current translation, an
 project knowledge the lines need. Translate a quest or cutscene as one scene, so voices, \
 address, and jokes stay consistent across its lines.
 - Write translations with `aeria write`, one block per string: the `@address` line, \
-then the translation on the next line. Several blocks go in one call, from a file or \
-standard input. Every translation is checked; a rejected one comes back with what to \
-fix. `aeria check` runs the same checks without writing.
+then the translation on the next line. Several blocks go in one call, best on standard \
+input (`aeria write -`). A file, if you need one, goes into the system's temporary \
+folder and is deleted after the write, never into the project. Every translation is \
+checked; a rejected one comes back with what to fix. `aeria check` runs the same checks \
+without writing.
 - You may write an untranslated string, or replace a translation an agent wrote. A \
 translation a person wrote or changed, and a reviewed one, is marked `(keep)` by `aeria \
 read`, and `aeria write` skips it: tell the user if you think it should change.
@@ -82,6 +84,9 @@ const GUIDE: &str = "\
 ## The project
 
 - `.aeria/` holds the translations. Never edit it directly: write with `aeria write`.
+- Keep the project clean: pass translations to `aeria write` on standard input, and put \
+any temporary file (batches, notes, scripts) in the system's temporary folder, never in \
+the project; delete it when done. Everything in the project ends up in its repository.
 - `aeria-knowledge/` is the project knowledge, the documentation every translation \
 follows. Read it, follow it, and keep it current; edit its files directly:
   - `style.md`: how each kind of text reads, one `## <kind>` section per kind: \
@@ -176,8 +181,10 @@ in the project directory, and an open Aeria window shows every write at once.
 2. Give every agent that translates the text of `aeria brief`, and one scene: a
    quest or cutscene sheet, or a range of rows of another sheet.
 3. A translating agent reads its scene with `aeria read <sheet>` (add
-   `--untranslated` to see only what is left), writes with `aeria write` in blocks of
-   an `@address` line and the translation, and fixes what comes back REJECTED.
+   `--untranslated` to see only what is left), writes with `aeria write -` on standard
+   input in blocks of an `@address` line and the translation, and fixes what comes back
+   REJECTED. Temporary files go into the system's temporary folder, never into the
+   project.
 4. Record decisions in `aeria-knowledge/` as you go; ask the user about matters of
    taste and settled entries.
 5. Check the work with `aeria audit` and `aeria review`; flag what a person must
