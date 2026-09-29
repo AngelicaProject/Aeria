@@ -942,13 +942,13 @@ impl Pace {
         self.successes += 1;
         if self.successes >= GROW_AFTER {
             self.successes = 0;
-            self.target = (self.target + 1).min(ceiling.max(1));
+            self.target = self.target.saturating_add(1).min(ceiling.max(1));
         }
     }
 
-    fn failed(&mut self) {
+    fn failed(&mut self, ceiling: usize) {
         self.successes = 0;
-        self.target = (self.target / 2).max(MIN_LANES);
+        self.target = (self.lanes(ceiling) / 2).max(MIN_LANES);
     }
 }
 
@@ -1344,7 +1344,7 @@ async fn lane_loop(run: &JobRun, lane: usize) {
                 run.pace
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .failed();
+                    .failed(ceiling);
                 if failures >= MAX_PROVIDER_FAILURES {
                     pause_with_reason(run, format!("the provider keeps failing: {message}")).await;
                     return;
@@ -2504,14 +2504,14 @@ mod tests {
         assert_eq!(pace.lanes(4), 4, "the job's concurrency is a ceiling");
         pace.succeeded(48);
         assert_eq!(pace.lanes(48), 48);
-        pace.failed();
+        pace.failed(48);
         assert_eq!(pace.lanes(48), 24);
         for _ in 0..GROW_AFTER * 3 {
             pace.succeeded(48);
         }
         assert_eq!(pace.lanes(48), 27);
         for _ in 0..10 {
-            pace.failed();
+            pace.failed(48);
         }
         assert_eq!(pace.lanes(48), MIN_LANES);
     }
