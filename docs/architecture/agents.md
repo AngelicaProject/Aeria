@@ -1,7 +1,7 @@
 # Localization with agents
 
 Aeria has no built-in model or agent. A project is localized by external agent
-harnesses, such as Claude Code, Codex, or Hermes Agent, which plan the work,
+harnesses that can run commands, which plan the work,
 split it among their own subagents, and translate. Aeria gives them three
 things:
 
