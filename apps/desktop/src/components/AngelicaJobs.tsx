@@ -86,8 +86,11 @@ function unitAddress(location: UnitLocationDto): string {
 }
 
 /** What a lane is doing right now, as one line. */
-function workerActivity(worker: WorkerActivity, now: number, t: ReturnType<typeof useI18n>["t"]): string {
+function workerActivity(worker: WorkerActivity, now: number, t: ReturnType<typeof useI18n>["t"], studying: boolean): string {
   switch (worker.phase) {
+    case "idle":
+      // Every chunk waits for the study of the job's scope.
+      return t(studying ? "angelica.worker.waitingStudy" : "angelica.worker.idle");
     case "waiting":
       return worker.requests > 0 ? t("angelica.worker.waitingRequests", { count: worker.requests }) : t("angelica.worker.waiting");
     case "backoff":
@@ -97,7 +100,7 @@ function workerActivity(worker: WorkerActivity, now: number, t: ReturnType<typeo
   }
 }
 
-function WorkerRow({ worker, now }: { worker: WorkerActivity; now: number }) {
+function WorkerRow({ worker, now, studying }: { worker: WorkerActivity; now: number; studying: boolean }) {
   const { t } = useI18n();
   const health = workerHealth(worker, now);
   const timed = worker.phase !== "stopped" && worker.phase !== "backoff";
@@ -110,7 +113,7 @@ function WorkerRow({ worker, now }: { worker: WorkerActivity; now: number }) {
       <div className="angelica-worker-line">
         <span className="angelica-worker-dot" aria-hidden="true" />
         <span className="angelica-worker-lane">{t("angelica.worker.lane", { lane: String(worker.lane) })}</span>
-        <span className="angelica-worker-phase">{workerActivity(worker, now, t)}</span>
+        <span className="angelica-worker-phase">{workerActivity(worker, now, t, studying)}</span>
         {timed ? <span className="angelica-worker-time">{formatElapsed(now - worker.phaseStartedUnixMs)}</span> : null}
       </div>
       {health === "active" ? null : <span className="angelica-worker-silence" title={t("angelica.worker.silentHint")}>{t("angelica.worker.silence", { time: formatElapsed(now - worker.lastActivityUnixMs) })}</span>}
@@ -153,6 +156,7 @@ function JobWorkers({ job, busy, setConcurrency }: { job: JobSummary; busy: bool
   if (workers.length === 0) return <p className="angelica-job-empty">{t("angelica.job.noWorkers")}</p>;
   const working = workers.filter((worker) => worker.phase !== "stopped");
   const stopped = workers.length - working.length;
+  const studying = workers.some((worker) => worker.step === "study" && worker.phase !== "idle" && worker.phase !== "stopped");
   return (
     <>
       <div className="angelica-job-toolbar">
@@ -160,7 +164,7 @@ function JobWorkers({ job, busy, setConcurrency }: { job: JobSummary; busy: bool
         <label className="angelica-job-concurrency">{t("angelica.job.concurrency")}<ConcurrencyControl job={job} busy={busy} setConcurrency={setConcurrency} /></label>
       </div>
       <ul className="angelica-workers">
-        {working.map((worker) => <WorkerRow key={worker.lane} worker={worker} now={now} />)}
+        {working.map((worker) => <WorkerRow key={worker.lane} worker={worker} now={now} studying={studying} />)}
       </ul>
       {stopped > 0 && working.length > 0 ? <p className="angelica-job-empty">{t("angelica.worker.stoppedCount", { count: stopped })}</p> : null}
     </>

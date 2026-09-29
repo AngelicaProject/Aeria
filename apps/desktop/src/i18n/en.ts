@@ -558,6 +558,7 @@ export const en = {
   "angelica.worker.title": "What the workers are doing · {active} of {total} working",
   "angelica.worker.lane": "Worker {lane}",
   "angelica.worker.idle": "Taking the next chunk",
+  "angelica.worker.waitingStudy": "Waiting for the study of the job's scope",
   "angelica.worker.preparing": "Loading strings and context",
   "angelica.worker.waiting": "Waiting for the provider",
   "angelica.worker.reasoning": "Reasoning",

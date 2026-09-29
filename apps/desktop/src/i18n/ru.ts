@@ -563,6 +563,7 @@ export const ru: Catalog = {
   "angelica.worker.title": "Что делают исполнители · работают {active} из {total}",
   "angelica.worker.lane": "Исполнитель {lane}",
   "angelica.worker.idle": "Берёт следующую часть",
+  "angelica.worker.waitingStudy": "Ждёт конца изучения объёма задачи",
   "angelica.worker.preparing": "Загружает строки и контекст",
   "angelica.worker.waiting": "Ждёт ответа провайдера",
   "angelica.worker.reasoning": "Рассуждает",
