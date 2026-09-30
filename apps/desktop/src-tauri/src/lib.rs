@@ -55,10 +55,10 @@ pub use games::{
 pub use git::{
     git_branches, git_checkpoint, git_clone_repository, git_commit_changes, git_create_branch,
     git_delete_branch, git_fetch, git_fetch_main, git_finish_contribution, git_initialize, git_log,
-    git_merge_contribution, git_overview, git_pending_changes, git_project_changes, git_pull,
-    git_push, git_remote_branches, git_remove_remote, git_set_identity, git_set_main_branch,
-    git_set_remote, git_set_upstream, git_state_stamp, git_string_history, git_switch_branch,
-    git_sync,
+    git_merge_contribution, git_overview, git_pending_changes, git_pending_sheet_changes,
+    git_project_changes, git_pull, git_push, git_remote_branches, git_remove_remote,
+    git_set_identity, git_set_main_branch, git_set_remote, git_set_upstream, git_state_stamp,
+    git_string_history, git_switch_branch, git_sync,
 };
 pub use guide::{
     ProjectKnowledgeDto, TermInput, project_knowledge, save_knowledge_style, save_knowledge_terms,
@@ -148,6 +148,7 @@ pub fn run() {
             git_set_identity,
             git_set_remote,
             git_pending_changes,
+            git_pending_sheet_changes,
             git_checkpoint,
             git_log,
             git_commit_changes,

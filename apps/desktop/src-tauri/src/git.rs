@@ -818,18 +818,95 @@ pub async fn git_set_remote(
     .await
 }
 
+/// The most uncommitted string changes listed at once; a project without a
+/// first commit can have hundreds of thousands.
+const PENDING_LISTED: usize = 500;
+
+/// The uncommitted string changes: how many there are, and the first of
+/// them in file order.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PendingChangesDto {
+    pub total: usize,
+    pub changes: Vec<EntryChangeDto>,
+}
+
+fn pending_changes_with_state(state: &DesktopState) -> CommandResult<PendingChangesDto> {
+    let session = state.session()?;
+    let repository = GitRepository::open(session.root(), state.git())?;
+    let files = repository.pending_files(&mut state.pending_cache())?;
+    let total = files.iter().map(|(_, changes)| changes.len()).sum();
+    let listed: Vec<EntryChange> = files
+        .iter()
+        .flat_map(|(_, changes)| changes.iter())
+        .take(PENDING_LISTED)
+        .cloned()
+        .collect();
+    Ok(PendingChangesDto {
+        total,
+        changes: changes_dto(&listed, Some(&session)),
+    })
+}
+
+/// Whether `path` (`po/...`) is a file of the sheet whose files are named
+/// after `base`: `po/{base}.po`, or `po/{base}/{start}.po` for a sheet split
+/// by row range.
+fn is_sheet_file(path: &str, base: &str) -> bool {
+    let Some(rest) = path
+        .strip_prefix(aeria_git::PO_DIR)
+        .and_then(|rest| rest.strip_prefix('/'))
+        .and_then(|rest| rest.strip_prefix(base))
+    else {
+        return false;
+    };
+    rest == ".po"
+        || rest
+            .strip_prefix('/')
+            .and_then(|file| file.strip_suffix(".po"))
+            .is_some_and(|start| {
+                !start.is_empty() && start.bytes().all(|byte| byte.is_ascii_digit())
+            })
+}
+
+fn pending_sheet_changes_with_state(
+    state: &DesktopState,
+    sheet_name: &str,
+) -> CommandResult<Vec<EntryChangeDto>> {
+    let session = state.session()?;
+    let repository = GitRepository::open(session.root(), state.git())?;
+    let base = session.sheet_base(sheet_name);
+    let files = repository.pending_files(&mut state.pending_cache())?;
+    let changes: Vec<EntryChange> = files
+        .iter()
+        .filter(|(path, _)| is_sheet_file(path, &base))
+        .flat_map(|(_, changes)| changes.iter().cloned())
+        .collect();
+    Ok(changes_dto(&changes, Some(&session)))
+}
+
 #[tauri::command(rename_all = "camelCase")]
-/// Returns the uncommitted string changes.
+/// Returns how many strings have uncommitted changes, and the first
+/// [`PENDING_LISTED`] of those changes.
 ///
 /// # Errors
 ///
 /// Returns a typed command error when no project is open or Git fails.
-pub async fn git_pending_changes(app: tauri::AppHandle) -> CommandResult<Vec<EntryChangeDto>> {
+pub async fn git_pending_changes(app: tauri::AppHandle) -> CommandResult<PendingChangesDto> {
+    run_blocking(move || pending_changes_with_state(&app.state::<DesktopState>())).await
+}
+
+#[tauri::command(rename_all = "camelCase")]
+/// Returns every uncommitted string change of one sheet.
+///
+/// # Errors
+///
+/// Returns a typed command error when no project is open or Git fails.
+pub async fn git_pending_sheet_changes(
+    app: tauri::AppHandle,
+    sheet_name: String,
+) -> CommandResult<Vec<EntryChangeDto>> {
     run_blocking(move || {
-        let state = app.state::<DesktopState>();
-        let session = state.session()?;
-        let repository = GitRepository::open(session.root(), state.git())?;
-        Ok(changes_dto(&repository.pending_changes()?, Some(&session)))
+        pending_sheet_changes_with_state(&app.state::<DesktopState>(), &sheet_name)
     })
     .await
 }
@@ -1490,11 +1567,21 @@ mod tests {
     }
 
     fn git_pending_changes_of(state: &DesktopState) -> Vec<EntryChangeDto> {
-        let session = state.session().expect("session");
-        let repository = GitRepository::open(session.root(), state.git()).expect("repository");
-        changes_dto(
-            &repository.pending_changes().expect("pending"),
-            Some(&session),
-        )
+        let pending = pending_changes_with_state(state).expect("pending");
+        let sheet = pending_sheet_changes_with_state(state, "Synthetic").expect("sheet");
+        assert_eq!(pending.total, pending.changes.len());
+        assert_eq!(sheet.len(), pending.total);
+        pending.changes
+    }
+
+    #[test]
+    fn sheet_files_are_matched_by_base() {
+        assert!(is_sheet_file("po/Addon.po", "Addon"));
+        assert!(is_sheet_file("po/Item/2000.po", "Item"));
+        assert!(is_sheet_file("po/quest/001/Q_1.po", "quest/001/Q_1"));
+        assert!(!is_sheet_file("po/AddonTransient.po", "Addon"));
+        assert!(!is_sheet_file("po/Item/x/2000.po", "Item"));
+        assert!(!is_sheet_file("po/Item/.po", "Item"));
+        assert!(!is_sheet_file("Addon.po", "Addon"));
     }
 }

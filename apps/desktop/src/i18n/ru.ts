@@ -934,6 +934,7 @@ export const ru: Catalog = {
   "git.openRepository": "Настройки репозитория",
   "git.connectRemote": "Подключить удалённый репозиторий…",
   "git.changes.translations": "Переводы ({count})",
+  "git.changes.more": "Показаны первые {shown} из {count}. Коммит сохранит их все.",
   "git.changes.project": "Проект",
   "git.area.packSettings": "Настройки пакета",
   "git.area.fonts": "Шрифты игры",

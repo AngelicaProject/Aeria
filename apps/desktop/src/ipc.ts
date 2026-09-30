@@ -31,6 +31,7 @@ import type {
   GitSyncDto,
   TranslatorIdentityDto,
   EntryChangeDto,
+  PendingChangesDto,
   StringHistoryDto,
   EntryResolutionDto,
   ProjectOpenResultDto,
@@ -270,8 +271,14 @@ export function gitSetRemote(name: string, url: string): Promise<GitRemoteDto[]>
   return call<GitRemoteDto[]>("git_set_remote", { name, url });
 }
 
-export function gitPendingChanges(): Promise<EntryChangeDto[]> {
-  return call<EntryChangeDto[]>("git_pending_changes");
+/** How many strings have uncommitted changes, with the first few hundred of them. */
+export function gitPendingChanges(): Promise<PendingChangesDto> {
+  return call<PendingChangesDto>("git_pending_changes");
+}
+
+/** Every uncommitted string change of one sheet. */
+export function gitPendingSheetChanges(sheetName: string): Promise<EntryChangeDto[]> {
+  return call<EntryChangeDto[]>("git_pending_sheet_changes", { sheetName });
 }
 
 export function gitCheckpoint(message: string | null): Promise<GitCommitChangesDto> {

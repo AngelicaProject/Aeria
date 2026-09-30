@@ -166,7 +166,8 @@ loading they cover the rows loaded so far and grow as the rest arrives. Formatti
 **Formatting** chip in the editor's source header; they stay translatable. The toolbar shows sheet-wide
 coverage from `translation_progress`, never a figure derived from loaded pages.
 Strings with uncommitted Git changes carry a gutter marker (added or modified)
-derived from `git_pending_changes`.
+derived from `git_pending_sheet_changes`, which returns the changes of the
+open sheet only.
 
 ### Scene view
 
@@ -469,8 +470,10 @@ and has no refresh button.
   explains that the work is not merged into it yet.
 - **Changes** (collapsible; the dock remembers whether it is open while the
   window lives) starts with the composer, which commits everything below and
-  edits the translator name and optional email. Below it are the string
-  changes grouped by sheet with a marker (A translated, M changed, D removed,
+  edits the translator name and optional email. Below it are how many strings
+  changed and the first 500 of those changes grouped by sheet (a project
+  without a first commit has one for every translated string; the rest are
+  counted, and a checkpoint commits them all) with a marker (A translated, M changed, D removed,
   • marked; clicking one opens the string with its checkpoint diff) and
   project file changes
   grouped by area, as described in

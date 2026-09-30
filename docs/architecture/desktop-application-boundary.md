@@ -244,6 +244,7 @@ lists the problems.
 Git collaboration commands (`git_overview`, `git_initialize`,
 `git_set_identity`, `git_set_remote`, `git_remove_remote`,
 `git_remote_branches`, `git_fetch_main`, `git_set_upstream`, `git_pending_changes`,
+`git_pending_sheet_changes`,
 `git_project_changes`, `git_checkpoint`, `git_log`, `git_commit_changes`,
 `git_string_history`, `git_sync`, `git_branches`, `git_create_branch`,
 `git_switch_branch`, `git_set_main_branch`, `git_state_stamp`,
@@ -257,7 +258,12 @@ interleave with saves; fetch and push run without them. An integration whose
 result is for another game version is rolled back. Strings changed
 differently on both sides are returned in the sync result, not as an error,
 so the renderer can collect a resolution per string and sync again. String
-changes carry each string's coordinate in the game when it has one. Git
+changes carry each string's coordinate in the game when it has one.
+`git_pending_changes` returns how many strings have uncommitted changes and
+the first 500 of those changes, and `git_pending_sheet_changes(sheetName)`
+every change of one sheet's files. Both read the changed PO files through a
+cache in `DesktopState` that reads a file again only when its size or
+modification time, or `HEAD`, changed. Git
 failures map to stable `git*` error codes such as `gitUnavailable`,
 `gitIdentityMissing`, `gitMergeConflict`, `gitIncomingRejected`, and
 `gitInvalidSettings`.

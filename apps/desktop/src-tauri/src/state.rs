@@ -1,7 +1,7 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
-use aeria_git::GitExecutable;
+use aeria_git::{GitExecutable, PendingCache};
 use aeria_po::Session;
 
 use crate::error::CommandError;
@@ -17,6 +17,9 @@ pub struct DesktopState {
     /// update must not interrupt.
     activities: Mutex<Vec<(u64, Activity)>>,
     next_activity_id: AtomicU64,
+    /// Uncommitted string changes already read, so the Git views can ask
+    /// often without reading every changed file again.
+    pending: Mutex<PendingCache>,
 }
 
 /// Work that an application update waits for instead of interrupting.
@@ -53,6 +56,7 @@ impl DesktopState {
             git: OnceLock::new(),
             activities: Mutex::new(Vec::new()),
             next_activity_id: AtomicU64::new(1),
+            pending: Mutex::new(PendingCache::new()),
         }
     }
 
@@ -133,6 +137,16 @@ impl DesktopState {
     /// # Errors
     ///
     /// Returns `noProjectOpen` when no project is open.
+    /// The cache of uncommitted string changes. A poisoned lock is recovered
+    /// with an empty cache, which is read again.
+    pub(crate) fn pending_cache(&self) -> MutexGuard<'_, PendingCache> {
+        self.pending.lock().unwrap_or_else(|poisoned| {
+            let mut guard = poisoned.into_inner();
+            *guard = PendingCache::default();
+            guard
+        })
+    }
+
     pub(crate) fn session(&self) -> CommandResult<Arc<Session>> {
         self.lock_project()?
             .as_ref()

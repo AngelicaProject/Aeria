@@ -1,6 +1,6 @@
 import { memo } from "react";
 import type { MessageKey } from "../i18n/translate";
-import type { EntryChangeDto, SourceBinding } from "../types";
+import type { PendingChangesDto, SourceBinding } from "../types";
 import { useI18n } from "../ui/i18n";
 import { Segmented } from "../ui/primitives/Segmented";
 import { UiIcon } from "../ui/primitives/UiIcon";
@@ -22,7 +22,7 @@ type WorkbenchToolDockProps = {
   workspaceRevision?: number;
   onWorkspaceChanged?: () => void;
   onRestoreTarget?: (targetMacro: string) => void;
-  pending?: { changes: EntryChangeDto[] | null; refresh: () => Promise<void> };
+  pending?: { summary: PendingChangesDto | null; refresh: () => Promise<void> };
   onRevealBinding?: (binding: SourceBinding) => void;
 };
 

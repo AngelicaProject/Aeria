@@ -33,7 +33,7 @@ import type {
   EntryConflictDto,
   GitOverviewDto,
   ProjectChangeDto,
-  EntryChangeDto,
+  PendingChangesDto,
 } from "../types";
 import { IconButton } from "../ui/primitives/IconButton";
 import { UiIcon } from "../ui/primitives/UiIcon";
@@ -60,7 +60,7 @@ type GitPanelProps = {
   projectRevision?: number | undefined;
   onWorkspaceChanged?: (() => void) | undefined;
   /** Pending changes owned by the workbench; detached windows fetch their own. */
-  pending?: { changes: EntryChangeDto[] | null; refresh: () => Promise<void> } | undefined;
+  pending?: { summary: PendingChangesDto | null; refresh: () => Promise<void> } | undefined;
   /** Opens a string in the editor; absent in detached windows. */
   onRevealBinding?: ((binding: SourceBinding) => void) | undefined;
   /** Opens one commit in a document tab; absent in detached windows. */
@@ -69,6 +69,8 @@ type GitPanelProps = {
   /** Opens Settings on the repository section. */
   onOpenSettings?: (() => void) | undefined;
 };
+
+const NO_PENDING: PendingChangesDto = { total: 0, changes: [] };
 
 const syncLabels: Record<GitSyncDto["integration"], { plain: MessageKey; pushed: MessageKey }> = {
   upToDate: { plain: "git.sync.upToDate", pushed: "git.sync.upToDatePushed" },
@@ -87,7 +89,7 @@ export function GitPanel({ selectedKey, workspaceRevision, projectRevision, onWo
   const { t } = useI18n();
   const [overview, setOverview] = useState<GitOverviewDto | null>(null);
   const [branches, setBranches] = useState<GitBranchDto[]>([]);
-  const [ownPending, setOwnPending] = useState<EntryChangeDto[]>([]);
+  const [ownPending, setOwnPending] = useState<PendingChangesDto>(NO_PENDING);
   const [projectChanges, setProjectChanges] = useState<ProjectChangeDto[]>([]);
   const [historyRevision, setHistoryRevision] = useState(0);
   // Kept while the window lives, so reopening the Git tab keeps it as it was left.
@@ -125,7 +127,7 @@ export function GitPanel({ selectedKey, workspaceRevision, projectRevision, onWo
         // Optional: a failure only hides the offer.
         setCheckWorkflow(await gitCheckWorkflow().catch(() => null));
       } else {
-        setOwnPending([]);
+        setOwnPending(NO_PENDING);
         setProjectChanges([]);
       }
       setHistoryRevision((current) => current + 1);
@@ -190,7 +192,7 @@ export function GitPanel({ selectedKey, workspaceRevision, projectRevision, onWo
     };
   }, [watchMain, busy, refresh]);
 
-  const pending = externalPending ? externalPending.changes ?? [] : ownPending;
+  const pending = externalPending ? externalPending.summary ?? NO_PENDING : ownPending;
 
   const run = useCallback(async (label: string, action: () => Promise<string | null | void>) => {
     setBusy(label);
@@ -246,7 +248,7 @@ export function GitPanel({ selectedKey, workspaceRevision, projectRevision, onWo
 
   const status = overview.repository;
   const hasRemote = overview.remotes.length > 0;
-  const changeCount = pending.length + projectChanges.length;
+  const changeCount = pending.total + projectChanges.length;
   const mainBranch = overview.collaboration?.mainBranch ?? null;
   const onMain = mainBranch !== null && status.branch === mainBranch && status.head !== null;
   const localBranches = branches.filter((branch) => !branch.remote);
@@ -426,9 +428,10 @@ export function GitPanel({ selectedKey, workspaceRevision, projectRevision, onWo
             </form>
           ) : null}
           {changeCount === 0 ? <p className="muted">{t("git.noChanges")}</p> : <>
-            {pending.length > 0 ? <>
-              <h4 className="git-subhead">{t("git.changes.translations", { count: pending.length })}</h4>
-              <TranslationChangeGroups changes={pending} selectedKey={selectedKey} onRevealBinding={onRevealBinding} viewKey="pending" />
+            {pending.total > 0 ? <>
+              <h4 className="git-subhead">{t("git.changes.translations", { count: pending.total })}</h4>
+              <TranslationChangeGroups changes={pending.changes} selectedKey={selectedKey} onRevealBinding={onRevealBinding} viewKey="pending" />
+              {pending.total > pending.changes.length ? <p className="muted">{t("git.changes.more", { shown: pending.changes.length, count: pending.total })}</p> : null}
             </> : null}
             {projectChanges.length > 0 ? <>
               <h4 className="git-subhead">{t("git.changes.project")}</h4>

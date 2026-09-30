@@ -13,7 +13,7 @@ use std::process::Command;
 use aeria_git::{
     CollaborationSettings, ConflictResolution, ContributionStatus, EntryChangeKind,
     FONT_SETTINGS_FILE, FONTS_DIR, GitError, GitExecutable, GitRepository, IntegrateOutcome,
-    KNOWLEDGE_DIR, PACK_SETTINGS_FILE,
+    KNOWLEDGE_DIR, PACK_SETTINGS_FILE, PendingCache,
 };
 use tempfile::TempDir;
 
@@ -218,6 +218,42 @@ fn checkpoints_commit_strings_and_their_history_is_read_per_string() {
     let log = repository.log(0, 10).expect("log");
     assert_eq!(log.len(), 2);
     assert_eq!(log[0].id, second.commit.id);
+}
+
+#[test]
+fn cached_pending_changes_follow_the_files_and_head() {
+    let sandbox = Sandbox::new();
+    let repository = sandbox.project("project", "Ada");
+    let root = repository.root().to_owned();
+    let unit = id(0x7a, 1);
+    let mut cache = PendingCache::new();
+    let translations = |cache: &mut PendingCache| -> Vec<String> {
+        repository
+            .pending_files(cache)
+            .expect("pending")
+            .iter()
+            .flat_map(|(_, changes)| {
+                changes
+                    .iter()
+                    .map(|change| change.after.translation.clone())
+            })
+            .collect()
+    };
+
+    write_shard(&root, 0x7a, &[(unit, 1, "Bonjour", "")]);
+    assert_eq!(translations(&mut cache), ["Bonjour"]);
+    assert_eq!(translations(&mut cache), ["Bonjour"]);
+    // A different length, so the file's stamp changes even within the
+    // resolution of its modification time.
+    write_shard(&root, 0x7a, &[(unit, 1, "Salut", "")]);
+    assert_eq!(translations(&mut cache), ["Salut"]);
+
+    repository.checkpoint(None).expect("checkpoint");
+    assert!(translations(&mut cache).is_empty());
+    write_shard(&root, 0x7a, &[(unit, 1, "Coucou !", "")]);
+    let pending = repository.pending_files(&mut cache).expect("pending");
+    assert_eq!(pending[0].1[0].before.translation, "Salut");
+    assert_eq!(pending[0].1[0].after.translation, "Coucou !");
 }
 
 #[test]

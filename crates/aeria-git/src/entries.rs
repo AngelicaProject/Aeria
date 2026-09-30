@@ -4,6 +4,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt::Write as _;
+use std::sync::Arc;
 
 use aeria_po::{Entry, PoFile};
 
@@ -66,6 +67,38 @@ pub struct EntryChange {
     pub kind: EntryChangeKind,
     pub before: EntryState,
     pub after: EntryState,
+}
+
+/// The size and modification time of a file; `None` when it is missing.
+type FileStamp = (u64, Option<std::time::SystemTime>);
+
+fn file_stamp(path: &std::path::Path) -> Option<FileStamp> {
+    let metadata = std::fs::metadata(path).ok()?;
+    Some((metadata.len(), metadata.modified().ok()))
+}
+
+/// A changed PO file, relative to the project root, with its string changes.
+pub type PendingFile = (String, Arc<Vec<EntryChange>>);
+
+/// The string changes of files read by [`GitRepository::pending_files`],
+/// kept while the file on disk, the repository, and `HEAD` stay the same.
+#[derive(Debug, Default)]
+pub struct PendingCache {
+    root: Option<std::path::PathBuf>,
+    head: Option<String>,
+    files: BTreeMap<String, (Option<FileStamp>, Arc<Vec<EntryChange>>)>,
+}
+
+impl PendingCache {
+    /// An empty cache.
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            root: None,
+            head: None,
+            files: BTreeMap::new(),
+        }
+    }
 }
 
 fn parse(bytes: Option<&[u8]>) -> PoFile {
@@ -267,7 +300,32 @@ impl GitRepository {
     ///
     /// Returns an error when Git fails or a file cannot be read.
     pub fn pending_changes(&self) -> Result<Vec<EntryChange>, GitError> {
+        let mut cache = PendingCache::default();
+        Ok(self
+            .pending_files(&mut cache)?
+            .iter()
+            .flat_map(|(_, changes)| changes.iter().cloned())
+            .collect())
+    }
+
+    /// The uncommitted string changes of the working tree against `HEAD`,
+    /// per changed PO file in path order. Files that did not change on disk
+    /// since `cache` read them, with the same `HEAD`, are not read again, so
+    /// a project with many uncommitted files can be asked often.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when Git fails or a file cannot be read.
+    pub fn pending_files(&self, cache: &mut PendingCache) -> Result<Vec<PendingFile>, GitError> {
         let status = self.status()?;
+        let root = self.root().to_owned();
+        if cache.root.as_ref() != Some(&root) || cache.head != status.head {
+            *cache = PendingCache {
+                root: Some(root),
+                head: status.head.clone(),
+                files: BTreeMap::new(),
+            };
+        }
         let paths: BTreeSet<&str> = status
             .files
             .iter()
@@ -275,21 +333,46 @@ impl GitRepository {
             .map(String::as_str)
             .filter(|path| is_po_path(path))
             .collect();
+        let stamps: Vec<Option<FileStamp>> = paths
+            .iter()
+            .map(|path| file_stamp(&self.root().join(path)))
+            .collect();
+        let stale: Vec<&str> = paths
+            .iter()
+            .zip(&stamps)
+            .filter(|(path, stamp)| {
+                cache
+                    .files
+                    .get(**path)
+                    .is_none_or(|(seen, _)| seen != *stamp)
+            })
+            .map(|(path, _)| *path)
+            .collect();
         let committed = if status.head.is_some() {
-            let specs: Vec<String> = paths
+            let specs: Vec<String> = stale
                 .iter()
                 .map(|path| format!("HEAD:{}", self.top_level_path(path)))
                 .collect();
             self.read_blobs(&specs)?
         } else {
-            vec![None; paths.len()]
+            vec![None; stale.len()]
         };
-        let mut changes = Vec::new();
-        for (path, before) in paths.into_iter().zip(committed) {
+        for (path, before) in stale.into_iter().zip(committed) {
+            let stamp = file_stamp(&self.root().join(path));
             let after = self.read_working(path)?;
-            changes.extend(diff_file(path, before.as_deref(), after.as_deref()));
+            let changes = diff_file(path, before.as_deref(), after.as_deref());
+            cache
+                .files
+                .insert(path.to_owned(), (stamp, Arc::new(changes)));
         }
-        Ok(changes)
+        cache.files.retain(|path, _| paths.contains(path.as_str()));
+        Ok(paths
+            .into_iter()
+            .filter_map(|path| {
+                let (_, changes) = cache.files.get(path)?;
+                (!changes.is_empty()).then(|| (path.to_owned(), Arc::clone(changes)))
+            })
+            .collect())
     }
 
     /// Project files (see [`crate::PROJECT_PATHS`]) a commit changed

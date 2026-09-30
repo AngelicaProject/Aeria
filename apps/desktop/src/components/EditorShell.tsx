@@ -6,6 +6,7 @@ import { listen } from "@tauri-apps/api/event";
 import {
   closeProject,
   gitPendingChanges,
+  gitPendingSheetChanges,
   normalizeCommandError,
   pageTranslationRows,
   setTranslationNote,
@@ -24,6 +25,7 @@ import type {
   TranslationRowCursorDto,
   TranslationRowDto,
   EntryChangeDto,
+  PendingChangesDto,
 } from "../types";
 import { ErrorBanner } from "./ErrorBanner";
 import { ConfirmDialog } from "./ConfirmDialog";
@@ -264,7 +266,8 @@ export function EditorShell({
   const [settingsSection, setSettingsSection] = useState<SettingsSection>("appearance");
   const [palette, setPalette] = useState<{ open: boolean; input: string; key: number }>({ open: false, input: "", key: 0 });
   const [recentSheets, setRecentSheets] = useState<string[]>([]);
-  const [pendingChanges, setPendingChanges] = useState<EntryChangeDto[] | null>(null);
+  const [pendingSummary, setPendingSummary] = useState<PendingChangesDto | null>(null);
+  const [sheetPending, setSheetPending] = useState<EntryChangeDto[] | null>(null);
   const { preferences } = usePreferences();
   const leftDockOpen = layout.regions.leftDock.visible;
   const rightDockOpen = layout.regions.rightDock.visible;
@@ -761,28 +764,48 @@ export function EditorShell({
     if (selectedSheetName) void beginSheetLoad(selectedSheetName, { immediate: false, refresh: true });
   }, [beginSheetLoad, selectedSheetName]);
 
-  // Uncommitted translation-unit changes drive list markers and the editor
-  // diff. Projects without a repository simply have none.
-  const refreshPendingChanges = useCallback(async () => {
+  // Uncommitted string changes of the open sheet drive list markers and the
+  // editor diff; the Git dock gets their count and the first few hundred.
+  // Only the open sheet is asked for its changes, because a project without
+  // a first commit has one for every translated string. Projects without a
+  // repository simply have none.
+  const pendingSheetName = useRef(selectedSheetName);
+  pendingSheetName.current = selectedSheetName;
+  const refreshSheetPending = useCallback(async () => {
+    const sheetName = pendingSheetName.current;
     try {
-      setPendingChanges(await gitPendingChanges());
+      const changes = sheetName ? await gitPendingSheetChanges(sheetName) : [];
+      if (pendingSheetName.current === sheetName) setSheetPending(changes);
     } catch {
-      setPendingChanges(null);
+      if (pendingSheetName.current === sheetName) setSheetPending(null);
     }
   }, []);
+  const refreshPendingChanges = useCallback(async () => {
+    try {
+      setPendingSummary(await gitPendingChanges());
+    } catch {
+      setPendingSummary(null);
+    }
+    await refreshSheetPending();
+  }, [refreshSheetPending]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => void refreshPendingChanges(), 250);
     return () => window.clearTimeout(timer);
   }, [refreshPendingChanges, workspaceRevision]);
 
+  useEffect(() => {
+    setSheetPending(null);
+    void refreshSheetPending();
+  }, [refreshSheetPending, selectedSheetName]);
+
   const pendingByBinding = useMemo(() => {
     const byBinding = new Map<string, EntryChangeDto>();
-    for (const change of pendingChanges ?? []) {
+    for (const change of sheetPending ?? []) {
       if (change.sourceBinding) byBinding.set(bindingKey(change.sourceBinding), change);
     }
     return byBinding;
-  }, [pendingChanges]);
+  }, [sheetPending]);
 
   const changedKinds = useMemo(() => new Map([...pendingByBinding].map(([key, change]) => [key, changeMark(change.kind)])), [pendingByBinding]);
 
@@ -868,7 +891,7 @@ export function EditorShell({
   const saveNote = useStableCallback((...args: Parameters<typeof handleSaveNote>) => void handleSaveNote(...args));
   const restoreTarget = useStableCallback((target: string) => void handleRestoreTarget(target));
   const openRepositorySettings = useCallback(() => openSettings("repository"), [openSettings]);
-  const pendingState = useMemo(() => ({ changes: pendingChanges, refresh: refreshPendingChanges }), [pendingChanges, refreshPendingChanges]);
+  const pendingState = useMemo(() => ({ summary: pendingSummary, refresh: refreshPendingChanges }), [pendingSummary, refreshPendingChanges]);
 
   // Layout ---------------------------------------------------------------
 

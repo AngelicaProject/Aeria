@@ -27,7 +27,8 @@ pub use collaboration::{COLLABORATION_FILE, CollaborationSettings};
 pub use credential::HostCredential;
 pub use entries::{
     ConflictResolution, EntryChange, EntryChangeKind, EntryConflict, EntryHistory, EntryRevision,
-    EntryState, PO_DIR, diff_file, is_po_path, merge_file, summarize_changes,
+    EntryState, PO_DIR, PendingCache, PendingFile, diff_file, is_po_path, merge_file,
+    summarize_changes,
 };
 pub use process::{GitExecutable, GitOrigin};
 pub use repository::{

@@ -919,6 +919,7 @@ export const en = {
   "git.openRepository": "Repository settings",
   "git.connectRemote": "Connect a remote repository…",
   "git.changes.translations": "Translations ({count})",
+  "git.changes.more": "Showing the first {shown} of {count}. All of them are committed together.",
   "git.changes.project": "Project",
   "git.area.packSettings": "Pack settings",
   "git.area.fonts": "Game fonts",

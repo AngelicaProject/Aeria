@@ -395,6 +395,12 @@ export type EntryChangeDto = {
   after: EntryVersionDto;
 };
 
+/** How many strings have uncommitted changes, and the first of those changes. */
+export type PendingChangesDto = {
+  total: number;
+  changes: EntryChangeDto[];
+};
+
 export type EntryRevisionDto = {
   commit: GitCommitDto;
   kind: EntryChangeKind;
