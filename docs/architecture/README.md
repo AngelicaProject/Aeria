@@ -20,6 +20,6 @@ Start with [`overview.md`](./overview.md). It defines the major runtime boundari
 | Localization with agents, project knowledge, the `aeria` command | [`agents.md`](./agents.md) | `aeria-knowledge` |
 | Runtime translation pack export | [`export.md`](./export.md) | `aeria-export` |
 | Proposal: the project as PO files in `po/`, replacing the workspace, identity, review states, source updates, and the corpus view | [`po-project.md`](./po-project.md) | `aeria-po`, the `aeria` command; the desktop not yet |
-| Proposal: machine translation of `po/` by `aeria translate` with a ChatGPT subscription | [`translate.md`](./translate.md) | not implemented |
+| Proposal: machine translation of `po/`, a tool a person runs, with a ChatGPT subscription | [`translate.md`](./translate.md) | not implemented |
 
 Architecture documents own boundaries and invariants, not low-level coding style. Implementation conventions belong under [`../development/`](../development/README.md), while serialized contracts belong under [`../formats/`](../formats/README.md).
