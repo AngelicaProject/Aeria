@@ -30,6 +30,9 @@ use crate::sync::{ProjectFiles, WriteLock};
 
 /// A server with no requests for this long stops.
 const IDLE_TIMEOUT: Duration = Duration::from_mins(15);
+/// How often the server looks for writes of other processes to show in
+/// game/.
+const CORPUS_WATCH: Duration = Duration::from_secs(2);
 /// How long a command waits for a new server to open the project.
 const START_TIMEOUT: Duration = Duration::from_secs(180);
 /// How long a command waits to connect to a running server.
@@ -183,6 +186,9 @@ impl Server {
         let mut project = self.project.write().unwrap_or_else(PoisonError::into_inner);
         self.take_in_writes(&mut project)?;
         let result = write(&mut project);
+        // game/ shows what was written; a file that cannot be written now
+        // is written by the next check.
+        let _ = super::corpus::refresh(&project);
         // The server's own write is taken in already.
         if let Some(files) = &self.files {
             *self.seen.lock().unwrap_or_else(PoisonError::into_inner) = files.stamp();
@@ -255,6 +261,7 @@ pub(crate) fn serve(root: &Path) -> i32 {
             .unwrap_or_else(PoisonError::into_inner)
             .warm();
     });
+    watch_corpus(std::sync::Arc::clone(&server), files.clone(), pid);
     let idle = std::sync::Arc::clone(&server);
     let idle_files = files.clone();
     std::thread::spawn(move || {
@@ -290,6 +297,28 @@ pub(crate) fn serve(root: &Path) -> i32 {
         });
     }
     0
+}
+
+/// Keeps game/ following translations written by other processes, such as
+/// the desktop, while the server runs. A project that can no longer be taken
+/// in, for example after a game update, ends the server; the next command
+/// starts one on the new version.
+fn watch_corpus(server: std::sync::Arc<Server>, files: ProjectFiles, pid: u32) {
+    std::thread::spawn(move || {
+        loop {
+            std::thread::sleep(CORPUS_WATCH);
+            if !server.stale() {
+                continue;
+            }
+            // A file that cannot be written now is written by a later pass.
+            if server
+                .read(|project| Ok(super::corpus::refresh(project)))
+                .is_err()
+            {
+                stop(&files, pid);
+            }
+        }
+    });
 }
 
 /// Removes the server file if it still names this process, and exits.

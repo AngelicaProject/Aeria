@@ -444,10 +444,7 @@ pub(crate) fn read(
                 .rows
                 .is_none_or(|(first, last)| (first..=last).contains(&line.address.row))
         })
-        .filter(|(_, line)| {
-            !options.untranslated
-                || !translated(&project.session, &line.address)
-        })
+        .filter(|(_, line)| !options.untranslated || !translated(&project.session, &line.address))
         .unzip();
     let limit = options.limit.unwrap_or(READ_LIMIT);
     let mut next = positions.get(limit).copied();

@@ -86,23 +86,53 @@ text of `aeria brief`.
 
 - `game/` is the game's text: `aeria corpus` adds `/game/` to the project's
   `.gitignore`, and checkpoints never commit it. It is made from the installed
-  game and the project, again after a game update or to show translations made
-  elsewhere. Files are rewritten only when their text changes.
-- `game/.aeria-state.json` keeps, for every translated string, the translation
-  its file was made with, and the size and time of each file when Aeria last
-  read or wrote it.
+  game and the project. Files are rewritten only when their text changes, and
+  making the whole corpus removes the files of sheets the game no longer has.
+- `game/.aeria-state.json` keeps the game version the corpus was made for;
+  for every translated string, the translation its file shows and a digest of
+  how it shows it (translation, author, review state, note); and for each
+  file its size and time when Aeria last read or wrote it, the game version
+  it was made for, and whether it has problems left.
 - `aeria check` without input reads the files that changed since, and those
   with problems left, and saves every `msgstr` that differs from what its file
-  was made with through the checks and the compare-and-set write of `write`.
-  Each problem is reported as `game/<file>:<line>: <what to fix>`: a line that
+  shows through the checks and the compare-and-set write of `write`. Each
+  problem is reported as `game/<file>:<line>: <what to fix>`: a line that
   breaks the PO format (the rest of that entry is skipped, the other entries
   are read), a rejected or skipped translation, a translation removed in the
-  file, and a translation that changed in the project after the file was made,
-  which is never replaced. A translation that was not saved stays in its file
-  and is reported by the next check. `check` reads standard input only with
-  `-`, since a harness may leave it open.
-- `aeria corpus` keeps a file with changes a check has not saved, unless
-  `--force` is given.
+  file, a `msgid` that is not the game's current text of that address (the
+  file was made before a game update), and a translation that changed in the
+  project after the file was made. Such a translation is never saved: a
+  translation lands only on the text it was written for, and never replaces
+  one made elsewhere meanwhile. A translation that was not saved stays in its
+  file and is reported by the next check. `check` reads standard input only
+  with `-`, since a harness may leave it open.
+
+#### Keeping `game/` current
+
+`game/` always shows the project and the installed game. After every write of
+the command (a check, `write`, or `flag`, through the project server or
+without one), and while a server runs, every 2 seconds after another process
+such as the desktop wrote the project, Aeria rewrites the files whose strings
+changed since they were made: a translation, its author, review state, or
+note, detected from the digests without reading the files. Only files the
+corpus has are rewritten; `aeria corpus` decides what it holds. After a game
+update, once the project itself has been updated (see
+[`rebase.md`](./rebase.md)), the first of these makes the whole corpus again
+for the new version. A server that can no longer take the project in, as
+after a game update, exits, and the next command starts one on the new
+version.
+
+A file with changes not saved yet is never replaced, by these updates or by
+`aeria corpus` unless `--force` is given. A file kept through a game update
+that way is made again for the new version once its problems are gone.
+
+When a file is made again, a translation whose `msgid` changed from the one
+the previous file showed, and that waits for review, is marked `#, fuzzy`
+with the previous source as `#| msgid`, as `msgmerge` does. The source
+update marks such translations `needs-review`; the previous source comes from
+the file, since the workspace keeps only the current one. The mark stays
+while the translation waits for review and goes once it changes or a person
+reviews it.
 
 ### The project server
 

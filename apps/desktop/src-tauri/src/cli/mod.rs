@@ -13,8 +13,8 @@
 
 mod audit;
 mod corpus;
-mod project;
 mod plan;
+mod project;
 mod read;
 mod serve;
 mod texts;
@@ -386,7 +386,12 @@ impl Access<'_> {
                     .map_err(|error| {
                         format!("the project's write lock cannot be taken: {error}")
                     })?;
-                write(&mut Project::open(start, env)?)
+                let mut project = Project::open(start, env)?;
+                let result = write(&mut project);
+                // game/ shows what was written; a file that cannot be
+                // written now is written by the next check.
+                let _ = corpus::refresh(&project);
+                result
             }
             Self::Served(server) => server.write(write),
         }
@@ -593,7 +598,6 @@ fn command_line(args: &[String]) -> Result<CommandLine, String> {
     line.command = Some(command.clone());
     Ok(line)
 }
-
 
 /// Writes Aeria's part of `AGENTS.md` and `CLAUDE.md` at a project root.
 ///

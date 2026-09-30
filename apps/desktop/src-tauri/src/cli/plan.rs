@@ -195,7 +195,11 @@ const TERMS_SHOWN: usize = 60;
 
 const WORKER: &str = "Give each task to its own agent, one task per agent, with these instructions: run `aeria brief` and follow it; then take the task's commands one at a time: run it (and the command its output ends with, if it continues), translate the strings it lists, and write them with `aeria write` (blocks in a file or on standard input), fixing what comes back rejected, before the next command. Translate only the task's strings: those past its --limit belong to other tasks. Reply with one line: written, rejected, skipped. Tasks do not overlap, so any number can run at once; `aeria overview <pattern>` shows progress, and `aeria plan` again lists what is left.";
 
-pub(crate) fn plan(project: &Project, options: &PlanOptions, out: &mut Output) -> Result<(), String> {
+pub(crate) fn plan(
+    project: &Project,
+    options: &PlanOptions,
+    out: &mut Output,
+) -> Result<(), String> {
     let sheets: Vec<(String, usize)> = sheet_counts(project)
         .into_iter()
         .filter(|sheet| matches_pattern(&sheet.name, &options.pattern))
@@ -301,17 +305,31 @@ mod tests {
         .expect("split");
         let listed: Vec<(usize, Vec<&str>)> = tasks
             .iter()
-            .map(|task| (task.strings, task.commands.iter().map(String::as_str).collect()))
+            .map(|task| {
+                (
+                    task.strings,
+                    task.commands.iter().map(String::as_str).collect(),
+                )
+            })
             .collect();
         assert_eq!(
             listed,
             [
                 (120, vec!["aeria read quest/000/Big_00001 --untranslated"]),
-                (6, vec!["aeria read BNpcName --untranslated --from 1 --limit 6"]),
-                (1, vec!["aeria read BNpcName --untranslated --from 31 --limit 1"]),
                 (
                     6,
-                    vec!["aeria read Race --untranslated", "aeria read Tribe --untranslated"]
+                    vec!["aeria read BNpcName --untranslated --from 1 --limit 6"]
+                ),
+                (
+                    1,
+                    vec!["aeria read BNpcName --untranslated --from 31 --limit 1"]
+                ),
+                (
+                    6,
+                    vec![
+                        "aeria read Race --untranslated",
+                        "aeria read Tribe --untranslated"
+                    ]
                 ),
                 (2, vec!["aeria read quest/000/Small_00002 --untranslated"]),
             ]
