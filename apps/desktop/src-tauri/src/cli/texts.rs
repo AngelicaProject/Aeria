@@ -1,4 +1,5 @@
-//! `brief` and `guide`: what agents need to know, as text.
+//! What agents need to know, as text: the rules of a translation for
+//! `game/README.md`, and Aeria's part of `AGENTS.md` and `CLAUDE.md`.
 
 use std::fmt::Write as _;
 
@@ -8,48 +9,8 @@ use aeria_knowledge::rules::{
 
 use super::project::Project;
 
-/// How translations reach the project with the command.
-const WRITING: &str = "\
-Writing translations:
-- Read a scene with `aeria read <sheet>`: every string of a quest or cutscene in play \
-order, or of another sheet in row order, with its address (`@sheet:row:subrow:column`), \
-speaker, source, the other client languages, macros, the current translation, and the \
-project knowledge the lines need. Translate a quest or cutscene as one scene, so voices, \
-address, and jokes stay consistent across its lines: read all its parts first.
-- Write as you go, about 50 strings per write: translate a part, write it, go on. \
-Written translations are saved at once, so nothing is lost if the work stops, and \
-`aeria read <sheet> --untranslated` shows what is left. Do not hold a large range back \
-to write it in one go. For a long list sheet, repeat `aeria read <sheet> --rows <a>-<b> \
---untranslated --limit 50`, translate, write, until nothing untranslated is left.
-- Write translations with `aeria write`, one block per string: the `@address` line, \
-then the translation on the next line, written as it is, with no escaping. Several \
-blocks go in one call. Never put translations inside a shell command line, where \
-quoting corrupts apostrophes and quotes: write the blocks to a file in the system's \
-temporary folder with a file-writing tool and run `aeria write <file>`, or pipe them \
-on standard input (`aeria write -`). The file is deleted after the write; never put \
-one in the project. Every translation is checked as it is written; a rejected one \
-comes back with what to fix. `aeria check` runs the same checks without writing.
-- You may write an untranslated string, or replace a translation an agent wrote. A \
-translation a person wrote or changed, and a reviewed one, is marked `(keep)` by `aeria \
-read`, and `aeria write` skips it: tell the user if you think it should change.
-- Advice that comes back with a written translation (a term that seems missing, a word \
-that may need a gender condition, phrasing that reads machine-written) is worth a \
-second look; fix it with another write when it is right.";
-
-/// The rules of a translation for this project, for any agent translating.
-pub(crate) fn brief(project: &Project) -> String {
-    let mut text = rules(project);
-    text.push_str(WRITING);
-    text.push_str(
-        "\n\nThe project knowledge `aeria read` shows with the lines takes precedence over \
-         the style defaults above. Entries marked settled were decided by a person.\n",
-    );
-    text
-}
-
-/// The rules of a translation and how macros are written, without how the
-/// command writes translations: [`brief`] adds that, and `game/README.md`
-/// says how the files are saved instead.
+/// The rules of a translation and how macros are written, for
+/// `game/README.md`.
 pub(crate) fn rules(project: &Project) -> String {
     let target = project.target_language();
     let mut text = format!(
@@ -74,89 +35,6 @@ pub(crate) fn rules(project: &Project) -> String {
     text
 }
 
-/// How the project is organized and how to work on it, for the agent that
-/// leads the work.
-pub(crate) fn guide(project: &Project) -> String {
-    let mut text = String::new();
-    let _ = write!(
-        text,
-        "# Localizing this project with the aeria command\n\n\
-         This is an Aeria project: a fan localization of FINAL FANTASY XIV from {} into {}. \
-         The game's text is read from the installed game; the project stores only \
-         translations and decisions. Aeria, the desktop editor, shows every translation you \
-         write as soon as it is written.\n\n",
-        project.source_language(),
-        project
-            .target_language()
-            .as_deref()
-            .unwrap_or("a target language not set yet")
-    );
-    text.push_str(GUIDE);
-    text
-}
-
-const GUIDE: &str = "\
-## The project
-
-- `.aeria/` holds the translations. Never edit it directly: write with `aeria write`.
-- Keep the project clean: pass translations to `aeria write` on standard input, and put \
-any temporary file (batches, notes, scripts) in the system's temporary folder, never in \
-the project; delete it when done. Everything in the project ends up in its repository.
-- `aeria-knowledge/` is the project knowledge, the documentation every translation \
-follows. Read it, follow it, and keep it current; edit its files directly:
-  - `style.md`: how each kind of text reads, one `## <kind>` section per kind: \
-general, journal, objective, system, dialogue, names, items, actions, interface, lore.
-  - `terms.csv`: terms every translation renders the same way; columns term, \
-translation, note, forbidden (variants separated by `;`), settled.
-  - `characters.md`: how characters speak, one `## LABEL` section per character, named \
-by the speaker labels `aeria read` shows (several labels separated by commas).
-  - `story.md`: what happened so far, one `## <sheet>` section per quest or cutscene \
-sheet, so later scenes stay consistent with earlier ones.
-  - `lessons.md`: recurring problems and what to do instead, one `## <id>` section per \
-lesson; `<!-- aeria: domain=<kind> -->` under the heading limits one to a kind of text.
-- An entry a person decided is settled: `yes` in the settled column of a term, or \
-`<!-- aeria: settled=yes -->` as the first line under a heading. Follow settled entries \
-and do not change them without asking the user. Entries you write are not settled.
-- `aeria knowledge` checks the files and reports every problem with its line.
-
-## Commands
-
-- `aeria plan <pattern>` — the untranslated strings split into tasks for parallel agents.
-- `aeria overview` — the project's areas and progress; `aeria overview <pattern>` lists \
-sheets, such as `quest/*` or `*item*`; `--folders` lists folders such as quest/000.
-- `aeria read <sheet>` — a scene with everything needed to translate it. A long scene \
-comes in parts that fit a terminal; the end of each part gives the command for the next \
-(`--from`).
-- `aeria brief` — the translation rules; give it to every agent that translates.
-- `aeria write` / `aeria check` — write translations, or only check them.
-- `aeria find <text>` — search the source text, or translations with `--in translation`.
-- `aeria audit [<pattern>]` — deterministic checks of the translations: the same source translated differently, forbidden terms, broken macros, gender, machine phrasing, length. Fix agents' findings with `aeria write`; flag a person's.
-- `aeria review` — what waits for review; `aeria flag <address>… --reason <text>` marks translations for a person to decide.
-- Every command has `--help`, and `--json` for machine-readable output.
-
-## Working on a large scope
-
-- Split the work with `aeria plan <pattern>`: it lists tasks of at most 50 untranslated \
-strings (`--size`), with the commands that read each one and the instructions to give \
-the agent that runs it. A quest or cutscene is never split; small sheets are packed \
-together. Tasks do not overlap, so any number of agents can run them at once; writes \
-from parallel agents are safe. Hand each task on as it is; do not work out ranges \
-yourself.
-- Settle what many tasks share before they run: `aeria plan <pattern> --terms` lists \
-the words that recur in the strings and have no term yet. Settle names and terms first \
-(names, places, items, actions), then the style of each kind of text, then quests and \
-cutscenes in the game's order, so later scenes build on earlier ones.
-- Record decisions as you make them: a term in `terms.csv`, a character's voice in \
-`characters.md`, what a scene established in `story.md`, a correction that will recur \
-in `lessons.md`. Agents that translate later read them through `aeria read`.
-- Ask the user about matters of taste that are theirs to decide, such as how formal \
-the translation is or how a well-known name is rendered, and record the answer as a \
-settled entry.
-- Check progress with `aeria overview <pattern>`, not by collecting agents' reports; \
-`aeria plan` again lists what is left.
-- The user reviews and commits the work in Aeria; do not commit or push unless asked.
-";
-
 const BLOCK_BEGIN: &str = "<!-- aeria:begin -->";
 const BLOCK_END: &str = "<!-- aeria:end -->";
 
@@ -178,8 +56,8 @@ localization of FINAL FANTASY XIV.
 - `aeria-knowledge/` holds the project's terms, style, character voices, and story:
   follow it and keep it current. Entries marked settled are a person's decisions; ask
   before changing them.
-- Never edit `.aeria/`, where the project keeps its translations. `aeria --help` lists
-  the other commands.";
+- Never edit `.aeria/`, where the project keeps its translations: `aeria check` saves
+  them there.";
 
 /// Aeria's part of `CLAUDE.md`: Claude Code reads `CLAUDE.md` and imports
 /// `AGENTS.md` from it.

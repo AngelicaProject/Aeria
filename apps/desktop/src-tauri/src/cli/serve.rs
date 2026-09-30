@@ -461,7 +461,6 @@ fn send_ping(port: u16, token: &str, build: &str) -> bool {
             &Request {
                 cwd: PathBuf::new(),
                 args: vec!["--version".to_owned()],
-                stdin: None,
             },
         ),
         Some(Reply::Response(_))

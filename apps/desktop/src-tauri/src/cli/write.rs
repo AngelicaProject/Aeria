@@ -1,14 +1,11 @@
-//! `write` and `check`: translations from an agent, checked before anything
-//! is stored.
-
-use std::fmt::Write as _;
+//! Saving translations: each is checked before anything is stored, and
+//! only an agent's own translations are replaced.
 
 use aeria_core::ReviewState;
 use aeria_knowledge::Knowledge;
 use aeria_knowledge::rules::machine_phrasing;
 use aeria_workspace::{AssistedExpectation, AssistedWrite, AssistedWriteError};
-use serde::{Deserialize, Serialize};
-use serde_json::json;
+use serde::Serialize;
 
 use super::Output;
 use super::project::{Address, Author, Project, current, other_languages, source_of};
@@ -18,64 +15,6 @@ use super::project::{Address, Author, Project, current, other_languages, source_
 pub(crate) struct Entry {
     pub address: Address,
     pub text: String,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct JsonEntry {
-    at: String,
-    text: String,
-}
-
-/// Reads translations: JSON Lines (`{"at": "<address>", "text": "…"}` per
-/// line) when the input starts with `{`, otherwise blocks of an
-/// `@<address>` line followed by the translation. Anything after the address
-/// on its line, such as what `aeria read` prints there, is ignored, as are
-/// blank lines and lines starting with `#` between blocks.
-pub(crate) fn parse_entries(input: &str) -> Result<Vec<Entry>, String> {
-    let input = input.trim_start_matches('\u{feff}');
-    if input.trim_start().starts_with('{') {
-        return input
-            .lines()
-            .enumerate()
-            .filter(|(_, line)| !line.trim().is_empty())
-            .map(|(number, line)| {
-                let entry: JsonEntry = serde_json::from_str(line)
-                    .map_err(|error| format!("line {}: {error}", number + 1))?;
-                Ok(Entry {
-                    address: Address::parse(&entry.at)
-                        .map_err(|error| format!("line {}: {error}", number + 1))?,
-                    text: entry.text,
-                })
-            })
-            .collect();
-    }
-    let mut entries: Vec<(Address, Vec<&str>)> = Vec::new();
-    for (number, line) in input.lines().enumerate() {
-        if let Some(rest) = line.strip_prefix('@') {
-            let address = rest
-                .split(|character: char| character.is_whitespace() || character == '·')
-                .next()
-                .unwrap_or_default();
-            let address =
-                Address::parse(address).map_err(|error| format!("line {}: {error}", number + 1))?;
-            entries.push((address, Vec::new()));
-        } else if let Some((_, text)) = entries.last_mut() {
-            text.push(line);
-        } else if !line.trim().is_empty() && !line.starts_with('#') {
-            return Err(format!(
-                "line {}: a translation must follow an @<address> line",
-                number + 1
-            ));
-        }
-    }
-    Ok(entries
-        .into_iter()
-        .map(|(address, lines)| Entry {
-            address,
-            text: lines.join("\n").trim_matches('\n').trim_end().to_owned(),
-        })
-        .collect())
 }
 
 /// What happened to one translation.
@@ -237,38 +176,6 @@ fn judge(project: &Project, entries: &[Entry]) -> Result<Judged, String> {
     Ok(judged)
 }
 
-/// Checks translations without writing them.
-pub(crate) fn check(
-    project: &Project,
-    entries: &[Entry],
-    out: &mut Output,
-) -> Result<bool, String> {
-    let outcomes: Vec<(String, Outcome)> = judge(project, entries)?
-        .into_iter()
-        .map(|(address, judged)| match judged {
-            Ok(pending) => (
-                address,
-                Outcome::Ok {
-                    advice: pending.advice,
-                },
-            ),
-            Err(outcome) => (address, outcome),
-        })
-        .collect();
-    Ok(report(&outcomes, true, 0, out))
-}
-
-/// Writes translations that pass their checks.
-pub(crate) fn write(
-    project: &mut Project,
-    entries: &[Entry],
-    options: &WriteOptions,
-    out: &mut Output,
-) -> Result<bool, String> {
-    let (outcomes, written) = apply(project, entries, options, out)?;
-    Ok(report(&outcomes, false, written, out))
-}
-
 /// Writes translations that pass their checks and returns the outcome of
 /// each, by address, and how many were written.
 pub(crate) fn apply(
@@ -344,109 +251,4 @@ pub(crate) fn apply(
         ));
     }
     Ok((outcomes, written.len()))
-}
-
-/// Prints outcomes; returns whether none was rejected or failed.
-fn report(outcomes: &[(String, Outcome)], dry_run: bool, written: usize, out: &mut Output) -> bool {
-    let rejected = outcomes
-        .iter()
-        .filter(|(_, outcome)| matches!(outcome, Outcome::Rejected { .. }))
-        .count();
-    let skipped = outcomes
-        .iter()
-        .filter(|(_, outcome)| matches!(outcome, Outcome::Skipped { .. }))
-        .count();
-    let failed = outcomes
-        .iter()
-        .filter(|(_, outcome)| matches!(outcome, Outcome::Failed { .. }))
-        .count();
-    if out.json {
-        out.json_value(&json!({
-            "written": written,
-            "rejected": rejected,
-            "skipped": skipped,
-            "failed": failed,
-            "results": outcomes
-                .iter()
-                .map(|(address, outcome)| json!({ "at": address, "result": outcome }))
-                .collect::<Vec<_>>(),
-        }));
-        return rejected == 0 && failed == 0;
-    }
-    for (address, outcome) in outcomes {
-        match outcome {
-            Outcome::Ok { advice } => {
-                let verb = if dry_run { "ok" } else { "written" };
-                if advice.is_empty() {
-                    let _ = writeln!(out.text, "{verb} @{address}");
-                } else {
-                    let _ = writeln!(
-                        out.text,
-                        "{verb} @{address} — advice: {}",
-                        advice.join("; ")
-                    );
-                }
-            }
-            Outcome::Rejected { reasons } => {
-                let _ = writeln!(out.text, "REJECTED @{address}: {}", reasons.join("; "));
-            }
-            Outcome::Skipped { reason } => {
-                let _ = writeln!(out.text, "skipped @{address}: {reason}");
-            }
-            Outcome::Failed { reason } => {
-                let _ = writeln!(
-                    out.text,
-                    "FAILED @{address}: not saved ({reason}); write it again"
-                );
-            }
-            Outcome::Unchanged => {
-                let _ = writeln!(out.text, "unchanged @{address}");
-            }
-        }
-    }
-    let ok = outcomes
-        .iter()
-        .filter(|(_, outcome)| matches!(outcome, Outcome::Ok { .. }))
-        .count();
-    let _ = writeln!(
-        out.text,
-        "{} {ok} · rejected {rejected} · skipped {skipped}{}{}",
-        if dry_run { "would write" } else { "written" },
-        if failed > 0 {
-            format!(" · failed {failed}")
-        } else {
-            String::new()
-        },
-        if rejected > 0 {
-            " — fix the rejected lines and write them again"
-        } else {
-            ""
-        }
-    );
-    rejected == 0 && failed == 0
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn blocks_and_json_lines_are_read() {
-        let entries = parse_entries(
-            "# a comment\n@Addon:1:0:1 · text · untranslated\nОК\n\n@quest/000/A:3:0:1\nПервая <br>вторая\n",
-        )
-        .expect("blocks");
-        assert_eq!(entries.len(), 2);
-        assert_eq!(entries[0].address.to_string(), "Addon:1:0:1");
-        assert_eq!(entries[0].text, "ОК");
-        assert_eq!(entries[1].text, "Первая <br>вторая");
-
-        let entries = parse_entries(
-            "{\"at\": \"Addon:1:0:1\", \"text\": \"ОК\"}\n\n{\"at\": \"@Addon:2:0:1\", \"text\": \"Отмена\"}\n",
-        )
-        .expect("json");
-        assert_eq!(entries[1].address.row, 2);
-        assert!(parse_entries("ОК\n").is_err());
-        assert!(parse_entries("@Addon:1\nОК").is_err());
-    }
 }

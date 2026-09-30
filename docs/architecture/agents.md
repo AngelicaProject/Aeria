@@ -1,16 +1,20 @@
 # Localization with agents
 
 Aeria has no built-in model or agent. A project is localized by external agent
-harnesses that can run commands, which plan the work,
-split it among their own subagents, and translate. Aeria gives them three
-things:
+harnesses that can run commands, which plan the work, split it among their own
+subagents, and translate. Aeria gives them the game the way a codebase is given
+to them: files to read, search, and edit with their own tools, and one command
+that checks and saves the edits.
 
+- the **corpus**: the whole game text in `game/` as gettext PO files, with the
+  other client languages, speakers, and macro legends, and `game/README.md`
+  with the layout and the rules (see [The corpus](#the-corpus));
 - the **project knowledge**: files in the project that say how the project
   translates (see [Project knowledge](#project-knowledge));
 - the **rules of a translation** every string follows, whoever writes it (see
   [Translation rules](#translation-rules));
-- the **`aeria` command**, which reads the game and the project for an agent
-  and writes checked translations (see [The `aeria` command](#the-aeria-command)).
+- the **`aeria` command**, which makes the corpus and saves checked
+  translations from it (see [The `aeria` command](#the-aeria-command)).
 
 Aeria never distributes or schedules work; a harness decides what to
 translate, in which order, and with how many agents.
@@ -55,7 +59,9 @@ with their file and line and left out; the rest of the knowledge is used.
   check for officialese, bookish links, calques, and stacked explanations.
 
 The project knowledge takes precedence over the style defaults. The rules
-reach agents through `aeria brief`.
+reach agents through `game/README.md`, which also carries the macro
+authoring reference of [`strings.md`](./strings.md) and the layout of the
+knowledge files.
 
 ## The `aeria` command
 
@@ -67,8 +73,17 @@ the desktop does not need to be open. It finds the project root by walking up
 from the current directory (or `--project`) to the directory with `.aeria/`,
 and the game installation, caches, and application data the desktop uses.
 Output is compact text by default and one JSON value with `--json`. The tool
-and every command have `--help`. Exit status: 0 done, 1 done with rejected
-or failed translations or knowledge problems, 2 error.
+and every command have `--help`. Exit status: 0 done, 1 done with
+translations not saved or knowledge problems, 2 error.
+
+| Command | Purpose |
+| --- | --- |
+| `corpus [<pattern>]` | Writes the game text into `game/` as PO files; see [The corpus](#the-corpus). `--force` also replaces files with unsaved changes. |
+| `check` | Saves the translations changed in `game/`, reports every problem as `file:line`, including problems of the knowledge files, and brings `game/` up to date; see [The corpus](#the-corpus) and [Saving](#saving). |
+| `init` | Writes Aeria's section into `AGENTS.md` and `CLAUDE.md` at the project root (see [Discovery](#discovery)). |
+
+Everything else an agent does with its own tools on the files: searching the
+game, counting what is left, comparing translations across the project.
 
 ### The corpus
 
@@ -81,8 +96,9 @@ sheet is one file, or a folder of files of 200 strings in row order, such as
 `msgid` its source, `msgstr` its translation (empty while there is none), and
 extracted comments hold the other client languages, the speaker or kind, the
 row's other cells, and the legends of its macros; `#, keep` marks a translation
-an agent may not replace. `game/README.md` describes the layout and carries the
-text of `aeria brief`.
+an agent may not replace. `game/README.md` describes the layout, how the
+files are saved, the knowledge files, and how to work with the user, followed
+by the [translation rules](#translation-rules).
 
 - `game/` is the game's text: `aeria corpus` adds `/game/` to the project's
   `.gitignore`, and checkpoints never commit it. It is made from the installed
@@ -93,9 +109,9 @@ text of `aeria brief`.
   how it shows it (translation, author, review state, note); and for each
   file its size and time when Aeria last read or wrote it, the game version
   it was made for, and whether it has problems left.
-- `aeria check` without input reads the files that changed since, and those
-  with problems left, and saves every `msgstr` that differs from what its file
-  shows through the checks and the compare-and-set write of `write`. Each
+- `aeria check` reads the files that changed since, and those with problems
+  left, and saves every `msgstr` that differs from what its file shows
+  through the checks and the compare-and-set write of [Saving](#saving). Each
   problem is reported as `game/<file>:<line>: <what to fix>`: a line that
   breaks the PO format (the rest of that entry is skipped, the other entries
   are read), a rejected or skipped translation, a translation removed in the
@@ -104,14 +120,13 @@ text of `aeria brief`.
   project after the file was made. Such a translation is never saved: a
   translation lands only on the text it was written for, and never replaces
   one made elsewhere meanwhile. A translation that was not saved stays in its
-  file and is reported by the next check. `check` reads standard input only
-  with `-`, since a harness may leave it open.
+  file and is reported by the next check. `check` never reads standard input,
+  which a harness may leave open.
 
 #### Keeping `game/` current
 
-`game/` always shows the project and the installed game. After every write of
-the command (a check, `write`, or `flag`, through the project server or
-without one), and while a server runs, every 2 seconds after another process
+`game/` always shows the project and the installed game. After every check,
+through the project server or without one, and while a server runs, every 2 seconds after another process
 such as the desktop wrote the project, Aeria rewrites the files whose strings
 changed since they were made: a translation, its author, review state, or
 note, detected from the digests without reading the files. Only files the
@@ -138,12 +153,11 @@ reviews it.
 
 A command is a thin client of the project's server, a background process of
 the same executable (`__serve`) that keeps the game, the workspace, and the
-caches open: the sheets' strings, the other client languages, the knowledge
-(read again when a file changes), the search index with its word counts, and
-similar strings per source text. With a running server a command takes about
-30 ms; `read` of a 126-line quest with similar translations not yet looked up
-takes about 0.6 s, as the lookups run on four threads, and a batch of 100
-translations is written in about 0.4 s.
+caches open: the sheets' strings, the other client languages, and the
+knowledge (read again when a file changes). With a running server, `check`
+of a project whose corpus holds the whole game (9,474 files) takes about 2 s,
+most of it looking at every file's size and time; making the whole corpus
+takes about 40 s.
 
 - The first command for a project starts the server and waits until it has
   opened the project (about 2 s for a project of 25,000 translations);
@@ -167,24 +181,7 @@ translations is written in about 0.4 s.
   `AERIA_NO_SERVER` set, a command opens the project itself.
 - `AERIA_TRACE` prints how long opening the project takes.
 
-| Command | Purpose |
-| --- | --- |
-| `guide` | How the project is organized, the knowledge files, the commands, and how to work on a large scope with several agents. |
-| `brief` | The [translation rules](#translation-rules), the project's languages, the macro authoring reference of [`strings.md`](./strings.md), and how to write with the command, for every agent that translates. |
-| `overview` | Languages, game version, progress, and areas of the project (quests, cutscenes, and the non-dialogue domains), and the state of the knowledge; with a pattern (`quest/*`, `item`), the matching sheets and their progress; `--folders` groups sheets by folder. Files at the project root that look temporary (`.batch`, `.jsonl`, `.txt`, `.tmp`, `.csv`, `.tsv`) are named with a reminder that they belong in the system's temporary folder. |
-| `plan <pattern>` | The untranslated strings of the matching sheets split into tasks for parallel agents, with the instructions to give each agent. A quest or cutscene is one task, never split; other sheets are cut into chunks of at most `--size` strings (50 by default), each read with `read <sheet> --untranslated --from <position> --limit <n>`; small sheets and scenes are packed together up to `--size`. Positions count a sheet's whole listing, so writes do not shift them and tasks never overlap. `--terms` adds the words that recur in the strings and no term of the project covers. Deterministic; it reads which strings have a translation, not who wrote them. |
-| `read <sheet>` | A scene: the translatable strings of a quest or cutscene in the order of its dialogue, or of another sheet in row order, with `--rows` and `--untranslated` to narrow it. The text output stays under a size budget (`--max-bytes`, 24 000 bytes by default) because agent harnesses cut long command output; whole strings past it are left out, and the end gives the command that continues at the next string's position in the listing (`--from`), which works for play order as well as row order. With `--limit`, the continuation keeps what is left of it, and at the limit the output says the strings after it are for other tasks. Each string has its address `@sheet:row:subrow:column`, its kind or speaker, its state (untranslated, or whose translation it is and its review state; `(keep)` marks one an agent may not replace), the source, the other client languages, the legends of its macros, the row's other cells, a mark where the French or German line varies with the player character's gender and the source does not, and, for strings an agent may write, up to two similar translated strings from the search index when it exists. Before the lines comes the knowledge slice they need: style of their domains, lessons, the terms in them, their speakers' voices, and the story of the sheet. |
-| `write` | Writes translations from standard input (preferred), a file, or `--at`/`--text`; the guide and brief tell agents to keep temporary files out of the project: blocks of an `@address` line and the translation, or JSON Lines. See the invariants below. `--needs-review` marks them as needing review; otherwise they are drafts. |
-| `corpus [<pattern>]` | Writes the game text into `game/` as PO files; see [The corpus](#the-corpus). |
-| `check` | Without input, saves the translations changed in `game/`; with input (`-`, a file, or `--at`), the checks of `write` without writing. |
-| `find <text>` | Strings whose source (the default; the first search builds the search index of the game version) or translation (`--in translation`) contains the text, ignoring case and tags; `--sheet` takes a pattern. |
-| `knowledge` | Checks the knowledge files and lists every problem with its file and line. |
-| `audit [<pattern>]` | Deterministic checks of every translation, or those of matching sheets, grouped by check with whose translation each finding is: the same source translated differently (`inconsistent`), forbidden term variants (`forbidden`), a broken assisted structure (`structure`), both genders written at once (`both-genders`), a source with a `$gn4` condition and a translation without one (`gender`), a term whose translation does not seem to be used (`terms`), `machine_phrasing` (`phrasing`), and interface strings over 1.8 times their source and at least 24 characters (`long`). `--check` selects checks. Exit status 1 when there are findings. |
-| `review [<pattern>]` | Translations that need review, whoever marked them, with source, translation, and note, and the translations a game update detached. |
-| `flag <address>… --reason` | Marks translations as needing review and adds `[agent] <reason>` to their note, for what a person must decide; an untranslated string cannot be flagged. |
-| `init` | Writes Aeria's section into `AGENTS.md` and `CLAUDE.md` at the project root (see [Discovery](#discovery)). |
-
-### Writing
+### Saving
 
 - Every translation is checked before anything is stored. It is rejected when
   it is empty, has a line break its source does not have (the game's line
@@ -195,15 +192,16 @@ translations is written in about 0.4 s.
   invalid or structurally unsafe translation is never stored.
 - A translation that passed its checks but could not be saved, for example
   because the disk refused the write, is reported as failed rather than
-  rejected; writing it again may succeed. A stamp that cannot be replaced
+  rejected; the next check tries it again. A stamp that cannot be replaced
   after a write is a warning: the translations are written.
-- Advice does not block a write: a term of the source whose translation does
+- Advice does not keep a translation from being saved: a term of the source whose translation does
   not seem to be used, a source that varies with the player character's
   gender and a translation that does not, a French or German line that varies
   where the source does not, and `machine_phrasing`.
-- An agent writes an untranslated string or replaces a translation an agent
+- An agent saves an untranslated string or replaces a translation an agent
   wrote that is not reviewed. A translation a person wrote or changed, and a
-  reviewed one, is skipped and reported. Which translations agents wrote is
+  reviewed one, is marked `#, keep` in its file and is not saved when changed
+  there. Which translations agents wrote is
   kept per project in a ledger (see
   [Sharing a project between processes](#sharing-a-project-between-processes)):
   a translation is an agent's while its text is the one recorded, so a
@@ -219,7 +217,7 @@ Per project, keyed by a hash of its canonical root, application data holds
   server around each write, a command without a server before it opens the
   project, and the desktop around each translation, note, and review change. Writes of parallel agents and of the desktop never
   interleave, and each starts from the workspace the previous one left.
-- A command that wrote translations, and the desktop after each of its
+- A check that saved translations, and the desktop after each of its
   writes, replaces the stamp before releasing the lock. The desktop compares the stamp with the one its session took in,
   before each of its writes and every 1.5 seconds; after a change it reloads
   the workspace under the lock and emits `project://workspace-reloaded`, on
@@ -252,9 +250,9 @@ Agent harnesses find the command in two ways; Settings → Agents →
   text. Checkpoints commit both files, so collaborators and their agents get
   them.
 
-Aeria installs no skills. What an agent needs to know comes from the command
-(`aeria guide`, `aeria brief`, the help of each command), so it always matches
-the installed version, and `AGENTS.md` points there. Connecting removes the
+Aeria installs no skills. What an agent needs to know is in `game/README.md`,
+which Aeria writes with the corpus, so it always matches the installed version,
+and `AGENTS.md` points there. Connecting removes the
 `aeria-localization` skill earlier versions put into harnesses' skill folders,
 where the file is still the one they wrote. Skills a project writes for
 itself go into `.agents/skills/` (Codex, Hermes Agent) or `.claude/skills/`

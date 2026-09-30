@@ -37,7 +37,6 @@ use super::project::{
     Address, Author, Current, LineKind, Project, SheetLine, current, matches_pattern,
     other_languages, read_sheet_lines, sheet_lines, source_of,
 };
-use super::read::{quest_title, sheet_counts};
 use super::write::{self, Entry, Outcome, WriteOptions};
 use super::{Output, fmt_count};
 
@@ -513,6 +512,33 @@ fn write_file(
     Ok(changed)
 }
 
+/// The sheets with translatable strings, in the game's order.
+fn sheet_names(project: &Project) -> Vec<String> {
+    project
+        .session
+        .source()
+        .catalog()
+        .map(|catalog| {
+            catalog
+                .iter()
+                .filter(|sheet| sheet.translatable > 0)
+                .map(|sheet| sheet.name.clone())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// The title of a quest sheet's quest.
+fn quest_title(project: &Project, sheet: &str) -> Option<String> {
+    let (row, subrow) = project.session.source().quest_row(sheet).ok().flatten()?;
+    let quest = project.sheet("Quest").ok()?;
+    let row = quest.row(row, subrow)?;
+    quest
+        .cells(row)
+        .find(|cell| cell.translatable && !cell.text().trim().is_empty())
+        .map(|cell| cell.text())
+}
+
 fn title_of(project: &Project, sheet: &str) -> Option<String> {
     sheet
         .starts_with("quest/")
@@ -562,9 +588,8 @@ fn make(project: &Project, options: &CorpusOptions) -> Result<Made, String> {
     std::fs::create_dir_all(&corpus).map_err(|error| format!("{}: {error}", corpus.display()))?;
     ignore_corpus(&root)?;
     let mut state = load_state(&corpus);
-    let sheets: Vec<String> = sheet_counts(project)
+    let sheets: Vec<String> = sheet_names(project)
         .into_iter()
-        .map(|sheet| sheet.name)
         .filter(|name| {
             options
                 .pattern
@@ -625,8 +650,7 @@ fn make(project: &Project, options: &CorpusOptions) -> Result<Made, String> {
     } else if state.game_version.is_empty() {
         state.game_version = project.session.source().version().to_string();
     }
-    std::fs::write(corpus.join(README), readme(project))
-        .map_err(|error| format!("{}: {error}", corpus.join(README).display()))?;
+    write_readme(project, &corpus)?;
     save_state(&corpus, &state)?;
     Ok(made)
 }
@@ -759,6 +783,7 @@ pub(crate) fn refresh(project: &Project) -> Result<usize, String> {
     if !corpus.join(STATE_FILE).is_file() {
         return Ok(0);
     }
+    write_readme(project, &corpus)?;
     let mut state = load_state(&corpus);
     if state.game_version != project.session.source().version().to_string() {
         let made = make(
@@ -814,6 +839,17 @@ pub(crate) fn refresh(project: &Project) -> Result<usize, String> {
     Ok(written)
 }
 
+/// Writes `game/README.md` when its text changed, as after an update of
+/// Aeria.
+fn write_readme(project: &Project, corpus: &Path) -> Result<(), String> {
+    let path = corpus.join(README);
+    let text = readme(project);
+    if std::fs::read(&path).ok().as_deref() != Some(text.as_bytes()) {
+        std::fs::write(&path, text).map_err(|error| format!("{}: {error}", path.display()))?;
+    }
+    Ok(())
+}
+
 fn readme(project: &Project) -> String {
     let mut text = format!(
         "# The text of FINAL FANTASY XIV\n\n\
@@ -844,8 +880,34 @@ literal `<` as `\\<`; in a PO string that backslash is doubled, so `msgstr` hold
 every changed `msgstr` that passes the checks, lists each problem as \
 `file:line: what to fix`, and brings the files up to date with the project. A translation \
 that was not saved stays in its file until it is fixed. Leave `msgctxt` and `msgid` as \
-they are. Terms, style, character voices, and the story so far are in \
-`../aeria-knowledge/`.\n\n",
+they are. Several agents can translate at once, each in its own files; checks wait for \
+each other. Keep temporary files (lists, scripts, batches) in the system's temporary \
+folder, never in the project: everything in the project ends up in its repository.\n\n\
+## The project knowledge\n\n\
+`../aeria-knowledge/` is the documentation every translation follows. Read it, follow it, \
+and keep it current by editing its files; `aeria check` reports every problem in them \
+with its line.\n\n\
+- `style.md`: how each kind of text reads, one `## <kind>` section per kind: general, \
+journal, objective, system, dialogue, names, items, actions, interface, lore.\n\
+- `terms.csv`: terms every translation renders the same way; columns term, translation, \
+note, forbidden (variants separated by `;`), settled. `aeria check` rejects a forbidden \
+variant of a term in a translation of a string that contains the term.\n\
+- `characters.md`: how characters speak, one `## LABEL` section per character, named by \
+the speaker labels of the files (`#. speaker:`), several labels separated by commas.\n\
+- `story.md`: what happened so far, one `## <sheet>` section per quest or cutscene \
+sheet, so later scenes stay consistent with earlier ones.\n\
+- `lessons.md`: recurring problems and what to do instead, one `## <id>` section per \
+lesson; `<!-- aeria: domain=<kind> -->` under the heading limits one to a kind of text.\n\n\
+An entry a person decided is settled: `yes` in the settled column of a term, or \
+`<!-- aeria: settled=yes -->` as the first line under a heading. Follow settled entries \
+and do not change them without asking the user; entries you write are not settled. \
+Record decisions as you make them: a term, a character's voice, what a scene \
+established, a correction that will recur. Settle what many strings share, names and \
+terms first, before translating them in parallel, and translate quests and cutscenes \
+in the game's order, so later scenes build on earlier ones. Ask the user about matters \
+of taste, such as how formal the translation is or how a well-known name is rendered, \
+and record the answer as a settled entry.\n\n\
+The user reviews and commits the work in Aeria; do not commit or push unless asked.\n\n",
         project.session.source().version(),
         project.source_language(),
         project
@@ -1085,14 +1147,17 @@ pub(crate) fn check_files(project: &mut Project, out: &mut Output) -> Result<boo
     }
     save_state(&corpus, &state)?;
     let updated = refresh(project)?;
+    let knowledge = project.knowledge().problems.clone();
+    let clean = problems.is_empty() && knowledge.is_empty();
     if out.json {
         out.json_value(&json!({
             "saved": written,
             "problems": problems,
+            "knowledgeProblems": knowledge,
             "advice": advice,
             "filesUpdated": updated,
         }));
-        return Ok(problems.is_empty());
+        return Ok(clean);
     }
     for line in &advice {
         let _ = writeln!(out.text, "{line}");
@@ -1104,11 +1169,14 @@ pub(crate) fn check_files(project: &mut Project, out: &mut Output) -> Result<boo
             problem.file, problem.line, problem.message
         );
     }
+    for problem in &knowledge {
+        let _ = writeln!(out.text, "{problem}");
+    }
     let _ = write!(
         out.text,
         "saved: {} · problems: {}",
         fmt_count(written),
-        fmt_count(problems.len())
+        fmt_count(problems.len() + knowledge.len())
     );
     if updated > 0 {
         let _ = write!(
@@ -1122,7 +1190,7 @@ pub(crate) fn check_files(project: &mut Project, out: &mut Output) -> Result<boo
         out.text
             .push_str("A translation that was not saved stays in its file until it is fixed.\n");
     }
-    Ok(problems.is_empty())
+    Ok(clean)
 }
 
 #[cfg(test)]
