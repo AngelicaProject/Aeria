@@ -1,6 +1,6 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Dialog } from "radix-ui";
-import { normalizeCommandError, projectKnowledge, saveKnowledgeCharacters, saveKnowledgeStyle, saveKnowledgeTerms } from "../ipc";
+import { normalizeCommandError, projectKnowledge, saveKnowledgeStyle, saveKnowledgeTerms } from "../ipc";
 import { filterRows, inputsFromRows, rowProblems, rowsChanged, rowsFromEntries, type GlossaryRow, type RowProblem } from "../projectGuide";
 import type { CommandError, ProjectKnowledgeDto } from "../types";
 import type { MessageKey } from "../i18n/translate";
@@ -10,7 +10,7 @@ import { UiIcon } from "../ui/primitives/UiIcon";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { ErrorBanner } from "./ErrorBanner";
 
-export type ProjectGuideTab = "terms" | "style" | "characters";
+export type ProjectGuideTab = "terms" | "style";
 
 type ProjectGuideDialogProps = {
   open: boolean;
@@ -30,8 +30,7 @@ const ROWS_SHOWN = 300;
 const FILE_LIMIT = 8 * 1024 * 1024;
 
 /**
- * The project's knowledge in `aeria-knowledge/`: terms, style, and
- * character voices, edited by translators and agents alike.
+ * The project's knowledge in `aeria-knowledge/`: terms and style.
  * Memoized so the closed dialog does not re-render with the workbench.
  */
 export const ProjectGuideDialog = memo(function ProjectGuideDialog({ open, initialTab, onOpenChange }: ProjectGuideDialogProps) {
@@ -40,7 +39,6 @@ export const ProjectGuideDialog = memo(function ProjectGuideDialog({ open, initi
   const [saved, setSaved] = useState<ProjectKnowledgeDto | null>(null);
   const [rows, setRows] = useState<GlossaryRow[]>([]);
   const [style, setStyle] = useState("");
-  const [characters, setCharacters] = useState("");
   const [query, setQuery] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<CommandError | null>(null);
@@ -53,7 +51,6 @@ export const ProjectGuideDialog = memo(function ProjectGuideDialog({ open, initi
     nextKey.current = next.length;
     setRows(next);
     setStyle(knowledge.style ?? "");
-    setCharacters(knowledge.characters ?? "");
   }, []);
 
   const load = useCallback(() => {
@@ -72,8 +69,6 @@ export const ProjectGuideDialog = memo(function ProjectGuideDialog({ open, initi
   const termsDirty = saved !== null && rowsChanged(rows, saved.entries);
   const styleDirty = saved !== null && style !== (saved.style ?? "");
   const styleBytes = useMemo(() => new TextEncoder().encode(style).length, [style]);
-  const charactersDirty = saved !== null && characters !== (saved.characters ?? "");
-  const charactersBytes = useMemo(() => new TextEncoder().encode(characters).length, [characters]);
   const filtered = useMemo(() => filterRows(rows, query), [query, rows]);
 
   const run = async (operation: () => Promise<ProjectKnowledgeDto>) => {
@@ -105,11 +100,6 @@ export const ProjectGuideDialog = memo(function ProjectGuideDialog({ open, initi
     void run(() => saveKnowledgeStyle(saved.style, style));
   };
 
-  const saveCharacters = () => {
-    if (!saved) return;
-    void run(() => saveKnowledgeCharacters(saved.characters, characters));
-  };
-
   // A term a person edits is one a person decided.
   const update = (key: number, field: "term" | "translation" | "note" | "forbidden", value: string) => {
     setRows((current) => current.map((row) => row.key === key ? { ...row, [field]: value, settled: true } : row));
@@ -126,7 +116,7 @@ export const ProjectGuideDialog = memo(function ProjectGuideDialog({ open, initi
   };
 
   const close = (next: boolean) => {
-    if (next || !(termsDirty || styleDirty || charactersDirty)) { onOpenChange(next); return; }
+    if (next || !(termsDirty || styleDirty)) { onOpenChange(next); return; }
     setConfirm({ message: t("guide.discard"), run: () => onOpenChange(false) });
   };
 
@@ -144,7 +134,6 @@ export const ProjectGuideDialog = memo(function ProjectGuideDialog({ open, initi
               options={[
                 { value: "terms", label: termsDirty ? `${t("guide.tab.terms")} •` : t("guide.tab.terms") },
                 { value: "style", label: styleDirty ? `${t("guide.tab.style")} •` : t("guide.tab.style") },
-                { value: "characters", label: charactersDirty ? `${t("guide.tab.characters")} •` : t("guide.tab.characters") },
               ]}
             />
             <Dialog.Close className="icon-button icon-button-ghost" aria-label={t("settings.closeLabel")}><UiIcon icon="x" size="sm" /></Dialog.Close>
@@ -198,23 +187,6 @@ export const ProjectGuideDialog = memo(function ProjectGuideDialog({ open, initi
                 {problems.size > 0 ? <span className="guide-problems">{t("guide.glossary.problems", { count: problems.size })}</span> : null}
                 <button className="button button-ghost" type="button" disabled={busy || !termsDirty} onClick={() => show(saved)}>{t("guide.revert")}</button>
                 <button className="button button-primary" type="button" disabled={busy || !termsDirty || problems.size > 0} onClick={saveTerms}>{t("guide.save")}</button>
-              </div>
-            </section>
-          ) : tab === "characters" ? (
-            <section className="guide-body">
-              <p className="field-hint">{t("guide.characters.hint")}</p>
-              {saved.charactersError ? <p className="ai-test-result failed"><UiIcon icon="circleAlert" size="xs" />{saved.charactersError}</p> : null}
-              {saved.characterDiagnostics.length > 0 ? (
-                <details className="guide-diagnostics">
-                  <summary>{t("guide.characters.ignored", { count: saved.characterDiagnostics.length })}</summary>
-                  <ul>{saved.characterDiagnostics.map((problem) => <li key={problem.line}>{t("guide.glossary.line", { line: problem.line })}: {problem.message}</li>)}</ul>
-                </details>
-              ) : null}
-              <textarea className="input guide-guidance" value={characters} spellCheck placeholder={t("guide.characters.placeholder")} aria-label={t("guide.tab.characters")} onChange={(event) => setCharacters(event.target.value)} />
-              <div className="dialog-actions">
-                <span className={charactersBytes > FILE_LIMIT ? "guide-problems" : "muted"}>{t("guide.size", { kib: (charactersBytes / 1024).toFixed(1) })}</span>
-                <button className="button button-ghost" type="button" disabled={busy || !charactersDirty} onClick={() => setCharacters(saved.characters ?? "")}>{t("guide.revert")}</button>
-                <button className="button button-primary" type="button" disabled={busy || !charactersDirty || charactersBytes > FILE_LIMIT} onClick={saveCharacters}>{t("guide.save")}</button>
               </div>
             </section>
           ) : (

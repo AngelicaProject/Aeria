@@ -1137,7 +1137,6 @@ export function EditorShell({
         { kind: "separator", id: "translation-sep-1" },
         { kind: "command", id: "terms", label: t("menu.terms"), onSelect: () => openGuide("terms") },
         { kind: "command", id: "style", label: t("menu.style"), onSelect: () => openGuide("style") },
-        { kind: "command", id: "characters", label: t("menu.characters"), onSelect: () => openGuide("characters") },
       ],
     },
     {
@@ -1205,7 +1204,6 @@ export function EditorShell({
     { id: "view-reveal-sheet", category: category.view, title: t("workbench.revealSheet"), icon: "locateFixed", enabled: selectedSheetName !== null, run: () => { showPanel("sheets", "left", false); setRevealSheetSignal((current) => current + 1); } },
     { id: "project-terms", category: category.translation, title: t("menu.terms"), icon: "languages", run: () => openGuide("terms") },
     { id: "project-style", category: category.translation, title: t("menu.style"), icon: "messageSquare", run: () => openGuide("style") },
-    { id: "project-characters", category: category.translation, title: t("menu.characters"), icon: "messageSquare", run: () => openGuide("characters") },
     { id: "git-open", category: category.git, title: t("command.showChanges"), icon: "gitBranch", run: () => showPanel("git", "right", false) },
     { id: "prefs-settings", category: category.preferences, title: t("command.openSettings"), shortcut: "Ctrl+,", icon: "settings", run: () => openSettings() },
     { id: "prefs-theme", category: category.preferences, title: t("settings.theme.title"), icon: "palette", run: () => openSettings("appearance") },

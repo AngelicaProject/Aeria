@@ -22,22 +22,22 @@ translate, in which order, and with how many agents.
 
 ## Project knowledge
 
-The knowledge is the `aeria-knowledge` directory at the project root:
-`style.md` (how each kind of text reads), `terms.csv` (terms every
-translation renders the same way), `characters.md` (how characters speak),
-`story.md` (what happened so far, per quest or cutscene sheet), and
-`lessons.md` (recurring problems and what to do instead). The format is
-[Project Knowledge Format v1](../formats/knowledge-v1.md). `aeria-knowledge`
-owns reading, checking, and selecting it.
+The game is its own glossary: names of people, places, monsters, items,
+actions, and statuses are strings of their sheets in `po/`, and their
+translations are how the project renders them everywhere. Context comes from
+the game too: a quest or cutscene is one file with its journal, objectives,
+and dialogue, and each line names its speaker.
 
-The knowledge is project documentation, like `docs/` of a code repository:
-people and agents read and edit the files directly, and a checkpoint commits
-them with the translations (see [`git.md`](./git.md#checkpoints)). There is one
-layer. An entry a person decided is marked `settled`; agents follow it and do
-not change it without asking a person.
+The knowledge holds only what the game cannot tell. It is the
+`aeria-knowledge` directory at the project root: `style.md` (how the
+translation reads, written by a person) and `terms.csv` (terms that are not
+strings of the game, such as lore words, and variants never to use). The
+format is [Project Knowledge Format v1](../formats/knowledge-v1.md).
+`aeria-knowledge` owns reading and checking it. A term a person decided is
+marked `settled`; agents follow it and do not change it without asking a
+person.
 
-The desktop edits the terms, the style, and the character voices in the
-project knowledge dialog (see
+The desktop edits the terms and the style in the project knowledge dialog (see
 [`desktop-editor-ui.md`](./desktop-editor-ui.md#project-knowledge-dialog)). A
 term a person edits there is marked settled.
 
@@ -59,7 +59,7 @@ with their file and line and left out; the rest of the knowledge is used.
 - for Russian, notes on living language and `machine_phrasing`, a word-level
   check for officialese, bookish links, calques, and stacked explanations.
 
-The project knowledge takes precedence over the style defaults. The rules
+`style.md` takes precedence over the style defaults. The rules
 reach agents through `po/README.md`, which also carries the macro
 authoring reference of [`strings.md`](./strings.md) and the layout of the
 knowledge files.

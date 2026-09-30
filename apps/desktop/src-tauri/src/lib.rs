@@ -65,8 +65,7 @@ pub use git::{
     git_unit_history,
 };
 pub use guide::{
-    ProjectKnowledgeDto, TermInput, project_knowledge, save_knowledge_characters,
-    save_knowledge_style, save_knowledge_terms,
+    ProjectKnowledgeDto, TermInput, project_knowledge, save_knowledge_style, save_knowledge_terms,
 };
 pub use state::{Activity, DesktopState};
 pub use updates::{
@@ -222,7 +221,6 @@ pub fn run() {
             project_knowledge,
             save_knowledge_style,
             save_knowledge_terms,
-            save_knowledge_characters,
             export_overview,
             export_save_settings,
             export_generate_key,

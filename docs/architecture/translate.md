@@ -104,8 +104,9 @@ provider can serve them from its prompt cache:
 Then the batch's own material:
 
 4. terms of `terms.csv` that occur in the batch's source text;
-5. for dialogue, the sections of `characters.md` for its speakers and the
-   section of `story.md` for its sheet;
+5. the game's names that occur in the batch's source text (people, places,
+   items, actions, statuses), with their translations from the name sheets
+   of `po/`, so a name reads the same everywhere;
 6. up to 40 entries of the same file that are already translated, nearest to
    the batch first, as examples of the file's wording;
 7. the batch: for each entry its identifier, source text, and `#.` comments
@@ -165,10 +166,9 @@ Agents are not told to run machine translation, and `po/README.md` tells
 them not to translate large amounts with their own subagents: bulk
 translation is the person's tool. Their work is what needs judgment:
 
-- the knowledge a run follows: terms and names, the style of each kind of
-  text, the characters and story of the scenes;
-- reading the result of a run, fixing what is wrong, and recording recurring
-  problems in `lessons.md` and the knowledge, so the next run follows them;
+- the name sheets, which every later run follows;
+- reading the result of a run and fixing what is wrong; fixed translations
+  are the examples later batches of the file see;
 - `fuzzy` entries after a game update;
 - text that deserves translation by hand.
 

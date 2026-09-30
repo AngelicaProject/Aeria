@@ -426,9 +426,6 @@ export function saveKnowledgeStyle(expected: string | null, text: string): Promi
   return call<ProjectKnowledgeDto>("save_knowledge_style", { expected, text });
 }
 
-export function saveKnowledgeCharacters(expected: string | null, text: string): Promise<ProjectKnowledgeDto> {
-  return call<ProjectKnowledgeDto>("save_knowledge_characters", { expected, text });
-}
 
 export function saveKnowledgeTerms(expected: string | null, entries: TermInput[]): Promise<ProjectKnowledgeDto> {
   return call<ProjectKnowledgeDto>("save_knowledge_terms", { expected, entries });

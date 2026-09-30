@@ -543,7 +543,7 @@ export type GlossaryEntry = { term: string; translation: string; note?: string; 
 
 export type TermInput = { term: string; translation: string; note: string | null; forbidden: string[]; settled: boolean };
 
-/** The project's style, terms, and character voices in `aeria-knowledge/`. */
+/** The project's style and terms in `aeria-knowledge/`. */
 export type ProjectKnowledgeDto = {
   /** `style.md`; null when the file does not exist. */
   style: string | null;
@@ -551,13 +551,8 @@ export type ProjectKnowledgeDto = {
   termsText: string | null;
   entries: GlossaryEntry[];
   diagnostics: { line: number; message: string }[];
-  /** `characters.md`; null when the file does not exist. */
-  characters: string | null;
-  /** Profiles the characters file ignores, with the reason. */
-  characterDiagnostics: { line: number; message: string }[];
   styleError: string | null;
   termsError: string | null;
-  charactersError: string | null;
 };
 
 /** Project-shared pack identity in aeria-pack.json. */

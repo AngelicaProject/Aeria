@@ -511,9 +511,9 @@ unsaved draft.
 ## Project knowledge dialog
 
 The project knowledge dialog opens from the Translation menu (**Terms**,
-**Style**, **Character voices**) and the command palette. It edits three
-files of the [project knowledge](./agents.md#project-knowledge):
-`aeria-knowledge/terms.csv`, `style.md`, and `characters.md`.
+**Style**) and the command palette. It edits the two files of the
+[project knowledge](./agents.md#project-knowledge):
+`aeria-knowledge/terms.csv` and `style.md`.
 
 The Terms tab is a table of term, translation, note, forbidden variants
 (separated by `;`), and **Settled**, with a filter, **Add term**, and a remove
@@ -522,10 +522,7 @@ a row marks it settled; the checkbox changes that. Rows with an empty term or
 translation, or a term repeated case-insensitively, are marked and block
 saving. Rows the file excludes are listed with their line numbers; saving
 removes them only after confirmation. The Style tab is a Markdown text area
-for the style sections, and the Voices tab one for the
-[character profiles](../formats/voices-v1.md); profiles the file ignores are
-listed with their line numbers, and a save with an ignored profile is refused
-with the first problem. Both show their size against the 8 MiB limit. Each tab
+for `style.md` and shows its size against the 8 MiB limit. Each tab
 has **Revert** and **Save**; closing with unsaved changes asks first. A save
 fails, without writing, when the file changed since it was loaded, for
 example because an agent wrote it.

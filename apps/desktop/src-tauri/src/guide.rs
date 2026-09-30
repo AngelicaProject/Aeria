@@ -1,5 +1,4 @@
-//! The project knowledge editor: the style, terms, and character voices in
-//! `aeria-knowledge/` (see `docs/formats/knowledge-v1.md`).
+//! The project knowledge editor: the style and terms in `aeria-knowledge/` (see `docs/formats/knowledge-v1.md`).
 //!
 //! A save replaces a file only if it still has the content the editor
 //! loaded, so a change made meanwhile by hand, by Git, or by an agent is
@@ -9,8 +8,8 @@ use std::path::{Path, PathBuf};
 
 use aeria_knowledge::knowledge::read_file;
 use aeria_knowledge::{
-    GlossaryDiagnostic, GlossaryEntry, KnowledgeFile, MAX_KNOWLEDGE_BYTES, VoiceDiagnostic,
-    parse_glossary, parse_voices, write_glossary,
+    GlossaryDiagnostic, GlossaryEntry, KnowledgeFile, MAX_KNOWLEDGE_BYTES, parse_glossary,
+    write_glossary,
 };
 use serde::{Deserialize, Serialize};
 use tauri::Manager;
@@ -32,14 +31,9 @@ pub struct ProjectKnowledgeDto {
     pub entries: Vec<GlossaryEntry>,
     /// Rows excluded from the terms, with the reason.
     pub diagnostics: Vec<GlossaryDiagnostic>,
-    /// `characters.md`; `None` when the file does not exist.
-    pub characters: Option<String>,
-    /// Profiles the characters file ignores, with the reason.
-    pub character_diagnostics: Vec<VoiceDiagnostic>,
     /// Why a file cannot be used at all.
     pub style_error: Option<String>,
     pub terms_error: Option<String>,
-    pub characters_error: Option<String>,
 }
 
 /// One edited term.
@@ -73,11 +67,8 @@ fn load(root: &Path) -> ProjectKnowledgeDto {
         terms_text: None,
         entries: Vec::new(),
         diagnostics: Vec::new(),
-        characters: None,
-        character_diagnostics: Vec::new(),
         style_error: None,
         terms_error: None,
-        characters_error: None,
     };
     match read_file(root, KnowledgeFile::Style) {
         Ok(text) => dto.style = text,
@@ -97,16 +88,6 @@ fn load(root: &Path) -> ProjectKnowledgeDto {
         Ok(None) => {}
         Err(message) => dto.terms_error = Some(message),
     }
-    match read_file(root, KnowledgeFile::Characters) {
-        Ok(text) => {
-            dto.character_diagnostics = text
-                .as_deref()
-                .map(|text| parse_voices(text).diagnostics)
-                .unwrap_or_default();
-            dto.characters = text;
-        }
-        Err(message) => dto.characters_error = Some(message),
-    }
     dto
 }
 
@@ -117,18 +98,6 @@ fn check_size(text: &str) -> CommandResult<()> {
         )));
     }
     Ok(())
-}
-
-/// Checks edited character voices: every profile must be usable.
-fn check_characters(text: &str) -> CommandResult<()> {
-    check_size(text)?;
-    match parse_voices(text).diagnostics.first() {
-        Some(problem) => Err(knowledge_error(format!(
-            "line {}: {}",
-            problem.line, problem.message
-        ))),
-        None => Ok(()),
-    }
 }
 
 /// The canonical terms file for edited entries. Every entry must be valid:
@@ -204,7 +173,7 @@ fn save(
 }
 
 #[tauri::command(rename_all = "camelCase")]
-/// Reads the project's style, terms, and character voices.
+/// Reads the project's style and terms.
 ///
 /// # Errors
 ///
@@ -266,32 +235,6 @@ pub async fn save_knowledge_terms(
     .await
 }
 
-#[tauri::command(rename_all = "camelCase")]
-/// Replaces `characters.md` if it still has the `expected` content (`None`
-/// when it did not exist).
-///
-/// # Errors
-///
-/// Returns `projectKnowledgeInvalid` for a file that is too large or has a
-/// profile that would be ignored, `projectKnowledgeConflict` when the file
-/// changed, or `projectKnowledgeWrite`.
-pub async fn save_knowledge_characters(
-    app: tauri::AppHandle,
-    expected: Option<String>,
-    text: String,
-) -> CommandResult<ProjectKnowledgeDto> {
-    check_characters(&text)?;
-    run_blocking(move || {
-        save(
-            &repository_root(&app)?,
-            KnowledgeFile::Characters,
-            expected.as_deref(),
-            &text,
-        )
-    })
-    .await
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -343,24 +286,5 @@ mod tests {
         assert!(saved.entries[0].settled);
         assert_eq!(saved.terms_text.as_deref(), Some(text.as_str()));
         assert!(saved.diagnostics.is_empty());
-    }
-
-    #[test]
-    fn characters_are_saved_only_when_every_profile_is_usable() {
-        let directory = tempfile::tempdir().expect("directory");
-        let root = directory.path();
-        let text = "## URIANGER\nАрхаичная речь.\n";
-        check_characters(text).expect("valid");
-        let saved = save(root, KnowledgeFile::Characters, None, text).expect("saved");
-        assert_eq!(saved.characters.as_deref(), Some(text));
-        assert!(saved.character_diagnostics.is_empty());
-        let invalid = check_characters("## Urianger Augurelle\nText.\n").expect_err("label");
-        assert!(
-            invalid.message.starts_with("line 1:"),
-            "{}",
-            invalid.message
-        );
-        let conflict = save(root, KnowledgeFile::Characters, None, text).expect_err("changed");
-        assert_eq!(conflict.code, "projectKnowledgeConflict");
     }
 }

@@ -86,38 +86,29 @@ project files: they discard translations that are not committed, yours and other
 Aeria.\n\
 - A game update (`aeria update`) is the user's step: it makes every file again for the \
 new game version as one commit.\n\n\
-## The project knowledge\n\n\
-`../aeria-knowledge/` is the documentation every translation follows. Read it, follow \
-it, and keep it current by editing its files; `aeria check` reports every problem in them \
-with its line. In a new project the files exist with no entries: the project has decided \
-nothing yet, and entries are added as it does.\n\n\
-- `style.md`: how each kind of text reads, one `## <kind>` section per kind: general, \
-journal, objective, system, dialogue, names, items, actions, interface, lore.\n\
-- `terms.csv`: terms every translation renders the same way; columns term, translation, \
-note, forbidden (variants separated by `;`), settled. `aeria check` reports a forbidden \
-variant of a term in a translation of a string that contains the term.\n\
-- `characters.md`: how characters speak, one `## LABEL` section per character, named by \
-the speaker labels of the files (`#. speaker:`), several labels separated by commas.\n\
-- `story.md`: what happened so far, one `## <sheet>` section per quest or cutscene \
-sheet, so later scenes stay consistent with earlier ones.\n\
-- `lessons.md`: recurring problems and what to do instead, one `## <id>` section per \
-lesson; `<!-- aeria: domain=<kind> -->` under the heading limits one to a kind of text.\n\n\
-An entry a person decided is settled: `yes` in the settled column of a term, or \
-`<!-- aeria: settled=yes -->` as the first line under a heading. Follow settled entries \
-and do not change them without asking the user; entries you write are not settled. \
-Record decisions as you make them: a term, a character's voice, what a scene \
-established, a correction that will recur. Settle what many strings share, names and \
-terms first, before translating them in parallel, and translate quests and cutscenes in \
-the game's order, so later scenes build on earlier ones. Ask the user about matters of \
-taste, such as how formal the translation is or how a well-known name is rendered, and \
-record the answer as a settled entry.\n\n",
+## Names and the project knowledge\n\n\
+The game is its own glossary. Names of people, places, monsters, items, actions, and \
+statuses are strings of their sheets (`ENpcResident/`, `BNpcName/`, `PlaceName/`, \
+`Item/`, `Action/`, `Status/`, and others): translate a name there, and render it the \
+same way wherever it occurs. Translate those sheets before the text that uses them, and \
+quests and cutscenes in the game's order.\n\n\
+`../aeria-knowledge/` holds what the game cannot tell:\n\n\
+- `style.md`: how the translation reads, written by the user: how formal it is, how \
+the player and other characters are addressed, how names are rendered, the tone of each \
+kind of text. Follow it; ask the user before changing it.\n\
+- `terms.csv`: words rendered the same way that are not strings of the game, such as \
+lore terms; columns term, translation, note, forbidden (variants separated by `;`), \
+settled. `aeria check` reports a forbidden variant of a term in a translation of a \
+string that contains the term. A term marked settled was decided by the user; ask \
+before changing it.\n\n\
+In a new project both files are empty: the project has decided nothing yet. Ask the \
+user about matters of taste, such as how formal the translation is or how a well-known \
+name is rendered.\n\n",
         project.source.version()
     );
     text.push_str(&rules(project));
     text.push_str(
-        "The project knowledge in `../aeria-knowledge/` takes precedence over the style \
-         defaults above. Entries marked settled were decided by a person; ask before \
-         changing them.\n",
+        "`../aeria-knowledge/style.md` takes precedence over the style defaults above.\n",
     );
     text
 }
@@ -148,9 +139,8 @@ localization of FINAL FANTASY XIV, kept in Git.
   translation, how the game's macros work, and how to work with Git here.
 - Translate by writing `msgstr` in those files with any tools, then run `aeria check`
   and fix every `file:line` it reports.
-- `aeria-knowledge/` holds the project's terms, style, character voices, and story:
-  follow it and keep it current. Entries marked settled are a person's decisions; ask
-  before changing them.
+- `aeria-knowledge/` holds the project's style and the terms that are not strings of
+  the game: follow them, and ask before changing a person's decisions.
 - Never run `git restore`, `git checkout`, `git reset`, `git clean`, or `git stash` on
   project files, and do not commit or push unless asked: `git diff` shows your work,
   and the user reviews and commits it.";

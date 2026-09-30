@@ -736,14 +736,14 @@ mod tests {
 
         let made = run_in(&root, &env, &["init", "--language", "ru"]);
         // Running it again only adds what is missing.
-        std::fs::remove_file(root.join("aeria-knowledge").join("story.md")).expect("remove");
+        std::fs::remove_file(root.join("aeria-knowledge").join("style.md")).expect("remove");
         let again = run_in(&root, &env, &["init", "--language", "ru"]);
         assert!(
-            again.stdout.contains("aeria-knowledge/story.md"),
+            again.stdout.contains("aeria-knowledge/style.md"),
             "{}",
             again.stdout
         );
-        assert!(root.join("aeria-knowledge").join("story.md").is_file());
+        assert!(root.join("aeria-knowledge").join("style.md").is_file());
         assert_eq!(made.code, OK, "{}{}", made.stdout, made.stderr);
         assert!(root.join("aeria.json").is_file());
         assert!(root.join("po").join("README.md").is_file());
