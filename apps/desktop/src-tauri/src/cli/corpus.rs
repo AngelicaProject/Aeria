@@ -838,7 +838,9 @@ goes once the translation changes or a person reviews it.\n\
 everywhere or how the official localizations handled a macro.\n\n\
 ## Translating\n\n\
 Write the translation into `msgstr` as a PO string: `\\\"` for a quote, `\\\\` for a \
-backslash, one line (the game breaks lines with `<br>`). Then run `aeria check`: it saves \
+backslash, one line (the game breaks lines with `<br>`). The macro text below writes a \
+literal `<` as `\\<`; in a PO string that backslash is doubled, so `msgstr` holds \
+`\\\\<`. Then run `aeria check`: it saves \
 every changed `msgstr` that passes the checks, lists each problem as \
 `file:line: what to fix`, and brings the files up to date with the project. A translation \
 that was not saved stays in its file until it is fixed. Leave `msgctxt` and `msgid` as \
@@ -850,7 +852,12 @@ they are. Terms, style, character voices, and the story so far are in \
             .target_language()
             .unwrap_or_else(|| "target".to_owned()),
     );
-    text.push_str(&super::texts::brief(project));
+    text.push_str(&super::texts::rules(project));
+    text.push_str(
+        "The project knowledge in `../aeria-knowledge/` takes precedence over the style \
+         defaults above. Entries marked settled were decided by a person; ask before changing \
+         them.\n",
+    );
     text
 }
 

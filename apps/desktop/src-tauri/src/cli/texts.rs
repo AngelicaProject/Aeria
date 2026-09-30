@@ -38,6 +38,19 @@ second look; fix it with another write when it is right.";
 
 /// The rules of a translation for this project, for any agent translating.
 pub(crate) fn brief(project: &Project) -> String {
+    let mut text = rules(project);
+    text.push_str(WRITING);
+    text.push_str(
+        "\n\nThe project knowledge `aeria read` shows with the lines takes precedence over \
+         the style defaults above. Entries marked settled were decided by a person.\n",
+    );
+    text
+}
+
+/// The rules of a translation and how macros are written, without how the
+/// command writes translations: [`brief`] adds that, and `game/README.md`
+/// says how the files are saved instead.
+pub(crate) fn rules(project: &Project) -> String {
     let target = project.target_language();
     let mut text = format!(
         "# Translating FINAL FANTASY XIV for this project\n\nSource language: {}. Target \
@@ -58,11 +71,6 @@ pub(crate) fn brief(project: &Project) -> String {
     text.push('\n');
     text.push_str(&aeria_se::authoring_reference());
     text.push_str("\n\n");
-    text.push_str(WRITING);
-    text.push_str(
-        "\n\nThe project knowledge `aeria read` shows with the lines takes precedence over \
-         the style defaults above. Entries marked settled were decided by a person.\n",
-    );
     text
 }
 
