@@ -50,15 +50,15 @@ impl Counts {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-struct SheetCounts {
-    name: String,
-    strings: usize,
-    translated: usize,
+pub(crate) struct SheetCounts {
+    pub(crate) name: String,
+    pub(crate) strings: usize,
+    pub(crate) translated: usize,
     reviewed: usize,
     needs_review: usize,
 }
 
-fn sheet_counts(project: &Project) -> Vec<SheetCounts> {
+pub(crate) fn sheet_counts(project: &Project) -> Vec<SheetCounts> {
     let progress: BTreeMap<String, _> = project
         .session
         .translation_progress()
@@ -276,7 +276,9 @@ pub(crate) struct ReadOptions {
     pub untranslated: bool,
     /// Zero-based position in the whole listing to start from.
     pub from: usize,
-    pub limit: usize,
+    /// `--limit`; without it at most [`READ_LIMIT`] strings, and a
+    /// continuation keeps what is left of a given one.
+    pub limit: Option<usize>,
     /// Bytes of text output at most, 0 for no bound; whole strings are
     /// left out past it, and the end says how to go on.
     pub max_bytes: usize,
@@ -315,6 +317,9 @@ struct Similar {
     #[serde(serialize_with = "super::project::serialize_review")]
     review: ReviewState,
 }
+
+/// Strings `read` lists without `--limit`.
+pub(crate) const READ_LIMIT: usize = 400;
 
 /// Most similar translations shown per line.
 const SIMILAR_PER_LINE: usize = 2;
@@ -444,8 +449,9 @@ pub(crate) fn read(
                 || current(&project.session, ledger.as_ref(), &line.address).is_none()
         })
         .unzip();
-    let mut next = positions.get(options.limit).copied();
-    selected.truncate(options.limit);
+    let limit = options.limit.unwrap_or(READ_LIMIT);
+    let mut next = positions.get(limit).copied();
+    selected.truncate(limit);
 
     let mut domains: Vec<Domain> = Vec::new();
     let mut speakers: Vec<&str> = Vec::new();
@@ -584,7 +590,20 @@ pub(crate) fn read(
         out.text.push_str(block);
     }
     if let Some(from) = next_from {
+        // Past its --limit the listing may belong to another agent's task.
+        let left = limit.saturating_sub(kept);
+        if options.limit.is_some() && left == 0 {
+            let _ = writeln!(
+                out.text,
+                "\n--limit reached; the {} strings after it are for other tasks.",
+                positions.len() - kept.min(positions.len())
+            );
+            return Ok(());
+        }
         let mut again = format!("aeria read {} --from {from}", options.sheet);
+        if options.limit.is_some() {
+            let _ = write!(again, " --limit {left}");
+        }
         if let Some((first, last)) = options.rows {
             let _ = write!(again, " --rows {first}-");
             if last != u32::MAX {
@@ -597,7 +616,7 @@ pub(crate) fn read(
         let _ = writeln!(
             out.text,
             "\n… {} more strings of this listing were left out to keep the output short: `{again}`",
-            positions.len() - kept.min(positions.len())
+            positions.len().min(limit) - kept.min(positions.len())
         );
     }
     Ok(())

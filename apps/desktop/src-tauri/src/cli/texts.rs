@@ -113,6 +113,7 @@ and do not change them without asking the user. Entries you write are not settle
 
 ## Commands
 
+- `aeria plan <pattern>` — the untranslated strings split into tasks for parallel agents.
 - `aeria overview` — the project's areas and progress; `aeria overview <pattern>` lists \
 sheets, such as `quest/*` or `*item*`; `--folders` lists folders such as quest/000.
 - `aeria read <sheet>` — a scene with everything needed to translate it. A long scene \
@@ -127,21 +128,24 @@ comes in parts that fit a terminal; the end of each part gives the command for t
 
 ## Working on a large scope
 
-- Plan by scenes: a quest or cutscene sheet is one unit of work; other sheets split by \
-rows (`--rows`). Scenes that do not share characters or terms can be translated in \
-parallel by several agents; writes from parallel agents are safe.
-- Settle what many scenes share before translating them: names and terms first (names, \
-places, items, actions), then the style of each kind of text, then quests and cutscenes \
-in the game's order, so later scenes build on earlier ones.
+- Split the work with `aeria plan <pattern>`: it lists tasks of at most 50 untranslated \
+strings (`--size`), with the commands that read each one and the instructions to give \
+the agent that runs it. A quest or cutscene is never split; small sheets are packed \
+together. Tasks do not overlap, so any number of agents can run them at once; writes \
+from parallel agents are safe. Hand each task on as it is; do not work out ranges \
+yourself.
+- Settle what many tasks share before they run: `aeria plan <pattern> --terms` lists \
+the words that recur in the strings and have no term yet. Settle names and terms first \
+(names, places, items, actions), then the style of each kind of text, then quests and \
+cutscenes in the game's order, so later scenes build on earlier ones.
 - Record decisions as you make them: a term in `terms.csv`, a character's voice in \
 `characters.md`, what a scene established in `story.md`, a correction that will recur \
 in `lessons.md`. Agents that translate later read them through `aeria read`.
 - Ask the user about matters of taste that are theirs to decide, such as how formal \
 the translation is or how a well-known name is rendered, and record the answer as a \
 settled entry.
-- Give each translating agent `aeria brief`, its scene, and the instruction to write \
-with `aeria write` as it goes, about 50 strings per write, and fix what comes back \
-rejected.
+- Check progress with `aeria overview <pattern>`, not by collecting agents' reports; \
+`aeria plan` again lists what is left.
 - The user reviews and commits the work in Aeria; do not commit or push unless asked.
 ";
 

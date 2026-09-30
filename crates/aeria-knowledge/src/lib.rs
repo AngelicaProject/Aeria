@@ -15,7 +15,8 @@ pub mod sections;
 pub mod voices;
 
 pub use glossary::{
-    Glossary, GlossaryDiagnostic, GlossaryEntry, GlossaryError, parse_glossary, write_glossary,
+    Glossary, GlossaryDiagnostic, GlossaryEntry, GlossaryError, contains_term, parse_glossary,
+    write_glossary,
 };
 pub use knowledge::{
     Domain, KNOWLEDGE_DIR, Knowledge, KnowledgeFile, KnowledgeTexts, Lesson, MAX_KNOWLEDGE_BYTES,

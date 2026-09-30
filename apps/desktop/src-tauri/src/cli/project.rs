@@ -419,6 +419,15 @@ impl Current {
 }
 
 /// The current translation of a string, with who wrote it.
+/// Whether the string has a translation; cheaper than [`current`], which
+/// also asks the ledger who wrote it.
+pub(crate) fn translated(session: &ProjectSession, address: &Address) -> bool {
+    session
+        .workspace()
+        .unit_by_source_binding(&address.binding())
+        .is_some()
+}
+
 pub(crate) fn current(
     session: &ProjectSession,
     ledger: Option<&Ledger>,

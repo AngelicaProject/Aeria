@@ -13,6 +13,7 @@
 
 mod audit;
 mod project;
+mod plan;
 mod read;
 mod serve;
 mod texts;
@@ -43,6 +44,7 @@ Commands:
   guide       How the project is organized and how to work on it. Start here.
   brief       The rules every translation follows, for agents that translate.
   overview    The project's areas and progress, or the sheets matching a pattern.
+  plan        Split the untranslated strings of a scope into tasks for parallel agents.
   read        A scene: the strings of a sheet with everything needed to translate them.
   write       Write translations; each is checked, rejected ones say what to fix.
   check       The checks of `write`, without writing.
@@ -81,6 +83,24 @@ contain it (item). Case is ignored.
 /// Output of `aeria read` at most, in bytes: agent harnesses cut
 /// command output at about 30 000 characters or 50 KB.
 const READ_MAX_BYTES: usize = 24_000;
+
+const PLAN_HELP: &str = "\
+aeria plan <pattern> [--size <n>] [--terms] [--from <n>] [--limit <n>]
+
+The untranslated strings of the matching sheets, split into tasks that agents translate at
+the same time without overlapping. A quest or cutscene is one scene and is never split;
+other sheets are cut into chunks of at most --size strings, each read with
+`aeria read <sheet> --untranslated --from <position> --limit <n>`, where the position
+counts the sheet's whole listing, so writes by other agents do not shift it. Small
+sheets and scenes are packed together up to --size. Before the tasks come the
+instructions to give every agent that runs one.
+
+  --size <n>   Strings per task at most (default 50); a larger scene stays whole.
+  --terms      Also list the words that recur in these strings and have no term in
+               aeria-knowledge/terms.csv, to settle before the tasks run.
+  --from <n>   Start at task n (1 is the first).
+  --limit <n>  At most n tasks (default 200); the end says how to go on.
+";
 
 const READ_HELP: &str = "\
 aeria read <sheet> [--rows <from>-<to>] [--untranslated] [--from <n>] [--limit <n>]
@@ -688,6 +708,22 @@ fn dispatch(
             })?;
             Ok(OK)
         }
+        "plan" => {
+            let parsed = Arguments::parse(rest, &["size", "from", "limit"], &["terms"])?;
+            let options = plan::PlanOptions {
+                pattern: parsed
+                    .positional
+                    .first()
+                    .ok_or("name the sheets to plan, such as BNpcName, quest/*, or cut_scene/*")?
+                    .clone(),
+                size: parsed.number("size", 50)?.max(1),
+                from: parsed.number("from", 1)?.saturating_sub(1),
+                limit: parsed.limit(200)?,
+                terms: parsed.switch("terms"),
+            };
+            access.read(start, |project| plan::plan(project, &options, out))?;
+            Ok(OK)
+        }
         "read" => {
             let parsed = Arguments::parse(
                 rest,
@@ -704,7 +740,10 @@ fn dispatch(
                 rows: parsed.value("rows").map(row_range).transpose()?,
                 untranslated: parsed.switch("untranslated"),
                 from: parsed.number("from", 1)?.saturating_sub(1),
-                limit: parsed.limit(400)?,
+                limit: parsed
+                    .value("limit")
+                    .map(|_| parsed.limit(read::READ_LIMIT))
+                    .transpose()?,
                 max_bytes: parsed.number("max-bytes", READ_MAX_BYTES)?,
                 knowledge: !parsed.switch("no-knowledge"),
                 memory: !parsed.switch("no-similar"),
@@ -824,6 +863,7 @@ fn command_help(command: &str) -> Option<&'static str> {
     Some(match command {
         "overview" => OVERVIEW_HELP,
         "read" => READ_HELP,
+        "plan" => PLAN_HELP,
         "write" => WRITE_HELP,
         "check" => CHECK_HELP,
         "find" => FIND_HELP,
