@@ -19,5 +19,6 @@ Start with [`overview.md`](./overview.md). It defines the major runtime boundari
 | Search and translation memory | [`search.md`](./search.md) | `aeria-search` |
 | Localization with agents, project knowledge, the `aeria` command | [`agents.md`](./agents.md) | `aeria-knowledge` |
 | Runtime translation pack export | [`export.md`](./export.md) | `aeria-export` |
+| Proposal: the project as PO files, replacing the workspace, identity, source updates, and the corpus view | [`po-project.md`](./po-project.md) | not implemented |
 
 Architecture documents own boundaries and invariants, not low-level coding style. Implementation conventions belong under [`../development/`](../development/README.md), while serialized contracts belong under [`../formats/`](../formats/README.md).
