@@ -226,15 +226,10 @@ different `X-Game-Version` values; the same update brings the older files to
 the installed version, and the result does not depend on the order of the
 merges.
 
-## Migration from Workspace Format v3
+## Earlier projects
 
-One deterministic step, one commit: Aeria makes `po/` from the installed game
-at the project's game version and fills `msgstr` from each bound unit at its
-binding. A unit that needs review becomes `#, fuzzy`, so it is not exported
-until someone has looked at it; notes become `# ` lines; detached units become
-obsolete entries of their sheet's file. Review states other than that and the
-ledger are dropped. `aeria-pack.json` and `aeria-fonts.json` move into
-`aeria.json`, and `.aeria/` is removed.
+There is no migration. A project in Workspace Format v3 is reported as
+unsupported; its translations are started again in a new project.
 
 ## What goes away
 
