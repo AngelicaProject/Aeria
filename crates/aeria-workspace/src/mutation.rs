@@ -358,7 +358,9 @@ impl ProjectSession {
             self.workspace.require_source_language(&self.source)?;
             let id = self.workspace.create_unit(facts, target_macro)?;
             if let Err(error) = self.store.persist_unit(&self.workspace, id) {
-                debug_assert!(self.workspace.remove_unit(id).is_some());
+                // Outside the assertion: release builds drop its expression.
+                let removed = self.workspace.remove_unit(id);
+                debug_assert!(removed.is_some());
                 return Err(error.into());
             }
             return Ok(id);
