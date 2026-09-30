@@ -1,0 +1,20 @@
+[package]
+name = "aeria-po"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "The project as PO files: the format, entry identity, file layout, files made from the game, and game updates."
+
+[dependencies]
+aeria-se = { path = "../aeria-se" }
+aeria-source = { path = "../aeria-source" }
+thiserror = "2.0.20"
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+aeria-sqpack = { path = "../aeria-sqpack", features = ["testing"] }
+tempfile = "3.27.0"

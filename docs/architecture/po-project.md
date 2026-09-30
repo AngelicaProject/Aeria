@@ -199,7 +199,8 @@ visible in the diff and can be reverted.
 
 1. Aeria makes every file again from the installed game.
 2. It joins each entry of the previous files to the new entry with the same
-   `msgctxt`:
+   `msgctxt`, across all files, so a sheet whose file is split or joined
+   keeps every translation:
 
    | Previous entry | New entry with the same `msgctxt` | Result |
    | --- | --- | --- |
@@ -208,9 +209,10 @@ visible in the diff and can be reverted.
    | any | none | the entry becomes obsolete (`#~`) at the end of its file, with its translation and notes |
    | none | exists | a new entry with an empty `msgstr` |
 
-   An obsolete entry whose `msgctxt` exists again in a later version joins as
-   above. A file of a sheet the game no longer has keeps only obsolete
-   entries.
+   An obsolete entry goes into the new file of its previous path, else the
+   first file of its sheet, else a file of its previous path that keeps only
+   obsolete entries (a sheet the game no longer has). An obsolete entry whose
+   `msgctxt` exists again in a later version joins as above.
 3. `X-Game-Version` is set to the installed version.
 
 A fuzzy entry keeps its previous `#| msgid` until its translation changes; the

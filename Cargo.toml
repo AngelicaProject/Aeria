@@ -15,6 +15,7 @@ members = [
   "crates/aeria-fonts",
   "crates/aeria-publish",
   "crates/aeria-check",
+  "crates/aeria-po",
   "apps/desktop/src-tauri",
 ]
 
