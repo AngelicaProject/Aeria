@@ -67,6 +67,55 @@ impl KnowledgeFile {
     }
 }
 
+impl KnowledgeFile {
+    /// The text of the file in a new project: a title and what the file
+    /// holds, with no entries.
+    #[must_use]
+    pub fn empty(self) -> String {
+        match self {
+            Self::Style => {
+                "# Style\n\nHow each kind of text reads, one `## <kind>` section per kind: \
+                            general, journal, objective, system, dialogue, names, items, actions, \
+                            interface, lore.\n"
+                    .to_owned()
+            }
+            Self::Terms => crate::glossary::write_glossary(&[]),
+            Self::Characters => "# Characters\n\nHow characters speak, one `## LABEL` section per \
+                                 character, named by the speaker labels of the game's text.\n"
+                .to_owned(),
+            Self::Story => "# Story\n\nWhat happened so far, one `## <sheet>` section per quest \
+                            or cutscene sheet.\n"
+                .to_owned(),
+            Self::Lessons => "# Lessons\n\nRecurring problems and what to do instead, one \
+                              `## <id>` section per lesson.\n"
+                .to_owned(),
+        }
+    }
+}
+
+/// Writes every knowledge file the project does not have yet, with no
+/// entries. Returns the files written, relative to the root.
+///
+/// # Errors
+///
+/// Returns a description when a file cannot be written.
+pub fn create_empty(root: &Path) -> Result<Vec<String>, String> {
+    let directory = root.join(KNOWLEDGE_DIR);
+    std::fs::create_dir_all(&directory)
+        .map_err(|error| format!("{}: {error}", directory.display()))?;
+    let mut written = Vec::new();
+    for file in KnowledgeFile::ALL {
+        let path = file.path(root);
+        if path.exists() {
+            continue;
+        }
+        std::fs::write(&path, file.empty())
+            .map_err(|error| format!("{}: {error}", path.display()))?;
+        written.push(file.relative_path());
+    }
+    Ok(written)
+}
+
 /// A kind of game text with its own conventions.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -530,6 +579,31 @@ fn bounded(text: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn empty_files_read_without_problems_and_are_never_replaced() {
+        let directory = tempfile::tempdir().expect("directory");
+        let root = directory.path();
+        assert_eq!(super::create_empty(root).expect("create").len(), 5);
+        let knowledge = Knowledge::load(root);
+        assert!(knowledge.problems.is_empty(), "{:?}", knowledge.problems);
+        assert!(knowledge.terms.entries.is_empty());
+        std::fs::write(
+            KnowledgeFile::Story.path(root),
+            "## a
+kept
+",
+        )
+        .expect("write");
+        assert!(super::create_empty(root).expect("again").is_empty());
+        assert_eq!(
+            std::fs::read_to_string(KnowledgeFile::Story.path(root)).expect("read"),
+            "## a
+kept
+"
+        );
+    }
+
     use super::*;
 
     #[test]

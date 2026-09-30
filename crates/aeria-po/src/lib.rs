@@ -15,6 +15,7 @@ pub use identity::{Identity, ROWS_PER_FILE, RowName, SheetPaths, is_scene, split
 pub use merge::{merge, merge_files};
 pub use po::{Entry, Header, PoFile, Problem, quote, unquote};
 pub use project::{
-    FORMAT, FileProblems, GAME_VERSION_FIELD, PO_DIR, ProjectError, SETTINGS_FILE, Settings,
-    Updated, create, list, make, read, read_settings, update, versions, write, write_settings,
+    FORMAT, FileProblems, GAME_VERSION_FIELD, PO_DIR, ProjectError, README_PATH, SETTINGS_FILE,
+    Settings, Updated, create, list, make, read, read_settings, update, versions, write,
+    write_settings,
 };

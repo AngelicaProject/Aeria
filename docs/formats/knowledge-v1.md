@@ -4,14 +4,15 @@ Status: **implemented in `aeria-knowledge`**.
 
 Project knowledge is what a project decided about style, terms, characters,
 and story, and the lessons it learned. It is the `aeria-knowledge` directory
-at the project root, next to `.aeria/`. It is committed with the project and
+at the project root, next to `po/`. It is committed with the project and
 shared through Git like any other file, and it is not part of the Workspace
 Format. People and agents edit its files directly. How Aeria uses it is
 described in [`../architecture/agents.md`](../architecture/agents.md#project-knowledge).
 
 ## Files
 
-Every file is optional, UTF-8 with an optional leading BOM that is ignored,
+`aeria init` writes every file with a title, a line on what it holds, and no
+entries (`terms.csv` with its header only). Every file is optional, UTF-8 with an optional leading BOM that is ignored,
 at most 8 MiB, with CRLF or LF line endings. Aeria writes LF.
 
 | File | Format | Entries |

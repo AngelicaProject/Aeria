@@ -58,9 +58,10 @@ aeria init --language <tag> [--source <language>]
 
 Makes the directory a project: aeria.json, and in po/ every translatable string of the
 installed game as gettext PO files, with the other client languages, speakers, and macro
-legends as comments; po/README.md with the layout and the rules; AGENTS.md and
-CLAUDE.md, which agent harnesses read. Makes the directory a Git repository if it is not
-one and commits the project.
+legends as comments; po/README.md with the layout and the rules; aeria-knowledge/ with
+its files and no entries yet; AGENTS.md and CLAUDE.md, which agent harnesses read. Makes the directory a Git repository if it is not
+one and commits the project. In an existing project it only adds the files around po/
+that are missing, rewrites Aeria's sections and po/README.md, and commits those.
 
   --language <tag>     The target language, such as ru, es, or pt-BR.
   --source <language>  The source language: en (default), ja, de, or fr.
@@ -468,9 +469,10 @@ fn language_tag(tag: &str) -> bool {
 }
 
 /// The project files `init` commits.
-const PROJECT_FILES: [&str; 5] = [
+const PROJECT_FILES: [&str; 6] = [
     aeria_po::SETTINGS_FILE,
     aeria_po::PO_DIR,
+    aeria_knowledge::KNOWLEDGE_DIR,
     ".gitattributes",
     "AGENTS.md",
     "CLAUDE.md",
@@ -507,7 +509,7 @@ fn init(
     }
     std::fs::create_dir_all(start).map_err(|error| format!("{}: {error}", start.display()))?;
     if let Ok(root) = project::find_root(start) {
-        return Err(format!("{} is already an Aeria project", root.display()));
+        return complete(&root, env, out);
     }
     let root =
         std::fs::canonicalize(start).map_err(|error| format!("{}: {error}", start.display()))?;
@@ -515,6 +517,7 @@ fn init(
     let files = aeria_po::create(&root, &source, language, Project::threads())
         .map_err(|error| error.to_string())?;
     let project = Project::open(&root, env)?;
+    aeria_knowledge::create_empty(&root)?;
     texts::write_readme(&project)?;
     keep_lf(&root)?;
     texts::init(&root)?;
@@ -540,6 +543,43 @@ fn init(
         Err(error) => out.warn(&format!(
             "the project was made but not committed ({error}); commit it before translating"
         )),
+    }
+    Ok(())
+}
+
+/// The files around `po/` that a project made by an earlier version of
+/// Aeria may lack: adds what is missing, changes nothing that exists but
+/// Aeria's sections and `po/README.md`, and commits them.
+fn complete(root: &Path, env: &Env, out: &mut Output) -> Result<(), String> {
+    let project = Project::open(root, env)?;
+    let added = aeria_knowledge::create_empty(root)?;
+    texts::write_readme(&project)?;
+    keep_lf(root)?;
+    texts::init(root)?;
+    let files: Vec<&str> = PROJECT_FILES
+        .iter()
+        .copied()
+        .filter(|path| *path != aeria_po::PO_DIR && *path != aeria_po::SETTINGS_FILE)
+        .chain([aeria_po::README_PATH])
+        .collect();
+    let _ = writeln!(
+        out.text,
+        "{} is already an Aeria project; added what it lacked: {}",
+        project.root_display(),
+        if added.is_empty() {
+            "nothing".to_owned()
+        } else {
+            added.join(", ")
+        }
+    );
+    if git::is_repository(root) {
+        match git::commit(root, &files, "Add the project files Aeria writes") {
+            Ok(Some(hash)) => {
+                let _ = writeln!(out.text, "committed as {hash}");
+            }
+            Ok(None) => {}
+            Err(error) => out.warn(&format!("not committed ({error}); commit these files")),
+        }
     }
     Ok(())
 }
@@ -695,10 +735,20 @@ mod tests {
         git(&root, &["config", "user.email", "test@example.com"]);
 
         let made = run_in(&root, &env, &["init", "--language", "ru"]);
+        // Running it again only adds what is missing.
+        std::fs::remove_file(root.join("aeria-knowledge").join("story.md")).expect("remove");
+        let again = run_in(&root, &env, &["init", "--language", "ru"]);
+        assert!(
+            again.stdout.contains("aeria-knowledge/story.md"),
+            "{}",
+            again.stdout
+        );
+        assert!(root.join("aeria-knowledge").join("story.md").is_file());
         assert_eq!(made.code, OK, "{}{}", made.stdout, made.stderr);
         assert!(root.join("aeria.json").is_file());
         assert!(root.join("po").join("README.md").is_file());
         assert!(root.join("po").join("Addon.po").is_file());
+        assert!(root.join("aeria-knowledge").join("terms.csv").is_file());
         assert!(
             std::fs::read_to_string(root.join("AGENTS.md"))
                 .expect("agents")

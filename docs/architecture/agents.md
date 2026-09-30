@@ -76,7 +76,7 @@ command have `--help`. Exit status: 0 done, 1 done with problems, 2 error.
 
 | Command | Purpose |
 | --- | --- |
-| `init --language <tag>` | Makes the directory a project: `aeria.json`, `po/` with every translatable string of the installed game, `po/README.md`, `.gitattributes` keeping PO files LF, and Aeria's sections of `AGENTS.md` and `CLAUDE.md`; makes it a Git repository if it is not one and commits the project. About a minute for the whole game (7,337 files, 430 MB; 117 MB in Git). |
+| `init --language <tag>` | Makes the directory a project: `aeria.json`, `po/` with every translatable string of the installed game, `po/README.md`, `aeria-knowledge/` with its files and no entries, `.gitattributes` keeping PO files LF, and Aeria's sections of `AGENTS.md` and `CLAUDE.md`; makes it a Git repository if it is not one and commits the project. In an existing project it only adds the files around `po/` that are missing, rewrites Aeria's sections and `po/README.md`, and commits those. About a minute for the whole game (7,337 files, 430 MB; 117 MB in Git). |
 | `check [--all]` | The linter of [`po-project.md`](./po-project.md#checking) over the files of `po/` changed since the last commit (every file with `--all`, or outside a repository) and over the project knowledge; writes `po/README.md` when its text changed and no other file. About 1 s for a few files and 10 s for the whole game. |
 | `update` | The game update of [`po-project.md`](./po-project.md#game-updates): refuses while `po/` or `aeria.json` has changes that are not committed, makes every file again, carries the translations over, and commits the result as one commit. |
 

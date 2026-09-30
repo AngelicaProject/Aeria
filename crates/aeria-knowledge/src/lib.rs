@@ -20,7 +20,7 @@ pub use glossary::{
 };
 pub use knowledge::{
     Domain, KNOWLEDGE_DIR, Knowledge, KnowledgeFile, KnowledgeTexts, Lesson, MAX_KNOWLEDGE_BYTES,
-    read_file, sheet_domain,
+    create_empty, read_file, sheet_domain,
 };
 pub use sections::{Section, parse_sections, write_sections};
 pub use voices::{VoiceDiagnostic, VoiceProfile, VoiceProfiles, parse_voices, speaker_label};

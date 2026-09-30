@@ -18,6 +18,8 @@ use crate::po::{PoFile, Problem};
 pub const SETTINGS_FILE: &str = "aeria.json";
 /// The folder of the project's PO files.
 pub const PO_DIR: &str = "po";
+/// What agents read first, written by Aeria: `po/README.md`.
+pub const README_PATH: &str = "po/README.md";
 /// The value of `format` in [`SETTINGS_FILE`].
 pub const FORMAT: &str = "aeria-po/1";
 /// The header field with the game version a file was made for.

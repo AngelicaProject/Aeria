@@ -89,7 +89,8 @@ new game version as one commit.\n\n\
 ## The project knowledge\n\n\
 `../aeria-knowledge/` is the documentation every translation follows. Read it, follow \
 it, and keep it current by editing its files; `aeria check` reports every problem in them \
-with its line.\n\n\
+with its line. In a new project the files exist with no entries: the project has decided \
+nothing yet, and entries are added as it does.\n\n\
 - `style.md`: how each kind of text reads, one `## <kind>` section per kind: general, \
 journal, objective, system, dialogue, names, items, actions, interface, lore.\n\
 - `terms.csv`: terms every translation renders the same way; columns term, translation, \
