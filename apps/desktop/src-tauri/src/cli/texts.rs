@@ -165,7 +165,10 @@ Work on it with the `aeria` command:
   never edit `.aeria/` directly.
 - `aeria-knowledge/` is the project's documentation: follow it and keep it current.
   Entries marked settled are a person's decisions; ask before changing them.
-- `aeria --help` lists every command.";
+- `aeria --help` lists every command.
+- `aeria` reads the installed game and Aeria's settings in the user's profile, so it
+  runs outside a command sandbox. Where commands run sandboxed, run `aeria` with
+  the permission to leave the sandbox, and ask the user to allow it for good.";
 
 /// Aeria's part of `CLAUDE.md`: Claude Code reads `CLAUDE.md` and imports
 /// `AGENTS.md` from it.

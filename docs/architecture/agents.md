@@ -180,7 +180,10 @@ Agent harnesses find the command in two ways; Settings → Agents →
   connected.
 - **Project files.** `aeria init`, and connecting with a project open, write
   Aeria's section between `<!-- aeria:begin -->` and `<!-- aeria:end -->` into
-  `AGENTS.md` (what the project is and which commands to start with) and
+  `AGENTS.md` (what the project is, which commands to start with, and that
+  `aeria` runs outside a command sandbox, since it reads the game and Aeria's
+  settings in the user's profile; a sandboxed harness such as Codex on
+  Windows runs commands as another user without access to them) and
   `CLAUDE.md` (which imports `AGENTS.md` for Claude Code), keeping any other
   text. Checkpoints commit both files, so collaborators and their agents get
   them.
