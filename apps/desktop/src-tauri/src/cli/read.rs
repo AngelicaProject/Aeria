@@ -274,7 +274,12 @@ pub(crate) struct ReadOptions {
     /// Inclusive row range.
     pub rows: Option<(u32, u32)>,
     pub untranslated: bool,
+    /// Zero-based position in the whole listing to start from.
+    pub from: usize,
     pub limit: usize,
+    /// Bytes of text output at most, 0 for no bound; whole strings are
+    /// left out past it, and the end says how to go on.
+    pub max_bytes: usize,
     pub knowledge: bool,
     pub memory: bool,
 }
@@ -424,19 +429,22 @@ pub(crate) fn read(
         .iter()
         .filter(|line| current(&project.session, ledger.as_ref(), &line.address).is_none())
         .count();
-    let mut selected: Vec<&SheetLine> = all
+    // Each selected string with its position in the whole listing.
+    let (positions, mut selected): (Vec<usize>, Vec<&SheetLine>) = all
         .iter()
-        .filter(|line| {
+        .enumerate()
+        .skip(options.from)
+        .filter(|(_, line)| {
             options
                 .rows
                 .is_none_or(|(first, last)| (first..=last).contains(&line.address.row))
         })
-        .filter(|line| {
+        .filter(|(_, line)| {
             !options.untranslated
                 || current(&project.session, ledger.as_ref(), &line.address).is_none()
         })
-        .collect();
-    let next_row = (selected.len() > options.limit).then(|| selected[options.limit].address.row);
+        .unzip();
+    let mut next = positions.get(options.limit).copied();
     selected.truncate(options.limit);
 
     let mut domains: Vec<Domain> = Vec::new();
@@ -489,18 +497,6 @@ pub(crate) fn read(
             &[options.sheet.as_str()],
         )
     });
-    if out.json {
-        out.json_value(&json!({
-            "sheet": options.sheet,
-            "quest": title,
-            "total": total,
-            "untranslated": untranslated_count,
-            "knowledge": knowledge,
-            "lines": lines,
-            "nextRow": next_row,
-        }));
-        return Ok(());
-    }
 
     let source_language = project.source_language();
     let target = project
@@ -513,19 +509,19 @@ pub(crate) fn read(
     } else {
         "sheet"
     };
-    let _ = write!(out.text, "# {}", options.sheet);
+    let mut head = format!("# {}", options.sheet);
     if let Some(title) = &title {
-        let _ = write!(out.text, " — {kind} «{title}»");
+        let _ = write!(head, " — {kind} «{title}»");
     }
     let _ = writeln!(
-        out.text,
+        head,
         " · {} strings · {} untranslated{}",
         fmt_count(total),
         fmt_count(untranslated_count),
         if dialogue { " · in play order" } else { "" }
     );
     let _ = writeln!(
-        out.text,
+        head,
         "kinds of text: {}",
         domains
             .iter()
@@ -533,77 +529,132 @@ pub(crate) fn read(
             .collect::<Vec<_>>()
             .join(", ")
     );
-    if let Some(knowledge) = knowledge.filter(|text| !text.is_empty()) {
-        let _ = writeln!(
-            out.text,
-            "\n## Project knowledge for these lines\n{knowledge}"
-        );
+    if let Some(knowledge) = knowledge.as_ref().filter(|text| !text.is_empty()) {
+        let _ = writeln!(head, "\n## Project knowledge for these lines\n{knowledge}");
     }
-    let _ = writeln!(out.text, "\n## Lines");
-    for line in &lines {
-        let _ = write!(out.text, "\n@{} · {}", line.address, line.kind.label());
-        match &line.current {
-            None => out.text.push_str(" · untranslated"),
-            Some(current) => {
-                let _ = write!(
-                    out.text,
-                    " · {} {}",
-                    match current.author {
-                        Author::Agent => "agent's",
-                        Author::Person => "person's",
-                    },
-                    review_word(current.review)
-                );
-                if !current.replaceable() {
-                    out.text.push_str(" (keep)");
-                }
-            }
-        }
-        if line.gender_varies {
-            out.text.push_str(" · fr/de vary by player gender");
-        }
-        let _ = write!(out.text, "\n  {source_language}: {}", line.source);
-        for (code, text) in &line.other_languages {
-            let _ = write!(out.text, "\n  {code}: {text}");
-        }
-        for legend in &line.macros {
-            let _ = write!(out.text, "\n  macro: {legend}");
-        }
-        for (column, text) in &line.context {
-            let _ = write!(out.text, "\n  column {column}: {text}");
-        }
-        if let Some(current) = &line.current {
-            let _ = write!(out.text, "\n  {target}: {}", current.target);
-            if let Some(note) = &current.note {
-                let _ = write!(out.text, "\n  note: {note}");
-            }
-        }
-        for similar in &line.similar {
-            let _ = write!(
-                out.text,
-                "\n  similar ({:.0} %, {}): {} → {}",
-                similar.similarity * 100.0,
-                review_word(similar.review),
-                similar.source,
-                similar.target
-            );
-        }
-        out.text.push('\n');
-    }
-    if let Some(row) = next_row {
-        let last = options.rows.map_or(u32::MAX, |(_, last)| last);
-        let _ = writeln!(
-            out.text,
-            "\n… more lines follow: `aeria read {} --rows {row}-{}`",
-            options.sheet,
-            if last == u32::MAX {
-                String::new()
+    head.push_str("\n## Lines\n");
+    let blocks: Vec<String> = lines
+        .iter()
+        .map(|line| line_block(line, &source_language, &target))
+        .collect();
+    // Harnesses cut long command output; whole strings past the budget are
+    // left for the next read. The first string is always shown.
+    let mut kept = blocks.len();
+    if options.max_bytes > 0 {
+        // JSON is measured as JSON: escaping makes it larger than the text.
+        let size = |index: usize| {
+            if out.json {
+                serde_json::to_string_pretty(&lines[index]).map_or(0, |line| line.len())
             } else {
-                last.to_string()
+                blocks[index].len()
             }
+        };
+        let mut used = if out.json {
+            serde_json::to_string_pretty(&knowledge).map_or(0, |knowledge| knowledge.len())
+        } else {
+            head.len()
+        };
+        for (index, position) in positions.iter().take(blocks.len()).enumerate() {
+            used += size(index);
+            if index > 0 && used > options.max_bytes {
+                kept = index;
+                next = Some(*position);
+                break;
+            }
+        }
+    }
+    lines.truncate(kept);
+    // Position shown to agents is one-based.
+    let next_from = next.map(|position| position + 1);
+
+    if out.json {
+        out.json_value(&json!({
+            "sheet": options.sheet,
+            "quest": title,
+            "total": total,
+            "untranslated": untranslated_count,
+            "knowledge": knowledge,
+            "lines": lines,
+            "nextFrom": next_from,
+        }));
+        return Ok(());
+    }
+    out.text.push_str(&head);
+    for block in &blocks[..kept] {
+        out.text.push_str(block);
+    }
+    if let Some(from) = next_from {
+        let mut again = format!("aeria read {} --from {from}", options.sheet);
+        if let Some((first, last)) = options.rows {
+            let _ = write!(again, " --rows {first}-");
+            if last != u32::MAX {
+                let _ = write!(again, "{last}");
+            }
+        }
+        if options.untranslated {
+            again.push_str(" --untranslated");
+        }
+        let _ = writeln!(
+            out.text,
+            "\n… {} more strings of this listing were left out to keep the output short: `{again}`",
+            positions.len() - kept.min(positions.len())
         );
     }
     Ok(())
+}
+
+/// One string of a read listing as text.
+fn line_block(line: &ReadLine, source_language: &str, target: &str) -> String {
+    let mut out = String::new();
+    let _ = write!(out, "\n@{} · {}", line.address, line.kind.label());
+    match &line.current {
+        None => out.push_str(" · untranslated"),
+        Some(current) => {
+            let _ = write!(
+                out,
+                " · {} {}",
+                match current.author {
+                    Author::Agent => "agent's",
+                    Author::Person => "person's",
+                },
+                review_word(current.review)
+            );
+            if !current.replaceable() {
+                out.push_str(" (keep)");
+            }
+        }
+    }
+    if line.gender_varies {
+        out.push_str(" · fr/de vary by player gender");
+    }
+    let _ = write!(out, "\n  {source_language}: {}", line.source);
+    for (code, text) in &line.other_languages {
+        let _ = write!(out, "\n  {code}: {text}");
+    }
+    for legend in &line.macros {
+        let _ = write!(out, "\n  macro: {legend}");
+    }
+    for (column, text) in &line.context {
+        let _ = write!(out, "\n  column {column}: {text}");
+    }
+    if let Some(current) = &line.current {
+        let _ = write!(out, "\n  {target}: {}", current.target);
+        if let Some(note) = &current.note {
+            let _ = write!(out, "\n  note: {note}");
+        }
+    }
+    for similar in &line.similar {
+        let _ = write!(
+            out,
+            "\n  similar ({:.0} %, {}): {} → {}",
+            similar.similarity * 100.0,
+            review_word(similar.review),
+            similar.source,
+            similar.target
+        );
+    }
+    out.push('\n');
+    out
 }
 
 // ---------------------------------------------------------------- find

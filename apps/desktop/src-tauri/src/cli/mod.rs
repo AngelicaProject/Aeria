@@ -78,9 +78,13 @@ contain it (item). Case is ignored.
   --limit <n>     At most n sheets (default 100).
 ";
 
+/// Output of `aeria read` at most, in bytes: agent harnesses cut
+/// command output at about 30 000 characters or 50 KB.
+const READ_MAX_BYTES: usize = 24_000;
+
 const READ_HELP: &str = "\
-aeria read <sheet> [--rows <from>-<to>] [--untranslated] [--limit <n>]
-                   [--no-knowledge] [--no-similar]
+aeria read <sheet> [--rows <from>-<to>] [--untranslated] [--from <n>] [--limit <n>]
+                   [--max-bytes <n>] [--no-knowledge] [--no-similar]
 
 A scene: the translatable strings of a sheet, a quest or cutscene in play order and any
 other sheet in row order. Each string starts with its address, @sheet:row:subrow:column,
@@ -93,7 +97,11 @@ terms, character voices, and the story so far.
 
   --rows <a>-<b>   Only rows a to b; `--rows 500-` from row 500, `--rows 7` one row.
   --untranslated   Only strings without a translation.
-  --limit <n>      At most n strings (default 400); the end says how to go on.
+  --from <n>       Start at the n-th string of the listing (1 is the first).
+  --limit <n>      At most n strings (default 400).
+  --max-bytes <n>  At most n bytes of output (default 24000, 0 for no bound),
+                   so terminals that cut long output do not lose strings. Whole strings
+                   past it are left out, and the end gives the command that goes on.
   --no-knowledge   Leave out the project knowledge.
   --no-similar     Leave out similar translations (they need the search index).
 ";
@@ -401,6 +409,15 @@ impl Arguments {
         self.values.get(name).map(String::as_str)
     }
 
+    /// A non-negative number option.
+    fn number(&self, name: &str, default: usize) -> Result<usize, String> {
+        self.value(name).map_or(Ok(default), |value| {
+            value
+                .parse::<usize>()
+                .map_err(|_| format!("--{name} {value:?} is not a number"))
+        })
+    }
+
     fn limit(&self, default: usize) -> Result<usize, String> {
         self.value("limit").map_or(Ok(default), |value| {
             value
@@ -669,7 +686,7 @@ fn dispatch(
         "read" => {
             let parsed = Arguments::parse(
                 rest,
-                &["rows", "limit"],
+                &["rows", "from", "limit", "max-bytes"],
                 &["untranslated", "no-knowledge", "no-similar"],
             )?;
             let sheet = parsed
@@ -681,7 +698,9 @@ fn dispatch(
                 sheet,
                 rows: parsed.value("rows").map(row_range).transpose()?,
                 untranslated: parsed.switch("untranslated"),
+                from: parsed.number("from", 1)?.saturating_sub(1),
                 limit: parsed.limit(400)?,
+                max_bytes: parsed.number("max-bytes", READ_MAX_BYTES)?,
                 knowledge: !parsed.switch("no-knowledge"),
                 memory: !parsed.switch("no-similar"),
             };

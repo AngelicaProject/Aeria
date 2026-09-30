@@ -108,7 +108,7 @@ and do not change them without asking the user. Entries you write are not settle
 
 - `aeria overview` — the project's areas and progress; `aeria overview <pattern>` lists \
 sheets, such as `quest/*` or `*item*`; `--folders` lists folders such as quest/000.
-- `aeria read <sheet>` — a scene with everything needed to translate it.
+- `aeria read <sheet>` — a scene with everything needed to translate it. A long scene comes in parts that fit a terminal; the end of each part gives the command for the next (`--from`). Read every part before writing.
 - `aeria brief` — the translation rules; give it to every agent that translates.
 - `aeria write` / `aeria check` — write translations, or only check them.
 - `aeria find <text>` — search the source text, or translations with `--in translation`.
@@ -181,7 +181,8 @@ in the project directory, and an open Aeria window shows every write at once.
 2. Give every agent that translates the text of `aeria brief`, and one scene: a
    quest or cutscene sheet, or a range of rows of another sheet.
 3. A translating agent reads its scene with `aeria read <sheet>` (add
-   `--untranslated` to see only what is left), writes with `aeria write -` on standard
+   `--untranslated` to see only what is left; a long scene comes in parts, and the end
+   of each gives the command for the next), writes with `aeria write -` on standard
    input in blocks of an `@address` line and the translation, and fixes what comes back
    REJECTED. Temporary files go into the system's temporary folder, never into the
    project.
