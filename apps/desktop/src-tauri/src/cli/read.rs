@@ -11,7 +11,7 @@ use serde_json::json;
 
 use super::project::{
     Address, Author, Current, LineKind, Project, SheetLine, current, matches_pattern,
-    other_languages, review_word, sheet_lines,
+    other_languages, review_word, sheet_lines, translated,
 };
 use super::{Output, fmt_count};
 
@@ -432,7 +432,7 @@ pub(crate) fn read(
     let total = all.len();
     let untranslated_count = all
         .iter()
-        .filter(|line| current(&project.session, ledger.as_ref(), &line.address).is_none())
+        .filter(|line| !translated(&project.session, &line.address))
         .count();
     // Each selected string with its position in the whole listing.
     let (positions, mut selected): (Vec<usize>, Vec<&SheetLine>) = all
@@ -446,7 +446,7 @@ pub(crate) fn read(
         })
         .filter(|(_, line)| {
             !options.untranslated
-                || current(&project.session, ledger.as_ref(), &line.address).is_none()
+                || !translated(&project.session, &line.address)
         })
         .unzip();
     let limit = options.limit.unwrap_or(READ_LIMIT);

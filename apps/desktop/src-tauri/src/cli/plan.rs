@@ -193,15 +193,7 @@ fn frequent_words(project: &Project, sheets: &[(String, usize)]) -> Result<Vec<F
 /// Frequent words shown at most.
 const TERMS_SHOWN: usize = 60;
 
-const WORKER: &str = "\
-Give each task to one agent with these instructions: run `aeria brief` and follow it; \
-run the task's commands and translate every string they list (when an output ends with \
-a command that continues it, run that too); write with `aeria write`, about 50 strings \
-per write, the blocks in a file or on standard input, and fix what comes back rejected. \
-Translate only the task's strings: those past its --limit belong to other tasks. Reply \
-with one line: written, rejected, skipped. Tasks do not overlap, so any number can run \
-at once; `aeria overview <pattern>` shows progress, and `aeria plan` again lists what is \
-left.";
+const WORKER: &str = "Give each task to its own agent, one task per agent, with these instructions: run `aeria brief` and follow it; then take the task's commands one at a time: run it (and the command its output ends with, if it continues), translate the strings it lists, and write them with `aeria write` (blocks in a file or on standard input), fixing what comes back rejected, before the next command. Translate only the task's strings: those past its --limit belong to other tasks. Reply with one line: written, rejected, skipped. Tasks do not overlap, so any number can run at once; `aeria overview <pattern>` shows progress, and `aeria plan` again lists what is left.";
 
 pub(crate) fn plan(project: &Project, options: &PlanOptions, out: &mut Output) -> Result<(), String> {
     let sheets: Vec<(String, usize)> = sheet_counts(project)
