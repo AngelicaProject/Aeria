@@ -104,6 +104,21 @@ fn skill_targets() -> Vec<(String, PathBuf)> {
         });
     if let Some(hermes) = hermes.filter(|dir| dir.is_dir()) {
         targets.push(("Hermes Agent".to_owned(), hermes.join("skills")));
+        // Each Hermes profile reads its own skill folder, not the shared one.
+        let mut profiles: Vec<(String, PathBuf)> = std::fs::read_dir(hermes.join("profiles"))
+            .into_iter()
+            .flatten()
+            .flatten()
+            .filter(|entry| entry.path().is_dir())
+            .map(|entry| {
+                (
+                    format!("Hermes Agent ({})", entry.file_name().to_string_lossy()),
+                    entry.path().join("skills"),
+                )
+            })
+            .collect();
+        profiles.sort();
+        targets.extend(profiles);
     }
     targets
 }

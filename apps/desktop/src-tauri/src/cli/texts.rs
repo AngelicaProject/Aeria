@@ -22,11 +22,13 @@ Written translations are saved at once, so nothing is lost if the work stops, an
 to write it in one go. For a long list sheet, repeat `aeria read <sheet> --rows <a>-<b> \
 --untranslated --limit 50`, translate, write, until nothing untranslated is left.
 - Write translations with `aeria write`, one block per string: the `@address` line, \
-then the translation on the next line. Several blocks go in one call, best on standard \
-input (`aeria write -`). A file, if you need one, goes into the system's temporary \
-folder and is deleted after the write, never into the project. Every translation is \
-checked; a rejected one comes back with what to fix. `aeria check` runs the same checks \
-without writing.
+then the translation on the next line, written as it is, with no escaping. Several \
+blocks go in one call. Never put translations inside a shell command line, where \
+quoting corrupts apostrophes and quotes: write the blocks to a file in the system's \
+temporary folder with a file-writing tool and run `aeria write <file>`, or pipe them \
+on standard input (`aeria write -`). The file is deleted after the write; never put \
+one in the project. Every translation is checked as it is written; a rejected one \
+comes back with what to fix. `aeria check` runs the same checks without writing.
 - You may write an untranslated string, or replace a translation an agent wrote. A \
 translation a person wrote or changed, and a reviewed one, is marked `(keep)` by `aeria \
 read`, and `aeria write` skips it: tell the user if you think it should change.
@@ -126,8 +128,7 @@ comes in parts that fit a terminal; the end of each part gives the command for t
 ## Working on a large scope
 
 - Plan by scenes: a quest or cutscene sheet is one unit of work; other sheets split by \
-rows (`--rows`), at most about 100 strings per agent. Agents given several hundred \
-strings at once tend to stop without writing any. Scenes that do not share characters or terms can be translated in \
+rows (`--rows`). Scenes that do not share characters or terms can be translated in \
 parallel by several agents; writes from parallel agents are safe.
 - Settle what many scenes share before translating them: names and terms first (names, \
 places, items, actions), then the style of each kind of text, then quests and cutscenes \
@@ -188,13 +189,14 @@ in the project directory, and an open Aeria window shows every write at once.
 1. Run `aeria guide` in the project and follow it; `aeria overview` shows what is
    translated.
 2. Give every agent that translates the text of `aeria brief`, and one scene: a
-   quest or cutscene sheet, or up to about 100 strings of another sheet (`--rows`).
-   Larger shares make agents stop without writing.
+   quest or cutscene sheet, or a range of rows of another sheet (`--rows`).
 3. A translating agent reads its scene with `aeria read <sheet>` (add
    `--untranslated` to see only what is left; a long scene comes in parts, and the end
    of each gives the command for the next), and writes as it goes, about 50 strings
-   per `aeria write -` on standard input, in blocks of an `@address` line and the
-   translation; it fixes what comes back REJECTED. Written work is saved at once;
+   per write, in blocks of an `@address` line and the translation as it is (no
+   escaping): a file written with a file-writing tool and passed as `aeria write
+   <file>`, or `aeria write -` on standard input, never translations inside a shell
+   command line. It fixes what comes back REJECTED. Written work is saved at once;
    `--untranslated` shows what is left. Temporary files go into the system's
    temporary folder, never into the project.
 4. Record decisions in `aeria-knowledge/` as you go; ask the user about matters of

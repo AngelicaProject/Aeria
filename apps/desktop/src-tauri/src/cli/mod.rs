@@ -97,7 +97,9 @@ terms, character voices, and the story so far.
 
   --rows <a>-<b>   Only rows a to b; `--rows 500-` from row 500, `--rows 7` one row.
   --untranslated   Only strings without a translation.
-  --from <n>       Start at the n-th string of the listing (1 is the first).
+  --from <n>       Start at the n-th string of the sheet's whole listing (1 is the
+                   first). Positions count every string, so filters and writes by
+                   other agents do not shift them.
   --limit <n>      At most n strings (default 400).
   --max-bytes <n>  At most n bytes of output (default 24000, 0 for no bound),
                    so terminals that cut long output do not lose strings. Whole strings
@@ -118,8 +120,12 @@ macro text; write <br> where the game breaks the line.
   Ну наконец-то! Тебя уже заждались.
 
 JSON Lines work too: {\"at\": \"<address>\", \"text\": \"<translation>\"} per line.
-Prefer standard input (`aeria write -`); a file belongs in the system's temporary
-folder, never in the project, and is deleted after the write.
+The block form needs no escaping: quotes, apostrophes, and backslashes are written as
+they are. Never put translations inside a shell command line, where quoting corrupts
+them: write the blocks to a file with a file-writing tool and pass its path, or pipe
+them on standard input (`aeria write -`). A file belongs in the system's temporary
+folder, never in the project, and is deleted after the write. Writing also checks, so
+`aeria check` first is not needed.
 
 Each translation is checked: its macros and structure against the source, forbidden
 term variants, and forms that write both genders at once. A rejected one is not
