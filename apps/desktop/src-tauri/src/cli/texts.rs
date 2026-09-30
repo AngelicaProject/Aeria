@@ -15,7 +15,12 @@ Writing translations:
 order, or of another sheet in row order, with its address (`@sheet:row:subrow:column`), \
 speaker, source, the other client languages, macros, the current translation, and the \
 project knowledge the lines need. Translate a quest or cutscene as one scene, so voices, \
-address, and jokes stay consistent across its lines.
+address, and jokes stay consistent across its lines: read all its parts first.
+- Write as you go, about 50 strings per write: translate a part, write it, go on. \
+Written translations are saved at once, so nothing is lost if the work stops, and \
+`aeria read <sheet> --untranslated` shows what is left. Do not hold a large range back \
+to write it in one go. For a long list sheet, repeat `aeria read <sheet> --rows <a>-<b> \
+--untranslated --limit 50`, translate, write, until nothing untranslated is left.
 - Write translations with `aeria write`, one block per string: the `@address` line, \
 then the translation on the next line. Several blocks go in one call, best on standard \
 input (`aeria write -`). A file, if you need one, goes into the system's temporary \
@@ -108,7 +113,9 @@ and do not change them without asking the user. Entries you write are not settle
 
 - `aeria overview` — the project's areas and progress; `aeria overview <pattern>` lists \
 sheets, such as `quest/*` or `*item*`; `--folders` lists folders such as quest/000.
-- `aeria read <sheet>` — a scene with everything needed to translate it. A long scene comes in parts that fit a terminal; the end of each part gives the command for the next (`--from`). Read every part before writing.
+- `aeria read <sheet>` — a scene with everything needed to translate it. A long scene \
+comes in parts that fit a terminal; the end of each part gives the command for the next \
+(`--from`).
 - `aeria brief` — the translation rules; give it to every agent that translates.
 - `aeria write` / `aeria check` — write translations, or only check them.
 - `aeria find <text>` — search the source text, or translations with `--in translation`.
@@ -119,7 +126,8 @@ sheets, such as `quest/*` or `*item*`; `--folders` lists folders such as quest/0
 ## Working on a large scope
 
 - Plan by scenes: a quest or cutscene sheet is one unit of work; other sheets split by \
-rows (`--rows`). Scenes that do not share characters or terms can be translated in \
+rows (`--rows`), at most about 100 strings per agent. Agents given several hundred \
+strings at once tend to stop without writing any. Scenes that do not share characters or terms can be translated in \
 parallel by several agents; writes from parallel agents are safe.
 - Settle what many scenes share before translating them: names and terms first (names, \
 places, items, actions), then the style of each kind of text, then quests and cutscenes \
@@ -131,7 +139,8 @@ in `lessons.md`. Agents that translate later read them through `aeria read`.
 the translation is or how a well-known name is rendered, and record the answer as a \
 settled entry.
 - Give each translating agent `aeria brief`, its scene, and the instruction to write \
-with `aeria write` and fix what comes back rejected.
+with `aeria write` as it goes, about 50 strings per write, and fix what comes back \
+rejected.
 - The user reviews and commits the work in Aeria; do not commit or push unless asked.
 ";
 
@@ -179,13 +188,15 @@ in the project directory, and an open Aeria window shows every write at once.
 1. Run `aeria guide` in the project and follow it; `aeria overview` shows what is
    translated.
 2. Give every agent that translates the text of `aeria brief`, and one scene: a
-   quest or cutscene sheet, or a range of rows of another sheet.
+   quest or cutscene sheet, or up to about 100 strings of another sheet (`--rows`).
+   Larger shares make agents stop without writing.
 3. A translating agent reads its scene with `aeria read <sheet>` (add
    `--untranslated` to see only what is left; a long scene comes in parts, and the end
-   of each gives the command for the next), writes with `aeria write -` on standard
-   input in blocks of an `@address` line and the translation, and fixes what comes back
-   REJECTED. Temporary files go into the system's temporary folder, never into the
-   project.
+   of each gives the command for the next), and writes as it goes, about 50 strings
+   per `aeria write -` on standard input, in blocks of an `@address` line and the
+   translation; it fixes what comes back REJECTED. Written work is saved at once;
+   `--untranslated` shows what is left. Temporary files go into the system's
+   temporary folder, never into the project.
 4. Record decisions in `aeria-knowledge/` as you go; ask the user about matters of
    taste and settled entries.
 5. Check the work with `aeria audit` and `aeria review`; flag what a person must

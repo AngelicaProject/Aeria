@@ -182,7 +182,10 @@ Agent harnesses find the command in three ways; Settings → Agents →
   each harness whose home folder exists: `~/.claude/skills` (Claude Code),
   `~/.codex/skills` (Codex), and `%LOCALAPPDATA%\hermes\skills` or
   `$HERMES_HOME/skills` (Hermes Agent). It tells the agent to start with
-  `aeria guide` and how to split work among subagents.
+  `aeria guide` and how to split work among subagents: one quest or cutscene,
+  or about 100 strings of another sheet, per agent, written as it goes in
+  writes of about 50 strings. Agents handed several hundred strings to write
+  at once tend to stop without writing any.
 - **Project files.** `aeria init`, and connecting with a project open, write
   Aeria's section between `<!-- aeria:begin -->` and `<!-- aeria:end -->` into
   `AGENTS.md` (what the project is and which commands to start with) and
