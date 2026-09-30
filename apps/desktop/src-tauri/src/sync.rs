@@ -2,28 +2,22 @@
 //! and any number of `aeria` commands run by agents.
 //!
 //! Per project, keyed by a hash of its canonical root, application data holds
-//! `agents/<key>.lock`, `agents/<key>.stamp`, and `agents/<key>.sqlite3`:
+//! `agents/<key>.lock` and `agents/<key>.stamp`:
 //!
 //! - Every workspace write takes an exclusive lock on the lock file for its
 //!   whole run, so writes from different processes never interleave.
 //! - A command that wrote translations replaces the stamp before it releases
 //!   the lock. A process that keeps the workspace in memory compares the stamp
 //!   with the one it last saw and reloads the workspace when it changed.
-//! - The ledger records the translations agents wrote, with their text. A
-//!   translation is an agent's while its text is still the one recorded; a
-//!   person's edit changes the text, and the translation becomes theirs.
 
 use std::fmt::Write as _;
 use std::fs::{self, File};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use rusqlite::{Connection, OptionalExtension, params};
 use sha2::{Digest, Sha256};
 
 const AGENTS_DIRECTORY: &str = "agents";
-/// How long a ledger write waits for another process.
-const LEDGER_BUSY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
 /// A hash of the canonical project root, so paths never appear in file
 /// names and every process finds the same files for one project.
@@ -44,7 +38,6 @@ pub(crate) fn project_key(root: &Path) -> String {
 pub(crate) struct ProjectFiles {
     lock: PathBuf,
     stamp: PathBuf,
-    ledger: PathBuf,
 }
 
 impl ProjectFiles {
@@ -55,12 +48,7 @@ impl ProjectFiles {
         Self {
             lock: directory.join(format!("{key}.lock")),
             stamp: directory.join(format!("{key}.stamp")),
-            ledger: directory.join(format!("{key}.sqlite3")),
         }
-    }
-
-    fn directory(&self) -> &Path {
-        self.lock.parent().unwrap_or_else(|| Path::new("."))
     }
 
     /// Another file of the project in the same folder, such as
@@ -90,31 +78,6 @@ impl ProjectFiles {
             .with_extension(format!("stamp.{}", std::process::id()));
         fs::write(&partial, format!("{now}-{}", std::process::id()))?;
         replace_file(&partial, &self.stamp)
-    }
-
-    /// Opens the ledger of agent translations, creating it when missing.
-    ///
-    /// # Errors
-    ///
-    /// Returns a description when the ledger cannot be opened.
-    pub(crate) fn ledger(&self) -> Result<Ledger, String> {
-        fs::create_dir_all(self.directory())
-            .map_err(|error| format!("{}: {error}", self.directory().display()))?;
-        let connection = Connection::open(&self.ledger)
-            .map_err(|error| format!("{}: {error}", self.ledger.display()))?;
-        connection
-            .busy_timeout(LEDGER_BUSY_TIMEOUT)
-            .and_then(|()| {
-                connection.execute_batch(
-                    "CREATE TABLE IF NOT EXISTS written (
-                        location TEXT PRIMARY KEY,
-                        target TEXT NOT NULL,
-                        written_ms INTEGER NOT NULL
-                    );",
-                )
-            })
-            .map_err(|error| format!("{}: {error}", self.ledger.display()))?;
-        Ok(Ledger { connection })
     }
 }
 
@@ -198,78 +161,6 @@ impl WriteLock {
     }
 }
 
-/// The translations agents wrote in one project.
-pub(crate) struct Ledger {
-    connection: Connection,
-}
-
-impl Ledger {
-    /// The text an agent last wrote at `location`, if any.
-    ///
-    /// # Errors
-    ///
-    /// Returns a description when the ledger cannot be read.
-    pub(crate) fn agent_target(&self, location: &str) -> Result<Option<String>, String> {
-        self.connection
-            .query_row(
-                "SELECT target FROM written WHERE location = ?1",
-                params![location],
-                |row| row.get(0),
-            )
-            .optional()
-            .map_err(|error| error.to_string())
-    }
-
-    /// Every translation agents wrote, by location: one read for checks
-    /// across the whole project.
-    ///
-    /// # Errors
-    ///
-    /// Returns a description when the ledger cannot be read.
-    pub(crate) fn all(&self) -> Result<std::collections::HashMap<String, String>, String> {
-        let mut statement = self
-            .connection
-            .prepare("SELECT location, target FROM written")
-            .map_err(|error| error.to_string())?;
-        statement
-            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
-            .map_err(|error| error.to_string())?
-            .collect::<Result<_, _>>()
-            .map_err(|error| error.to_string())
-    }
-
-    /// Records translations agents wrote, as `(location, target)`.
-    ///
-    /// # Errors
-    ///
-    /// Returns a description when the ledger cannot be written.
-    pub(crate) fn record(&mut self, written: &[(String, String)]) -> Result<(), String> {
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_or(0, |duration| {
-                i64::try_from(duration.as_millis()).unwrap_or(i64::MAX)
-            });
-        let transaction = self
-            .connection
-            .transaction()
-            .map_err(|error| error.to_string())?;
-        {
-            let mut upsert = transaction
-                .prepare(
-                    "INSERT INTO written (location, target, written_ms) VALUES (?1, ?2, ?3)
-                     ON CONFLICT(location) DO UPDATE SET target = excluded.target, written_ms = excluded.written_ms",
-                )
-                .map_err(|error| error.to_string())?;
-            for (location, target) in written {
-                upsert
-                    .execute(params![location, target, now])
-                    .map_err(|error| error.to_string())?;
-            }
-        }
-        transaction.commit().map_err(|error| error.to_string())
-    }
-}
-
 /// Renderer event after the open project's workspace was reloaded because
 /// an `aeria` command wrote it.
 pub const WORKSPACE_RELOADED_EVENT: &str = "project://workspace-reloaded";
@@ -332,7 +223,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn stamps_locks_and_the_ledger_are_shared_per_project() {
+    fn stamps_and_locks_are_shared_per_project() {
         let data = tempfile::tempdir().expect("data");
         let project = tempfile::tempdir().expect("project");
         let files = ProjectFiles::new(data.path(), project.path());
@@ -348,22 +239,6 @@ mod tests {
         let first = files.stamp().expect("stamped");
         let _again = WriteLock::acquire(&files).expect("released");
 
-        let mut ledger = files.ledger().expect("ledger");
-        assert_eq!(ledger.agent_target("Addon:1:0:1").expect("read"), None);
-        ledger
-            .record(&[("Addon:1:0:1".to_owned(), "ОК".to_owned())])
-            .expect("record");
-        ledger
-            .record(&[("Addon:1:0:1".to_owned(), "Готово".to_owned())])
-            .expect("again");
-        let reopened = files.ledger().expect("reopen");
-        assert_eq!(
-            reopened
-                .agent_target("Addon:1:0:1")
-                .expect("read")
-                .as_deref(),
-            Some("Готово")
-        );
         assert!(!first.is_empty());
     }
 }

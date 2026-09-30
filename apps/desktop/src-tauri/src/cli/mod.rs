@@ -1,21 +1,21 @@
-//! The `aeria` command: the project for external agents.
+//! The `aeria` command: the project's files for people and agents.
 //!
-//! Agents such as Claude Code, Codex, or Hermes Agent translate the game's
-//! text in `game/`, which `aeria corpus` makes, and save it with
-//! `aeria check` (see `docs/architecture/agents.md`). It works on the project
-//! files directly; an open Aeria window reloads after its writes.
+//! A project is `aeria.json` and the PO files of `po/`, kept in Git (see
+//! `docs/architecture/po-project.md`). Agents such as Claude Code, Codex, or
+//! Hermes Agent translate by editing `po/`; the command makes a project
+//! (`init`), checks the files (`check`), and brings them to a new game version
+//! (`update`).
 //!
 //! A command is a thin client: it hands its arguments to the project's server
-//! (see [`serve`]), which keeps the game, the workspace, and every cache open
-//! between commands, and prints what the server answers. Help and version
-//! are answered without a server; `AERIA_NO_SERVER` runs a command
-//! in-process.
+//! (see [`serve`]), which keeps the installed game open between commands, and
+//! prints what the server answers. Help and version are answered without a
+//! server; `AERIA_NO_SERVER` runs a command in-process.
 
-mod corpus;
+mod check;
+mod git;
 mod project;
 mod serve;
 mod texts;
-mod write;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
@@ -27,23 +27,22 @@ use serde::{Deserialize, Serialize};
 
 /// Exit status: done.
 const OK: i32 = 0;
-/// Exit status: done, but some translations were not saved or the knowledge
-/// has problems.
+/// Exit status: done, but the files or the knowledge have problems.
 const PARTIAL: i32 = 1;
 /// Exit status: the command could not run.
 const FAILED: i32 = 2;
 
 const HELP: &str = "\
-aeria — the text of FINAL FANTASY XIV for translating an Aeria project
+aeria — the Aeria project of a translation of FINAL FANTASY XIV
 
 Usage: aeria [--project <dir>] [--json] <command> [options]
 
 Commands:
-  corpus      Write the whole game text into game/ as PO files to read and translate.
-  check       Save the translations changed in game/ and bring it up to date.
-  init        Write AGENTS.md and CLAUDE.md so agent harnesses find game/.
+  init        Make a project: every string of the installed game as PO files in po/.
+  check       Check the files of po/ and the project knowledge; list each problem.
+  update      Bring po/ to the installed game version, as one commit.
 
-game/README.md describes the files and the rules of a translation.
+po/README.md describes the files, the rules of a translation, and working with Git.
 
 Options:
   --project <dir>  The project, or a directory inside it (default: the current directory).
@@ -51,44 +50,45 @@ Options:
   -h, --help       Help; `aeria <command> --help` for one command.
   --version        The version of Aeria.
 
-Exit status: 0 done, 1 done with translations not saved or knowledge problems, 2 error.
-";
-
-const CHECK_HELP: &str = "\
-aeria check
-
-Saves every msgstr changed in the PO files of game/ that passes the checks: its macros
-and structure against the source, forbidden term variants, and forms that write both
-genders at once. Each problem is listed as file:line; advice, such as a term that seems
-missing, comes with saved ones. A translation that was not saved stays in its file, and
-the next check reads it again. A translation a person wrote or reviewed (`#, keep`), one
-that changed in the project after its file was made, and one written for a source the
-game has since changed are never saved. Problems in aeria-knowledge/ are listed too.
-Then the files are brought up to date with the project.
-";
-
-const CORPUS_HELP: &str = "\
-aeria corpus [<pattern>] [--force]
-
-Writes the whole game text into game/ in the project, as gettext PO files to read,
-search, and translate with any tool: a quest or cutscene is one file in play order,
-another sheet one file or a folder of files of 200 strings. Each entry has the address
-(msgctxt), the source (msgid), the translation (msgstr), and the other client languages,
-the speaker, and what the macros do as comments; game/README.md explains the layout and
-the rules. `aeria check` saves what changed. game/ is added to .gitignore: it is the
-game's text and is never committed. Files with changes not saved yet are kept.
-
-  <pattern>  Only the matching sheets, such as BNpcName or quest/*.
-  --force    Also replace files with changes `aeria check` has not saved.
+Exit status: 0 done, 1 done with problems, 2 error.
 ";
 
 const INIT_HELP: &str = "\
-aeria init
+aeria init --language <tag> [--source <language>]
 
-Writes AGENTS.md and CLAUDE.md at the project root, which agent harnesses such as
-Claude Code, Codex, and Hermes Agent read: they say this is an Aeria project, that the
-game's text is in game/, and how translations are saved. Text of your own in those files
-is kept; Aeria's part between its markers is replaced.
+Makes the directory a project: aeria.json, and in po/ every translatable string of the
+installed game as gettext PO files, with the other client languages, speakers, and macro
+legends as comments; po/README.md with the layout and the rules; AGENTS.md and
+CLAUDE.md, which agent harnesses read. Makes the directory a Git repository if it is not
+one and commits the project.
+
+  --language <tag>     The target language, such as ru, es, or pt-BR.
+  --source <language>  The source language: en (default), ja, de, or fr.
+";
+
+const CHECK_HELP: &str = "\
+aeria check [--all]
+
+Checks the PO files changed since the last commit (every file with --all, or outside
+a Git repository) and the project knowledge, and lists each problem as file:line: the
+PO format, Git conflict markers, a msgctxt or msgid that is not the installed game's,
+a file made for another game version, and translations that break the macros, have a
+line break the source does not, use a forbidden variant of a term, or write both
+genders at once. Advice, such as a term that seems missing, is listed separately.
+Changes no translation. Exit status 1 when there are problems.
+
+  --all  Every file, not only those changed since the last commit.
+";
+
+const UPDATE_HELP: &str = "\
+aeria update
+
+Brings po/ to the installed game version: every file is made again from the game and
+each translation is carried over by msgctxt. A translation whose source changed is
+marked fuzzy, with the source it was written for as #| msgid; one whose string the game
+no longer has becomes an obsolete entry (#~). Runs only when po/ and aeria.json have no
+changes that are not committed, and commits the result, so the update is one commit to
+review and revert.
 ";
 
 /// A command's output: text, or one JSON value with `--json`, and warnings
@@ -182,34 +182,6 @@ impl Access<'_> {
             Self::Served(server) => server.read(read),
         }
     }
-
-    /// A write opens the project under the write lock, so it starts from the
-    /// workspace every earlier writer left.
-    fn write<T>(
-        &self,
-        start: &Path,
-        write: impl FnOnce(&mut Project) -> Result<T, String>,
-    ) -> Result<T, String> {
-        match self {
-            Self::Direct(env) => {
-                let _lock = env
-                    .project_files(start)?
-                    .as_ref()
-                    .map(crate::sync::WriteLock::acquire)
-                    .transpose()
-                    .map_err(|error| {
-                        format!("the project's write lock cannot be taken: {error}")
-                    })?;
-                let mut project = Project::open(start, env)?;
-                let result = write(&mut project);
-                // game/ shows what was written; a file that cannot be
-                // written now is written by the next check.
-                let _ = corpus::refresh(&project);
-                result
-            }
-            Self::Served(server) => server.write(write),
-        }
-    }
 }
 
 /// A count with thin groups: 12 345.
@@ -274,6 +246,10 @@ impl Arguments {
 
     fn switch(&self, name: &str) -> bool {
         self.switches.contains(name)
+    }
+
+    fn value(&self, name: &str) -> Option<&str> {
+        self.values.get(name).map(String::as_str)
     }
 }
 
@@ -398,7 +374,9 @@ fn client(args: &[String]) -> Response {
         args: args.to_vec(),
     };
     let start = cwd.join(line.project.unwrap_or_default());
-    if std::env::var_os("AERIA_NO_SERVER").is_none()
+    // A project that does not exist yet has no server.
+    if line.command.as_deref() != Some("init")
+        && std::env::var_os("AERIA_NO_SERVER").is_none()
         && let Ok(root) = project::find_root(&start)
         && let Some(response) = serve::request(&root, &request)
     {
@@ -444,28 +422,162 @@ fn dispatch(
     out: &mut Output,
 ) -> Result<i32, String> {
     match command {
-        "corpus" => {
-            let parsed = Arguments::parse(rest, &[], &["force"])?;
-            let options = corpus::CorpusOptions {
-                pattern: parsed.positional.first().cloned(),
-                force: parsed.switch("force"),
+        "init" => {
+            let parsed = Arguments::parse(rest, &["language", "source"], &[])?;
+            let language = parsed
+                .value("language")
+                .ok_or("name the target language with --language, such as --language ru")?;
+            let env = match access {
+                Access::Direct(env) => (*env).clone(),
+                Access::Served(_) => Env::standalone(),
             };
-            access.read(start, |project| corpus::corpus(project, &options, out))?;
+            init(
+                start,
+                &env,
+                language,
+                parsed.value("source").unwrap_or("en"),
+                out,
+            )?;
             Ok(OK)
         }
         "check" => {
-            Arguments::parse(rest, &[], &[])?;
-            let clean = access.write(start, |project| corpus::check_files(project, out))?;
+            let parsed = Arguments::parse(rest, &[], &["all"])?;
+            let options = check::CheckOptions {
+                all: parsed.switch("all"),
+            };
+            let clean = access.read(start, |project| check::check(project, &options, out))?;
             Ok(if clean { OK } else { PARTIAL })
         }
-        "init" => {
+        "update" => {
             Arguments::parse(rest, &[], &[])?;
-            let root = project::find_root(start)?;
-            out.text = texts::init(&root)?;
+            access.read(start, |project| update(project, out))?;
             Ok(OK)
         }
         other => Err(unknown(other)),
     }
+}
+
+/// Whether a language tag is plain enough to be one: letters, digits, and
+/// hyphens.
+fn language_tag(tag: &str) -> bool {
+    !tag.is_empty()
+        && tag.len() <= 35
+        && tag
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || character == '-')
+}
+
+/// The project files `init` commits.
+const PROJECT_FILES: [&str; 5] = [
+    aeria_po::SETTINGS_FILE,
+    aeria_po::PO_DIR,
+    ".gitattributes",
+    "AGENTS.md",
+    "CLAUDE.md",
+];
+
+/// `.gitattributes` keeps PO files LF on every checkout.
+fn keep_lf(root: &Path) -> Result<(), String> {
+    let path = root.join(".gitattributes");
+    let rule = "*.po text eol=lf";
+    let current = std::fs::read_to_string(&path).unwrap_or_default();
+    if current.lines().any(|line| line.trim() == rule) {
+        return Ok(());
+    }
+    let mut next = current.trim_end().to_owned();
+    if !next.is_empty() {
+        next.push('\n');
+    }
+    next.push_str(rule);
+    next.push('\n');
+    std::fs::write(&path, next).map_err(|error| format!("{}: {error}", path.display()))
+}
+
+fn init(
+    start: &Path,
+    env: &Env,
+    language: &str,
+    source_language: &str,
+    out: &mut Output,
+) -> Result<(), String> {
+    if !language_tag(language) {
+        return Err(format!(
+            "{language:?} is not a language tag, such as ru, es, or pt-BR"
+        ));
+    }
+    std::fs::create_dir_all(start).map_err(|error| format!("{}: {error}", start.display()))?;
+    if let Ok(root) = project::find_root(start) {
+        return Err(format!("{} is already an Aeria project", root.display()));
+    }
+    let root =
+        std::fs::canonicalize(start).map_err(|error| format!("{}: {error}", start.display()))?;
+    let source = env.open_game(source_language)?;
+    let files = aeria_po::create(&root, &source, language, Project::threads())
+        .map_err(|error| error.to_string())?;
+    let project = Project::open(&root, env)?;
+    texts::write_readme(&project)?;
+    keep_lf(&root)?;
+    texts::init(&root)?;
+    git::init(&root)?;
+    let version = source.version().to_string();
+    let committed = git::commit(
+        &root,
+        &PROJECT_FILES,
+        &format!("Make the project for game version {version}"),
+    );
+    let _ = writeln!(
+        out.text,
+        "{}: a project for game version {version}, {source_language} → {language}: {} files in {}/",
+        project.root_display(),
+        fmt_count(files),
+        aeria_po::PO_DIR
+    );
+    match committed {
+        Ok(Some(hash)) => {
+            let _ = writeln!(out.text, "committed as {hash}");
+        }
+        Ok(None) => {}
+        Err(error) => out.warn(&format!(
+            "the project was made but not committed ({error}); commit it before translating"
+        )),
+    }
+    Ok(())
+}
+
+fn update(project: &Project, out: &mut Output) -> Result<(), String> {
+    let root = &project.root;
+    let paths = [aeria_po::PO_DIR, aeria_po::SETTINGS_FILE];
+    let repository = git::is_repository(root);
+    if repository && !git::committed(root, &paths)? {
+        return Err(format!(
+            "{} or {} has changes that are not committed: commit them first, so the update is one commit of its own",
+            aeria_po::PO_DIR,
+            aeria_po::SETTINGS_FILE
+        ));
+    }
+    let version = project.source.version().to_string();
+    let updated = aeria_po::update(root, &project.source, Project::threads())
+        .map_err(|error| error.to_string())?;
+    texts::write_readme(project)?;
+    let _ = writeln!(
+        out.text,
+        "game version {version}: {} files changed · {} translations fuzzy · {} obsolete",
+        fmt_count(updated.files),
+        fmt_count(updated.fuzzy),
+        fmt_count(updated.obsolete)
+    );
+    if repository {
+        let commit = git::commit(root, &paths, &format!("Update to game version {version}"))?;
+        let _ = writeln!(
+            out.text,
+            "{}",
+            commit.map_or_else(
+                || "nothing changed".to_owned(),
+                |hash| format!("committed as {hash}")
+            )
+        );
+    }
+    Ok(())
 }
 
 fn unknown(command: &str) -> String {
@@ -474,9 +586,9 @@ fn unknown(command: &str) -> String {
 
 fn command_help(command: &str) -> Option<&'static str> {
     Some(match command {
-        "check" => CHECK_HELP,
-        "corpus" => CORPUS_HELP,
         "init" => INIT_HELP,
+        "check" => CHECK_HELP,
+        "update" => UPDATE_HELP,
         _ => return None,
     })
 }
@@ -491,11 +603,18 @@ mod tests {
 
     #[test]
     fn arguments_and_counts_parse() {
-        let parsed =
-            Arguments::parse(&strings(&["quest/*", "--force"]), &[], &["force"]).expect("parse");
-        assert_eq!(parsed.positional, ["quest/*"]);
-        assert!(parsed.switch("force"));
+        let parsed = Arguments::parse(
+            &strings(&["x", "--all", "--language=ru"]),
+            &["language"],
+            &["all"],
+        )
+        .expect("parse");
+        assert_eq!(parsed.positional, ["x"]);
+        assert!(parsed.switch("all"));
+        assert_eq!(parsed.value("language"), Some("ru"));
         assert!(Arguments::parse(&strings(&["--nope"]), &[], &[]).is_err());
+        assert!(language_tag("pt-BR"));
+        assert!(!language_tag("ru ru"));
 
         assert_eq!(fmt_count(0), "0");
         assert_eq!(fmt_count(1234), "1 234");
@@ -504,7 +623,7 @@ mod tests {
 
     #[test]
     fn every_command_has_help() {
-        for command in ["corpus", "check", "init"] {
+        for command in ["init", "check", "update"] {
             assert!(command_help(command).is_some(), "{command}");
             assert!(HELP.contains(command), "{command}");
         }
@@ -523,32 +642,7 @@ mod tests {
         assert_eq!(run(&["nonsense"]).code, FAILED);
     }
 
-    /// A Russian project over the synthetic game, with its own data folder.
-    fn project() -> (
-        tempfile::TempDir,
-        crate::test_support::TestGame,
-        Env,
-        PathBuf,
-    ) {
-        let directory = tempfile::tempdir().expect("directory");
-        let game = crate::test_support::test_game();
-        let root = directory.path().join("project");
-        std::fs::create_dir_all(&root).expect("root");
-        aeria_workspace::ProjectSession::initialize(
-            &root,
-            crate::test_support::open(game.path()),
-            "ru",
-        )
-        .expect("project");
-        let env = Env {
-            data_dir: Some(directory.path().join("data")),
-            cache_dir: Some(directory.path().join("cache")),
-            game_path: Some(game.path().to_string_lossy().into_owned()),
-        };
-        (directory, game, env, root)
-    }
-
-    fn run_in(root: &std::path::Path, env: &Env, args: &[&str]) -> Response {
+    fn run_in(root: &Path, env: &Env, args: &[&str]) -> Response {
         let mut all = vec!["--project".to_owned(), root.to_string_lossy().into_owned()];
         all.extend(strings(args));
         let response = execute(
@@ -562,87 +656,101 @@ mod tests {
         response
     }
 
-    /// Replaces the msgstr of the entry with `address` in a corpus file.
-    fn translate_in_file(root: &std::path::Path, address: &str, translation: &str) {
-        let path = root.join("game").join("Addon.po");
+    /// Replaces one line of the entry with `context` in `po/Addon.po`.
+    fn edit_entry(root: &Path, context: &str, field: &str, value: &str) {
+        let path = root.join("po").join("Addon.po");
         let text = std::fs::read_to_string(&path).expect("file");
-        let context = format!("msgctxt \"{address}\"\n");
-        let at = text.find(&context).expect("entry");
-        let msgstr = at + text[at..].find("msgstr ").expect("msgstr");
-        let end = msgstr + text[msgstr..].find('\n').expect("line end");
-        let next = format!(
-            "{}msgstr \"{translation}\"{}",
-            &text[..msgstr],
-            &text[end..]
-        );
+        let at = text
+            .find(&format!("msgctxt \"{context}\"\n"))
+            .expect("entry");
+        let start = at + text[at..].find(&format!("{field} ")).expect("field");
+        let end = start + text[start..].find('\n').expect("line end");
+        let next = format!("{}{field} \"{value}\"{}", &text[..start], &text[end..]);
         std::fs::write(&path, next).expect("write");
     }
 
+    fn git(root: &Path, args: &[&str]) {
+        let status = std::process::Command::new("git")
+            .current_dir(root)
+            .args(args)
+            .status()
+            .expect("git");
+        assert!(status.success(), "git {args:?}");
+    }
+
     #[test]
-    fn agents_translate_in_files_and_never_replace_a_persons_translation() {
-        let (_directory, _game, env, root) = project();
-        run_in(&root, &env, &["corpus", "Addon"]);
-        assert!(root.join("game").join("README.md").is_file());
-        let at = "Addon:1:0:1";
-        let address = project::Address::parse(at).expect("address");
-        let now = |env: &Env| {
-            let project = Project::open(&root, env).expect("open");
-            let ledger = project.ledger();
-            project::current(&project.session, ledger.as_ref(), &address)
+    fn a_project_is_made_checked_and_updated() {
+        let directory = tempfile::tempdir().expect("directory");
+        let game = crate::test_support::test_game();
+        let env = Env {
+            data_dir: Some(directory.path().join("data")),
+            game_path: Some(game.path().to_string_lossy().into_owned()),
         };
+        let root = directory.path().join("project");
+        std::fs::create_dir_all(&root).expect("root");
+        // The commit of `init` needs an identity; the test's own repository
+        // has one before `init` runs.
+        git(&root, &["init", "--quiet"]);
+        git(&root, &["config", "user.name", "Test"]);
+        git(&root, &["config", "user.email", "test@example.com"]);
 
-        translate_in_file(&root, at, "ОК");
-        assert_eq!(run_in(&root, &env, &["check"]).code, OK);
-        let written = now(&env).expect("translated");
-        assert_eq!(
-            (written.target.as_str(), written.author),
-            ("ОК", project::Author::Agent)
-        );
-        let stamp = env
-            .project_files(&root)
-            .expect("files")
-            .expect("data")
-            .stamp();
-        assert!(stamp.is_some(), "open windows are told");
-
-        // An agent replaces its own translation.
-        translate_in_file(&root, at, "Готово");
-        assert_eq!(run_in(&root, &env, &["check"]).code, OK);
-        assert_eq!(now(&env).expect("translated").target, "Готово");
-
-        // A person's edit reaches the file and makes the string theirs.
-        let mut project = Project::open(&root, &env).expect("open");
-        project
-            .session
-            .set_target(&address.binding(), "Подтвердить")
-            .expect("person");
-        drop(project);
-        assert_eq!(run_in(&root, &env, &["check"]).code, OK);
-        let file = std::fs::read_to_string(root.join("game").join("Addon.po")).expect("file");
-        assert!(file.contains("#, keep\nmsgctxt \"Addon:1:0:1\""), "{file}");
-        assert!(file.contains("msgstr \"Подтвердить\""), "{file}");
-        translate_in_file(&root, at, "ОК");
-        assert_eq!(run_in(&root, &env, &["check"]).code, PARTIAL);
-        assert_eq!(now(&env).expect("translated").target, "Подтвердить");
-
-        // A broken translation is not saved and is reported with its line.
-        translate_in_file(&root, at, "Подтвердить");
-        translate_in_file(&root, "Addon:2:0:1", "<i>Отмена");
-        let response = run_in(&root, &env, &["check"]);
-        assert_eq!(response.code, PARTIAL);
+        let made = run_in(&root, &env, &["init", "--language", "ru"]);
+        assert_eq!(made.code, OK, "{}{}", made.stdout, made.stderr);
+        assert!(root.join("aeria.json").is_file());
+        assert!(root.join("po").join("README.md").is_file());
+        assert!(root.join("po").join("Addon.po").is_file());
         assert!(
-            response.stdout.contains("game/Addon.po:"),
+            std::fs::read_to_string(root.join("AGENTS.md"))
+                .expect("agents")
+                .contains("po/README.md")
+        );
+        assert_eq!(run_in(&root, &env, &["check"]).code, OK);
+
+        // A good translation passes; a broken one and a changed msgid are
+        // reported with their file and line.
+        edit_entry(&root, "Addon:ADDON_OK:1", "msgstr", "ОК");
+        let checked = run_in(&root, &env, &["check"]);
+        assert_eq!(checked.code, OK, "{}", checked.stdout);
+        edit_entry(&root, "Addon:ADDON_CANCEL:1", "msgstr", "<i>Отмена");
+        let checked = run_in(&root, &env, &["check"]);
+        assert_eq!(checked.code, PARTIAL);
+        assert!(
+            checked.stdout.contains("po/Addon.po:"),
             "{}",
-            response.stdout
+            checked.stdout
         );
-        let project = Project::open(&root, &env).expect("open");
+        edit_entry(&root, "Addon:ADDON_CANCEL:1", "msgstr", "Отмена");
+        edit_entry(&root, "Addon:ADDON_CANCEL:1", "msgid", "Something else");
+        let checked = run_in(&root, &env, &["check"]);
         assert!(
-            project::current(
-                &project.session,
-                None,
-                &project::Address::parse("Addon:2:0:1").expect("address")
-            )
-            .is_none()
+            checked.stdout.contains("msgid is not the game's text"),
+            "{}",
+            checked.stdout
+        );
+
+        // An update needs committed files, then changes nothing on the same
+        // game version.
+        let refused = execute(
+            &Request {
+                cwd: PathBuf::from("."),
+                args: strings(&["--project", &root.to_string_lossy(), "update"]),
+            },
+            &Access::Direct(&env),
+        );
+        assert_eq!(refused.code, FAILED);
+        assert!(
+            refused.stderr.contains("not committed"),
+            "{}",
+            refused.stderr
+        );
+        edit_entry(&root, "Addon:ADDON_CANCEL:1", "msgid", "Cancel");
+        git(&root, &["add", "--all"]);
+        git(&root, &["commit", "--quiet", "-m", "Translate"]);
+        let updated = run_in(&root, &env, &["update"]);
+        assert!(
+            updated.stdout.contains("nothing changed"),
+            "{}",
+            updated.stdout
         );
     }
 }

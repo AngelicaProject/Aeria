@@ -1,7 +1,6 @@
 //! The project server: one background process per project that keeps the
-//! game, the workspace, and the caches of the `aeria` command open, so a
-//! command is a request to it rather than a process that opens everything
-//! again.
+//! installed game and the project knowledge open, so a command is a request
+//! to it rather than a process that opens the game again.
 //!
 //! The first command for a project starts the server (the same executable
 //! with `__serve <root>`); it listens on a loopback port, and
@@ -11,28 +10,23 @@
 //! starts a new one. The server stops after [`IDLE_TIMEOUT`] without
 //! requests.
 //!
-//! Reads run in parallel; writes take the project's cross-process write lock
-//! and run one at a time. Before each request the server compares the
-//! project's stamp with the last one it took in and reloads the workspace
-//! when another process, such as the desktop, wrote it.
+//! Requests run in parallel. A server whose game was updated on disk answers
+//! that it must restart, and the command starts a new one.
 
 use std::io::{BufRead, BufReader, Write as _};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, PoisonError, RwLock};
+use std::sync::{Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
 use super::project::{Env, Project};
 use super::{Request, Response};
-use crate::sync::{ProjectFiles, WriteLock};
+use crate::sync::ProjectFiles;
 
 /// A server with no requests for this long stops.
 const IDLE_TIMEOUT: Duration = Duration::from_mins(15);
-/// How often the server looks for writes of other processes to show in
-/// game/.
-const CORPUS_WATCH: Duration = Duration::from_secs(2);
 /// How long a command waits for a new server to open the project.
 const START_TIMEOUT: Duration = Duration::from_secs(180);
 /// How long a command waits to connect to a running server.
@@ -126,74 +120,17 @@ fn write_info(files: &ProjectFiles, info: &ServerInfo) -> std::io::Result<()> {
 
 /// The running server of a project.
 pub(crate) struct Server {
-    project: RwLock<Project>,
-    files: Option<ProjectFiles>,
-    /// The stamp the open workspace has taken in.
-    seen: Mutex<Option<String>>,
+    project: Project,
     last_request: Mutex<Instant>,
 }
 
 impl Server {
-    /// Reloads the workspace when another process wrote the project since
-    /// the server last took its writes in. Call with the write lock held.
-    fn take_in_writes(&self, project: &mut Project) -> Result<(), String> {
-        let Some(files) = &self.files else {
-            return Ok(());
-        };
-        let stamp = files.stamp();
-        let mut seen = self.seen.lock().unwrap_or_else(PoisonError::into_inner);
-        if *seen != stamp {
-            project
-                .session
-                .reload_workspace()
-                .map_err(|error| format!("the project changed and cannot be reloaded: {error}"))?;
-            *seen = stamp;
-        }
-        Ok(())
-    }
-
-    fn stale(&self) -> bool {
-        self.files.as_ref().is_some_and(|files| {
-            *self.seen.lock().unwrap_or_else(PoisonError::into_inner) != files.stamp()
-        })
-    }
-
-    /// Runs a read of the open project.
+    /// Runs a command on the open project.
     pub(crate) fn read<T>(
         &self,
         read: impl FnOnce(&Project) -> Result<T, String>,
     ) -> Result<T, String> {
-        if self.stale() {
-            let _lock = self.files.as_ref().map(WriteLock::acquire).transpose();
-            let mut project = self.project.write().unwrap_or_else(PoisonError::into_inner);
-            self.take_in_writes(&mut project)?;
-        }
-        let project = self.project.read().unwrap_or_else(PoisonError::into_inner);
-        read(&project)
-    }
-
-    /// Runs a write of the open project under the project's write lock.
-    pub(crate) fn write<T>(
-        &self,
-        write: impl FnOnce(&mut Project) -> Result<T, String>,
-    ) -> Result<T, String> {
-        let _lock = self
-            .files
-            .as_ref()
-            .map(WriteLock::acquire)
-            .transpose()
-            .map_err(|error| format!("the project's write lock cannot be taken: {error}"))?;
-        let mut project = self.project.write().unwrap_or_else(PoisonError::into_inner);
-        self.take_in_writes(&mut project)?;
-        let result = write(&mut project);
-        // game/ shows what was written; a file that cannot be written now
-        // is written by the next check.
-        let _ = super::corpus::refresh(&project);
-        // The server's own write is taken in already.
-        if let Some(files) = &self.files {
-            *self.seen.lock().unwrap_or_else(PoisonError::into_inner) = files.stamp();
-        }
-        result
+        read(&self.project)
     }
 }
 
@@ -235,9 +172,7 @@ pub(crate) fn serve(root: &Path) -> i32 {
     };
     let token = random_token();
     let server = std::sync::Arc::new(Server {
-        project: RwLock::new(project),
-        seen: Mutex::new(files.stamp()),
-        files: Some(files.clone()),
+        project,
         last_request: Mutex::new(Instant::now()),
     });
     if write_info(
@@ -256,12 +191,8 @@ pub(crate) fn serve(root: &Path) -> i32 {
     }
     let warm = std::sync::Arc::clone(&server);
     std::thread::spawn(move || {
-        warm.project
-            .read()
-            .unwrap_or_else(PoisonError::into_inner)
-            .warm();
+        let _ = warm.project.knowledge();
     });
-    watch_corpus(std::sync::Arc::clone(&server), files.clone(), pid);
     let idle = std::sync::Arc::clone(&server);
     let idle_files = files.clone();
     std::thread::spawn(move || {
@@ -299,28 +230,6 @@ pub(crate) fn serve(root: &Path) -> i32 {
     0
 }
 
-/// Keeps game/ following translations written by other processes, such as
-/// the desktop, while the server runs. A project that can no longer be taken
-/// in, for example after a game update, ends the server; the next command
-/// starts one on the new version.
-fn watch_corpus(server: std::sync::Arc<Server>, files: ProjectFiles, pid: u32) {
-    std::thread::spawn(move || {
-        loop {
-            std::thread::sleep(CORPUS_WATCH);
-            if !server.stale() {
-                continue;
-            }
-            // A file that cannot be written now is written by a later pass.
-            if server
-                .read(|project| Ok(super::corpus::refresh(project)))
-                .is_err()
-            {
-                stop(&files, pid);
-            }
-        }
-    });
-}
-
 /// Removes the server file if it still names this process, and exits.
 fn stop(files: &ProjectFiles, pid: u32) -> ! {
     if read_info(files).is_some_and(|info| info.pid == pid) {
@@ -343,6 +252,9 @@ fn handle(stream: TcpStream, server: &Server, token: &str, build: &str) -> bool 
             (Reply::Refused("wrong token".to_owned()), false)
         }
         Ok(envelope) if envelope.build != build => (Reply::Restart, true),
+        // The game on disk is another version than the one this server
+        // opened: a new server opens it.
+        Ok(_) if !server.project.game_current() => (Reply::Restart, true),
         Ok(envelope) => (
             Reply::Response(super::execute(
                 &envelope.request,

@@ -37,6 +37,7 @@ dependencies = [
  "aeria-fonts",
  "aeria-git",
  "aeria-knowledge",
+ "aeria-po",
  "aeria-projects",
  "aeria-publish",
  "aeria-rebase",
@@ -121,6 +122,8 @@ dependencies = [
  "aeria-se",
  "aeria-source",
  "aeria-sqpack",
+ "serde",
+ "serde_json",
  "tempfile",
  "thiserror 2.0.20",
 ]

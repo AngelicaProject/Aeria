@@ -89,32 +89,71 @@ fn reserved(segment: &str) -> bool {
     RESERVED.iter().any(|name| name.eq_ignore_ascii_case(stem))
 }
 
-/// The paths of sheets in `po/`, safe on every system: a segment Windows
-/// reserves gets `~`, and a sheet whose path differs from an earlier one's
-/// only by case gets `~` and its number among them.
+/// The paths of sheets in `po/`, safe on systems that ignore case:
+///
+/// - a segment Windows reserves gets `~`;
+/// - a folder takes the casing it first has in the sheet list, so two
+///   sheets never ask for one folder in two casings;
+/// - a sheet whose path is also a folder of other sheets, in any case, gets
+///   `~`, so a sheet split into files by row never shares a folder with
+///   other sheets (the data sheet `Quest` next to the dialogue in `quest/`);
+/// - a sheet whose path differs from an earlier one's only by case gets `~`
+///   and its number among them.
 #[derive(Clone, Debug, Default)]
 pub struct SheetPaths {
     paths: BTreeMap<String, String>,
+}
+
+fn segments(sheet: &str) -> Vec<String> {
+    sheet
+        .split('/')
+        .map(|segment| {
+            if reserved(segment) {
+                format!("{segment}~")
+            } else {
+                segment.to_owned()
+            }
+        })
+        .collect()
 }
 
 impl SheetPaths {
     /// Paths for the sheets of a game, in the game's sorted sheet list.
     #[must_use]
     pub fn new<'a>(sheets: impl IntoIterator<Item = &'a str>) -> Self {
+        let sheets: Vec<&str> = sheets.into_iter().collect();
+        // Every folder, by its lowercase path, in the casing it first has.
+        let mut folders: BTreeMap<String, String> = BTreeMap::new();
+        for sheet in &sheets {
+            let parts = segments(sheet);
+            let mut folder = String::new();
+            for part in &parts[..parts.len().saturating_sub(1)] {
+                let next = if folder.is_empty() {
+                    part.clone()
+                } else {
+                    format!("{folder}/{part}")
+                };
+                folder.clone_from(folders.entry(next.to_lowercase()).or_insert(next));
+            }
+        }
         let mut paths = BTreeMap::new();
         let mut seen: BTreeMap<String, usize> = BTreeMap::new();
         for sheet in sheets {
-            let mut path = sheet
-                .split('/')
-                .map(|segment| {
-                    if reserved(segment) {
-                        format!("{segment}~")
-                    } else {
-                        segment.to_owned()
-                    }
-                })
-                .collect::<Vec<_>>()
-                .join("/");
+            let parts = segments(sheet);
+            let (name, parent) = parts.split_last().unwrap_or((&parts[0], &[]));
+            let mut path = if parent.is_empty() {
+                name.clone()
+            } else {
+                let parent = parent.join("/");
+                let parent = folders
+                    .get(&parent.to_lowercase())
+                    .cloned()
+                    .unwrap_or(parent);
+                format!("{parent}/{name}")
+            };
+            if folders.contains_key(&path.to_lowercase()) {
+                path.push('~');
+            }
             let count = seen.entry(path.to_lowercase()).or_default();
             *count += 1;
             if *count > 1 {
@@ -171,13 +210,28 @@ mod tests {
 
     #[test]
     fn files_by_row_range_and_safe_paths() {
-        let paths = SheetPaths::new(["Aux", "BNpcName", "Item", "item", "quest/000/A"]);
+        let paths = SheetPaths::new([
+            "Aux",
+            "BNpcName",
+            "Custom/1/A",
+            "Item",
+            "Quest",
+            "custom/2/B",
+            "item",
+            "quest/000/A",
+        ]);
         assert_eq!(paths.file("BNpcName", true, 3726), "BNpcName/3000.po");
         assert_eq!(paths.file("BNpcName", true, 999), "BNpcName/0.po");
         assert_eq!(paths.file("Addon", false, 5), "Addon.po");
         assert_eq!(paths.base("Aux"), "Aux~");
         assert_eq!(paths.base("Item"), "Item");
         assert_eq!(paths.base("item"), "item~2");
+        // A sheet named like a folder of other sheets, and folders in one
+        // casing.
+        assert_eq!(paths.base("Quest"), "Quest~");
+        assert_eq!(paths.file("Quest", true, 65_123), "Quest~/65000.po");
+        assert_eq!(paths.base("quest/000/A"), "quest/000/A");
+        assert_eq!(paths.base("custom/2/B"), "Custom/2/B");
         assert!(splits("BNpcName", 15_000));
         assert!(!splits("quest/000/A", 15_000));
         assert!(!splits("Race", 20));

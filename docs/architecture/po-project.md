@@ -1,6 +1,9 @@
 # The project as PO files
 
-Status: **proposal, not implemented.** When implemented it replaces Workspace
+Status: **partly implemented.** The format, identity, files, game updates,
+and checking are implemented in `aeria-po` and the `aeria` command (`init`,
+`check`, `update`; see [`agents.md`](./agents.md#the-aeria-command)); the
+desktop and export still work on Workspace Format v3. When complete it replaces Workspace
 Format v3 (`.aeria/`), the translation unit identity of
 [`identity.md`](./identity.md), the source update rules of
 [`rebase-safety.md`](./rebase-safety.md), the `aeria-units` merge driver of

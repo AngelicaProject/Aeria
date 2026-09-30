@@ -53,11 +53,6 @@ pub(crate) fn standalone_data_dir() -> Option<PathBuf> {
     ))
 }
 
-/// The cache folder without a running application.
-pub(crate) fn standalone_cache_dir() -> Option<PathBuf> {
-    Some(dirs::cache_dir()?.join(APP_FOLDER))
-}
-
 /// Uses the legacy folder only while it still holds data that was not moved.
 fn choose_data_dir(current: PathBuf, legacy: &Path) -> PathBuf {
     if !current.exists() && legacy.is_dir() && legacy != current {

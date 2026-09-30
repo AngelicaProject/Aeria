@@ -4,8 +4,8 @@
 use std::fmt::Write as _;
 
 use aeria_source::{
-    DialogueKind, GameSource, LineRole, RowKeys, SheetLookup, SourceCell, SourceLanguage,
-    SourceRow, line_role,
+    DialogueKind, GameSource, LineRole, RowKeys, SheetInLanguage, SheetLookup, SourceCell,
+    SourceLanguage, SourceRow, line_role,
 };
 
 use crate::identity::{Identity, RowName, SheetPaths, is_scene, splits};
@@ -104,6 +104,12 @@ pub fn sheet_files(
     if is_scene(name) {
         comment.push_str(" · in play order");
     }
+    // The other client languages, each read once for the whole sheet.
+    let others: Vec<(SourceLanguage, SheetInLanguage)> = SourceLanguage::ALL
+        .into_iter()
+        .filter(|language| *language != source.language())
+        .map(|language| Ok((language, source.sheet_in_language(&sheet, language)?)))
+        .collect::<Result<_, GenerateError>>()?;
     let mut files: Vec<(String, PoFile)> = Vec::new();
     for row in sheet.rows() {
         let key = keys.and_then(|keys| keys.key_of(row.row_id, row.subrow_id));
@@ -116,7 +122,7 @@ pub fn sheet_files(
                 continue;
             }
             let text = cell.text();
-            let extracted = extracted(source, name, row, cell, &cells, keys, dialogue);
+            let extracted = extracted(&others, name, row, cell, &cells, keys, dialogue);
             let identity = Identity {
                 sheet: name.to_owned(),
                 row: match key {
@@ -154,7 +160,7 @@ pub fn sheet_files(
 /// The `#.` lines of a cell: the other client languages, the speaker or
 /// kind of a dialogue line or the row's other cells, and what its macros do.
 fn extracted(
-    source: &GameSource,
+    others: &[(SourceLanguage, SheetInLanguage)],
     name: &str,
     row: &SourceRow,
     cell: &SourceCell<'_>,
@@ -163,15 +169,13 @@ fn extracted(
     dialogue: bool,
 ) -> Vec<String> {
     let text = cell.text();
-    let mut lines: Vec<String> = source
-        .cell_in_other_languages(name, row.row_id, row.subrow_id, cell.column)
-        .unwrap_or_default()
-        .into_iter()
-        .filter(|(language, _)| *language != source.language())
-        .filter_map(|(language, other)| {
-            other
+    let mut lines: Vec<String> = others
+        .iter()
+        .filter_map(|(language, sheet)| {
+            sheet
+                .text(row.row_id, row.subrow_id, cell.column)
                 .filter(|other| !other.trim().is_empty())
-                .map(|other| format!("{}: {other}", code(language)))
+                .map(|other| format!("{}: {other}", code(*language)))
         })
         .collect();
     let key = keys.and_then(|keys| keys.key_of(row.row_id, row.subrow_id));

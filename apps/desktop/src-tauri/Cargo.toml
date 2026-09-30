@@ -33,6 +33,7 @@ aeria-publish = { path = "../../../crates/aeria-publish" }
 aeria-rebase = { path = "../../../crates/aeria-rebase" }
 aeria-se = { path = "../../../crates/aeria-se" }
 aeria-search = { path = "../../../crates/aeria-search" }
+aeria-po = { path = "../../../crates/aeria-po" }
 aeria-source = { path = "../../../crates/aeria-source" }
 aeria-workspace = { path = "../../../crates/aeria-workspace" }
 dirs = "6.0.0"
