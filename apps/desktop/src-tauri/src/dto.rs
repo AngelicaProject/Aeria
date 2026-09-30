@@ -1,15 +1,7 @@
 use std::path::Path;
 
-use aeria_core::{
-    DetachReason, ReviewState, SourceBinding, SourceStatus, TranslationUnit, TranslationUnitId,
-};
+use aeria_po::{CellView, Page, RowView, Session, SheetProgress, Translation, Updated};
 use aeria_projects::RegistryEntry;
-use aeria_rebase::SheetLayoutUpdate;
-use aeria_workspace::{
-    ProjectSession, SheetTranslationProgress, SourceUpdateReport, TranslationCellView,
-    TranslationContextCellView, TranslationOverlayView, TranslationRowCursor, TranslationRowPage,
-    TranslationRowView,
-};
 use serde::{Deserialize, Serialize};
 
 use crate::error::CommandError;
@@ -24,7 +16,8 @@ pub struct OtherLanguageTextDto {
     pub text: Option<String>,
 }
 
-/// A source occurrence coordinate accepted and returned by desktop commands.
+/// A string of the game by its coordinate, accepted and returned by desktop
+/// commands.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SourceBindingDto {
@@ -32,57 +25,6 @@ pub struct SourceBindingDto {
     pub row_id: u32,
     pub subrow_id: u16,
     pub column_index: u32,
-}
-
-impl From<&SourceBinding> for SourceBindingDto {
-    fn from(binding: &SourceBinding) -> Self {
-        Self {
-            sheet_name: binding.sheet_name().to_owned(),
-            row_id: binding.row_id(),
-            subrow_id: binding.subrow_id(),
-            column_index: binding.column_index(),
-        }
-    }
-}
-
-impl From<SourceBindingDto> for SourceBinding {
-    fn from(binding: SourceBindingDto) -> Self {
-        Self::new(
-            binding.sheet_name,
-            binding.row_id,
-            binding.subrow_id,
-            binding.column_index,
-        )
-    }
-}
-
-/// The review-state values supported by the desktop protocol.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub enum ReviewStateDto {
-    Draft,
-    Reviewed,
-    NeedsReview,
-}
-
-impl From<ReviewState> for ReviewStateDto {
-    fn from(state: ReviewState) -> Self {
-        match state {
-            ReviewState::Draft => Self::Draft,
-            ReviewState::Reviewed => Self::Reviewed,
-            ReviewState::NeedsReview => Self::NeedsReview,
-        }
-    }
-}
-
-impl From<ReviewStateDto> for ReviewState {
-    fn from(state: ReviewStateDto) -> Self {
-        match state {
-            ReviewStateDto::Draft => Self::Draft,
-            ReviewStateDto::Reviewed => Self::Reviewed,
-            ReviewStateDto::NeedsReview => Self::NeedsReview,
-        }
-    }
 }
 
 /// One sheet of the game with its size.
@@ -103,24 +45,23 @@ pub struct ProjectSummaryDto {
     pub repository_root: String,
     pub source_language: String,
     pub target_language: String,
-    /// The game version the project describes, which is the installed
+    /// The game version the project's files are for, which is the installed
     /// game's version while the project is open.
     pub game_version: String,
     /// The game installation the project reads.
     pub game_path: String,
     pub sheets: Vec<ProjectSheetDto>,
-    pub detached_unit_count: usize,
 }
 
 impl ProjectSummaryDto {
-    pub(crate) fn from_session(session: &ProjectSession) -> Self {
-        let workspace_metadata = session.workspace().metadata();
+    pub(crate) fn from_session(session: &Session) -> Self {
+        let settings = session.settings();
         let catalog = session.source().catalog().unwrap_or_default();
         Self {
-            repository_root: session.repository_root().to_string_lossy().into_owned(),
-            source_language: workspace_metadata.source_language().to_owned(),
-            target_language: workspace_metadata.target_language().to_owned(),
-            game_version: workspace_metadata.game_version().to_string(),
+            repository_root: session.root().to_string_lossy().into_owned(),
+            source_language: settings.source_language.clone(),
+            target_language: settings.target_language.clone(),
+            game_version: session.source().version().to_string(),
             game_path: session.source().game_path().to_string_lossy().into_owned(),
             sheets: catalog
                 .iter()
@@ -131,29 +72,29 @@ impl ProjectSummaryDto {
                     unavailable: sheet.unavailable,
                 })
                 .collect(),
-            detached_unit_count: session.detached_units().count(),
         }
     }
 }
 
-/// Workspace coverage for one sheet. Counts are bounded by the sheet's
-/// `translatableCellCount`; sheets without translations are omitted.
+/// How much of one sheet is translated. Sheets without strings are omitted.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SheetProgressDto {
     pub sheet_name: String,
+    /// The sheet's strings in the project.
+    pub strings: usize,
     pub translated: usize,
-    pub reviewed: usize,
-    pub needs_review: usize,
+    /// Translations whose source changed since they were written.
+    pub fuzzy: usize,
 }
 
-impl From<SheetTranslationProgress> for SheetProgressDto {
-    fn from(progress: SheetTranslationProgress) -> Self {
+impl From<SheetProgress> for SheetProgressDto {
+    fn from(progress: SheetProgress) -> Self {
         Self {
-            sheet_name: progress.sheet_name,
+            sheet_name: progress.sheet,
+            strings: progress.entries,
             translated: progress.translated,
-            reviewed: progress.reviewed,
-            needs_review: progress.needs_review,
+            fuzzy: progress.fuzzy,
         }
     }
 }
@@ -166,7 +107,7 @@ impl From<SheetTranslationProgress> for SheetProgressDto {
 pub struct ProjectOpenResultDto {
     pub project: ProjectSummaryDto,
     pub warning: Option<CommandError>,
-    /// Present when opening applied a source update.
+    /// Present when opening updated the project to the installed game.
     pub source_update: Option<SourceUpdateReportDto>,
 }
 
@@ -176,132 +117,50 @@ pub struct ProjectOpenResultDto {
 pub enum GameOpenResultDto {
     /// The project is open and describes the game.
     Opened { result: Box<ProjectOpenResultDto> },
-    /// The project needs a source update first. Nothing was written; after
-    /// confirmation the renderer updates the project from the game.
-    SourceUpdateRequired { report: SourceUpdateReportDto },
+    /// The project's files are for an older game version. Nothing was
+    /// written; after confirmation the renderer updates the project.
+    SourceUpdateRequired { update: SourceUpdateNeededDto },
 }
 
-/// Why a translation unit is detached from the current source.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub enum DetachReasonDto {
-    SheetRemoved,
-    SheetUnavailable,
-    RowRemoved,
-    CellRemoved,
-    ColumnUnresolved,
-    NotTranslatable,
-    BindingConflict,
-}
-
-impl From<DetachReason> for DetachReasonDto {
-    fn from(reason: DetachReason) -> Self {
-        match reason {
-            DetachReason::SheetRemoved => Self::SheetRemoved,
-            DetachReason::SheetUnavailable => Self::SheetUnavailable,
-            DetachReason::RowRemoved => Self::RowRemoved,
-            DetachReason::CellRemoved => Self::CellRemoved,
-            DetachReason::ColumnUnresolved => Self::ColumnUnresolved,
-            DetachReason::NotTranslatable => Self::NotTranslatable,
-            DetachReason::BindingConflict => Self::BindingConflict,
-        }
-    }
-}
-
-/// A sheet whose units were bound in another layout, or that is gone.
+/// The game versions of a project that needs an update.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct SheetLayoutUpdateDto {
-    pub sheet_name: String,
-    pub removed: bool,
-    /// The sheet still exists in the game but cannot be read.
-    pub unavailable: bool,
-    pub mapped_columns: usize,
-    pub unresolved_columns: usize,
+pub struct SourceUpdateNeededDto {
+    pub previous_game_version: String,
+    pub game_version: String,
 }
 
-impl From<&SheetLayoutUpdate> for SheetLayoutUpdateDto {
-    fn from(update: &SheetLayoutUpdate) -> Self {
-        let mapped_columns = update
-            .columns
-            .iter()
-            .filter(|column| column.column.is_some())
-            .count();
-        Self {
-            sheet_name: update.sheet_name.clone(),
-            removed: update.layout.is_none() && !update.unavailable,
-            unavailable: update.unavailable,
-            mapped_columns,
-            unresolved_columns: update.columns.len() - mapped_columns,
-        }
-    }
-}
-
-/// Counts and layout changes of a previewed or applied source update.
+/// What updating a project to the installed game did.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SourceUpdateReportDto {
     pub previous_game_version: String,
     pub game_version: String,
-    pub unchanged: usize,
-    pub source_changed: usize,
-    pub detached: usize,
-    pub newly_detached: usize,
-    pub reattached: usize,
-    pub column_mapped: usize,
-    pub row_moved: usize,
-    pub changed_units: usize,
-    pub sheet_layout_updates: Vec<SheetLayoutUpdateDto>,
+    /// Files written or removed.
+    pub files: usize,
+    /// Translations marked fuzzy because their source changed.
+    pub fuzzy: usize,
+    /// Translations kept as obsolete because their string left the game.
+    pub obsolete: usize,
+    /// The commit that recorded the update, when one was made.
+    pub commit: Option<String>,
 }
 
-impl From<&SourceUpdateReport> for SourceUpdateReportDto {
-    fn from(report: &SourceUpdateReport) -> Self {
-        let plan = &report.plan;
-        let summary = plan.summary;
+impl SourceUpdateReportDto {
+    pub(crate) fn new(
+        previous_game_version: String,
+        game_version: String,
+        updated: Updated,
+        commit: Option<String>,
+    ) -> Self {
         Self {
-            previous_game_version: plan.previous_game_version.to_string(),
-            game_version: plan.game_version.to_string(),
-            unchanged: summary.unchanged,
-            source_changed: summary.source_changed,
-            detached: summary.detached,
-            newly_detached: summary.newly_detached,
-            reattached: summary.reattached,
-            column_mapped: summary.column_mapped,
-            row_moved: summary.row_moved,
-            changed_units: summary.changed_units,
-            sheet_layout_updates: plan.sheet_layout_updates.iter().map(Into::into).collect(),
+            previous_game_version,
+            game_version,
+            files: updated.files,
+            fuzzy: updated.fuzzy,
+            obsolete: updated.obsolete,
+            commit,
         }
-    }
-}
-
-/// A translation unit preserved without a current source occurrence.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct DetachedUnitDto {
-    pub translation_unit_id: String,
-    pub last_source_binding: SourceBindingDto,
-    /// The source text the unit was last bound to.
-    pub last_source_text: String,
-    pub reason: DetachReasonDto,
-    pub target_macro: String,
-    pub review_state: ReviewStateDto,
-    pub translator_note: Option<String>,
-}
-
-impl DetachedUnitDto {
-    pub(crate) fn from_unit(unit: &TranslationUnit) -> Option<Self> {
-        let SourceStatus::Detached(reason) = unit.source_status() else {
-            return None;
-        };
-        Some(Self {
-            translation_unit_id: unit.id().to_string(),
-            last_source_binding: unit.source_binding().into(),
-            last_source_text: unit.source().text().to_owned(),
-            reason: reason.into(),
-            target_macro: unit.target_macro().to_owned(),
-            review_state: unit.review_state().into(),
-            translator_note: unit.translator_note().map(str::to_owned),
-        })
     }
 }
 
@@ -354,23 +213,7 @@ pub struct TranslationRowCursorDto {
     pub subrow_id: u16,
 }
 
-impl From<&TranslationRowCursor> for TranslationRowCursorDto {
-    fn from(cursor: &TranslationRowCursor) -> Self {
-        Self {
-            sheet_name: cursor.sheet_name().to_owned(),
-            row_id: cursor.row_id(),
-            subrow_id: cursor.subrow_id(),
-        }
-    }
-}
-
-impl From<TranslationRowCursorDto> for TranslationRowCursor {
-    fn from(cursor: TranslationRowCursorDto) -> Self {
-        Self::new(cursor.sheet_name, cursor.row_id, cursor.subrow_id)
-    }
-}
-
-/// One read-only technical context cell in a logical source row.
+/// One read-only context cell in a row.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TranslationContextCellDto {
@@ -378,16 +221,7 @@ pub struct TranslationContextCellDto {
     pub source_macro: String,
 }
 
-impl From<TranslationContextCellView> for TranslationContextCellDto {
-    fn from(cell: TranslationContextCellView) -> Self {
-        Self {
-            column_index: cell.column_index,
-            source_macro: cell.source_macro,
-        }
-    }
-}
-
-/// One translatable String cell and its optional translation overlay.
+/// One string of a row and its translation.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TranslationCellDto {
@@ -398,18 +232,7 @@ pub struct TranslationCellDto {
     pub translation: Option<TranslationOverlayDto>,
 }
 
-impl From<TranslationCellView> for TranslationCellDto {
-    fn from(cell: TranslationCellView) -> Self {
-        Self {
-            source_binding: (&cell.source_binding).into(),
-            source_macro: cell.source_macro,
-            formatting_only: cell.formatting_only,
-            translation: cell.translation.map(Into::into),
-        }
-    }
-}
-
-/// One logical source row for the desktop editor.
+/// One row of a sheet for the desktop editor.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TranslationRowDto {
@@ -420,19 +243,40 @@ pub struct TranslationRowDto {
     pub cells: Vec<TranslationCellDto>,
 }
 
-impl From<TranslationRowView> for TranslationRowDto {
-    fn from(row: TranslationRowView) -> Self {
+impl TranslationRowDto {
+    pub(crate) fn new(sheet_name: &str, row: RowView) -> Self {
         Self {
-            sheet_name: row.sheet_name,
-            row_id: row.row_id,
-            subrow_id: row.subrow_id,
-            context: row.context.into_iter().map(Into::into).collect(),
-            cells: row.cells.into_iter().map(Into::into).collect(),
+            sheet_name: sheet_name.to_owned(),
+            row_id: row.row,
+            subrow_id: row.subrow,
+            context: row
+                .context
+                .into_iter()
+                .map(|(column_index, source_macro)| TranslationContextCellDto {
+                    column_index,
+                    source_macro,
+                })
+                .collect(),
+            cells: row
+                .cells
+                .into_iter()
+                .map(|cell: CellView| TranslationCellDto {
+                    source_binding: SourceBindingDto {
+                        sheet_name: sheet_name.to_owned(),
+                        row_id: row.row,
+                        subrow_id: row.subrow,
+                        column_index: cell.column,
+                    },
+                    source_macro: cell.source,
+                    formatting_only: cell.formatting_only,
+                    translation: cell.translation.map(Into::into),
+                })
+                .collect(),
         }
     }
 }
 
-/// One bounded page of logical source rows and optional workspace overlays.
+/// One bounded page of rows with their translations.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TranslationRowPageDto {
@@ -440,47 +284,45 @@ pub struct TranslationRowPageDto {
     pub next_after: Option<TranslationRowCursorDto>,
 }
 
-impl From<TranslationRowPage> for TranslationRowPageDto {
-    fn from(page: TranslationRowPage) -> Self {
+impl TranslationRowPageDto {
+    pub(crate) fn new(sheet_name: &str, page: Page) -> Self {
         Self {
-            rows: page.rows.into_iter().map(Into::into).collect(),
-            next_after: page.next_after.as_ref().map(Into::into),
+            rows: page
+                .rows
+                .into_iter()
+                .map(|row| TranslationRowDto::new(sheet_name, row))
+                .collect(),
+            next_after: page
+                .next_after
+                .map(|(row_id, subrow_id)| TranslationRowCursorDto {
+                    sheet_name: sheet_name.to_owned(),
+                    row_id,
+                    subrow_id,
+                }),
         }
     }
 }
 
-/// The sparse workspace data overlaid on one source occurrence.
+/// The translation of one string as its entry holds it.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TranslationOverlayDto {
-    pub translation_unit_id: String,
+    /// The translation; empty when the string is not translated.
     pub target_macro: String,
-    pub review_state: ReviewStateDto,
+    /// The source changed since the translation was written.
+    pub fuzzy: bool,
     pub translator_note: Option<String>,
+    /// The source the translation was written for, while it is fuzzy.
+    pub previous_source: Option<String>,
 }
 
-impl From<TranslationOverlayView> for TranslationOverlayDto {
-    fn from(overlay: TranslationOverlayView) -> Self {
+impl From<Translation> for TranslationOverlayDto {
+    fn from(translation: Translation) -> Self {
         Self {
-            translation_unit_id: overlay.translation_unit_id.to_string(),
-            target_macro: overlay.target_macro,
-            review_state: overlay.review_state.into(),
-            translator_note: overlay.translator_note,
-        }
-    }
-}
-
-/// The canonical textual translation-unit ID returned by target mutations.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct TranslationUnitIdDto {
-    pub translation_unit_id: String,
-}
-
-impl From<TranslationUnitId> for TranslationUnitIdDto {
-    fn from(id: TranslationUnitId) -> Self {
-        Self {
-            translation_unit_id: id.to_string(),
+            target_macro: translation.text,
+            fuzzy: translation.fuzzy,
+            translator_note: translation.note,
+            previous_source: translation.previous,
         }
     }
 }
@@ -493,110 +335,45 @@ mod tests {
     use aeria_projects::RegistryEntry;
 
     #[test]
-    fn source_binding_mapping_preserves_all_coordinates() {
-        let binding = SourceBinding::new("Synthetic", 42, 3, 7);
-
-        let dto = SourceBindingDto::from(&binding);
-        assert_eq!(SourceBinding::from(dto), binding);
-    }
-
-    #[test]
-    fn translation_row_mapping_preserves_context_cells_and_explicit_empty_overlays() {
-        let translated_id = TranslationUnitId::from_bytes([0xab; 16]);
-        let translated_binding = SourceBinding::new("Synthetic", 42, 0, 0);
-        let empty_binding = SourceBinding::new("Synthetic", 7, 0, 0);
-        let page = TranslationRowPage {
-            rows: vec![TranslationRowView {
-                sheet_name: "Synthetic".to_owned(),
-                row_id: 42,
-                subrow_id: 0,
-                context: vec![TranslationContextCellView {
-                    column_index: 3,
-                    source_macro: "Context field".to_owned(),
-                }],
+    fn a_page_maps_rows_cells_and_translations() {
+        let page = Page {
+            rows: vec![RowView {
+                row: 42,
+                subrow: 0,
+                context: vec![(3, "Context field".to_owned())],
                 cells: vec![
-                    TranslationCellView {
-                        source_binding: translated_binding,
-                        source_macro: "source".to_owned(),
+                    CellView {
+                        column: 0,
+                        source: "source".to_owned(),
                         formatting_only: false,
-                        translation: Some(TranslationOverlayView {
-                            translation_unit_id: translated_id,
-                            target_macro: String::new(),
-                            review_state: ReviewState::NeedsReview,
-                            translator_note: Some("check later".to_owned()),
+                        translation: Some(Translation {
+                            text: String::new(),
+                            fuzzy: true,
+                            note: Some("check later".to_owned()),
+                            previous: None,
                         }),
                     },
-                    TranslationCellView {
-                        source_binding: empty_binding,
-                        source_macro: "...".to_owned(),
+                    CellView {
+                        column: 1,
+                        source: "...".to_owned(),
                         formatting_only: true,
                         translation: None,
                     },
                 ],
             }],
-            next_after: Some(TranslationRowCursor::new("Synthetic", 7, 0)),
+            next_after: Some((7, 0)),
         };
-
-        let dto = TranslationRowPageDto::from(page);
+        let dto = TranslationRowPageDto::new("Synthetic", page);
         assert_eq!(dto.rows[0].row_id, 42);
         assert_eq!(dto.rows[0].context[0].source_macro, "Context field");
-        let overlay = dto.rows[0].cells[0]
-            .translation
-            .as_ref()
-            .expect("explicit empty target remains an overlay");
-        assert_eq!(
-            overlay.translation_unit_id,
-            "abababababababababababababababab"
-        );
-        assert_eq!(overlay.target_macro, "");
-        assert_eq!(overlay.review_state, ReviewStateDto::NeedsReview);
+        let cell = &dto.rows[0].cells[0];
+        assert_eq!(cell.source_binding.sheet_name, "Synthetic");
+        let overlay = cell.translation.as_ref().expect("overlay");
+        assert!(overlay.fuzzy);
         assert_eq!(overlay.translator_note.as_deref(), Some("check later"));
         assert!(dto.rows[0].cells[1].translation.is_none());
-        assert!(!dto.rows[0].cells[0].formatting_only);
         assert!(dto.rows[0].cells[1].formatting_only);
         assert_eq!(dto.next_after.expect("cursor").row_id, 7);
-    }
-
-    #[test]
-    fn only_detached_units_map_to_detached_dtos() {
-        let unit = TranslationUnit::new(
-            TranslationUnitId::from_bytes([0xcd; 16]),
-            aeria_core::SourceFacts::new(
-                SourceBinding::new("Addon", 4021, 0, 2),
-                aeria_core::LayoutHash::from_bytes([1; 8]),
-                "Done",
-                None,
-            ),
-            "Готово",
-        );
-        assert!(DetachedUnitDto::from_unit(&unit).is_none());
-
-        let mut detached = unit;
-        detached.set_review_state(ReviewState::Reviewed);
-        detached.detach(DetachReason::ColumnUnresolved);
-        let dto = DetachedUnitDto::from_unit(&detached).expect("detached unit");
-        assert_eq!(dto.reason, DetachReasonDto::ColumnUnresolved);
-        assert_eq!(dto.last_source_binding.row_id, 4021);
-        assert_eq!(dto.last_source_binding.column_index, 2);
-        assert_eq!(dto.last_source_text, "Done");
-        assert_eq!(dto.target_macro, "Готово");
-        assert_eq!(dto.review_state, ReviewStateDto::Reviewed);
-    }
-
-    #[test]
-    fn review_state_mapping_is_explicit() {
-        assert_eq!(
-            ReviewStateDto::from(ReviewState::Draft),
-            ReviewStateDto::Draft
-        );
-        assert_eq!(
-            ReviewState::from(ReviewStateDto::Reviewed),
-            ReviewState::Reviewed
-        );
-        assert_eq!(
-            ReviewStateDto::from(ReviewState::NeedsReview),
-            ReviewStateDto::NeedsReview
-        );
     }
 
     #[test]

@@ -17,16 +17,15 @@ use aeria_check::{Finding, Severity, Stage, StageReport, run_stage};
 
 const USAGE: &str =
     "usage: aeria-check [integrity|translations|merge|all] [--project DIR] [--base REV]
-       aeria-check merge-driver BASE OURS THEIRS PATH
 
 Stages:
-  integrity     conflict markers, the manifest, and project settings
-  translations  every unit and translation, and canonical files
-  merge         compared with --base: source or language changes, removed units
+  integrity     conflict markers, aeria.json, and project settings
+  translations  every PO file and every translation against its source
+  merge         compared with --base: game version or language changes, removed translations
   all           every stage (default)
 
 Options:
-  --project DIR  the folder that contains .aeria/ (default: .)
+  --project DIR  the folder that contains aeria.json (default: .)
   --base REV     the revision the change merges into, for the merge stage
   --version      print the version";
 
@@ -125,35 +124,8 @@ fn summary(report: &StageReport) -> String {
     text
 }
 
-/// `merge-driver BASE OURS THEIRS PATH`: Git's merge driver for unit shards
-/// (`%O %A %B %P`). Exits 0 for a clean merge, 1 when units conflict (they
-/// are marked in the file), and 2 when a version is not a valid shard, which
-/// leaves the local version for Git to report as a conflict.
-fn merge_driver(args: &[String]) -> ExitCode {
-    let [base, ours, theirs, path] = args else {
-        eprintln!("aeria-check: merge-driver needs BASE OURS THEIRS PATH\n\n{USAGE}");
-        return ExitCode::from(2);
-    };
-    match aeria_git::run_merge_driver(base.as_ref(), ours.as_ref(), theirs.as_ref(), path) {
-        Ok(0) => ExitCode::SUCCESS,
-        Ok(conflicts) => {
-            eprintln!(
-                "aeria-check: {conflicts} translation unit(s) in {path} changed differently on both sides; keep one version of each marked unit"
-            );
-            ExitCode::FAILURE
-        }
-        Err(error) => {
-            eprintln!("aeria-check: cannot merge {path} per unit: {error}");
-            ExitCode::from(2)
-        }
-    }
-}
-
 fn main() -> ExitCode {
     let raw: Vec<String> = std::env::args().skip(1).collect();
-    if raw.first().map(String::as_str) == Some("merge-driver") {
-        return merge_driver(&raw[1..]);
-    }
     let arguments = match parse(raw.into_iter()) {
         Ok(Some(arguments)) => arguments,
         Ok(None) => {
@@ -261,13 +233,13 @@ mod tests {
     fn annotations_escape_their_properties_and_message() {
         let finding = Finding {
             severity: Severity::Error,
-            path: Some(".aeria/units/00.jsonl".to_owned()),
+            path: Some("po/Addon.po".to_owned()),
             line: Some(3),
             message: "bad: 50%\nnext".to_owned(),
         };
         assert_eq!(
             annotation(&finding, "project/"),
-            "::error title=Aeria check,file=project/.aeria/units/00.jsonl,line=3::bad: 50%25%0Anext"
+            "::error title=Aeria check,file=project/po/Addon.po,line=3::bad: 50%25%0Anext"
         );
     }
 }

@@ -1,8 +1,0 @@
-{
-  "bundle": {
-    "resources": {
-      "binaries/mingit": "git",
-      "binaries/aeria-cli.exe": "bin/aeria.exe"
-    }
-  }
-}

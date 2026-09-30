@@ -7,10 +7,9 @@ use std::path::{Path, PathBuf};
 
 use crate::GitError;
 use crate::collaboration::{COLLABORATION_FILE, CollaborationSettings};
+use crate::entries::{EntryChange, PO_DIR, is_po_path, summarize_changes};
 use crate::process::{GitExecutable, require_success};
-use crate::semantic::{UnitChange, summarize_changes};
 
-pub(crate) const AERIA_PATH: &str = ".aeria";
 pub const ATTRIBUTES_FILE: &str = ".gitattributes";
 /// The project-root file of Pack Settings v1, owned by `aeria-export`.
 pub const PACK_SETTINGS_FILE: &str = "aeria-pack.json";
@@ -20,49 +19,27 @@ pub const FONT_SETTINGS_FILE: &str = "aeria-fonts.json";
 pub const FONTS_DIR: &str = "fonts";
 /// The project knowledge directory, owned by `aeria-knowledge`.
 pub const KNOWLEDGE_DIR: &str = "aeria-knowledge";
-/// The files agent harnesses read, written by `aeria init`.
-pub const AGENT_FILES: [&str; 2] = ["AGENTS.md", "CLAUDE.md"];
-/// Skill folders of agent harnesses: Codex and Hermes Agent read
-/// `.agents/skills`, Claude Code `.claude/skills`. Skills a project keeps
-/// there are committed with it; Aeria writes none.
-pub const SKILL_DIRS: [&str; 2] = [".agents/skills", ".claude/skills"];
+/// The project settings file, owned by `aeria-po`.
+pub const SETTINGS_FILE: &str = "aeria.json";
 /// The feed workflow, owned by `aeria-publish`. It builds the update feed on
 /// GitHub from released packs, so it belongs to the project like its settings.
 pub const FEED_WORKFLOW_FILE: &str = ".github/workflows/harmonia-feed.yml";
-/// Every project path a checkpoint commits besides `.aeria/`.
-pub const PROJECT_PATHS: [&str; 12] = [
+/// Every project path a checkpoint commits besides `po/`.
+pub const PROJECT_PATHS: [&str; 9] = [
+    SETTINGS_FILE,
     ATTRIBUTES_FILE,
     COLLABORATION_FILE,
     PACK_SETTINGS_FILE,
     FONT_SETTINGS_FILE,
     FONTS_DIR,
     KNOWLEDGE_DIR,
-    AGENT_FILES[0],
-    AGENT_FILES[1],
-    SKILL_DIRS[0],
-    SKILL_DIRS[1],
     FEED_WORKFLOW_FILE,
     crate::workflow::CHECK_WORKFLOW_FILE,
 ];
-/// Workspace Format files are LF-only. This rule keeps Git from
-/// converting them on checkout (for example with `core.autocrlf=true`).
-const ATTRIBUTES_RULE: &str = "/.aeria/** text eol=lf";
-/// The name of Aeria's merge driver in Git configuration and attributes.
-pub const MERGE_DRIVER: &str = "aeria-units";
-/// Unit shards merge with Aeria's driver where it is configured. Without the
-/// configuration Git merges them as text, as before.
-const MERGE_ATTRIBUTE_RULE: &str = "/.aeria/units/*.jsonl merge=aeria-units";
-
-/// The command Git runs as the merge driver for `executable`, which must
-/// accept `merge-driver <base> <ours> <theirs> <path>`. Git runs it through
-/// its shell, where forward slashes work on every platform.
-#[must_use]
-pub fn merge_driver_command(executable: &Path) -> String {
-    format!(
-        "\"{}\" merge-driver %O %A %B %P",
-        executable.to_string_lossy().replace('\\', "/")
-    )
-}
+/// PO files are LF-only. This rule keeps Git from converting them on
+/// checkout (for example with `core.autocrlf=true`), so a file Aeria wrote
+/// is the file Git has.
+const ATTRIBUTES_RULE: &str = "*.po text eol=lf";
 const LOG_FORMAT: &str = "--format=%H%x1f%P%x1f%an%x1f%ae%x1f%at%x1f%D%x1f%s";
 
 /// A Git working tree that contains an Aeria project root.
@@ -132,10 +109,10 @@ pub struct FileStatus {
 }
 
 impl FileStatus {
-    /// Returns whether the file belongs to Aeria-managed workspace data.
+    /// Returns whether the file is one of the project's PO files.
     #[must_use]
     pub fn is_translation_data(&self) -> bool {
-        is_aeria_path(&self.path)
+        is_po_path(&self.path)
     }
 }
 
@@ -155,7 +132,7 @@ pub struct RepositoryStatus {
 }
 
 impl RepositoryStatus {
-    /// Returns whether Aeria-managed workspace data has uncommitted changes.
+    /// Returns whether the project's PO files have uncommitted changes.
     #[must_use]
     pub fn has_translation_changes(&self) -> bool {
         self.files.iter().any(FileStatus::is_translation_data)
@@ -188,7 +165,7 @@ pub struct CommitSummary {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CheckpointOutcome {
     pub commit: CommitSummary,
-    pub changes: Vec<UnitChange>,
+    pub changes: Vec<EntryChange>,
     /// The contribution branch created for this checkpoint under the
     /// pull-request policy, if any.
     pub branch_created: Option<String>,
@@ -574,86 +551,6 @@ impl GitRepository {
         Ok(())
     }
 
-    /// The command this repository's own configuration runs as Aeria's merge
-    /// driver, if it has one.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when Git fails.
-    pub fn merge_driver(&self) -> Result<Option<String>, GitError> {
-        Ok(self
-            .config_get(&format!("merge.{MERGE_DRIVER}.driver"))?
-            .filter(|(_, scope)| *scope == ConfigScope::Repository)
-            .map(|(command, _)| command))
-    }
-
-    /// Points an enabled merge driver at `executable`, for example after
-    /// Aeria moved or updated. Returns whether it changed; a repository
-    /// without the driver is left alone.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when Git fails.
-    pub fn update_merge_driver(&self, executable: &Path) -> Result<bool, GitError> {
-        let command = merge_driver_command(executable);
-        match self.merge_driver()? {
-            Some(current) if current != command => {
-                self.run(&[
-                    "config",
-                    "--local",
-                    "--",
-                    &format!("merge.{MERGE_DRIVER}.driver"),
-                    &command,
-                ])?;
-                Ok(true)
-            }
-            _ => Ok(false),
-        }
-    }
-
-    /// Makes command-line `git merge` and `git pull` merge unit shards per
-    /// translation unit with `executable`, or stops doing so with `None`.
-    ///
-    /// The driver is set in this repository's configuration, which is local
-    /// to the machine. Enabling it also adds the attribute rule to
-    /// `.gitattributes`, a project file the next checkpoint commits; the rule
-    /// stays when the driver is disabled, because Git merges as text wherever
-    /// the driver is not configured.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when Git or writing `.gitattributes` fails.
-    pub fn set_merge_driver(&self, executable: Option<&Path>) -> Result<(), GitError> {
-        let section = format!("merge.{MERGE_DRIVER}");
-        let Some(executable) = executable else {
-            // A missing section is already the goal.
-            let _ = self.git.output(
-                &self.root,
-                &["config", "--local", "--remove-section", &section],
-            )?;
-            return Ok(());
-        };
-        self.run(&[
-            "config",
-            "--local",
-            "--",
-            &format!("{section}.name"),
-            "Aeria per-string merge of translation units",
-        ])?;
-        self.run(&[
-            "config",
-            "--local",
-            "--",
-            &format!("{section}.driver"),
-            &merge_driver_command(executable),
-        ])?;
-        ensure_attribute_rule(
-            &self.root,
-            MERGE_ATTRIBUTE_RULE,
-            "# Command-line Git merges translation units per string where Aeria's driver is configured.",
-        )
-    }
-
     /// Returns Git options that make commits use only the configured
     /// translator identity, with an empty email when none is configured.
     ///
@@ -807,10 +704,9 @@ impl GitRepository {
 
     /// Commits all Aeria-managed project data as the translator identity.
     ///
-    /// Only `.aeria/`, `.gitattributes`, and the collaboration settings are
-    /// committed; other staged or unstaged files are left untouched. A blank
-    /// `message` is replaced with a deterministic summary of the
-    /// translation-unit changes. Under the pull-request policy a checkpoint on
+    /// Only `po/` and the project files of [`PROJECT_PATHS`] are committed;
+    /// other staged or unstaged files are left untouched. A blank `message`
+    /// is replaced with a deterministic summary of the string changes. Under the pull-request policy a checkpoint on
     /// the main branch first moves the uncommitted work to a new contribution
     /// branch.
     ///
@@ -891,9 +787,9 @@ impl GitRepository {
 
     /// Returns the Aeria-managed paths that exist or are tracked.
     fn managed_paths(&self) -> Result<Vec<&'static str>, GitError> {
-        let mut paths = vec![AERIA_PATH];
-        for path in PROJECT_PATHS {
-            if self.root.join(path).exists() || self.is_tracked(path)? {
+        let mut paths = Vec::new();
+        for path in std::iter::once(PO_DIR).chain(PROJECT_PATHS) {
+            if has_files(&self.root.join(path)) || self.is_tracked(path)? {
                 paths.push(path);
             }
         }
@@ -1078,8 +974,17 @@ impl GitRepository {
     }
 }
 
-pub(crate) fn is_aeria_path(path: &str) -> bool {
-    path == AERIA_PATH || path.starts_with(".aeria/")
+/// Whether a path is a file, or a folder with a file somewhere in it: Git
+/// knows no empty folders.
+fn has_files(path: &Path) -> bool {
+    if path.is_file() {
+        return true;
+    }
+    fs::read_dir(path).is_ok_and(|entries| {
+        entries
+            .filter_map(Result::ok)
+            .any(|entry| has_files(&entry.path()))
+    })
 }
 
 fn require_directory(path: &Path) -> Result<(), GitError> {
@@ -1099,7 +1004,7 @@ fn require_directory(path: &Path) -> Result<(), GitError> {
 }
 
 fn ensure_line_ending_rule(root: &Path) -> Result<(), GitError> {
-    ensure_attribute_rule(root, ATTRIBUTES_RULE, "# Aeria workspace data is LF-only.")
+    ensure_attribute_rule(root, ATTRIBUTES_RULE, "# Aeria's PO files are LF-only.")
 }
 
 fn ensure_attribute_rule(root: &Path, rule: &str, comment: &str) -> Result<(), GitError> {
@@ -1425,16 +1330,16 @@ mod tests {
 # branch.head main\0\
 # branch.upstream origin/main\0\
 # branch.ab +2 -1\0\
-1 .M N... 100644 100644 100644 aaaa bbbb project/.aeria/units/7a.jsonl\0\
+1 .M N... 100644 100644 100644 aaaa bbbb project/po/Addon/0.po\0\
 2 R. N... 100644 100644 100644 aaaa bbbb R100 project/new name.txt\0project/old.txt\0\
-? project/.aeria/units/00.jsonl\0";
+? project/po/Item.po\0";
         let status = parse_status(output, "project/").expect("status");
 
         assert_eq!(status.branch.as_deref(), Some("main"));
         assert_eq!(status.upstream.as_deref(), Some("origin/main"));
         assert_eq!((status.ahead, status.behind), (2, 1));
         assert_eq!(status.files.len(), 3);
-        assert_eq!(status.files[0].path, ".aeria/units/7a.jsonl");
+        assert_eq!(status.files[0].path, "po/Addon/0.po");
         assert_eq!(status.files[0].kind, FileChangeKind::Modified);
         assert!(!status.files[0].staged);
         assert_eq!(status.files[1].path, "new name.txt");

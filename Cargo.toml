@@ -6,8 +6,6 @@ members = [
   "crates/aeria-se",
   "crates/aeria-sqpack",
   "crates/aeria-source",
-  "crates/aeria-workspace",
-  "crates/aeria-rebase",
   "crates/aeria-search",
   "crates/aeria-knowledge",
   "crates/aeria-git",

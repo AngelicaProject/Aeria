@@ -9,7 +9,6 @@ import {
   normalizeCommandError,
   pageTranslationRows,
   setTranslationNote,
-  setTranslationReviewState,
   setTranslationTarget,
   translationProgress,
 } from "../ipc";
@@ -18,14 +17,13 @@ import type {
   CommandError,
   ProjectSheetDto,
   ProjectSummaryDto,
-  ReviewState,
   SheetProgressDto,
   SourceBinding,
   TranslationCellDto,
   TranslationOverlayDto,
   TranslationRowCursorDto,
   TranslationRowDto,
-  UnitChangeDto,
+  EntryChangeDto,
 } from "../types";
 import { ErrorBanner } from "./ErrorBanner";
 import { ConfirmDialog } from "./ConfirmDialog";
@@ -49,7 +47,7 @@ import { ExportDialog } from "./ExportDialog";
 import { ProjectGuideDialog, type ProjectGuideTab } from "./ProjectGuideDialog";
 import { WorkbenchToolDock, toolTitle, type WorkbenchTool } from "./WorkbenchToolDock";
 import { CommitView } from "./GitHistory";
-import type { GitCommitDto } from "../types";
+import { changeMark, type GitCommitDto } from "../types";
 import { detachedPanelTitle, type DetachedPanel } from "./DetachedToolWindow";
 import { displayPathName } from "../pathDisplay";
 import { initialWorkbenchLayout, reduceWorkbenchLayout } from "../ui/layout";
@@ -122,7 +120,6 @@ type EditorShellProps = {
   project: ProjectSummaryDto;
   applicationWarning: CommandError | null;
   onDismissApplicationWarning: () => void;
-  onShowDetachedUnits: () => void;
   onClosed: () => void;
   /** Reports project metadata changed in settings, such as the target language. */
   onProjectChanged: (project: ProjectSummaryDto) => void;
@@ -138,13 +135,13 @@ function targetCell(row: TranslationRowDto, target: RowTarget): TranslationCellD
   return row.cells.find((cell) => target.columnIndex === null || cell.sourceBinding.columnIndex === target.columnIndex) ?? row.cells[0];
 }
 
-function patchRow(row: TranslationRowDto, patches: ReadonlyMap<string, TranslationOverlayDto>): TranslationRowDto {
+function patchRow(row: TranslationRowDto, patches: ReadonlyMap<string, TranslationOverlayDto | null>): TranslationRowDto {
   let changed = false;
   const cells = row.cells.map((cell) => {
-    const translation = patches.get(bindingKey(cell.sourceBinding));
-    if (!translation) return cell;
+    const key = bindingKey(cell.sourceBinding);
+    if (!patches.has(key)) return cell;
     changed = true;
-    return { ...cell, translation };
+    return { ...cell, translation: patches.get(key) ?? null };
   });
   return changed ? { ...row, cells } : row;
 }
@@ -202,7 +199,6 @@ export function EditorShell({
   project,
   applicationWarning,
   onDismissApplicationWarning,
-  onShowDetachedUnits,
   onClosed,
   onProjectChanged,
 }: EditorShellProps) {
@@ -266,7 +262,7 @@ export function EditorShell({
   const [settingsSection, setSettingsSection] = useState<SettingsSection>("appearance");
   const [palette, setPalette] = useState<{ open: boolean; input: string; key: number }>({ open: false, input: "", key: 0 });
   const [recentSheets, setRecentSheets] = useState<string[]>([]);
-  const [pendingChanges, setPendingChanges] = useState<UnitChangeDto[] | null>(null);
+  const [pendingChanges, setPendingChanges] = useState<EntryChangeDto[] | null>(null);
   const { preferences } = usePreferences();
   const leftDockOpen = layout.regions.leftDock.visible;
   const rightDockOpen = layout.regions.rightDock.visible;
@@ -282,7 +278,7 @@ export function EditorShell({
   const loaderRef = useRef<SheetLoader | null>(null);
   const pendingReveal = useRef<PendingReveal | null>(null);
   /** Overlays saved while a sheet streams, applied to pages read before the save. */
-  const overlayPatches = useRef(new Map<string, TranslationOverlayDto>());
+  const overlayPatches = useRef(new Map<string, TranslationOverlayDto | null>());
   const selectedRowKeyRef = useRef<string | null>(null);
   selectedRowKeyRef.current = selectedRowCursor ? rowKey(selectedRowCursor) : null;
   const lensFilterRef = useRef(lensFilter);
@@ -299,6 +295,7 @@ export function EditorShell({
   const sheetHasNoRows = selectedSheetName !== null && loadedSheetName === selectedSheetName && !sheetLoading && !sheetStreaming && rows.length === 0;
 
   const progressBySheet = useMemo(() => new Map(progress.map((entry) => [entry.sheetName, entry])), [progress]);
+  const fuzzyCount = useMemo(() => progress.reduce((sum, entry) => sum + entry.fuzzy, 0), [progress]);
   const projectProgress = useMemo(() => {
     const total = project.sheets.reduce((sum, sheet) => sum + sheet.translatableCellCount, 0);
     const translated = progress.reduce((sum, entry) => sum + entry.translated, 0);
@@ -308,7 +305,7 @@ export function EditorShell({
   const selectedSheetProgress = useMemo(() => selectedSheet && selectedSheet.translatableCellCount > 0
     ? {
         translated: progressBySheet.get(selectedSheet.name)?.translated ?? 0,
-        reviewed: progressBySheet.get(selectedSheet.name)?.reviewed ?? 0,
+        fuzzy: progressBySheet.get(selectedSheet.name)?.fuzzy ?? 0,
         total: selectedSheet.translatableCellCount,
       }
     : null, [progressBySheet, selectedSheet]);
@@ -334,7 +331,7 @@ export function EditorShell({
     }
   }, [documentTabs.activeId]);
 
-  const applyOverlay = useCallback((sourceBinding: TranslationCellDto["sourceBinding"], translation: TranslationOverlayDto) => {
+  const applyOverlay = useCallback((sourceBinding: TranslationCellDto["sourceBinding"], translation: TranslationOverlayDto | null) => {
     const targetKey = bindingKey(sourceBinding);
     overlayPatches.current.set(targetKey, translation);
     setWorkspaceRevision((current) => current + 1);
@@ -702,18 +699,14 @@ export function EditorShell({
     }
   }, [applyOverlay, confirmMutationDiscard, preferences.focusTargetOnNext, runMutation, selectedRow, t]);
 
-  const handleApprove = useCallback(async (cell: TranslationCellDto, draft: CellDraft, targetDirty: boolean, otherDirty: boolean, discardOtherDrafts: () => void) => {
-    if (!selectedRow || !(await confirmMutationDiscard(otherDirty, t("workbench.discard.review")))) return;
+  // Accepting saves the translation as it is: a changed text is written, and
+  // a fuzzy one is marked current, since saving clears the mark.
+  const handleApprove = useCallback(async (cell: TranslationCellDto, draft: CellDraft, _targetDirty: boolean, otherDirty: boolean, discardOtherDrafts: () => void) => {
+    if (!selectedRow || !(await confirmMutationDiscard(otherDirty, t("workbench.discard.saveTarget")))) return;
     if (otherDirty) discardOtherDrafts();
     const key = bindingKey(cell.sourceBinding);
-    const approved = await runMutation("review", key, t("workbench.error.review"), async () => {
-      let unitId = cell.translation?.translationUnitId ?? null;
-      if (targetDirty || unitId === null) {
-        const saved = await setTranslationTarget(cell.sourceBinding, draft.target);
-        applyOverlay(cell.sourceBinding, saved);
-        unitId = saved.translationUnitId;
-      }
-      const overlay = await setTranslationReviewState(unitId, "reviewed");
+    const approved = await runMutation("target", key, t("workbench.error.saveTarget"), async () => {
+      const overlay = await setTranslationTarget(cell.sourceBinding, draft.target);
       pendingAdvance.current = key;
       focusTargetRequest.current = preferences.focusTargetOnNext;
       applyOverlay(cell.sourceBinding, overlay);
@@ -725,25 +718,13 @@ export function EditorShell({
   }, [applyOverlay, confirmMutationDiscard, preferences.focusTargetOnNext, runMutation, selectedRow, t]);
 
   const handleSaveNote = useCallback(async (cell: TranslationCellDto, draft: CellDraft, otherDirty: boolean, discardOtherDrafts: () => void) => {
-    const translation = cell.translation;
-    if (!translation || !selectedRow || !(await confirmMutationDiscard(otherDirty, t("workbench.discard.saveNote")))) return;
+    if (!selectedRow || !(await confirmMutationDiscard(otherDirty, t("workbench.discard.saveNote")))) return;
     if (otherDirty) discardOtherDrafts();
     await runMutation("note", bindingKey(cell.sourceBinding), t("workbench.error.saveNote"), async () => {
-      const overlay = await setTranslationNote(translation.translationUnitId, draft.note.length === 0 ? null : draft.note);
+      const overlay = await setTranslationNote(cell.sourceBinding, draft.note.length === 0 ? null : draft.note);
       applyOverlay(cell.sourceBinding, overlay);
     });
   }, [applyOverlay, confirmMutationDiscard, runMutation, selectedRow, t]);
-
-  const handleReviewChange = useCallback(async (cell: TranslationCellDto, reviewState: ReviewState, discardDrafts: () => void) => {
-    const translation = cell.translation;
-    const shouldDiscardDrafts = hasDirtyDraft.current;
-    if (!translation || translation.reviewState === reviewState || !(await confirmMutationDiscard(shouldDiscardDrafts, t("workbench.discard.review")))) return;
-    if (shouldDiscardDrafts) discardDrafts();
-    await runMutation("review", bindingKey(cell.sourceBinding), t("workbench.error.review"), async () => {
-      const overlay = await setTranslationReviewState(translation.translationUnitId, reviewState);
-      applyOverlay(cell.sourceBinding, overlay);
-    });
-  }, [applyOverlay, confirmMutationDiscard, runMutation, t]);
 
   const handleClose = useCallback(async () => {
     if (!(await requestDiscardConfirmation(t("workbench.discard.closeProject")))) return;
@@ -771,11 +752,7 @@ export function EditorShell({
     }
   }, [requestDiscardConfirmation, t]);
 
-  const selectedUnitId = useMemo(() => {
-    if (!selectedRow || !selectedBinding) return null;
-    const key = bindingKey(selectedBinding);
-    return selectedRow.cells.find((cell) => bindingKey(cell.sourceBinding) === key)?.translation?.translationUnitId ?? null;
-  }, [selectedRow, selectedBinding]);
+  const selectedKey = useMemo(() => selectedBinding ? bindingKey(selectedBinding) : null, [selectedBinding]);
 
   const handleWorkspaceChanged = useCallback(() => {
     setWorkspaceRevision((current) => current + 1);
@@ -798,24 +775,23 @@ export function EditorShell({
   }, [refreshPendingChanges, workspaceRevision]);
 
   const pendingByBinding = useMemo(() => {
-    const byBinding = new Map<string, UnitChangeDto>();
+    const byBinding = new Map<string, EntryChangeDto>();
     for (const change of pendingChanges ?? []) {
-      const unit = change.after ?? change.before;
-      if (unit) byBinding.set(bindingKey(unit.sourceBinding), change);
+      if (change.sourceBinding) byBinding.set(bindingKey(change.sourceBinding), change);
     }
     return byBinding;
   }, [pendingChanges]);
 
-  const changedKinds = useMemo(() => new Map([...pendingByBinding].map(([key, change]) => [key, change.kind])), [pendingByBinding]);
+  const changedKinds = useMemo(() => new Map([...pendingByBinding].map(([key, change]) => [key, changeMark(change.kind)])), [pendingByBinding]);
 
   const selectedCheckpoint = useMemo<CheckpointBaseline | null>(() => {
     const change = selectedBinding ? pendingByBinding.get(bindingKey(selectedBinding)) : undefined;
     if (!change) return null;
     return {
       kind: change.kind,
-      target: change.before?.targetMacro ?? null,
-      reviewChanged: change.reviewChanged,
-      noteChanged: change.noteChanged,
+      target: change.before.targetMacro || null,
+      fuzzyChanged: change.before.fuzzy !== change.after.fuzzy,
+      noteChanged: change.before.translatorNote !== change.after.translatorNote,
     };
   }, [pendingByBinding, selectedBinding]);
 
@@ -856,7 +832,8 @@ export function EditorShell({
   // Agents write through the `aeria` command; the backend reloads the
   // workspace after their writes and the open sheet follows.
   useEffect(() => {
-    const subscription = listen("project://workspace-reloaded", () => stableWorkspaceChanged());
+    // A file of a shown sheet changed outside the editor, by Git or by hand.
+    const subscription = listen<string[]>("project://files-changed", () => stableWorkspaceChanged());
     return () => { void subscription.then((unlisten) => unlisten()); };
   }, [stableWorkspaceChanged]);
   const openPalette = useCallback((input: string) => {
@@ -887,7 +864,6 @@ export function EditorShell({
   const saveTarget = useStableCallback((...args: Parameters<typeof handleSaveTarget>) => void handleSaveTarget(...args));
   const approve = useStableCallback((...args: Parameters<typeof handleApprove>) => void handleApprove(...args));
   const saveNote = useStableCallback((...args: Parameters<typeof handleSaveNote>) => void handleSaveNote(...args));
-  const changeReview = useStableCallback((...args: Parameters<typeof handleReviewChange>) => void handleReviewChange(...args));
   const restoreTarget = useStableCallback((target: string) => void handleRestoreTarget(target));
   const openRepositorySettings = useCallback(() => openSettings("repository"), [openSettings]);
   const pendingState = useMemo(() => ({ changes: pendingChanges, refresh: refreshPendingChanges }), [pendingChanges, refreshPendingChanges]);
@@ -1071,7 +1047,7 @@ export function EditorShell({
       return <SheetSidebar sheets={project.sheets} selectedSheetName={selectedSheetName} disabled={closing} active={active} hideEmpty={hideEmptySheets} onHideEmptyChange={setHideEmptySheets} filterOpen={sheetFilterOpen} onFilterOpenChange={setSheetFilterOpen} onOpenFilter={focusSheetFilter} quickFindSignal={quickFindSignal} revealSignal={revealSheetSignal} collapseSignal={collapseSheetsSignal} onSelect={handleSheetSelect} progress={progressBySheet} />;
     }
     const tool: WorkbenchTool = panelId === "search" ? "search" : "git";
-    return <WorkbenchToolDock activeTool={tool} selectedBinding={selectedBinding} onOpenCommit={stableOpenCommit} selectedCommitId={activeCommitId} onOpenRepositorySettings={openRepositorySettings} projectRevision={projectRevision} selectedUnitId={selectedUnitId} workspaceRevision={workspaceRevision} onWorkspaceChanged={stableWorkspaceChanged} pending={pendingState} onRevealBinding={stableRevealBinding} />;
+    return <WorkbenchToolDock activeTool={tool} selectedBinding={selectedBinding} onOpenCommit={stableOpenCommit} selectedCommitId={activeCommitId} onOpenRepositorySettings={openRepositorySettings} projectRevision={projectRevision} selectedKey={selectedKey} workspaceRevision={workspaceRevision} onWorkspaceChanged={stableWorkspaceChanged} pending={pendingState} onRevealBinding={stableRevealBinding} />;
   };
 
   const renderDock = (region: "left" | "right", panelId: string | null, open: boolean) => {
@@ -1194,7 +1170,7 @@ export function EditorShell({
     { id: "copy-source", category: category.translation, title: t("menu.copySource"), icon: "copyPlus", enabled: selectedRow !== null, run: () => editorRef.current?.copySource() },
     { id: "revert", category: category.translation, title: t("menu.revert"), icon: "undo", enabled: dirty, run: () => editorRef.current?.revert() },
     { id: "filter-untranslated", category: category.strings, title: t("command.showUntranslated"), icon: "listFilter", run: () => setLensFilter({ ...emptyOccurrenceFilter, status: "untranslated" }) },
-    { id: "filter-review", category: category.strings, title: t("command.showNeedsReview"), icon: "listFilter", run: () => setLensFilter({ ...emptyOccurrenceFilter, status: "needsReview" }) },
+    { id: "filter-fuzzy", category: category.strings, title: t("command.showFuzzy"), icon: "listFilter", run: () => setLensFilter({ ...emptyOccurrenceFilter, status: "fuzzy" }) },
     { id: "filter-clear", category: category.strings, title: t("command.clearFilters"), icon: "x", run: () => setLensFilter(emptyOccurrenceFilter) },
     { id: "view-sheets", category: category.view, title: t("command.toggleSheets"), shortcut: "Ctrl+B", icon: "table2", run: () => showPanel("sheets", "left") },
     { id: "view-search", category: category.view, title: t("command.toggleSearch"), icon: "search", run: () => showPanel("search", "left") },
@@ -1322,7 +1298,6 @@ export function EditorShell({
                   onSaveTarget={saveTarget}
                   onApprove={approve}
                   onSaveNote={saveNote}
-                  onReviewChange={changeReview}
                   onNavigate={stableNavigateFromEditor}
                   takeFocusRequest={takeFocusRequest}
                   checkpoint={selectedCheckpoint}
@@ -1377,8 +1352,8 @@ export function EditorShell({
         selectedBinding={selectedBinding}
         dirty={dirty}
         projectProgress={projectProgress}
-        detachedCount={project.detachedUnitCount}
-        onShowDetached={onShowDetachedUnits}
+        fuzzyCount={fuzzyCount}
+        onShowFuzzy={() => setLensFilter({ ...emptyOccurrenceFilter, status: "fuzzy" })}
       />
       <ConfirmDialog
         open={discardRequest !== null}

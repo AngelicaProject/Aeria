@@ -1,6 +1,6 @@
 import { memo } from "react";
 import type { MessageKey } from "../i18n/translate";
-import type { SourceBinding, UnitChangeDto } from "../types";
+import type { EntryChangeDto, SourceBinding } from "../types";
 import { useI18n } from "../ui/i18n";
 import { Segmented } from "../ui/primitives/Segmented";
 import { UiIcon } from "../ui/primitives/UiIcon";
@@ -18,11 +18,11 @@ type WorkbenchToolDockProps = {
   /** Opens Settings on the repository section. */
   onOpenRepositorySettings?: (() => void) | undefined;
   projectRevision?: number;
-  selectedUnitId?: string | null;
+  selectedKey?: string | null;
   workspaceRevision?: number;
   onWorkspaceChanged?: () => void;
   onRestoreTarget?: (targetMacro: string) => void;
-  pending?: { changes: UnitChangeDto[] | null; refresh: () => Promise<void> };
+  pending?: { changes: EntryChangeDto[] | null; refresh: () => Promise<void> };
   onRevealBinding?: (binding: SourceBinding) => void;
 };
 
@@ -31,7 +31,7 @@ export function toolTitle(tool: WorkbenchTool): MessageKey {
 }
 
 /** Memoized: the Git panel is costly to re-render on unrelated workbench updates. */
-export const WorkbenchToolDock = memo(function WorkbenchToolDock({ activeTool, selectedBinding, onOpenCommit, selectedCommitId, onOpenRepositorySettings, projectRevision, selectedUnitId, workspaceRevision, onWorkspaceChanged, onRestoreTarget, pending, onRevealBinding }: WorkbenchToolDockProps) {
+export const WorkbenchToolDock = memo(function WorkbenchToolDock({ activeTool, selectedBinding, onOpenCommit, selectedCommitId, onOpenRepositorySettings, projectRevision, selectedKey, workspaceRevision, onWorkspaceChanged, onRestoreTarget, pending, onRevealBinding }: WorkbenchToolDockProps) {
   const { t } = useI18n();
   if (activeTool === "search") {
     return (
@@ -46,7 +46,7 @@ export const WorkbenchToolDock = memo(function WorkbenchToolDock({ activeTool, s
   }
   return (
     <section className="tool-content git-tool" aria-label={t("workbench.tool.git")}>
-      <GitPanel onOpenCommit={onOpenCommit} selectedCommitId={selectedCommitId} onOpenSettings={onOpenRepositorySettings} projectRevision={projectRevision} selectedUnitId={selectedUnitId ?? null} workspaceRevision={workspaceRevision ?? 0} onWorkspaceChanged={onWorkspaceChanged} pending={pending} onRevealBinding={onRevealBinding} />
+      <GitPanel onOpenCommit={onOpenCommit} selectedCommitId={selectedCommitId} onOpenSettings={onOpenRepositorySettings} projectRevision={projectRevision} selectedKey={selectedKey ?? null} workspaceRevision={workspaceRevision ?? 0} onWorkspaceChanged={onWorkspaceChanged} pending={pending} onRevealBinding={onRevealBinding} />
     </section>
   );
 });

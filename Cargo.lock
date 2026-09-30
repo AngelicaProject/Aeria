@@ -15,7 +15,8 @@ dependencies = [
  "aeria-export",
  "aeria-fonts",
  "aeria-git",
- "aeria-workspace",
+ "aeria-knowledge",
+ "aeria-po",
  "serde_json",
  "tempfile",
 ]
@@ -24,7 +25,6 @@ dependencies = [
 name = "aeria-core"
 version = "0.1.0"
 dependencies = [
- "sha2 0.11.0",
  "thiserror 2.0.20",
 ]
 
@@ -40,15 +40,9 @@ dependencies = [
  "aeria-po",
  "aeria-projects",
  "aeria-publish",
- "aeria-rebase",
  "aeria-se",
- "aeria-search",
  "aeria-source",
  "aeria-sqpack",
- "aeria-workspace",
- "dirs",
- "getrandom 0.4.3",
- "rusqlite",
  "semver",
  "serde",
  "serde_json",
@@ -69,10 +63,10 @@ version = "0.1.0"
 dependencies = [
  "aeria-core",
  "aeria-fonts",
+ "aeria-po",
  "aeria-se",
  "aeria-source",
  "aeria-sqpack",
- "aeria-workspace",
  "brotli",
  "p256",
  "serde",
@@ -98,8 +92,7 @@ dependencies = [
 name = "aeria-git"
 version = "0.1.0"
 dependencies = [
- "aeria-core",
- "aeria-workspace",
+ "aeria-po",
  "serde_json",
  "tempfile",
  "thiserror 2.0.20",
@@ -119,6 +112,7 @@ dependencies = [
 name = "aeria-po"
 version = "0.1.0"
 dependencies = [
+ "aeria-knowledge",
  "aeria-se",
  "aeria-source",
  "aeria-sqpack",
@@ -157,17 +151,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "aeria-rebase"
-version = "0.1.0"
-dependencies = [
- "aeria-core",
- "aeria-source",
- "aeria-sqpack",
- "tempfile",
- "thiserror 2.0.20",
-]
-
-[[package]]
 name = "aeria-se"
 version = "0.1.0"
 
@@ -202,22 +185,6 @@ version = "0.1.0"
 dependencies = [
  "crc32fast",
  "flate2",
- "thiserror 2.0.20",
-]
-
-[[package]]
-name = "aeria-workspace"
-version = "0.1.0"
-dependencies = [
- "aeria-core",
- "aeria-rebase",
- "aeria-se",
- "aeria-source",
- "aeria-sqpack",
- "serde",
- "serde_json",
- "sha2 0.11.0",
- "tempfile",
  "thiserror 2.0.20",
 ]
 

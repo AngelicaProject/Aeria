@@ -1,13 +1,13 @@
-import type { SourceBinding, UnitChangeDto } from "./types";
+import type { EntryChangeDto, EntryChangeKind, SourceBinding } from "./types";
 
-export type ChangeKind = UnitChangeDto["kind"];
+export type ChangeKind = EntryChangeKind;
 
 /** What the change list shows: text to find and one kind, or every kind. */
 export type ChangeFilter = { query: string; kind: ChangeKind | "all" };
 
 export type ChangeGroup = {
   sheetName: string;
-  changes: UnitChangeDto[];
+  changes: EntryChangeDto[];
   /** Whether the group's changes span more than one column, so rows name theirs. */
   multiColumn: boolean;
 };
@@ -15,25 +15,30 @@ export type ChangeGroup = {
 /** One line of the flattened list: a sheet header or a change under it. */
 export type ChangeItem =
   | { type: "group"; group: ChangeGroup; shown: number; closed: boolean }
-  | { type: "change"; change: UnitChangeDto; group: ChangeGroup };
+  | { type: "change"; change: EntryChangeDto; group: ChangeGroup };
 
 /** Changes above which sheets start collapsed, so the list stays scannable. */
 export const COLLAPSE_THRESHOLD = 50;
 
-export function changeBinding(change: UnitChangeDto): SourceBinding | null {
-  return (change.after ?? change.before)?.sourceBinding ?? null;
+export function changeBinding(change: EntryChangeDto): SourceBinding | null {
+  return change.sourceBinding;
+}
+
+/** The sheet of a change: from the game, or from its `msgctxt` when the game has no such string. */
+export function changeSheet(change: EntryChangeDto): string | null {
+  return change.sourceBinding?.sheetName ?? (change.context.split(":")[0] || null);
 }
 
 /** Groups changes by sheet, ordered by sheet name then row coordinate. */
-export function groupChanges(changes: readonly UnitChangeDto[], unknownSheet: string): ChangeGroup[] {
-  const groups = new Map<string, UnitChangeDto[]>();
+export function groupChanges(changes: readonly EntryChangeDto[], unknownSheet: string): ChangeGroup[] {
+  const groups = new Map<string, EntryChangeDto[]>();
   for (const change of changes) {
-    const sheetName = changeBinding(change)?.sheetName ?? unknownSheet;
+    const sheetName = changeSheet(change) ?? unknownSheet;
     const group = groups.get(sheetName);
     if (group) group.push(change);
     else groups.set(sheetName, [change]);
   }
-  const order = (change: UnitChangeDto) => {
+  const order = (change: EntryChangeDto) => {
     const binding = changeBinding(change);
     return binding ? [binding.rowId, binding.subrowId, binding.columnIndex] : [0, 0, 0];
   };
@@ -53,7 +58,7 @@ export function isFilterActive(filter: ChangeFilter): boolean {
 
 /** Whether a change matches the filter by kind and by its sheet, text, or
  * exact `row` / `row:subrow`. */
-export function matchesChange(change: UnitChangeDto, sheetName: string, filter: ChangeFilter): boolean {
+export function matchesChange(change: EntryChangeDto, sheetName: string, filter: ChangeFilter): boolean {
   if (filter.kind !== "all" && change.kind !== filter.kind) return false;
   const query = filter.query.trim().toLocaleLowerCase();
   if (query === "") return true;
@@ -63,12 +68,12 @@ export function matchesChange(change: UnitChangeDto, sheetName: string, filter: 
   if (coordinate && binding) {
     return binding.rowId === Number(coordinate[1]) && (coordinate[2] === undefined || binding.subrowId === Number(coordinate[2]));
   }
-  const haystack = [sheetName, change.after?.targetMacro ?? "", change.before?.targetMacro ?? ""];
+  const haystack = [sheetName, change.after.targetMacro, change.before.targetMacro, change.sourceMacro];
   return haystack.some((text) => text.toLocaleLowerCase().includes(query));
 }
 
-export function kindCounts(changes: readonly UnitChangeDto[]): Record<ChangeKind, number> {
-  const counts: Record<ChangeKind, number> = { added: 0, modified: 0, removed: 0 };
+export function kindCounts(changes: readonly EntryChangeDto[]): Record<ChangeKind, number> {
+  const counts: Record<ChangeKind, number> = { translated: 0, changed: 0, cleared: 0, marked: 0 };
   for (const change of changes) counts[change.kind] += 1;
   return counts;
 }

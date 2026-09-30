@@ -277,9 +277,8 @@ kbd {
   border-radius: 50%;
 }
 .review-dot-none { box-shadow: 0 0 0 1.5px var(--review-none) inset; }
-.review-dot-draft { background: var(--review-draft); }
-.review-dot-needsReview { background: var(--review-needs); box-shadow: 0 0 0 3px color-mix(in srgb, var(--review-needs) 22%, transparent); }
-.review-dot-reviewed { background: var(--review-done); }
+.review-dot-translated { background: var(--review-done); }
+.review-dot-fuzzy { background: var(--review-needs); box-shadow: 0 0 0 3px color-mix(in srgb, var(--review-needs) 22%, transparent); }
 
 .meter {
   position: relative;
@@ -293,7 +292,7 @@ kbd {
 }
 .meter > span { position: absolute; inset: 0 auto 0 0; border-radius: inherit; transition: width var(--duration) var(--ease-out); }
 .meter-translated { background: color-mix(in srgb, var(--accent) 55%, transparent); }
-.meter-reviewed { background: var(--accent); }
+.meter-fuzzy { background: var(--review-needs); }
 .meter-inline { width: 44px; margin-right: 6px; }
 
 .progress-track {

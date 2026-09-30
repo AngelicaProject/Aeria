@@ -13,7 +13,7 @@ import {
   exportSaveSettings,
   normalizeCommandError,
 } from "../ipc";
-import type { CommandError, ContentPolicy, ExportOverviewDto, ExportReportDto, PackSettings, ReleaseChannel } from "../types";
+import type { CommandError, ExportOverviewDto, ExportReportDto, PackSettings, ReleaseChannel } from "../types";
 import { useI18n } from "../ui/i18n";
 import { Segmented } from "../ui/primitives/Segmented";
 import { UiIcon, type UiIconName } from "../ui/primitives/UiIcon";
@@ -36,7 +36,6 @@ type Release = {
   /** Empty means today's date. */
   label: string;
   channel: ReleaseChannel;
-  contentPolicy: ContentPolicy;
   changelog: string;
 };
 
@@ -96,7 +95,7 @@ export const ExportDialog = memo(function ExportDialog({ open, onOpenChange, onO
   const [overview, setOverview] = useState<ExportOverviewDto | null>(null);
   const [section, setSection] = useState<Section>("release");
   const [settings, setSettings] = useState<PackSettings>(emptySettings);
-  const [release, setRelease] = useState<Release>({ label: "", channel: "stable", contentPolicy: "reviewed", changelog: "" });
+  const [release, setRelease] = useState<Release>({ label: "", channel: "stable", changelog: "" });
   /** The last number published from this dialog, ahead of the fetched tags. */
   const [publishedHere, setPublishedHere] = useState(0);
   const [busy, setBusy] = useState<string | null>(null);
@@ -163,7 +162,6 @@ export const ExportDialog = memo(function ExportDialog({ open, onOpenChange, onO
     sequence,
     version: release.label.trim() || today(),
     channel: release.channel,
-    contentPolicy: release.contentPolicy,
     changelog: release.changelog.trim() || null,
   });
 
@@ -285,11 +283,7 @@ export const ExportDialog = memo(function ExportDialog({ open, onOpenChange, onO
           : <Check state="info">{t("export.check.notPushed")}</Check>) : null}
       </ul>
 
-      <div className="export-block">
-        <span className="field-label">{t("export.release.content")}</span>
-        <Segmented<ContentPolicy> label={t("export.release.content")} value={release.contentPolicy} disabled={busy !== null} onChange={(contentPolicy) => setRelease((current) => ({ ...current, contentPolicy }))} options={[{ value: "reviewed", label: t("export.release.reviewed") }, { value: "all", label: t("export.release.all") }]} />
-        <span className="field-hint">{t(release.contentPolicy === "reviewed" ? "export.release.reviewedHint" : "export.release.allHint")}</span>
-      </div>
+      <p className="field-hint">{t("export.release.contentHint")}</p>
 
       <div className="export-block">
         <span className="field-label">{t("export.release.number", { sequence })}</span>
@@ -323,8 +317,8 @@ export const ExportDialog = memo(function ExportDialog({ open, onOpenChange, onO
             {result.report.fontTargets > 0 ? <span>{t("export.result.fonts", { glyphs: result.report.fontGlyphs, sizes: result.report.fontTargets })}</span> : null}
             <span>{result.report.signedBy ? t("export.result.signed", { fingerprint: shortFingerprint(result.report.signedBy) }) : t("export.result.unsigned")}</span>
           </p>
-          {result.report.skippedUnreviewed + result.report.skippedDetached > 0 ? (
-            <p className="field-hint">{t("export.result.skipped", { unreviewed: result.report.skippedUnreviewed, detached: result.report.skippedDetached })}</p>
+          {result.report.skippedFuzzy > 0 ? (
+            <p className="field-hint">{t("export.result.skippedFuzzy", { fuzzy: result.report.skippedFuzzy })}</p>
           ) : null}
           {result.path ? <code className="export-selectable">{result.path}</code> : null}
           {result.releaseUrl ? <code className="export-selectable">{result.releaseUrl}</code> : null}

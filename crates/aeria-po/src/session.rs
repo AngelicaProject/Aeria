@@ -41,6 +41,8 @@ pub struct Translation {
     pub fuzzy: bool,
     /// The translator's note (`# ` comments), lines joined with `\n`.
     pub note: Option<String>,
+    /// The source the translation was written for, while it is fuzzy.
+    pub previous: Option<String>,
 }
 
 impl Translation {
@@ -50,6 +52,7 @@ impl Translation {
             text: entry.translation.clone(),
             fuzzy: entry.fuzzy,
             note,
+            previous: entry.previous.clone().filter(|_| entry.fuzzy),
         })
     }
 }
@@ -171,10 +174,13 @@ pub struct SheetProgress {
 /// An open project.
 pub struct Session {
     root: PathBuf,
-    settings: Settings,
+    settings: Mutex<Settings>,
     source: Arc<GameSource>,
     paths: SheetPaths,
     files: Mutex<HashMap<String, (Stamp, Arc<FileState>)>>,
+    /// Files read for the editor, by path relative to `po/`, with the stamp
+    /// they had: [`Session::changed_sheets`] watches them.
+    viewed: Mutex<HashMap<String, Stamp>>,
     knowledge: Mutex<Option<(Vec<Stamp>, Arc<Knowledge>)>>,
     /// Writes one at a time, so two edits of one file never race.
     writing: Mutex<()>,
@@ -233,10 +239,11 @@ impl Session {
         let paths = SheetPaths::new(source.sheet_names().iter().map(String::as_str));
         Self {
             root: root.to_owned(),
-            settings,
+            settings: Mutex::new(settings),
             source,
             paths,
             files: Mutex::new(HashMap::new()),
+            viewed: Mutex::new(HashMap::new()),
             knowledge: Mutex::new(None),
             writing: Mutex::new(()),
         }
@@ -247,9 +254,16 @@ impl Session {
         &self.root
     }
 
+    /// The project settings, `aeria.json`.
     #[must_use]
-    pub const fn settings(&self) -> &Settings {
-        &self.settings
+    pub fn settings(&self) -> Settings {
+        lock(&self.settings).clone()
+    }
+
+    /// Holds every write of the session until the guard drops, for an
+    /// operation that changes the files underneath it, such as a Git merge.
+    pub fn hold_writes(&self) -> MutexGuard<'_, ()> {
+        lock(&self.writing)
     }
 
     #[must_use]
@@ -267,14 +281,16 @@ impl Session {
     /// # Errors
     ///
     /// Returns an error when `aeria.json` cannot be written.
-    pub fn set_target_language(&mut self, tag: &str) -> Result<(), ProjectError> {
-        if self.settings.target_language == tag {
+    pub fn set_target_language(&self, tag: &str) -> Result<(), ProjectError> {
+        let _writing = lock(&self.writing);
+        let mut settings = lock(&self.settings);
+        if settings.target_language == tag {
             return Ok(());
         }
-        let mut settings = self.settings.clone();
-        tag.clone_into(&mut settings.target_language);
-        write_settings(&self.root, &settings)?;
-        self.settings = settings;
+        let mut changed = settings.clone();
+        tag.clone_into(&mut changed.target_language);
+        write_settings(&self.root, &changed)?;
+        *settings = changed;
         Ok(())
     }
 
@@ -330,6 +346,32 @@ impl Session {
         Ok(state)
     }
 
+    /// Records the stamp of a file the editor shows.
+    fn view(&self, path: &str) {
+        let now = stamp(&self.root.join(PO_DIR).join(path));
+        lock(&self.viewed).insert(path.to_owned(), now);
+    }
+
+    /// The sheets of the files the editor has shown that changed on disk
+    /// since, by Git or by hand; each is reported once per change.
+    #[must_use]
+    pub fn changed_sheets(&self) -> Vec<String> {
+        let mut changed = std::collections::BTreeSet::new();
+        let mut viewed = lock(&self.viewed);
+        for (path, seen) in viewed.iter_mut() {
+            let now = stamp(&self.root.join(PO_DIR).join(path));
+            if now != *seen {
+                *seen = now;
+                if let Some((_, state)) = lock(&self.files).get(path)
+                    && let Some(sheet) = &state.sheet
+                {
+                    changed.insert(sheet.clone());
+                }
+            }
+        }
+        changed.into_iter().collect()
+    }
+
     /// A bounded page of a sheet's rows with their translations, after the
     /// row `after` (exclusive), ordered by row ID then subrow. A row with no
     /// string of the project is left out, so a page may be shorter than
@@ -370,6 +412,7 @@ impl Session {
                 let path = self.file_of(&sheet, source_row.row_id);
                 if !states.contains_key(&path) {
                     let state = self.file_state(&path)?;
+                    self.view(&path);
                     states.insert(path.clone(), state);
                 }
                 let state = &states[&path];
@@ -421,8 +464,14 @@ impl Session {
         Ok(self.file_state(&path)?.translations.get(&identity).cloned())
     }
 
-    /// The file, `msgctxt`, and game text of a string.
-    fn locate(
+    /// The file of a string, relative to `po/`, its `msgctxt`, and its text
+    /// in the game.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the string is not an entry of the project or
+    /// the game cannot be read.
+    pub fn locate(
         &self,
         sheet_name: &str,
         row: u32,
@@ -441,6 +490,22 @@ impl Session {
         let key = keys.and_then(|keys| keys.key_of(row, subrow));
         let identity = identity_of(sheet_name, key, row, subrow, column).to_string();
         Ok((self.file_of(&sheet, row), identity, cell.text()))
+    }
+
+    /// The coordinate of an entry's string in the game: sheet, row, subrow,
+    /// and column. `None` when the `msgctxt` is not an identity or the game
+    /// has no such string.
+    #[must_use]
+    pub fn coordinate_of(&self, context: &str) -> Option<(String, u32, u16, u32)> {
+        let identity = crate::identity::Identity::parse(context).ok()?;
+        let SheetLookup::Present(sheet) = self.source.sheet(&identity.sheet).ok()? else {
+            return None;
+        };
+        let (row, subrow) = match &identity.row {
+            crate::identity::RowName::Id { row, subrow } => (*row, *subrow),
+            crate::identity::RowName::Key(key) => identity_keys(&sheet)?.row_of(key)?,
+        };
+        Some((identity.sheet, row, subrow, identity.column))
     }
 
     /// Changes one entry of a file on disk and returns its translation.
@@ -482,7 +547,11 @@ impl Session {
             write_atomically(&full, &file.write())?;
         }
         let state = Arc::new(FileState::of(&file));
-        lock(&self.files).insert(path, (stamp(&full), state));
+        let now = stamp(&full);
+        lock(&self.files).insert(path.clone(), (now, state));
+        if let Some(seen) = lock(&self.viewed).get_mut(&path) {
+            *seen = now;
+        }
         Ok(translation)
     }
 
@@ -505,7 +574,7 @@ impl Session {
         text: &str,
     ) -> Result<Option<Translation>, EditError> {
         let knowledge = self.knowledge();
-        let target = self.settings.target_language.clone();
+        let target = self.settings().target_language;
         self.edit(sheet_name, row, subrow, column, |entry| {
             if !text.is_empty() {
                 let verdict =

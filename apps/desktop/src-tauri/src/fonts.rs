@@ -101,9 +101,7 @@ pub struct PreviewSizeDto {
 }
 
 fn project_root(state: &DesktopState) -> CommandResult<PathBuf> {
-    let project = state.lock_project()?;
-    let session = project.as_ref().ok_or_else(CommandError::no_project)?;
-    Ok(session.repository_root().to_owned())
+    Ok(state.session()?.root().to_owned())
 }
 
 fn font_error(error: &aeria_fonts::FontError) -> CommandError {

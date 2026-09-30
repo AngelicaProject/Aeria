@@ -3,7 +3,7 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import { domKey } from "../binding";
 import { answerOption, buildSceneRows, cutsceneRow, speakerName, type SceneHeading, type SceneLine, type SceneMarker, type SceneRow } from "../dialogueScene";
 import type { TranslationOccurrenceView } from "../translationOccurrences";
-import type { AvailabilityDto, CutscenePlayDto, OptionLabelDto, SheetDialogueDto, SourceBinding, UnitChangeKind } from "../types";
+import type { AvailabilityDto, ChangeMark, CutscenePlayDto, OptionLabelDto, SheetDialogueDto, SourceBinding } from "../types";
 import { UiIcon, type UiIconName } from "../ui/primitives/UiIcon";
 import { useI18n } from "../ui/i18n";
 import type { MessageKey } from "../i18n/translate";
@@ -25,7 +25,7 @@ type DialogueSceneProps = {
   onReveal: (binding: SourceBinding) => void;
   /** Opens another sheet; with a cutscene file's path, at that cutscene. */
   onOpenSheet: (sheetName: string, cutscene?: string) => void;
-  changedKinds: ReadonlyMap<string, UnitChangeKind>;
+  changedKinds: ReadonlyMap<string, ChangeMark>;
   /** A cutscene file's path to scroll to and mark once the scene shows it. */
   target: string | null;
   /** The target was scrolled to, or the sheet does not show it. */
@@ -337,7 +337,7 @@ export const DialogueScene = memo(function DialogueScene({
             title={row.line.occurrence === null ? t("scene.notTranslatable") : undefined}
             onClick={() => select(row.line)}
           >
-            <span className="lens-status">{row.line.occurrence ? <ReviewDot state={row.line.occurrence.reviewState} /> : null}</span>
+            <span className="lens-status">{row.line.occurrence ? <ReviewDot state={row.line.occurrence.state} /> : null}</span>
             {texts(row.line, row.style === "other" ? <span className="lens-tag mono">{row.line.rowKey}</span> : undefined)}
           </div>
         );

@@ -21,13 +21,13 @@ function MainWindow() {
   const [startupState, setStartupState] = useState<StartupState>("starting");
   const [startupError, setStartupError] = useState<CommandError | null>(null);
   const [projectWarning, setProjectWarning] = useState<CommandError | null>(null);
-  /** An applied source update to summarize, or `{ report: null }` for the detached list only. */
-  const [sourceUpdateView, setSourceUpdateView] = useState<{ report: SourceUpdateReportDto | null } | null>(null);
+  /** An update to a new game version that just ran, to summarize. */
+  const [sourceUpdateView, setSourceUpdateView] = useState<SourceUpdateReportDto | null>(null);
 
   function handleProjectReady(result: ProjectOpenResultDto) {
     setProject(result.project);
     setProjectWarning(result.warning);
-    setSourceUpdateView(result.sourceUpdate ? { report: result.sourceUpdate } : null);
+    setSourceUpdateView(result.sourceUpdate);
   }
 
   // The game's symbols and icons follow the open project's game.
@@ -80,7 +80,6 @@ function MainWindow() {
         project={project}
         applicationWarning={projectWarning}
         onDismissApplicationWarning={() => setProjectWarning(null)}
-        onShowDetachedUnits={() => setSourceUpdateView({ report: null })}
         onProjectChanged={setProject}
         onClosed={() => {
           setProject(null);
@@ -91,7 +90,7 @@ function MainWindow() {
       <SourceUpdateDialog
         open={sourceUpdateView !== null}
         mode="summary"
-        report={sourceUpdateView?.report ?? null}
+        report={sourceUpdateView}
         onClose={() => setSourceUpdateView(null)}
       />
       <UpdateNotice />

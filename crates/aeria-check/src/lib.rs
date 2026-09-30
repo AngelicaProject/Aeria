@@ -1,26 +1,24 @@
 //! Checks that an Aeria translation repository is safe to merge.
 //!
-//! A pull request merged on a Git host combines unit shards as plain text,
-//! and files can be edited on the host's website. Aeria itself merges per
-//! translation unit and validates the project, but a host does neither. This
-//! crate runs the same strict readers Aeria uses, without the game source, so
-//! a CI job can refuse a merge that would leave the project unreadable.
+//! A pull request merged on a Git host combines the project's PO files as
+//! plain text, and files can be edited on the host's website. This crate
+//! runs the checks Aeria runs when it saves a translation, without the game,
+//! so a CI job can refuse a merge that would break the project.
 //!
 //! The checks run in stages:
 //!
-//! 1. **Integrity**: no merge conflict markers in project files, a readable
-//!    manifest, and valid collaboration, pack, and font settings with their
-//!    font files present.
-//! 2. **Translations**: every unit shard loads strictly (identity, bindings,
-//!    and every target as a valid structured string), and every managed file
-//!    is byte for byte what Aeria writes.
+//! 1. **Integrity**: no merge conflict markers in project files, readable
+//!    `aeria.json`, and valid collaboration, pack, and font settings with
+//!    their font files present.
+//! 2. **Translations**: every PO file reads without a problem, every
+//!    `msgctxt` is an identity once per file, and every translation passes
+//!    the checks of a translation against its `msgid`.
 //! 3. **Merge**: compared with the base revision, a change of the game
-//!    source or the project languages and removed translation units are
+//!    version or the project languages and removed translations are
 //!    reported for review.
 //!
-//! Checks that need the game source, such as tag compatibility with the
-//! original text, remain with Aeria, which runs them when it opens or syncs
-//! the project.
+//! Checks that need the game, such as whether a `msgid` is still the game's
+//! text, remain with Aeria.
 
 use std::fmt;
 use std::fs;
@@ -30,11 +28,10 @@ use std::process::Command;
 use aeria_export::PackSettings;
 use aeria_fonts::{FontSettings, project_path};
 use aeria_git::{CollaborationSettings, PROJECT_PATHS};
-use aeria_workspace::{Workspace, WorkspaceStore, WorkspaceStoreError};
+use aeria_knowledge::Knowledge;
+use aeria_po::{PO_DIR, PoFile, SETTINGS_FILE, Settings, check_file, list, read_settings};
 
-/// The managed workspace directory.
-const AERIA_DIRECTORY: &str = ".aeria";
-/// Removed units listed individually before the rest are only counted.
+/// Removed translations listed individually before the rest are counted.
 const LISTED_REMOVALS: usize = 10;
 
 /// One stage of the check.
@@ -167,16 +164,6 @@ impl Reporter<'_> {
             message,
         });
     }
-
-    fn workspace_error(&mut self, error: &WorkspaceStoreError) {
-        let message = match error {
-            WorkspaceStoreError::UnsupportedFormatVersion { .. } => {
-                format!("{error}; this project was written by another version of Aeria")
-            }
-            _ => error.to_string(),
-        };
-        self.add(Severity::Error, error.path(), message);
-    }
 }
 
 fn relative(root: &Path, path: &Path) -> String {
@@ -186,25 +173,22 @@ fn relative(root: &Path, path: &Path) -> String {
         .replace('\\', "/")
 }
 
+/// The project's PO files, as full paths.
+fn po_files(root: &Path) -> Vec<PathBuf> {
+    list(root)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|path| root.join(PO_DIR).join(path))
+        .collect()
+}
+
 /// Project text files where a conflict marker would break a reader.
 fn text_files(root: &Path) -> Vec<PathBuf> {
-    let mut files = vec![root.join(AERIA_DIRECTORY).join("manifest.json")];
-    if let Ok(entries) = fs::read_dir(root.join(AERIA_DIRECTORY).join("units")) {
-        let mut shards: Vec<_> = entries
-            .filter_map(Result::ok)
-            .map(|entry| entry.path())
-            .filter(|path| {
-                path.extension()
-                    .is_some_and(|extension| extension == "jsonl")
-            })
-            .collect();
-        shards.sort();
-        files.extend(shards);
-    }
+    let mut files = po_files(root);
     files.extend(
         PROJECT_PATHS
             .iter()
-            .filter(|path| **path != aeria_git::FONTS_DIR)
+            .filter(|path| **path != aeria_git::FONTS_DIR && **path != aeria_git::KNOWLEDGE_DIR)
             .map(|path| project_path(root, path)),
     );
     files.retain(|path| path.is_file());
@@ -238,17 +222,20 @@ fn integrity(report: &mut Reporter<'_>) {
                 Some(&path),
                 Some(*first),
                 format!(
-                    "unresolved merge conflict markers on {} line(s); merge in Aeria (Pull or Sync), which merges translations per string",
+                    "unresolved merge conflict markers on {} line(s); merge in Aeria (Pull or Sync), which joins translations per string",
                     lines.len()
                 ),
             );
         }
     }
 
-    if let Err(error) = WorkspaceStore::new(&root).read_metadata() {
-        report.workspace_error(&error);
+    if let Err(error) = read_settings(&root) {
+        report.add(
+            Severity::Error,
+            Some(&root.join(SETTINGS_FILE)),
+            error.to_string(),
+        );
     }
-
     if let Err(error) = CollaborationSettings::load(&root) {
         report.add(
             Severity::Error,
@@ -292,152 +279,160 @@ fn integrity(report: &mut Reporter<'_>) {
 
 fn translations(report: &mut Reporter<'_>) {
     let root = report.root.to_owned();
-    match WorkspaceStore::new(&root).non_canonical_files() {
-        Ok(files) => {
-            for path in files {
-                report.add(
+    let target = read_settings(&root)
+        .map(|settings| settings.target_language)
+        .unwrap_or_default();
+    let knowledge = Knowledge::load(&root);
+    for problem in &knowledge.problems {
+        report.add(Severity::Error, None, problem.clone());
+    }
+    for path in po_files(&root) {
+        let Ok(text) = fs::read_to_string(&path) else {
+            report.add(Severity::Error, Some(&path), "the file is not UTF-8 text");
+            continue;
+        };
+        let (file, problems) = PoFile::parse(&text);
+        for problem in problems {
+            report.add_at(
+                Severity::Error,
+                Some(&path),
+                Some(problem.line),
+                problem.message,
+            );
+        }
+        for finding in check_file(&file, &knowledge, &target) {
+            if !finding.advice {
+                report.add_at(
                     Severity::Error,
                     Some(&path),
-                    "the file is valid but not written the way Aeria writes it, so it was edited or merged outside Aeria; open the project in Aeria, save any string, and commit, or merge in Aeria instead of on the website",
+                    Some(finding.line),
+                    finding.message,
                 );
             }
         }
-        Err(error) => report.workspace_error(&error),
     }
 }
 
 /// Runs Git in `directory`, returning stdout when it succeeds.
 fn git(directory: &Path, args: &[&str]) -> Option<Vec<u8>> {
-    let output = Command::new("git")
-        .current_dir(directory)
-        .args(args)
-        .output()
-        .ok()?;
+    let output = Command::new(
+        std::env::var_os("AERIA_GIT_PATH")
+            .filter(|path| !path.is_empty())
+            .unwrap_or_else(|| "git".into()),
+    )
+    .current_dir(directory)
+    .args(args)
+    .output()
+    .ok()?;
     output.status.success().then_some(output.stdout)
 }
 
-/// The project's `.aeria/` at `revision`, extracted to a temporary folder.
-fn workspace_at(
-    root: &Path,
-    revision: &str,
-) -> Result<Option<(tempfile::TempDir, Workspace)>, String> {
-    let prefix = git(root, &["rev-parse", "--show-prefix"])
-        .map(|bytes| String::from_utf8_lossy(&bytes).trim().to_owned())
-        .ok_or("the project is not in a Git repository")?;
-    let tree = format!("{prefix}{AERIA_DIRECTORY}/");
-    let listing = git(
+/// A project file at `revision`; `None` when it does not exist there.
+fn file_at(root: &Path, revision: &str, path: &str) -> Option<String> {
+    git(root, &["show", &format!("{revision}:./{path}")])
+        .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
+}
+
+/// The PO files changed since `base`, and the translations the base has
+/// that the working tree lost.
+fn removed_translations(root: &Path, base: &str) -> (usize, Vec<String>) {
+    let changed = git(
         root,
-        &[
-            "ls-tree",
-            "-r",
-            "--name-only",
-            "--full-tree",
-            revision,
-            &tree,
-        ],
+        &["diff", "--name-only", "--relative", base, "--", PO_DIR],
     )
-    .ok_or_else(|| {
-        format!(
-            "cannot read revision {revision:?}; fetch it first (for example with fetch-depth: 2)"
-        )
-    })?;
-    let names: Vec<String> = String::from_utf8_lossy(&listing)
-        .lines()
-        .map(str::to_owned)
-        .collect();
-    if names.is_empty() {
-        return Ok(None);
+    .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
+    .unwrap_or_default();
+    let mut removed = Vec::new();
+    let mut files = 0;
+    for path in changed.lines().filter(|path| aeria_git::is_po_path(path)) {
+        files += 1;
+        let before = file_at(root, base, path)
+            .map(|text| PoFile::parse(&text).0)
+            .unwrap_or_default();
+        let after = fs::read_to_string(root.join(path))
+            .map(|text| PoFile::parse(&text).0)
+            .unwrap_or_default();
+        let kept: std::collections::HashMap<&str, &str> = after
+            .entries
+            .iter()
+            .map(|entry| (entry.context.as_str(), entry.translation.as_str()))
+            .collect();
+        removed.extend(
+            before
+                .entries
+                .iter()
+                .filter(|entry| !entry.translation.is_empty())
+                .filter(|entry| {
+                    kept.get(entry.context.as_str())
+                        .is_none_or(|translation| translation.is_empty())
+                })
+                .map(|entry| entry.context.clone()),
+        );
     }
-    let folder = tempfile::tempdir().map_err(|error| error.to_string())?;
-    for name in &names {
-        let bytes = git(root, &["show", &format!("{revision}:{name}")])
-            .ok_or_else(|| format!("cannot read {name} at {revision}"))?;
-        let local = folder
-            .path()
-            .join(name.strip_prefix(&prefix).unwrap_or(name));
-        if let Some(parent) = local.parent() {
-            fs::create_dir_all(parent).map_err(|error| error.to_string())?;
-        }
-        fs::write(&local, bytes).map_err(|error| error.to_string())?;
-    }
-    let workspace = WorkspaceStore::new(folder.path())
-        .load()
-        .map_err(|error| format!("the base project cannot be loaded for comparison: {error}"))?;
-    Ok(Some((folder, workspace)))
+    (files, removed)
 }
 
 fn merge(report: &mut Reporter<'_>, base: &str) {
     let root = report.root.to_owned();
-    let manifest = root.join(AERIA_DIRECTORY).join("manifest.json");
-    let head = match WorkspaceStore::new(&root).load() {
-        Ok(workspace) => workspace,
-        Err(error) => {
-            report.add(
-                Severity::Notice,
-                error.path(),
-                "the merged project did not load (see the earlier stages), so it was not compared with the base",
-            );
-            return;
-        }
+    let settings_path = root.join(SETTINGS_FILE);
+    let Ok(head) = read_settings(&root) else {
+        report.add(
+            Severity::Notice,
+            Some(&settings_path),
+            "the merged project did not load (see the earlier stages), so it was not compared with the base",
+        );
+        return;
     };
-    let base_workspace = match workspace_at(&root, base) {
-        Ok(Some((_folder, workspace))) => workspace,
-        Ok(None) => {
-            report.add(
-                Severity::Notice,
-                Some(&manifest),
-                "the base revision has no Aeria project; this merge adds it",
-            );
-            return;
-        }
-        Err(message) => {
-            report.add(Severity::Notice, None, message);
-            return;
-        }
-    };
-
-    let (old, new) = (base_workspace.metadata(), head.metadata());
-    if old.source_language() != new.source_language()
-        || old.target_language() != new.target_language()
+    if git(
+        &root,
+        &["rev-parse", "--verify", &format!("{base}^{{commit}}")],
+    )
+    .is_none()
     {
         report.add(
+            Severity::Notice,
+            None,
+            format!(
+                "cannot read revision {base:?}; fetch it first (for example with fetch-depth: 2)"
+            ),
+        );
+        return;
+    }
+    let Some(old) = file_at(&root, base, SETTINGS_FILE)
+        .and_then(|text| serde_json::from_str::<Settings>(&text).ok())
+    else {
+        report.add(
+            Severity::Notice,
+            Some(&settings_path),
+            "the base revision has no Aeria project; this merge adds it",
+        );
+        return;
+    };
+    if old.source_language != head.source_language || old.target_language != head.target_language {
+        report.add(
             Severity::Warning,
-            Some(&manifest),
+            Some(&settings_path),
             format!(
                 "changes the project languages from {:?} → {:?} to {:?} → {:?}",
-                old.source_language(),
-                old.target_language(),
-                new.source_language(),
-                new.target_language()
+                old.source_language,
+                old.target_language,
+                head.source_language,
+                head.target_language
             ),
         );
     }
-    if old.game_version() != new.game_version() {
+    if old.game_version != head.game_version {
         report.add(
             Severity::Warning,
-            Some(&manifest),
+            Some(&settings_path),
             format!(
-                "updates the project from game version {} to {} (a source update); after the merge, every collaborator needs that game version to keep working",
-                old.game_version(),
-                new.game_version()
+                "updates the project from game version {} to {}; after the merge, every collaborator needs that game version to keep working",
+                old.game_version, head.game_version
             ),
         );
     }
 
-    let removed: Vec<String> = base_workspace
-        .units()
-        .filter(|unit| head.unit(unit.id()).is_none())
-        .map(|unit| {
-            let binding = unit.source_binding();
-            format!(
-                "{}:{}:{}:{}",
-                binding.sheet_name(),
-                binding.row_id(),
-                binding.subrow_id(),
-                binding.column_index()
-            )
-        })
-        .collect();
+    let (files, removed) = removed_translations(&root, base);
     if !removed.is_empty() {
         let listed = removed
             .iter()
@@ -450,21 +445,21 @@ fn merge(report: &mut Reporter<'_>, base: &str) {
             Severity::Warning,
             None,
             format!(
-                "removes {} translation unit(s) that the base has: {listed}{}; Aeria never removes units, so check where this came from",
+                "removes {} translation(s) that the base has: {listed}{}; check that this was intended",
                 removed.len(),
-                if more > 0 { format!(" and {more} more") } else { String::new() }
+                if more > 0 {
+                    format!(" and {more} more")
+                } else {
+                    String::new()
+                }
             ),
         );
     }
-    let added = head
-        .units()
-        .filter(|unit| base_workspace.unit(unit.id()).is_none())
-        .count();
     report.add(
         Severity::Notice,
         None,
         format!(
-            "compared with {base}: {added} unit(s) added, {} removed",
+            "compared with {base}: {files} PO file(s) changed, {} translation(s) removed",
             removed.len()
         ),
     );
@@ -478,7 +473,7 @@ mod tests {
     fn conflict_markers_are_whole_marker_lines() {
         let text = "a\n<<<<<<< HEAD\nb\n=======\nc\n>>>>>>> branch\n== not a marker\n";
         assert_eq!(conflict_markers(text), [2, 4, 6]);
-        assert!(conflict_markers("{\"target\":\"=======\"}\n").is_empty());
+        assert!(conflict_markers("msgstr \"=======\"\n").is_empty());
     }
 
     #[test]
@@ -486,7 +481,7 @@ mod tests {
         let folder = tempfile::tempdir().expect("folder");
         let report = run_stage(Stage::Integrity, folder.path(), None);
         assert!(report.failed());
-        assert_eq!(report.findings[0].path.as_deref(), Some(".aeria"));
+        assert_eq!(report.findings[0].path.as_deref(), Some("aeria.json"));
     }
 
     #[test]

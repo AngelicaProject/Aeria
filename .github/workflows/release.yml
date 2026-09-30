@@ -205,14 +205,6 @@ jobs:
           AERIA_CHECK_SHA256: ${{ needs.check.outputs.sha256 }}
         run: pnpm tauri build --no-bundle -- --locked
 
-      # The aeria command for agents ships as bin/aeria.exe. It is built after
-      # the application: the bundle configuration that names it cannot be
-      # part of the application's build, which checks resources exist.
-      - name: Build the aeria command
-        run: |
-          cargo build --release --locked -p aeria-desktop --bin aeria-cli
-          cp target/release/aeria-cli.exe apps/desktop/src-tauri/binaries/aeria-cli.exe
-
       # Packaged before the installer so the executable carries no installer
       # bundle type: a portable copy announces updates but never installs them.
       - name: Package the portable build
@@ -222,8 +214,6 @@ jobs:
           mkdir -p "dist/$name"
           cp target/release/aeria.exe "dist/$name/"
           cp -r target/release/git "dist/$name/git"
-          mkdir -p "dist/$name/bin"
-          cp target/release/aeria-cli.exe "dist/$name/bin/aeria.exe"
           (cd dist && 7z a -tzip -mx=9 "$name.zip" "$name" > /dev/null)
           echo "zip=dist/$name.zip" >> "$GITHUB_OUTPUT"
 
@@ -232,7 +222,7 @@ jobs:
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-        run: pnpm tauri bundle --bundles nsis --config src-tauri/tauri.agents.conf.json
+        run: pnpm tauri bundle --bundles nsis
 
       - name: Fetch the stable aeria-check
         if: github.event_name == 'push'

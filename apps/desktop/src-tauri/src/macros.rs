@@ -212,10 +212,7 @@ fn insertions(game: &dyn Game) -> Vec<MacroInsertionDto> {
 /// The open project's game, when a project is open.
 fn project_source(app: &tauri::AppHandle) -> Option<Arc<GameSource>> {
     let state = app.state::<DesktopState>();
-    let project = state.lock_project().ok()?;
-    project
-        .as_ref()
-        .map(aeria_workspace::ProjectSession::source_handle)
+    state.session().ok().map(|session| session.source_handle())
 }
 
 /// The family name the renderer registers the game glyph font under.

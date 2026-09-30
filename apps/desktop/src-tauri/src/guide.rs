@@ -55,10 +55,7 @@ fn knowledge_error(message: impl Into<String>) -> CommandError {
 }
 
 fn repository_root(app: &tauri::AppHandle) -> CommandResult<PathBuf> {
-    let state = app.state::<DesktopState>();
-    let project = state.lock_project()?;
-    let session = project.as_ref().ok_or_else(CommandError::no_project)?;
-    Ok(session.repository_root().to_owned())
+    Ok(app.state::<DesktopState>().session()?.root().to_owned())
 }
 
 fn load(root: &Path) -> ProjectKnowledgeDto {

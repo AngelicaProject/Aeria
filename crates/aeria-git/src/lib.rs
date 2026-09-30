@@ -1,9 +1,9 @@
 //! Git repository operations and semantic collaboration helpers.
 //!
 //! Aeria uses Git as its collaboration and history layer. This crate drives
-//! the system Git client for repository operations and interprets workspace
-//! unit shards so history and changes can be presented per translation
-//! unit instead of per file. The Git author identity is the translator
+//! the system Git client for repository operations and reads the project's
+//! PO files so history and changes can be presented per string instead of
+//! per file. The Git author identity is the translator
 //! identity: every checkpoint is attributed to the configured
 //! `user.name`/`user.email`.
 
@@ -12,34 +12,29 @@
 mod branches;
 mod collaboration;
 mod credential;
-mod merge;
+mod entries;
 mod process;
 mod repository;
-mod semantic;
 mod sync;
 mod workflow;
 
 use std::path::PathBuf;
 
-use aeria_workspace::WorkspaceStoreError;
 use thiserror::Error;
 
 pub use branches::{BranchInfo, ContributionStatus, FinishOutcome};
 pub use collaboration::{COLLABORATION_FILE, CollaborationSettings};
 pub use credential::HostCredential;
-pub use merge::{
-    ConflictResolution, DriverMerge, UnitConflict, merge_shard_for_driver, run_merge_driver,
+pub use entries::{
+    ConflictResolution, EntryChange, EntryChangeKind, EntryConflict, EntryHistory, EntryRevision,
+    EntryState, PO_DIR, diff_file, is_po_path, merge_file, summarize_changes,
 };
 pub use process::{GitExecutable, GitOrigin};
 pub use repository::{
-    AGENT_FILES, ATTRIBUTES_FILE, CheckpointOutcome, CommitSummary, ConfigScope,
-    FEED_WORKFLOW_FILE, FONT_SETTINGS_FILE, FONTS_DIR, FileChangeKind, FileStatus, GitRepository,
-    KNOWLEDGE_DIR, MERGE_DRIVER, PACK_SETTINGS_FILE, PROJECT_PATHS, RemoteInfo, RepositoryStatus,
-    SKILL_DIRS, TranslatorIdentity, clone_folder_name, merge_driver_command,
-};
-pub use semantic::{
-    Attribution, ContributorSummary, RecordVersion, UnitAttribution, UnitChange, UnitChangeKind,
-    UnitHistory, UnitRevision, summarize_changes, summarize_contributors,
+    ATTRIBUTES_FILE, CheckpointOutcome, CommitSummary, ConfigScope, FEED_WORKFLOW_FILE,
+    FONT_SETTINGS_FILE, FONTS_DIR, FileChangeKind, FileStatus, GitRepository, KNOWLEDGE_DIR,
+    PACK_SETTINGS_FILE, PROJECT_PATHS, RemoteInfo, RepositoryStatus, SETTINGS_FILE,
+    TranslatorIdentity, clone_folder_name,
 };
 pub use sync::IntegrateOutcome;
 pub use workflow::{
@@ -111,10 +106,10 @@ pub enum GitError {
     #[error("incoming changes conflict with local commits in {}", files.join(", "))]
     MergeConflict { files: Vec<String> },
 
-    /// The same translation units were changed differently locally and
-    /// remotely. The merge was aborted; retry with explicit resolutions.
+    /// The same strings were changed differently locally and remotely. The
+    /// merge was aborted; retry with explicit resolutions.
     #[error("{} translated strings were changed differently here and on the remote", conflicts.len())]
-    TranslationConflicts { conflicts: Vec<UnitConflict> },
+    TranslationConflicts { conflicts: Vec<EntryConflict> },
 
     /// The published main branch accepts changes only through pull requests.
     #[error(
@@ -132,10 +127,6 @@ pub enum GitError {
         "incoming changes were rolled back because the resulting project is not valid: {reason}"
     )]
     IncomingRejected { reason: String },
-
-    /// A workspace file or historical revision is invalid.
-    #[error(transparent)]
-    Workspace(#[from] WorkspaceStoreError),
 
     /// A filesystem operation failed.
     #[error("filesystem operation '{operation}' failed for {path}: {source}")]

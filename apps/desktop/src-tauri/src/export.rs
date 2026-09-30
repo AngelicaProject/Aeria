@@ -131,7 +131,6 @@ pub struct ReleaseInputDto {
     pub sequence: u64,
     pub version: String,
     pub channel: ChannelDto,
-    pub content_policy: ContentPolicyDto,
     #[serde(default)]
     pub changelog: Option<String>,
 }
@@ -143,20 +142,14 @@ pub enum ChannelDto {
     Testing,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub enum ContentPolicyDto {
-    Reviewed,
-    All,
-}
-
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ExportReportDto {
     pub exported: u64,
-    pub skipped_detached: u64,
     pub skipped_untranslated: u64,
-    pub skipped_unreviewed: u64,
+    /// Translations left out because their source changed since they were
+    /// written.
+    pub skipped_fuzzy: u64,
     pub sheets: u64,
     pub strings: u64,
     pub pack_hash: String,
@@ -245,9 +238,7 @@ fn optional(value: Option<String>) -> Option<String> {
 }
 
 fn project_root(state: &DesktopState) -> CommandResult<PathBuf> {
-    let project = state.lock_project()?;
-    let session = project.as_ref().ok_or_else(CommandError::no_project)?;
-    Ok(session.repository_root().to_owned())
+    Ok(state.session()?.root().to_owned())
 }
 
 fn load_settings(root: &Path) -> CommandResult<PackSettings> {
@@ -270,14 +261,13 @@ fn github_target(repository: &GitRepository) -> Option<GitHubRepository> {
 
 fn overview(state: &DesktopState, store: &dyn SigningKeyStore) -> CommandResult<ExportOverviewDto> {
     let (root, source_language, game_version, target_language) = {
-        let project = state.lock_project()?;
-        let session = project.as_ref().ok_or_else(CommandError::no_project)?;
-        let metadata = session.workspace().metadata();
+        let session = state.session()?;
+        let settings = session.settings();
         (
-            session.repository_root().to_owned(),
-            metadata.source_language().to_owned(),
-            metadata.game_version().to_string(),
-            metadata.target_language().to_owned(),
+            session.root().to_owned(),
+            settings.source_language,
+            session.source().version().to_string(),
+            settings.target_language,
         )
     };
     let (settings, settings_error) = match PackSettings::load(&root) {
@@ -488,11 +478,11 @@ fn build(
 ) -> CommandResult<BuiltRelease> {
     let version = release.version.trim();
     let state = app.state::<DesktopState>();
-    // The project stays locked so the workspace cannot change between the
-    // commit check and the end of collection.
-    let project = state.lock_project()?;
-    let session = project.as_ref().ok_or_else(CommandError::no_project)?;
-    let status = GitRepository::open(session.repository_root(), state.git())?.status()?;
+    // Writes are held so the files cannot change between the commit check
+    // and the end of collection.
+    let session = state.session()?;
+    let writes = session.hold_writes();
+    let status = GitRepository::open(session.root(), state.git())?.status()?;
     if has_export_changes(&status) {
         return Err(export_error(
             "exportUncommitted",
@@ -523,24 +513,17 @@ fn build(
             ChannelDto::Stable => Channel::Stable,
             ChannelDto::Testing => Channel::Testing,
         },
-        target_language: session.workspace().metadata().target_language().to_owned(),
+        target_language: session.settings().target_language,
         source: pack_source(session.source()),
-        content_policy: match release.content_policy {
-            ContentPolicyDto::Reviewed => ContentPolicy::Reviewed,
-            ContentPolicyDto::All => ContentPolicy::All,
-        },
+        // Every exported translation is committed and not fuzzy: accepted.
+        content_policy: ContentPolicy::Reviewed,
         project_commit: commit,
         exporter_aeria: env!("CARGO_PKG_VERSION").to_owned(),
         min_harmonia: settings.min_harmonia.clone(),
     };
-    let export = collect_project(
-        session.workspace(),
-        session.source(),
-        manifest.content_policy,
-        &mut SeStringEncoder,
-    )?;
-    let root = session.repository_root().to_owned();
-    drop(project);
+    let export = collect_project(session.root(), session.source(), &mut SeStringEncoder)?;
+    let root = session.root().to_owned();
+    drop(writes);
 
     // The font files are committed (checked above), so HEAD is what renders.
     let fonts = FontSettings::load(&root)
@@ -571,9 +554,8 @@ fn report_dto(built: &BuiltRelease) -> ExportReportDto {
     let report = &built.report;
     ExportReportDto {
         exported: report.exported,
-        skipped_detached: report.skipped_detached,
         skipped_untranslated: report.skipped_untranslated,
-        skipped_unreviewed: report.skipped_unreviewed,
+        skipped_fuzzy: report.skipped_fuzzy,
         sheets: built.pack.counts.sheets,
         strings: built.pack.counts.strings,
         pack_hash: built.pack.pack_hash_text(),

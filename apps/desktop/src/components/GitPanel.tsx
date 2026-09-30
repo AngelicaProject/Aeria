@@ -30,10 +30,10 @@ import type {
   GitBranchDto,
   GitCommitDto,
   GitSyncDto,
-  UnitConflictDto,
+  EntryConflictDto,
   GitOverviewDto,
   ProjectChangeDto,
-  UnitChangeDto,
+  EntryChangeDto,
 } from "../types";
 import { IconButton } from "../ui/primitives/IconButton";
 import { UiIcon } from "../ui/primitives/UiIcon";
@@ -42,7 +42,7 @@ import type { MessageKey } from "../i18n/translate";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { GitBranchPicker } from "./GitBranchPicker";
 import { GitHistoryList } from "./GitHistory";
-import { ProjectChangeList, Section, TranslationChangeGroups, unitLabel, useStickyState } from "./GitShared";
+import { ProjectChangeList, Section, TranslationChangeGroups, bindingLabel, useStickyState } from "./GitShared";
 
 /** How often the dock checks whether the repository changed. */
 const POLL_MS = 2000;
@@ -52,15 +52,15 @@ const MAIN_CHECK_MS = 5 * 60_000;
 const MAIN_CHECK_MIN_MS = 60_000;
 
 type GitPanelProps = {
-  /** Translation unit of the selected cell, when it has one. */
-  selectedUnitId: string | null;
+  /** The key of the selected string (see `changeKey`), when one is selected. */
+  selectedKey: string | null;
   /** Changes whenever the editor persisted a translation. */
   workspaceRevision: number;
   /** Changes whenever project settings, glossary, or guidance may have been saved. */
   projectRevision?: number | undefined;
   onWorkspaceChanged?: (() => void) | undefined;
   /** Pending changes owned by the workbench; detached windows fetch their own. */
-  pending?: { changes: UnitChangeDto[] | null; refresh: () => Promise<void> } | undefined;
+  pending?: { changes: EntryChangeDto[] | null; refresh: () => Promise<void> } | undefined;
   /** Opens a string in the editor; absent in detached windows. */
   onRevealBinding?: ((binding: SourceBinding) => void) | undefined;
   /** Opens one commit in a document tab; absent in detached windows. */
@@ -83,18 +83,18 @@ const blockLabels: Record<NonNullable<GitBranchDto["blocked"]>, MessageKey> = {
 };
 
 /** Branch, sync, uncommitted changes with the checkpoint, and project history. It follows the repository on its own. */
-export function GitPanel({ selectedUnitId, workspaceRevision, projectRevision, onWorkspaceChanged, pending: externalPending, onRevealBinding, onOpenCommit, selectedCommitId, onOpenSettings }: GitPanelProps) {
+export function GitPanel({ selectedKey, workspaceRevision, projectRevision, onWorkspaceChanged, pending: externalPending, onRevealBinding, onOpenCommit, selectedCommitId, onOpenSettings }: GitPanelProps) {
   const { t } = useI18n();
   const [overview, setOverview] = useState<GitOverviewDto | null>(null);
   const [branches, setBranches] = useState<GitBranchDto[]>([]);
-  const [ownPending, setOwnPending] = useState<UnitChangeDto[]>([]);
+  const [ownPending, setOwnPending] = useState<EntryChangeDto[]>([]);
   const [projectChanges, setProjectChanges] = useState<ProjectChangeDto[]>([]);
   const [historyRevision, setHistoryRevision] = useState(0);
   // Kept while the window lives, so reopening the Git tab keeps it as it was left.
   const [changesOpen, setChangesOpen] = useStickyState("git.changesOpen", true);
   const [message, setMessage] = useState("");
   const [identityDraft, setIdentityDraft] = useState<{ name: string; email: string; global: boolean } | null>(null);
-  const [conflicts, setConflicts] = useState<UnitConflictDto[]>([]);
+  const [conflicts, setConflicts] = useState<EntryConflictDto[]>([]);
   const [choices, setChoices] = useState<Record<string, ConflictResolution>>({});
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<CommandError | null>(null);
@@ -217,8 +217,7 @@ export function GitPanel({ selectedUnitId, workspaceRevision, projectRevision, o
     setConflicts([]);
     if (result.workspaceChanged) onWorkspaceChanged?.();
     const labels = syncLabels[result.integration];
-    const text = t(result.pushed ? labels.pushed : labels.plain);
-    return result.reconciled ? `${text} ${t("git.sync.reconciled")}` : text;
+    return t(result.pushed ? labels.pushed : labels.plain);
   };
 
   const feedback = <>
@@ -306,17 +305,18 @@ export function GitPanel({ selectedUnitId, workspaceRevision, projectRevision, o
         <Section title={t("git.chooseVersions")} icon="gitMerge" meta={conflicts.length}>
           <ul className="git-list">
             {conflicts.map((conflict) => (
-              <li className="git-item" key={conflict.translationUnitId}>
-                <span className="git-item-title mono">{unitLabel(conflict.ours ?? conflict.theirs, t)}</span>
-                <div className="git-choice" role="radiogroup" aria-label={t("git.versionFor", { unit: unitLabel(conflict.ours ?? conflict.theirs, t) })}>
+              <li className="git-item" key={conflict.context}>
+                <span className="git-item-title mono">{bindingLabel(conflict.sourceBinding, t)}</span>
+                <span className="git-item-subject">{conflict.sourceMacro}</span>
+                <div className="git-choice" role="radiogroup" aria-label={t("git.versionFor", { unit: bindingLabel(conflict.sourceBinding, t) })}>
                   {(["ours", "theirs"] as const).map((side) => {
                     const version = side === "ours" ? conflict.ours : conflict.theirs;
-                    const checked = choices[conflict.translationUnitId] === side;
+                    const checked = choices[conflict.context] === side;
                     return (
                       <label className={checked ? "git-choice-option checked" : "git-choice-option"} key={side}>
-                        <input type="radio" name={conflict.translationUnitId} checked={checked} onChange={() => setChoices({ ...choices, [conflict.translationUnitId]: side })} />
+                        <input type="radio" name={conflict.context} checked={checked} onChange={() => setChoices({ ...choices, [conflict.context]: side })} />
                         <span className="git-choice-side">{t(side === "ours" ? "git.mine" : "git.server")}</span>
-                        <span className="git-choice-text">{version ? version.targetMacro || t("common.empty") : <em>{t("git.deleted")}</em>}</span>
+                        <span className="git-choice-text">{version.targetMacro || <em>{t("git.deleted")}</em>}</span>
                       </label>
                     );
                   })}
@@ -324,8 +324,8 @@ export function GitPanel({ selectedUnitId, workspaceRevision, projectRevision, o
               </li>
             ))}
           </ul>
-          <button className="button button-primary button-block" type="button" disabled={busy !== null || conflicts.some((conflict) => !choices[conflict.translationUnitId])} onClick={() => void run(conflictAction, async () => {
-            const resolutions = conflicts.map((conflict) => ({ translationUnitId: conflict.translationUnitId, resolution: choices[conflict.translationUnitId] ?? "ours" }));
+          <button className="button button-primary button-block" type="button" disabled={busy !== null || conflicts.some((conflict) => !choices[conflict.context])} onClick={() => void run(conflictAction, async () => {
+            const resolutions = conflicts.map((conflict) => ({ context: conflict.context, resolution: choices[conflict.context] ?? "ours" }));
             return conflictAction === "pull" ? describeSync(await gitPull(resolutions), "pull") : describeSync(await gitSync(resolutions));
           })}>{t(conflictAction === "pull" ? "git.pullWithChoices" : "git.syncWithChoices")}</button>
         </Section>
@@ -428,7 +428,7 @@ export function GitPanel({ selectedUnitId, workspaceRevision, projectRevision, o
           {changeCount === 0 ? <p className="muted">{t("git.noChanges")}</p> : <>
             {pending.length > 0 ? <>
               <h4 className="git-subhead">{t("git.changes.translations", { count: pending.length })}</h4>
-              <TranslationChangeGroups changes={pending} selectedUnitId={selectedUnitId} onRevealBinding={onRevealBinding} viewKey="pending" />
+              <TranslationChangeGroups changes={pending} selectedKey={selectedKey} onRevealBinding={onRevealBinding} viewKey="pending" />
             </> : null}
             {projectChanges.length > 0 ? <>
               <h4 className="git-subhead">{t("git.changes.project")}</h4>

@@ -1,11 +1,7 @@
-use aeria_core::TranslationUnitIdParseError;
 use aeria_git::GitError;
+use aeria_po::{EditError, OpenError, ProjectError};
 use aeria_projects::RegistryError;
 use aeria_source::SourceError;
-use aeria_workspace::{
-    ProjectSessionError, TranslationMutationError, TranslationReadError, WorkspaceError,
-    WorkspaceStoreError,
-};
 use serde::{Deserialize, Serialize};
 
 /// A typed error returned by every application command.
@@ -75,63 +71,45 @@ impl From<SourceError> for CommandError {
     }
 }
 
-impl From<TranslationUnitIdParseError> for CommandError {
-    fn from(error: TranslationUnitIdParseError) -> Self {
-        Self::new("invalidTranslationUnitId", error.to_string())
-    }
-}
-
-impl From<ProjectSessionError> for CommandError {
-    fn from(error: ProjectSessionError) -> Self {
+impl From<ProjectError> for CommandError {
+    fn from(error: ProjectError) -> Self {
         let code = match &error {
-            ProjectSessionError::Store { .. } => "projectStore",
-            ProjectSessionError::GameOutdated { .. } => "gameOutdated",
-            ProjectSessionError::Compatibility { .. } => "projectCompatibility",
-            ProjectSessionError::SourceUpdateRequired { .. } => "sourceUpdateRequired",
-            ProjectSessionError::SourceUpdate { .. } => "sourceUpdate",
-            ProjectSessionError::Workspace { .. } => "projectWorkspace",
-            ProjectSessionError::InvalidTargetLanguage { .. } => "invalidTargetLanguage",
+            ProjectError::Exists(_) => "projectExists",
+            ProjectError::Missing { .. } => "projectMissing",
+            ProjectError::Generate(_) => "gameRead",
+            ProjectError::Io { .. } | ProjectError::Settings { .. } => "projectStore",
         };
         Self::new(code, error.to_string())
     }
 }
 
-impl From<TranslationReadError> for CommandError {
-    fn from(error: TranslationReadError) -> Self {
-        let code = match &error {
-            TranslationReadError::WorkspaceSourceMismatch { .. } => "translationSourceIntegrity",
-            TranslationReadError::InvalidPageLimit { .. }
-            | TranslationReadError::CursorSheetMismatch { .. }
-            | TranslationReadError::Source(_) => "translationRead",
-        };
-        Self::new(code, error.to_string())
+impl From<OpenError> for CommandError {
+    fn from(error: OpenError) -> Self {
+        match error {
+            OpenError::Project(error) => error.into(),
+            OpenError::SourceLanguage { .. } => {
+                Self::new("projectCompatibility", error.to_string())
+            }
+            OpenError::GameOutdated { .. } => Self::new("gameOutdated", error.to_string()),
+            OpenError::UpdateRequired { .. } => {
+                Self::new("sourceUpdateRequired", error.to_string())
+            }
+            OpenError::Version(_) => Self::new("projectStore", error.to_string()),
+        }
     }
 }
 
-impl From<TranslationMutationError> for CommandError {
-    fn from(error: TranslationMutationError) -> Self {
+impl From<EditError> for CommandError {
+    fn from(error: EditError) -> Self {
         let code = match &error {
-            TranslationMutationError::EmptyTarget => "emptyTranslationTarget",
-            TranslationMutationError::SourceNotTranslatable { .. } => "sourceNotTranslatable",
-            TranslationMutationError::Workspace(error) => workspace_error_code(error),
-            TranslationMutationError::Persistence(_) => "translationPersistence",
-            TranslationMutationError::SourceIntegrity { .. } => "translationSourceIntegrity",
+            EditError::Source(_) => "translationRead",
+            EditError::Project(_) => "translationPersistence",
+            EditError::NotAnEntry(_) => "sourceNotTranslatable",
+            EditError::Broken { .. } => "projectFileBroken",
+            EditError::SourceMismatch(_) => "translationSourceIntegrity",
+            EditError::Invalid(_) => "translationInvalid",
         };
         Self::new(code, error.to_string())
-    }
-}
-
-fn workspace_error_code(error: &WorkspaceError) -> &'static str {
-    match error {
-        WorkspaceError::Source(_) | WorkspaceError::SourceCellNotFound { .. } => "translationRead",
-        WorkspaceError::InvalidTarget { .. }
-        | WorkspaceError::UnitNotFound { .. }
-        | WorkspaceError::DuplicateUnitId { .. }
-        | WorkspaceError::DuplicateSourceBinding { .. }
-        | WorkspaceError::DetachedUnit { .. }
-        | WorkspaceError::InvalidMetadata(_)
-        | WorkspaceError::SourceLanguageMismatch { .. }
-        | WorkspaceError::Identity(_) => "translationWorkspace",
     }
 }
 
@@ -156,16 +134,9 @@ impl From<GitError> for CommandError {
             GitError::TranslationConflicts { .. } => "gitTranslationConflicts",
             GitError::InvalidSettings { .. } => "gitInvalidSettings",
             GitError::MainBranchProtected { .. } => "gitMainBranchProtected",
-            GitError::Workspace(_) => "gitWorkspaceData",
             GitError::Io { .. } => "gitIo",
         };
         Self::new(code, error.to_string())
-    }
-}
-
-impl From<WorkspaceStoreError> for CommandError {
-    fn from(error: WorkspaceStoreError) -> Self {
-        Self::new("projectStore", error.to_string())
     }
 }
 
@@ -173,62 +144,34 @@ impl From<WorkspaceStoreError> for CommandError {
 mod tests {
     use std::path::PathBuf;
 
-    use aeria_core::TranslationUnitId;
-    use aeria_workspace::{TranslationReadError, WorkspaceError};
-
     use super::*;
 
     #[test]
-    fn game_failures_use_stable_codes() {
+    fn game_and_project_failures_use_stable_codes() {
         let missing = aeria_source::GameSource::open(
             PathBuf::from("missing-game"),
             aeria_source::SourceLanguage::English,
         )
         .expect_err("missing game");
         assert_eq!(CommandError::from(missing).code, "gameRead");
-        let outdated = CommandError::from(ProjectSessionError::GameOutdated {
-            repository_root: PathBuf::from("repository"),
-            project: "2026.10.01.0000.0000".parse().expect("version"),
-            game: "2026.09.15.0000.0000".parse().expect("version"),
+        let outdated = CommandError::from(OpenError::GameOutdated {
+            project: "2026.10.01.0000.0000".to_owned(),
+            game: "2026.09.15.0000.0000".to_owned(),
         });
         assert_eq!(outdated.code, "gameOutdated");
-    }
-
-    #[test]
-    fn representative_backend_errors_use_boundary_codes() {
-        let read_error =
-            CommandError::from(TranslationReadError::InvalidPageLimit { limit: 0, max: 256 });
-        assert_eq!(read_error.code, "translationRead");
-
-        let empty_target_error = CommandError::from(TranslationMutationError::EmptyTarget);
-        assert_eq!(empty_target_error.code, "emptyTranslationTarget");
-
-        let mutation_error = CommandError::from(TranslationMutationError::Workspace(
-            WorkspaceError::UnitNotFound {
-                id: TranslationUnitId::from_bytes([0; 16]),
-            },
-        ));
-        assert_eq!(mutation_error.code, "translationWorkspace");
-
-        let blocked_error = CommandError::from(TranslationMutationError::SourceNotTranslatable {
-            source_binding: aeria_core::SourceBinding::new("Synthetic", 42, 0, 0),
-        });
-        assert_eq!(blocked_error.code, "sourceNotTranslatable");
-    }
-
-    #[test]
-    fn source_update_errors_use_stable_codes() {
-        let required = CommandError::from(ProjectSessionError::SourceUpdateRequired {
-            repository_root: PathBuf::from("repository"),
-            requirement: aeria_workspace::SourceUpdateRequirement::SourceFactsMismatch { units: 1 },
+        let required = CommandError::from(OpenError::UpdateRequired {
+            project: "2026.09.01.0000.0000".to_owned(),
+            game: "2026.09.15.0000.0000".to_owned(),
         });
         assert_eq!(required.code, "sourceUpdateRequired");
+    }
 
-        let detached = CommandError::from(TranslationMutationError::Workspace(
-            WorkspaceError::DetachedUnit {
-                id: TranslationUnitId::from_bytes([0; 16]),
-            },
-        ));
-        assert_eq!(detached.code, "translationWorkspace");
+    #[test]
+    fn edit_failures_use_stable_codes() {
+        let invalid = CommandError::from(EditError::Invalid(vec!["broken macro".to_owned()]));
+        assert_eq!(invalid.code, "translationInvalid");
+        assert_eq!(invalid.message, "broken macro");
+        let missing = CommandError::from(EditError::NotAnEntry("Addon:9:0:0".to_owned()));
+        assert_eq!(missing.code, "sourceNotTranslatable");
     }
 }

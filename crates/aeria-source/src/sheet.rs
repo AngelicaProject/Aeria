@@ -3,7 +3,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 
-use aeria_core::{LayoutHash, SourceBinding, SourceFacts};
+use aeria_core::LayoutHash;
 use aeria_sqpack::GameData;
 use aeria_sqpack::excel::{self, Column, ColumnKind, SheetError, Variant};
 use sha2::{Digest, Sha256};
@@ -167,22 +167,6 @@ impl SourceSheet {
                 bytes,
                 translatable: *translatable,
             })
-    }
-
-    /// The source facts of one String cell: its binding, the sheet layout,
-    /// its text, and its row key when the sheet is keyed.
-    #[must_use]
-    pub fn facts(&self, row_id: u32, subrow_id: u16, column: u32) -> Option<SourceFacts> {
-        let cell = self.cell(row_id, subrow_id, column)?;
-        Some(SourceFacts::new(
-            SourceBinding::new(self.name.as_str(), row_id, subrow_id, column),
-            self.layout,
-            cell.text(),
-            self.row_keys
-                .as_ref()
-                .and_then(|keys| keys.key_of(row_id, subrow_id))
-                .map(str::to_owned),
-        ))
     }
 
     /// The sheet's row keys, when it has a row key column.

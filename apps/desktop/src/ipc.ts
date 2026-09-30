@@ -17,14 +17,11 @@ import type {
   PublishedReleaseDto,
   ReleaseInput,
   TermInput,
-  AgentsStatusDto,
   ProjectKnowledgeDto,
   CommandError,
   CollaborationDto,
-  DetachedUnitDto,
   GameOpenResultDto,
   GameSettingsDto,
-  ContributorDto,
   GitBranchDto,
   GitCommitChangesDto,
   GitFinishDto,
@@ -33,17 +30,14 @@ import type {
   GitRemoteDto,
   GitSyncDto,
   TranslatorIdentityDto,
-  UnitAttributionDto,
-  UnitChangeDto,
-  UnitHistoryDto,
-  UnitResolutionDto,
+  EntryChangeDto,
+  StringHistoryDto,
+  EntryResolutionDto,
   ProjectOpenResultDto,
   ProjectSummaryDto,
   RecentProjectDto,
-  ReviewState,
   SheetProgressDto,
   SourceBinding,
-  SourceUpdateReportDto,
   TranslationRowCursorDto,
   TranslationRowPageDto,
   TranslationOverlayDto,
@@ -145,14 +139,10 @@ export function translationProgress(): Promise<SheetProgressDto[]> {
   return call<SheetProgressDto[]>("translation_progress");
 }
 
-/** Plans the source update opening would apply, without writing anything. */
-export function previewSourceUpdate(repositoryRoot: string): Promise<SourceUpdateReportDto> {
-  return call<SourceUpdateReportDto>("preview_source_update", { repositoryRoot });
-}
-
 /**
- * Opens a project with the configured game installation. When the project
- * needs a source update, nothing is written and the plan is returned.
+ * Opens a project with the configured game installation. When the project's
+ * files are for an older game version, nothing is written and the versions
+ * are returned.
  */
 export function openProjectFromGame(repositoryRoot: string): Promise<GameOpenResultDto> {
   return call<GameOpenResultDto>("open_project_from_game", { repositoryRoot });
@@ -168,13 +158,13 @@ export function setGamePath(path: string | null): Promise<GameSettingsDto> {
   return call<GameSettingsDto>("set_game_path", { path });
 }
 
-/** Opens the project with the configured game and applies a required source update. */
+/**
+ * Updates the project to the configured game and opens it: every file is
+ * made again, translations are carried over (fuzzy where their source
+ * changed), and the update is committed.
+ */
 export function updateProjectFromGame(repositoryRoot: string): Promise<ProjectOpenResultDto> {
   return call<ProjectOpenResultDto>("update_project_from_game", { repositoryRoot });
-}
-
-export function listDetachedUnits(): Promise<DetachedUnitDto[]> {
-  return call<DetachedUnitDto[]>("list_detached_units");
 }
 
 /** Creates a project for the configured game installation. */
@@ -237,28 +227,26 @@ export function sheetDialogue(sheetName: string): Promise<SheetDialogueDto | nul
   return call<SheetDialogueDto | null>("sheet_dialogue", { sheetName });
 }
 
+/**
+ * Saves the translation of one string; an empty text leaves it untranslated.
+ * Refused with `translationInvalid` when the checks find a problem. Returns
+ * what the string's entry holds afterwards.
+ */
 export function setTranslationTarget(
   sourceBinding: SourceBinding,
   targetMacro: string,
-): Promise<TranslationOverlayDto> {
-  return call<TranslationOverlayDto>("set_translation_target", {
+): Promise<TranslationOverlayDto | null> {
+  return call<TranslationOverlayDto | null>("set_translation_target", {
     sourceBinding,
     targetMacro,
   });
 }
 
 export function setTranslationNote(
-  translationUnitId: string,
+  sourceBinding: SourceBinding,
   note: string | null,
-): Promise<TranslationOverlayDto> {
-  return call<TranslationOverlayDto>("set_translation_note", { translationUnitId, note });
-}
-
-export function setTranslationReviewState(
-  translationUnitId: string,
-  reviewState: ReviewState,
-): Promise<TranslationOverlayDto> {
-  return call<TranslationOverlayDto>("set_translation_review_state", { translationUnitId, reviewState });
+): Promise<TranslationOverlayDto | null> {
+  return call<TranslationOverlayDto | null>("set_translation_note", { sourceBinding, note });
 }
 
 export function gitOverview(): Promise<GitOverviewDto> {
@@ -277,8 +265,8 @@ export function gitSetRemote(name: string, url: string): Promise<GitRemoteDto[]>
   return call<GitRemoteDto[]>("git_set_remote", { name, url });
 }
 
-export function gitPendingChanges(): Promise<UnitChangeDto[]> {
-  return call<UnitChangeDto[]>("git_pending_changes");
+export function gitPendingChanges(): Promise<EntryChangeDto[]> {
+  return call<EntryChangeDto[]>("git_pending_changes");
 }
 
 export function gitCheckpoint(message: string | null): Promise<GitCommitChangesDto> {
@@ -293,12 +281,9 @@ export function gitCommitChanges(commitId: string): Promise<GitCommitChangesDto>
   return call<GitCommitChangesDto>("git_commit_changes", { commitId });
 }
 
-export function gitUnitHistory(translationUnitId: string, limit: number): Promise<UnitHistoryDto> {
-  return call<UnitHistoryDto>("git_unit_history", { translationUnitId, limit });
-}
-
-export function gitContributors(): Promise<ContributorDto[]> {
-  return call<ContributorDto[]>("git_contributors");
+/** The history of one string: its uncommitted change and the commits that changed it. */
+export function gitStringHistory(sourceBinding: SourceBinding, limit: number): Promise<StringHistoryDto> {
+  return call<StringHistoryDto>("git_string_history", { sourceBinding, limit });
 }
 
 export function gitProjectChanges(): Promise<ProjectChangeDto[]> {
@@ -327,7 +312,7 @@ export function gitFetch(): Promise<void> {
   return call<void>("git_fetch");
 }
 
-export function gitPull(resolutions: UnitResolutionDto[] = []): Promise<GitSyncDto> {
+export function gitPull(resolutions: EntryResolutionDto[] = []): Promise<GitSyncDto> {
   return call<GitSyncDto>("git_pull", { resolutions });
 }
 
@@ -347,20 +332,8 @@ export function gitOpenBranchSettings(): Promise<void> {
   return call<void>("git_open_branch_settings");
 }
 
-export function gitMergeDriver(): Promise<{ enabled: boolean }> {
-  return call<{ enabled: boolean }>("git_merge_driver");
-}
-
-export function gitSetMergeDriver(enabled: boolean): Promise<{ enabled: boolean }> {
-  return call<{ enabled: boolean }>("git_set_merge_driver", { enabled });
-}
-
-export function gitSync(resolutions: UnitResolutionDto[] = []): Promise<GitSyncDto> {
+export function gitSync(resolutions: EntryResolutionDto[] = []): Promise<GitSyncDto> {
   return call<GitSyncDto>("git_sync", { resolutions });
-}
-
-export function gitUnitAttribution(translationUnitIds: string[]): Promise<UnitAttributionDto[]> {
-  return call<UnitAttributionDto[]>("git_unit_attribution", { translationUnitIds });
 }
 
 export function gitBranches(): Promise<GitBranchDto[]> {
@@ -409,14 +382,6 @@ export function defaultProjectsDirectory(): Promise<string> {
   return call<string>("default_projects_directory_path");
 }
 
-export function agentsStatus(): Promise<AgentsStatusDto> {
-  return call<AgentsStatusDto>("agents_status");
-}
-
-/** Installs the aeria command, the skill, and the project's AGENTS.md. */
-export function agentsConnect(): Promise<AgentsStatusDto> {
-  return call<AgentsStatusDto>("agents_connect");
-}
 
 export function projectKnowledge(): Promise<ProjectKnowledgeDto> {
   return call<ProjectKnowledgeDto>("project_knowledge");

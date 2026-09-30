@@ -23,8 +23,8 @@ pub enum ProjectAreaDto {
     Terms,
     /// The other files of `aeria-knowledge/`.
     Knowledge,
-    /// `AGENTS.md` and `CLAUDE.md`, which agent harnesses read.
-    AgentFiles,
+    /// `aeria.json`: the project's languages and game version.
+    ProjectSettings,
     PackSettings,
     FontSettings,
     FontFile,
@@ -88,7 +88,7 @@ const TERMS_PATH: &str = "aeria-knowledge/terms.csv";
 fn area_of(path: &str) -> Option<ProjectAreaDto> {
     Some(match path {
         TERMS_PATH => ProjectAreaDto::Terms,
-        "AGENTS.md" | "CLAUDE.md" => ProjectAreaDto::AgentFiles,
+        aeria_git::SETTINGS_FILE => ProjectAreaDto::ProjectSettings,
         PACK_SETTINGS_FILE => ProjectAreaDto::PackSettings,
         FONT_SETTINGS_FILE => ProjectAreaDto::FontSettings,
         COLLABORATION_FILE => ProjectAreaDto::Collaboration,
@@ -123,10 +123,9 @@ pub fn compare(
             Some(Vec::new())
         }
         ProjectAreaDto::Terms => glossary_details(before, after),
-        ProjectAreaDto::Knowledge | ProjectAreaDto::AgentFiles | ProjectAreaDto::GitAttributes => {
-            text_details(before, after)
-        }
+        ProjectAreaDto::Knowledge | ProjectAreaDto::GitAttributes => text_details(before, after),
         ProjectAreaDto::PackSettings
+        | ProjectAreaDto::ProjectSettings
         | ProjectAreaDto::FontSettings
         | ProjectAreaDto::Collaboration => json_details(before, after),
     };
@@ -385,7 +384,7 @@ pub fn checkpoint_message(
         let name = match change.area {
             ProjectAreaDto::Terms => "terms",
             ProjectAreaDto::Knowledge => "knowledge",
-            ProjectAreaDto::AgentFiles => "agent instructions",
+            ProjectAreaDto::ProjectSettings => "project settings",
             ProjectAreaDto::PackSettings => "pack settings",
             ProjectAreaDto::FontSettings | ProjectAreaDto::FontFile => "game fonts",
             ProjectAreaDto::Collaboration => "collaboration policy",
@@ -420,7 +419,8 @@ mod tests {
         assert!(is_project_path("aeria-knowledge/style.md"));
         assert!(!is_project_path("aeria-knowledgex/style.md"));
         assert!(is_project_path("fonts/Unbounded-Variable.ttf"));
-        assert!(!is_project_path(".aeria/units/10.jsonl"));
+        assert!(!is_project_path("po/Addon/0.po"));
+        assert!(is_project_path("aeria.json"));
         assert!(!is_project_path("fontsx"));
         assert!(is_project_path(".github/workflows/harmonia-feed.yml"));
         assert!(is_project_path(".github/workflows/aeria-check.yml"));

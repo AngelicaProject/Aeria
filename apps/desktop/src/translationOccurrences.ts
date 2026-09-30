@@ -1,5 +1,6 @@
 import { bindingKey, rowKey } from "./binding.ts";
-import type { ReviewState, SourceBinding, TranslationRowDto } from "./types";
+import { stringState } from "./stringState.ts";
+import type { SourceBinding, StringState, TranslationRowDto } from "./types";
 
 /**
  * Renderer-only projection of one translatable source cell.
@@ -13,7 +14,7 @@ export type TranslationOccurrenceView = {
   sourceMacro: string;
   formattingOnly: boolean;
   targetMacro: string | null;
-  reviewState: ReviewState | null;
+  state: StringState | null;
   fieldIndexInRow: number;
   fieldCountInRow: number;
   firstInRow: boolean;
@@ -48,8 +49,8 @@ function rowViews(row: TranslationRowDto): TranslationOccurrenceView[] {
     binding: cell.sourceBinding,
     sourceMacro: cell.sourceMacro,
     formattingOnly: cell.formattingOnly,
-    targetMacro: cell.translation?.targetMacro ?? null,
-    reviewState: cell.translation?.reviewState ?? null,
+    targetMacro: cell.translation?.targetMacro || null,
+    state: stringState(cell.translation),
     fieldIndexInRow,
     fieldCountInRow,
     firstInRow: fieldIndexInRow === 0,
@@ -61,7 +62,7 @@ export function occurrenceKey(occurrence: Pick<TranslationOccurrenceView, "bindi
   return bindingKey(occurrence.binding);
 }
 
-export type OccurrenceStatusFilter = "all" | "untranslated" | "draft" | "needsReview" | "reviewed";
+export type OccurrenceStatusFilter = "all" | "untranslated" | "translated" | "fuzzy";
 
 /** Prose strings, or formatting-only strings (punctuation, digits, number formatting). */
 export type OccurrenceKindFilter = "all" | "text" | "formatting";
@@ -86,7 +87,7 @@ export function filterOccurrences(
   if (!isOccurrenceFilterActive(filter)) return occurrences;
   const query = filter.query.trim().toLocaleLowerCase();
   return occurrences.filter((occurrence) => {
-    if (filter.status === "untranslated" ? occurrence.reviewState !== null : filter.status !== "all" && occurrence.reviewState !== filter.status) {
+    if (filter.status === "untranslated" ? occurrence.state !== null : filter.status !== "all" && occurrence.state !== filter.status) {
       return false;
     }
     if (filter.kind !== "all" && occurrence.formattingOnly !== (filter.kind === "formatting")) return false;

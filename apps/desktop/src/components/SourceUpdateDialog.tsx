@@ -1,120 +1,50 @@
-import { useEffect, useState } from "react";
 import { Dialog } from "radix-ui";
-import { listDetachedUnits, normalizeCommandError } from "../ipc";
-import { detachReasonLabels, sourceUpdateFacts } from "../sourceUpdate";
-import type { CommandError, DetachedUnitDto, SourceUpdateReportDto } from "../types";
+import { sourceUpdateFacts } from "../sourceUpdate";
+import type { SourceUpdateNeededDto, SourceUpdateReportDto } from "../types";
 import { useI18n } from "../ui/i18n";
-import { ErrorBanner } from "./ErrorBanner";
 
 type SourceUpdateDialogProps = {
   open: boolean;
-  /**
-   * `confirm` asks before an update is applied. `summary` shows an applied
-   * update, or only the detached translations when `report` is null.
-   */
+  /** `confirm` asks before a project is updated to the installed game; `summary` shows an update that ran. */
   mode: "confirm" | "summary";
-  report: SourceUpdateReportDto | null;
+  /** The versions of a project that needs an update, for `confirm`. */
+  needed?: SourceUpdateNeededDto | null;
+  /** What an update did, for `summary`. */
+  report?: SourceUpdateReportDto | null;
   busy?: boolean;
   onConfirm?: () => void;
   onClose: () => void;
 };
 
-type DetachedState =
-  | { status: "idle" }
-  | { status: "loading" }
-  | { status: "loaded"; units: DetachedUnitDto[] }
-  | { status: "failed"; error: CommandError };
-
-export function SourceUpdateDialog({ open, mode, report, busy = false, onConfirm, onClose }: SourceUpdateDialogProps) {
+/** Asks before updating a project to a new game version, or tells what the update did. */
+export function SourceUpdateDialog({ open, mode, needed = null, report = null, busy = false, onConfirm, onClose }: SourceUpdateDialogProps) {
   const { t } = useI18n();
-  const [detached, setDetached] = useState<DetachedState>({ status: "idle" });
-  const showDetached = mode === "summary" && (report === null || report.detached > 0);
-
-  useEffect(() => {
-    if (!open || !showDetached) return;
-    let active = true;
-    setDetached({ status: "loading" });
-    void listDetachedUnits()
-      .then((units) => { if (active) setDetached({ status: "loaded", units }); })
-      .catch((error: unknown) => { if (active) setDetached({ status: "failed", error: normalizeCommandError(error) }); });
-    return () => { active = false; };
-  }, [open, showDetached]);
-
-  const title = mode === "confirm"
-    ? t("sourceUpdate.confirmTitle")
-    : report ? t("sourceUpdate.summaryTitle") : t("sourceUpdate.detachedTitle");
+  const version = (mode === "confirm" ? needed?.gameVersion : report?.gameVersion) ?? "";
+  const previous = (mode === "confirm" ? needed?.previousGameVersion : report?.previousGameVersion) ?? "";
 
   return (
     <Dialog.Root open={open} onOpenChange={(next) => { if (!next && !busy) onClose(); }}>
       <Dialog.Portal>
         <Dialog.Overlay className="dialog-overlay" />
         <Dialog.Content className="dialog source-update-dialog" aria-describedby="source-update-description">
-          <Dialog.Title className="dialog-title">{title}</Dialog.Title>
+          <Dialog.Title className="dialog-title">{t(mode === "confirm" ? "sourceUpdate.confirmTitle" : "sourceUpdate.summaryTitle")}</Dialog.Title>
           <p id="source-update-description" className="dialog-description">
-            {mode === "confirm" && report
-              ? t("sourceUpdate.confirmDescription", { version: report.gameVersion })
-              : report
-                ? t("sourceUpdate.summaryDescription", { version: report.gameVersion })
-                : t("sourceUpdate.detachedDescription")}
+            {t(mode === "confirm" ? "sourceUpdate.confirmDescription" : "sourceUpdate.summaryDescription", { version, previous })}
           </p>
-          {report ? (
+          {mode === "summary" && report ? (
             <>
               <ul className="source-update-facts">
-                {sourceUpdateFacts(report, mode === "summary").map((fact) => (
+                {sourceUpdateFacts(report).map((fact) => (
                   <li key={fact.key} className={fact.tone === "attention" ? "attention" : undefined}>
                     {t(fact.key, { count: fact.count })}
                   </li>
                 ))}
               </ul>
-              {report.sheetLayoutUpdates.length > 0 ? (
-                <div className="source-update-section">
-                  <strong>{t("sourceUpdate.schemaTitle")}</strong>
-                  <ul className="source-update-list">
-                    {report.sheetLayoutUpdates.map((sheet, index) => (
-                      <li key={`${sheet.sheetName}-${index}`}>
-                        <span className="mono">{sheet.sheetName}</span>
-                        <span className="muted">
-                          {sheet.unavailable
-                            ? t("sourceUpdate.schemaUnavailable")
-                            : sheet.removed
-                            ? t("sourceUpdate.schemaRemoved")
-                            : t("sourceUpdate.schemaColumns", { mapped: sheet.mappedColumns, unresolved: sheet.unresolvedColumns })}
-                        </span>
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              ) : null}
-              <p className="dialog-description">{t("sourceUpdate.preservedNote")}</p>
+              <p className="dialog-description">
+                {report.commit ? t("sourceUpdate.committed", { commit: report.commit.slice(0, 7) }) : t("sourceUpdate.notCommitted")}
+              </p>
             </>
-          ) : null}
-          {showDetached ? (
-            <div className="source-update-section">
-              {report ? <strong>{t("sourceUpdate.detachedTitle")}</strong> : null}
-              {detached.status === "loading" ? <div className="launcher-state"><span className="spinner" /> {t("common.loading")}</div> : null}
-              {detached.status === "failed" ? <ErrorBanner title={t("sourceUpdate.detachedFailed")} error={detached.error} onDismiss={() => setDetached({ status: "idle" })} /> : null}
-              {detached.status === "loaded" && detached.units.length === 0 ? <p className="muted">{t("sourceUpdate.detachedNone")}</p> : null}
-              {detached.status === "loaded" && detached.units.length > 0 ? (
-                <ul className="source-update-list">
-                  {detached.units.map((unit) => (
-                    <li key={unit.translationUnitId}>
-                      <span className="mono">
-                        {t("common.cellLocation", {
-                          sheet: unit.lastSourceBinding.sheetName,
-                          row: String(unit.lastSourceBinding.rowId),
-                          subrow: String(unit.lastSourceBinding.subrowId),
-                          column: String(unit.lastSourceBinding.columnIndex),
-                        })}
-                      </span>
-                      <span className="muted">{t(detachReasonLabels[unit.reason])}</span>
-                      <span className="source-update-source" title={t("sourceUpdate.lastSource")}>{unit.lastSourceText}</span>
-                      <span className="source-update-target">{unit.targetMacro || t("common.empty")}</span>
-                    </li>
-                  ))}
-                </ul>
-              ) : null}
-            </div>
-          ) : null}
+          ) : <p className="dialog-description">{t("sourceUpdate.preservedNote")}</p>}
           <div className="dialog-actions">
             {mode === "confirm" ? (
               <>

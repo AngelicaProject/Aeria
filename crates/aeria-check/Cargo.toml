@@ -15,7 +15,8 @@ path = "src/main.rs"
 aeria-export = { path = "../aeria-export" }
 aeria-fonts = { path = "../aeria-fonts" }
 aeria-git = { path = "../aeria-git" }
-aeria-workspace = { path = "../aeria-workspace" }
+aeria-knowledge = { path = "../aeria-knowledge" }
+aeria-po = { path = "../aeria-po" }
 serde_json = "1.0.151"
 tempfile = "3.27.0"
 

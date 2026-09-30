@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import type { ProjectArea, ProjectChangeDto, SourceBinding, UnitChangeDto, UnitVersionDto } from "../types";
+import { bindingKey } from "../binding";
+import type { EntryChangeDto, EntryChangeKind, EntryVersionDto, ProjectArea, ProjectChangeDto, SourceBinding } from "../types";
 import { COLLAPSE_THRESHOLD, changeBinding, flattenChanges, groupChanges, isFilterActive, kindCounts, type ChangeFilter, type ChangeGroup, type ChangeItem, type ChangeKind } from "../gitChanges";
 import { IconButton } from "../ui/primitives/IconButton";
 import { Segmented } from "../ui/primitives/Segmented";
@@ -10,46 +11,62 @@ import type { MessageKey } from "../i18n/translate";
 
 export { changeBinding, groupChanges, type ChangeGroup } from "../gitChanges";
 
-const kindLetter: Record<UnitChangeDto["kind"], string> = { added: "A", modified: "M", removed: "D" };
-export const kindLabel: Record<UnitChangeDto["kind"], MessageKey> = { added: "git.kind.added", modified: "git.kind.modified", removed: "git.kind.removed" };
+const kindLetter: Record<EntryChangeKind, string> = { translated: "A", changed: "M", cleared: "D", marked: "•" };
+/** The colour class of a kind, shared with file changes. */
+const kindClass: Record<EntryChangeKind, string> = { translated: "added", changed: "modified", cleared: "removed", marked: "modified" };
+export const kindLabel: Record<EntryChangeKind, MessageKey> = { translated: "git.kind.translated", changed: "git.kind.changed", cleared: "git.kind.cleared", marked: "git.kind.marked" };
 
-export function unitLabel(unit: UnitVersionDto | null, t: Translate): string {
-  if (!unit) return t("git.unknownUnit");
-  const binding = unit.sourceBinding;
+/** Where a string is, for people: sheet, row, subrow, and column. */
+export function bindingLabel(binding: SourceBinding | null, t: Translate): string {
+  if (!binding) return t("git.unknownUnit");
   return t("common.cellLocation", { sheet: binding.sheetName, row: String(binding.rowId), subrow: String(binding.subrowId), column: String(binding.columnIndex) });
 }
 
-export function changeLabel(change: UnitChangeDto, t: Translate): string {
-  if (change.kind === "added") return t("git.change.added");
-  if (change.kind === "removed") return t("git.change.removed");
-  const parts = [];
-  if (change.targetChanged) parts.push(t("git.change.text"));
-  if (change.reviewChanged) parts.push(t("git.change.review"));
-  if (change.noteChanged) parts.push(t("git.change.note"));
+/** What changed about a string besides its kind: its note or its fuzzy mark. */
+export function changeLabel(change: Pick<EntryChangeDto, "kind" | "before" | "after">, t: Translate): string {
+  const parts: string[] = [];
+  if (change.kind !== "marked") parts.push(t(kindLabel[change.kind]));
+  if (change.before.fuzzy !== change.after.fuzzy) parts.push(t(change.after.fuzzy ? "git.change.fuzzy" : "git.change.notFuzzy"));
+  if (change.before.translatorNote !== change.after.translatorNote) parts.push(t("git.change.note"));
   return parts.join(", ") || t("git.change.changed");
 }
 
-/** Whether a change needs its own "what changed" note: additions and
- * removals already say it with their letter and styling. */
-function changeNote(change: UnitChangeDto, t: Translate): string | null {
-  return change.kind === "modified" ? changeLabel(change, t) : null;
+/** The text a change shows: the translation after it, or before it for a removal. */
+export function changeText(change: EntryChangeDto): string {
+  return change.kind === "cleared" ? change.before.targetMacro : change.after.targetMacro;
 }
 
-export function ChangeRow({ change, selected, showColumn = true, onOpen }: { change: UnitChangeDto; selected: boolean; showColumn?: boolean; onOpen?: (() => void) | undefined }) {
+export function versionText(version: EntryVersionDto): string {
+  return version.targetMacro;
+}
+
+/** Whether a change needs its own "what changed" note: a changed translation
+ * says it with its letter; marks and notes need words. */
+function changeNote(change: EntryChangeDto, t: Translate): string | null {
+  const marked = change.before.fuzzy !== change.after.fuzzy || change.before.translatorNote !== change.after.translatorNote;
+  return change.kind === "marked" || marked ? changeLabel(change, t) : null;
+}
+
+export function ChangeRow({ change, selected, showColumn = true, onOpen }: { change: EntryChangeDto; selected: boolean; showColumn?: boolean; onOpen?: (() => void) | undefined }) {
   const { t } = useI18n();
   const binding = changeBinding(change);
-  const text = change.after?.targetMacro ?? change.before?.targetMacro ?? "";
+  const text = changeText(change);
   const note = changeNote(change, t);
   const content = <>
-    <span className={`git-kind git-kind-${change.kind}`} aria-label={t(kindLabel[change.kind])}>{kindLetter[change.kind]}</span>
+    <span className={`git-kind git-kind-${kindClass[change.kind]}`} aria-label={t(kindLabel[change.kind])}>{kindLetter[change.kind]}</span>
     <span className="git-change-coord mono">{binding ? `${binding.rowId}:${binding.subrowId}` : "?"}{binding && showColumn ? <small>{` · ${binding.columnIndex}`}</small> : null}</span>
-    <span className={change.kind === "removed" ? "git-change-text removed" : "git-change-text"}>{text || <em>{t("git.emptyText")}</em>}</span>
+    <span className={change.kind === "cleared" ? "git-change-text removed" : "git-change-text"}>{text || <em>{t("git.emptyText")}</em>}</span>
     {note ? <span className="git-change-meta">{note}</span> : null}
   </>;
-  const title = [binding ? unitLabel(change.after ?? change.before, t) : null, t(kindLabel[change.kind]), text].filter(Boolean).join("\n");
+  const title = [bindingLabel(binding, t), t(kindLabel[change.kind]), text].filter(Boolean).join("\n");
   return onOpen
     ? <button type="button" className={selected ? "git-change selected" : "git-change"} onClick={onOpen} title={title}>{content}</button>
     : <div className={selected ? "git-change selected" : "git-change"} title={title}>{content}</div>;
+}
+
+/** The key a change is selected and listed by: its string's coordinate, or its `msgctxt`. */
+export function changeKey(change: EntryChangeDto): string {
+  return change.sourceBinding ? bindingKey(change.sourceBinding) : change.context;
 }
 
 /** How a change list was left: kept while the window lives, so reopening
@@ -74,7 +91,7 @@ const CHANGE_ROW = 26;
 /** Changes from which the search and kind filter are offered. */
 const TOOLBAR_THRESHOLD = 12;
 
-const kindFilterLabels: Record<ChangeKind, MessageKey> = { added: "git.filter.added", modified: "git.filter.modified", removed: "git.filter.removed" };
+const kindFilterLabels: Record<ChangeKind, MessageKey> = { translated: "git.filter.translated", changed: "git.filter.changed", cleared: "git.filter.cleared", marked: "git.filter.marked" };
 
 /**
  * Translation changes grouped by sheet: searchable, filterable by kind, with
@@ -82,7 +99,7 @@ const kindFilterLabels: Record<ChangeKind, MessageKey> = { added: "git.filter.ad
  * when there are many changes. The list is virtualized, so thousands of
  * changes stay responsive.
  */
-export function TranslationChangeGroups({ changes, selectedUnitId, onRevealBinding, viewKey }: { changes: readonly UnitChangeDto[]; selectedUnitId: string | null; onRevealBinding?: ((binding: SourceBinding) => void) | undefined; viewKey?: string | undefined }) {
+export function TranslationChangeGroups({ changes, selectedKey, onRevealBinding, viewKey }: { changes: readonly EntryChangeDto[]; selectedKey: string | null; onRevealBinding?: ((binding: SourceBinding) => void) | undefined; viewKey?: string | undefined }) {
   const { t, formatNumber } = useI18n();
   const [view, setViewState] = useState<ChangeViewState>(() => (viewKey ? changeViews.get(viewKey) : undefined) ?? emptyView);
   const setView = (next: ChangeViewState) => {
@@ -109,7 +126,7 @@ export function TranslationChangeGroups({ changes, selectedUnitId, onRevealBindi
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const virtualizer = useVirtualizer({ count: items.length, getScrollElement: () => scrollRef.current, estimateSize: () => CHANGE_ROW, overscan: 16 });
-  const selectedIndex = selectedUnitId === null ? -1 : items.findIndex((item) => item.type === "change" && item.change.translationUnitId === selectedUnitId);
+  const selectedIndex = selectedKey === null ? -1 : items.findIndex((item) => item.type === "change" && changeKey(item.change) === selectedKey);
   useEffect(() => {
     if (selectedIndex >= 0) virtualizer.scrollToIndex(selectedIndex, { align: "auto" });
   }, [selectedIndex, virtualizer]);
@@ -120,7 +137,7 @@ export function TranslationChangeGroups({ changes, selectedUnitId, onRevealBindi
   const pinned = topItem?.type === "change" ? topItem.group : null;
   const pinnedItem = pinned ? items.find((item): item is Extract<ChangeItem, { type: "group" }> => item.type === "group" && item.group === pinned) : undefined;
 
-  const kinds = (["added", "modified", "removed"] as const).filter((kind) => counts[kind] > 0);
+  const kinds = (["translated", "changed", "cleared", "marked"] as const).filter((kind) => counts[kind] > 0);
   const showToolbar = changes.length >= TOOLBAR_THRESHOLD;
   const renderItem = (item: ChangeItem) => {
     if (item.type === "group") {
@@ -135,7 +152,7 @@ export function TranslationChangeGroups({ changes, selectedUnitId, onRevealBindi
       );
     }
     const binding = changeBinding(item.change);
-    return <ChangeRow change={item.change} selected={item.change.translationUnitId === selectedUnitId} showColumn={item.group.multiColumn} onOpen={binding && onRevealBinding && item.change.kind !== "removed" ? () => onRevealBinding(binding) : undefined} />;
+    return <ChangeRow change={item.change} selected={changeKey(item.change) === selectedKey} showColumn={item.group.multiColumn} onOpen={binding && onRevealBinding ? () => onRevealBinding(binding) : undefined} />;
   };
 
   return (
@@ -157,7 +174,7 @@ export function TranslationChangeGroups({ changes, selectedUnitId, onRevealBindi
                 ...kinds.map((kind) => ({
                   value: kind,
                   title: t(kindFilterLabels[kind]),
-                  label: <><span className={`git-kind git-kind-${kind}`} aria-hidden="true">{kindLetter[kind]}</span>{` ${formatNumber(counts[kind])}`}</>,
+                  label: <><span className={`git-kind git-kind-${kindClass[kind]}`} aria-hidden="true">{kindLetter[kind]}</span>{` ${formatNumber(counts[kind])}`}</>,
                 })),
               ]}
             />
@@ -171,7 +188,7 @@ export function TranslationChangeGroups({ changes, selectedUnitId, onRevealBindi
             {virtualizer.getVirtualItems().map((row) => {
               const item = items[row.index]!;
               return (
-                <div key={item.type === "group" ? `g:${item.group.sheetName}` : item.change.translationUnitId} role="listitem" className="git-change-slot" style={{ transform: `translateY(${row.start}px)`, height: CHANGE_ROW }}>
+                <div key={item.type === "group" ? `g:${item.group.sheetName}` : changeKey(item.change)} role="listitem" className="git-change-slot" style={{ transform: `translateY(${row.start}px)`, height: CHANGE_ROW }}>
                   {renderItem(item)}
                 </div>
               );
@@ -186,7 +203,7 @@ export function TranslationChangeGroups({ changes, selectedUnitId, onRevealBindi
 const areaInfo: Record<ProjectArea, { icon: UiIconName; title: MessageKey; order: number }> = {
   terms: { icon: "languages", title: "git.area.terms", order: 0 },
   knowledge: { icon: "messageSquare", title: "git.area.knowledge", order: 1 },
-  agentFiles: { icon: "sparkles", title: "git.area.agentFiles", order: 1 },
+  projectSettings: { icon: "settings", title: "git.area.projectSettings", order: 1 },
   packSettings: { icon: "arrowUpRight", title: "git.area.packSettings", order: 2 },
   fontSettings: { icon: "palette", title: "git.area.fonts", order: 3 },
   fontFile: { icon: "palette", title: "git.area.fonts", order: 3 },

@@ -3,7 +3,11 @@ export type CommandError = {
   message: string;
 };
 
-export type ReviewState = "draft" | "reviewed" | "needsReview";
+/**
+ * What a string's entry says about it: `translated`, `fuzzy` (translated,
+ * but its source changed since), or `null` for untranslated.
+ */
+export type StringState = "translated" | "fuzzy";
 
 export type SourceBinding = {
   sheetName: string;
@@ -142,68 +146,43 @@ export type ProjectSummaryDto = {
   /** The game installation the project reads. */
   gamePath: string;
   sheets: ProjectSheetDto[];
-  /** Translations preserved without a current source occurrence. */
-  detachedUnitCount: number;
 };
 
-/** Workspace coverage for one sheet; sheets without translations are omitted. */
+/** How much of one sheet is translated; sheets without strings are omitted. */
 export type SheetProgressDto = {
   sheetName: string;
+  /** The sheet's strings in the project. */
+  strings: number;
   translated: number;
-  reviewed: number;
-  needsReview: number;
+  /** Translations whose source changed since they were written. */
+  fuzzy: number;
 };
 
 export type ProjectOpenResultDto = {
   project: ProjectSummaryDto;
   warning: CommandError | null;
-  /** Present when opening applied a source update. */
+  /** Present when opening updated the project to the installed game. */
   sourceUpdate: SourceUpdateReportDto | null;
 };
 
-/** Why a translation is preserved without a current source occurrence. */
-export type DetachReason =
-  | "sheetRemoved"
-  | "sheetUnavailable"
-  | "rowRemoved"
-  | "cellRemoved"
-  | "columnUnresolved"
-  | "notTranslatable"
-  | "bindingConflict";
-
-export type SheetLayoutUpdateDto = {
-  sheetName: string;
-  removed: boolean;
-  /** The sheet still exists in the game but cannot be read. */
-  unavailable: boolean;
-  mappedColumns: number;
-  unresolvedColumns: number;
+/** The game versions of a project whose files are for an older game version. */
+export type SourceUpdateNeededDto = {
+  previousGameVersion: string;
+  gameVersion: string;
 };
 
-/** Counts of a previewed or applied deterministic source update. */
+/** What updating a project to the installed game did. */
 export type SourceUpdateReportDto = {
   previousGameVersion: string;
   gameVersion: string;
-  unchanged: number;
-  sourceChanged: number;
-  detached: number;
-  newlyDetached: number;
-  reattached: number;
-  columnMapped: number;
-  rowMoved: number;
-  changedUnits: number;
-  sheetLayoutUpdates: SheetLayoutUpdateDto[];
-};
-
-export type DetachedUnitDto = {
-  translationUnitId: string;
-  lastSourceBinding: SourceBinding;
-  /** The source text the translation was last bound to. */
-  lastSourceText: string;
-  reason: DetachReason;
-  targetMacro: string;
-  reviewState: ReviewState;
-  translatorNote: string | null;
+  /** Files written or removed. */
+  files: number;
+  /** Translations marked fuzzy because their source changed. */
+  fuzzy: number;
+  /** Translations kept as obsolete because their string left the game. */
+  obsolete: number;
+  /** The commit that recorded the update, when one was made. */
+  commit: string | null;
 };
 
 export type RecentProjectAvailability = "ready" | "repositoryMissing";
@@ -214,7 +193,7 @@ export type GameOpenResultDto =
   | {
     /** Nothing was written; confirm, then update the project from the game. */
     status: "sourceUpdateRequired";
-    report: SourceUpdateReportDto;
+    update: SourceUpdateNeededDto;
   };
 
 export type GameOrigin = "settings" | "squareEnix" | "steam" | "xivLauncher" | "defaultLocation";
@@ -245,11 +224,15 @@ export type RecentProjectDto = {
   availability: RecentProjectAvailability;
 };
 
+/** The translation of one string as its entry holds it. */
 export type TranslationOverlayDto = {
-  translationUnitId: string;
+  /** The translation; empty when the string is not translated. */
   targetMacro: string;
-  reviewState: ReviewState;
+  /** The source changed since the translation was written. */
+  fuzzy: boolean;
   translatorNote: string | null;
+  /** The source the translation was written for, while it is fuzzy. */
+  previousSource: string | null;
 };
 
 export type TranslationRowCursorDto = {
@@ -282,10 +265,6 @@ export type TranslationRowDto = {
 export type TranslationRowPageDto = {
   rows: TranslationRowDto[];
   nextAfter: TranslationRowCursorDto | null;
-};
-
-export type TranslationUnitIdDto = {
-  translationUnitId: string;
 };
 
 export type GitFileKind =
@@ -381,20 +360,6 @@ export type GitBranchDto = {
   blocked: "noProject" | "olderFormat" | "otherSource" | null;
 };
 
-export type AttributionDto = {
-  commit: string;
-  authorName: string;
-  authorEmail: string;
-  authoredAt: number;
-};
-
-export type UnitAttributionDto = {
-  translationUnitId: string;
-  translatedBy: AttributionDto | null;
-  reviewedBy: AttributionDto | null;
-  lastChangedBy: AttributionDto | null;
-};
-
 export type GitCommitDto = {
   id: string;
   parents: string[];
@@ -407,47 +372,55 @@ export type GitCommitDto = {
   subject: string;
 };
 
-export type UnitVersionDto = {
-  sourceBinding: SourceBinding;
+/** What a person can change about a string at one point in time. */
+export type EntryVersionDto = {
   targetMacro: string;
-  reviewState: ReviewState;
+  fuzzy: boolean;
   translatorNote: string | null;
 };
 
-export type UnitChangeKind = "added" | "modified" | "removed";
+export type EntryChangeKind = "translated" | "changed" | "cleared" | "marked";
 
-export type UnitChangeDto = {
-  translationUnitId: string;
-  kind: UnitChangeKind;
-  before: UnitVersionDto | null;
-  after: UnitVersionDto | null;
-  targetChanged: boolean;
-  reviewChanged: boolean;
-  noteChanged: boolean;
+/** A change of one string. */
+export type EntryChangeDto = {
+  /** The entry's msgctxt. */
+  context: string;
+  /** The PO file, relative to the project root. */
+  path: string;
+  /** Where the string is in the game; null when the game has no such string. */
+  sourceBinding: SourceBinding | null;
+  sourceMacro: string;
+  kind: EntryChangeKind;
+  before: EntryVersionDto;
+  after: EntryVersionDto;
 };
 
-export type RecordVersionDto =
-  | { state: "absent" }
-  | { state: "valid"; unit: UnitVersionDto }
-  | { state: "invalid"; message: string };
-
-export type UnitRevisionDto = {
+export type EntryRevisionDto = {
   commit: GitCommitDto;
-  kind: UnitChangeKind;
-  before: RecordVersionDto;
-  after: RecordVersionDto;
+  kind: EntryChangeKind;
+  before: EntryVersionDto;
+  after: EntryVersionDto;
 };
 
-export type UnitHistoryDto = {
-  translationUnitId: string;
-  pending: UnitChangeDto | null;
-  revisions: UnitRevisionDto[];
+/** The history of one string, newest first. */
+export type StringHistoryDto = {
+  pending: EntryChangeDto | null;
+  revisions: EntryRevisionDto[];
   truncated: boolean;
-  translatedBy: AttributionDto | null;
-  reviewedBy: AttributionDto | null;
 };
 
-export type ProjectArea = "terms" | "knowledge" | "agentFiles" | "packSettings" | "fontSettings" | "fontFile" | "collaboration" | "gitAttributes" | "feedWorkflow" | "checkWorkflow";
+/** How a project file changed. */
+export type ChangeKind = "added" | "modified" | "removed";
+
+/** How the list marks a string with uncommitted changes. */
+export type ChangeMark = "added" | "modified";
+
+/** The list mark of a string change: a new translation, or any other change. */
+export function changeMark(kind: EntryChangeKind): ChangeMark {
+  return kind === "translated" ? "added" : "modified";
+}
+
+export type ProjectArea = "terms" | "knowledge" | "projectSettings" | "packSettings" | "fontSettings" | "fontFile" | "collaboration" | "gitAttributes" | "feedWorkflow" | "checkWorkflow";
 
 /** The GitHub workflow that runs aeria-check on pull requests. */
 export type CheckWorkflowDto = {
@@ -462,7 +435,7 @@ export type CheckWorkflowDto = {
 };
 
 export type ProjectChangeDetailDto = {
-  kind: UnitChangeKind;
+  kind: ChangeKind;
   /** The term, the settings path ("fonts › MiedingerMid › source"), or "" for a guidance line. */
   label: string;
   before: string | null;
@@ -473,7 +446,7 @@ export type ProjectChangeDetailDto = {
 export type ProjectChangeDto = {
   path: string;
   area: ProjectArea;
-  kind: UnitChangeKind;
+  kind: ChangeKind;
   details: ProjectChangeDetailDto[];
   truncated: boolean;
   unreadable: boolean;
@@ -482,30 +455,26 @@ export type ProjectChangeDto = {
 
 export type GitCommitChangesDto = {
   commit: GitCommitDto;
-  changes: UnitChangeDto[];
+  changes: EntryChangeDto[];
   projectChanges: ProjectChangeDto[];
   branchCreated: string | null;
 };
 
-export type ContributorDto = {
-  name: string;
-  email: string;
-  translated: number;
-  reviewed: number;
-  lastAuthoredAt: number;
-};
-
-export type UnitConflictDto = {
-  translationUnitId: string;
-  base: UnitVersionDto | null;
-  ours: UnitVersionDto | null;
-  theirs: UnitVersionDto | null;
+/** A string changed differently here and on the remote. */
+export type EntryConflictDto = {
+  context: string;
+  path: string;
+  sourceBinding: SourceBinding | null;
+  sourceMacro: string;
+  base: EntryVersionDto;
+  ours: EntryVersionDto;
+  theirs: EntryVersionDto;
 };
 
 export type ConflictResolution = "ours" | "theirs";
 
-export type UnitResolutionDto = {
-  translationUnitId: string;
+export type EntryResolutionDto = {
+  context: string;
   resolution: ConflictResolution;
 };
 
@@ -516,26 +485,12 @@ export type GitSyncDto = {
   pushed: boolean;
   workspaceChanged: boolean;
   /** When non-empty nothing was integrated; sync again with resolutions. */
-  conflicts: UnitConflictDto[];
-  /** Merged translations were reconciled with the current source and wait for a checkpoint. */
-  reconciled: boolean;
+  conflicts: EntryConflictDto[];
 };
 
 export type GitFinishDto = {
   integration: GitIntegration;
   deletedBranch: string | null;
-};
-
-/** What is connected for agent harnesses such as Claude Code, Codex, and Hermes Agent. */
-export type AgentsStatusDto = {
-  /** Where the aeria command is installed for agents, when it is. */
-  commandPath: string | null;
-  commandCurrent: boolean;
-  onPath: boolean;
-  /** The open project's AGENTS.md has Aeria's section; null without a project. */
-  projectFiles: boolean | null;
-  /** This build of Aeria has no aeria command to install. */
-  commandMissing: boolean;
 };
 
 /** One term of `aeria-knowledge/terms.csv`; `settled` when a person decided it. */
@@ -595,21 +550,19 @@ export type ExportOverviewDto = {
 };
 
 export type ReleaseChannel = "stable" | "testing";
-export type ContentPolicy = "reviewed" | "all";
 
 export type ReleaseInput = {
   sequence: number;
   version: string;
   channel: ReleaseChannel;
-  contentPolicy: ContentPolicy;
   changelog: string | null;
 };
 
 export type ExportReportDto = {
   exported: number;
-  skippedDetached: number;
   skippedUntranslated: number;
-  skippedUnreviewed: number;
+  /** Translations left out because their source changed since they were written. */
+  skippedFuzzy: number;
   sheets: number;
   strings: number;
   packHash: string;
