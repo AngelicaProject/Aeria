@@ -520,12 +520,6 @@ export type ModelInfo = {
   efforts: string[];
 };
 
-/** What a machine translation run of a scope would translate. */
-export type TranslationCountDto = {
-  files: number;
-  strings: number;
-};
-
 /** A string whose machine translation failed the checks twice; it stays untranslated. */
 export type TranslationRejected = {
   path: string;

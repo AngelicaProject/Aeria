@@ -65,9 +65,9 @@ pub use guide::{
 };
 pub use state::{Activity, DesktopState};
 pub use translate::{
-    ModelAccountDto, ModelSignInDto, Translation, TranslationCountDto, model_account, model_list,
+    ModelAccountDto, ModelSignInDto, Translation, model_account, model_list,
     model_open_sign_in_page, model_sign_in_poll, model_sign_in_start, model_sign_out,
-    translation_count, translation_start, translation_status, translation_stop,
+    translation_name_sheets, translation_start, translation_status, translation_stop,
 };
 pub use updates::{
     AvailableUpdateDto, UpdateChannel, UpdateDownloadDto, UpdateStatusDto, Updates, update_check,
@@ -197,7 +197,7 @@ pub fn run() {
             model_sign_in_poll,
             model_sign_out,
             model_list,
-            translation_count,
+            translation_name_sheets,
             translation_start,
             translation_status,
             translation_stop

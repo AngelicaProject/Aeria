@@ -9,31 +9,46 @@ use std::path::Path;
 use aeria_po::{Identity, PO_DIR, PoFile};
 use aho_corasick::{AhoCorasick, AhoCorasickBuilder, MatchKind};
 
-/// Sheets whose strings are names.
+/// Sheets whose strings are names, in the order a run translates them: the
+/// world and who lives in it first, then what names use those words (an
+/// action or item named after a place, a duty or quest named after both).
 pub const NAME_SHEETS: [&str; 22] = [
-    "Action",
-    "BNpcName",
-    "ClassJob",
-    "Companion",
-    "ContentFinderCondition",
-    "ENpcResident",
-    "EObjName",
-    "EventItem",
-    "Fate",
-    "GuardianDeity",
-    "InstanceContent",
-    "Item",
-    "Mount",
-    "Ornament",
     "PlaceName",
-    "Quest",
-    "Race",
-    "Status",
-    "Title",
     "Town",
-    "Trait",
+    "Race",
     "Tribe",
+    "GuardianDeity",
+    "ClassJob",
+    "Status",
+    "Action",
+    "Trait",
+    "Item",
+    "EventItem",
+    "Mount",
+    "Companion",
+    "Ornament",
+    "Title",
+    "ENpcResident",
+    "BNpcName",
+    "EObjName",
+    "Fate",
+    "InstanceContent",
+    "ContentFinderCondition",
+    "Quest",
 ];
+
+/// The place in [`NAME_SHEETS`] of the sheet a file relative to `po/`
+/// belongs to; `None` for a file of any other sheet.
+#[must_use]
+pub fn name_sheet_of(path: &str) -> Option<usize> {
+    let sheet = path
+        .strip_suffix(".po")
+        .unwrap_or(path)
+        .split('/')
+        .next()?
+        .trim_end_matches('~');
+    NAME_SHEETS.iter().position(|name| *name == sheet)
+}
 
 /// Longest name taken from a name sheet; longer strings are descriptions.
 const MAX_NAME: usize = 48;
@@ -61,14 +76,7 @@ impl Names {
         let mut found: BTreeMap<String, String> = BTreeMap::new();
         let paths = aeria_po::list(root).unwrap_or_default();
         for path in paths {
-            let sheet = path
-                .strip_suffix(".po")
-                .unwrap_or(&path)
-                .split('/')
-                .next()
-                .unwrap_or_default()
-                .trim_end_matches('~');
-            if !NAME_SHEETS.contains(&sheet) {
+            if name_sheet_of(&path).is_none() {
                 continue;
             }
             let Ok(text) = std::fs::read_to_string(root.join(PO_DIR).join(&path)) else {
@@ -172,6 +180,11 @@ mod tests {
                 ("Limsa Lominsa".to_owned(), "Лимса Ломинса".to_owned()),
             ]
         );
+        assert_eq!(name_sheet_of("PlaceName.po"), Some(0));
+        assert_eq!(name_sheet_of("Item/31000.po"), Some(9));
+        assert_eq!(name_sheet_of("Quest~.po"), Some(NAME_SHEETS.len() - 1));
+        assert_eq!(name_sheet_of("quest/001/X.po"), None);
+        assert_eq!(name_sheet_of("ItemFood.po"), None);
         assert!(is_name("Mother Miounne"));
         assert!(!is_name("delivery moogle"));
         assert!(!is_name(

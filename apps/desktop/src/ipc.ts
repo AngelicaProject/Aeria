@@ -47,7 +47,6 @@ import type {
   ModelAccountDto,
   ModelInfo,
   ModelSignInDto,
-  TranslationCountDto,
   TranslationStatus,
 } from "./types";
 
@@ -427,8 +426,9 @@ export function modelList(): Promise<ModelInfo[]> {
  * What a machine translation of `scope` would translate. The scope names
  * sheets, and folders of sheets ending with "/"; empty is the whole project.
  */
-export function translationCount(scope: string[], fuzzy: boolean): Promise<TranslationCountDto> {
-  return call<TranslationCountDto>("translation_count", { scope, fuzzy });
+/** The sheets whose strings are the game's names, in the order a run translates them first. */
+export function translationNameSheets(): Promise<string[]> {
+  return call<string[]>("translation_name_sheets");
 }
 
 export function translationStart(scope: string[], fuzzy: boolean, model: string, effort: string | null): Promise<void> {

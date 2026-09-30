@@ -304,9 +304,25 @@
 .export-warning { display: flex; align-items: center; gap: 6px; margin: 0; color: var(--warn); font-size: var(--text-sm); }
 .export-warning-inline { color: var(--warn); font-size: var(--text-sm); }
 
-.translate-dialog { display: flex; flex-direction: column; gap: 12px; width: min(620px, calc(100vw - 32px)); }
-.translate-dialog .export-block { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; }
-.translate-dialog .field-inline { display: flex; align-items: center; gap: 8px; }
+.translate-dialog { display: flex; flex-direction: column; gap: 12px; width: min(900px, calc(100vw - 32px)); }
+.translate-dialog .field-inline { display: flex; align-items: flex-start; gap: 8px; }
+.translate-layout { display: grid; grid-template-columns: minmax(0, 1fr) 280px; gap: 16px; min-height: 0; }
+.translate-picker { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.translate-presets { display: flex; flex-wrap: wrap; gap: 4px; }
+.translate-preset { padding: 2px 8px; font-size: var(--text-xs); }
+.translate-tree { height: min(420px, 55vh); margin: 0; padding: 4px 0; overflow: auto; border: 1px solid var(--line); border-radius: var(--radius-sm); }
+.translate-tree:disabled { opacity: 0.6; }
+.translate-row { display: flex; align-items: center; gap: 6px; min-height: 26px; padding-inline-end: 10px; font-size: var(--text-sm); cursor: default; }
+.translate-row:hover { background: var(--hover); }
+.translate-twisty { display: inline-flex; align-items: center; justify-content: center; flex: none; width: 16px; height: 16px; padding: 0; border: 0; background: transparent; color: var(--fg-muted); }
+.translate-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+button.translate-name { padding: 0; border: 0; background: transparent; color: var(--fg); font: inherit; text-align: start; }
+.translate-remaining { flex: none; color: var(--fg-muted); font-size: var(--text-xs); font-variant-numeric: tabular-nums; }
+.translate-remaining.done { color: var(--ok); }
+.translate-tree .field-hint { padding: 6px 10px; }
+.translate-side { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.translate-summary { margin: 0; font-weight: 600; }
+@media (max-width: 720px) { .translate-layout { grid-template-columns: 1fr; } }
 .translate-progress { display: flex; flex-direction: column; gap: 8px; }
 .translate-progress .meter { width: 100%; }
 .export-optional { margin-left: 6px; color: var(--fg-subtle); font-weight: 400; }

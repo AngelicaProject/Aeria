@@ -3,7 +3,7 @@
 //! strings still untranslated, so a run that stopped continues when it is
 //! started again.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -15,7 +15,7 @@ use tokio::task::JoinSet;
 
 use crate::ModelError;
 use crate::codex::{Codex, Request, Usage};
-use crate::names::Names;
+use crate::names::{Names, name_sheet_of};
 use crate::prompt::{self, Item, Term};
 
 /// Strings of a scene file that are one request; a longer scene is split.
@@ -219,10 +219,11 @@ pub fn plan(root: &std::path::Path, paths: &[String], fuzzy: bool) -> Result<Vec
 }
 
 /// What a run shares among its requests.
+#[derive(Clone)]
 struct Shared {
     session: Arc<Session>,
     codex: Arc<Codex>,
-    names: Names,
+    names: Arc<Names>,
     knowledge: Arc<Knowledge>,
     target: String,
     instructions: String,
@@ -508,7 +509,7 @@ async fn prepare(
         let options = options.clone();
         tokio::task::spawn_blocking(move || {
             let batches = plan(session.root(), &options.paths, options.fuzzy)?;
-            Ok::<_, String>((batches, Names::load(session.root())))
+            Ok::<_, String>((batches, Arc::new(Names::load(session.root()))))
         })
         .await
     };
@@ -586,52 +587,70 @@ fn failed(error: ModelError, failures: &mut u32, pace: &mut usize, handle: &Run)
     }
 }
 
-async fn drive(session: Arc<Session>, codex: Arc<Codex>, options: Options, handle: &Run) -> Stop {
-    let (shared, batches) = match prepare(session, codex, options).await {
-        Ok(prepared) => prepared,
-        Err(stop) => return stop,
-    };
-    handle.update(|status| {
-        status.batches = batches.len();
-        status.strings = batches.iter().map(|batch| batch.contexts.len()).sum();
-        let mut files: Vec<&str> = batches.iter().map(|batch| batch.path.as_str()).collect();
-        files.dedup();
-        status.files = files.len();
-    });
-    let mut queue: VecDeque<Batch> = batches.into();
+/// The batches of a run in the order it sends them: each name sheet's on
+/// its own, in the order of [`crate::names::NAME_SHEETS`], and then all
+/// others. The names are read again after each name sheet, so later
+/// batches use the translations it wrote.
+fn phases(batches: Vec<Batch>) -> Vec<(bool, VecDeque<Batch>)> {
+    let mut names: BTreeMap<usize, VecDeque<Batch>> = BTreeMap::new();
+    let mut rest = VecDeque::new();
+    for batch in batches {
+        match name_sheet_of(&batch.path) {
+            Some(order) => names.entry(order).or_default().push_back(batch),
+            None => rest.push_back(batch),
+        }
+    }
+    let mut phases: Vec<(bool, VecDeque<Batch>)> =
+        names.into_values().map(|queue| (true, queue)).collect();
+    if !rest.is_empty() {
+        phases.push((false, rest));
+    }
+    phases
+}
+
+/// The request pace and the failures in a row, kept across phases.
+struct Pace {
+    now: usize,
+    failures: u32,
+}
+
+/// Sends the batches of `queue` until all have answered; a stop ends it
+/// early.
+async fn drain(
+    shared: &Arc<Shared>,
+    mut queue: VecDeque<Batch>,
+    pace: &mut Pace,
+    handle: &Run,
+) -> Option<Stop> {
     let mut running: JoinSet<(Batch, Result<Done, ModelError>)> = JoinSet::new();
-    // The first request goes alone and stores the instructions in the
-    // service's cache; the others start when it has answered.
-    let mut pace = 1;
-    let mut failures = 0;
     loop {
         if handle.cancelled() {
             running.abort_all();
-            return Stop::Cancelled;
+            return Some(Stop::Cancelled);
         }
-        while running.len() < pace
+        while running.len() < pace.now
             && let Some(batch) = queue.pop_front()
         {
-            let shared = Arc::clone(&shared);
+            let shared = Arc::clone(shared);
             running.spawn(async move {
                 let result = translate(shared, batch.clone()).await;
                 (batch, result)
             });
         }
-        let Some(joined) = running.join_next().await else {
-            return Stop::Finished;
-        };
+        // Nothing left running means every batch has answered.
+        let joined = running.join_next().await?;
         let Ok((batch, result)) = joined else {
             continue;
         };
         match result {
             Ok(done) => {
-                failures = 0;
-                pace = if pace == 1 {
+                pace.failures = 0;
+                pace.now = if pace.now == 1 {
                     CEILING
                 } else {
-                    (pace + 1).min(CEILING)
+                    (pace.now + 1).min(CEILING)
                 };
+                let now = pace.now;
                 handle.update(|status| {
                     status.batches_done += 1;
                     status.written += done.written;
@@ -643,7 +662,7 @@ async fn drive(session: Arc<Session>, codex: Arc<Codex>, options: Options, handl
                     status.input_tokens += done.usage.input;
                     status.cached_tokens += done.usage.cached;
                     status.output_tokens += done.usage.output;
-                    status.pace = pace;
+                    status.pace = now;
                     status.message = None;
                 });
             }
@@ -652,7 +671,7 @@ async fn drive(session: Arc<Session>, codex: Arc<Codex>, options: Options, handl
                     error,
                     ModelError::RateLimited { .. } | ModelError::Network(_) | ModelError::Timeout
                 );
-                match failed(error, &mut failures, &mut pace, handle) {
+                match failed(error, &mut pace.failures, &mut pace.now, handle) {
                     Next::Continue => {}
                     Next::Wait(wait) => {
                         if retry {
@@ -662,12 +681,52 @@ async fn drive(session: Arc<Session>, codex: Arc<Codex>, options: Options, handl
                     }
                     Next::Stop(stop) => {
                         running.abort_all();
-                        return stop;
+                        return Some(stop);
                     }
                 }
             }
         }
     }
+}
+
+async fn drive(session: Arc<Session>, codex: Arc<Codex>, options: Options, handle: &Run) -> Stop {
+    let (mut shared, batches) = match prepare(session, codex, options).await {
+        Ok(prepared) => prepared,
+        Err(stop) => return stop,
+    };
+    handle.update(|status| {
+        status.batches = batches.len();
+        status.strings = batches.iter().map(|batch| batch.contexts.len()).sum();
+        let mut files: Vec<&str> = batches.iter().map(|batch| batch.path.as_str()).collect();
+        files.dedup();
+        status.files = files.len();
+    });
+    // The first request goes alone and stores the instructions in the
+    // service's cache; the others start when it has answered.
+    let mut pace = Pace {
+        now: 1,
+        failures: 0,
+    };
+    let mut names_changed = false;
+    for (names, queue) in phases(batches) {
+        if names_changed {
+            let root = shared.session.root().to_owned();
+            let Ok(names) = tokio::task::spawn_blocking(move || Names::load(&root)).await else {
+                return Stop::Failed {
+                    message: "the game's names could not be read again".to_owned(),
+                };
+            };
+            shared = Arc::new(Shared {
+                names: Arc::new(names),
+                ..(*shared).clone()
+            });
+        }
+        if let Some(stop) = drain(&shared, queue, &mut pace, handle).await {
+            return stop;
+        }
+        names_changed = names;
+    }
+    Stop::Finished
 }
 
 /// Counts what a run of `paths` would translate: strings by file, relative
@@ -705,5 +764,40 @@ mod tests {
         assert!(!selected("AddonTransient.po", &paths));
         assert!(!selected("quest/000/B.po", &paths));
         assert!(selected("anything.po", &[]));
+    }
+
+    #[test]
+    fn name_sheets_go_first_one_at_a_time() {
+        let batch = |path: &str| Batch {
+            path: path.to_owned(),
+            contexts: vec![format!("{path}:1")],
+            first: 0,
+            last: 0,
+        };
+        let batches = vec![
+            batch("Addon/0.po"),
+            batch("Item/0.po"),
+            batch("quest/001/X.po"),
+            batch("PlaceName.po"),
+            batch("Item/1000.po"),
+        ];
+        let order: Vec<(bool, Vec<String>)> = phases(batches)
+            .into_iter()
+            .map(|(names, queue)| (names, queue.into_iter().map(|batch| batch.path).collect()))
+            .collect();
+        assert_eq!(
+            order,
+            vec![
+                (true, vec!["PlaceName.po".to_owned()]),
+                (
+                    true,
+                    vec!["Item/0.po".to_owned(), "Item/1000.po".to_owned()]
+                ),
+                (
+                    false,
+                    vec!["Addon/0.po".to_owned(), "quest/001/X.po".to_owned()]
+                ),
+            ]
+        );
     }
 }

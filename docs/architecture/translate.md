@@ -51,12 +51,12 @@ settings say so.
 
 ## What is translated
 
-A run takes a sheet, a folder of sheets (such as `quest/001/`), or the whole
-project, and translates every string whose `msgstr` is empty and that is not
-fuzzy. On request it also translates fuzzy strings, giving the model the
-previous source and translation, and clears the mark of each one it writes.
-Before starting, the dialog shows how many strings and files it would
-translate.
+A run takes chosen sheets and folders of sheets (such as `quest/001/`), or
+the whole project, and translates every string whose `msgstr` is empty and
+that is not fuzzy. On request it also translates fuzzy strings, giving the
+model the previous source and translation, and clears the mark of each one it
+writes. Before starting, the dialog shows how many strings the chosen sheets
+still need, from the project's progress.
 
 There is no job store and no state outside the files. What is left is exactly
 the strings still untranslated, so a run after a stop, a usage limit, or a
@@ -72,6 +72,15 @@ a sheet's neighbouring rows together:
 - otherwise a file's untranslated strings are split into batches of 100.
 
 Each batch is one request, and a batch never spans files.
+
+The batches of the name sheets go first, one sheet at a time in the order of
+`NAME_SHEETS` in `aeria-model` (places, towns, races, and tribes; classes,
+statuses, actions, and traits; items, mounts, and minions; titles, residents,
+monsters, and objects; FATEs, duties, and quests), and the translated names
+are read again after each of them. Everything else follows in one queue. So
+an action named after a place, a quest named after a character, and every
+line of dialogue use the names the same run just wrote, and one run of the
+whole project needs no care about the order of sheets.
 
 ## The request
 
@@ -139,7 +148,11 @@ again.
 
 ## Progress
 
-The dialog shows, every second while it is open: strings written of the
+The dialog chooses what to translate in a tree of the project's sheets,
+with a search and each sheet's and folder's untranslated strings, and with
+quick choices: the name sheets, the quests, and every sheet with
+untranslated strings. It shows, every second while it is open: strings
+written of the
 run's strings, strings refused by the checks, tokens used, the share of
 prompt tokens served from the cache, the current pace, the last failure of
 the service while the run waits, and why the run stopped. The run goes on

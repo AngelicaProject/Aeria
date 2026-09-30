@@ -9,7 +9,6 @@ use aeria_model::{Codex, KeyringStore, ModelError, ModelInfo, Options, Run, Stat
 use serde::Serialize;
 use tauri::Manager;
 
-use crate::commands::run_blocking;
 use crate::error::CommandError;
 use crate::state::DesktopState;
 
@@ -172,14 +171,6 @@ pub async fn model_list(app: tauri::AppHandle) -> CommandResult<Vec<ModelInfo>> 
     Ok(app.state::<Translation>().codex()?.models().await?)
 }
 
-/// What a run of some paths would translate.
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct TranslationCountDto {
-    pub files: usize,
-    pub strings: usize,
-}
-
 /// The files and folders of `po/` of a scope: sheet names, and folders of
 /// sheet names ending with `/`, such as `quest/001/`. An empty scope is the
 /// whole project.
@@ -195,27 +186,11 @@ fn paths_of(session: &aeria_po::Session, scope: &[String]) -> Vec<String> {
 }
 
 #[tauri::command(rename_all = "camelCase")]
-/// Counts the strings a run of `scope` (see [`paths_of`]) would translate.
-///
-/// # Errors
-///
-/// Returns `noProjectOpen` or `projectStore` when the files cannot be read.
-pub async fn translation_count(
-    app: tauri::AppHandle,
-    scope: Vec<String>,
-    fuzzy: bool,
-) -> CommandResult<TranslationCountDto> {
-    run_blocking(move || {
-        let session = app.state::<DesktopState>().session()?;
-        let paths = paths_of(&session, &scope);
-        let counts = aeria_model::run::count(session.root(), &paths, fuzzy)
-            .map_err(|message| CommandError::new("projectStore", message))?;
-        Ok(TranslationCountDto {
-            files: counts.len(),
-            strings: counts.values().sum(),
-        })
-    })
-    .await
+/// The sheets whose strings are the game's names, in the order a run
+/// translates them before any other sheet.
+#[must_use]
+pub fn translation_name_sheets() -> Vec<&'static str> {
+    aeria_model::names::NAME_SHEETS.to_vec()
 }
 
 #[tauri::command(rename_all = "camelCase")]

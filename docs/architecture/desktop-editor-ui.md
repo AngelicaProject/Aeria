@@ -535,10 +535,13 @@ example by Git.
 ## Machine translation
 
 **Machine translation…** opens from the Translation menu and the command
-palette. The dialog chooses what to translate (the open sheet, the sheets of
-its folder, or the whole project) and whether strings with a changed source
-are included, shows how many strings and files that is, and names the model;
-without a model it links to Settings. **Translate** starts a run, and the
+palette. The dialog chooses what to translate in a tree of the project's
+sheets with checkboxes (a folder's box chooses all its sheets), a search, and
+quick choices (names, quests, all untranslated, clear); every sheet and folder
+shows how many strings it still needs. It opens with the open sheet chosen.
+It also chooses whether strings with a changed source are included, shows how
+many sheets and strings are chosen, and names the model; without a model it
+links to Settings. **Translate** starts a run, and the
 dialog shows its progress every second: strings written of the run's strings,
 strings refused by the checks with their problems, tokens and the share served
 from the cache, the pace, and why the run stopped. The dialog can be hidden

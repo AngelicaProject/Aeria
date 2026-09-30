@@ -270,7 +270,8 @@ failures map to stable `git*` error codes such as `gitUnavailable`,
 
 `model_account`, `model_sign_in_start`, `model_open_sign_in_page`,
 `model_sign_in_poll`, `model_sign_out`, and `model_list` sign in to a ChatGPT
-subscription and list its models; `translation_count(scope, fuzzy)`,
+subscription and list its models; `translation_name_sheets` lists the name
+sheets a run translates first, and
 `translation_start(scope, fuzzy, model, effort)`, `translation_status`, and
 `translation_stop` run [machine translation](./translate.md). A scope names
 sheets, and folders of sheets ending with `/`; empty is the whole project. One

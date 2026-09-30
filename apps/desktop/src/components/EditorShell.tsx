@@ -1392,7 +1392,7 @@ export function EditorShell({
       <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} initialSection={settingsSection} projectOpen project={project} onProjectChanged={onProjectChanged} />
       <ProjectGuideDialog open={guide.open} initialTab={guide.tab} onOpenChange={setGuideOpen} />
       <ExportDialog open={exportOpen} onOpenChange={setExportOpen} onOpenChanges={() => { setExportOpen(false); showPanel("git", "right", false); }} />
-      <TranslateDialog open={translateOpen} onOpenChange={setTranslateOpen} sheetName={selectedSheetName} onOpenSettings={() => { setTranslateOpen(false); openSettings("translation"); }} />
+      <TranslateDialog open={translateOpen} onOpenChange={setTranslateOpen} sheets={project.sheets} progress={progressBySheet} sheetName={selectedSheetName} onOpenSettings={() => { setTranslateOpen(false); openSettings("translation"); }} onFilesChanged={handleWorkspaceChanged} />
       {palette.open ? (
         <CommandPalette
           key={palette.key}
