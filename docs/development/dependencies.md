@@ -20,7 +20,7 @@ A dependency should have a concrete current use, a maintenance story, and compat
 - React: renderer UI
 - TypeScript: strict frontend typing
 - Vite: frontend build/dev tooling
-- SQLite: local disposable indexes/cache/job state
+- SQLite: local disposable indexes
 
 Likely UI-level dependencies such as Tailwind, Radix primitives, CodeMirror, docking/layout libraries, and Git/SQLite Rust crates should be added when the first feature that needs them is implemented, after checking their current stable versions and licenses.
 
@@ -77,13 +77,14 @@ their license texts; the OFL allows bundling them with software.
 - `getrandom` (MIT OR Apache-2.0), already in the graph through `p256`, to draw
   signing keys from the operating system random source.
 
-The desktop adds `dirs` (MIT OR Apache-2.0), already in the graph through
-Tauri, to find Aeria's data and cache folders from the `aeria` command, which
-runs without Tauri's path resolver; `rusqlite` (MIT) with `bundled`, the same
-version as `aeria-search`, for the ledger of agent translations;
-`getrandom` (MIT OR Apache-2.0), already in the graph through `p256`, for the
-token of the `aeria` project server;
-`tauri-plugin-opener` (Apache-2.0 OR MIT) to open GitHub
+`aeria-model` uses `reqwest`, `rustls`, and `keyring` as `aeria-publish`
+does, for the Codex Responses API and the ChatGPT sign-in, whose refresh token
+is kept in the OS credential store; `base64` (MIT OR Apache-2.0) to read the
+account from the sign-in's token; `aho-corasick` to find the game's names in a
+batch in one pass; and `tokio` with only `rt`, `sync`, `time`, and `macros` to
+run the requests of a batch concurrently.
+
+The desktop adds `tauri-plugin-opener` (Apache-2.0 OR MIT) to open GitHub
 pages from Rust, and `tokio` with only `rt` and `time`, already part of the
 Tauri runtime, to pace background update checks.
 

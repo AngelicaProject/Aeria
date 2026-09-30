@@ -12,13 +12,13 @@ contracts are [`../formats/pack-v1.md`](../formats/pack-v1.md),
 [`../formats/pack-settings-v1.md`](../formats/pack-settings-v1.md).
 
 The pack is designed for fast, reliable runtime lookup and does not mirror the
-editable Git workspace representation.
+project's PO files.
 
 ## Requirements
 
 - explicit format version
-- deterministic output for identical project, source, policy, release
-  parameters, and signing key
+- deterministic output for identical project, game, release parameters, and
+  signing key
 - validation before emission; any failed string fails the export
 - no partially written final pack; atomic replacement where supported
 - every exported translation is bound to the exact source bytes it was made
@@ -28,29 +28,30 @@ editable Git workspace representation.
 
 1. **Preconditions.** The project is open with the game at its game
    version, the game has not been patched since the project was opened (its
-   version file is read again), and `aeria-pack.json` is valid. Translation data and
-   `aeria-pack.json` have no uncommitted changes, because the manifest records
-   `HEAD` as `project.commit`; the project stays locked from this check until
-   collection ends. Export is unavailable in a degraded workspace.
-2. **Select units.** Bound units with a target, filtered by the content
-   policy: `reviewed` exports only `reviewed` units; `all` also exports
-   `draft` and `needs-review` units as unreviewed cells. The policy is chosen
-   per export and recorded in the pack manifest.
-3. **Validate.** Each target is parsed and semantically validated by
-   `aeria-se`, as on save. Each unit's source facts are compared with the
-   game's cell once more; a unit that does not describe the game fails the
-   export. Its source guard is computed from the cell's current bytes.
+   version file is read again), and `aeria-pack.json` is valid. `po/`,
+   `aeria-pack.json`, and the font settings have no uncommitted changes,
+   because the manifest records `HEAD` as `project.commit`; the session's
+   writes are held from this check until collection ends.
+2. **Select translations.** Every entry of `po/` with a translation that is
+   not fuzzy (see [`po-project.md`](./po-project.md#checking)). Committed
+   translations are the project's accepted work, so every exported cell is
+   `reviewed` and the manifest's `contentPolicy` is `reviewed`.
+3. **Validate.** Each entry's `msgctxt` is found in the game (a keyed row by
+   its key) and its `msgid` compared with the game's text of that cell; an
+   entry that does not describe the game fails the export, and the project
+   needs a game update. Each translation is parsed and semantically validated
+   by `aeria-se`. Its source guard is computed from the cell's current bytes.
 4. **Encode.** Target macro strings are encoded in batches of 4096 by
    `SeStringEncoder`, which uses `aeria_se::codec::encode_checked`, the
    inverse of the decoder that prints source text (see
-   [`strings.md`](./strings.md#byte-codec)). It confirms that decoding the
+   [`strings.md`](./strings.md#layers)). It confirms that decoding the
    bytes and encoding the result again gives the same bytes; numbers may be
    typed differently from how they print, so the check is on bytes. A rejected
    string, a `0x00` byte, or a string longer than 65535 bytes fails the export.
    `collect_project` takes the encoder as a `StringEncoder` so the pipeline is
    testable with a fake encoder.
 5. **Layout.** For every exported sheet, all String columns of the game's
-   sheet header form its layout; each unit's `columnIndex` becomes its string
+   sheet header form its layout; each entry's column becomes its string
    ordinal.
 6. **Fonts.** When `aeria-fonts.json` exists, `aeria-fonts` renders the
    configured characters for every size of every listed game font (below) and
@@ -95,14 +96,14 @@ as the game would draw it, at 1:1 and magnified, over guides for the native
 line box, baseline, and capital height. The preview renders from the unsaved
 settings; export uses the committed ones.
 
-The export report (`ExportReport`) lists what was left out: detached units,
-empty targets, and unreviewed units under the `reviewed` policy.
+The export report (`ExportReport`) counts what was left out: untranslated
+strings and fuzzy translations.
 
 The manifest takes `packId`, `title`, `publisher`, `license`, and
-`minHarmonia` from `aeria-pack.json`; `release` and `contentPolicy` from the
-export; `target.language` from the workspace, which must be a target
-language (a project still on `und` cannot export); `source` from the game;
-and `exporter.aeria` from the Aeria build.
+`minHarmonia` from `aeria-pack.json`; `release` from the export;
+`contentPolicy` `reviewed`; `target.language` from `aeria.json`, which must
+be a target language; `source` from the game; and `exporter.aeria` from the
+Aeria build.
 
 ## Desktop flow
 
@@ -113,8 +114,8 @@ the left; the dialog opens on *Pack* until the pack settings exist and on
 - **Release** shows what the export needs (pack settings saved, everything
   committed, the project key on this computer, font glyphs, pushed to
   GitHub) with a link to the section that fixes each item, then the release
-  parameters:
-  - content policy, with what each choice means for players;
+  parameters, after a line saying that the pack holds every committed
+  translation except fuzzy ones:
   - the release number (`sequence`), which is not editable: one more than
     the highest local `harmonia/<n>` tag. Publishing raises it above the
     latest GitHub release when the local tags are behind, so numbers never

@@ -120,7 +120,7 @@ followed by one LF. Readers reject unknown, missing, and duplicate fields.
 | `target.language`, `source.language` | BCP 47 language tags; `source.language` is the game language the project translates from. `target.language` is never `und`: Aeria refuses to export a project without a target language |
 | `source.gameVersion` | the text of `game/ffxivgame.ver` of the game the pack was built from |
 | `contentPolicy` | `reviewed` or `all` (see [Cell state](#cell-state)) |
-| `project.commit` | Git commit of the exported workspace state |
+| `project.commit` | Git commit of the exported project |
 | `exporter.aeria` | producing Aeria version, a non-empty display string that also identifies the string encoder |
 | `minHarmonia` | lowest Harmonia version that implements this format minor |
 | `counts` | exact counts; readers verify them. `strings` is the number of distinct stored strings |
@@ -369,10 +369,12 @@ spelling.
 
 ## Cell state
 
-`contentPolicy: "reviewed"` means every cell has state `1`. `all` also exports
-`draft` and `needs-review` units as state `2`. Harmonia may let the player
-choose whether state-`2` cells are applied; the pack never mixes in other
-states.
+`contentPolicy: "reviewed"` means every cell has state `1`. `all` means cells
+may also have state `2`, translations the project has not accepted. Harmonia
+may let the player choose whether state-`2` cells are applied; the pack never
+mixes in other states. Aeria writes `reviewed` packs only: a project's
+accepted translations are its committed translations that are not fuzzy (see
+[`../architecture/export.md`](../architecture/export.md#pipeline)).
 
 ## Signature block
 

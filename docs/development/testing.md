@@ -2,36 +2,37 @@
 
 Tests protect contracts, not implementation trivia.
 
-Prioritize deterministic fixtures and regression cases around the highest-risk boundaries: source verification, structured strings, workspace persistence, rebase, Git merge behavior, AI validation, and export.
+Prioritize deterministic fixtures and regression cases around the highest-risk boundaries: source verification, structured strings, the project's PO files, game updates, Git merge behavior, the checks of a translation, and export.
 
 ## Test layers
 
 - Unit tests for pure domain rules and parsers.
 - Golden/round-trip tests for structured strings and serialization.
 - Property/fuzz tests for parsers and invariants.
-- Integration tests over synthetic SqPack game folders and workspace repositories.
+- Integration tests over synthetic SqPack game folders and project repositories.
 - Desktop IPC tests for capability contracts.
 - Frontend component/workflow tests for high-value user flows.
 - Packaging smoke tests on supported release targets.
 
-## Source update and collaboration safety
+## Game update and collaboration safety
 
-The source update, persistence, and Git layers share one safety contract:
+The game update, persistence, and Git layers share one safety contract:
 no translation is removed, overwritten, or shown against source text it was
 not made for. Changes to these layers keep the following suites passing and
 extend them for new cases:
 
-- `aeria-rebase` `tests/rebase.rs`: one test per planner outcome, combined
-  patches, row-key edge cases, a bounded exhaustive transition model, and
-  `randomized_patches_never_attach_a_translation_to_different_text`, which
-  checks the core invariants over seeded random patches and requires every
-  kind of outcome (including binding conflicts and reattachment) to occur.
-- `aeria-workspace` `tests/session.rs`: game updates that are previewed,
-  applied, and repeated after interruption, chains of patches, and units
-  merged from branches on an older game version.
-- `aeria-git` `merge.rs` unit tests, including an exhaustive three-way merge
-  check, and `tests/collaboration.rs` for sync, conflicts, reconciliation
-  commits, and per-unit history.
+- `aeria-po` `merge.rs` unit tests: translations follow their identity, and a
+  translation whose source changed becomes fuzzy with the source it was
+  written for; `tests/game.rs`: files made from a synthetic game follow it
+  across an update that keeps every translation, as fuzzy or obsolete.
+- `aeria-po` `tests/session.rs`: reading, saving, and checking strings
+  through a session, refused translations, and files changed on disk.
+- `aeria-git` `entries.rs` unit tests and `tests/collaboration.rs` for sync,
+  per-string three-way merges and conflicts, reconciliation commits, and
+  per-string history.
+- `aeria-model` `tests/run.rs`: a whole machine translation run against a
+  fake Codex server, including a refused translation and resuming from the
+  files.
 
 A new invariant check should be confirmed to fail against a deliberately
 broken implementation before it is relied on.

@@ -45,7 +45,7 @@ reported as `updateSettings` and is never replaced with defaults.
 - Switching from nightly to stable needs no manual steps: the copy keeps its
   nightly build and moves to stable with the first stable release newer than
   it. Aeria never installs an older version, because a nightly may already
-  have migrated local or workspace data to a newer format.
+  have migrated local or project data to a newer format.
 
 ## Distribution
 
@@ -150,17 +150,6 @@ permissions and calls the `update_*` commands.
 
 A published version is never rebuilt or re-tagged; fix problems with a new
 patch release.
-
-## The aeria command
-
-The installer and the portable build ship the `aeria` command for agents as
-`bin/aeria.exe` (see [`../architecture/agents.md`](../architecture/agents.md#discovery)).
-The release workflow builds `aeria-cli` after the application, copies it to
-`apps/desktop/src-tauri/binaries/aeria-cli.exe`, and bundles the installer
-with `src-tauri/tauri.agents.conf.json`, which adds it to the resources. It
-cannot be a resource of the ordinary configuration: the application's build
-checks that resources exist, and the command is built from the same package
-after it.
 
 ## Bundled Git
 

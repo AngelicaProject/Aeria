@@ -1,82 +1,78 @@
 # The project as PO files
 
-Status: **partly implemented.** The format, identity, files, game updates,
-and checking are implemented in `aeria-po` and the `aeria` command (`init`,
-`check`, `update`; see [`agents.md`](./agents.md#the-aeria-command)); the
-desktop and export still work on Workspace Format v3. When complete it replaces Workspace
-Format v3 (`.aeria/`), the translation unit identity of
-[`identity.md`](./identity.md), the source update rules of
-[`rebase-safety.md`](./rebase-safety.md), the `aeria-units` merge driver of
-[`git.md`](./git.md), review states, the agents' ledger, and the `game/`
-corpus view of [`agents.md`](./agents.md#the-corpus). Those documents describe
-the current system until then.
+Status: **implemented** in `aeria-po` (the format, identity, files, game
+updates, checks, and the session the desktop edits through), the desktop,
+`aeria-git`, `aeria-export`, and `aeria-check`.
 
 ## Why
 
-Agents localize the game best when they work on it the way they work on a
-codebase: files they read, search, and edit with their own tools, and a
-checker that reports problems by file and line. The `game/` corpus showed it.
-It also showed the weakness of a corpus that is only a view: the project's
-truth stayed in `.aeria/units`, the files agents edited were kept in step with
-it by a two-way synchronization (a baseline, digests, file times, a watcher),
-and `git diff` showed changes the agent had not made. An agent took them for
-side effects of the check and reset `.aeria/units` with `git restore`, which
-discarded every uncommitted translation.
+A project's text is the game's text and its translation, kept as files that
+people, the desktop, machine translation, and Git all work on directly: one
+truth, with no second store to keep in step with it. Principle 7 of
+[`../product/principles.md`](../product/principles.md) asks that friendly
+operations and Git work on the same project state; the PO files are that
+state.
 
-Principle 7 of [`../product/principles.md`](../product/principles.md) asks that
-friendly operations and Git work on the same project state. This proposal
-makes the PO files that state: one truth, edited by agents, people, the
-desktop, and Git alike.
-
-Review states and authorship marks go too. They were made for people
-translating with a machine's help. When agents do most of the work, Git
-answers the same questions better: who changed a string and when is the
-history and `git blame`, what changed is the diff, and accepting work is
-committing it.
+Review states and authorship marks do not exist. Git answers their questions
+better: who changed a string and when is the history, what changed is the
+diff, and accepting work is committing it.
 
 ## The project
 
-A project is a Git repository:
+A project is a folder, usually a Git repository:
 
 ```text
-aeria.json                  project settings: languages, pack, fonts
+aeria.json                  format, source and target languages, game version
 po/                         the game's text and its translation, as PO files
-  README.md                 what agents need to know, written by Aeria
   quest/000/ClsArc000_00021.po
-  BNpcName/003.po
+  BNpcName/3000.po
   ...
-aeria-knowledge/            project knowledge, unchanged
-fonts/, AGENTS.md, CLAUDE.md, .github/workflows/, ...
+aeria-knowledge/            project knowledge: style.md, terms.csv
+aeria-pack.json, aeria-fonts.json, fonts/, aeria-collaboration.json, ...
 ```
 
 Every translatable string of the game is an entry in `po/`, translated or
-not. There is no `.aeria/` directory, no separate store of translations, and
-no state outside the files and Git. `aeria.json` holds the source and target
-languages and what `aeria-pack.json` and `aeria-fonts.json` hold today.
+not. There is no separate store of translations and no state outside the
+files and Git. `aeria.json`:
 
-The repository holds the game's text in the source language and the evidence
-languages (Japanese, English, German, French, as the client ships them). For
-Project Prima that is about 427 MB of files, about 111 MB compressed in Git; a
-patch adds the changed files. Public community repositories already publish
-the complete text of the game in every client language.
+```json
+{
+  "format": "aeria-po/1",
+  "sourceLanguage": "en",
+  "targetLanguage": "ru",
+  "gameVersion": "2026.09.15.0000.0000"
+}
+```
+
+`gameVersion` is the game version the files of `po/` are for; a project that
+does not record it takes the `X-Game-Version` of its first file.
+
+The repository holds the game's text in the source language and the other
+client languages (Japanese, English, German, French, as the client ships
+them): for the whole game about 7,300 files and 430 MB, about 117 MB
+compressed in Git; a patch adds the changed files. Public community
+repositories already publish the complete text of the game in every client
+language.
 
 ### Files
 
 - A quest (`quest/…`) or cutscene (`cut_scene/…`) sheet is one file, its
   entries in play order.
 - Any other sheet is one file when its row IDs are below 1,000, otherwise a
-  folder of files by row ID range: `BNpcName/003.po` holds rows 3000–3999.
+  folder of files by row ID range: `BNpcName/3000.po` holds rows 3000–3999.
   A range is a range of IDs, not of positions, so an added row never moves
   another row to a different file.
-- A path segment that Windows reserves (`CON`, `AUX`, `NUL`, `COM1`, …) or
-  that differs from another only by case gets the suffix `~` and, for a case
-  collision, the number of its place in the sheet list. The game has no such
-  sheet today; the rule keeps a checkout possible on every system.
+- Paths are safe on systems that ignore case: a segment Windows reserves
+  (`CON`, `AUX`, `NUL`, `COM1`, …) gets `~`; each folder takes the casing it
+  first has in the game's sheet list; a sheet whose path is also a folder of
+  other sheets gets `~` (the data sheet `Quest` is `Quest~/`, beside the
+  dialogue in `quest/`); a sheet whose path differs from an earlier one's
+  only by case gets `~` and its number among them.
 
 A file starts with a header entry:
 
 ```po
-# quest/000/ClsArc000_00021 — «Way of the Archer» · 44 strings in play order
+# quest/000/ClsArc000_00021 — «Way of the Archer» · in play order
 msgid ""
 msgstr ""
 "Language: ru\n"
@@ -103,20 +99,21 @@ msgstr "Ателина из Гильдии лучников хочет убед�
 | Part | Meaning | Written by |
 | --- | --- | --- |
 | `#.` lines | the other client languages, the speaker or kind of line, the row's other cells, what the macros do | Aeria, from the game; never edited by hand |
-| `# ` lines | translator notes | people and agents |
+| `# ` lines | translator notes | people |
 | `#, fuzzy` and `#\| msgid` | a game update changed the source; `#\| msgid` is the source the translation was written for | Aeria, in a game update |
 | `msgctxt` | the entry's identity; see [Identity](#identity) | Aeria |
 | `msgid` | the source text as macro text ([`strings.md`](./strings.md#macro-text)) | Aeria |
-| `msgstr` | the translation as macro text; empty while there is none | people and agents |
+| `msgstr` | the translation as macro text; empty while there is none | people and machine translation |
 
 `fuzzy` is the only mark. It states a fact of the game, not an opinion of a
-translator: the source changed after the translation was written. Anything a
-translator wants a person to decide goes into a note and to the user.
+translator: the source changed after the translation was written.
 
 Entries are ordered as the game orders them: play order in a scene, row and
 column order elsewhere. The `#.` lines are derived only from the game, so
 every collaborator with the same game version produces the same bytes for
-them and Git never sees them conflict.
+them and Git never sees them conflict. Files are written in one canonical
+form, one line per field, so a save changes only the lines of the string it
+changed.
 
 ### Identity
 
@@ -131,7 +128,8 @@ renumbers the rest; there the game stores a stable key in each row (see
 
 `msgctxt` is therefore:
 
-- in a sheet with a row key column: `sheet:key:column`;
+- in a sheet with a row key column whose keys are all non-empty and free of
+  `:`: `sheet:key:column`;
 - in any other sheet: `sheet:row:subrow:column`.
 
 No other identity is derived or stored. See [Stability data](#stability-data)
@@ -139,9 +137,9 @@ for how the game keeps these across patches.
 
 ## Why PO
 
-The format must let agents and people edit one string at a time with ordinary
-tools, carry context next to each string, merge line by line in Git without
-false conflicts, and hold macro text, which is full of `<` and `>`.
+The format must let people edit one string at a time with ordinary tools,
+carry context next to each string, merge line by line in Git without false
+conflicts, and hold macro text, which is full of `<` and `>`.
 
 - **gettext PO** keeps one entry per string with comments above it; merges
   line by line; has the marks this model needs as part of the format (`fuzzy`,
@@ -156,49 +154,74 @@ false conflicts, and hold macro text, which is full of `<` and `>`.
 
 ## Editing
 
-Agents and people edit `msgstr` and notes with any tool. The desktop edits the
-same files: it re-reads a file before each save, changes only the entry being
-edited, and replaces the file atomically; it watches `po/` and shows edits
-made elsewhere, with each entry's changes since the last commit and its
-history from Git. Git is ordinary Git: no merge driver, no hooks. Two people
-who translate different strings of one file merge cleanly, because unchanged
-`msgctxt`, `msgid`, and comment lines separate their edits; two people who
-translate the same string get a conflict in that entry, which `aeria check`
-reports until it is resolved.
+The desktop opens a project with the installed game (`aeria_po::Session`):
+
+- **Opening** reads `aeria.json` and requires the game's source language and
+  version. A game older than the project is refused; a newer one asks for a
+  [game update](#game-updates). Opening never writes.
+- **Reading** a sheet takes its rows from the game and the translations of
+  their strings from the sheet's files, parsed when first read and read again
+  only when a file's size or time changed. Rows come in pages of at most 256
+  source rows; a row with no string of the project is left out, and its
+  other non-empty cells are returned as context.
+- **Saving** a string reads its file again, checks the translation (see
+  [Checking](#checking)), sets its `msgstr` or note, clears `fuzzy` and the
+  previous source, and replaces the file through a temporary file and a
+  rename. A translation with a problem is refused and nothing is written. An
+  entry whose `msgid` is not the game's text refuses the save: the project
+  needs a game update. An empty translation leaves the string untranslated.
+  Saves are made one at a time.
+- **Changes made elsewhere**, by Git, by hand, or by a machine translation
+  run, are seen on the next read. The desktop checks the files of the sheets
+  it has shown every 1.5 seconds and reloads a sheet whose file changed.
+- **Progress** per sheet counts entries, translated entries, and fuzzy
+  entries; the first count reads every file, later ones only changed files.
 
 A person's decision wins through Git (principle 5): any translation can be
 changed, and no change reaches the project's history without the person
 committing it in Aeria or merging it, where the diff shows it; every change
-can be reverted.
+can be reverted. Git is ordinary Git: no merge driver, no hooks. Two people
+who translate different strings of one file usually merge cleanly, because
+unchanged `msgctxt`, `msgid`, and comment lines separate their edits; when Git
+reports a conflict in a PO file, Aeria joins the file per string (see
+[`git.md`](./git.md#per-string-merge)).
+
+A project is created from the installed game with a target language: every
+file of `po/` with empty translations, `aeria.json`, and the knowledge files
+without entries (about a minute for the whole game).
 
 ## Checking
 
-`aeria check` is a linter over `po/` and `aeria-knowledge/`; it changes no
-file. It reports, each as `file:line: what to fix`:
+The checks are Aeria's own; they run when a translation is saved, on every
+answer of [machine translation](./translate.md), and in CI (`aeria-check`,
+see [`git.md`](./git.md#merge-check-ci)). A translation has a **problem**
+when it:
 
-- a line that breaks the PO format, or a Git conflict marker;
-- a `msgctxt` that the installed game does not have, or a `msgid` that is not
-  its current text;
-- a translation that breaks the assisted structure policy of
-  [`strings.md`](./strings.md), uses a forbidden variant of a term of its
-  source, has a line break its source does not have, or, for Russian, writes
-  both genders at once;
-- a problem of the knowledge files.
+- breaks the assisted structure policy of [`strings.md`](./strings.md): the
+  source's macros, as game data, must stay;
+- has a line break its source does not have (the game breaks lines with
+  `<br>`);
+- uses a forbidden variant of a term of its source (see
+  [`knowledge.md`](./knowledge.md));
+- for Russian, writes both genders at once (`готов(а)`).
 
-Advice that does not make a translation wrong (a term whose translation does
-not seem to be used, a gender condition that may be missing, machine
-phrasing) is listed separately. Exit status 1 when there are problems.
+Advice does not make a translation wrong: a term whose translation does not
+seem to be used, a condition on the player character's gender that may be
+missing, machine phrasing. A file has a problem when a line breaks the PO
+format or is a Git conflict marker, or a `msgctxt` is not an identity or
+appears twice.
 
 A translation is *valid* when its entry passes these checks. Invariant: only
-valid translations whose entry is not `fuzzy` are exported. An invalid or
-fuzzy translation stays in its file as visible work and never reaches players.
+valid translations whose entry is not `fuzzy` are exported. A fuzzy
+translation stays in its file as visible work and never reaches players.
 
 ## Game updates
 
 A game update brings the project from the game version its files were made
-for to the installed one. It is deterministic, runs only on a working tree
-without uncommitted changes, and produces one commit, so everything it did is
-visible in the diff and can be reverted.
+for to the installed one. It is deterministic, refuses to run while `po/` or
+`aeria.json` has uncommitted changes, and produces one commit, "Update to
+game version …", so everything it did is visible in the diff and can be
+reverted. The desktop offers it when it opens a project for an older version.
 
 1. Aeria makes every file again from the installed game.
 2. It joins each entry of the previous files to the new entry with the same
@@ -216,50 +239,22 @@ visible in the diff and can be reverted.
    first file of its sheet, else a file of its previous path that keeps only
    obsolete entries (a sheet the game no longer has). An obsolete entry whose
    `msgctxt` exists again in a later version joins as above.
-3. `X-Game-Version` is set to the installed version.
+3. `X-Game-Version` and `aeria.json` `gameVersion` are set to the installed
+   version.
 
-A fuzzy entry keeps its previous `#| msgid` until its translation changes; the
-change removes the mark. A person who finds the translation still right
-removes the mark in Aeria. Nothing else happens: no text similarity, no
-moving translations between rows, no column mapping. A string whose meaning
-moved (a renumbered list, a reordered column) becomes fuzzy and is fixed as
-ordinary work; since fuzzy entries are not exported, no player sees a
-translation meant for another string.
-
-After a merge of branches made for different game versions, files carry
-different `X-Game-Version` values; the same update brings the older files to
-the installed version, and the result does not depend on the order of the
-merges.
+Running it again on the same game changes nothing. A fuzzy entry keeps its
+previous `#| msgid` until its translation is saved, which removes the mark;
+the editor shows the old source beside the new one. Nothing else happens: no
+text similarity, no moving translations between rows, no column mapping. A
+string whose meaning moved (a renumbered list, a reordered column) becomes
+fuzzy and is fixed as ordinary work; since fuzzy entries are not exported, no
+player sees a translation meant for another string.
 
 ## Earlier projects
 
-There is no migration. A project in Workspace Format v3 is reported as
-unsupported; its translations are started again in a new project.
-
-## What goes away
-
-- `.aeria/` and Workspace Format v3, translation unit IDs, layouts, statuses,
-  detach reasons, and review states;
-- the source update planner of `aeria-rebase` with its column mapping and
-  binding conflicts;
-- the `aeria-units` merge driver and the merge check it needed;
-- the agents' ledger, stamp, and write lock, and the `game/` view with its
-  baseline, digests, and watcher;
-- `aeria corpus`: `po/` is the project.
-
-## What agents are told
-
-`AGENTS.md` and `po/README.md` say, besides the layout and the rules of a
-translation:
-
-- the files in `po/` are the project; edit `msgstr` and notes, nothing else;
-- run `aeria check` after editing and fix what it reports;
-- `#, fuzzy` marks strings a game update changed; bring the translation in
-  line with the new source;
-- `git diff` shows your work; never run `git restore`, `git checkout`,
-  `git reset`, `git clean`, or `git stash` on project files, and do not
-  commit or push unless asked: the user reviews and commits in Aeria;
-- ask the user about matters of taste and anything you are not sure to change.
+There is no migration. A project of the earlier format has no `aeria.json`
+and is reported as not a project; its translations are started again in a
+new project.
 
 ## Stability data
 
@@ -286,5 +281,5 @@ per sheet. Most column count changes are in numeric columns.
 
 ## Open question
 
-- How the desktop's search and translation memory read the files (today they
-  read the workspace).
+- Search and translation memory over the files of `po/` (`aeria-search`
+  indexes the game only).

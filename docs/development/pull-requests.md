@@ -10,7 +10,7 @@ Write a human-readable, imperative title that describes the outcome of the pull 
 Good:
 
 - `Read the translation source from the installed game`
-- `Preserve ambiguous matches during source rebase`
+- `Keep a translation fuzzy when its source changes`
 - `Organize contributor and agent guidance`
 
 Avoid:
@@ -48,7 +48,7 @@ The exact checks that were run and any important manual or compatibility verific
 Links to updated canonical documentation, or a short explanation of why no documentation change is required.
 ```
 
-Add a `## Compatibility and risk` section when a change affects persisted data, source compatibility, migration, identity, rebase, merge, export, credentials, or destructive operations.
+Add a `## Compatibility and risk` section when a change affects persisted data, source compatibility, migration, identity, game updates, merge, export, credentials, or destructive operations.
 
 Keep the description about the final change. Do not paste a prompt transcript, implementation diary, or speculative follow-up plan into the main description.
 

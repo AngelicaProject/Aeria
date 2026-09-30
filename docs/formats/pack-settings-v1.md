@@ -4,11 +4,10 @@ Status: **implemented in `aeria-export`**.
 
 Pack Settings v1 is the project-shared identity of the project's
 [Harmonia pack](./pack-v1.md). It is a single optional file,
-`aeria-pack.json`, in the project root next to `.aeria/`. It is committed with
-the project so every maintainer exports the same pack, and the repository's
-feed workflow reads it to build the [feed](./feed-v1.md) without Aeria. It is
-not part of the workspace format; the workspace reader ignores it like any
-other project-root file.
+`aeria-pack.json`, in the project root next to `aeria.json`. It is committed
+with the project so every maintainer exports the same pack, and the
+repository's feed workflow reads it to build the [feed](./feed-v1.md) without
+Aeria.
 
 How the settings are used is described in
 [`../architecture/export.md`](../architecture/export.md).

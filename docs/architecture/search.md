@@ -51,7 +51,7 @@ rebuilt. A cancelled or failed build leaves no index.
   texts score 1. Candidates below 0.5 are dropped.
 - **Translation text**: `text_contains` matches a translation's plain text
   against a query, ignoring case. Translations change with every edit, so
-  they are searched in the workspace rather than indexed.
+  they are searched in the project's files rather than indexed.
 
 ## Terminology candidates
 
@@ -76,14 +76,13 @@ seconds for the English client.
 
 The result is a heuristic: ordinary capitalized words, such as interface
 labels or the pronoun *I*, can rank high. Choosing terminology is left to
-the translator or an agent.
+the translator.
 
 ## Desktop use
 
-No desktop feature uses the index yet; the `aeria` command will (see
-[`agents.md`](./agents.md#the-aeria-command)). Indexes are kept per source
-language and game version in application data; those of game versions no
-longer in use stay on disk until the user clears application data.
+No desktop feature uses the index yet. Indexes are kept per source language
+and game version in application data; those of game versions no longer in
+use stay on disk until the user clears application data.
 
-Translation memory is the similar sources that have a non-empty bound
-translation in the workspace, with the translation and its review state.
+Translation memory is the similar sources that have a translation in `po/`,
+with the translation and whether it is fuzzy.

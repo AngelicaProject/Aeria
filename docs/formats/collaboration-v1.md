@@ -5,8 +5,7 @@ Status: **implemented in `aeria-git`**.
 Collaboration Settings v1 records the project's main branch. Translations
 reach it only through pull requests; there is no other policy. It is a single
 optional file, `aeria-collaboration.json`, in the project root next to
-`.aeria/`, committed with the project by a checkpoint. It is not part of Workspace Format v1, and the Workspace
-Format v1 reader ignores it like any other project-root file.
+`aeria.json`, committed with the project by a checkpoint.
 
 The behavior is described in
 [`../architecture/git.md`](../architecture/git.md#branches-and-contributions).

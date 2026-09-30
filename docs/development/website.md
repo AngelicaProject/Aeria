@@ -18,8 +18,8 @@ Pages at <https://angelicaproject.github.io/Aeria/>.
   translations in any language; it is not written as product marketing.
   Describe only what is implemented. The page is plain: the name, one sentence on what
   Aeria is, a bulleted list of what it does, one concrete sentence per item
-  (translation with agents, see
-  [`../architecture/agents.md`](../architecture/agents.md), among them), the
+  (machine translation, see
+  [`../architecture/translate.md`](../architecture/translate.md), among them), the
   tag example, installing a translation in the game, and development links.
 - The string specimen shows an English source line translated in several
   fan projects (Russian, Spanish, Portuguese), none of which the game ships.

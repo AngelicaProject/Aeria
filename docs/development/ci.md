@@ -25,11 +25,11 @@ cargo test --workspace --locked
 No Rust job requires a game installation: source tests run over synthetic
 SqPack fixtures.
 
-Workspace persistence also runs its focused locked test suite on
+The project's PO files also run their focused locked test suite on
 `windows-latest` because Windows is the first production desktop target:
 
 ```text
-cargo test -p aeria-workspace --locked
+cargo test -p aeria-po --locked
 ```
 
 The Windows desktop job stages the pinned MinGit runtime and runs the local project-registry persistence and
@@ -41,7 +41,7 @@ cargo test -p aeria-projects --all-targets --locked
 ```
 
 The Windows desktop job then reruns the path-handling suites (`aeria-sqpack`,
-`aeria-source`, `aeria-workspace`, `aeria-search`, `aeria-projects`,
+`aeria-source`, `aeria-po`, `aeria-search`, `aeria-projects`,
 `aeria-git` with the bundled MinGit, and the desktop library)
 with `TMP` and `TEMP` pointing at a Cyrillic folder with a space, so every
 file those tests create lives under such a path. See

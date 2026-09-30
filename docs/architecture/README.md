@@ -4,22 +4,16 @@ Start with [`overview.md`](./overview.md). It defines the major runtime boundari
 
 | Area | Canonical document | Primary implementation area |
 | --- | --- | --- |
-| Overall boundaries | [`overview.md`](./overview.md) | workspace-wide |
+| Overall boundaries | [`overview.md`](./overview.md) | project-wide |
 | Desktop application boundary | [`desktop-application-boundary.md`](./desktop-application-boundary.md) | `apps/desktop/src-tauri` |
 | Desktop translation editor UI | [`desktop-editor-ui.md`](./desktop-editor-ui.md) | `apps/desktop/src` |
-| Open project session ownership | [`project-session.md`](./project-session.md) | `aeria-workspace` |
-| Bounded translation reads | [`translation-read.md`](./translation-read.md) | `aeria-workspace`, `aeria-source` |
-| Transactional translation mutations | [`translation-mutations.md`](./translation-mutations.md) | `aeria-workspace` |
+| The project as PO files: format, identity, editing, checks, game updates | [`po-project.md`](./po-project.md) | `aeria-po` |
 | The installed game as source: sheets, permission, row keys | [`source.md`](./source.md) | `aeria-sqpack`, `aeria-source` |
 | Structured strings and macros | [`strings.md`](./strings.md) | `aeria-se` |
-| Translation unit identity | [`identity.md`](./identity.md) | `aeria-core`, `aeria-workspace`, `aeria-rebase` |
-| Workspace state and persistence | [`workspace.md`](./workspace.md) | `aeria-workspace` |
-| Source updates after game patches | [`rebase.md`](./rebase.md), [`rebase-safety.md`](./rebase-safety.md) | `aeria-rebase`, `aeria-workspace` |
 | Git-backed collaboration | [`git.md`](./git.md) | `aeria-git` |
 | Search and translation memory | [`search.md`](./search.md) | `aeria-search` |
-| Localization with agents, project knowledge, the `aeria` command | [`agents.md`](./agents.md) | `aeria-knowledge` |
+| Project knowledge and translation rules | [`knowledge.md`](./knowledge.md) | `aeria-knowledge` |
+| Machine translation with a ChatGPT subscription | [`translate.md`](./translate.md) | `aeria-model` |
 | Runtime translation pack export | [`export.md`](./export.md) | `aeria-export` |
-| Proposal: the project as PO files in `po/`, replacing the workspace, identity, review states, source updates, and the corpus view | [`po-project.md`](./po-project.md) | `aeria-po`, the `aeria` command; the desktop not yet |
-| Proposal: machine translation of `po/`, a tool a person runs, with a ChatGPT subscription | [`translate.md`](./translate.md) | not implemented |
 
 Architecture documents own boundaries and invariants, not low-level coding style. Implementation conventions belong under [`../development/`](../development/README.md), while serialized contracts belong under [`../formats/`](../formats/README.md).

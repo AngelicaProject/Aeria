@@ -68,8 +68,8 @@ every translation of the sheet, unchanged.
 
 `SourceSheet::text(row, subrow, column)` prints the String cell with
 `aeria_se::codec::decode`. The printed macro text is what translators see
-and what translation units store (see
-[`../formats/workspace-v3.md`](../formats/workspace-v3.md)). Two cells whose
+and what the project's PO files store as `msgid` (see
+[`po-project.md`](./po-project.md#the-project)). Two cells whose
 texts are equal are the same source for Aeria even when their bytes differ.
 Export and Harmonia compare bytes instead (see
 [`export.md`](./export.md)).
@@ -134,7 +134,7 @@ a translated name that is merely unique must never act as an identity key.
 
 Quest sheets (`quest/…/<ID>`) and cutscene sheets (`cut_scene/…/<ID>`) with
 row keys describe their rows in the keys. This structure is context for
-translators (the editor's scene view) and agents; it never affects
+translators (the editor's scene view) and machine translation; it never affects
 identity, permission, or any persisted data.
 
 `GameSource::dialogue` returns the rows of such a sheet that have text, in row
@@ -381,15 +381,15 @@ the game may show them by row number from its own code, or not at all.
 Reading every sheet of one language takes about one to two seconds on one
 thread. A sheet is read on demand and takes milliseconds. Permission reads
 the sheet in the three other evidence languages as well. Opening a project
-reads every sheet that holds translation units, once.
+reads a sheet when the editor shows it.
 
-## Degraded workspace
+## Without the game
 
 A project whose game is older than the project's game version, or that has
-no game folder configured, cannot be edited. Git history, the manifest, the
-glossary, and translations remain inspectable in the repository, but editing,
-preview, assisted translation, and export require the game at the project's
-version or newer.
+no game folder configured, cannot be opened in the editor. Its files remain
+readable in the repository and are checked in CI without the game, but
+editing, machine translation, and export require the game at the project's
+version, or a newer one after a game update.
 
 ## Additional source languages
 

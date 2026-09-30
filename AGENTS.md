@@ -19,12 +19,11 @@ Then load the canonical project documentation for the affected area:
 - Architecture and subsystem ownership: `docs/architecture/README.md`
 - Game source (reading the installed game): `docs/architecture/source.md`
 - Structured strings / SeString macros: `docs/architecture/strings.md`
-- Translation identity: `docs/architecture/identity.md`
-- Workspace persistence: `docs/architecture/workspace.md` and `docs/formats/workspace-v3.md`
-- Source update / rebase: `docs/architecture/rebase.md` and `docs/architecture/rebase-safety.md`
+- The project's PO files, translation identity, game updates, checks: `docs/architecture/po-project.md`
 - Git collaboration inside Aeria: `docs/architecture/git.md` and `docs/formats/collaboration-v1.md`
 - Search and translation memory: `docs/architecture/search.md`
-- Localization with agents, project knowledge, the `aeria` command: `docs/architecture/agents.md` and `docs/formats/knowledge-v1.md`
+- Project knowledge (style and terms): `docs/architecture/knowledge.md` and `docs/formats/knowledge-v1.md`
+- Machine translation: `docs/architecture/translate.md`
 - Runtime pack export: `docs/architecture/export.md` and `docs/formats/pack-v1.md`
 - Rust implementation: `docs/development/rust.md`
 - Frontend implementation: `docs/development/frontend.md`
@@ -42,7 +41,7 @@ Start from `docs/README.md` when the correct document is not obvious.
 - Do not expand a milestone into adjacent subsystems unless the extra work is required for correctness.
 - Preserve the product invariants in `docs/product/principles.md` and the ownership boundaries in `docs/architecture/overview.md`.
 - Treat the game's data layout and released persisted formats as contracts. Do not invent consumer-only compatibility rules or silently reinterpret unknown data.
-- Deterministic identity, rebase, migration, merge, and export behavior must not depend on AI judgment.
+- Deterministic identity, game update, merge, and export behavior must not depend on AI judgment.
 - Invalid or structurally unsafe translated strings must never be persisted as successful translations.
 - Do not introduce first-party `unsafe` Rust without a narrowly scoped documented justification and review.
 - Do not weaken tests, validation, or CI gates to make a change pass.

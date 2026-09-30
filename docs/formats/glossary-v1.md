@@ -6,11 +6,10 @@ Glossary Format v1 is the format of the project's terms,
 `aeria-knowledge/terms.csv`, part of the
 [project knowledge](./knowledge-v1.md). It is committed with the project,
 reviewed and merged through Git like any other file, and meant to be edited
-by hand, in a spreadsheet, by agents, or in the desktop's knowledge editor.
-It is not part of the Workspace Format.
+by hand, in a spreadsheet, or in the desktop's knowledge editor.
 
 How Aeria uses it is described in
-[`../architecture/agents.md`](../architecture/agents.md#project-knowledge).
+[`../architecture/knowledge.md`](../architecture/knowledge.md#project-knowledge).
 
 ## Absence
 
@@ -34,7 +33,7 @@ The first record names the columns, in any order:
 | `translation` | yes | The translation to use. |
 | `note` | no | Guidance for translators, such as usage, gender, or declension. |
 | `forbidden` | no | Translations that must not be used, separated by `;`. |
-| `settled` | no | `yes`, `true`, or `1`, ignoring case, when a person decided the term; agents do not change a settled term without asking. Anything else, or an empty field, is not settled. |
+| `settled` | no | `yes`, `true`, or `1`, ignoring case, when a person decided the term. Anything else, or an empty field, is not settled. |
 
 A missing `term` or `translation` column, a repeated column, or any other
 column name makes the whole file invalid. Aeria reports the problem and uses
@@ -73,7 +72,7 @@ Aether,Эфир,,Этер,yes
 
 A term matches text case-insensitively, as a whole word when the term starts
 and ends with a letter, digit, or underscore. Matching selects the terms a
-scene needs and drives the checks of an agent's write: a forbidden variant in
+batch of machine translation needs and drives the checks of a translation: a forbidden variant in
 a translation rejects it, and a term whose translation does not seem to be
 used, allowing for inflected endings, is reported as advice. Matching never
 changes a translation.

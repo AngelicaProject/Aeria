@@ -7,7 +7,7 @@ Read the relevant project documentation before changing code. Use `docs/README.m
 1. Inspect the current implementation, tests, and nearby conventions.
 2. Identify the exact behavior, contract, or invariant affected by the task.
 3. Define the smallest coherent scope that satisfies the request.
-4. Note any correctness-sensitive boundary involved: source validation, string structure, identity, workspace persistence, rebase, merge, export, credentials, or recovery.
+4. Note any correctness-sensitive boundary involved: source validation, string structure, identity, the project's PO files, game updates, merge, export, credentials, or recovery.
 
 Do not start implementing a later subsystem simply because the current change makes it possible.
 

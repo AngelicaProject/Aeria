@@ -12,11 +12,11 @@ here.
 The knowledge is the `aeria-knowledge` directory at the project root, next to
 `po/`. It is committed with the project and shared through Git like any other
 file. How Aeria uses it is described in
-[`../architecture/agents.md`](../architecture/agents.md#project-knowledge).
+[`../architecture/knowledge.md`](../architecture/knowledge.md#project-knowledge).
 
 ## Files
 
-`aeria init` writes both files with no entries: `style.md` with a title and a
+Creating a project writes both files with no entries: `style.md` with a title and a
 line on what it holds, `terms.csv` with its header only. Every file is
 optional, UTF-8 with an optional leading BOM that is ignored, at most 8 MiB,
 with CRLF or LF line endings. Aeria writes LF.
@@ -33,6 +33,5 @@ are reported with their line; the rest are used.
 ## Settled terms
 
 A term a person decided is **settled** by its `settled` column (see
-[Glossary Format v1](./glossary-v1.md)); agents follow it and do not change
-it without asking. The desktop's knowledge editor marks a term settled when a
-person edits it.
+[Glossary Format v1](./glossary-v1.md)). The desktop's knowledge editor marks
+a term settled when a person edits it.

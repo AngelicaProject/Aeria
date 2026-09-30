@@ -1,7 +1,7 @@
 # Desktop application boundary
 
-The desktop process currently owns one active project session and exposes the
-existing Rust application API to the renderer through typed Tauri commands:
+The desktop process owns one active project session and exposes the Rust
+application API to the renderer through typed Tauri commands:
 
 ```text
 React
@@ -10,18 +10,19 @@ Tauri command DTOs
   ↓
 DesktopState
   ↓
-one ProjectSession
+one aeria_po::Session
   ↓
-aeria-workspace
+the project's files and the installed game
 ```
 
-`DesktopState` contains one `Mutex<Option<ProjectSession>>` and a separate
-narrow mutex for local recent-project registry file operations. Rust owns the
-authoritative project state; React receives owned DTO snapshots only. There is
-one active project per desktop process for now. Opening or initializing a
-replacement constructs and verifies the new `ProjectSession` before acquiring
-the state lock, so failure preserves the previous active session. Closing is
-idempotent and drops the active session without changing the workspace.
+`DesktopState` holds the open session as `Mutex<Option<Arc<Session>>>` and a
+separate narrow mutex for local recent-project registry file operations. Rust
+owns the authoritative project state, which is the project's files; React
+receives owned DTO snapshots only. There is one active project per desktop
+process. Opening or creating a replacement constructs and verifies the new
+session before it replaces the active one, so failure preserves the previous
+session. Closing is idempotent and drops the active session without changing
+any file.
 
 ## Local data folders
 
@@ -47,8 +48,8 @@ built again.
 ## Local project registry
 
 The desktop keeps a bounded convenience registry at
-`<app-data>/projects-v2.json`. It is application-local state, not workspace
-data, and is never written to `.aeria/`, a translation repository, or the
+`<app-data>/projects-v2.json`. It is application-local state, not project
+data, and is never written to a project, a translation repository, or the
 cache. Registries of earlier versions (`projects-v1.json`) are not read.
 
 The registry stores an opaque UUID-like local ID, the canonical repository
@@ -73,21 +74,20 @@ recovery path. A valid final file wins over recovery state, and an owned
 previous file is recovered only when the final file is missing.
 
 The launcher can list recents using filesystem presence only, without reading
-the game or creating a `ProjectSession`. Ready entries can be opened by
-opaque ID through this sequence:
+the game or opening a project. Ready entries can be opened by opaque ID
+through this sequence:
 
 ```text
 repository existence check
 → GameSource::open on the configured installation in the remembered
    source language
-→ ProjectSession::open with that game
-   (or open_with_source_update when the caller accepted a source update)
+→ Session::open with that game
+   (or a game update first when the caller accepted one)
 → active-project replacement
 → best-effort registry refresh
 ```
 
-The workspace manifest, not the registry, decides whether the game fits the
-project; the registry's language and game version are display data, and the
+`aeria.json`, not the registry, decides whether the game fits the project; the registry's language and game version are display data, and the
 language selects which language the game is opened in. `Remove from recents`
 removes only registry state. Manual Open project and Create project remain
 fully usable when the registry is corrupt, stale, or unavailable, and closing
@@ -113,13 +113,15 @@ defaults.
 `DesktopState` records the work an update must not interrupt. Mutating Git
 commands (checkpoint, commit, sync, branch switch, finishing or merging a
 contribution, clone) hold a `Sync` activity guard and pack export and
-publication an `Export` guard for their whole run. `update_install` runs through `DesktopState::while_idle`, which
+publication an `Export` guard for their whole run. A machine translation run
+is not guarded; an update that restarts the application stops it, and
+starting it again continues. `update_install` runs through `DesktopState::while_idle`, which
 fails with `updateBusy` while any of them runs and holds the activity lock
 while the installer starts, so no guarded operation begins in between. The
 renderer additionally reports unsaved editor drafts and saves in flight to
 the update store and does not request installation while one exists.
 
-## Source updates
+## Opening, creating, and updating projects
 
 Project commands take no game path. They resolve the installation in
 the worker from the application setting: the folder chosen with
@@ -132,55 +134,51 @@ or with `null` returns to detection. The setting is local application state
 in `game-settings.json`; a malformed file fails with `gameSettings` and is
 never replaced with defaults.
 
-`open_project_from_game(repositoryRoot)` reads the source language from the
-workspace manifest and opens the configured game in that language. It
-returns `GameOpenResultDto`: `opened` with the `ProjectOpenResultDto`, or
-`sourceUpdateRequired` with the `SourceUpdateReportDto` of the plan, written
-nowhere. `open_recent_project(projectId, acceptSourceUpdate?)` returns the
-same DTO for a registry entry. After confirmation the renderer calls
-`update_project_from_game(repositoryRoot)`, or `open_recent_project` with
-`acceptSourceUpdate`; both open through
-`ProjectSession::open_with_source_update` and return the applied report in
-`ProjectOpenResultDto.sourceUpdate`. `update_project_from_game` is also the
-path for an installed game after a patch. `preview_source_update(repositoryRoot)`
-returns the plan without writing or changing the active project. A game
-older than the project's game version is refused; see
-[`rebase.md`](./rebase.md).
+`open_project_from_game(repositoryRoot)` reads the source language from
+`aeria.json` and opens the configured game in that language. It returns
+`GameOpenResultDto`: `opened` with the `ProjectOpenResultDto`, or
+`sourceUpdateRequired` with the project's and the game's versions when the
+project's files are for an older game version, written nowhere. A game older
+than the project is refused with `gameOutdated`, a game in another source
+language with `projectCompatibility`, and a folder without `aeria.json` with
+`projectMissing`. `open_recent_project(projectId, acceptSourceUpdate?)`
+returns the same DTO for a registry entry. After confirmation the renderer
+calls `update_project_from_game(repositoryRoot)`, or `open_recent_project`
+with `acceptSourceUpdate`: the [game update](./po-project.md#game-updates)
+runs, is committed when the project is a repository with an identity, and the
+report (files, fuzzy and obsolete translations, the commit) comes back in
+`ProjectOpenResultDto.sourceUpdate`. An update refuses with
+`gitUncommittedTranslations` while `po/` or `aeria.json` has uncommitted
+changes.
 
 `initialize_project_from_game(repositoryRoot, sourceLanguage,
 targetLanguage)` creates the folder when needed, opens the game in the source
-language, and initializes the workspace; when it fails, a folder it created
-is removed again if it is still empty. Opening, updating, and creating read
-the cached sheet catalog, building it when needed, before the session is
-installed.
+language, and writes the project (see
+[`po-project.md`](./po-project.md#editing)); when it fails, a folder it
+created is removed again if it is still empty. A folder that already has
+`aeria.json` or `po/` fails with `projectExists`. Opening, updating, and
+creating read the cached sheet catalog, building it when needed, before the
+session is installed.
 
 `initialize_project_from_game` refuses a `targetLanguage` that is not a
-target language as defined in [`workspace.md`](./workspace.md#project-scope).
-`set_project_target_language(targetLanguage)` changes the open project's
-target language through `ProjectSession::set_target_language` and updates
-the Recent projects entry; a failed registry update is returned as the
-result's warning.
+BCP 47 language tag of a language other than `und`
+(`invalidTargetLanguage`). `set_project_target_language(targetLanguage)`
+writes the open project's target language to `aeria.json` and updates the
+Recent projects entry; a failed registry update is returned as the result's
+warning.
 
 `default_projects_directory_path` returns
 `Documents/Aeria`, the folder for new projects and for clones without a
 parent.
 
-`ProjectSummaryDto.detachedUnitCount` reports detached units, and
-`list_detached_units` returns each one's last binding, reason, target,
-review state, and note. A plan that cannot be built maps to `sourceUpdate`.
-Planning and applying remain in `aeria-rebase` and `aeria-workspace`; the
-IPC layer only chooses whether to call the preview or the applying
-constructor.
-
 The game installation path is local runtime state held by the session's
-`GameSource`; it is never added to Workspace Format. Public commands derive
-the application cache directory
-through Tauri's path API; React cannot choose an arbitrary cache root.
-Translation browsing delegates to the bounded
-`ProjectSession::page_translation_rows` API, so page size remains governed by
-the backend contract. The DTO is row-centric, while each contained cell keeps
-its existing `SourceBinding` and overlay. Tauri performs DTO and error mapping,
-not business logic, and does not read the game or SQLite directly.
+`GameSource`; it is never written to a project. Public commands derive the
+application cache directory through Tauri's path API; React cannot choose an
+arbitrary cache root. `page_translation_rows(sheetName, after, limit)` reads
+a page of at most 256 source rows through `Session::page`; each cell carries
+its coordinate (`SourceBinding`) and its translation (`TranslationOverlayDto`:
+the text, whether it is fuzzy, the note, and the previous source of a fuzzy
+one). Tauri performs DTO and error mapping, not business logic.
 
 `source_in_other_languages(sourceBinding)` returns the source cell's
 macro text in each client language other than the project's source
@@ -209,11 +207,10 @@ A cutscene in a traced scene has its file's `path` when it resolves. A script or
 and is reported in `scriptError` rather than failing the command. It is
 `null` for any other sheet and is never recorded.
 
-`translation_progress` returns per-sheet `SheetProgressDto` coverage for the
-active project from `ProjectSession::translation_progress` (see
-[`translation-read.md`](./translation-read.md#translation-progress)). The
-renderer re-reads it after each committed translation mutation or workspace
-reload and never derives sheet-wide progress from loaded row pages.
+`translation_progress` returns per sheet the strings, translated strings, and
+fuzzy strings of the project from `Session::progress`; the first call reads
+every file, later calls only changed files. The renderer re-reads it after
+each save and never derives sheet-wide progress from loaded row pages.
 `app_info` returns the application name and version for display.
 
 `macro_view(text)` describes macro text for the editor: its diagnostics and
@@ -234,71 +231,66 @@ by `aeria_fonts::bitmap_font`), and `game_icon(id)` an inline icon of
 16-bit numbers, then RGBA pixels. Both are empty without a project or when
 the game has nothing to show.
 
-Filesystem, game reading, SQLite, workspace loading, row paging, and ordinary
-translation mutations run inside Tauri blocking workers. The async command
-handlers do not hold `DesktopState` or the project mutex across an await;
-worker-side access still goes through the single `ProjectSession` mutex, so
-mutations remain serialized. Target, note, and review commands return the
-compact committed `TranslationOverlayDto` for the changed cell; the renderer
-patches that cell instead of reloading the current sheet.
+Filesystem, game reading, row paging, and saves run inside Tauri blocking
+workers. The async command handlers do not hold `DesktopState` across an
+await. `set_translation_target(sourceBinding, targetMacro)` and
+`set_translation_note(sourceBinding, note)` save one string through the
+session, which makes its saves one at a time, and return the string's
+`TranslationOverlayDto` (or `null` for a string left untranslated and without
+a note); the renderer patches that cell instead of reloading the sheet. A
+translation the checks refuse fails with `translationInvalid`, whose message
+lists the problems.
 
 Git collaboration commands (`git_overview`, `git_initialize`,
 `git_set_identity`, `git_set_remote`, `git_remove_remote`,
 `git_remote_branches`, `git_fetch_main`, `git_set_upstream`, `git_pending_changes`,
 `git_project_changes`, `git_checkpoint`, `git_log`, `git_commit_changes`,
-`git_unit_history`, `git_unit_attribution`, `git_contributors`, `git_sync`,
-`git_branches`, `git_create_branch`, `git_switch_branch`,
-`git_set_main_branch`, `git_state_stamp`, `git_finish_contribution`,
-`git_merge_contribution`, `git_delete_branch`, and
-`git_clone_repository`) delegate to
-`aeria-git` for the active project's repository root; see
-[`git.md`](./git.md). The Git executable is selected once at application
-setup (override, bundled runtime, then `PATH`) and kept in `DesktopState`.
-Checkpoint, the integration step of sync, branch switches, and finishing a
-contribution hold the project mutex so they cannot interleave with
-translation mutations; fetch and push run without it. Operations that change
-the working tree reload the active `ProjectSession` and are rolled back if
-the reload fails. Same-unit sync conflicts are returned in the sync result,
-not as an error, so the renderer can collect per-unit resolutions and sync
-again. Project-wide attribution is cached in memory per repository root and
-`HEAD`; it is derived data and never persisted. Git failures map to stable
-`git*` error codes such as `gitUnavailable`, `gitIdentityMissing`,
-`gitMergeConflict`, `gitIncomingRejected`, and `gitInvalidSettings`.
+`git_string_history`, `git_sync`, `git_branches`, `git_create_branch`,
+`git_switch_branch`, `git_set_main_branch`, `git_state_stamp`,
+`git_finish_contribution`, `git_merge_contribution`, `git_delete_branch`, and
+`git_clone_repository`) delegate to `aeria-git` for the active project's
+repository root; see [`git.md`](./git.md). The Git executable is selected
+once at application setup (override, bundled runtime, then `PATH`) and kept in
+`DesktopState`. Checkpoint, the integration step of sync, branch switches,
+and finishing a contribution hold the session's writes so they cannot
+interleave with saves; fetch and push run without them. An integration whose
+result is for another game version is rolled back. Strings changed
+differently on both sides are returned in the sync result, not as an error,
+so the renderer can collect a resolution per string and sync again. String
+changes carry each string's coordinate in the game when it has one. Git
+failures map to stable `git*` error codes such as `gitUnavailable`,
+`gitIdentityMissing`, `gitMergeConflict`, `gitIncomingRejected`, and
+`gitInvalidSettings`.
 
-`agents_status` reports and `agents_connect` sets up what agent harnesses
-need (see [`agents.md`](./agents.md#discovery)); connecting fails with
-`agentsConnect` naming the step. They run in blocking workers; changing the
-user's `PATH` runs PowerShell's
-`[Environment]::SetEnvironmentVariable` with the value in an environment
-variable.
+`model_account`, `model_sign_in_start`, `model_open_sign_in_page`,
+`model_sign_in_poll`, `model_sign_out`, and `model_list` sign in to a ChatGPT
+subscription and list its models; `translation_count(scope, fuzzy)`,
+`translation_start(scope, fuzzy, model, effort)`, `translation_status`, and
+`translation_stop` run [machine translation](./translate.md). A scope names
+sheets, and folders of sheets ending with `/`; empty is the whole project. One
+run goes at a time (`translationRunning`); it runs on the async runtime and
+its status is read while it goes. Model failures map to `model*` codes such as
+`modelSignInRequired` and `modelUsageLimit`.
 
-`project_knowledge`, `save_knowledge_style`, `save_knowledge_terms`, and
-`save_knowledge_characters` read and write the
-[project knowledge](../formats/knowledge-v1.md) files for the editor dialog. A
-save replaces the file through a temporary file and rename only if it still
-has the content the dialog loaded, so a file changed since, by hand, by Git,
-or by an agent, is reported as `projectKnowledgeConflict` and not
+`project_knowledge`, `save_knowledge_style`, and `save_knowledge_terms` read
+and write the [project knowledge](../formats/knowledge-v1.md) files for the
+editor dialog. A save replaces the file through a temporary file and rename
+only if it still has the content the dialog loaded, so a file changed since,
+by hand or by Git, is reported as `projectKnowledgeConflict` and not
 overwritten; an invalid entry or a file over the size limit is
 `projectKnowledgeInvalid`.
 
-`set_translation_target`, `set_translation_note`, and
-`set_translation_review_state` write through `DesktopState::write_project`:
-it takes the project's cross-process write lock before the project mutex,
-reloads the workspace when an `aeria` command wrote it since the session last
-took its writes in, and then runs the write. A lock that cannot be taken is
-`projectLock`. A background thread started at setup compares the command
-stamp every 1.5 seconds, reloads under the same lock order, and emits
-`project://workspace-reloaded`. See
-[`agents.md`](./agents.md#sharing-a-project-between-processes).
+A background thread started at setup asks the session every 1.5 seconds which
+of the sheets the editor has shown changed on disk, by Git, by hand, or by a
+machine translation run, and emits `project://files-changed` with their names;
+the renderer reloads the open sheet.
 
 Commands that require an active project report `noProjectOpen` before
-validating project-scoped payload such as translation-unit IDs.
+validating project-scoped payload.
 
-The IPC boundary contains no source update planning and no background
-server. React has no direct filesystem or SQLite access. Translation-unit IDs
-cross IPC only in their canonical textual form, and review states use an
-explicit camelCase protocol enum.
+React has no direct filesystem access. Strings cross IPC by their coordinate
+(`SourceBinding`) and, in Git changes, their `msgctxt`.
 
-Opening, updating, and creating a project run no child process and cannot be
-cancelled. After the new session is installed, the desktop attempts the
+Opening and creating a project run no child process and cannot be cancelled;
+updating runs Git to check the working tree and commit the update. After the new session is installed, the desktop attempts the
 recent-project upsert under the registry lock only.

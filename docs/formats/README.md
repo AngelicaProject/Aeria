@@ -2,7 +2,7 @@
 
 This section owns Aeria-defined persisted and exported contracts.
 
-- [`workspace-v3.md`](./workspace-v3.md) — current translation workspace format version 3. Earlier versions are not read.
+- [`../architecture/po-project.md`](../architecture/po-project.md) — the project's PO files (`po/`) and project settings (`aeria.json`), described with the project they hold.
 - [`knowledge-v1.md`](./knowledge-v1.md) — project knowledge: the `aeria-knowledge` directory of style and terms.
 - [`glossary-v1.md`](./glossary-v1.md) — the project's terms (`aeria-knowledge/terms.csv`).
 - [`collaboration-v1.md`](./collaboration-v1.md) — project-shared collaboration policy (`aeria-collaboration.json`).

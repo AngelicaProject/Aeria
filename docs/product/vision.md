@@ -14,15 +14,14 @@ Aeria is built around three problems:
 
 1. **Game updates** — move translation work between game versions conservatively and deterministically.
 2. **Structured strings** — edit, validate, and preview nested macros and runtime constructs without treating them as plain text.
-3. **Large-scale translation** — let AI agents localize at scale through Aeria while structural validation, the project's knowledge, and human review stay in control.
+3. **Large-scale translation** — translate whole sheets by machine in minutes while structural validation, the game's own names, the project's knowledge, and human review stay in control.
 
 ## Project model
 
 - One project has exactly one target language.
 - Additional official source languages may be enabled locally as optional context for an individual translator.
-- The project repository stores translated/project state, not the complete source corpus.
+- The project repository stores the translatable strings of the game as gettext PO files, one per sheet, with their translations; the game remains the source of their structure.
 - A project may be used by one person or by a community through branches and pull requests.
-- The repository may specify a collaboration policy such as direct-push or pull-request workflow.
 
 ## Core user journey
 
@@ -31,9 +30,9 @@ A user should be able to:
 1. Open or clone a translation project.
 2. Point Aeria at the installed game, which is the source of every project.
 3. Search the full source corpus and edit translations with game constructs represented safely and clearly.
-4. Have AI agents localize new or untranslated content, with only structurally valid translations stored and every decision a person made kept.
+4. Machine-translate new or untranslated content, with only structurally valid translations stored and every existing translation kept.
 5. Review changes, stage and commit selected work, synchronize with others, and use either a simple or advanced Git workflow.
-6. Detect a new game version, update the project deterministically, review changed and detached translations, and continue translating.
+6. Detect a new game version, update the project deterministically, review translations whose source changed, and continue translating.
 7. Export a versioned pack consumed by the in-game Harmonia plugin.
 
 ## Non-goals

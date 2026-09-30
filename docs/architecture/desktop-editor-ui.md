@@ -11,12 +11,11 @@ project launcher
 → bounded translation rows in the strings list
 → selected occurrence in the editor below the list
 → explicit target and note persistence
-→ immediate review-state persistence
 ```
 
 The renderer owns only ephemeral drafts, navigation, sheet loading, filtering of
-loaded rows, and loading/error presentation. Rust remains authoritative for source
-bindings, workspace state, validation, classification, and mutation semantics.
+loaded rows, and loading/error presentation. Rust remains authoritative for the
+project's files, validation, classification, and save semantics.
 
 ## Launcher
 
@@ -42,11 +41,11 @@ ready entries open on click. A name filter appears once more than three
 projects are listed.
 
 Open project takes only a repository root. Aeria reads the source language
-from the workspace manifest and opens the configured game installation in that
+from `aeria.json` and opens the configured game installation in that
 language. When the installed game is newer than the project's game version,
-nothing is written and the launcher asks for confirmation with the planned
-counts, as for Update project; a game older than the project is refused.
-Opening a recent project follows the same rule.
+nothing is written and the launcher asks to update the project to it, naming
+both versions; a game older than the project is refused. Opening a recent
+project follows the same rule.
 
 New and cloned projects go to `Documents/Aeria` unless another location is
 chosen. New project takes a project name, which becomes the repository folder
@@ -57,8 +56,9 @@ creation then fails or is cancelled, the folder is removed again if it is
 still empty. New project also takes the target language: a common language
 from a list or any BCP 47 tag typed after *Other…*; `und` is not accepted.
 The interface language is suggested when it is not the source language, and
-creation is refused until a language is chosen. While the game is read, the form shows a
-*Reading the game* state; the operation cannot be cancelled.
+creation is refused until a language is chosen. While the game is read and the
+project's files are written (about a minute for the whole game), the form
+shows a *Reading the game* state; the operation cannot be cancelled.
 
 ### Game installation
 
@@ -141,7 +141,8 @@ The list receives row pages but renders a flattened occurrence view: one
 `TranslationCellDto` is one lane, identified by `sheetName`, `rowId`,
 `subrowId`, and `columnIndex`. A logical row remains the grouping context: the
 `rowId:subrowId` coordinate appears on its first lane and continuation lanes
-show a connector. Each lane shows its review state, `col N` field identity, and
+show a connector. Each lane shows the string's state (untranslated,
+translated, or with a changed source), `col N` field identity, and
 single-line source and target previews in which macro spans are tinted. Until
 EXDSchema exists, fields are labelled by column. Blocked source cells remain
 context only and are never used as permission heuristics.
@@ -157,7 +158,7 @@ Pages that contain no visible rows are simply skipped, and there is no manual
 **Load more**. Reloading the open sheet after a Git operation keeps the current
 rows and selection on screen and swaps in the new rows once complete. Overlays
 saved while a sheet streams are applied to pages read before the save. A text
-filter, a review state filter (untranslated, draft, needs review, reviewed),
+filter, a state filter (untranslated, translated, source changed),
 and a string kind toggle pair (text only or formatting only; pressing the
 active one again shows both) narrow the list; while the sheet is still
 loading they cover the rows loaded so far and grow as the rest arrives. Formatting-only strings (no letters outside macros, such as
@@ -267,9 +268,9 @@ cutscene's timeline decides and Aeria does not read.
 
 A speaker's name is the speaker label in title case (`AMHGARANJY_GEVA` reads
 *Amhgaranjy Geva*), and the label itself is in its tooltip. Each line shows
-its review state, source, and translation, wrapped and with a line break at
+its state, source, and translation, wrapped and with a line break at
 each `<br>`. Selecting a line opens it in the editor, and the arrow keys,
-Save & next, and Approve & next move through strings as in the list. The
+Save & next, and Accept & next move through strings as in the list. The
 list's filters stay available; lines they exclude are dimmed rather than
 hidden, so the scene stays whole. A row the game does not allow translating
 is shown without a translation and cannot be selected.
@@ -277,8 +278,8 @@ is shown without a translation and cannot be selected.
 ## Translation editor
 
 The editor sits below the list and edits one occurrence at a time. Its bar shows
-the occurrence's review state and coordinate, field tabs for multi-cell rows,
-the review-state control, and Revert. The source and target panes each have
+the string's state and coordinate, field tabs for multi-cell rows, a *Source
+changed* mark on a fuzzy string, and Revert. The source and target panes each have
 their own Text / Code switch (see below).
 
 Source and target sit side by side, with the translator note beside them (or
@@ -369,17 +370,17 @@ an older text):
   character keeps the interface fonts.
 
 Row context cells are available in a collapsible section under the source. **Copy source to target** replaces the target draft
-with the source macro text.
+with the source macro text. Under the source of a fuzzy string, the source
+its translation was written for is shown as a word-level diff against the
+current source.
 
-Each cell has an independent target draft, note draft, translation-unit ID,
-and review state. Target and note text do not autosave: both use explicit save
-actions. Empty or whitespace-only target drafts cannot be saved; the editor
-keeps Save disabled until the target contains non-whitespace content, and the
-Rust mutation API enforces the same rule. Review-state changes persist
-immediately. Mutations still address one cell-level `SourceBinding` at a time,
-and each successful mutation patches that cell from the returned
-`TranslationOverlayDto`. A row is dirty when any contained cell has a dirty
-target or note.
+Each cell has an independent target draft and note draft. Target and note text
+do not autosave: both use explicit save actions. A save addresses one
+`SourceBinding` and patches that cell from the returned
+`TranslationOverlayDto`; a translation the checks refuse is not saved, and the
+error lists its problems. Saving a fuzzy string's translation accepts it and
+removes the mark. A row is dirty when any contained cell has a dirty target or
+note.
 
 When the selected string has uncommitted Git changes, the target pane shows a
 word-level diff between the last checkpoint and the current draft, or notes that
@@ -390,12 +391,12 @@ no dirty draft remains, then selects the next occurrence in the filtered list
 and, unless disabled in settings, focuses its target. When there is nothing to
 save it only moves on.
 
-**Approve & next** (Ctrl+Shift+Enter, also in the Translation menu and the
-command palette) is for quick review: it saves an edited target first, marks
-the string reviewed, and moves on like Save & next. A reviewed string without
-edits only moves on; an empty target does nothing. When the selected string
-has left the filtered list, for example a draft filter after approving it,
-the next and previous strings are found from its place in sheet order.
+**Accept & next** (Ctrl+Shift+Enter, also in the Translation menu and the
+command palette) is for quick review: it saves the target as it is, which also
+accepts a fuzzy string, and moves on like Save & next. A translated string
+without edits only moves on; an empty target does nothing. When the selected
+string has left the filtered list, for example a fuzzy filter after accepting
+it, the next and previous strings are found from its place in sheet order.
 
 Unsaved target or note drafts are marked and protected by a discard
 confirmation when changing rows, changing sheets, closing the project, or
@@ -450,7 +451,7 @@ and has no refresh button.
   which creates a branch from `HEAD` and checks it out. On the main
   branch it explains that the next checkpoint starts a contribution branch.
 - It offers repository initialization, a per-string "Current (yours) /
-  Incoming" choice for same-unit merge conflicts, and, on a contribution
+  Incoming" choice for strings both sides changed, and, on a contribution
   branch, a Pull request section with the branch's push state, its unmerged
   commits, and "Switch to `<main>` and delete this branch" once it is merged
   — or, in a repository without a remote, "Merge into `<main>`" with a
@@ -463,14 +464,15 @@ and has no refresh button.
   them (Commit, Merge, push, pull, upstream) and the common loanwords
   («коммит», «смержить»).
 - The branch switcher disables branches that hold the project in a state the
-  open session cannot load (no project, an older Workspace Format, or another
-  game source) and says why; when the main branch is such a branch, the dock
+  open session cannot load (no project, an earlier project format, or another
+  game version) and says why; when the main branch is such a branch, the dock
   explains that the work is not merged into it yet.
 - **Changes** (collapsible; the dock remembers whether it is open while the
   window lives) starts with the composer, which commits everything below and
-  edits the translator name and optional email. Below it are the
-  translation-unit changes grouped by sheet with an A/M/D marker (clicking
-  one opens the string with its checkpoint diff) and project file changes
+  edits the translator name and optional email. Below it are the string
+  changes grouped by sheet with a marker (A translated, M changed, D removed,
+  • marked; clicking one opens the string with its checkpoint diff) and
+  project file changes
   grouped by area, as described in
   [`git.md`](./git.md#project-file-changes).
 - The translation changes are a virtualized list of at most 480 px. With 12
@@ -479,8 +481,8 @@ and has no refresh button.
   sheets; a search or kind filter opens every matching sheet. With more than
   50 changes in several sheets, sheets start collapsed. The sheet whose
   changes are at the top stays pinned above them. A row names its column
-  only when the sheet's changes span several columns, and shows what
-  changed (text, review, note) only for modified strings. Filters and open
+  only when the sheet's changes span several columns, and says when a
+  string's fuzzy mark or note changed. Filters and open
   sheets are kept per list (the uncommitted changes, or each commit) while
   the window lives. Commit tabs use the same list.
 - **History** fills the rest of the dock: commits with a lane graph, branch
@@ -492,9 +494,9 @@ changes (which open in the editor), and project file changes.
 
 Dialogs that write project files (export, fonts, project knowledge)
 refresh the dock when they close. A sync, branch switch, or finished
-contribution that changed the workspace reloads the current sheet and
-progress, as does a write of an agent through the `aeria` command (see
-[`agents.md`](./agents.md#sharing-a-project-between-processes)).
+contribution that changed the working tree reloads the current sheet and
+progress, and so does a change of a shown sheet's file by Git, by hand, or by
+machine translation (`project://files-changed`).
 
 ## String history
 
@@ -504,15 +506,15 @@ when another string is selected and after a restart. Languages shows the selecte
 languages, stacked in the source pane's chip or code view, so a translator
 can compare how each language uses tags such as conditions; a tag clicked
 there is added to the translation as from the source pane. A language
-without the string says so. History shows who translated and reviewed the
-selected string and every committed change to it; "Use this text" puts a historical text into the editor as an
-unsaved draft.
+without the string says so. History shows every committed change to the
+selected string with its author, and its uncommitted change; "Use this text"
+puts a historical text into the editor as an unsaved draft.
 
 ## Project knowledge dialog
 
 The project knowledge dialog opens from the Translation menu (**Terms**,
 **Style**) and the command palette. It edits the two files of the
-[project knowledge](./agents.md#project-knowledge):
+[project knowledge](./knowledge.md#project-knowledge):
 `aeria-knowledge/terms.csv` and `style.md`.
 
 The Terms tab is a table of term, translation, note, forbidden variants
@@ -525,7 +527,20 @@ removes them only after confirmation. The Style tab is a Markdown text area
 for `style.md` and shows its size against the 8 MiB limit. Each tab
 has **Revert** and **Save**; closing with unsaved changes asks first. A save
 fails, without writing, when the file changed since it was loaded, for
-example because an agent wrote it.
+example by Git.
+
+## Machine translation
+
+**Machine translation…** opens from the Translation menu and the command
+palette. The dialog chooses what to translate (the open sheet, the sheets of
+its folder, or the whole project) and whether strings with a changed source
+are included, shows how many strings and files that is, and names the model;
+without a model it links to Settings. **Translate** starts a run, and the
+dialog shows its progress every second: strings written of the run's strings,
+strings refused by the checks with their problems, tokens and the share served
+from the cache, the pace, and why the run stopped. The dialog can be hidden
+while the run goes; **Stop** stops it, and a stopped run offers
+**Continue**. See [`translate.md`](./translate.md).
 
 ## Export
 
@@ -554,26 +569,24 @@ Monokai Pro, Night Owl, Rosé Pine, Ayu, Solarized, Palenight, Kanagawa, and
 Everforest) mapped onto Aeria's layered tokens; Catppuccin, Aeria's own themes,
 and High Contrast Dark are also available.
 
-Settings open as a dialog with Appearance, Editor, Workflow, Game, Agents,
-Project, Repository, Keyboard shortcuts, and About sections and a search across all settings. Theme, accent,
+Settings open as a dialog with Appearance, Editor, Workflow, Game, Machine
+translation, Project, Repository, Keyboard shortcuts, and About sections and a search across all settings. Theme, accent,
 Reduce transparency, interface zoom (webview zoom), editor text size, macro
 highlighting, control-character display, strings list density, and focusing the
-next target after Save & next are per-machine renderer preferences kept in local
-storage; they are never project data. Components consume semantic tokens from `ui/theme/tokens.css`, which
+next target after Save & next, and the machine translation model and reasoning
+effort are per-machine renderer preferences kept in local storage; they are never project data. Components consume semantic tokens from `ui/theme/tokens.css`, which
 derive surfaces, lines, and state colors from each theme's palette.
 
-The Agents section shows whether the `aeria` command is installed and on
-`PATH` and the open project's `AGENTS.md` and `CLAUDE.md`, with **Connect agents** (or **Update**
-when everything is in place) that sets them all up; see
-[`agents.md`](./agents.md#discovery).
+The Machine translation section says that signing in to a ChatGPT
+subscription is unofficial and counts against the plan's Codex limits, signs
+in (it shows the code, opens OpenAI's page, and waits) or out, and chooses
+the model and its reasoning effort from the account's models.
 
 The Project section changes the open project's target language with the
 same picker as New project. A listed language is saved when chosen; a typed
-tag on Enter or when the field loses focus. Saving rewrites only the
-workspace manifest, which collaborators receive through Git; units, targets,
-and IDs are unchanged. Projects created before the language could be chosen
-carry `und`, which the section shows as no language with a warning that
-export needs one.
+tag on Enter or when the field loses focus. Saving rewrites only
+`aeria.json`, which collaborators receive through Git; translations are
+unchanged.
 
 On supported Windows versions, the launcher, workbench, and tool windows use the
 system Acrylic backdrop and follow the selected light or dark theme. The
@@ -584,11 +597,11 @@ corners. Reduce transparency, High Contrast Dark, and other platforms use an
 opaque theme-colored backdrop.
 
 The launcher offers **Update project** for an existing repository and an
-installed game, and asks for confirmation with the planned counts before a
-package with other content is applied. After an update the workbench shows a
-summary; the status bar shows the number of detached translations and opens
-their list. See [`rebase.md`](./rebase.md#desktop-workflow).
+installed game. After an update the workbench shows a summary: translations
+to check because their source changed, translations kept as obsolete, files
+written, and the commit. The status bar shows how many strings of the project
+have a changed source and filters the list to them. See
+[`po-project.md`](./po-project.md#game-updates).
 
-This editor intentionally has no structured macro controls, manual
-reattachment of detached translations, or export. The workbench retains truthful bottom-panel
-tabs, and status/layout infrastructure even when those backends are unavailable.
+The workbench retains truthful bottom-panel tabs, and status/layout
+infrastructure even when those backends are unavailable.
