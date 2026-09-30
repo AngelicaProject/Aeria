@@ -8,6 +8,7 @@ repository.workspace = true
 description = "The project as PO files: the format, entry identity, file layout, files made from the game, and game updates."
 
 [dependencies]
+aeria-knowledge = { path = "../aeria-knowledge" }
 aeria-se = { path = "../aeria-se" }
 aeria-source = { path = "../aeria-source" }
 serde = { version = "1.0.229", features = ["derive"] }

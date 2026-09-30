@@ -5,7 +5,7 @@ use std::fmt::Write as _;
 
 use aeria_source::{
     DialogueKind, GameSource, LineRole, RowKeys, SheetInLanguage, SheetLookup, SourceCell,
-    SourceLanguage, SourceRow, line_role,
+    SourceLanguage, SourceRow, SourceSheet, line_role,
 };
 
 use crate::identity::{Identity, RowName, SheetPaths, is_scene, splits};
@@ -67,6 +67,41 @@ fn role_comment(sheet: &str, key: &str) -> String {
     }
 }
 
+/// The row keys that name a sheet's rows in its identities: those of a keyed
+/// sheet, when no key is empty or could be mistaken for a separator.
+#[must_use]
+pub fn identity_keys(sheet: &SourceSheet) -> Option<&RowKeys> {
+    sheet.row_keys().filter(|keys| {
+        sheet.rows().iter().all(|row| {
+            keys.key_of(row.row_id, row.subrow_id)
+                .is_some_and(|key| !key.contains(':') && !key.is_empty())
+        })
+    })
+}
+
+/// The identity of a string: by the row's key when the sheet's rows are
+/// named by keys (see [`identity_keys`]), otherwise by row ID and subrow.
+#[must_use]
+pub fn identity_of(sheet: &str, key: Option<&str>, row: u32, subrow: u16, column: u32) -> Identity {
+    Identity {
+        sheet: sheet.to_owned(),
+        row: match key {
+            Some(key) => RowName::Key(key.to_owned()),
+            None => RowName::Id { row, subrow },
+        },
+        column,
+    }
+}
+
+/// Whether a cell of a sheet is an entry of the project: a translatable,
+/// non-empty string that is not the row key.
+#[must_use]
+pub fn is_entry(cell: &SourceCell<'_>, keys: Option<&RowKeys>) -> bool {
+    cell.translatable
+        && !cell.bytes.is_empty()
+        && keys.is_none_or(|keys| keys.column() != cell.column)
+}
+
 /// The files of one sheet, each with its path relative to `po/`, in order.
 /// A sheet the game does not have or cannot read has none.
 ///
@@ -82,13 +117,7 @@ pub fn sheet_files(
     let SheetLookup::Present(sheet) = source.sheet(name)? else {
         return Ok(Vec::new());
     };
-    // A key names a row only when no key could be mistaken for a separator.
-    let keys = sheet.row_keys().filter(|keys| {
-        sheet.rows().iter().all(|row| {
-            keys.key_of(row.row_id, row.subrow_id)
-                .is_some_and(|key| !key.contains(':') && !key.is_empty())
-        })
-    });
+    let keys = identity_keys(&sheet);
     let dialogue = DialogueKind::of(name).is_some() && keys.is_some();
     let highest = sheet.rows().last().map_or(0, |row| row.row_id);
     let split = splits(name, highest);
@@ -115,25 +144,12 @@ pub fn sheet_files(
         let key = keys.and_then(|keys| keys.key_of(row.row_id, row.subrow_id));
         let cells: Vec<_> = sheet.cells(row).collect();
         for cell in &cells {
-            if !cell.translatable
-                || cell.bytes.is_empty()
-                || keys.is_some_and(|keys| keys.column() == cell.column)
-            {
+            if !is_entry(cell, keys) {
                 continue;
             }
             let text = cell.text();
             let extracted = extracted(&others, name, row, cell, &cells, keys, dialogue);
-            let identity = Identity {
-                sheet: name.to_owned(),
-                row: match key {
-                    Some(key) => RowName::Key(key.to_owned()),
-                    None => RowName::Id {
-                        row: row.row_id,
-                        subrow: row.subrow_id,
-                    },
-                },
-                column: cell.column,
-            };
+            let identity = identity_of(name, key, row.row_id, row.subrow_id, cell.column);
             let path = paths.file(name, split, row.row_id);
             let entry = Entry {
                 extracted,

@@ -4,13 +4,16 @@
 //!
 //! See `docs/architecture/po-project.md`.
 
+pub mod check;
 pub mod generate;
 pub mod identity;
 pub mod merge;
 pub mod po;
 pub mod project;
+pub mod session;
 
-pub use generate::{GenerateError, Languages, sheet_files};
+pub use check::{Finding, Verdict, check_file, check_translation};
+pub use generate::{GenerateError, Languages, identity_keys, identity_of, is_entry, sheet_files};
 pub use identity::{Identity, ROWS_PER_FILE, RowName, SheetPaths, is_scene, splits};
 pub use merge::{merge, merge_files};
 pub use po::{Entry, Header, PoFile, Problem, quote, unquote};
@@ -18,4 +21,8 @@ pub use project::{
     FORMAT, FileProblems, GAME_VERSION_FIELD, PO_DIR, ProjectError, README_PATH, SETTINGS_FILE,
     Settings, Updated, create, list, make, read, read_settings, update, versions, write,
     write_settings,
+};
+pub use session::{
+    CellView, EditError, OpenError, Page, RowView, Session, SheetProgress, Translation,
+    write_atomically,
 };

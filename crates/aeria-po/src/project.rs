@@ -37,6 +37,9 @@ pub struct Settings {
     pub source_language: String,
     /// The target language tag, such as `ru`.
     pub target_language: String,
+    /// The game version the files of `po/` are for.
+    #[serde(default)]
+    pub game_version: String,
 }
 
 /// Errors of a project on disk.
@@ -285,6 +288,7 @@ pub fn create(
         format: FORMAT.to_owned(),
         source_language: source.language().code().to_owned(),
         target_language: target_language.to_owned(),
+        game_version: source.version().to_string(),
     };
     let files = make(
         source,
@@ -329,7 +333,7 @@ pub fn versions(files: &BTreeMap<String, PoFile>) -> Vec<String> {
 /// Returns an error when the settings, the game, or a file cannot be read,
 /// a file breaks the format, or a file cannot be written.
 pub fn update(root: &Path, source: &GameSource, threads: usize) -> Result<Updated, ProjectError> {
-    let settings = read_settings(root)?;
+    let mut settings = read_settings(root)?;
     let (previous, problems) = read(root, &list(root)?)?;
     if let Some((path, problem)) = problems.first() {
         return Err(ProjectError::Settings {
@@ -343,11 +347,12 @@ pub fn update(root: &Path, source: &GameSource, threads: usize) -> Result<Update
     let fresh = make(
         source,
         &Languages {
-            target: settings.target_language,
+            target: settings.target_language.clone(),
         },
         threads,
     )?;
     let version = source.version().to_string();
+    settings.game_version.clone_from(&version);
     let merged = merge_files(&previous, fresh, &version);
     let count = |files: &BTreeMap<String, PoFile>| {
         files.values().fold((0, 0), |(fuzzy, obsolete), file| {
@@ -360,6 +365,7 @@ pub fn update(root: &Path, source: &GameSource, threads: usize) -> Result<Update
     let (fuzzy_before, obsolete_before) = count(&previous);
     let (fuzzy_after, obsolete_after) = count(&merged);
     let files = write(root, &merged)?;
+    write_settings(root, &settings)?;
     Ok(Updated {
         files,
         fuzzy: fuzzy_after.saturating_sub(fuzzy_before),
