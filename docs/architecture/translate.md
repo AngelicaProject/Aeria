@@ -67,6 +67,25 @@ the entries still empty, so a second run after an interruption, a usage
 limit, or a failed batch continues where the first stopped. `--count` prints
 what a run would translate, by file, and stops.
 
+## Running
+
+A run takes hours for a large folder, longer than a harness lets a command
+run, and nobody should have to watch it. `aeria translate` therefore starts
+the run in a background process of the same executable, started the way the
+project server is (see [`agents.md`](./agents.md#the-project-server)), prints
+what the run covers, and returns at once.
+
+- One run per project. Calling `aeria translate` while a run is going adds the
+  paths to it instead of starting another, so agents cannot start competing
+  runs.
+- `aeria translate --status` prints the run's progress: entries written, left,
+  and rejected, by path; its current pace; tokens; and why it stopped, if it
+  did. The run keeps this in `agents/<key>.translate` in application data.
+- `aeria translate --wait` follows the run in the foreground until it ends,
+  for a person in a terminal.
+- `aeria translate --stop` stops the run; batches in flight are dropped and
+  written by the next run.
+
 ## Batches
 
 Entries are grouped in file order, which keeps a scene's dialogue together and
@@ -129,7 +148,8 @@ any other edit; `aeria check` sees them as changed files.
 
 ## Pace and limits
 
-A run keeps up to 16 requests in flight. A rate-limit answer halves that, to
+The run sets its own pace; neither a person nor an agent chooses it. It keeps
+up to 16 requests in flight. A rate-limit answer halves that, to
 no fewer than two, and every finished batch adds one back. A network error,
 timeout, or rate limit returns the batch to the queue after a wait of 20
 seconds times the failures in a row; the third in a row stops the run. A
@@ -141,12 +161,13 @@ limit's reset, if any. Running the command again later continues.
 
 ## Output
 
-One line per finished batch (file, entries written, entries rejected), a
-line every 30 seconds with entries written, entries left, tokens used, and
-the share of prompt tokens served from the cache, and a summary: written,
-rejected with reasons, left, tokens. `--json` gives the summary as one JSON
-value. Exit status: 0 when nothing is left in the paths, 1 when entries were
-rejected or left, 2 on an error.
+Starting a run prints its paths and how many entries they have left.
+`--status` and `--wait` print entries written, left, and rejected, tokens
+used, and the share of prompt tokens served from the cache; when the run
+ended, the rejected entries with their reasons. `--json` gives the same as
+one JSON value. Exit status of `--status` and `--wait`: 0 when nothing is
+left in the run's paths, 1 when entries were rejected or left, 2 on an
+error.
 
 ## Agents
 
@@ -161,9 +182,8 @@ their own subagents, and what they do instead:
   --fuzzy`;
 - translate by hand what deserves it.
 
-A run of a large folder takes longer than a harness lets a command run. An
-agent runs it in the background or asks the person to; an interrupted run
-loses only the batches in flight.
+An agent starts a run and goes on with other work; it asks `--status` when
+it wants to know where the run is, and never needs to control its pace.
 
 ## Not included
 
