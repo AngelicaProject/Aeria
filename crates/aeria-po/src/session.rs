@@ -294,6 +294,13 @@ impl Session {
         Ok(())
     }
 
+    /// The path of a sheet in `po/` without the extension: its file with
+    /// `.po`, or its folder when it is split by row.
+    #[must_use]
+    pub fn sheet_base(&self, sheet: &str) -> String {
+        self.paths.base(sheet).to_owned()
+    }
+
     /// The project knowledge, read again when a file of it changed.
     #[must_use]
     pub fn knowledge(&self) -> Arc<Knowledge> {
@@ -613,6 +620,72 @@ impl Session {
             entry.notes = lines;
             Ok(())
         })
+    }
+
+    /// Writes translations of entries of one file, by `msgctxt`, in one
+    /// write. Only an entry that is still untranslated (or still fuzzy, with
+    /// `replace_fuzzy`) takes its translation, so work saved meanwhile is
+    /// kept; the caller checked the translations. Returns the `msgctxt` of
+    /// every entry written.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the file cannot be read, breaks the format, or
+    /// cannot be written.
+    pub fn fill(
+        &self,
+        path: &str,
+        translations: &[(String, String)],
+        replace_fuzzy: bool,
+    ) -> Result<Vec<String>, EditError> {
+        let _writing = lock(&self.writing);
+        let full = self.root.join(PO_DIR).join(path);
+        let text = std::fs::read_to_string(&full).map_err(|source| ProjectError::Io {
+            path: full.clone(),
+            source,
+        })?;
+        let (mut file, problems) = PoFile::parse(&text);
+        if let Some(problem) = problems.first() {
+            return Err(EditError::Broken {
+                path: path.to_owned(),
+                line: problem.line,
+                message: problem.message.clone(),
+            });
+        }
+        let wanted: HashMap<&str, &str> = translations
+            .iter()
+            .filter(|(_, text)| !text.is_empty())
+            .map(|(context, text)| (context.as_str(), text.as_str()))
+            .collect();
+        let mut written = Vec::new();
+        for entry in &mut file.entries {
+            let Some(text) = wanted.get(entry.context.as_str()) else {
+                continue;
+            };
+            let open = if entry.fuzzy {
+                replace_fuzzy
+            } else {
+                entry.translation.is_empty()
+            };
+            if open {
+                (*text).clone_into(&mut entry.translation);
+                entry.fuzzy = false;
+                entry.previous = None;
+                written.push(entry.context.clone());
+            }
+        }
+        if !written.is_empty() {
+            write_atomically(&full, &file.write())?;
+        }
+        let now = stamp(&full);
+        lock(&self.files).insert(path.to_owned(), (now, Arc::new(FileState::of(&file))));
+        if let Some(seen) = lock(&self.viewed).get_mut(path) {
+            // The editor shows this file: tell it, as for a change by Git.
+            if written.is_empty() {
+                *seen = now;
+            }
+        }
+        Ok(written)
     }
 
     /// How much of each sheet with entries is translated, by sheet name.

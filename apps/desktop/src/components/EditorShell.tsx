@@ -44,6 +44,7 @@ import { TranslationList } from "./TranslationList";
 import { WindowChrome } from "./WindowChrome";
 import type { ApplicationMenuDefinition } from "./ApplicationMenu";
 import { ExportDialog } from "./ExportDialog";
+import { TranslateDialog } from "./TranslateDialog";
 import { ProjectGuideDialog, type ProjectGuideTab } from "./ProjectGuideDialog";
 import { WorkbenchToolDock, toolTitle, type WorkbenchTool } from "./WorkbenchToolDock";
 import { CommitView } from "./GitHistory";
@@ -254,6 +255,7 @@ export function EditorShell({
     setGuide((current) => ({ ...current, open }));
     if (!open) setProjectRevision((current) => current + 1);
   }, []);
+  const [translateOpen, setTranslateOpen] = useState(false);
   const [exportOpen, setExportOpenState] = useState(false);
   const setExportOpen = useCallback((open: boolean) => {
     setExportOpenState(open);
@@ -1113,6 +1115,8 @@ export function EditorShell({
         { kind: "separator", id: "translation-sep-1" },
         { kind: "command", id: "terms", label: t("menu.terms"), onSelect: () => openGuide("terms") },
         { kind: "command", id: "style", label: t("menu.style"), onSelect: () => openGuide("style") },
+        { kind: "separator", id: "translation-sep-2" },
+        { kind: "command", id: "machine-translation", label: t("menu.machineTranslation"), onSelect: () => setTranslateOpen(true) },
       ],
     },
     {
@@ -1187,6 +1191,7 @@ export function EditorShell({
     ...themeRegistry.map((entry): PaletteCommand => ({ id: `theme-${entry.id}`, category: category.theme, title: themeLabel(entry), icon: "palette", run: () => setThemeId(entry.id) })),
     { id: "file-close-sheet", category: category.file, title: t("menu.closeSheet"), shortcut: "Ctrl+W", icon: "x", enabled: documentTabs.activeId !== null, run: () => { if (documentTabs.activeId) void handleDocumentClose(documentTabs.activeId); } },
     { id: "file-export-pack", category: category.file, title: t("menu.exportPack"), icon: "arrowUpRight", run: () => setExportOpen(true) },
+    { id: "machine-translation", category: category.strings, title: t("menu.machineTranslation"), icon: "sparkles", run: () => setTranslateOpen(true) },
     { id: "file-close-project", category: category.file, title: t("menu.closeProject"), icon: "folder", run: () => void handleClose() },
   ];
 
@@ -1364,6 +1369,7 @@ export function EditorShell({
       <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} initialSection={settingsSection} projectOpen project={project} onProjectChanged={onProjectChanged} />
       <ProjectGuideDialog open={guide.open} initialTab={guide.tab} onOpenChange={setGuideOpen} />
       <ExportDialog open={exportOpen} onOpenChange={setExportOpen} onOpenChanges={() => { setExportOpen(false); showPanel("git", "right", false); }} />
+      <TranslateDialog open={translateOpen} onOpenChange={setTranslateOpen} sheetName={selectedSheetName} onOpenSettings={() => { setTranslateOpen(false); openSettings("translation"); }} />
       {palette.open ? (
         <CommandPalette
           key={palette.key}

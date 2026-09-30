@@ -2,6 +2,7 @@ import { memo, useEffect, useState, type CSSProperties, type ReactNode } from "r
 import { Dialog } from "radix-ui";
 import { appInfo } from "../ipc";
 import { GameSettings } from "./GameSettings";
+import { MachineTranslationSettings } from "./MachineTranslationSettings";
 import { TargetLanguageSetting } from "./ProjectSettings";
 import type { ProjectSummaryDto } from "../types";
 import { keyboardShortcuts, shortcutGroupLabels } from "../shortcuts";
@@ -25,13 +26,14 @@ export const accentPresets: readonly { value: string; label: MessageKey }[] = [
   { value: "#98c379", label: "settings.accent.green" },
 ];
 
-export type SettingsSection = "appearance" | "editor" | "workflow" | "game" | "project" | "repository" | "keyboard" | "about";
+export type SettingsSection = "appearance" | "editor" | "workflow" | "game" | "translation" | "project" | "repository" | "keyboard" | "about";
 
 const sections: ReadonlyArray<{ id: SettingsSection; label: MessageKey; icon: UiIconName }> = [
   { id: "appearance", label: "settings.section.appearance", icon: "palette" },
   { id: "editor", label: "settings.section.editor", icon: "languages" },
   { id: "workflow", label: "settings.section.workflow", icon: "arrowRight" },
   { id: "game", label: "settings.section.game", icon: "gamepad" },
+  { id: "translation", label: "settings.section.translation", icon: "sparkles" },
   { id: "project", label: "settings.section.project", icon: "languages" },
   { id: "repository", label: "settings.section.repository", icon: "gitBranch" },
   { id: "keyboard", label: "settings.section.keyboard", icon: "listFilter" },
@@ -188,6 +190,10 @@ export const SettingsDialog = memo(function SettingsDialog({ open, onOpenChange,
     {
       id: "game-installation", section: "game", title: t("settings.game.title"), description: t("settings.game.description"), keywords: t("settings.game.keywords"), wide: true,
       control: <GameSettings />,
+    },
+    {
+      id: "machine-translation", section: "translation", title: t("translate.settings.title"), description: t("translate.settings.description"), keywords: t("translate.settings.keywords"), wide: true,
+      control: <MachineTranslationSettings />,
     },
     {
       id: "shortcuts", section: "keyboard", title: t("settings.shortcuts.title"), keywords: keyboardShortcuts.map((shortcut) => `${shortcut.keys} ${t(shortcut.action)}`).join(" "), wide: true,

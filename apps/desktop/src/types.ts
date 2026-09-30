@@ -493,6 +493,68 @@ export type GitFinishDto = {
   deletedBranch: string | null;
 };
 
+/** Whether a ChatGPT subscription is signed in for machine translation. */
+export type ModelAccountDto = {
+  signedIn: boolean;
+  /** The account's e-mail address, once a request read it. */
+  account: string | null;
+};
+
+/** A device sign-in to finish on OpenAI's page. */
+export type ModelSignInDto = {
+  userCode: string;
+  verificationUrl: string;
+  /** Seconds between polls. */
+  interval: number;
+};
+
+/** A model the signed-in account can use. */
+export type ModelInfo = {
+  id: string;
+  efforts: string[];
+};
+
+/** What a machine translation run of a scope would translate. */
+export type TranslationCountDto = {
+  files: number;
+  strings: number;
+};
+
+/** A string whose machine translation failed the checks twice; it stays untranslated. */
+export type TranslationRejected = {
+  path: string;
+  context: string;
+  translation: string;
+  problems: string[];
+};
+
+export type TranslationStop =
+  | { reason: "finished" }
+  | { reason: "cancelled" }
+  | { reason: "usageLimit"; resetsAt: number | null }
+  | { reason: "signInRequired" }
+  | { reason: "failed"; message: string };
+
+/** Where a machine translation run is. */
+export type TranslationStatus = {
+  running: boolean;
+  files: number;
+  batches: number;
+  batchesDone: number;
+  strings: number;
+  written: number;
+  rejected: number;
+  rejections: TranslationRejected[];
+  inputTokens: number;
+  cachedTokens: number;
+  outputTokens: number;
+  pace: number;
+  stop: TranslationStop | null;
+  message: string | null;
+  /** Unix milliseconds. */
+  startedAt: number;
+};
+
 /** One term of `aeria-knowledge/terms.csv`; `settled` when a person decided it. */
 export type GlossaryEntry = { term: string; translation: string; note?: string; forbidden?: string[]; settled?: boolean };
 

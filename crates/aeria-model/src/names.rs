@@ -1,0 +1,181 @@
+//! The game is its own glossary: names of people, places, monsters, items,
+//! actions, and statuses are strings of their sheets, and their
+//! translations are how the project renders them everywhere. This finds the
+//! translated names that occur in a text.
+
+use std::collections::BTreeMap;
+use std::path::Path;
+
+use aeria_po::{Identity, PO_DIR, PoFile};
+use aho_corasick::{AhoCorasick, AhoCorasickBuilder, MatchKind};
+
+/// Sheets whose strings are names.
+pub const NAME_SHEETS: [&str; 22] = [
+    "Action",
+    "BNpcName",
+    "ClassJob",
+    "Companion",
+    "ContentFinderCondition",
+    "ENpcResident",
+    "EObjName",
+    "EventItem",
+    "Fate",
+    "GuardianDeity",
+    "InstanceContent",
+    "Item",
+    "Mount",
+    "Ornament",
+    "PlaceName",
+    "Quest",
+    "Race",
+    "Status",
+    "Title",
+    "Town",
+    "Trait",
+    "Tribe",
+];
+
+/// Longest name taken from a name sheet; longer strings are descriptions.
+const MAX_NAME: usize = 48;
+
+/// Whether a source string reads as a name: short, one line, no macros, and
+/// with a capital letter, since the game capitalizes names.
+fn is_name(text: &str) -> bool {
+    let length = text.chars().count();
+    (3..=MAX_NAME).contains(&length)
+        && !text.contains(['<', '\n', '.', '!', '?', ':'])
+        && text.chars().any(char::is_uppercase)
+}
+
+/// Translated names of the project.
+pub struct Names {
+    names: Vec<(String, String)>,
+    matcher: Option<AhoCorasick>,
+}
+
+impl Names {
+    /// Reads the translated names from the name sheets' files under `po/`.
+    /// A name translated two ways keeps the first.
+    #[must_use]
+    pub fn load(root: &Path) -> Self {
+        let mut found: BTreeMap<String, String> = BTreeMap::new();
+        let paths = aeria_po::list(root).unwrap_or_default();
+        for path in paths {
+            let sheet = path
+                .strip_suffix(".po")
+                .unwrap_or(&path)
+                .split('/')
+                .next()
+                .unwrap_or_default()
+                .trim_end_matches('~');
+            if !NAME_SHEETS.contains(&sheet) {
+                continue;
+            }
+            let Ok(text) = std::fs::read_to_string(root.join(PO_DIR).join(&path)) else {
+                continue;
+            };
+            for entry in PoFile::parse(&text).0.entries {
+                if entry.translation.is_empty() || entry.fuzzy || !is_name(&entry.source) {
+                    continue;
+                }
+                if Identity::parse(&entry.context)
+                    .is_ok_and(|identity| NAME_SHEETS.contains(&identity.sheet.as_str()))
+                {
+                    found.entry(entry.source).or_insert(entry.translation);
+                }
+            }
+        }
+        Self::new(found.into_iter().collect())
+    }
+
+    /// Names from pairs of source and translation.
+    #[must_use]
+    pub fn new(names: Vec<(String, String)>) -> Self {
+        let matcher = (!names.is_empty())
+            .then(|| {
+                AhoCorasickBuilder::new()
+                    .match_kind(MatchKind::LeftmostLongest)
+                    .build(names.iter().map(|(source, _)| source.as_str()))
+                    .ok()
+            })
+            .flatten();
+        Self { names, matcher }
+    }
+
+    #[must_use]
+    pub const fn len(&self) -> usize {
+        self.names.len()
+    }
+
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        self.names.is_empty()
+    }
+
+    /// The translated names that occur in `texts` as whole words, each once,
+    /// at most `limit` of them.
+    #[must_use]
+    pub fn in_texts<'a>(
+        &self,
+        texts: impl IntoIterator<Item = &'a str>,
+        limit: usize,
+    ) -> Vec<(String, String)> {
+        let Some(matcher) = &self.matcher else {
+            return Vec::new();
+        };
+        let mut seen = Vec::new();
+        for text in texts {
+            for found in matcher.find_iter(text) {
+                let before = text[..found.start()].chars().next_back();
+                let after = text[found.end()..].chars().next();
+                let boundary = |character: Option<char>| {
+                    character.is_none_or(|character| !character.is_alphanumeric())
+                };
+                if !boundary(before) || !boundary(after) {
+                    continue;
+                }
+                let index = found.pattern().as_usize();
+                if !seen.contains(&index) {
+                    seen.push(index);
+                    if seen.len() == limit {
+                        break;
+                    }
+                }
+            }
+        }
+        seen.into_iter()
+            .map(|index| self.names[index].clone())
+            .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn names_are_found_as_whole_words() {
+        let names = Names::new(vec![
+            ("Minfilia".to_owned(), "Минфилия".to_owned()),
+            ("Limsa Lominsa".to_owned(), "Лимса Ломинса".to_owned()),
+            ("Limsa".to_owned(), "Лимса".to_owned()),
+            ("Fire".to_owned(), "Огонь".to_owned()),
+        ]);
+        let found = names.in_texts(
+            ["Minfilia waits in Limsa Lominsa.", "Firearms and Minfilia."],
+            10,
+        );
+        assert_eq!(
+            found,
+            vec![
+                ("Minfilia".to_owned(), "Минфилия".to_owned()),
+                ("Limsa Lominsa".to_owned(), "Лимса Ломинса".to_owned()),
+            ]
+        );
+        assert!(is_name("Mother Miounne"));
+        assert!(!is_name("delivery moogle"));
+        assert!(!is_name(
+            "Restores 1,000 HP. Can only be used out of combat."
+        ));
+    }
+}

@@ -28,6 +28,7 @@ aeria-projects = { path = "../../../crates/aeria-projects" }
 aeria-publish = { path = "../../../crates/aeria-publish" }
 aeria-se = { path = "../../../crates/aeria-se" }
 aeria-po = { path = "../../../crates/aeria-po" }
+aeria-model = { path = "../../../crates/aeria-model" }
 aeria-source = { path = "../../../crates/aeria-source" }
 serde = { version = "1.0", features = ["derive"] }
 semver = "1.0.28"

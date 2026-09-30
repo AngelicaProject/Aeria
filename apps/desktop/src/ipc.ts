@@ -43,6 +43,11 @@ import type {
   TranslationOverlayDto,
   OtherLanguageTextDto,
   SheetDialogueDto,
+  ModelAccountDto,
+  ModelInfo,
+  ModelSignInDto,
+  TranslationCountDto,
+  TranslationStatus,
 } from "./types";
 
 export function normalizeCommandError(error: unknown): CommandError {
@@ -380,6 +385,56 @@ export function gitCloneRepository(url: string, parent: string | null): Promise<
 /** The folder that receives new and cloned projects when no other folder is chosen. */
 export function defaultProjectsDirectory(): Promise<string> {
   return call<string>("default_projects_directory_path");
+}
+
+/** Whether a ChatGPT subscription is signed in for machine translation. */
+export function modelAccount(): Promise<ModelAccountDto> {
+  return call<ModelAccountDto>("model_account");
+}
+
+/** Starts signing in with a ChatGPT subscription; the code is entered on OpenAI's page. */
+export function modelSignInStart(): Promise<ModelSignInDto> {
+  return call<ModelSignInDto>("model_sign_in_start");
+}
+
+/** Opens OpenAI's page where the sign-in code is entered. */
+export function modelOpenSignInPage(): Promise<void> {
+  return call<void>("model_open_sign_in_page");
+}
+
+/** Polls the sign-in once; true once it finished. */
+export function modelSignInPoll(): Promise<boolean> {
+  return call<boolean>("model_sign_in_poll");
+}
+
+export function modelSignOut(): Promise<void> {
+  return call<void>("model_sign_out");
+}
+
+/** The models the signed-in account can use. */
+export function modelList(): Promise<ModelInfo[]> {
+  return call<ModelInfo[]>("model_list");
+}
+
+/**
+ * What a machine translation of `scope` would translate. The scope names
+ * sheets, and folders of sheets ending with "/"; empty is the whole project.
+ */
+export function translationCount(scope: string[], fuzzy: boolean): Promise<TranslationCountDto> {
+  return call<TranslationCountDto>("translation_count", { scope, fuzzy });
+}
+
+export function translationStart(scope: string[], fuzzy: boolean, model: string, effort: string | null): Promise<void> {
+  return call<void>("translation_start", { scope, fuzzy, model, effort });
+}
+
+/** The progress of the last machine translation run; null before one started. */
+export function translationStatus(): Promise<TranslationStatus | null> {
+  return call<TranslationStatus | null>("translation_status");
+}
+
+export function translationStop(): Promise<void> {
+  return call<void>("translation_stop");
 }
 
 

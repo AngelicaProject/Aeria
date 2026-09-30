@@ -26,6 +26,10 @@ export type Preferences = {
   listDensity: ListDensity;
   dialogueView: DialogueView;
   focusTargetOnNext: boolean;
+  /** The model machine translation uses; empty until one is chosen. */
+  translationModel: string;
+  /** Its reasoning effort; empty for the model's default. */
+  translationEffort: string;
 };
 
 export const interfaceZoomOptions = [0.9, 1, 1.1, 1.25] as const;
@@ -43,6 +47,8 @@ export const defaultPreferences: Preferences = {
   listDensity: "comfortable",
   dialogueView: "scene",
   focusTargetOnNext: true,
+  translationModel: "",
+  translationEffort: "",
 };
 
 function pick<T>(value: unknown, allowed: readonly T[], fallback: T): T {
@@ -71,5 +77,7 @@ export function parsePreferences(raw: string | null): Preferences {
     listDensity: pick(stored.listDensity, ["compact", "comfortable"] as const, defaultPreferences.listDensity),
     dialogueView: pick(stored.dialogueView, ["strings", "scene"] as const, defaultPreferences.dialogueView),
     focusTargetOnNext: boolean("focusTargetOnNext"),
+    translationModel: typeof stored.translationModel === "string" ? stored.translationModel : defaultPreferences.translationModel,
+    translationEffort: typeof stored.translationEffort === "string" ? stored.translationEffort : defaultPreferences.translationEffort,
   };
 }

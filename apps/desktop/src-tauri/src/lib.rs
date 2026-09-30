@@ -16,6 +16,7 @@ mod state;
 mod sync;
 #[cfg(test)]
 mod test_support;
+mod translate;
 mod updates;
 
 use serde::Serialize;
@@ -63,6 +64,11 @@ pub use guide::{
     ProjectKnowledgeDto, TermInput, project_knowledge, save_knowledge_style, save_knowledge_terms,
 };
 pub use state::{Activity, DesktopState};
+pub use translate::{
+    ModelAccountDto, ModelSignInDto, Translation, TranslationCountDto, model_account, model_list,
+    model_open_sign_in_page, model_sign_in_poll, model_sign_in_start, model_sign_out,
+    translation_count, translation_start, translation_status, translation_stop,
+};
 pub use updates::{
     AvailableUpdateDto, UpdateChannel, UpdateDownloadDto, UpdateStatusDto, Updates, update_check,
     update_download, update_install, update_open_release, update_set_channel, update_status,
@@ -97,6 +103,7 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(DesktopState::new())
         .manage(Updates::default())
+        .manage(Translation::default())
         .setup(|app| {
             paths::migrate_legacy_directories(app.handle());
             app.state::<DesktopState>()
@@ -182,7 +189,17 @@ pub fn run() {
             fonts_use_recommended,
             fonts_save,
             fonts_import_file,
-            fonts_preview
+            fonts_preview,
+            model_account,
+            model_sign_in_start,
+            model_open_sign_in_page,
+            model_sign_in_poll,
+            model_sign_out,
+            model_list,
+            translation_count,
+            translation_start,
+            translation_status,
+            translation_stop
         ])
         .run(tauri::generate_context!())
         .expect("failed to run Aeria desktop application");
