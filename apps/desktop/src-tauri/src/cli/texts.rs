@@ -163,7 +163,8 @@ localization of FINAL FANTASY XIV.
 - `game/` holds the whole text of the game as gettext PO files: a file per quest,
   cutscene, or sheet, with the Japanese, English, German, and French texts. Read
   `game/README.md` first: the layout, the rules of a translation, and how the game's
-  macros work. If `game/` is missing, make it with `aeria corpus`.
+  macros work. If `game/` is missing, make it with `aeria corpus`; otherwise start with
+  `aeria check`, which brings it up to date with the project.
 - Translate by writing `msgstr` in those files, with any tools. Then run `aeria check`:
   it saves what changed and lists each problem as `file:line`.
 - `aeria-knowledge/` holds the project's terms, style, character voices, and story:

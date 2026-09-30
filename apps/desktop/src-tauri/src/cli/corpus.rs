@@ -819,7 +819,7 @@ fn readme(project: &Project) -> String {
         "# The text of FINAL FANTASY XIV\n\n\
 Every translatable string of the game, version {}, made by `aeria corpus` from the \
 installed game and this project. It is never committed. It always shows the project: \
-translations made in Aeria or elsewhere appear in the files by the next `aeria check`, \
+translations made in Aeria or elsewhere appear in the files by the next `aeria check` (run one before you start), \
 and after a game update every file is made again.\n\n\
 ## Layout\n\n\
 - A quest (`quest/…`) or cutscene (`cut_scene/…`) is one file, its strings in the order \
