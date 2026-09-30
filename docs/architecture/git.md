@@ -125,7 +125,8 @@ A checkpoint stages and commits only Aeria-managed paths (`git commit
 `aeria-collaboration.json`, `aeria-pack.json`, `aeria-fonts.json`, the
 `fonts/` directory of source fonts, the `aeria-knowledge/` directory of
 [project knowledge](../formats/knowledge-v1.md), `AGENTS.md` and `CLAUDE.md`
-for agent harnesses (see [`agents.md`](./agents.md#discovery)), and the feed
+for agent harnesses and the project's own agent skills in `.agents/skills/` and
+`.claude/skills/` (see [`agents.md`](./agents.md#discovery)), and the feed
 workflow
 `.github/workflows/harmonia-feed.yml` (`PROJECT_PATHS`). Unrelated staged or modified files are
 left untouched and listed in Settings → Repository as other files. A blank

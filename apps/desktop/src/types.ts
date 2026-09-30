@@ -532,7 +532,6 @@ export type AgentsStatusDto = {
   commandPath: string | null;
   commandCurrent: boolean;
   onPath: boolean;
-  skills: { harness: string; path: string; installed: boolean; current: boolean }[];
   /** The open project's AGENTS.md has Aeria's section; null without a project. */
   projectFiles: boolean | null;
   /** This build of Aeria has no aeria command to install. */

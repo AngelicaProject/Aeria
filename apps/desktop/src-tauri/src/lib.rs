@@ -23,7 +23,7 @@ mod updates;
 use serde::Serialize;
 use tauri::Manager;
 
-pub use agents::{AgentsStatusDto, SkillTargetDto, agents_connect, agents_status};
+pub use agents::{AgentsStatusDto, agents_connect, agents_status};
 pub use check_workflow::{
     CheckWorkflowDto, git_check_workflow, git_install_check_workflow, git_open_branch_settings,
 };

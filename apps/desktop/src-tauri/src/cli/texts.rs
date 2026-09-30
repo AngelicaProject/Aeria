@@ -171,42 +171,6 @@ Work on it with the `aeria` command:
 /// `AGENTS.md` from it.
 const CLAUDE_BLOCK: &str = "@AGENTS.md";
 
-/// The skill that tells agent harnesses with skills how to localize with
-/// the command, as `SKILL.md`.
-pub(crate) const SKILL: &str = "\
----
-name: aeria-localization
-description: Localize FINAL FANTASY XIV in an Aeria project with the aeria command: read scenes with every client language, write checked translations, keep the project knowledge, and split large scopes among subagents. Use in any directory with an .aeria folder, or when asked to translate or localize FFXIV text with Aeria.
----
-
-# Localizing with Aeria
-
-An Aeria project is a directory with `.aeria/` (the translations) and
-`aeria-knowledge/` (style, terms, character voices, story, lessons). The `aeria`
-command reads the game and the project and writes checked translations; it works
-in the project directory, and an open Aeria window shows every write at once.
-
-1. Run `aeria guide` in the project and follow it; `aeria overview` shows what is
-   translated.
-2. Give every agent that translates the text of `aeria brief`, and one scene: a
-   quest or cutscene sheet, or a range of rows of another sheet (`--rows`).
-3. A translating agent reads its scene with `aeria read <sheet>` (add
-   `--untranslated` to see only what is left; a long scene comes in parts, and the end
-   of each gives the command for the next), and writes as it goes, about 50 strings
-   per write, in blocks of an `@address` line and the translation as it is (no
-   escaping): a file written with a file-writing tool and passed as `aeria write
-   <file>`, or `aeria write -` on standard input, never translations inside a shell
-   command line. It fixes what comes back REJECTED. Written work is saved at once;
-   `--untranslated` shows what is left. Temporary files go into the system's
-   temporary folder, never into the project.
-4. Record decisions in `aeria-knowledge/` as you go; ask the user about matters of
-   taste and settled entries.
-5. Check the work with `aeria audit` and `aeria review`; flag what a person must
-   decide with `aeria flag`.
-
-Every command has `--help` and `--json`.
-";
-
 /// Puts Aeria's block into a file between its markers, keeping everything
 /// else. Returns whether the file changed.
 fn upsert_block(path: &std::path::Path, block: &str) -> Result<bool, String> {
@@ -279,6 +243,5 @@ mod tests {
                 .expect("again")
                 .contains("AGENTS.md: already current")
         );
-        assert!(SKILL.starts_with("---\nname: aeria-localization\n"));
     }
 }

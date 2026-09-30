@@ -1,7 +1,8 @@
-//! Connecting agent harnesses to Aeria: the `aeria` command on `PATH`, the
-//! `aeria-localization` skill for harnesses that use skills, and
+//! Connecting agent harnesses to Aeria: the `aeria` command on `PATH`, and
 //! `AGENTS.md` and `CLAUDE.md` in the open project (see
-//! `docs/architecture/agents.md`).
+//! `docs/architecture/agents.md`). What agents need to know comes from the
+//! command itself (`aeria guide`, `aeria brief`), so it matches the
+//! installed version; Aeria installs no skills.
 
 use std::path::{Path, PathBuf};
 
@@ -14,19 +15,11 @@ use crate::state::DesktopState;
 
 type CommandResult<T> = Result<T, CommandError>;
 
-const SKILL_NAME: &str = "aeria-localization";
-
-/// One harness's skill folder.
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SkillTargetDto {
-    /// Claude Code, Codex, or Hermes Agent.
-    pub harness: String,
-    pub path: String,
-    pub installed: bool,
-    /// The installed skill is this version's.
-    pub current: bool,
-}
+/// The skill earlier versions installed into harnesses' skill folders.
+const OLD_SKILL_NAME: &str = "aeria-localization";
+/// How that skill began; a skill of the same name written by anyone else is
+/// left alone.
+const OLD_SKILL_START: &str = "---\nname: aeria-localization\ndescription: Localize FINAL FANTASY XIV in an Aeria project with the aeria command";
 
 /// What is connected.
 #[derive(Clone, Debug, Serialize)]
@@ -38,8 +31,6 @@ pub struct AgentsStatusDto {
     pub command_current: bool,
     /// The command's folder is on the user's `PATH`.
     pub on_path: bool,
-    /// Harnesses found on this computer and their skill.
-    pub skills: Vec<SkillTargetDto>,
     /// The open project's `AGENTS.md` has Aeria's section; `None` without a
     /// project.
     pub project_files: Option<bool>,
@@ -83,13 +74,13 @@ fn same_file(left: &Path, right: &Path) -> bool {
     }
 }
 
-/// Harnesses whose home folder exists, with their skill folder.
-fn skill_targets() -> Vec<(String, PathBuf)> {
+/// The skill folders earlier versions installed into.
+fn old_skill_folders() -> Vec<PathBuf> {
     let mut targets = Vec::new();
     if let Some(home) = dirs::home_dir() {
-        for (harness, folder) in [("Claude Code", ".claude"), ("Codex", ".codex")] {
+        for folder in [".claude", ".codex"] {
             if home.join(folder).is_dir() {
-                targets.push((harness.to_owned(), home.join(folder).join("skills")));
+                targets.push(home.join(folder).join("skills"));
             }
         }
     }
@@ -103,22 +94,14 @@ fn skill_targets() -> Vec<(String, PathBuf)> {
             }
         });
     if let Some(hermes) = hermes.filter(|dir| dir.is_dir()) {
-        targets.push(("Hermes Agent".to_owned(), hermes.join("skills")));
-        // Each Hermes profile reads its own skill folder, not the shared one.
-        let mut profiles: Vec<(String, PathBuf)> = std::fs::read_dir(hermes.join("profiles"))
-            .into_iter()
-            .flatten()
-            .flatten()
-            .filter(|entry| entry.path().is_dir())
-            .map(|entry| {
-                (
-                    format!("Hermes Agent ({})", entry.file_name().to_string_lossy()),
-                    entry.path().join("skills"),
-                )
-            })
-            .collect();
-        profiles.sort();
-        targets.extend(profiles);
+        targets.push(hermes.join("skills"));
+        targets.extend(
+            std::fs::read_dir(hermes.join("profiles"))
+                .into_iter()
+                .flatten()
+                .flatten()
+                .map(|entry| entry.path().join("skills")),
+        );
     }
     targets
 }
@@ -218,19 +201,6 @@ fn status(app: &tauri::AppHandle) -> AgentsStatusDto {
     };
     let on_path = command_directory()
         .is_some_and(|directory| user_path().is_some_and(|path| path_contains(&path, &directory)));
-    let skills = skill_targets()
-        .into_iter()
-        .map(|(harness, folder)| {
-            let file = folder.join(SKILL_NAME).join("SKILL.md");
-            let text = std::fs::read_to_string(&file).ok();
-            SkillTargetDto {
-                harness,
-                path: file.to_string_lossy().into_owned(),
-                installed: text.is_some(),
-                current: text.as_deref() == Some(crate::cli::SKILL),
-            }
-        })
-        .collect();
     let project_files = project_root(app).map(|root| {
         std::fs::read_to_string(root.join("AGENTS.md"))
             .is_ok_and(|text| text.contains("<!-- aeria:begin -->"))
@@ -239,7 +209,6 @@ fn status(app: &tauri::AppHandle) -> AgentsStatusDto {
         command_path: installed.map(|path| path.to_string_lossy().into_owned()),
         command_current,
         on_path,
-        skills,
         project_files,
         command_missing: bundled.is_none(),
     }
@@ -263,6 +232,19 @@ fn install_command() -> Result<(), String> {
         .map_err(|error| format!("{}: {error}", installed.display()))
 }
 
+/// Removes the skill earlier versions installed, where it is still theirs.
+fn remove_old_skills() {
+    for folder in old_skill_folders() {
+        let directory = folder.join(OLD_SKILL_NAME);
+        let file = directory.join("SKILL.md");
+        if std::fs::read_to_string(&file).is_ok_and(|text| text.starts_with(OLD_SKILL_START)) {
+            let _ = std::fs::remove_file(&file);
+            // Only an emptied folder goes.
+            let _ = std::fs::remove_dir(&directory);
+        }
+    }
+}
+
 /// Keeps an installed command current after Aeria updates. Called at
 /// startup; does nothing unless agents were connected.
 pub(crate) fn refresh_installed_command() {
@@ -277,12 +259,7 @@ fn connect(app: &tauri::AppHandle) -> CommandResult<AgentsStatusDto> {
     if let Some(directory) = command_directory() {
         add_to_user_path(&directory).map_err(fail)?;
     }
-    for (_, folder) in skill_targets() {
-        let directory = folder.join(SKILL_NAME);
-        std::fs::create_dir_all(&directory)
-            .and_then(|()| std::fs::write(directory.join("SKILL.md"), crate::cli::SKILL))
-            .map_err(|error| fail(format!("{}: {error}", directory.display())))?;
-    }
+    remove_old_skills();
     if let Some(root) = project_root(app) {
         crate::cli::write_agent_files(&root).map_err(fail)?;
     }
@@ -300,8 +277,8 @@ pub async fn agents_status(app: tauri::AppHandle) -> CommandResult<AgentsStatusD
 }
 
 #[tauri::command(rename_all = "camelCase")]
-/// Installs the `aeria` command on the user's `PATH`, the skill for every
-/// harness found, and `AGENTS.md` and `CLAUDE.md` in the open project.
+/// Installs the `aeria` command on the user's `PATH` and writes `AGENTS.md`
+/// and `CLAUDE.md` in the open project.
 ///
 /// # Errors
 ///

@@ -548,7 +548,6 @@ fn command_line(args: &[String]) -> Result<CommandLine, String> {
     Ok(line)
 }
 
-pub(crate) use texts::SKILL;
 
 /// Writes Aeria's part of `AGENTS.md` and `CLAUDE.md` at a project root.
 ///

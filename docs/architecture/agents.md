@@ -109,7 +109,7 @@ translations is written in about 0.4 s.
 | `brief` | The [translation rules](#translation-rules), the project's languages, the macro authoring reference of [`strings.md`](./strings.md), and how to write with the command, for every agent that translates. |
 | `overview` | Languages, game version, progress, and areas of the project (quests, cutscenes, and the non-dialogue domains), and the state of the knowledge; with a pattern (`quest/*`, `item`), the matching sheets and their progress; `--folders` groups sheets by folder. Files at the project root that look temporary (`.batch`, `.jsonl`, `.txt`, `.tmp`, `.csv`, `.tsv`) are named with a reminder that they belong in the system's temporary folder. |
 | `read <sheet>` | A scene: the translatable strings of a quest or cutscene in the order of its dialogue, or of another sheet in row order, with `--rows` and `--untranslated` to narrow it. The text output stays under a size budget (`--max-bytes`, 24 000 bytes by default) because agent harnesses cut long command output; whole strings past it are left out, and the end gives the command that continues at the next string's position in the listing (`--from`), which works for play order as well as row order. Each string has its address `@sheet:row:subrow:column`, its kind or speaker, its state (untranslated, or whose translation it is and its review state; `(keep)` marks one an agent may not replace), the source, the other client languages, the legends of its macros, the row's other cells, a mark where the French or German line varies with the player character's gender and the source does not, and, for strings an agent may write, up to two similar translated strings from the search index when it exists. Before the lines comes the knowledge slice they need: style of their domains, lessons, the terms in them, their speakers' voices, and the story of the sheet. |
-| `write` | Writes translations from standard input (preferred), a file, or `--at`/`--text`; the guide, brief, and skill tell agents to keep temporary files out of the project: blocks of an `@address` line and the translation, or JSON Lines. See the invariants below. `--needs-review` marks them as needing review; otherwise they are drafts. |
+| `write` | Writes translations from standard input (preferred), a file, or `--at`/`--text`; the guide and brief tell agents to keep temporary files out of the project: blocks of an `@address` line and the translation, or JSON Lines. See the invariants below. `--needs-review` marks them as needing review; otherwise they are drafts. |
 | `check` | The checks of `write`, without writing. |
 | `find <text>` | Strings whose source (the default; the first search builds the search index of the game version) or translation (`--in translation`) contains the text, ignoring case and tags; `--sheet` takes a pattern. |
 | `knowledge` | Checks the knowledge files and lists every problem with its file and line. |
@@ -168,8 +168,8 @@ Identity, source updates, merges, and export do not depend on agents.
 
 ## Discovery
 
-Agent harnesses find the command in three ways; Settings → Agents →
-**Connect agents** in the desktop sets up all three and shows their state:
+Agent harnesses find the command in two ways; Settings → Agents →
+**Connect agents** in the desktop sets up both and shows their state:
 
 - **The command on `PATH`.** The installer and the portable build ship the
   command as `bin/aeria.exe` beside the application (a development build has
@@ -178,17 +178,17 @@ Agent harnesses find the command in three ways; Settings → Agents →
   that folder to the user's `PATH`; agents started afterwards find `aeria`. A
   desktop that starts after an update refreshes the copy when agents were
   connected.
-- **The skill.** `aeria-localization/SKILL.md` goes into the skill folder of
-  each harness whose home folder exists: `~/.claude/skills` (Claude Code),
-  `~/.codex/skills` (Codex), and `%LOCALAPPDATA%\hermes\skills` or
-  `$HERMES_HOME/skills` (Hermes Agent), and the `skills` folder of every Hermes
-  profile under `profiles/`, since a profile reads only its own. It tells the
-  agent to start with `aeria guide` and how to split work among subagents: one
-  quest or cutscene, or a range of rows of another sheet, per agent, written as
-  it goes in writes of about 50 strings, so the work is saved if an agent stops.
 - **Project files.** `aeria init`, and connecting with a project open, write
   Aeria's section between `<!-- aeria:begin -->` and `<!-- aeria:end -->` into
   `AGENTS.md` (what the project is and which commands to start with) and
   `CLAUDE.md` (which imports `AGENTS.md` for Claude Code), keeping any other
   text. Checkpoints commit both files, so collaborators and their agents get
   them.
+
+Aeria installs no skills. What an agent needs to know comes from the command
+(`aeria guide`, `aeria brief`, the help of each command), so it always matches
+the installed version, and `AGENTS.md` points there. Connecting removes the
+`aeria-localization` skill earlier versions put into harnesses' skill folders,
+where the file is still the one they wrote. Skills a project writes for
+itself go into `.agents/skills/` (Codex, Hermes Agent) or `.claude/skills/`
+(Claude Code) and are committed with the project like its knowledge.

@@ -18,7 +18,7 @@ function StatusLine({ done, label, detail }: { done: boolean; label: string; det
 
 /**
  * Connects agent harnesses (Claude Code, Codex, Hermes Agent) to Aeria:
- * the `aeria` command on PATH, the skill, and AGENTS.md in the open project.
+ * the `aeria` command on PATH and AGENTS.md in the open project.
  */
 export function AgentsSettings() {
   const { t } = useI18n();
@@ -51,7 +51,6 @@ export function AgentsSettings() {
   const complete = status !== null
     && status.commandCurrent
     && status.onPath
-    && status.skills.every((skill) => skill.current)
     && status.projectFiles !== false;
 
   return (
@@ -63,10 +62,6 @@ export function AgentsSettings() {
         <>
           <ul className="agents-status">
             <StatusLine done={status.commandCurrent && status.onPath} label={t("settings.agents.command")} detail={status.commandPath} />
-            {status.skills.map((skill) => (
-              <StatusLine key={skill.harness} done={skill.current} label={t("settings.agents.skill", { harness: skill.harness })} detail={skill.path} />
-            ))}
-            {status.skills.length === 0 ? <li className="agents-status-line muted">{t("settings.agents.noHarness")}</li> : null}
             {status.projectFiles === null
               ? <li className="agents-status-line muted">{t("settings.agents.noProject")}</li>
               : <StatusLine done={status.projectFiles} label={t("settings.agents.projectFiles")} />}

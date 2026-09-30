@@ -22,11 +22,15 @@ pub const FONTS_DIR: &str = "fonts";
 pub const KNOWLEDGE_DIR: &str = "aeria-knowledge";
 /// The files agent harnesses read, written by `aeria init`.
 pub const AGENT_FILES: [&str; 2] = ["AGENTS.md", "CLAUDE.md"];
+/// Skill folders of agent harnesses: Codex and Hermes Agent read
+/// `.agents/skills`, Claude Code `.claude/skills`. Skills a project keeps
+/// there are committed with it; Aeria writes none.
+pub const SKILL_DIRS: [&str; 2] = [".agents/skills", ".claude/skills"];
 /// The feed workflow, owned by `aeria-publish`. It builds the update feed on
 /// GitHub from released packs, so it belongs to the project like its settings.
 pub const FEED_WORKFLOW_FILE: &str = ".github/workflows/harmonia-feed.yml";
 /// Every project path a checkpoint commits besides `.aeria/`.
-pub const PROJECT_PATHS: [&str; 10] = [
+pub const PROJECT_PATHS: [&str; 12] = [
     ATTRIBUTES_FILE,
     COLLABORATION_FILE,
     PACK_SETTINGS_FILE,
@@ -35,6 +39,8 @@ pub const PROJECT_PATHS: [&str; 10] = [
     KNOWLEDGE_DIR,
     AGENT_FILES[0],
     AGENT_FILES[1],
+    SKILL_DIRS[0],
+    SKILL_DIRS[1],
     FEED_WORKFLOW_FILE,
     crate::workflow::CHECK_WORKFLOW_FILE,
 ];

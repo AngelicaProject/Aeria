@@ -566,8 +566,7 @@ storage; they are never project data. Components consume semantic tokens from `u
 derive surfaces, lines, and state colors from each theme's palette.
 
 The Agents section shows whether the `aeria` command is installed and on
-`PATH`, the skill of each agent harness found on this computer, and the open
-project's `AGENTS.md` and `CLAUDE.md`, with **Connect agents** (or **Update**
+`PATH` and the open project's `AGENTS.md` and `CLAUDE.md`, with **Connect agents** (or **Update**
 when everything is in place) that sets them all up; see
 [`agents.md`](./agents.md#discovery).
 
