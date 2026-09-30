@@ -265,6 +265,18 @@ pub(crate) fn write(
     options: &WriteOptions,
     out: &mut Output,
 ) -> Result<bool, String> {
+    let (outcomes, written) = apply(project, entries, options, out)?;
+    Ok(report(&outcomes, false, written, out))
+}
+
+/// Writes translations that pass their checks and returns the outcome of
+/// each, by address, and how many were written.
+pub(crate) fn apply(
+    project: &mut Project,
+    entries: &[Entry],
+    options: &WriteOptions,
+    out: &mut Output,
+) -> Result<(Vec<(String, Outcome)>, usize), String> {
     let judged = judge(project, entries)?;
     let mut ledger = project.ledger();
     // Every translation that passed is written in one batch, so each shard
@@ -331,7 +343,7 @@ pub(crate) fn write(
             "the translations were written, but an open Aeria window may show them only after it reopens the project: {error}"
         ));
     }
-    Ok(report(&outcomes, false, written.len(), out))
+    Ok((outcomes, written.len()))
 }
 
 /// Prints outcomes; returns whether none was rejected or failed.

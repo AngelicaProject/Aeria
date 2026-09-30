@@ -158,18 +158,19 @@ const AGENTS_BLOCK: &str = "\
 ## Aeria localization project
 
 This directory is an [Aeria](https://angelicaproject.github.io/Aeria/) project: a fan
-localization of FINAL FANTASY XIV. The game's text comes from the installed game; the
-project keeps the translations in `.aeria/` and its knowledge in `aeria-knowledge/`.
-Work on it with the `aeria` command:
+localization of FINAL FANTASY XIV.
 
-- Start with `aeria guide`: how the project is organized and how to work on it,
-  alone or with several agents.
-- Every agent that translates reads `aeria brief` first.
-- Read a scene with `aeria read <sheet>` and write translations with `aeria write`;
-  never edit `.aeria/` directly.
-- `aeria-knowledge/` is the project's documentation: follow it and keep it current.
-  Entries marked settled are a person's decisions; ask before changing them.
-- `aeria --help` lists every command.";
+- `game/` holds the whole text of the game as gettext PO files: a file per quest,
+  cutscene, or sheet, with the Japanese, English, German, and French texts. Read
+  `game/README.md` first: the layout, the rules of a translation, and how the game's
+  macros work. If `game/` is missing, make it with `aeria corpus`.
+- Translate by writing `msgstr` in those files, with any tools. Then run `aeria check`:
+  it saves what changed and lists each problem as `file:line`.
+- `aeria-knowledge/` holds the project's terms, style, character voices, and story:
+  follow it and keep it current. Entries marked settled are a person's decisions; ask
+  before changing them.
+- Never edit `.aeria/`, where the project keeps its translations. `aeria --help` lists
+  the other commands.";
 
 /// Aeria's part of `CLAUDE.md`: Claude Code reads `CLAUDE.md` and imports
 /// `AGENTS.md` from it.
@@ -236,7 +237,7 @@ mod tests {
         init(root).expect("init");
         let agents = std::fs::read_to_string(root.join("AGENTS.md")).expect("read");
         assert!(agents.starts_with("# Our rules\nBe kind.\n\n<!-- aeria:begin -->"));
-        assert!(agents.contains("aeria guide"));
+        assert!(agents.contains("game/README.md"));
         let claude = std::fs::read_to_string(root.join("CLAUDE.md")).expect("read");
         assert_eq!(
             claude,

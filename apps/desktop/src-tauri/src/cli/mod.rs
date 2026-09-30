@@ -12,6 +12,7 @@
 //! in-process.
 
 mod audit;
+mod corpus;
 mod project;
 mod plan;
 mod read;
@@ -44,10 +45,12 @@ Commands:
   guide       How the project is organized and how to work on it. Start here.
   brief       The rules every translation follows, for agents that translate.
   overview    The project's areas and progress, or the sheets matching a pattern.
+  corpus      Write the whole game text into game/ as PO files to read and translate.
   plan        Split the untranslated strings of a scope into tasks for parallel agents.
   read        A scene: the strings of a sheet with everything needed to translate them.
   write       Write translations; each is checked, rejected ones say what to fix.
-  check       The checks of `write`, without writing.
+  check       Save the translations changed in game/; with input, the checks of
+              `write` without writing.
   find        Search the source text or the translations.
   audit       Deterministic checks across the project: inconsistent translations,
               forbidden terms, broken macros, gender, machine phrasing, length.
@@ -162,10 +165,33 @@ the write; write it again. Several agents may write at once: writes wait for eac
 ";
 
 const CHECK_HELP: &str = "\
-aeria check [<file>] [--at <address> --text <translation>]
+aeria check
+aeria check <file> | - | --at <address> --text <translation>
 
-The checks of `aeria write`, input in the same form, without writing anything: a dry
-run of a write.
+Without input: saves every msgstr changed in the PO files of game/ (see `aeria corpus`)
+that passes the checks of `aeria write`, and lists each problem as file:line. A
+translation that was not saved stays in its file, and the next check reads it again. A
+translation that changed in the project after its file was made is not replaced: make
+the file again with `aeria corpus`.
+
+With input, in the form of `aeria write` (`-` reads standard input): its checks without
+writing anything, a dry run.
+";
+
+const CORPUS_HELP: &str = "\
+aeria corpus [<pattern>] [--force]
+
+Writes the whole game text into game/ in the project, as gettext PO files to read,
+search, and translate with any tool: a quest or cutscene is one file in play order,
+another sheet one file or a folder of files of 200 strings. Each entry has the address
+(msgctxt), the source (msgid), the translation (msgstr), and the other client languages,
+the speaker, and what the macros do as comments; game/README.md explains the layout and
+the rules. `aeria check` saves what changed. game/ is added to .gitignore: it is the
+game's text and is never committed. Run it again after a game update or to see
+translations made elsewhere; files with changes not saved yet are kept.
+
+  <pattern>  Only the matching sheets, such as BNpcName or quest/*.
+  --force    Also replace files with changes `aeria check` has not saved.
 ";
 
 const FIND_HELP: &str = "\
@@ -620,7 +646,10 @@ fn client(args: &[String]) -> Response {
             .rest
             .iter()
             .filter(|arg| !arg.starts_with("--"))
-            .all(|arg| arg == "-");
+            .all(|arg| arg == "-")
+        // `check` alone checks game/; a harness may leave standard input
+        // open, so it is read only when asked for.
+        && (line.command.as_deref() != Some("check") || line.rest.iter().any(|arg| arg == "-"));
     let stdin = if reads_input && !std::io::stdin().is_terminal() {
         let mut input = String::new();
         if let Err(error) = std::io::stdin().read_to_string(&mut input) {
@@ -751,8 +780,27 @@ fn dispatch(
             access.read(start, |project| read::read(project, &options, out))?;
             Ok(OK)
         }
+        "corpus" => {
+            let parsed = Arguments::parse(rest, &[], &["force"])?;
+            let options = corpus::CorpusOptions {
+                pattern: parsed.positional.first().cloned(),
+                force: parsed.switch("force"),
+            };
+            access.read(start, |project| corpus::corpus(project, &options, out))?;
+            Ok(OK)
+        }
         "check" => {
             let parsed = Arguments::parse(rest, &["at", "text"], &[])?;
+            let has_input = parsed.value("at").is_some()
+                || !parsed.positional.is_empty()
+                || request
+                    .stdin
+                    .as_deref()
+                    .is_some_and(|input| !input.trim().is_empty());
+            if !has_input {
+                let clean = access.write(start, |project| corpus::check_files(project, out))?;
+                return Ok(if clean { OK } else { PARTIAL });
+            }
             let entries = entries(&parsed, request)?;
             let clean = access.read(start, |project| write::check(project, &entries, out))?;
             Ok(if clean { OK } else { PARTIAL })
@@ -866,6 +914,7 @@ fn command_help(command: &str) -> Option<&'static str> {
         "plan" => PLAN_HELP,
         "write" => WRITE_HELP,
         "check" => CHECK_HELP,
+        "corpus" => CORPUS_HELP,
         "find" => FIND_HELP,
         "knowledge" => KNOWLEDGE_HELP,
         "audit" => AUDIT_HELP,

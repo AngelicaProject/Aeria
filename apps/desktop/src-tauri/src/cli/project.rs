@@ -507,7 +507,8 @@ pub(crate) fn sheet_lines(project: &Project, sheet: &str) -> Result<Arc<Vec<Shee
     Ok(lines)
 }
 
-fn read_sheet_lines(project: &Project, sheet: &str) -> Result<Vec<SheetLine>, String> {
+/// [`sheet_lines`] without keeping them: for reading every sheet once.
+pub(crate) fn read_sheet_lines(project: &Project, sheet: &str) -> Result<Vec<SheetLine>, String> {
     let game = project.sheet(sheet)?;
     let source = project.session.source();
     if let Some(dialogue) = source.dialogue(sheet).map_err(|error| error.to_string())? {

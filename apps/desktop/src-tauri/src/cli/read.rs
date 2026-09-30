@@ -324,7 +324,7 @@ pub(crate) const READ_LIMIT: usize = 400;
 /// Most similar translations shown per line.
 const SIMILAR_PER_LINE: usize = 2;
 
-fn quest_title(project: &Project, sheet: &str) -> Option<String> {
+pub(crate) fn quest_title(project: &Project, sheet: &str) -> Option<String> {
     let (row, subrow) = project.session.source().quest_row(sheet).ok().flatten()?;
     let quest = project.sheet("Quest").ok()?;
     let row = quest.row(row, subrow)?;
