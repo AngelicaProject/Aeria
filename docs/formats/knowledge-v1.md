@@ -16,8 +16,11 @@ file. How Aeria uses it is described in
 
 ## Files
 
-Creating a project writes both files with no entries: `style.md` with a title and a
-line on what it holds, `terms.csv` with its header only. Every file is
+Creating a project writes both files: `style.md` with a starting style of the
+usual decisions (address following the French localization's tu and vous,
+how names and places are written, short interface labels, the target
+language's punctuation) for the translators to change, and `terms.csv` with
+its header only. Every file is
 optional, UTF-8 with an optional leading BOM that is ignored, at most 8 MiB,
 with CRLF or LF line endings. Aeria writes LF.
 

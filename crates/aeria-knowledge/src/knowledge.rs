@@ -43,15 +43,12 @@ impl KnowledgeFile {
         root.join(KNOWLEDGE_DIR).join(self.file_name())
     }
 
-    /// The text of the file in a new project: a title and what the file
-    /// holds, with no entries.
+    /// The text of the file in a new project: a starting style of the usual
+    /// decisions for the translators to change, and terms with no entries.
     #[must_use]
     pub fn empty(self) -> String {
         match self {
-            Self::Style => "# Style\n\nHow the translation reads, decided by a person: how formal \
-                            it is, how the player and other characters are addressed, how names \
-                            are rendered, and the tone of each kind of text.\n"
-                .to_owned(),
+            Self::Style => include_str!("default_style.md").to_owned(),
             Self::Terms => crate::glossary::write_glossary(&[]),
         }
     }

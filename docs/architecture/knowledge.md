@@ -21,7 +21,10 @@ The knowledge is the `aeria-knowledge` directory at the project root:
 
 - `style.md`: how the translation reads, written by a person: how formal it
   is, how the player and other characters are addressed, how names are
-  rendered, the tone of each kind of text;
+  rendered, the tone of each kind of text. A new project starts with the
+  usual decisions written down (see
+  [`knowledge-v1.md`](../formats/knowledge-v1.md#files)), for the
+  translators to change rather than to write from nothing;
 - `terms.csv`: terms that are not strings of the game, such as lore words,
   with their translation, a note, and variants never to use.
 
