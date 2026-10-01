@@ -40,7 +40,11 @@ pub fn instructions(source_language: &str, target_language: &str, style: Option<
         );
     }
     text.push_str(
-        "The request is JSON: `names` are the game's names that occur in the batch with the \
+        "The request is JSON: `about` says what the file is: its sheet, a quest's title, and \
+         whether its strings are in play order, so that a batch continues the strings before \
+         it; `speakers` are the characters who speak in the batch by their labels (the \
+         `speaker` of a string's context) with their names and the project's translations; \
+         `names` are the game's names that occur in the batch with the \
          project's translations, which you use exactly; `terms` are the project's terms, \
          which you use exactly and whose `never` variants you never use; `examples` are \
          translated strings of the same file, whose wording you continue; `strings` are the \
@@ -78,6 +82,8 @@ pub struct Term {
 #[must_use]
 pub fn input(
     file: &str,
+    about: &str,
+    speakers: &[(String, String, String)],
     names: &[(String, String)],
     terms: &[Term],
     examples: &[(String, String)],
@@ -85,6 +91,11 @@ pub fn input(
 ) -> String {
     let value = json!({
         "file": file,
+        "about": about,
+        "speakers": speakers
+            .iter()
+            .map(|(label, name, translation)| json!({ "speaker": label, "name": name, "translation": translation }))
+            .collect::<Vec<_>>(),
         "names": names
             .iter()
             .map(|(source, translation)| json!({ "name": source, "translation": translation }))
@@ -180,6 +191,12 @@ mod tests {
         assert!(!instructions("en", "fr", None).contains("Living Russian"));
         let input = input(
             "po/Addon/0.po",
+            "Addon",
+            &[(
+                "MINFILIA".to_owned(),
+                "Minfilia".to_owned(),
+                "Минфилия".to_owned(),
+            )],
             &[("Minfilia".to_owned(), "Минфилия".to_owned())],
             &[],
             &[],
@@ -193,5 +210,7 @@ mod tests {
         let value: Value = serde_json::from_str(&input).expect("json");
         assert_eq!(value["strings"][0]["context"][0], "de: Ok");
         assert_eq!(value["names"][0]["translation"], "Минфилия");
+        assert_eq!(value["speakers"][0]["speaker"], "MINFILIA");
+        assert_eq!(value["about"], "Addon");
     }
 }

@@ -71,7 +71,10 @@ a sheet's neighbouring rows together:
   there are at most 150, are one batch;
 - otherwise a file's untranslated strings are split into batches of 100.
 
-Each batch is one request, and a batch never spans files.
+Each batch is one request, and a batch never spans files. The batches of a
+scene go one after another: the next part of a quest or cutscene is sent when
+the one before it has answered, so it sees that part's translations among its
+examples. Batches of different files go side by side.
 
 The batches of the name sheets go first, one sheet at a time in the order of
 `NAME_SHEETS` in `aeria-model` (places, towns, races, and tribes; classes,
@@ -92,7 +95,12 @@ the macro authoring reference of [`strings.md`](./strings.md),
 
 The task is JSON built from the file as it is when the batch is sent:
 
-- `names`: the game's names that occur in the batch's sources as whole words,
+- `about`: the file's header comment: its sheet, a quest's title, and whether
+  its strings are in play order;
+- `speakers`: the speaker labels of the batch's strings (`ALPHINAUD`) whose
+  letters match a translated name, with the name and its translation;
+- `names`: the game's names that occur in the batch's sources or a quest's
+  title as whole words,
   with their translations from the name sheets of `po/` (`Action`,
   `BNpcName`, `ENpcResident`, `Item`, `PlaceName`, `Quest`, `Status`, and
   others; short, capitalized strings without macros), at most 80;

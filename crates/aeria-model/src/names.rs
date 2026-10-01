@@ -64,8 +64,19 @@ fn is_name(text: &str) -> bool {
 
 /// Translated names of the project.
 pub struct Names {
-    names: Vec<(String, String)>,
+    known: Vec<(String, String)>,
     matcher: Option<AhoCorasick>,
+    /// Names by their letters and digits in upper case, the form of a
+    /// speaker label such as `ALPHINAUD`.
+    labels: BTreeMap<String, usize>,
+}
+
+/// A name's letters and digits in upper case.
+fn label(text: &str) -> String {
+    text.chars()
+        .filter(|character| character.is_alphanumeric())
+        .flat_map(char::to_uppercase)
+        .collect()
 }
 
 impl Names {
@@ -107,17 +118,35 @@ impl Names {
                     .ok()
             })
             .flatten();
-        Self { names, matcher }
+        let mut labels = BTreeMap::new();
+        for (index, (source, _)) in names.iter().enumerate() {
+            labels.entry(label(source)).or_insert(index);
+        }
+        Self {
+            known: names,
+            matcher,
+            labels,
+        }
+    }
+
+    /// The name and translation a speaker label of a line stands for, such
+    /// as `Alphinaud` for `ALPHINAUD`; `None` when no translated name has its
+    /// letters, as for a label of a minor character.
+    #[must_use]
+    pub fn speaker(&self, speaker: &str) -> Option<(String, String)> {
+        self.labels
+            .get(&label(speaker))
+            .map(|index| self.known[*index].clone())
     }
 
     #[must_use]
     pub const fn len(&self) -> usize {
-        self.names.len()
+        self.known.len()
     }
 
     #[must_use]
     pub const fn is_empty(&self) -> bool {
-        self.names.is_empty()
+        self.known.is_empty()
     }
 
     /// The translated names that occur in `texts` as whole words, each once,
@@ -152,7 +181,7 @@ impl Names {
             }
         }
         seen.into_iter()
-            .map(|index| self.names[index].clone())
+            .map(|index| self.known[index].clone())
             .collect()
     }
 }
@@ -180,6 +209,11 @@ mod tests {
                 ("Limsa Lominsa".to_owned(), "Лимса Ломинса".to_owned()),
             ]
         );
+        assert_eq!(
+            names.speaker("LIMSALOMINSA"),
+            Some(("Limsa Lominsa".to_owned(), "Лимса Ломинса".to_owned()))
+        );
+        assert_eq!(names.speaker("FORTEMPSGUARD00054"), None);
         assert_eq!(name_sheet_of("PlaceName.po"), Some(0));
         assert_eq!(name_sheet_of("Item/31000.po"), Some(9));
         assert_eq!(name_sheet_of("Quest~.po"), Some(NAME_SHEETS.len() - 1));

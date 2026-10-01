@@ -3,7 +3,7 @@
 //! strings still untranslated, so a run that stopped continues when it is
 //! started again.
 
-use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -277,6 +277,26 @@ struct Built {
     strings: Strings,
 }
 
+/// The speakers of a batch's strings whose names are translated, each once:
+/// their label, name, and translation.
+fn speakers_of(names: &Names, strings: &Strings) -> Vec<(String, String, String)> {
+    let mut speakers: Vec<(String, String, String)> = Vec::new();
+    for (_, entry) in strings {
+        for line in &entry.extracted {
+            let Some(label) = line.strip_prefix("speaker: ") else {
+                continue;
+            };
+            if speakers.iter().any(|(seen, _, _)| seen == label) {
+                continue;
+            }
+            if let Some((name, translation)) = names.speaker(label) {
+                speakers.push((label.to_owned(), name, translation));
+            }
+        }
+    }
+    speakers
+}
+
 /// The request of a batch, from the file as it is now: the strings that
 /// still need a translation, examples, names, and terms.
 fn build(shared: &Shared, batch: &Batch) -> Result<Option<Built>, String> {
@@ -323,7 +343,16 @@ fn build(shared: &Shared, batch: &Batch) -> Result<Option<Built>, String> {
         .iter()
         .map(|(_, entry)| entry.source.as_str())
         .collect();
-    let names = shared.names.in_texts(sources.iter().copied(), NAMES);
+    // What the file is, from its header: `quest/000/X — «Title» · in play order`.
+    let about = file.header.comments.first().cloned().unwrap_or_default();
+    let title = about
+        .split_once('«')
+        .and_then(|(_, rest)| rest.split_once('»'))
+        .map(|(title, _)| title);
+    let names = shared
+        .names
+        .in_texts(title.into_iter().chain(sources.iter().copied()), NAMES);
+    let speakers = speakers_of(&shared.names, &strings);
     let mut terms: Vec<Term> = Vec::new();
     for source in &sources {
         for entry in shared.knowledge.terms_in(source) {
@@ -356,6 +385,8 @@ fn build(shared: &Shared, batch: &Batch) -> Result<Option<Built>, String> {
         .collect();
     let input = prompt::input(
         &format!("{PO_DIR}/{}", batch.path),
+        &about,
+        &speakers,
         &names,
         &terms,
         &examples,
@@ -630,6 +661,14 @@ struct Pace {
     failures: u32,
 }
 
+/// The first batch of `queue` whose file has no batch in flight. Batches of
+/// a scene go one after another, so each continues the dialogue the one
+/// before translated; batches of other files go side by side.
+fn take_next(queue: &mut VecDeque<Batch>, busy: &HashSet<String>) -> Option<Batch> {
+    let index = queue.iter().position(|batch| !busy.contains(&batch.path))?;
+    queue.remove(index)
+}
+
 /// Sends the batches of `queue` until all have answered; a stop ends it
 /// early.
 async fn drain(
@@ -639,29 +678,44 @@ async fn drain(
     handle: &Run,
 ) -> Option<Stop> {
     let mut running: JoinSet<(Batch, Result<Done, ModelError>)> = JoinSet::new();
+    // Scene files with a batch in flight, and the file of each task.
+    let mut busy: HashSet<String> = HashSet::new();
+    let mut files: HashMap<tokio::task::Id, String> = HashMap::new();
     loop {
         if handle.cancelled() {
             running.abort_all();
             return Some(Stop::Cancelled);
         }
         while running.len() < pace.now
-            && let Some(batch) = queue.pop_front()
+            && let Some(batch) = take_next(&mut queue, &busy)
         {
+            let path = batch.path.clone();
+            if is_scene(&path) {
+                busy.insert(path.clone());
+            }
             let shared = Arc::clone(shared);
-            running.spawn(async move {
+            let task = running.spawn(async move {
                 let result = translate(shared, batch.clone()).await;
                 (batch, result)
             });
+            files.insert(task.id(), path);
         }
         let joined = tokio::select! {
             // Nothing left running means every batch has answered.
-            joined = running.join_next() => joined?,
+            joined = running.join_next_with_id() => joined?,
             () = handle.until_cancelled() => {
                 running.abort_all();
                 return Some(Stop::Cancelled);
             }
         };
-        let Ok((batch, result)) = joined else {
+        let id = match &joined {
+            Ok((id, _)) => *id,
+            Err(error) => error.id(),
+        };
+        if let Some(path) = files.remove(&id) {
+            busy.remove(&path);
+        }
+        let Ok((_, (batch, result))) = joined else {
             continue;
         };
         match result {
@@ -792,6 +846,28 @@ mod tests {
         assert!(!selected("AddonTransient.po", &paths));
         assert!(!selected("quest/000/B.po", &paths));
         assert!(selected("anything.po", &[]));
+    }
+
+    #[test]
+    fn a_scene_waits_for_its_batch_in_flight() {
+        let batch = |path: &str, first: usize| Batch {
+            path: path.to_owned(),
+            contexts: vec![format!("{path}:{first}")],
+            first,
+            last: first,
+        };
+        let mut queue: VecDeque<Batch> = vec![
+            batch("cut_scene/024/A.po", 100),
+            batch("cut_scene/024/A.po", 200),
+            batch("Addon/0.po", 0),
+        ]
+        .into();
+        let busy: HashSet<String> = HashSet::from(["cut_scene/024/A.po".to_owned()]);
+        let next = take_next(&mut queue, &busy).expect("another file");
+        assert_eq!(next.path, "Addon/0.po");
+        assert!(take_next(&mut queue, &busy).is_none());
+        let next = take_next(&mut queue, &HashSet::new()).expect("the scene goes on");
+        assert_eq!(next.first, 100);
     }
 
     #[test]
