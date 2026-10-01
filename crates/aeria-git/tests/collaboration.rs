@@ -187,6 +187,8 @@ fn checkpoints_commit_strings_and_their_history_is_read_per_string() {
         .checkpoint(Some("Reword greeting"))
         .expect("second checkpoint");
     assert_eq!(second.commit.subject, "Reword greeting");
+    // One commit each: equal counts go by name.
+    assert_eq!(repository.authors().expect("authors"), ["Ada", "Grace"]);
 
     write_shard(&root, 0x7a, &[(unit, 1, "Coucou", "")]);
     let history = repository

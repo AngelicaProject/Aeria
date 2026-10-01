@@ -13,11 +13,11 @@ mod workflow;
 
 pub use github::{
     ExistingRelease, GITHUB_HOST, GitHubClient, GitHubRepository, PublishError, PublishedRelease,
-    RELEASE_TAG_PREFIX, ReleaseAsset, ReleaseRequest, pack_asset_name, release_tag,
+    RELEASE_TAG_PREFIX, ReleaseAsset, ReleaseRequest, pack_asset_name, release_tag, tag_version,
 };
 pub use keys::{
     KEYRING_SERVICE, KeyError, KeyringSigningKeyStore, MemorySigningKeyStore, SigningKeyStore,
-    SigningSecret,
+    SigningSecret, generate_pack_id,
 };
 pub use workflow::{
     FEED_WORKFLOW, FEED_WORKFLOW_PATH, WorkflowState, feed_workflow_state, install_feed_workflow,

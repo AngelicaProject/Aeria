@@ -486,6 +486,11 @@ export function exportInstallWorkflow(): Promise<ExportOverviewDto> {
   return call<ExportOverviewDto>("export_install_workflow");
 }
 
+/** The project's commit authors, most commits first. */
+export function exportGitAuthors(): Promise<string[]> {
+  return call<string[]>("export_git_authors");
+}
+
 export function exportPack(release: ReleaseInput, directory: string, sign: boolean): Promise<LocalExportDto> {
   return call<LocalExportDto>("export_pack", { release, directory, sign });
 }

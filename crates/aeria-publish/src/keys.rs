@@ -17,6 +17,18 @@ pub const KEYRING_SERVICE: &str = "Aeria";
 const BACKUP_FORMAT: &str = "aeria-signing-key";
 const BACKUP_VERSION: u64 = 1;
 
+/// A new pack ID from the operating system's random source.
+///
+/// # Errors
+/// Returns [`KeyError::Random`] when no randomness is available.
+pub fn generate_pack_id() -> Result<String, KeyError> {
+    let mut bytes = [0u8; 16];
+    getrandom::fill(&mut bytes).map_err(|error| KeyError::Random {
+        message: error.to_string(),
+    })?;
+    Ok(aeria_export::PackSettings::new_pack_id(bytes))
+}
+
 /// A P-256 private scalar. Its `Debug` output is redacted.
 #[derive(Clone, Eq, PartialEq)]
 pub struct SigningSecret([u8; 32]);

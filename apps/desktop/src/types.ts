@@ -574,10 +574,13 @@ export type ProjectKnowledgeDto = {
 
 /** Project-shared pack identity in aeria-pack.json. */
 export type PackSettings = {
+  /** Made by Aeria when the settings are first saved; never edited. */
   packId: string;
   title: string;
-  publisherName: string;
-  publisherUrl: string | null;
+  teamName: string;
+  teamUrl: string | null;
+  /** People credited in the pack; may be empty. */
+  authors: string[];
   license: string | null;
   minHarmonia: string;
 };
@@ -605,8 +608,8 @@ export type ExportOverviewDto = {
   /** The main branch on GitHub (as of the last fetch) has this Aeria's feed workflow. */
   workflowOnGithub: boolean;
   mainBranch: string | null;
-  /** Highest harmonia/<n> release tag in the local repository. */
-  latestReleaseTag: number | null;
+  /** The next release's version (YYYY.MM.DD.NNNN) from today and the local release tags. */
+  nextVersion: string;
   /** aeria-fonts.json exists. */
   fontsConfigured: boolean;
 };
@@ -614,8 +617,6 @@ export type ExportOverviewDto = {
 export type ReleaseChannel = "stable" | "testing";
 
 export type ReleaseInput = {
-  sequence: number;
-  version: string;
   channel: ReleaseChannel;
   changelog: string | null;
 };
@@ -633,8 +634,8 @@ export type ExportReportDto = {
   signedBy: string | null;
 };
 
-export type LocalExportDto = { path: string; report: ExportReportDto };
-export type PublishedReleaseDto = { sequence: number; releaseUrl: string; feedUrl: string; report: ExportReportDto };
+export type LocalExportDto = { version: string; path: string; report: ExportReportDto };
+export type PublishedReleaseDto = { version: string; releaseUrl: string; feedUrl: string; report: ExportReportDto };
 
 /** aeria-fonts.json: source fonts for glyphs the game fonts lack. */
 export type FontCaseMapping = "none" | "upper";

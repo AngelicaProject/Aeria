@@ -11,6 +11,7 @@ mod project;
 mod settings;
 mod signing;
 mod transport;
+mod version;
 mod writer;
 
 fn hex(bytes: &[u8]) -> String {
@@ -25,14 +26,15 @@ fn hex(bytes: &[u8]) -> String {
 
 pub use error::ExportError;
 pub use feed::{FeedDownload, feed_entry};
-pub use manifest::{Channel, ContentPolicy, PackManifest, PackSource, Publisher};
+pub use manifest::{Channel, PackGame, PackManifest, Team};
 pub use project::{
-    ExportReport, ProjectExport, SeStringEncoder, StringEncoder, collect_project, pack_source,
+    ExportReport, ProjectExport, SeStringEncoder, StringEncoder, collect_project, pack_game,
 };
 pub use settings::{PACK_SETTINGS_FILE, PackSettings};
 pub use signing::{KeyEndorsement, PackSigner, fingerprint};
 pub use transport::{compress_for_transport, write_file_atomically};
+pub use version::{PackVersion, ReleaseDate};
 pub use writer::{
-    BuiltPack, CellState, LayoutColumn, PackCell, PackCounts, PackSheet, SheetVariant,
-    source_guard, write_pack, write_pack_with_fonts,
+    BuiltPack, LayoutColumn, PackCell, PackCounts, PackSheet, SheetVariant, source_guard,
+    write_pack, write_pack_with_fonts,
 };

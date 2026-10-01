@@ -4,8 +4,8 @@ use std::path::Path;
 use std::sync::Arc;
 
 use aeria_export::{
-    Channel, ContentPolicy, ExportError, PackManifest, Publisher, StringEncoder, collect_project,
-    pack_source, source_guard, write_pack,
+    Channel, ExportError, PackManifest, StringEncoder, Team, collect_project, pack_game,
+    source_guard, write_pack,
 };
 use aeria_source::{GameSource, SourceLanguage};
 use aeria_sqpack::testing::{FakeGame, TextSheet};
@@ -122,30 +122,28 @@ fn a_collected_project_writes_a_pack_for_the_games_version() {
     let folder = project(&game.source, false);
     let export = collect_project(root(&folder), &game.source, &mut encoder()).expect("export");
     assert_eq!(export.report.exported, 2);
-    let source = pack_source(&game.source);
-    assert_eq!(source.language, "en");
-    assert_eq!(source.game_version, "2026.09.15.0000.0000");
+    let game_facts = pack_game(&game.source);
+    assert_eq!(game_facts.language, "en");
+    assert_eq!(game_facts.version, "2026.09.15.0000.0000");
     let manifest = PackManifest {
         pack_id: "synthetic".to_owned(),
         title: "Synthetic".to_owned(),
-        publisher: Publisher {
+        team: Team {
             name: "Tests".to_owned(),
             url: None,
         },
+        authors: Vec::new(),
         license: None,
-        sequence: 1,
-        version: "1".to_owned(),
+        version: "2026.10.01.0001".parse().expect("version"),
         channel: Channel::Testing,
-        target_language: "ru".to_owned(),
-        source,
-        content_policy: ContentPolicy::Reviewed,
-        project_commit: "0".repeat(40),
-        exporter_aeria: "0.1.0".to_owned(),
+        language: "ru".to_owned(),
+        game: game_facts,
+        aeria: "0.1.0".to_owned(),
+        commit: "0".repeat(40),
         min_harmonia: "0.1.0".to_owned(),
     };
     let pack = write_pack(&manifest, export.sheets, None, None).expect("pack");
     assert_eq!(pack.counts.cells, 2);
-    assert_eq!(pack.counts.reviewed_cells, 2);
 }
 
 #[test]

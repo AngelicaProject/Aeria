@@ -42,8 +42,9 @@ pub use dto::{
 pub use error::CommandError;
 pub use export::{
     ExportOverviewDto, LocalExportDto, PackSettingsDto, PublishedReleaseDto, ReleaseInputDto,
-    export_backup_key, export_generate_key, export_import_key, export_install_workflow,
-    export_overview, export_pack, export_publish, export_remove_key, export_save_settings,
+    export_backup_key, export_generate_key, export_git_authors, export_import_key,
+    export_install_workflow, export_overview, export_pack, export_publish, export_remove_key,
+    export_save_settings,
 };
 pub use fonts::{
     FontsOverviewDto, fonts_import_file, fonts_overview, fonts_preview, fonts_save,
@@ -184,6 +185,7 @@ pub fn run() {
             export_backup_key,
             export_remove_key,
             export_install_workflow,
+            export_git_authors,
             export_pack,
             export_publish,
             fonts_overview,

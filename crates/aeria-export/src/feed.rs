@@ -1,6 +1,6 @@
 use serde::Serialize;
 
-use crate::manifest::{Channel, ContentPolicy, PackManifest};
+use crate::manifest::{Channel, PackManifest};
 use crate::writer::BuiltPack;
 
 /// Where and how a release's pack is downloaded.
@@ -16,28 +16,20 @@ pub struct FeedDownload {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct EntryJson<'a> {
-    sequence: u64,
-    version: &'a str,
+    version: String,
     channel: Channel,
-    pack_hash: String,
-    source: SourceJson<'a>,
-    target: TargetJson<'a>,
-    content_policy: ContentPolicy,
+    language: &'a str,
+    game: GameJson<'a>,
     min_harmonia: &'a str,
+    pack_hash: String,
     download: DownloadJson<'a>,
     changelog: Option<&'a str>,
 }
 
 #[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct SourceJson<'a> {
+struct GameJson<'a> {
     language: &'a str,
-    game_version: &'a str,
-}
-
-#[derive(Serialize)]
-struct TargetJson<'a> {
-    language: &'a str,
+    version: &'a str,
 }
 
 #[derive(Serialize)]
@@ -63,19 +55,15 @@ pub fn feed_entry(
     changelog: Option<&str>,
 ) -> Vec<u8> {
     let entry = EntryJson {
-        sequence: manifest.sequence,
-        version: &manifest.version,
+        version: manifest.version.to_string(),
         channel: manifest.channel,
-        pack_hash: pack.pack_hash_text(),
-        source: SourceJson {
-            language: &manifest.source.language,
-            game_version: &manifest.source.game_version,
+        language: &manifest.language,
+        game: GameJson {
+            language: &manifest.game.language,
+            version: &manifest.game.version,
         },
-        target: TargetJson {
-            language: &manifest.target_language,
-        },
-        content_policy: manifest.content_policy,
         min_harmonia: &manifest.min_harmonia,
+        pack_hash: pack.pack_hash_text(),
         download: DownloadJson {
             url: &download.url,
             encoding: if download.brotli { "br" } else { "identity" },

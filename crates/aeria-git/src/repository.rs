@@ -960,6 +960,34 @@ impl GitRepository {
             .collect()
     }
 
+    /// Returns the names of the project's commit authors, most commits
+    /// first, as `.mailmap` maps them. Email addresses are never read.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when Git fails.
+    pub fn authors(&self) -> Result<Vec<String>, GitError> {
+        if self.head()?.is_none() {
+            return Ok(Vec::new());
+        }
+        let mut args = vec!["log", "-z", "--format=%aN", "HEAD"];
+        if !self.prefix.is_empty() {
+            args.extend(["--", "."]);
+        }
+        let mut counts: Vec<(String, usize)> = Vec::new();
+        for name in self.run_text(&args)?.split('\0').map(str::trim) {
+            if name.is_empty() {
+                continue;
+            }
+            match counts.iter_mut().find(|(known, _)| known == name) {
+                Some((_, count)) => *count += 1,
+                None => counts.push((name.to_owned(), 1)),
+            }
+        }
+        counts.sort_by(|(a, a_count), (b, b_count)| b_count.cmp(a_count).then_with(|| a.cmp(b)));
+        Ok(counts.into_iter().map(|(name, _)| name).collect())
+    }
+
     /// Returns one commit.
     ///
     /// # Errors

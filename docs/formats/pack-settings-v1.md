@@ -29,14 +29,18 @@ the closing `}`:
 ```json
 {
   "formatVersion": 1,
-  "packId": "ru-main",
-  "title": "Russian translation",
-  "publisher": {
+  "packId": "3f6c1a2e-8b4d-4c1f-9a7e-5d2b0c6e1f38",
+  "title": "Русский перевод",
+  "team": {
     "name": "Example team",
     "url": null
   },
+  "authors": [
+    "Анна",
+    "pokeda"
+  ],
   "license": "CC-BY-NC-SA-4.0",
-  "minHarmonia": "0.1.1.2",
+  "minHarmonia": "0.1.2.0",
   "signingKeyFingerprint": "<64 lowercase hex>"
 }
 ```
@@ -44,10 +48,11 @@ the closing `}`:
 | Field | Rule | Required |
 | --- | --- | --- |
 | `formatVersion` | the JSON integer `1` | yes |
-| `packId` | `[a-z0-9][a-z0-9-]{0,63}`; the manifest `packId` of every pack | yes |
+| `packId` | `[a-z0-9][a-z0-9-]{0,63}`; the manifest `packId` of every pack. Aeria writes a version 4 UUID when the settings are first saved and never changes it | yes |
 | `title` | non-empty display string without surrounding whitespace | yes |
-| `publisher.name` | as `title` | yes |
-| `publisher.url` | as `title`, or `null` | no |
+| `team.name` | as `title`: the team or project players see as the publisher | yes |
+| `team.url` | as `title`, or `null` | no |
+| `authors` | array of display strings as `title`, each at most once; `[]` when absent | no |
 | `license` | as `title`, or `null` | no |
 | `minHarmonia` | two to four dot-separated decimal numbers | yes |
 | `signingKeyFingerprint` | fingerprint of the publisher key (SHA-256 of the 65-byte public key, as in the pack signature block), or `null` before a key is chosen | no |
@@ -63,7 +68,7 @@ workflow copies it to the feed's `publisherKeyFingerprint`.
 
 - A leading UTF-8 BOM is accepted and ignored.
 - The document must be one JSON object. Unknown fields, in the object and in
-  `publisher`, are rejected.
+  `team`, are rejected.
 - A missing or non-integer `formatVersion` is invalid. A `formatVersion`
   other than `1` is rejected as unsupported rather than interpreted; a newer
   file requires a newer Aeria.

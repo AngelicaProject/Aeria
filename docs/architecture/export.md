@@ -30,12 +30,12 @@ project's PO files.
    version, the game has not been patched since the project was opened (its
    version file is read again), and `aeria-pack.json` is valid. `po/`,
    `aeria-pack.json`, and the font settings have no uncommitted changes,
-   because the manifest records `HEAD` as `project.commit`; the session's
+   because the manifest records `HEAD` as `built.commit`; the session's
    writes are held from this check until collection ends.
 2. **Select translations.** Every entry of `po/` with a translation that is
    not fuzzy (see [`po-project.md`](./po-project.md#checking)). Committed
-   translations are the project's accepted work, so every exported cell is
-   `reviewed` and the manifest's `contentPolicy` is `reviewed`.
+   translations are the project's accepted work; the pack does not
+   distinguish how a translation was made.
 3. **Validate.** Each entry's `msgctxt` is found in the game (a keyed row by
    its key) and its `msgid` compared with the game's text of that cell; an
    entry that does not describe the game fails the export, and the project
@@ -99,11 +99,10 @@ settings; export uses the committed ones.
 The export report (`ExportReport`) counts what was left out: untranslated
 strings and fuzzy translations.
 
-The manifest takes `packId`, `title`, `publisher`, `license`, and
-`minHarmonia` from `aeria-pack.json`; `release` from the export;
-`contentPolicy` `reviewed`; `target.language` from `aeria.json`, which must
-be a target language; `source` from the game; and `exporter.aeria` from the
-Aeria build.
+The manifest takes `packId`, `title`, `team`, `authors`, `license`, and
+`minHarmonia` from `aeria-pack.json`; `version` and `channel` from the
+export; `language` from `aeria.json`, which must be a target language;
+`game` from the game; and `built` from the Aeria build and `HEAD`.
 
 ## Desktop flow
 
@@ -116,24 +115,25 @@ the left; the dialog opens on *Pack* until the pack settings exist and on
   GitHub) with a link to the section that fixes each item, then the release
   parameters, after a line saying that the pack holds every committed
   translation except fuzzy ones:
-  - the release number (`sequence`), which is not editable: one more than
-    the highest local `harmonia/<n>` tag. Publishing raises it above the
-    latest GitHub release when the local tags are behind, so numbers never
-    repeat; the result shows the number used;
-  - an optional version label (`version`) shown to players, today's date
-    (`YYYY.MM.DD`) when empty;
+  - the version, which is not editable: the next
+    [release version](../formats/pack-v1.md#release-version) after the
+    newest local `harmonia/<version>` tag. Publishing also asks GitHub and
+    takes the next free number when someone has published in the meantime;
+    the result shows the version used;
   - an optional changelog and, with a GitHub target, the channel.
 
-  The footer *Save pack file…* writes `<packId>-<sequence>.hpk` to a folder,
-  signed when the project key is on this computer and unsigned otherwise;
-  *Publish to GitHub* publishes (below).
-- **Pack** edits the pack settings. Only the name and author are shown
-  directly, each with an example; website, license, and minimum Harmonia
-  version are under *More settings*. The pack ID is shown there read-only: it
-  is made once when the pack is created, from the GitHub repository
-  (`owner-name`, unique to the publisher) or, without one, from the name, and
-  the dialog never changes it, because Harmonia pins trust and finds updates
-  by it.
+  The footer *Save pack file…* writes `<title> <version>.hpk` to a folder
+  (characters a file name cannot hold become `-`), signed when the project
+  key is on this computer and unsigned otherwise; *Publish to GitHub*
+  publishes (below).
+- **Pack** edits the pack settings: the name, the team, and the authors, one
+  per line, with *Add from Git history*, which adds the names of the
+  project's commit authors (most commits first, as `.mailmap` maps them,
+  never their email addresses) for the maintainer to edit. Website, license,
+  and minimum Harmonia version are under *More settings*. The pack ID is not
+  a field: Aeria makes a UUID when the settings are first saved and shows it
+  read-only under *More settings* afterwards, because Harmonia pins trust and
+  finds updates by it.
 - **Game fonts** edits the font settings (below).
 - **Signing** manages the signing key.
 - **GitHub**, shown when `origin` is a GitHub repository, shows the feed URL
@@ -190,12 +190,12 @@ commits), and that the stored key is the project key. Aeria then:
    (`git credential fill`; with the bundled MinGit this is Git Credential
    Manager, which signs in through the browser when needed) and reports the
    outcome back with `approve` or `reject`. Aeria stores no GitHub token;
-2. lists the releases and, when the requested `sequence` is not higher than
-   every `harmonia/<n>` release (drafts included), uses the next free number;
+2. lists the `harmonia/<version>` releases (drafts included) and gives the
+   release the next version after the newest of them and of the local tags;
 3. builds and signs the pack, derives the `.hpk.br` file, and writes the feed
    entry with the release download URL;
-4. creates the release `harmonia/<sequence>` on `HEAD` as a draft (a
-   pre-release for the `testing` channel), uploads `<packId>-<sequence>.hpk.br`
+4. creates the release `harmonia/<version>` on `HEAD` as a draft (a
+   pre-release for the `testing` channel), uploads `pack-<version>.hpk.br`
    and `feed-entry.json`, and publishes it. If an upload or the publication
    fails, the draft is deleted. Upload URLs returned by GitHub must be on
    `uploads.github.com`, so the token is sent only to GitHub.
@@ -217,8 +217,8 @@ to deploy, so it only starts an on-demand run on the default branch; an
 on-demand run on another branch does nothing. A newer feed run cancels an
 older one still in progress. It reads
 `aeria-pack.json`, downloads the `feed-entry.json` asset of every published
-`harmonia/<n>` release, checks that each entry's `sequence` matches its tag
-and that no sequence repeats, keeps the ten newest releases per channel, and
+`harmonia/<version>` release, checks that each entry's `version` matches its
+tag and that no version repeats, keeps the newest release of each channel, and
 deploys `harmonia/feed-v1.json` to GitHub Pages. GitHub Pages must use
 GitHub Actions as its source. The workflow needs no signing key.
 

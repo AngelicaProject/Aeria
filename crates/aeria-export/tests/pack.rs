@@ -1,10 +1,9 @@
 use std::path::Path;
 
 use aeria_export::{
-    CellState, Channel, ContentPolicy, ExportError, FeedDownload, LayoutColumn, PackCell,
-    PackManifest, PackSheet, PackSigner, PackSource, Publisher, SheetVariant,
-    compress_for_transport, feed_entry, fingerprint, source_guard, write_file_atomically,
-    write_pack, write_pack_with_fonts,
+    Channel, ExportError, FeedDownload, LayoutColumn, PackCell, PackGame, PackManifest, PackSheet,
+    PackSigner, SheetVariant, Team, compress_for_transport, feed_entry, fingerprint, source_guard,
+    write_file_atomically, write_pack, write_pack_with_fonts,
 };
 use aeria_fonts::{FONTS_SECTION_KIND, FontSection, SectionGlyph, SectionSource, SectionTarget};
 use p256::ecdsa::signature::Verifier;
@@ -16,26 +15,25 @@ type Edit = Box<dyn Fn(&mut PackManifest, &mut Vec<PackSheet>)>;
 const FIXTURE: &str = "tests/fixtures/harmonia-interop.hpk";
 const FONTS_FIXTURE: &str = "tests/fixtures/harmonia-interop-fonts.hpk";
 
-fn manifest(policy: ContentPolicy) -> PackManifest {
+fn manifest() -> PackManifest {
     PackManifest {
-        pack_id: "interop-test".to_owned(),
+        pack_id: "3f6c1a2e-8b4d-4c1f-9a7e-5d2b0c6e1f38".to_owned(),
         title: "Interop test pack".to_owned(),
-        publisher: Publisher {
+        team: Team {
             name: "Aeria tests".to_owned(),
             url: None,
         },
+        authors: vec!["Анна".to_owned(), "pokeda".to_owned()],
         license: Some("CC0-1.0".to_owned()),
-        sequence: 7,
-        version: "2026.09.25".to_owned(),
+        version: "2026.10.01.0001".parse().unwrap(),
         channel: Channel::Stable,
-        target_language: "ru".to_owned(),
-        source: PackSource {
+        language: "ru".to_owned(),
+        game: PackGame {
             language: "en".to_owned(),
-            game_version: "2026.08.12.0000.0000".to_owned(),
+            version: "2026.08.12.0000.0000".to_owned(),
         },
-        content_policy: policy,
-        project_commit: "a".repeat(40),
-        exporter_aeria: "0.1.0".to_owned(),
+        aeria: "0.1.0".to_owned(),
+        commit: "a".repeat(40),
         min_harmonia: "1.0.0".to_owned(),
     }
 }
@@ -54,7 +52,6 @@ fn cell(row_id: u32, subrow_id: u16, column_index: u32, text: &str, source: &str
         row_id,
         subrow_id,
         column_index,
-        state: CellState::Reviewed,
         text: text.as_bytes().to_vec(),
         source_guard: source_guard(source.as_bytes()),
     }
@@ -106,6 +103,14 @@ fn sheets() -> Vec<PackSheet> {
     ]
 }
 
+// The keys of a pretty-printed object's top level, in written order.
+fn top_level_keys(json: &str) -> Vec<&str> {
+    json.lines()
+        .filter_map(|line| line.strip_prefix("  \""))
+        .filter_map(|rest| rest.split_once("\":").map(|(key, _)| key))
+        .collect()
+}
+
 fn signer() -> PackSigner {
     let mut secret = [0u8; 32];
     for (i, byte) in secret.iter_mut().enumerate() {
@@ -140,19 +145,19 @@ fn section(bytes: &[u8], kind: u32) -> &[u8] {
 
 #[test]
 fn output_is_canonical_and_deterministic() {
-    let first = write_pack(&manifest(ContentPolicy::Reviewed), sheets(), None, None).unwrap();
+    let first = write_pack(&manifest(), sheets(), None, None).unwrap();
     let mut shuffled = sheets();
     shuffled.reverse();
     for sheet in &mut shuffled {
         sheet.cells.reverse();
     }
-    let second = write_pack(&manifest(ContentPolicy::Reviewed), shuffled, None, None).unwrap();
+    let second = write_pack(&manifest(), shuffled, None, None).unwrap();
     assert_eq!(first, second);
 }
 
 #[test]
 fn layout_follows_pack_format_v1() {
-    let pack = write_pack(&manifest(ContentPolicy::Reviewed), sheets(), None, None).unwrap();
+    let pack = write_pack(&manifest(), sheets(), None, None).unwrap();
     let bytes = &pack.bytes;
 
     assert_eq!(&bytes[0..8], b"AERIAHPK");
@@ -192,12 +197,36 @@ fn layout_follows_pack_format_v1() {
     assert_eq!(pack.counts.strings, 4);
     assert_eq!(strings.split(|b| *b == 0).count() - 1, 4);
 
-    let manifest: serde_json::Value = serde_json::from_slice(section(bytes, 1)).unwrap();
-    assert_eq!(manifest["counts"]["cells"], 5);
-    assert_eq!(manifest["counts"]["rows"], 4);
-    assert_eq!(manifest["release"]["channel"], "stable");
-    assert_eq!(manifest["publisher"]["url"], serde_json::Value::Null);
-    assert!(section(bytes, 1).ends_with(b"}\n"));
+    // Cell records have no state: bytes 2 and 3 are reserved.
+    assert!(cells.chunks(24).all(|cell| cell[2..4] == [0, 0]));
+    assert_eq!(pack.counts.cells, 5);
+    assert_eq!(pack.counts.rows, 4);
+
+    let manifest = std::str::from_utf8(section(bytes, 1)).unwrap();
+    let json: serde_json::Value = serde_json::from_str(manifest).unwrap();
+    assert_eq!(
+        top_level_keys(manifest),
+        [
+            "packId",
+            "title",
+            "team",
+            "authors",
+            "license",
+            "version",
+            "channel",
+            "language",
+            "game",
+            "built",
+            "minHarmonia"
+        ]
+    );
+    assert_eq!(json["version"], "2026.10.01.0001");
+    assert_eq!(json["channel"], "stable");
+    assert_eq!(json["team"]["url"], serde_json::Value::Null);
+    assert_eq!(json["authors"][0], "Анна");
+    assert_eq!(json["game"]["version"], "2026.08.12.0000.0000");
+    assert_eq!(json["built"]["commit"], "a".repeat(40));
+    assert!(manifest.ends_with("}\n"));
 }
 
 #[test]
@@ -205,13 +234,7 @@ fn signature_and_endorsement_verify() {
     let previous = PackSigner::from_secret_bytes(&[9u8; 32]).unwrap();
     let signer = signer();
     let endorsement = previous.endorse(&signer.public_key());
-    let pack = write_pack(
-        &manifest(ContentPolicy::Reviewed),
-        sheets(),
-        Some(&signer),
-        Some(&endorsement),
-    )
-    .unwrap();
+    let pack = write_pack(&manifest(), sheets(), Some(&signer), Some(&endorsement)).unwrap();
 
     let block = &pack.bytes[u64_at(&pack.bytes, 16)..];
     assert_eq!(&block[0..8], b"HPKSIG01");
@@ -238,25 +261,25 @@ fn endorsement_must_match_the_signing_key() {
     let previous = PackSigner::from_secret_bytes(&[9u8; 32]).unwrap();
     let other = PackSigner::from_secret_bytes(&[8u8; 32]).unwrap();
     let endorsement = previous.endorse(&other.public_key());
-    let result = write_pack(
-        &manifest(ContentPolicy::Reviewed),
-        sheets(),
-        Some(&signer()),
-        Some(&endorsement),
-    );
+    let result = write_pack(&manifest(), sheets(), Some(&signer()), Some(&endorsement));
     assert!(matches!(result, Err(ExportError::Manifest(_))));
 }
 
 #[test]
 fn invalid_input_is_rejected() {
-    let reviewed = manifest(ContentPolicy::Reviewed);
+    let valid = manifest();
     let cases: Vec<(&str, Edit)> = vec![
         ("bad pack id", Box::new(|m, _| m.pack_id = "Bad".to_owned())),
-        ("zero sequence", Box::new(|m, _| m.sequence = 0)),
+        ("bad commit", Box::new(|m, _| m.commit = "xyz".to_owned())),
         (
-            "bad commit",
-            Box::new(|m, _| m.project_commit = "xyz".to_owned()),
+            "blank author",
+            Box::new(|m, _| m.authors.push(" ".to_owned())),
         ),
+        (
+            "repeated author",
+            Box::new(|m, _| m.authors.push("Анна".to_owned())),
+        ),
+        ("blank team", Box::new(|m, _| m.team.name = String::new())),
         (
             "bad version",
             Box::new(|m, _| m.min_harmonia = "1".to_owned()),
@@ -293,14 +316,10 @@ fn invalid_input_is_rejected() {
                 s.push(copy);
             }),
         ),
-        (
-            "unreviewed under reviewed policy",
-            Box::new(|_, s| s[1].cells[0].state = CellState::Unreviewed),
-        ),
     ];
 
     for (name, edit) in cases {
-        let mut manifest = reviewed.clone();
+        let mut manifest = valid.clone();
         let mut input = sheets();
         edit(&mut manifest, &mut input);
         assert!(
@@ -311,25 +330,8 @@ fn invalid_input_is_rejected() {
 }
 
 #[test]
-fn all_policy_marks_unreviewed_cells() {
-    let mut input = sheets();
-    input[1].cells[0].state = CellState::Unreviewed;
-    let pack = write_pack(&manifest(ContentPolicy::All), input, None, None).unwrap();
-    assert_eq!(pack.counts.cells, 5);
-    assert_eq!(pack.counts.reviewed_cells, 4);
-    let cells = section(&pack.bytes, 6);
-    assert_eq!(cells.chunks(24).filter(|c| c[2] == 2).count(), 1);
-}
-
-#[test]
 fn transport_compression_round_trips() {
-    let pack = write_pack(
-        &manifest(ContentPolicy::Reviewed),
-        sheets(),
-        Some(&signer()),
-        None,
-    )
-    .unwrap();
+    let pack = write_pack(&manifest(), sheets(), Some(&signer()), None).unwrap();
     let compressed = compress_for_transport(&pack.bytes).unwrap();
     let mut decoded = Vec::new();
     brotli::BrotliDecompress(&mut compressed.as_slice(), &mut decoded).unwrap();
@@ -338,13 +340,13 @@ fn transport_compression_round_trips() {
 
 #[test]
 fn feed_entry_describes_the_release() {
-    let manifest = manifest(ContentPolicy::Reviewed);
+    let manifest = manifest();
     let pack = write_pack(&manifest, sheets(), None, None).unwrap();
     let entry = feed_entry(
         &manifest,
         &pack,
         &FeedDownload {
-            url: "https://github.com/o/r/releases/download/harmonia/7/interop-test-7.hpk.br"
+            url: "https://github.com/o/r/releases/download/harmonia/2026.10.01.0001/pack-2026.10.01.0001.hpk.br"
                 .to_owned(),
             brotli: true,
             size: 10,
@@ -354,12 +356,25 @@ fn feed_entry_describes_the_release() {
         Some("Notes"),
     );
     let json: serde_json::Value = serde_json::from_slice(&entry).unwrap();
-    assert_eq!(json["sequence"], 7);
+    assert_eq!(
+        top_level_keys(std::str::from_utf8(&entry).unwrap()),
+        [
+            "version",
+            "channel",
+            "language",
+            "game",
+            "minHarmonia",
+            "packHash",
+            "download",
+            "changelog"
+        ]
+    );
+    assert_eq!(json["version"], "2026.10.01.0001");
     assert_eq!(json["packHash"], pack.pack_hash_text());
-    assert_eq!(json["source"]["gameVersion"], "2026.08.12.0000.0000");
+    assert_eq!(json["game"]["version"], "2026.08.12.0000.0000");
+    assert_eq!(json["language"], "ru");
     assert_eq!(json["download"]["encoding"], "br");
     assert_eq!(json["download"]["sha256"], "ab".repeat(32));
-    assert_eq!(json["contentPolicy"], "reviewed");
 }
 
 #[test]
@@ -379,9 +394,7 @@ fn atomic_write_replaces_the_file_under_a_non_ascii_path() {
 // format change. Regenerate with AERIA_UPDATE_FIXTURES=1 only on purpose.
 #[test]
 fn interop_fixture_is_stable() {
-    let mut input = sheets();
-    input[1].cells[0].state = CellState::Unreviewed;
-    let pack = write_pack(&manifest(ContentPolicy::All), input, Some(&signer()), None).unwrap();
+    let pack = write_pack(&manifest(), sheets(), Some(&signer()), None).unwrap();
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(FIXTURE);
     if std::env::var_os("AERIA_UPDATE_FIXTURES").is_some() {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -436,7 +449,7 @@ fn fonts() -> FontSection {
 
 #[test]
 fn fonts_are_an_optional_minor_1_section() {
-    let manifest = manifest(ContentPolicy::Reviewed);
+    let manifest = manifest();
     let plain = write_pack(&manifest, sheets(), None, None).unwrap();
     assert_eq!(
         write_pack_with_fonts(&manifest, sheets(), None, None, None).unwrap(),
@@ -464,14 +477,8 @@ fn fonts_are_an_optional_minor_1_section() {
 
 #[test]
 fn fonts_interop_fixture_is_stable() {
-    let pack = write_pack_with_fonts(
-        &manifest(ContentPolicy::Reviewed),
-        sheets(),
-        Some(&fonts()),
-        Some(&signer()),
-        None,
-    )
-    .unwrap();
+    let pack = write_pack_with_fonts(&manifest(), sheets(), Some(&fonts()), Some(&signer()), None)
+        .unwrap();
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(FONTS_FIXTURE);
     if std::env::var_os("AERIA_UPDATE_FIXTURES").is_some() {
         std::fs::write(&path, &pack.bytes).unwrap();
@@ -484,8 +491,8 @@ fn fonts_interop_fixture_is_stable() {
 #[test]
 fn a_pack_needs_a_chosen_target_language() {
     for language in ["und", "russian", "ru_RU"] {
-        let mut manifest = manifest(ContentPolicy::Reviewed);
-        manifest.target_language = language.to_owned();
+        let mut manifest = manifest();
+        manifest.language = language.to_owned();
         let result = write_pack(&manifest, sheets(), None, None);
         assert!(
             matches!(result, Err(ExportError::Manifest(_))),

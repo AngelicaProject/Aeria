@@ -7,8 +7,8 @@ use aeria_se::{SemanticValidity, parse};
 use aeria_source::{GameSource, SheetLookup, SheetVariant as SourceVariant, SourceSheet};
 
 use crate::error::ExportError;
-use crate::manifest::PackSource;
-use crate::writer::{CellState, LayoutColumn, PackCell, PackSheet, SheetVariant, source_guard};
+use crate::manifest::PackGame;
+use crate::writer::{LayoutColumn, PackCell, PackSheet, SheetVariant, source_guard};
 
 const ENCODE_BATCH: usize = 4096;
 
@@ -54,12 +54,12 @@ pub struct ProjectExport {
     pub report: ExportReport,
 }
 
-/// Manifest source facts of the game.
+/// The manifest's facts of the game.
 #[must_use]
-pub fn pack_source(source: &GameSource) -> PackSource {
-    PackSource {
+pub fn pack_game(source: &GameSource) -> PackGame {
+    PackGame {
         language: source.language().code().to_owned(),
-        game_version: source.version().as_str().to_owned(),
+        version: source.version().as_str().to_owned(),
     }
 }
 
@@ -228,7 +228,6 @@ pub fn collect_project(
             row_id: chosen.row,
             subrow_id: chosen.subrow,
             column_index: chosen.column,
-            state: CellState::Reviewed,
             text,
             source_guard: chosen.guard,
         });

@@ -1,6 +1,6 @@
 //! GitHub releases of the translation repository.
 //!
-//! A pack is published as release `harmonia/<sequence>` with the `.hpk.br`
+//! A pack is published as release `harmonia/<version>` with the `.hpk.br`
 //! and `feed-entry.json` assets (`docs/formats/feed-v1.md`). The release is
 //! created as a draft, the assets are uploaded, and only then is it
 //! published, so the feed workflow never sees a release without its assets.
@@ -9,6 +9,7 @@ use std::fmt::Write as _;
 use std::sync::Once;
 use std::time::Duration;
 
+use aeria_export::PackVersion;
 use reqwest::{Method, RequestBuilder, Response, StatusCode};
 use serde::Deserialize;
 use serde_json::json;
@@ -22,7 +23,7 @@ const REQUEST_TIMEOUT: Duration = Duration::from_mins(15);
 const MAX_RELEASE_PAGES: u32 = 50;
 /// The host whose Git credential authorizes API calls.
 pub const GITHUB_HOST: &str = "github.com";
-/// Release tags of packs are `harmonia/<sequence>`.
+/// Release tags of packs are `harmonia/<version>`.
 pub const RELEASE_TAG_PREFIX: &str = "harmonia/";
 
 /// A repository on github.com.
@@ -95,30 +96,37 @@ impl GitHubRepository {
 
     /// The download URL of a published release asset.
     #[must_use]
-    pub fn asset_download_url(&self, sequence: u64, asset_name: &str) -> String {
+    pub fn asset_download_url(&self, version: PackVersion, asset_name: &str) -> String {
         format!(
             "{}/releases/download/{}/{asset_name}",
             self.homepage(),
-            release_tag(sequence)
+            release_tag(version)
         )
     }
 }
 
 #[must_use]
-pub fn release_tag(sequence: u64) -> String {
-    format!("{RELEASE_TAG_PREFIX}{sequence}")
+pub fn release_tag(version: PackVersion) -> String {
+    format!("{RELEASE_TAG_PREFIX}{version}")
 }
 
-/// The `.hpk.br` asset name of a release.
+/// The version of a release tag, `None` for other tags.
 #[must_use]
-pub fn pack_asset_name(pack_id: &str, sequence: u64) -> String {
-    format!("{pack_id}-{sequence}.hpk.br")
+pub fn tag_version(tag: &str) -> Option<PackVersion> {
+    tag.strip_prefix(RELEASE_TAG_PREFIX)?.parse().ok()
+}
+
+/// The `.hpk.br` asset name of a release. A repository publishes one pack,
+/// so the name needs only the version.
+#[must_use]
+pub fn pack_asset_name(version: PackVersion) -> String {
+    format!("pack-{version}.hpk.br")
 }
 
 /// A pack release that exists on GitHub.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ExistingRelease {
-    pub sequence: u64,
+    pub version: PackVersion,
     pub draft: bool,
 }
 
@@ -133,7 +141,7 @@ pub struct ReleaseAsset {
 /// A release to create.
 #[derive(Clone, Debug)]
 pub struct ReleaseRequest {
-    pub sequence: u64,
+    pub version: PackVersion,
     /// The commit the tag is created on; it must already be on GitHub.
     pub commit: String,
     pub name: String,
@@ -229,7 +237,8 @@ impl GitHubClient {
         )
     }
 
-    /// Lists the pack releases (`harmonia/<sequence>` tags), drafts included.
+    /// Lists the pack releases (`harmonia/<version>` tags), drafts included,
+    /// newest first.
     ///
     /// # Errors
     /// Returns a [`PublishError`] for failed or unexpected responses.
@@ -249,13 +258,8 @@ impl GitHubClient {
             let batch: Vec<ReleaseJson> = parse(response).await?;
             let done = batch.len() < 100;
             releases.extend(batch.into_iter().filter_map(|release| {
-                let sequence = release
-                    .tag_name
-                    .strip_prefix(RELEASE_TAG_PREFIX)?
-                    .parse::<u64>()
-                    .ok()?;
                 Some(ExistingRelease {
-                    sequence,
+                    version: tag_version(&release.tag_name)?,
                     draft: release.draft,
                 })
             }));
@@ -263,7 +267,7 @@ impl GitHubClient {
                 break;
             }
         }
-        releases.sort_by_key(|release| std::cmp::Reverse(release.sequence));
+        releases.sort_by_key(|release| std::cmp::Reverse(release.version));
         Ok(releases)
     }
 
@@ -280,7 +284,7 @@ impl GitHubClient {
     ) -> Result<PublishedRelease, PublishError> {
         let url = self.releases_url(repository);
         let response = send(self.request(Method::POST, &url, token).json(&json!({
-            "tag_name": release_tag(release.sequence),
+            "tag_name": release_tag(release.version),
             "target_commitish": release.commit,
             "name": release.name,
             "body": release.body,
@@ -426,10 +430,14 @@ mod tests {
             owner: "Owner".to_owned(),
             name: "ru".to_owned(),
         };
+        let version: PackVersion = "2026.10.01.0002".parse().expect("version");
         assert_eq!(
-            repository.asset_download_url(42, &pack_asset_name("ru-main", 42)),
-            "https://github.com/Owner/ru/releases/download/harmonia/42/ru-main-42.hpk.br"
+            repository.asset_download_url(version, &pack_asset_name(version)),
+            "https://github.com/Owner/ru/releases/download/harmonia/2026.10.01.0002/pack-2026.10.01.0002.hpk.br"
         );
+        assert_eq!(tag_version(&release_tag(version)), Some(version));
+        assert_eq!(tag_version("harmonia/42"), None);
+        assert_eq!(tag_version("v2026.10.01.0002"), None);
         assert_eq!(
             repository.feed_url(),
             "https://owner.github.io/ru/harmonia/feed-v1.json"
