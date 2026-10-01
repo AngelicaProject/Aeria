@@ -51,7 +51,11 @@ pub fn instructions(source_language: &str, target_language: &str, style: Option<
          translations; `examples` are translated strings of the same file, whose wording you \
          continue; `strings` are the strings to translate, each with its `id`, its `source`, \
          and `context`: the other client languages (ja, de, fr), the speaker or kind of a \
-         line, other fields of its row, and what its macros do. A string with `previous` was translated before its \
+         line, other fields of its row, and what its macros do. A string with `gendered` \
+         names the texts (`source`, or a language of `context`) whose line varies with the \
+         player character's gender: there the translation needs a condition on $gn4 for \
+         every word that agrees with the player character, unless it is phrased so that \
+         nothing does. A string with `previous` was translated before its \
          source changed: `previous.source` is the old source and `previous.translation` its \
          translation; keep what still fits.\n\n\
          Answer with one JSON object and nothing else: each key is the `id` of a string and \
@@ -137,6 +141,10 @@ fn file_value(task: &FileTask) -> Value {
             .iter()
             .map(|item| {
                 let mut value = json!({ "id": item.id, "source": item.source, "context": item.context });
+                let gendered = gendered(item);
+                if !gendered.is_empty() {
+                    value["gendered"] = Value::from(gendered);
+                }
                 if let Some((source, translation)) = &item.previous {
                     value["previous"] = json!({ "source": source, "translation": translation });
                 }
@@ -144,6 +152,27 @@ fn file_value(task: &FileTask) -> Value {
             })
             .collect::<Vec<_>>(),
     })
+}
+
+/// The texts of a string whose line varies with the player character's
+/// gender: `source`, and the languages of its context (`fr: …`) with a
+/// condition on `$gn4`. The rule alone is easy to miss in a long request;
+/// the mark sits on the string that needs it.
+fn gendered(item: &Item) -> Vec<&str> {
+    let mut texts = Vec::new();
+    if item.source.contains("$gn4") {
+        texts.push("source");
+    }
+    for line in &item.context {
+        if let Some((language, text)) = line.split_once(": ")
+            && language.len() == 2
+            && language.bytes().all(|byte| byte.is_ascii_lowercase())
+            && text.contains("$gn4")
+        {
+            texts.push(language);
+        }
+    }
+    texts
 }
 
 /// A request that sends back the translations that failed the checks, with
@@ -229,5 +258,43 @@ mod tests {
         assert_eq!(value["names"][0]["translation"], "Минфилия");
         assert_eq!(value["files"][0]["speakers"][0]["speaker"], "MINFILIA");
         assert_eq!(value["files"][0]["about"], "Addon");
+        assert!(value["files"][0]["strings"][0].get("gendered").is_none());
+    }
+
+    #[test]
+    fn strings_that_vary_with_the_player_gender_are_marked() {
+        let item = |source: &str, context: &[&str]| Item {
+            id: "1".to_owned(),
+            source: source.to_owned(),
+            context: context.iter().map(|line| (*line).to_owned()).collect(),
+            previous: None,
+        };
+        let input = input(
+            &[FileTask {
+                items: vec![
+                    item(
+                        "Here to train as well, are you?",
+                        &[
+                            "ja: あなたも訓練？",
+                            "fr: Tu es <if $gn4>venue<else>venu</if> t'entraîner ?",
+                            "speaker: MAN",
+                        ],
+                    ),
+                    item("<if $gn4>Lady<else>Sir</if>!", &["de: Hallo!"]),
+                    item(
+                        "Well met.",
+                        &["fr: Salut.", "note: $gn4 is the player's gender"],
+                    ),
+                ],
+                ..FileTask::default()
+            }],
+            &[],
+            &[],
+        );
+        let value: Value = serde_json::from_str(&input).expect("json");
+        let strings = &value["files"][0]["strings"];
+        assert_eq!(strings[0]["gendered"], json!(["fr"]));
+        assert_eq!(strings[1]["gendered"], json!(["source"]));
+        assert!(strings[2].get("gendered").is_none());
     }
 }

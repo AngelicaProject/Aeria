@@ -115,8 +115,10 @@ The task is JSON built from the files as they are when the request is sent:
     first: up to 40 shared among the files, at least 5 each;
   - `strings`: each string's ID (unique in the request), source, and `#.`
     lines (the other client languages, speaker or kind, the row's other
-    cells, macro legends), and the previous source and translation of a
-    fuzzy one.
+    cells, macro legends), `gendered`: the texts (`source`, `fr`, `de`)
+    whose line has a condition on the player character's gender, so the
+    translation most likely needs one too, and the previous source and
+    translation of a fuzzy one.
 
 All requests of a run share one `prompt_cache_key`. A probe of this provider
 measured that requests with the same key and prefix got 99 % of the prompt
