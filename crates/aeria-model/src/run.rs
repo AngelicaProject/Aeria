@@ -106,6 +106,7 @@ pub struct Status {
 pub struct Run {
     status: Mutex<Status>,
     cancel: AtomicBool,
+    cancelled: tokio::sync::Notify,
 }
 
 impl Run {
@@ -130,10 +131,25 @@ impl Run {
     /// by the next run.
     pub fn cancel(&self) {
         self.cancel.store(true, Ordering::Relaxed);
+        self.cancelled.notify_waiters();
     }
 
     fn cancelled(&self) -> bool {
         self.cancel.load(Ordering::Relaxed)
+    }
+
+    /// Returns once the run is asked to stop, even while every request in
+    /// flight is still waiting for the service.
+    async fn until_cancelled(&self) {
+        loop {
+            let notified = self.cancelled.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+            if self.cancelled() {
+                return;
+            }
+            notified.await;
+        }
     }
 }
 
@@ -637,8 +653,14 @@ async fn drain(
                 (batch, result)
             });
         }
-        // Nothing left running means every batch has answered.
-        let joined = running.join_next().await?;
+        let joined = tokio::select! {
+            // Nothing left running means every batch has answered.
+            joined = running.join_next() => joined?,
+            () = handle.until_cancelled() => {
+                running.abort_all();
+                return Some(Stop::Cancelled);
+            }
+        };
         let Ok((batch, result)) = joined else {
             continue;
         };
@@ -677,7 +699,13 @@ async fn drain(
                         if retry {
                             queue.push_front(batch);
                         }
-                        tokio::time::sleep(wait).await;
+                        tokio::select! {
+                            () = tokio::time::sleep(wait) => {}
+                            () = handle.until_cancelled() => {
+                                running.abort_all();
+                                return Some(Stop::Cancelled);
+                            }
+                        }
                     }
                     Next::Stop(stop) => {
                         running.abort_all();

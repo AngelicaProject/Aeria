@@ -138,8 +138,10 @@ in flight. A rate-limit answer halves that, to no fewer than two, and every
 finished batch adds one back. A rate limit, network error, or timeout returns
 the batch to the queue after the wait the service asked for, or 20 seconds
 times the failures in a row; the third in a row stops the run. A response
-that sends nothing for 180 seconds is given up. Any other refusal leaves the
-batch's strings for the next run.
+that sends nothing for 180 seconds, its headers included, is given up, and a
+connection is given 30 seconds to open and is checked every 20 seconds, so a
+connection that died without closing fails its requests instead of holding
+the run. Any other refusal leaves the batch's strings for the next run.
 
 A usage-limit answer of the plan stops the run: what was written stays, and
 the run reports the time the limit resets when the service says. Starting it
@@ -156,4 +158,5 @@ written of the
 run's strings, strings refused by the checks, tokens used, the share of
 prompt tokens served from the cache, the current pace, the last failure of
 the service while the run waits, and why the run stopped. The run goes on
-when the dialog is hidden, and Stop drops the batches in flight.
+when the dialog is hidden, and Stop drops the batches in flight at once,
+without waiting for the service to answer them.

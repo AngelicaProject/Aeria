@@ -11,9 +11,14 @@ use crate::auth::{self, AccessToken, DeviceLogin, DevicePoll, Secret, TokenSet};
 
 /// The Codex backend of a ChatGPT subscription.
 pub const BASE_URL: &str = "https://chatgpt.com/backend-api/codex";
-/// A response that sends nothing for this long is given up.
+/// A response that sends nothing for this long, its headers included, is
+/// given up.
 const SILENCE_TIMEOUT: Duration = Duration::from_secs(180);
 const MODELS_TIMEOUT: Duration = Duration::from_secs(20);
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
+/// How often an open connection is checked, so a connection that died
+/// without closing fails its requests instead of holding them.
+const KEEP_ALIVE: Duration = Duration::from_secs(20);
 
 /// Where the refresh token of the sign-in is kept.
 pub trait TokenStore: Send + Sync {
@@ -126,6 +131,7 @@ pub struct Codex {
     store: Arc<dyn TokenStore>,
     access: tokio::sync::Mutex<Option<AccessToken>>,
     base: String,
+    silence: Duration,
 }
 
 impl Codex {
@@ -147,6 +153,11 @@ impl Codex {
         install_crypto_provider();
         let http = reqwest::Client::builder()
             .user_agent(concat!("Aeria/", env!("CARGO_PKG_VERSION")))
+            .connect_timeout(CONNECT_TIMEOUT)
+            .tcp_keepalive(KEEP_ALIVE)
+            .http2_keep_alive_interval(KEEP_ALIVE)
+            .http2_keep_alive_timeout(KEEP_ALIVE)
+            .http2_keep_alive_while_idle(true)
             .build()
             .map_err(|error| ModelError::Network(error.to_string()))?;
         Ok(Self {
@@ -154,7 +165,16 @@ impl Codex {
             store,
             access: tokio::sync::Mutex::new(None),
             base: base.trim_end_matches('/').to_owned(),
+            silence: SILENCE_TIMEOUT,
         })
+    }
+
+    /// The same client giving up a response after `silence` without a byte,
+    /// for tests.
+    #[must_use]
+    pub const fn with_silence(mut self, silence: Duration) -> Self {
+        self.silence = silence;
+        self
     }
 
     /// A client of another backend that already holds an access token, for
@@ -311,8 +331,8 @@ impl Codex {
     /// Returns a classified error: [`ModelError::UsageLimit`] when the
     /// plan's limit is reached, [`ModelError::RateLimited`] when requests
     /// come too fast, [`ModelError::SignInRequired`], a network error, or
-    /// [`ModelError::Timeout`] when the response is silent for three
-    /// minutes.
+    /// [`ModelError::Timeout`] when the service sends nothing, not even the
+    /// response's headers, for three minutes.
     pub async fn respond(&self, request: &Request) -> Result<Reply, ModelError> {
         let token = self.token().await?;
         let mut reasoning = json!({ "summary": "auto" });
@@ -333,12 +353,14 @@ impl Codex {
             "include": [],
             "prompt_cache_key": request.cache_key,
         });
-        let response = Self::authorize(self.http.post(format!("{}/responses", self.base)), &token)
+        let sent = Self::authorize(self.http.post(format!("{}/responses", self.base)), &token)
             .header("session_id", &request.cache_key)
             .header("accept", "text/event-stream")
             .json(&body)
-            .send()
+            .send();
+        let response = tokio::time::timeout(self.silence, sent)
             .await
+            .map_err(|_| ModelError::Timeout)?
             .map_err(|error| transport(&error))?;
         let status = response.status();
         if !status.is_success() {
@@ -347,13 +369,16 @@ impl Codex {
                 .get("retry-after")
                 .and_then(|value| value.to_str().ok())
                 .and_then(|value| value.parse::<u64>().ok());
-            let text = response.text().await.map_err(|error| transport(&error))?;
+            let text = tokio::time::timeout(self.silence, response.text())
+                .await
+                .map_err(|_| ModelError::Timeout)?
+                .map_err(|error| transport(&error))?;
             return Err(status_error(status.as_u16(), &text, retry_after));
         }
         let mut response = response;
         let mut events = Events::default();
         loop {
-            let chunk = tokio::time::timeout(SILENCE_TIMEOUT, response.chunk())
+            let chunk = tokio::time::timeout(self.silence, response.chunk())
                 .await
                 .map_err(|_| ModelError::Timeout)?
                 .map_err(|error| transport(&error))?;

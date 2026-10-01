@@ -4,9 +4,10 @@
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpListener;
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use aeria_model::auth::{AccessToken, Secret};
-use aeria_model::{Codex, Options, Run, Stop, TokenStore};
+use aeria_model::{Codex, ModelError, Options, Request, Run, Stop, TokenStore};
 use aeria_source::{GameSource, SourceLanguage};
 use aeria_sqpack::testing::{FakeGame, TextSheet};
 use base64::Engine as _;
@@ -167,4 +168,74 @@ async fn a_run_translates_what_is_left_with_names_and_checks() {
         aeria_model::run::plan(session.root(), &["Addon.po".to_owned()], false).expect("plan");
     assert_eq!(left.len(), 1);
     assert_eq!(left[0].contexts, ["Addon:2:0:0"]);
+}
+
+/// Accepts every request and never answers it, as a connection that died
+/// without closing does.
+fn serve_silence() -> String {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+    let base = format!("http://{}", listener.local_addr().expect("address"));
+    std::thread::spawn(move || {
+        let mut held = Vec::new();
+        for stream in listener.incoming() {
+            held.extend(stream.ok());
+        }
+    });
+    base
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_service_that_never_answers_times_out() {
+    let codex = Codex::with_access(Arc::new(NoStore), &serve_silence(), access())
+        .expect("codex")
+        .with_silence(Duration::from_millis(500));
+    let started = Instant::now();
+    let reply = codex
+        .respond(&Request {
+            model: "test".to_owned(),
+            effort: None,
+            instructions: "Translate.".to_owned(),
+            input: "{}".to_owned(),
+            cache_key: "test".to_owned(),
+        })
+        .await;
+    assert!(matches!(reply, Err(ModelError::Timeout)), "{reply:?}");
+    assert!(started.elapsed() < Duration::from_secs(10));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn stopping_a_run_does_not_wait_for_the_service() {
+    let directory = tempfile::tempdir().expect("directory");
+    let game = directory.path().join("game");
+    FakeGame::new("2026.09.15.0000.0000")
+        .with_text("Addon", &TextSheet::new(1, &[0]).row(1, &[(0, "Cancel")]))
+        .write(&game)
+        .expect("game");
+    let source = Arc::new(GameSource::open(&game, SourceLanguage::English).expect("source"));
+    let session = Arc::new(
+        aeria_po::session::create(&directory.path().join("project"), source, "ru", 1)
+            .expect("project"),
+    );
+    let codex =
+        Arc::new(Codex::with_access(Arc::new(NoStore), &serve_silence(), access()).expect("codex"));
+    let handle = Arc::new(Run::new());
+    let run = tokio::spawn(aeria_model::run::run(
+        session,
+        codex,
+        Options {
+            paths: Vec::new(),
+            fuzzy: false,
+            model: "test".to_owned(),
+            effort: None,
+        },
+        Arc::clone(&handle),
+    ));
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert!(handle.status().running);
+    handle.cancel();
+    tokio::time::timeout(Duration::from_secs(5), run)
+        .await
+        .expect("the run stops at once")
+        .expect("run");
+    assert_eq!(handle.status().stop, Some(Stop::Cancelled));
 }
