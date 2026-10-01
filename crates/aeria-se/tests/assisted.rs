@@ -137,10 +137,17 @@ fn formatting_may_change_but_what_it_opens_it_closes() {
     assert!(refused(colored, "Используйте <ui-color 500>Быстрый клинок.").contains("</ui-color>"));
     assert!(refused(source, "Небеса</i> и <i>земля").contains("comes before the <i>"));
     assert!(refused(source, "<i>Небеса</i></i> и земля").contains("without its <i>"));
-    // A source that leaves a color open for the next string keeps doing so.
-    let open = "<color #FF0000FF>Danger";
-    assert!(check_assisted_structure(open, "<color #FF0000FF>Опасно").is_ok());
-    assert!(refused(open, "Опасно").contains("leaves 1 <color> open"));
+    // What a source forgot to close may stay open or be closed, never more.
+    let open = "<i>Danger";
+    assert!(check_assisted_structure(open, "<i>Опасно").is_ok());
+    assert!(check_assisted_structure(open, "<i>Опасно</i>").is_ok());
+    assert!(check_assisted_structure(open, "Опасно").is_ok());
+    assert!(refused(open, "<i><i>Опасно").contains("needs its </i>"));
+    // A stray closing tag of the source may be dropped, not added to.
+    let stray = "I </i>loathe</i> lemons!";
+    assert!(check_assisted_structure(stray, "Я <i>ненавижу</i> лимоны!").is_ok());
+    assert!(check_assisted_structure(stray, "Я ненавижу</i> лимоны!").is_ok());
+    assert!(refused(stray, "Я </i>ненавижу</i></i> лимоны!").contains("without its <i>"));
 }
 
 #[test]

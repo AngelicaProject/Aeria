@@ -60,7 +60,11 @@ pub struct Rejected {
 
 /// Why a run stopped.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase", tag = "reason")]
+#[serde(
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    tag = "reason"
+)]
 pub enum Stop {
     /// Every batch was sent.
     Finished,
@@ -846,6 +850,18 @@ mod tests {
         assert!(!selected("AddonTransient.po", &paths));
         assert!(!selected("quest/000/B.po", &paths));
         assert!(selected("anything.po", &[]));
+    }
+
+    #[test]
+    fn a_stop_reads_as_the_renderer_expects() {
+        let stop = serde_json::to_value(Stop::UsageLimit {
+            resets_at: Some(1_900_000_000),
+        })
+        .expect("json");
+        assert_eq!(
+            stop,
+            serde_json::json!({ "reason": "usageLimit", "resetsAt": 1_900_000_000 })
+        );
     }
 
     #[test]

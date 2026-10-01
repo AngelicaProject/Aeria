@@ -277,8 +277,9 @@ and the known globals for the machine translation instructions.
   parameter is other data. Game data may move and repeat, anywhere in the
   string, including into or out of a condition's branches, and the target
   adds none the source lacks;
-- leaves each formatting macro (`i`, `b`, the colors) as open at its end as
-  the source does, with no closing tag before the tag it closes; otherwise
+- leaves each formatting macro (`i`, `b`, the colors) no more open at its
+  end than the source does (it may close what the source forgot to close),
+  and closes no more than the source does of what came before; otherwise
   formatting is the translation's own, since the official localizations
   format about four in five formatted strings differently from the English
   (italics above all), so it may be added, dropped, or moved;

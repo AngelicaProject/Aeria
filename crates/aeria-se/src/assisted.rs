@@ -516,8 +516,9 @@ pub fn check_assisted_structure(source: &str, target: &str) -> Result<(), Vec<St
 }
 
 /// Formatting may be added, dropped, or moved, but a translation leaves each
-/// macro's tags as open at its end as the source does, and closes no more
-/// than the source closes of what came before it.
+/// macro's tags no more open at its end than the source does (it may close
+/// what a source forgot to close), and closes no more than the source closes
+/// of what came before it.
 fn check_formatting(source: &[Mark], target: &[Mark], errors: &mut Vec<StructureError>) {
     let mut seen: Vec<u8> = Vec::new();
     for mark in source.iter().chain(target) {
@@ -528,22 +529,18 @@ fn check_formatting(source: &[Mark], target: &[Mark], errors: &mut Vec<Structure
         let (expected, lowest) = balance(source, mark.code);
         let (found, reached) = balance(target, mark.code);
         let name = mark.name;
-        if found != expected {
-            let message = if expected != 0 {
-                format!(
-                    "the source leaves {expected} <{name}> open at its end and the translation {found}; keep that, and close every other <{name}> it opens"
-                )
-            } else if found > 0 {
-                format!(
-                    "every <{name}> of the translation needs its </{name}> after it, as in the source; formatting may be added, dropped, or moved, but nothing it opens may stay open"
-                )
-            } else {
-                format!(
-                    "the translation has a </{name}> without its <{name}>; close only what it opens"
-                )
-            };
-            errors.push(StructureError::new(message));
-        } else if reached < lowest {
+        // Between closing everything and leaving open, or closing early,
+        // exactly what the source does.
+        let (fewest, most) = (expected.min(0), expected.max(0));
+        if found > most {
+            errors.push(StructureError::new(format!(
+                "every <{name}> of the translation needs its </{name}> after it; formatting may be added, dropped, or moved, but nothing it opens may stay open"
+            )));
+        } else if found < fewest {
+            errors.push(StructureError::new(format!(
+                "the translation has a </{name}> without its <{name}>; close only what it opens"
+            )));
+        } else if reached < lowest.min(found) {
             errors.push(StructureError::new(format!(
                 "a </{name}> of the translation comes before the <{name}> it closes; put each closing tag after its opening tag"
             )));
