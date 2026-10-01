@@ -122,14 +122,25 @@ fn game_data_inside_a_dropped_condition_stays() {
 }
 
 #[test]
-fn formatting_stays_as_often_as_the_source_has_it_in_any_order() {
+fn formatting_may_change_but_what_it_opens_it_closes() {
     let source = "<i>Heavens</i> and <b>earth</b>";
+    // As the official localizations do: moved, dropped, added, repeated.
     assert!(check_assisted_structure(source, "<b>Земля</b> и <i>небеса</i>").is_ok());
-    assert!(refused(source, "<i>Небеса</i> и земля").contains("keep the source's formatting"));
-    assert!(
-        refused(source, "<i>Небеса</i> и <b>земля</b> <i>!</i>")
-            .contains("appears 1× in the source and 2× in the translation")
-    );
+    assert!(check_assisted_structure(source, "Небеса и земля").is_ok());
+    assert!(check_assisted_structure(source, "<i>Небеса</i> и <b>земля</b> <i>!</i>").is_ok());
+    assert!(check_assisted_structure("Heavens and earth", "<i>Небеса</i> и земля").is_ok());
+    let colored = "Use <ui-color 500><ui-edge-color 501>Fast Blade</ui-edge-color></ui-color>.";
+    assert!(check_assisted_structure(colored, "Используйте «Быстрый клинок».").is_ok());
+
+    // Nothing may stay open past the string, or close before it opens.
+    assert!(refused(source, "<i>Небеса и земля").contains("needs its </i>"));
+    assert!(refused(colored, "Используйте <ui-color 500>Быстрый клинок.").contains("</ui-color>"));
+    assert!(refused(source, "Небеса</i> и <i>земля").contains("comes before the <i>"));
+    assert!(refused(source, "<i>Небеса</i></i> и земля").contains("without its <i>"));
+    // A source that leaves a color open for the next string keeps doing so.
+    let open = "<color #FF0000FF>Danger";
+    assert!(check_assisted_structure(open, "<color #FF0000FF>Опасно").is_ok());
+    assert!(refused(open, "Опасно").contains("leaves 1 <color> open"));
 }
 
 #[test]

@@ -86,8 +86,10 @@ Macro text:
 - A string's source is macro text, the game's written form; the macros each line uses \
 are explained with it. Write translations as macro text and localize them: word order, \
 conditions, and formatting follow the target language, not the source's shape.
-- Keep every macro marked as game data; it may move or repeat. Keep the source's \
-formatting as often as the source has it, in any order. Conditions may be reworded, \
+- Keep every macro marked as game data; it may move or repeat. Formatting (italics, \
+bold, colors) is the translation's own, as in the official localizations: add, drop, or \
+move it as the target language reads best, and close every tag you open, as the source \
+does. Conditions may be reworded, \
 restructured, added, or dropped: add one where the target language must agree with the \
 player character's gender or another known value. Write \\< \\{ \\\\ for literal \
 characters.";

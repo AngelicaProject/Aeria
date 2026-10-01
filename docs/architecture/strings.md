@@ -259,7 +259,7 @@ meaning) and the rule a translation follows for it:
 | Rule | Constructs | A translation |
 | --- | --- | --- |
 | Game data | runtime values (`num`, `player-name`, `string $gs1`), game data references (`sheet`, `noun-en`), icons, sounds, waits, links, opaque constructs, unknown codes, raw bytes | keeps it; it may move or repeat |
-| Formatting | `i`, `b`, `color`, `ui-color`, and their ends | keeps it as often as the source has it, in any order |
+| Formatting | `i`, `b`, `color`, `ui-color`, and their ends | may add, drop, or move it, and closes what it opens as the source does |
 | Condition | `if`, `switch`, `if-gender`, `if-self`, and other conditional selection | may reword, restructure, add, or drop it |
 | Free | `br`, `nbsp`, `shy`, `hyphen`, and text transforms such as `capitalize` | may add or drop it |
 
@@ -277,8 +277,11 @@ and the known globals for the machine translation instructions.
   parameter is other data. Game data may move and repeat, anywhere in the
   string, including into or out of a condition's branches, and the target
   adds none the source lacks;
-- has each formatting construct of the source as many times as the source,
-  in any order;
+- leaves each formatting macro (`i`, `b`, the colors) as open at its end as
+  the source does, with no closing tag before the tag it closes; otherwise
+  formatting is the translation's own, since the official localizations
+  format about four in five formatted strings differently from the English
+  (italics above all), so it may be added, dropped, or moved;
 - tests, in conditions it has, only parameters the source uses or globals
   whose meaning is established (see [Known global
   parameters](#known-global-parameters)); constants and game values such as
