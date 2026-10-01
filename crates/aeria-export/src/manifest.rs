@@ -30,7 +30,6 @@ pub struct PackGame {
 /// identical projects exported for the same release produce identical bytes.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PackManifest {
-    pub pack_id: String,
     pub title: String,
     pub team: Team,
     /// The people credited in the pack, in the order the project lists them.
@@ -51,7 +50,6 @@ pub struct PackManifest {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ManifestJson<'a> {
-    pack_id: &'a str,
     title: &'a str,
     team: TeamJson<'a>,
     authors: &'a [String],
@@ -85,9 +83,6 @@ struct BuiltJson<'a> {
 impl PackManifest {
     pub(crate) fn validate(&self) -> Result<(), ExportError> {
         let fail = |reason: &str| Err(ExportError::Manifest(reason.to_owned()));
-        if !is_pack_id(&self.pack_id) {
-            return fail("packId must match [a-z0-9][a-z0-9-]{0,63}");
-        }
         for (field, value) in [
             ("title", &self.title),
             ("team.name", &self.team.name),
@@ -128,7 +123,6 @@ impl PackManifest {
 
     pub(crate) fn to_json(&self) -> Vec<u8> {
         let json = ManifestJson {
-            pack_id: &self.pack_id,
             title: &self.title,
             team: TeamJson {
                 name: &self.team.name,
@@ -172,16 +166,6 @@ pub(crate) fn check_authors(authors: &[String]) -> Result<(), String> {
         }
     }
     Ok(())
-}
-
-pub(crate) fn is_pack_id(value: &str) -> bool {
-    let bytes = value.as_bytes();
-    !bytes.is_empty()
-        && bytes.len() <= 64
-        && bytes[0] != b'-'
-        && bytes
-            .iter()
-            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || *b == b'-')
 }
 
 fn is_lower_hex(value: &str) -> bool {

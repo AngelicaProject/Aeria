@@ -39,7 +39,7 @@ type Release = {
 };
 
 const DEFAULT_MIN_HARMONIA = "0.1.2.0";
-const emptySettings: PackSettings = { packId: "", title: "", teamName: "", teamUrl: null, authors: [], license: null, minHarmonia: DEFAULT_MIN_HARMONIA };
+const emptySettings: PackSettings = { title: "", teamName: "", teamUrl: null, authors: [], license: null, minHarmonia: DEFAULT_MIN_HARMONIA };
 
 /**
  * The version after `version` (`YYYY.MM.DD.NNNN`) on the same day. Versions
@@ -211,7 +211,7 @@ export const ExportDialog = memo(function ExportDialog({ open, onOpenChange, onO
     }),
   });
 
-  const field = (key: Exclude<keyof PackSettings, "authors" | "packId">, label: string, hint: string, options: { placeholder?: string; optional?: boolean; onChange?: (value: string) => void } = {}) => (
+  const field = (key: Exclude<keyof PackSettings, "authors">, label: string, hint: string, options: { placeholder?: string; optional?: boolean; onChange?: (value: string) => void } = {}) => (
     <label className="field">
       <span className="field-label">{label}{options.optional ? <span className="export-optional">{t("export.optional")}</span> : null}</span>
       <input
@@ -340,13 +340,6 @@ export const ExportDialog = memo(function ExportDialog({ open, onOpenChange, onO
           {field("teamUrl", t("export.pack.teamUrl"), t("export.pack.teamUrlHint"), { placeholder: "https://github.com/…", optional: true })}
           {field("license", t("export.pack.license"), t("export.pack.licenseHint"), { placeholder: "CC-BY-NC-SA-4.0", optional: true })}
           {field("minHarmonia", t("export.pack.minHarmonia"), t("export.pack.minHarmoniaHint"), { placeholder: DEFAULT_MIN_HARMONIA })}
-          {firstSetup ? null : (
-            <div className="field">
-              <span className="field-label">{t("export.pack.packId")}</span>
-              <code className="export-id">{settings.packId}</code>
-              <span className="field-hint">{t("export.pack.packIdHint")}</span>
-            </div>
-          )}
         </div>
       </details>
       <div className="dialog-actions export-actions-start">

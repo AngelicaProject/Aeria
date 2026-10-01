@@ -94,7 +94,6 @@ followed by one LF. Readers reject unknown, missing, and duplicate fields.
 
 ```json
 {
-  "packId": "3f6c1a2e-8b4d-4c1f-9a7e-5d2b0c6e1f38",
   "title": "Русский перевод",
   "team": { "name": "Example team", "url": "https://example.com" },
   "authors": ["Анна", "pokeda"],
@@ -110,7 +109,6 @@ followed by one LF. Readers reject unknown, missing, and duplicate fields.
 
 | Field | Rule |
 | --- | --- |
-| `packId` | `[a-z0-9][a-z0-9-]{0,63}`; the same for the project's whole release history. Aeria makes a version 4 UUID when the pack settings are first saved; it carries no meaning |
 | `title`, `team.name` | non-empty display strings without surrounding whitespace; `team.name` is the team or project players see as the pack's publisher |
 | `team.url`, `license` | display strings, or `null` when absent |
 | `authors` | display strings, each at most once, in the project's order; `[]` when nobody is credited |
@@ -123,13 +121,16 @@ followed by one LF. Readers reject unknown, missing, and duplicate fields.
 | `built.commit` | Git commit of the exported project, 40 lowercase hex digits |
 | `minHarmonia` | lowest Harmonia version that implements this format minor, two to four dot-separated numbers |
 
-The manifest carries no timestamps, local paths, or credentials.
+The manifest carries no timestamps, local paths, or credentials, and no
+identifier of the pack: a pack is recognized by its publisher key and, for
+updates, by the feed it came from (see
+[`feed-v1.md`](./feed-v1.md#publisher-trust-harmonia)).
 
 ### Release version
 
 `version` is `YYYY.MM.DD.NNNN`: the UTC date of the release and its number on
-that day, from `0001`, every part zero-padded to its width. Versions of one
-`packId` strictly increase; readers compare them by date, then number, which
+that day, from `0001`, every part zero-padded to its width. The versions of a
+project's releases strictly increase; readers compare them by date, then number, which
 for this fixed-width form is also their text order. Aeria gives a release the
 first number of today or, when the newest known release (local
 `harmonia/<version>` tags, and the GitHub releases when publishing) is from
@@ -398,8 +399,8 @@ Present only in signed packs; an unsigned pack ends at `bodyLength`.
 - Key fingerprint: SHA-256 of the 65-byte public key, shown in hex.
 - Nothing may follow the block.
 
-The signature covers `packHash`, which covers the manifest, so `packId`,
-`version`, `game`, and `minHarmonia` are all authenticated.
+The signature covers `packHash`, which covers the manifest, so `version`,
+`game`, and `minHarmonia` are all authenticated.
 
 ## Transport encoding
 

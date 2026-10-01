@@ -572,10 +572,8 @@ export type ProjectKnowledgeDto = {
   termsError: string | null;
 };
 
-/** Project-shared pack identity in aeria-pack.json. */
+/** Project-shared pack settings in aeria-pack.json. */
 export type PackSettings = {
-  /** Made by Aeria when the settings are first saved; never edited. */
-  packId: string;
   title: string;
   teamName: string;
   teamUrl: string | null;

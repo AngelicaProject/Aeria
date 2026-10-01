@@ -17,7 +17,7 @@ pub use github::{
 };
 pub use keys::{
     KEYRING_SERVICE, KeyError, KeyringSigningKeyStore, MemorySigningKeyStore, SigningKeyStore,
-    SigningSecret, generate_pack_id,
+    SigningSecret,
 };
 pub use workflow::{
     FEED_WORKFLOW, FEED_WORKFLOW_PATH, WorkflowState, feed_workflow_state, install_feed_workflow,

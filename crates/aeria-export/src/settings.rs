@@ -1,7 +1,7 @@
 //! Project-shared pack settings (Pack Settings v1, `aeria-pack.json`).
 //!
 //! The file is committed with the project so every maintainer exports the
-//! same pack identity and the repository's feed workflow can build the feed
+//! same pack and the repository's feed workflow can build the feed
 //! without Aeria. See `docs/formats/pack-settings-v1.md`.
 
 use std::fs;
@@ -11,7 +11,7 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 
 use crate::error::ExportError;
-use crate::manifest::{Team, check_authors, is_pack_id, is_version};
+use crate::manifest::{Team, check_authors, is_version};
 use crate::transport::write_file_atomically;
 
 /// The project-root file name of Pack Settings v1.
@@ -21,7 +21,6 @@ const FORMAT_VERSION: u64 = 1;
 /// Release-independent pack metadata shared by all maintainers.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PackSettings {
-    pub pack_id: String,
     pub title: String,
     pub team: Team,
     /// The people credited in the pack; may be empty.
@@ -37,7 +36,6 @@ pub struct PackSettings {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct SettingsJson {
     format_version: u64,
-    pack_id: String,
     title: String,
     team: TeamJson,
     #[serde(default)]
@@ -99,7 +97,6 @@ impl PackSettings {
         let json: SettingsJson = serde_json::from_value(value)
             .map_err(|error| ExportError::Settings(error.to_string()))?;
         let settings = Self {
-            pack_id: json.pack_id,
             title: json.title,
             team: Team {
                 name: json.team.name,
@@ -120,9 +117,6 @@ impl PackSettings {
     /// Returns [`ExportError::Settings`] naming the first invalid field.
     pub fn validate(&self) -> Result<(), ExportError> {
         let fail = |reason: &str| Err(ExportError::Settings(reason.to_owned()));
-        if !is_pack_id(&self.pack_id) {
-            return fail("packId must match [a-z0-9][a-z0-9-]{0,63}");
-        }
         for (field, value) in [
             ("title", Some(&self.title)),
             ("team.name", Some(&self.team.name)),
@@ -160,7 +154,6 @@ impl PackSettings {
     pub fn to_canonical_json(&self) -> String {
         let json = SettingsJson {
             format_version: FORMAT_VERSION,
-            pack_id: self.pack_id.clone(),
             title: self.title.clone(),
             team: TeamJson {
                 name: self.team.name.clone(),
@@ -175,24 +168,6 @@ impl PackSettings {
             serde_json::to_string_pretty(&json).expect("settings serialization cannot fail");
         text.push('\n');
         text
-    }
-
-    /// A new pack ID: a version 4 UUID made from 16 random bytes. A pack is
-    /// recognized by its ID for its whole release history, so the ID carries
-    /// no meaning that could later want to change.
-    #[must_use]
-    pub fn new_pack_id(mut random: [u8; 16]) -> String {
-        random[6] = (random[6] & 0x0f) | 0x40;
-        random[8] = (random[8] & 0x3f) | 0x80;
-        let hex = crate::hex(&random);
-        format!(
-            "{}-{}-{}-{}-{}",
-            &hex[0..8],
-            &hex[8..12],
-            &hex[12..16],
-            &hex[16..20],
-            &hex[20..32]
-        )
     }
 
     /// Validates and writes the canonical file into `project_root`.
@@ -214,7 +189,6 @@ mod tests {
 
     fn settings() -> PackSettings {
         PackSettings {
-            pack_id: "3f6c1a2e-8b4d-4c1f-9a7e-5d2b0c6e1f38".to_owned(),
             title: "Русский перевод".to_owned(),
             team: Team {
                 name: "Example team".to_owned(),
@@ -233,7 +207,7 @@ mod tests {
         assert_eq!(
             text,
             format!(
-                "{{\n  \"formatVersion\": 1,\n  \"packId\": \"3f6c1a2e-8b4d-4c1f-9a7e-5d2b0c6e1f38\",\n  \"title\": \"Русский перевод\",\n  \"team\": {{\n    \"name\": \"Example team\",\n    \"url\": null\n  }},\n  \"authors\": [\n    \"Анна\",\n    \"pokeda\"\n  ],\n  \"license\": \"CC-BY-NC-SA-4.0\",\n  \"minHarmonia\": \"1.0.0\",\n  \"signingKeyFingerprint\": \"{}\"\n}}\n",
+                "{{\n  \"formatVersion\": 1,\n  \"title\": \"Русский перевод\",\n  \"team\": {{\n    \"name\": \"Example team\",\n    \"url\": null\n  }},\n  \"authors\": [\n    \"Анна\",\n    \"pokeda\"\n  ],\n  \"license\": \"CC-BY-NC-SA-4.0\",\n  \"minHarmonia\": \"1.0.0\",\n  \"signingKeyFingerprint\": \"{}\"\n}}\n",
                 "ab".repeat(32)
             )
         );
@@ -249,7 +223,7 @@ mod tests {
         let valid = settings().to_canonical_json();
         for text in [
             valid.replace("\"formatVersion\": 1", "\"formatVersion\": 2"),
-            valid.replace("3f6c1a2e-8b4d-4c1f-9a7e-5d2b0c6e1f38", "RU"),
+            valid.replace("\"title\"", "\"packId\": \"ru-main\",\n  \"title\""),
             valid.replace("\"pokeda\"", "\"Анна\""),
             valid.replace("\"pokeda\"", "\" \""),
             valid.replace("1.0.0", "1"),
@@ -261,17 +235,6 @@ mod tests {
         ] {
             assert!(PackSettings::parse(&text).is_err(), "{text}");
         }
-    }
-
-    #[test]
-    fn new_pack_ids_are_version_4_uuids() {
-        let id = PackSettings::new_pack_id([0xff; 16]);
-        assert_eq!(id, "ffffffff-ffff-4fff-bfff-ffffffffffff");
-        assert!(is_pack_id(&id));
-        assert_eq!(
-            PackSettings::new_pack_id([0; 16]),
-            "00000000-0000-4000-8000-000000000000"
-        );
     }
 
     #[test]

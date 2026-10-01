@@ -126,7 +126,6 @@ fn a_collected_project_writes_a_pack_for_the_games_version() {
     assert_eq!(game_facts.language, "en");
     assert_eq!(game_facts.version, "2026.09.15.0000.0000");
     let manifest = PackManifest {
-        pack_id: "synthetic".to_owned(),
         title: "Synthetic".to_owned(),
         team: Team {
             name: "Tests".to_owned(),

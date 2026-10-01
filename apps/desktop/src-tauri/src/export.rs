@@ -18,8 +18,7 @@ use aeria_git::{GitExecutable, GitRepository, HostCredential};
 use aeria_publish::{
     GITHUB_HOST, GitHubClient, GitHubRepository, KeyError, KeyringSigningKeyStore, PublishError,
     RELEASE_TAG_PREFIX, ReleaseAsset, ReleaseRequest, SigningKeyStore, SigningSecret,
-    WorkflowState, feed_workflow_state, generate_pack_id, install_feed_workflow, pack_asset_name,
-    tag_version,
+    WorkflowState, feed_workflow_state, install_feed_workflow, pack_asset_name, tag_version,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -63,9 +62,6 @@ pub struct ExportOverviewDto {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PackSettingsDto {
-    /// Only reported; made once when the settings are first saved.
-    #[serde(default, skip_deserializing)]
-    pub pack_id: String,
     pub title: String,
     pub team_name: String,
     pub team_url: Option<String>,
@@ -226,7 +222,6 @@ impl From<PublishError> for CommandError {
 impl From<&PackSettings> for PackSettingsDto {
     fn from(settings: &PackSettings) -> Self {
         Self {
-            pack_id: settings.pack_id.clone(),
             title: settings.title.clone(),
             team_name: settings.team.name.clone(),
             team_url: settings.team.url.clone(),
@@ -283,7 +278,8 @@ fn overview(state: &DesktopState, store: &dyn SigningKeyStore) -> CommandResult<
     };
     let key = match settings
         .as_ref()
-        .map(|settings| store.get(&settings.pack_id))
+        .and_then(|settings| settings.signing_key_fingerprint.as_deref())
+        .map(|fingerprint| store.get(fingerprint))
     {
         None | Some(Ok(None)) => SigningKeyDto {
             state: KeyStateDto::Missing,
@@ -394,18 +390,10 @@ fn has_export_changes(status: &aeria_git::RepositoryStatus) -> bool {
             .any(|file| file.path == PACK_SETTINGS_FILE || crate::fonts::is_font_path(&file.path))
 }
 
-/// Writes the settings. The pack ID and key fingerprint are kept from the
-/// existing file; the first save makes the ID.
-fn save_settings(
-    root: &Path,
-    input: PackSettingsDto,
-    new_pack_id: impl FnOnce() -> CommandResult<String>,
-) -> CommandResult<()> {
-    let existing = PackSettings::load(root)?;
-    let (pack_id, signing_key_fingerprint) = match existing {
-        Some(existing) => (existing.pack_id, existing.signing_key_fingerprint),
-        None => (new_pack_id()?, None),
-    };
+/// Writes the settings. The key fingerprint is kept from the existing file.
+fn save_settings(root: &Path, input: PackSettingsDto) -> CommandResult<()> {
+    let signing_key_fingerprint =
+        PackSettings::load(root)?.and_then(|existing| existing.signing_key_fingerprint);
     let mut authors: Vec<String> = Vec::new();
     for author in input.authors {
         let author = author.trim().to_owned();
@@ -414,7 +402,6 @@ fn save_settings(
         }
     }
     let settings = PackSettings {
-        pack_id,
         title: input.title.trim().to_owned(),
         team: Team {
             name: input.team_name.trim().to_owned(),
@@ -473,8 +460,9 @@ fn pack_file_name(title: &str, version: PackVersion) -> String {
     format!("{title} {version}.hpk")
 }
 
-/// Stores `secret` as the pack's key and records its fingerprint in the
-/// settings when the project has none yet.
+/// Stores `secret` as the project's key and records its fingerprint in the
+/// settings. Replacing a recorded key removes the old one from this
+/// computer.
 fn adopt_key(
     root: &Path,
     store: &dyn SigningKeyStore,
@@ -494,33 +482,34 @@ fn adopt_key(
         }
         _ => {}
     }
-    store.set(&settings.pack_id, secret)?;
-    if settings.signing_key_fingerprint.as_deref() != Some(fingerprint.as_str()) {
-        settings.signing_key_fingerprint = Some(fingerprint);
-        settings.save(root)?;
+    store.set(secret)?;
+    if let Some(previous) = settings
+        .signing_key_fingerprint
+        .replace(fingerprint.clone())
+        && previous != fingerprint
+    {
+        store.delete(&previous)?;
     }
+    settings.save(root)?;
     Ok(())
 }
 
-/// The key that signs this project's packs. It must be the key recorded in
-/// the settings.
+/// The key that signs this project's packs: the one the settings record.
 fn project_signer(
     settings: &PackSettings,
     store: &dyn SigningKeyStore,
 ) -> CommandResult<SigningSecret> {
-    let secret = store.get(&settings.pack_id)?.ok_or_else(|| {
+    let missing = || {
         export_error(
             "exportKeyMissing",
-            "no signing key for this pack is stored on this computer",
+            "the project's signing key is not stored on this computer",
         )
-    })?;
-    if settings.signing_key_fingerprint.as_deref() != Some(secret.fingerprint().as_str()) {
-        return Err(export_error(
-            "exportKeyMismatch",
-            "the signing key on this computer is not the key recorded in the pack settings",
-        ));
-    }
-    Ok(secret)
+    };
+    let fingerprint = settings
+        .signing_key_fingerprint
+        .as_deref()
+        .ok_or_else(missing)?;
+    store.get(fingerprint)?.ok_or_else(missing)
 }
 
 struct BuiltRelease {
@@ -565,7 +554,6 @@ fn build(
         ));
     }
     let manifest = PackManifest {
-        pack_id: settings.pack_id.clone(),
         title: settings.title.clone(),
         team: settings.team.clone(),
         authors: settings.authors.clone(),
@@ -655,7 +643,7 @@ pub async fn export_save_settings(
     run_blocking(move || {
         let state = app.state::<DesktopState>();
         let root = project_root(&state)?;
-        save_settings(&root, settings, || Ok(generate_pack_id()?))?;
+        save_settings(&root, settings)?;
         overview(&state, &KeyringSigningKeyStore)
     })
     .await
@@ -713,13 +701,8 @@ pub async fn export_import_key(
 pub async fn export_backup_key(app: tauri::AppHandle, path: String) -> CommandResult<()> {
     run_blocking(move || {
         let settings = load_settings(&project_root(&app.state::<DesktopState>())?)?;
-        let secret = KeyringSigningKeyStore
-            .get(&settings.pack_id)?
-            .ok_or_else(|| export_error("exportKeyMissing", "no signing key is stored"))?;
-        write_file_atomically(
-            Path::new(&path),
-            secret.to_backup(&settings.pack_id).as_bytes(),
-        )?;
+        let secret = project_signer(&settings, &KeyringSigningKeyStore)?;
+        write_file_atomically(Path::new(&path), secret.to_backup().as_bytes())?;
         Ok(())
     })
     .await
@@ -736,7 +719,9 @@ pub async fn export_remove_key(app: tauri::AppHandle) -> CommandResult<ExportOve
     run_blocking(move || {
         let state = app.state::<DesktopState>();
         let settings = load_settings(&project_root(&state)?)?;
-        KeyringSigningKeyStore.delete(&settings.pack_id)?;
+        if let Some(fingerprint) = &settings.signing_key_fingerprint {
+            KeyringSigningKeyStore.delete(fingerprint)?;
+        }
         overview(&state, &KeyringSigningKeyStore)
     })
     .await
@@ -975,7 +960,6 @@ mod tests {
 
     fn settings(root: &Path) -> PackSettings {
         let settings = PackSettings {
-            pack_id: "ru-main".to_owned(),
             title: "Russian".to_owned(),
             team: Team {
                 name: "Team".to_owned(),
@@ -1052,39 +1036,41 @@ mod tests {
         let second = SigningSecret::generate().expect("key");
         let refused = adopt_key(temp.path(), &store, &second, false).expect_err("mismatch");
         assert_eq!(refused.code, "exportKeyMismatch");
-        assert_eq!(store.get("ru-main").expect("get"), Some(first.clone()));
+        assert_eq!(store.get(&second.fingerprint()).expect("get"), None);
 
         adopt_key(temp.path(), &store, &second, true).expect("replace");
-        assert_eq!(
-            load_settings(temp.path())
-                .expect("settings")
-                .signing_key_fingerprint,
-            Some(second.fingerprint())
-        );
+        let replaced = load_settings(temp.path()).expect("settings");
+        assert_eq!(replaced.signing_key_fingerprint, Some(second.fingerprint()));
+        assert_eq!(project_signer(&replaced, &store).expect("signer"), second);
+        assert_eq!(store.get(&first.fingerprint()).expect("get"), None);
     }
 
     #[test]
-    fn a_key_other_than_the_recorded_one_cannot_sign() {
+    fn only_the_recorded_key_signs() {
         let temp = tempfile::tempdir().expect("temp");
         let mut recorded = settings(temp.path());
         let store = MemorySigningKeyStore::default();
+        let key = SigningSecret::generate().expect("key");
+        store.set(&key).expect("set");
         assert_eq!(
-            project_signer(&recorded, &store).expect_err("missing").code,
+            project_signer(&recorded, &store)
+                .expect_err("none recorded")
+                .code,
             "exportKeyMissing"
         );
-        let key = SigningSecret::generate().expect("key");
-        store.set("ru-main", &key).expect("set");
         recorded.signing_key_fingerprint = Some("0".repeat(64));
         assert_eq!(
             project_signer(&recorded, &store)
-                .expect_err("mismatch")
+                .expect_err("another key")
                 .code,
-            "exportKeyMismatch"
+            "exportKeyMissing"
         );
+        recorded.signing_key_fingerprint = Some(key.fingerprint());
+        assert_eq!(project_signer(&recorded, &store).expect("signer"), key);
     }
 
     #[test]
-    fn saving_settings_keeps_the_pack_id_and_key() {
+    fn saving_settings_keeps_the_key() {
         let temp = tempfile::tempdir().expect("temp");
         let mut recorded = settings(temp.path());
         recorded.signing_key_fingerprint = Some("a".repeat(64));
@@ -1093,31 +1079,11 @@ mod tests {
         input.title = " Russian translation ".to_owned();
         input.license = Some("  ".to_owned());
         input.authors = vec![" Анна ".to_owned(), String::new(), "Анна".to_owned()];
-        save_settings(temp.path(), input, || unreachable!("the ID exists")).expect("save");
+        save_settings(temp.path(), input).expect("save");
         let saved = load_settings(temp.path()).expect("settings");
-        assert_eq!(saved.pack_id, "ru-main");
         assert_eq!(saved.title, "Russian translation");
         assert_eq!(saved.license, None);
         assert_eq!(saved.authors, ["Анна"]);
         assert_eq!(saved.signing_key_fingerprint, Some("a".repeat(64)));
-    }
-
-    #[test]
-    fn the_first_save_makes_the_pack_id() {
-        let temp = tempfile::tempdir().expect("temp");
-        let input = PackSettingsDto {
-            pack_id: String::new(),
-            title: "Russian".to_owned(),
-            team_name: "Team".to_owned(),
-            team_url: None,
-            authors: Vec::new(),
-            license: None,
-            min_harmonia: "0.1.2.0".to_owned(),
-            signing_key_fingerprint: None,
-        };
-        save_settings(temp.path(), input, || Ok(generate_pack_id()?)).expect("save");
-        let saved = load_settings(temp.path()).expect("settings");
-        assert_eq!(saved.pack_id.len(), 36);
-        assert_eq!(saved.signing_key_fingerprint, None);
     }
 }

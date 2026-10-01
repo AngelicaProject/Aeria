@@ -99,7 +99,7 @@ settings; export uses the committed ones.
 The export report (`ExportReport`) counts what was left out: untranslated
 strings and fuzzy translations.
 
-The manifest takes `packId`, `title`, `team`, `authors`, `license`, and
+The manifest takes `title`, `team`, `authors`, `license`, and
 `minHarmonia` from `aeria-pack.json`; `version` and `channel` from the
 export; `language` from `aeria.json`, which must be a target language;
 `game` from the game; and `built` from the Aeria build and `HEAD`.
@@ -130,10 +130,7 @@ the left; the dialog opens on *Pack* until the pack settings exist and on
   per line, with *Add from Git history*, which adds the names of the
   project's commit authors (most commits first, as `.mailmap` maps them,
   never their email addresses) for the maintainer to edit. Website, license,
-  and minimum Harmonia version are under *More settings*. The pack ID is not
-  a field: Aeria makes a UUID when the settings are first saved and shows it
-  read-only under *More settings* afterwards, because Harmonia pins trust and
-  finds updates by it.
+  and minimum Harmonia version are under *More settings*.
 - **Game fonts** edits the font settings (below).
 - **Signing** manages the signing key.
 - **GitHub**, shown when `origin` is a GitHub repository, shows the feed URL
@@ -144,20 +141,22 @@ and what the export report left out.
 
 ## Signing
 
-Packs are signed with a per-pack ECDSA P-256 key. The private key is stored
+Packs are signed with the project's ECDSA P-256 key. The private key is stored
 only in the OS credential store (Windows Credential Manager, the Secret
 Service on Linux, or the macOS Keychain) under the service `Aeria` and the
-account `pack-signing/<packId>`. It is never written to the project, settings,
-logs, errors, or IPC responses; the renderer sees only fingerprints.
+account `pack-signing/<fingerprint>`, the fingerprint `aeria-pack.json`
+records. It is never written to the project, settings, logs, errors, or IPC
+responses; the renderer sees only fingerprints.
 
 `aeria-pack.json` records the fingerprint of the project key. Creating the
 first key records it. Saving the pack settings or recording a fingerprint
 only writes the file; like every project file it is committed by the next
 checkpoint, and the Release checklist names what is uncommitted and opens
-the Git dock. A key whose fingerprint differs from the recorded one
-cannot sign or publish, and importing it is refused. Creating a new project
-key when one is recorded requires explicit confirmation, because Harmonia then
-asks every player to trust the new publisher.
+the Git dock. Only the key with the recorded fingerprint signs, and
+importing another key is refused. Creating a new project key when one is
+recorded requires explicit confirmation, because Harmonia then asks every
+player to trust the new publisher; the old key is removed from this
+computer.
 
 Several maintainers share the key through a backup file written on explicit
 request (*Save backup*) and imported on the other computer (*Import
@@ -167,15 +166,13 @@ backup*). The backup is JSON:
 {
   "format": "aeria-signing-key",
   "version": 1,
-  "packId": "ru-main",
   "fingerprint": "<64 hex>",
   "secretKey": "<64 hex>"
 }
 ```
 
-Import requires that `fingerprint` matches `secretKey`; `packId` is
-informational. Local exports may be unsigned; published packs are always
-signed.
+Import requires that `fingerprint` matches `secretKey`. Local exports may be
+unsigned; published packs are always signed.
 
 > Open decision: the writer supports key rotation through `KeyEndorsement`,
 > but the desktop does not offer rotation yet.

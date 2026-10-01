@@ -17,7 +17,6 @@ const FONTS_FIXTURE: &str = "tests/fixtures/harmonia-interop-fonts.hpk";
 
 fn manifest() -> PackManifest {
     PackManifest {
-        pack_id: "3f6c1a2e-8b4d-4c1f-9a7e-5d2b0c6e1f38".to_owned(),
         title: "Interop test pack".to_owned(),
         team: Team {
             name: "Aeria tests".to_owned(),
@@ -207,7 +206,6 @@ fn layout_follows_pack_format_v1() {
     assert_eq!(
         top_level_keys(manifest),
         [
-            "packId",
             "title",
             "team",
             "authors",
@@ -269,7 +267,6 @@ fn endorsement_must_match_the_signing_key() {
 fn invalid_input_is_rejected() {
     let valid = manifest();
     let cases: Vec<(&str, Edit)> = vec![
-        ("bad pack id", Box::new(|m, _| m.pack_id = "Bad".to_owned())),
         ("bad commit", Box::new(|m, _| m.commit = "xyz".to_owned())),
         (
             "blank author",

@@ -335,7 +335,6 @@ button.translate-name { padding: 0; border: 0; background: transparent; color: v
 .export-check-action { flex: none; height: 24px; }
 .export-details { max-width: 640px; }
 .export-details-body { display: flex; flex-direction: column; gap: 14px; padding-top: 10px; }
-.export-id { align-self: flex-start; padding: 2px 6px; border-radius: var(--radius-sm); background: var(--hover); font-size: var(--text-sm); user-select: text; }
 .export-details > summary { cursor: pointer; color: var(--fg-muted); font-size: var(--text-sm); }
 .export-nav-dot { width: 6px; height: 6px; margin-left: auto; border-radius: 50%; background: var(--warn); }
 .export-key { display: grid; grid-template-columns: max-content 1fr; gap: 4px 12px; margin: 0; font-size: var(--text-sm); }

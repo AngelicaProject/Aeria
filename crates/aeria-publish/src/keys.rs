@@ -1,8 +1,9 @@
 //! Publisher signing keys in the OS credential store.
 //!
-//! The private key of a pack is stored per `packId` and never written to the
-//! project, settings, logs, errors, or IPC responses. A backup file is written
-//! only on the user's explicit request.
+//! A private key is stored under its own fingerprint, the one the project's
+//! `aeria-pack.json` records, and never written to the project, settings,
+//! logs, errors, or IPC responses. A backup file is written only on the
+//! user's explicit request.
 
 use std::collections::HashMap;
 use std::fmt;
@@ -16,18 +17,6 @@ use thiserror::Error;
 pub const KEYRING_SERVICE: &str = "Aeria";
 const BACKUP_FORMAT: &str = "aeria-signing-key";
 const BACKUP_VERSION: u64 = 1;
-
-/// A new pack ID from the operating system's random source.
-///
-/// # Errors
-/// Returns [`KeyError::Random`] when no randomness is available.
-pub fn generate_pack_id() -> Result<String, KeyError> {
-    let mut bytes = [0u8; 16];
-    getrandom::fill(&mut bytes).map_err(|error| KeyError::Random {
-        message: error.to_string(),
-    })?;
-    Ok(aeria_export::PackSettings::new_pack_id(bytes))
-}
 
 /// A P-256 private scalar. Its `Debug` output is redacted.
 #[derive(Clone, Eq, PartialEq)]
@@ -93,11 +82,10 @@ impl SigningSecret {
 
     /// The backup file for this key: JSON with the key in hex.
     #[must_use]
-    pub fn to_backup(&self, pack_id: &str) -> String {
+    pub fn to_backup(&self) -> String {
         let backup = BackupJson {
             format: BACKUP_FORMAT.to_owned(),
             version: BACKUP_VERSION,
-            pack_id: pack_id.to_owned(),
             fingerprint: self.fingerprint(),
             secret_key: self.to_hex(),
         };
@@ -142,7 +130,6 @@ impl fmt::Debug for SigningSecret {
 struct BackupJson {
     format: String,
     version: u64,
-    pack_id: String,
     fingerprint: String,
     secret_key: String,
 }
@@ -160,58 +147,60 @@ pub enum KeyError {
     Random { message: String },
 }
 
-/// Storage for pack signing keys, one per `packId`.
+/// Storage for pack signing keys, each under its fingerprint.
 pub trait SigningKeyStore: Send + Sync {
+    /// The key with this fingerprint.
+    ///
     /// # Errors
     /// Returns an error when the store cannot be read.
-    fn get(&self, pack_id: &str) -> Result<Option<SigningSecret>, KeyError>;
-    /// Stores or replaces the key.
+    fn get(&self, fingerprint: &str) -> Result<Option<SigningSecret>, KeyError>;
+    /// Stores the key under its fingerprint.
     ///
     /// # Errors
     /// Returns an error when the store cannot be written.
-    fn set(&self, pack_id: &str, secret: &SigningSecret) -> Result<(), KeyError>;
-    /// Removes the key. Removing a missing key succeeds.
+    fn set(&self, secret: &SigningSecret) -> Result<(), KeyError>;
+    /// Removes the key with this fingerprint. Removing a missing key
+    /// succeeds.
     ///
     /// # Errors
     /// Returns an error when the store cannot be written.
-    fn delete(&self, pack_id: &str) -> Result<(), KeyError>;
+    fn delete(&self, fingerprint: &str) -> Result<(), KeyError>;
 }
 
 /// The platform credential store, under the service [`KEYRING_SERVICE`] and
-/// the account `pack-signing/<packId>`.
+/// the account `pack-signing/<fingerprint>`.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct KeyringSigningKeyStore;
 
 impl KeyringSigningKeyStore {
-    fn entry(pack_id: &str) -> Result<keyring::Entry, KeyError> {
-        keyring::Entry::new(KEYRING_SERVICE, &format!("pack-signing/{pack_id}"))
+    fn entry(fingerprint: &str) -> Result<keyring::Entry, KeyError> {
+        keyring::Entry::new(KEYRING_SERVICE, &format!("pack-signing/{fingerprint}"))
             .map_err(|error| keyring_error(&error))
     }
 }
 
 impl SigningKeyStore for KeyringSigningKeyStore {
-    fn get(&self, pack_id: &str) -> Result<Option<SigningSecret>, KeyError> {
-        match Self::entry(pack_id)?.get_password() {
-            Ok(value) => {
-                SigningSecret::from_hex(&value)
-                    .map(Some)
-                    .ok_or_else(|| KeyError::Failed {
-                        message: "the stored signing key is not valid".to_owned(),
-                    })
-            }
+    fn get(&self, fingerprint: &str) -> Result<Option<SigningSecret>, KeyError> {
+        match Self::entry(fingerprint)?.get_password() {
+            Ok(value) => SigningSecret::from_hex(&value)
+                .filter(|secret| secret.fingerprint() == fingerprint)
+                .map(Some)
+                .ok_or_else(|| KeyError::Failed {
+                    message: "the stored signing key is not valid".to_owned(),
+                }),
             Err(keyring::Error::NoEntry) => Ok(None),
             Err(error) => Err(keyring_error(&error)),
         }
     }
 
-    fn set(&self, pack_id: &str, secret: &SigningSecret) -> Result<(), KeyError> {
-        Self::entry(pack_id)?
+    fn set(&self, secret: &SigningSecret) -> Result<(), KeyError> {
+        Self::entry(&secret.fingerprint())?
             .set_password(&secret.to_hex())
             .map_err(|error| keyring_error(&error))
     }
 
-    fn delete(&self, pack_id: &str) -> Result<(), KeyError> {
-        match Self::entry(pack_id)?.delete_credential() {
+    fn delete(&self, fingerprint: &str) -> Result<(), KeyError> {
+        match Self::entry(fingerprint)?.delete_credential() {
             Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
             Err(error) => Err(keyring_error(&error)),
         }
@@ -250,17 +239,17 @@ impl MemorySigningKeyStore {
 }
 
 impl SigningKeyStore for MemorySigningKeyStore {
-    fn get(&self, pack_id: &str) -> Result<Option<SigningSecret>, KeyError> {
-        Ok(self.keys()?.get(pack_id).cloned())
+    fn get(&self, fingerprint: &str) -> Result<Option<SigningSecret>, KeyError> {
+        Ok(self.keys()?.get(fingerprint).cloned())
     }
 
-    fn set(&self, pack_id: &str, secret: &SigningSecret) -> Result<(), KeyError> {
-        self.keys()?.insert(pack_id.to_owned(), secret.clone());
+    fn set(&self, secret: &SigningSecret) -> Result<(), KeyError> {
+        self.keys()?.insert(secret.fingerprint(), secret.clone());
         Ok(())
     }
 
-    fn delete(&self, pack_id: &str) -> Result<(), KeyError> {
-        self.keys()?.remove(pack_id);
+    fn delete(&self, fingerprint: &str) -> Result<(), KeyError> {
+        self.keys()?.remove(fingerprint);
         Ok(())
     }
 }
@@ -274,7 +263,7 @@ mod tests {
         let first = SigningSecret::generate().expect("key");
         let second = SigningSecret::generate().expect("key");
         assert_ne!(first, second);
-        let backup = first.to_backup("ru-main");
+        let backup = first.to_backup();
         assert!(backup.contains(&first.fingerprint()));
         assert_eq!(SigningSecret::from_backup(&backup).expect("restore"), first);
     }
@@ -282,7 +271,7 @@ mod tests {
     #[test]
     fn damaged_backups_are_rejected_without_echoing_the_key() {
         let key = SigningSecret::generate().expect("key");
-        let backup = key.to_backup("ru-main");
+        let backup = key.to_backup();
         let hex = key.to_hex();
         let wrong_fingerprint = backup.replace(&key.fingerprint(), &"0".repeat(64));
         let wrong_key = backup.replace(&hex, &"f".repeat(64));
@@ -300,15 +289,16 @@ mod tests {
     }
 
     #[test]
-    fn memory_store_keeps_one_key_per_pack() {
+    fn memory_store_keeps_keys_under_their_fingerprints() {
         let store = MemorySigningKeyStore::default();
         let key = SigningSecret::generate().expect("key");
-        assert_eq!(store.get("ru-main").expect("get"), None);
-        store.set("ru-main", &key).expect("set");
-        assert_eq!(store.get("ru-main").expect("get"), Some(key));
-        assert_eq!(store.get("fr-main").expect("get"), None);
-        store.delete("ru-main").expect("delete");
-        store.delete("ru-main").expect("delete missing");
-        assert_eq!(store.get("ru-main").expect("get"), None);
+        let fingerprint = key.fingerprint();
+        assert_eq!(store.get(&fingerprint).expect("get"), None);
+        store.set(&key).expect("set");
+        assert_eq!(store.get(&fingerprint).expect("get"), Some(key));
+        assert_eq!(store.get(&"0".repeat(64)).expect("get"), None);
+        store.delete(&fingerprint).expect("delete");
+        store.delete(&fingerprint).expect("delete missing");
+        assert_eq!(store.get(&fingerprint).expect("get"), None);
     }
 }

@@ -8,7 +8,7 @@ releases and supplies the feed workflow
 A feed is a small JSON document that tells Harmonia the newest
 [Harmonia pack](./pack-v1.md) of each channel a project has published and
 where to download it. The feed is a hint, not a trust anchor. Every decision
-that matters (pack identity, version, game, publisher key) is verified against
+that matters (version, game, publisher key) is verified against
 the downloaded pack itself, so the feed needs no signature of its own.
 
 ## Hosting
@@ -28,8 +28,8 @@ Aeria creates the release and uploads both assets. A GitHub Actions workflow,
 supplied by Aeria as a template for the translation repository
 (`.github/workflows/harmonia-feed.yml`), is started by `release` events, runs
 on the repository's default branch, collects the
-`feed-entry.json` assets of the published releases, takes `packId`, `title`,
-and `publisherKeyFingerprint` from the committed
+`feed-entry.json` assets of the published releases, takes `title` and
+`publisherKeyFingerprint` from the committed
 [`aeria-pack.json`](./pack-settings-v1.md), and deploys the feed to Pages. The
 workflow never needs signing keys. Pack files are never stored in Pages or in
 Git history.
@@ -44,7 +44,6 @@ UTF-8 JSON without BOM.
 {
   "format": "harmonia-feed",
   "version": 1,
-  "packId": "3f6c1a2e-8b4d-4c1f-9a7e-5d2b0c6e1f38",
   "title": "Русский перевод",
   "publisherKeyFingerprint": "<64 hex>",
   "releases": [
@@ -71,7 +70,6 @@ UTF-8 JSON without BOM.
 | Field | Rule |
 | --- | --- |
 | `format`, `version` | exactly `"harmonia-feed"` and `1` |
-| `packId` | equals every listed pack's manifest `packId` |
 | `title` | the pack's title, shown when the feed is added; optional for readers |
 | `publisherKeyFingerprint` | fingerprint of the current signing key, or `null` for unsigned feeds; shown to the user when the feed is added |
 | `releases` | the newest release of each channel, at most one `stable` and one `testing`, newest version first |
@@ -111,24 +109,34 @@ game version changes. Requests send `If-None-Match` with the last `ETag`.
    `download.sha256`.
 2. Decode with an output limit of `download.unpackedSize`.
 3. Verify the pack completely (see [pack reader requirements](./pack-v1.md#reader-requirements-harmonia)).
-4. Verify that the pack's `packHash`, `packId`, `version`, and `game` equal
-   the feed entry, and apply the publisher trust rules below.
-5. Move the file atomically to `packs/<packId>/<packHash>.hpk` and atomically
-   update the installed-pack record. The new pack becomes active on the next
-   game start; the previous file is kept for rollback until then.
+4. Verify that the pack's `packHash`, `version`, and `game` equal the feed
+   entry, and apply the publisher trust rules below.
+5. Install the file atomically as the feed's translation, replacing its
+   previous pack. The new pack becomes active on the next game start; the
+   previous file is kept for rollback until then.
 
 ## Publisher trust (Harmonia)
 
-Trust is pinned per `packId` to a signing key fingerprint. Feed installs and
-manual imports follow the same rules:
+A pack carries no identifier. Harmonia keeps each installed translation under
+a name of its own and pins one signing key fingerprint to it: the key of its
+first signed pack, which the user confirmed. A translation added by its feed
+link also remembers the feed; the feed's `publisherKeyFingerprint` is shown
+before the first download. A pack updates a translation when it comes from
+that translation's feed, or, from a file, when it is signed by the
+translation's pinned key:
 
-| Pack | Pinned key for `packId` | Result |
-| --- | --- | --- |
-| Signed, key = pinned | any | accepted |
-| Signed, endorsed by the pinned key | pinned | accepted; pin moves to the new key |
-| Signed | none | user confirms the fingerprint; key is pinned |
-| Signed, other key, no valid endorsement | pinned | rejected for feeds; manual import requires the user to explicitly replace the pin |
-| Unsigned | any | rejected for feeds; manual import only after an explicit "unsigned build" confirmation, shown as unsigned in the UI |
+| Pack | Result |
+| --- | --- |
+| Signed by the pinned key of the translation it updates | accepted |
+| Signed by a key the pinned key endorsed | accepted; the pin moves to the new key |
+| From a feed with nothing installed yet, signed | the user confirms the fingerprint; a new translation with that key pinned |
+| From the feed of a translation, signed by another key without an endorsement | rejected |
+| From a file, signed by a key no translation pins | the user confirms the fingerprint; a new translation with that key pinned |
+| Unsigned, from a feed | rejected |
+| Unsigned, from a file | only after an explicit "unsigned build" confirmation; shown as unsigned. It replaces an installed unsigned translation with the same `title` and `team.name`, or becomes a new one |
+
+A translation installed from a file is connected to a feed only when the
+feed's `publisherKeyFingerprint` is the translation's pinned key.
 
 Manual import accepts a single `.hpk` or `.hpk.br` file; the signature is
 inside the pack.

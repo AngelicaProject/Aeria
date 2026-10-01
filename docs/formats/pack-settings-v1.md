@@ -29,7 +29,6 @@ the closing `}`:
 ```json
 {
   "formatVersion": 1,
-  "packId": "3f6c1a2e-8b4d-4c1f-9a7e-5d2b0c6e1f38",
   "title": "Русский перевод",
   "team": {
     "name": "Example team",
@@ -48,7 +47,6 @@ the closing `}`:
 | Field | Rule | Required |
 | --- | --- | --- |
 | `formatVersion` | the JSON integer `1` | yes |
-| `packId` | `[a-z0-9][a-z0-9-]{0,63}`; the manifest `packId` of every pack. Aeria writes a version 4 UUID when the settings are first saved and never changes it | yes |
 | `title` | non-empty display string without surrounding whitespace | yes |
 | `team.name` | as `title`: the team or project players see as the publisher | yes |
 | `team.url` | as `title`, or `null` | no |
