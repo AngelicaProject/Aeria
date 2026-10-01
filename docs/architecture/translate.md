@@ -71,10 +71,13 @@ a sheet's neighbouring rows together:
   there are at most 150, are one batch;
 - otherwise a file's untranslated strings are split into batches of 100.
 
-Each batch is one request, and a batch never spans files. The batches of a
-scene go one after another: the next part of a quest or cutscene is sent when
-the one before it has answered, so it sees that part's translations among its
-examples. Batches of different files go side by side.
+A batch never spans files. A file whose untranslated strings are one batch
+is packed into one request with the files after it, up to 150 strings and 12
+files, so that the many small quests and leftovers of sheets do not each pay
+for a request of their own; a batch of a file split into several is a
+request alone. The batches of a scene go one after another: the next part of
+a quest or cutscene is sent when the one before it has answered, so it sees
+that part's translations among its examples. Other requests go side by side.
 
 The batches of the name sheets go first, one sheet at a time in the order of
 `NAME_SHEETS` in `aeria-model` (places, towns, races, and tribes; classes,
@@ -93,13 +96,9 @@ provider serves them from its prompt cache: the
 the macro authoring reference of [`strings.md`](./strings.md),
 `aeria-knowledge/style.md`, and the form of the answer.
 
-The task is JSON built from the file as it is when the batch is sent:
+The task is JSON built from the files as they are when the request is sent:
 
-- `about`: the file's header comment: its sheet, a quest's title, and whether
-  its strings are in play order;
-- `speakers`: the speaker labels of the batch's strings (`ALPHINAUD`) whose
-  letters match a translated name, with the name and its translation;
-- `names`: the game's names that occur in the batch's sources or a quest's
+- `names`: the game's names that occur in the request's sources or a quest's
   title as whole words,
   with their translations from the name sheets of `po/` (`Action`,
   `BNpcName`, `ENpcResident`, `Item`, `PlaceName`, `Quest`, `Status`, and
@@ -107,11 +106,17 @@ The task is JSON built from the file as it is when the batch is sent:
   several ways gives its most frequent translation), at most 80;
 - `terms`: terms of `terms.csv` that occur in the sources, with their notes
   and forbidden variants, at most 60;
-- `examples`: up to 40 translated strings of the same file, nearest to the
-  batch first;
-- `strings`: each string's short ID, source, and `#.` lines (the other client
-  languages, speaker or kind, the row's other cells, macro legends), and the
-  previous source and translation of a fuzzy one.
+- `files`: each file of the request on its own, with
+  - `about`: the file's header comment: its sheet, a quest's title, and
+    whether its strings are in play order;
+  - `speakers`: the speaker labels of the file's strings (`ALPHINAUD`) whose
+    letters match a translated name, with the name and its translation;
+  - `examples`: translated strings of the same file, nearest to the batch
+    first: up to 40 shared among the files, at least 5 each;
+  - `strings`: each string's ID (unique in the request), source, and `#.`
+    lines (the other client languages, speaker or kind, the row's other
+    cells, macro legends), and the previous source and translation of a
+    fuzzy one.
 
 All requests of a run share one `prompt_cache_key`. A probe of this provider
 measured that requests with the same key and prefix got 99 % of the prompt

@@ -67,7 +67,12 @@ fn serve(answer: fn(&str, &str) -> String) -> (String, Arc<Mutex<Vec<Value>>>) {
                 .expect("task json");
             seen.lock().expect("lock").push(task.clone());
             let mut answers = serde_json::Map::new();
-            for string in task["strings"].as_array().into_iter().flatten() {
+            let strings = task["files"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .flat_map(|file| file["strings"].as_array().into_iter().flatten());
+            for string in strings {
                 let id = string["id"].as_str().expect("id");
                 let source = string["source"].as_str().expect("source");
                 answers.insert(id.to_owned(), Value::from(answer(id, source)));
@@ -160,8 +165,17 @@ async fn a_run_translates_what_is_left_with_names_and_checks() {
 
     let requests = requests.lock().expect("lock");
     assert_eq!(requests[0]["names"][0]["translation"], "Минфилия");
-    assert_eq!(requests[0]["examples"][0]["translation"], "Отмена");
-    assert_eq!(requests[0]["strings"].as_array().expect("strings").len(), 2);
+    assert_eq!(
+        requests[0]["files"][0]["examples"][0]["translation"],
+        "Отмена"
+    );
+    assert_eq!(
+        requests[0]["files"][0]["strings"]
+            .as_array()
+            .expect("strings")
+            .len(),
+        2
+    );
 
     // What was written is not sent again; what was refused is.
     let left =
@@ -238,4 +252,49 @@ async fn stopping_a_run_does_not_wait_for_the_service() {
         .expect("the run stops at once")
         .expect("run");
     assert_eq!(handle.status().stop, Some(Stop::Cancelled));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn small_files_share_a_request_and_each_is_written() {
+    let directory = tempfile::tempdir().expect("directory");
+    let game = directory.path().join("game");
+    FakeGame::new("2026.09.15.0000.0000")
+        .with_text("Addon", &TextSheet::new(1, &[0]).row(1, &[(0, "Cancel")]))
+        .with_text("Lobby", &TextSheet::new(1, &[0]).row(1, &[(0, "Start")]))
+        .write(&game)
+        .expect("game");
+    let source = Arc::new(GameSource::open(&game, SourceLanguage::English).expect("source"));
+    let session = Arc::new(
+        aeria_po::session::create(&directory.path().join("project"), source, "ru", 1)
+            .expect("project"),
+    );
+    let (base, requests) = serve(translate);
+    let codex = Arc::new(Codex::with_access(Arc::new(NoStore), &base, access()).expect("codex"));
+    let handle = Arc::new(Run::new());
+    aeria_model::run::run(
+        Arc::clone(&session),
+        codex,
+        Options {
+            paths: vec!["Addon.po".to_owned(), "Lobby.po".to_owned()],
+            fuzzy: false,
+            model: "test".to_owned(),
+            effort: None,
+        },
+        Arc::clone(&handle),
+    )
+    .await;
+
+    let status = handle.status();
+    assert_eq!(status.stop, Some(Stop::Finished), "{status:?}");
+    assert_eq!((status.files, status.written), (2, 2));
+    let requests = requests.lock().expect("lock");
+    assert_eq!(requests.len(), 1, "one request for both files");
+    assert_eq!(requests[0]["files"].as_array().expect("files").len(), 2);
+    for (sheet, text) in [("Addon", "«Cancel»"), ("Lobby", "«Start»")] {
+        let translated = session
+            .translation(sheet, 1, 0, 0)
+            .expect("read")
+            .expect("written");
+        assert_eq!(translated.text, text);
+    }
 }

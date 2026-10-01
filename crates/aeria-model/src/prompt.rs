@@ -18,7 +18,8 @@ pub fn instructions(source_language: &str, target_language: &str, style: Option<
     let mut text = format!(
         "You translate the text of FINAL FANTASY XIV from {source_language} into \
          {target_language} for a fan localization. Each request is a batch of strings of one \
-         file of the game, in the file's order; strings of a scene are lines of one dialogue.\n\n"
+         or more files of the game, each file's strings in its order; strings of a scene are \
+         lines of one dialogue, and files never share a dialogue.\n\n"
     );
     for section in [ORIGINAL_TEXT, TRANSLATION_STYLE, PLAYER_CHARACTER] {
         text.push_str(section);
@@ -40,17 +41,17 @@ pub fn instructions(source_language: &str, target_language: &str, style: Option<
         );
     }
     text.push_str(
-        "The request is JSON: `about` says what the file is: its sheet, a quest's title, and \
-         whether its strings are in play order, so that a batch continues the strings before \
-         it; `speakers` are the characters who speak in the batch by their labels (the \
-         `speaker` of a string's context) with their names and the project's translations; \
-         `names` are the game's names that occur in the batch with the \
+        "The request is JSON: `names` are the game's names that occur in the batch with the \
          project's translations, which you use exactly; `terms` are the project's terms, \
-         which you use exactly and whose `never` variants you never use; `examples` are \
-         translated strings of the same file, whose wording you continue; `strings` are the \
-         strings to translate, each with its `id`, its `source`, and `context`: the other \
-         client languages (ja, de, fr), the speaker or kind of a line, other fields of its \
-         row, and what its macros do. A string with `previous` was translated before its \
+         which you use exactly and whose `never` variants you never use; `files` are the \
+         files of the batch, each on its own: `about` says what the file is: its sheet, a \
+         quest's title, and whether its strings are in play order, so that a batch continues \
+         the strings before it; `speakers` are the characters who speak in the file by their \
+         labels (the `speaker` of a string's context) with their names and the project's \
+         translations; `examples` are translated strings of the same file, whose wording you \
+         continue; `strings` are the strings to translate, each with its `id`, its `source`, \
+         and `context`: the other client languages (ja, de, fr), the speaker or kind of a \
+         line, other fields of its row, and what its macros do. A string with `previous` was translated before its \
          source changed: `previous.source` is the old source and `previous.translation` its \
          translation; keep what still fits.\n\n\
          Answer with one JSON object and nothing else: each key is the `id` of a string and \
@@ -78,24 +79,23 @@ pub struct Term {
     pub never: Vec<String>,
 }
 
+/// One file of a request: what it is, who speaks, translated strings as
+/// examples, and the strings to translate.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct FileTask {
+    /// The file, relative to the project root: `po/...`.
+    pub file: String,
+    pub about: String,
+    /// Speaker labels with their names and translations.
+    pub speakers: Vec<(String, String, String)>,
+    pub examples: Vec<(String, String)>,
+    pub items: Vec<Item>,
+}
+
 /// The task of one request.
 #[must_use]
-pub fn input(
-    file: &str,
-    about: &str,
-    speakers: &[(String, String, String)],
-    names: &[(String, String)],
-    terms: &[Term],
-    examples: &[(String, String)],
-    items: &[Item],
-) -> String {
+pub fn input(files: &[FileTask], names: &[(String, String)], terms: &[Term]) -> String {
     let value = json!({
-        "file": file,
-        "about": about,
-        "speakers": speakers
-            .iter()
-            .map(|(label, name, translation)| json!({ "speaker": label, "name": name, "translation": translation }))
-            .collect::<Vec<_>>(),
         "names": names
             .iter()
             .map(|(source, translation)| json!({ "name": source, "translation": translation }))
@@ -113,11 +113,27 @@ pub fn input(
                 value
             })
             .collect::<Vec<_>>(),
-        "examples": examples
+        "files": files.iter().map(file_value).collect::<Vec<_>>(),
+    });
+    value.to_string()
+}
+
+fn file_value(task: &FileTask) -> Value {
+    json!({
+        "file": task.file,
+        "about": task.about,
+        "speakers": task
+            .speakers
+            .iter()
+            .map(|(label, name, translation)| json!({ "speaker": label, "name": name, "translation": translation }))
+            .collect::<Vec<_>>(),
+        "examples": task
+            .examples
             .iter()
             .map(|(source, translation)| json!({ "source": source, "translation": translation }))
             .collect::<Vec<_>>(),
-        "strings": items
+        "strings": task
+            .items
             .iter()
             .map(|item| {
                 let mut value = json!({ "id": item.id, "source": item.source, "context": item.context });
@@ -127,8 +143,7 @@ pub fn input(
                 value
             })
             .collect::<Vec<_>>(),
-    });
-    value.to_string()
+    })
 }
 
 /// A request that sends back the translations that failed the checks, with
@@ -190,27 +205,29 @@ mod tests {
         assert!(text.contains("К герою на «вы»."));
         assert!(!instructions("en", "fr", None).contains("Living Russian"));
         let input = input(
-            "po/Addon/0.po",
-            "Addon",
-            &[(
-                "MINFILIA".to_owned(),
-                "Minfilia".to_owned(),
-                "Минфилия".to_owned(),
-            )],
+            &[FileTask {
+                file: "po/Addon/0.po".to_owned(),
+                about: "Addon".to_owned(),
+                speakers: vec![(
+                    "MINFILIA".to_owned(),
+                    "Minfilia".to_owned(),
+                    "Минфилия".to_owned(),
+                )],
+                examples: Vec::new(),
+                items: vec![Item {
+                    id: "1".to_owned(),
+                    source: "OK".to_owned(),
+                    context: vec!["de: Ok".to_owned()],
+                    previous: None,
+                }],
+            }],
             &[("Minfilia".to_owned(), "Минфилия".to_owned())],
             &[],
-            &[],
-            &[Item {
-                id: "1".to_owned(),
-                source: "OK".to_owned(),
-                context: vec!["de: Ok".to_owned()],
-                previous: None,
-            }],
         );
         let value: Value = serde_json::from_str(&input).expect("json");
-        assert_eq!(value["strings"][0]["context"][0], "de: Ok");
+        assert_eq!(value["files"][0]["strings"][0]["context"][0], "de: Ok");
         assert_eq!(value["names"][0]["translation"], "Минфилия");
-        assert_eq!(value["speakers"][0]["speaker"], "MINFILIA");
-        assert_eq!(value["about"], "Addon");
+        assert_eq!(value["files"][0]["speakers"][0]["speaker"], "MINFILIA");
+        assert_eq!(value["files"][0]["about"], "Addon");
     }
 }

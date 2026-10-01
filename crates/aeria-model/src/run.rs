@@ -16,10 +16,13 @@ use tokio::task::JoinSet;
 use crate::ModelError;
 use crate::codex::{Codex, Request, Usage};
 use crate::names::{Names, name_sheet_of};
-use crate::prompt::{self, Item, Term};
+use crate::prompt::{self, FileTask, Item, Term};
 
 /// Strings of a scene file that are one request; a longer scene is split.
 const SCENE_BATCH: usize = 150;
+/// Most files of one request: small files are packed together up to
+/// [`SCENE_BATCH`] strings.
+const PACK_FILES: usize = 12;
 /// Strings per request otherwise.
 const BATCH: usize = 100;
 /// Most requests in flight.
@@ -272,8 +275,12 @@ fn now_millis() -> u64 {
         })
 }
 
-/// The strings of a request by the ids it gives them.
-type Strings = Vec<(String, Entry)>;
+/// The strings of a request by the ids it gives them, with their file.
+type Strings = Vec<(String, String, Entry)>;
+
+/// The batches one request translates: one batch of a file split into
+/// several, or whole small files packed together.
+type Pack = Vec<Batch>;
 
 /// The request of a batch and its strings.
 struct Built {
@@ -283,9 +290,12 @@ struct Built {
 
 /// The speakers of a batch's strings whose names are translated, each once:
 /// their label, name, and translation.
-fn speakers_of(names: &Names, strings: &Strings) -> Vec<(String, String, String)> {
+fn speakers_of(
+    names: &Names,
+    strings: &[(String, String, Entry)],
+) -> Vec<(String, String, String)> {
     let mut speakers: Vec<(String, String, String)> = Vec::new();
-    for (_, entry) in strings {
+    for (_, _, entry) in strings {
         for line in &entry.extracted {
             let Some(label) = line.strip_prefix("speaker: ") else {
                 continue;
@@ -301,22 +311,31 @@ fn speakers_of(names: &Names, strings: &Strings) -> Vec<(String, String, String)
     speakers
 }
 
-/// The request of a batch, from the file as it is now: the strings that
-/// still need a translation, examples, names, and terms.
-fn build(shared: &Shared, batch: &Batch) -> Result<Option<Built>, String> {
+/// One file of a request, from the file as it is now: the strings of
+/// `batch` that still need a translation, numbered after those already in
+/// `strings`, with examples, speakers, and what the file is; and the title
+/// of a quest. `None` when nothing is left to translate.
+fn file_task(
+    shared: &Shared,
+    batch: &Batch,
+    examples_wanted: usize,
+    strings: &mut Strings,
+) -> Result<Option<(FileTask, Option<String>)>, String> {
     let full = shared.session.root().join(PO_DIR).join(&batch.path);
     let text =
         std::fs::read_to_string(&full).map_err(|error| format!("po/{}: {error}", batch.path))?;
     let file = PoFile::parse(&text).0;
     let wanted: std::collections::HashSet<&str> =
         batch.contexts.iter().map(String::as_str).collect();
-    let mut strings: Strings = Vec::new();
+    let start = strings.len();
     for entry in &file.entries {
         if wanted.contains(entry.context.as_str()) && needs_work(entry, shared.options.fuzzy) {
-            strings.push(((strings.len() + 1).to_string(), entry.clone()));
+            let id = (strings.len() + 1).to_string();
+            strings.push((id, batch.path.clone(), entry.clone()));
         }
     }
-    if strings.is_empty() {
+    let mine = &strings[start..];
+    if mine.is_empty() {
         return Ok(None);
     }
     let mut examples: Vec<(usize, &Entry)> = file
@@ -340,39 +359,18 @@ fn build(shared: &Shared, batch: &Batch) -> Result<Option<Built>, String> {
     examples.sort_by_key(|(distance, _)| *distance);
     let examples: Vec<(String, String)> = examples
         .into_iter()
-        .take(EXAMPLES)
+        .take(examples_wanted)
         .map(|(_, entry)| (entry.source.clone(), entry.translation.clone()))
-        .collect();
-    let sources: Vec<&str> = strings
-        .iter()
-        .map(|(_, entry)| entry.source.as_str())
         .collect();
     // What the file is, from its header: `quest/000/X — «Title» · in play order`.
     let about = file.header.comments.first().cloned().unwrap_or_default();
     let title = about
         .split_once('«')
         .and_then(|(_, rest)| rest.split_once('»'))
-        .map(|(title, _)| title);
-    let names = shared
-        .names
-        .in_texts(title.into_iter().chain(sources.iter().copied()), NAMES);
-    let speakers = speakers_of(&shared.names, &strings);
-    let mut terms: Vec<Term> = Vec::new();
-    for source in &sources {
-        for entry in shared.knowledge.terms_in(source) {
-            if terms.len() < TERMS && !terms.iter().any(|term| term.term == entry.term) {
-                terms.push(Term {
-                    term: entry.term.clone(),
-                    translation: entry.translation.clone(),
-                    note: entry.note.clone(),
-                    never: entry.forbidden.clone(),
-                });
-            }
-        }
-    }
-    let items: Vec<Item> = strings
+        .map(|(title, _)| title.to_owned());
+    let items: Vec<Item> = mine
         .iter()
-        .map(|(id, entry)| Item {
+        .map(|(id, _, entry)| Item {
             id: id.clone(),
             source: entry.source.clone(),
             context: entry.extracted.clone(),
@@ -387,15 +385,57 @@ fn build(shared: &Shared, batch: &Batch) -> Result<Option<Built>, String> {
                 .flatten(),
         })
         .collect();
-    let input = prompt::input(
-        &format!("{PO_DIR}/{}", batch.path),
-        &about,
-        &speakers,
-        &names,
-        &terms,
-        &examples,
-        &items,
+    let task = FileTask {
+        file: format!("{PO_DIR}/{}", batch.path),
+        about,
+        speakers: speakers_of(&shared.names, mine),
+        examples,
+        items,
+    };
+    Ok(Some((task, title)))
+}
+
+/// The request of a pack: each file's part, and the names and terms that
+/// occur in any of them.
+fn build(shared: &Shared, pack: &[Batch]) -> Result<Option<Built>, String> {
+    let examples_wanted = (EXAMPLES / pack.len().max(1)).max(5);
+    let mut strings: Strings = Vec::new();
+    let mut files = Vec::new();
+    let mut titles = Vec::new();
+    for batch in pack {
+        if let Some((task, title)) = file_task(shared, batch, examples_wanted, &mut strings)? {
+            files.push(task);
+            titles.extend(title);
+        }
+    }
+    if strings.is_empty() {
+        return Ok(None);
+    }
+    let sources: Vec<&str> = strings
+        .iter()
+        .map(|(_, _, entry)| entry.source.as_str())
+        .collect();
+    let names = shared.names.in_texts(
+        titles
+            .iter()
+            .map(String::as_str)
+            .chain(sources.iter().copied()),
+        NAMES,
     );
+    let mut terms: Vec<Term> = Vec::new();
+    for source in &sources {
+        for entry in shared.knowledge.terms_in(source) {
+            if terms.len() < TERMS && !terms.iter().any(|term| term.term == entry.term) {
+                terms.push(Term {
+                    term: entry.term.clone(),
+                    translation: entry.translation.clone(),
+                    note: entry.note.clone(),
+                    never: entry.forbidden.clone(),
+                });
+            }
+        }
+    }
+    let input = prompt::input(&files, &names, &terms);
     Ok(Some(Built { input, strings }))
 }
 
@@ -411,7 +451,7 @@ fn request(shared: &Shared, input: String) -> Request {
 
 /// The problems of a translation of the string `id` of a batch.
 fn problems(shared: &Shared, strings: &Strings, id: &str, text: &str) -> Vec<String> {
-    let Some((_, entry)) = strings.iter().find(|(candidate, _)| candidate == id) else {
+    let Some((_, _, entry)) = strings.iter().find(|(candidate, _, _)| candidate == id) else {
         return vec!["not a string of the batch".to_owned()];
     };
     check_translation(
@@ -428,7 +468,6 @@ fn problems(shared: &Shared, strings: &Strings, id: &str, text: &str) -> Vec<Str
 /// problems; what fails again is rejected and stays untranslated.
 async fn settle(
     shared: &Shared,
-    batch: &Batch,
     built: &Built,
     answers: &mut HashMap<String, String>,
     usage: &mut Usage,
@@ -463,11 +502,13 @@ async fn settle(
         };
         if found.is_empty() {
             answers.insert(id, translation);
-        } else if let Some((_, entry)) =
-            built.strings.iter().find(|(candidate, _)| *candidate == id)
+        } else if let Some((_, path, entry)) = built
+            .strings
+            .iter()
+            .find(|(candidate, _, _)| *candidate == id)
         {
             rejected.push(Rejected {
-                path: batch.path.clone(),
+                path: path.clone(),
                 context: entry.context.clone(),
                 translation,
                 problems: found,
@@ -477,13 +518,12 @@ async fn settle(
     Ok(rejected)
 }
 
-/// Translates one batch: one request, one more for the translations that
-/// fail the checks, and one write of what passes.
-async fn translate(shared: Arc<Shared>, batch: Batch) -> Result<Done, ModelError> {
+/// Translates one pack: one request, one more for the translations that
+/// fail the checks, and one write per file of what passes.
+async fn translate(shared: Arc<Shared>, pack: Pack) -> Result<Done, ModelError> {
     let built = {
         let shared = Arc::clone(&shared);
-        let batch = batch.clone();
-        tokio::task::spawn_blocking(move || build(&shared, &batch))
+        tokio::task::spawn_blocking(move || build(&shared, &pack))
             .await
             .map_err(|error| ModelError::Invalid(error.to_string()))?
             .map_err(ModelError::Invalid)?
@@ -502,28 +542,32 @@ async fn translate(shared: Arc<Shared>, batch: Batch) -> Result<Done, ModelError
         .await?;
     add(&mut usage, reply.usage);
     let mut answers = prompt::parse(&reply.text).map_err(ModelError::Invalid)?;
-    let rejected = settle(&shared, &batch, &built, &mut answers, &mut usage).await?;
-    let translations: Vec<(String, String)> = built
-        .strings
-        .iter()
-        .filter_map(|(id, entry)| {
-            answers
-                .get(id)
-                .filter(|text| !text.is_empty())
-                .map(|text| (entry.context.clone(), text.clone()))
-        })
-        .collect();
+    let rejected = settle(&shared, &built, &mut answers, &mut usage).await?;
+    let mut by_file: BTreeMap<String, Vec<(String, String)>> = BTreeMap::new();
+    for (id, path, entry) in &built.strings {
+        if let Some(text) = answers.get(id).filter(|text| !text.is_empty()) {
+            by_file
+                .entry(path.clone())
+                .or_default()
+                .push((entry.context.clone(), text.clone()));
+        }
+    }
     let written = {
         let session = Arc::clone(&shared.session);
-        let path = batch.path.clone();
         let fuzzy = shared.options.fuzzy;
-        tokio::task::spawn_blocking(move || session.fill(&path, &translations, fuzzy))
-            .await
-            .map_err(|error| ModelError::Invalid(error.to_string()))?
-            .map_err(|error| ModelError::Invalid(error.to_string()))?
+        tokio::task::spawn_blocking(move || {
+            by_file.iter().try_fold(0, |written, (path, translations)| {
+                session
+                    .fill(path, translations, fuzzy)
+                    .map(|done| written + done.len())
+            })
+        })
+        .await
+        .map_err(|error| ModelError::Invalid(error.to_string()))?
+        .map_err(|error| ModelError::Invalid(error.to_string()))?
     };
     Ok(Done {
-        written: written.len(),
+        written,
         rejected,
         usage,
     })
@@ -642,7 +686,7 @@ fn failed(error: ModelError, failures: &mut u32, pace: &mut usize, handle: &Run)
 /// its own, in the order of [`crate::names::NAME_SHEETS`], and then all
 /// others. The names are read again after each name sheet, so later
 /// batches use the translations it wrote.
-fn phases(batches: Vec<Batch>) -> Vec<(bool, VecDeque<Batch>)> {
+fn phases(batches: Vec<Batch>) -> Vec<(bool, VecDeque<Pack>)> {
     let mut names: BTreeMap<usize, VecDeque<Batch>> = BTreeMap::new();
     let mut rest = VecDeque::new();
     for batch in batches {
@@ -651,12 +695,50 @@ fn phases(batches: Vec<Batch>) -> Vec<(bool, VecDeque<Batch>)> {
             None => rest.push_back(batch),
         }
     }
-    let mut phases: Vec<(bool, VecDeque<Batch>)> =
-        names.into_values().map(|queue| (true, queue)).collect();
+    let mut phases: Vec<(bool, VecDeque<Pack>)> = names
+        .into_values()
+        .map(|queue| (true, pack(queue)))
+        .collect();
     if !rest.is_empty() {
-        phases.push((false, rest));
+        phases.push((false, pack(rest)));
     }
     phases
+}
+
+/// The requests of a queue of batches: a file whose open strings are one
+/// batch is packed with the files after it, up to [`SCENE_BATCH`] strings and
+/// [`PACK_FILES`] files; a batch of a file split into several goes alone, so
+/// a long scene still goes part by part.
+fn pack(batches: VecDeque<Batch>) -> VecDeque<Pack> {
+    let mut per_file: HashMap<String, usize> = HashMap::new();
+    for batch in &batches {
+        *per_file.entry(batch.path.clone()).or_default() += 1;
+    }
+    let mut packs = VecDeque::new();
+    let mut open: Pack = Vec::new();
+    let mut size = 0;
+    for batch in batches {
+        if per_file[&batch.path] > 1 {
+            if !open.is_empty() {
+                packs.push_back(std::mem::take(&mut open));
+                size = 0;
+            }
+            packs.push_back(vec![batch]);
+            continue;
+        }
+        if !open.is_empty()
+            && (size + batch.contexts.len() > SCENE_BATCH || open.len() == PACK_FILES)
+        {
+            packs.push_back(std::mem::take(&mut open));
+            size = 0;
+        }
+        size += batch.contexts.len();
+        open.push(batch);
+    }
+    if !open.is_empty() {
+        packs.push_back(open);
+    }
+    packs
 }
 
 /// The request pace and the failures in a row, kept across phases.
@@ -665,11 +747,13 @@ struct Pace {
     failures: u32,
 }
 
-/// The first batch of `queue` whose file has no batch in flight. Batches of
-/// a scene go one after another, so each continues the dialogue the one
-/// before translated; batches of other files go side by side.
-fn take_next(queue: &mut VecDeque<Batch>, busy: &HashSet<String>) -> Option<Batch> {
-    let index = queue.iter().position(|batch| !busy.contains(&batch.path))?;
+/// The first pack of `queue` none of whose files has a batch in flight.
+/// Batches of a scene go one after another, so each continues the dialogue
+/// the one before translated; other files go side by side.
+fn take_next(queue: &mut VecDeque<Pack>, busy: &HashSet<String>) -> Option<Pack> {
+    let index = queue
+        .iter()
+        .position(|pack| pack.iter().all(|batch| !busy.contains(&batch.path)))?;
     queue.remove(index)
 }
 
@@ -677,32 +761,30 @@ fn take_next(queue: &mut VecDeque<Batch>, busy: &HashSet<String>) -> Option<Batc
 /// early.
 async fn drain(
     shared: &Arc<Shared>,
-    mut queue: VecDeque<Batch>,
+    mut queue: VecDeque<Pack>,
     pace: &mut Pace,
     handle: &Run,
 ) -> Option<Stop> {
-    let mut running: JoinSet<(Batch, Result<Done, ModelError>)> = JoinSet::new();
-    // Scene files with a batch in flight, and the file of each task.
+    let mut running: JoinSet<(Pack, Result<Done, ModelError>)> = JoinSet::new();
+    // Scene files with a batch in flight, and the files of each task.
     let mut busy: HashSet<String> = HashSet::new();
-    let mut files: HashMap<tokio::task::Id, String> = HashMap::new();
+    let mut files: HashMap<tokio::task::Id, Vec<String>> = HashMap::new();
     loop {
         if handle.cancelled() {
             running.abort_all();
             return Some(Stop::Cancelled);
         }
         while running.len() < pace.now
-            && let Some(batch) = take_next(&mut queue, &busy)
+            && let Some(next) = take_next(&mut queue, &busy)
         {
-            let path = batch.path.clone();
-            if is_scene(&path) {
-                busy.insert(path.clone());
-            }
+            let paths: Vec<String> = next.iter().map(|batch| batch.path.clone()).collect();
+            busy.extend(paths.iter().filter(|path| is_scene(path)).cloned());
             let shared = Arc::clone(shared);
             let task = running.spawn(async move {
-                let result = translate(shared, batch.clone()).await;
-                (batch, result)
+                let result = translate(shared, next.clone()).await;
+                (next, result)
             });
-            files.insert(task.id(), path);
+            files.insert(task.id(), paths);
         }
         let joined = tokio::select! {
             // Nothing left running means every batch has answered.
@@ -716,10 +798,10 @@ async fn drain(
             Ok((id, _)) => *id,
             Err(error) => error.id(),
         };
-        if let Some(path) = files.remove(&id) {
+        for path in files.remove(&id).unwrap_or_default() {
             busy.remove(&path);
         }
-        let Ok((_, (batch, result))) = joined else {
+        let Ok((_, (sent, result))) = joined else {
             continue;
         };
         match result {
@@ -755,7 +837,7 @@ async fn drain(
                     Next::Continue => {}
                     Next::Wait(wait) => {
                         if retry {
-                            queue.push_front(batch);
+                            queue.push_front(sent);
                         }
                         tokio::select! {
                             () = tokio::time::sleep(wait) => {}
@@ -872,18 +954,57 @@ mod tests {
             first,
             last: first,
         };
-        let mut queue: VecDeque<Batch> = vec![
-            batch("cut_scene/024/A.po", 100),
-            batch("cut_scene/024/A.po", 200),
-            batch("Addon/0.po", 0),
+        let mut queue: VecDeque<Pack> = vec![
+            vec![batch("cut_scene/024/A.po", 100)],
+            vec![batch("cut_scene/024/A.po", 200)],
+            vec![batch("quest/001/B.po", 0), batch("Addon/0.po", 0)],
         ]
         .into();
         let busy: HashSet<String> = HashSet::from(["cut_scene/024/A.po".to_owned()]);
-        let next = take_next(&mut queue, &busy).expect("another file");
-        assert_eq!(next.path, "Addon/0.po");
+        let next = take_next(&mut queue, &busy).expect("other files");
+        assert_eq!(next[1].path, "Addon/0.po");
         assert!(take_next(&mut queue, &busy).is_none());
         let next = take_next(&mut queue, &HashSet::new()).expect("the scene goes on");
-        assert_eq!(next.first, 100);
+        assert_eq!(next[0].first, 100);
+    }
+
+    #[test]
+    fn small_files_go_together_and_a_split_file_alone() {
+        let batch = |path: &str, strings: usize| Batch {
+            path: path.to_owned(),
+            contexts: (0..strings)
+                .map(|index| format!("{path}:{index}"))
+                .collect(),
+            first: 0,
+            last: strings.saturating_sub(1),
+        };
+        let queue: VecDeque<Batch> = vec![
+            batch("quest/000/A.po", 30),
+            batch("quest/000/B.po", 60),
+            batch("quest/000/C.po", 70),
+            batch("cut_scene/000/D.po", 100),
+            batch("cut_scene/000/D.po", 100),
+            batch("quest/000/E.po", 5),
+        ]
+        .into();
+        let packs: Vec<Vec<String>> = pack(queue)
+            .into_iter()
+            .map(|pack| {
+                pack.into_iter()
+                    .map(|batch| batch.path[batch.path.len() - 4..].to_owned())
+                    .collect()
+            })
+            .collect();
+        assert_eq!(
+            packs,
+            vec![
+                vec!["A.po", "B.po"],
+                vec!["C.po"],
+                vec!["D.po"],
+                vec!["D.po"],
+                vec!["E.po"],
+            ]
+        );
     }
 
     #[test]
@@ -903,7 +1024,14 @@ mod tests {
         ];
         let order: Vec<(bool, Vec<String>)> = phases(batches)
             .into_iter()
-            .map(|(names, queue)| (names, queue.into_iter().map(|batch| batch.path).collect()))
+            .map(|(names, queue)| {
+                let paths = queue
+                    .into_iter()
+                    .flatten()
+                    .map(|batch| batch.path)
+                    .collect();
+                (names, paths)
+            })
             .collect();
         assert_eq!(
             order,
