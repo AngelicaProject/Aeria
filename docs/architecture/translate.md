@@ -117,8 +117,8 @@ The task is JSON built from the files as they are when the request is sent:
     lines (the other client languages, speaker or kind, the row's other
     cells, macro legends), `gendered`: the texts (`source`, `fr`, `de`)
     whose line has a condition on the player character's gender, so the
-    translation most likely needs one too, and the previous source and
-    translation of a fuzzy one.
+    translation most likely needs one too, `maxLength` for an interface
+    label (below), and the previous source and translation of a fuzzy one.
 
 All requests of a run share one `prompt_cache_key`. A probe of this provider
 measured that requests with the same key and prefix got 99 % of the prompt
@@ -126,14 +126,37 @@ from the cache once one request had stored it, eight parallel requests on a
 cold prefix 25 %, and requests each with its own key 13 %; so the first
 request of a run goes alone and the others start when it has answered.
 
-The answer is one JSON object from string IDs to translations; the first
-object in the answer is read. A string the model leaves out stays for a later
-run.
+The answer is one JSON object from string IDs to pairs: the first words of
+the string's source (up to three, macros may be left out), then the
+translation. The first object in the answer is read. A string the model leaves
+out stays for a later run.
+
+In a long run of short, similar strings the model can slip and give a string
+the next one's translation; numbered IDs alone do not show it, and the
+translation passes every check. The repeated words do: an answer whose words,
+compared by letters and digits only, are not the start of its own source, or
+that gives a bare translation, is refused as belonging to another string
+(`fit::matches_start`).
+
+## Interface labels
+
+The game lays out its interface for the official localizations. A short
+string (at most 40 characters shown, no line break) of an interface sheet
+(`Addon`, `AddonTransient`, `BaseParam`, `ClassJob`, `ClassJobCategory`,
+`Completion`, `ConfigKey`, `ContentType`, `ItemSearchCategory`,
+`ItemUICategory`, `MainCommand`, `MainCommandCategory`) gets `maxLength`: the
+characters shown by the longest of its English source and the German and
+French lines of its context, macros not counted, `<nbsp>` as one, `<shy>` as
+none (`fit::length_budget`). The request asks for a translation within that
+length, with the language's usual abbreviations when needed, and a longer one
+is refused. Names of items, characters, and places get no length: their
+tooltips show them whole.
 
 ## Checking and writing
 
 Every translation is checked like a save in the editor
-([`po-project.md`](./po-project.md#checking)). A batch's failing translations
+([`po-project.md`](./po-project.md#checking)), after the answer's first
+words and an interface label's length. A batch's failing translations
 go back once, in one request, with each problem stated; what fails again stays
 untranslated and is listed in the run's status with its problems. Advice does
 not reject a translation.

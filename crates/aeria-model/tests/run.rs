@@ -75,7 +75,7 @@ fn serve(answer: fn(&str, &str) -> String) -> (String, Arc<Mutex<Vec<Value>>>) {
             for string in strings {
                 let id = string["id"].as_str().expect("id");
                 let source = string["source"].as_str().expect("source");
-                answers.insert(id.to_owned(), Value::from(answer(id, source)));
+                answers.insert(id.to_owned(), json!([source, answer(id, source)]));
             }
             let text = Value::from(Value::Object(answers).to_string());
             let events = format!(

@@ -57,9 +57,15 @@ pub fn instructions(source_language: &str, target_language: &str, style: Option<
          every word that agrees with the player character, unless it is phrased so that \
          nothing does. A string with `previous` was translated before its \
          source changed: `previous.source` is the old source and `previous.translation` its \
-         translation; keep what still fits.\n\n\
+         translation; keep what still fits. A string with `maxLength` is an interface label: \
+         its translation shows at most that many characters (macros not counted), as the \
+         official localizations fit the game's layout; shorten it, with the usual \
+         abbreviations of the language when needed (Шанс прям. удара).\n\n\
          Answer with one JSON object and nothing else: each key is the `id` of a string and \
-         each value its translation as macro text. Translate every string.",
+         each value an array of two strings: the first words of that string's source, up to \
+         three, copied as they are (macros may be left out), then its translation as macro \
+         text. The first words show which string a translation belongs to; give every \
+         string its own translation. Translate every string.",
     );
     text
 }
@@ -72,6 +78,16 @@ pub struct Item {
     pub context: Vec<String>,
     /// The old source and translation of a fuzzy string.
     pub previous: Option<(String, String)>,
+    /// The most characters an interface label's translation may show.
+    pub max_length: Option<usize>,
+}
+
+/// One answer: the words it repeats from the start of its source, and the
+/// translation. `start` is `None` when the answer gave a bare translation.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Answer {
+    pub start: Option<String>,
+    pub text: String,
 }
 
 /// A term of the project for a batch.
@@ -148,6 +164,9 @@ fn file_value(task: &FileTask) -> Value {
                 if let Some((source, translation)) = &item.previous {
                     value["previous"] = json!({ "source": source, "translation": translation });
                 }
+                if let Some(max) = item.max_length {
+                    value["maxLength"] = Value::from(max);
+                }
                 value
             })
             .collect::<Vec<_>>(),
@@ -187,17 +206,20 @@ pub fn retry_input(original: &str, problems: &[(String, String, Vec<String>)]) -
         .collect();
     format!(
         "{original}\n\nThese translations of the batch have problems. Answer with one JSON \
-         object of only these ids and their corrected translations.\n{}",
+         object of only these ids, each with the first words of its source and its corrected \
+         translation, as before.\n{}",
         Value::from(fixes)
     )
 }
 
-/// Reads an answer: the first JSON object in it, as ids and translations.
+/// Reads an answer: the first JSON object in it, as ids with the first words
+/// of their source and their translations. A bare string is read as a
+/// translation without its first words; other values are left out.
 ///
 /// # Errors
 ///
-/// Returns a description when the answer holds no JSON object of strings.
-pub fn parse(text: &str) -> Result<HashMap<String, String>, String> {
+/// Returns a description when the answer holds no JSON object.
+pub fn parse(text: &str) -> Result<HashMap<String, Answer>, String> {
     let start = text.find('{').ok_or("the answer holds no JSON object")?;
     let end = text.rfind('}').ok_or("the answer holds no JSON object")?;
     if end < start {
@@ -208,7 +230,23 @@ pub fn parse(text: &str) -> Result<HashMap<String, String>, String> {
     let object = value.as_object().ok_or("the answer is not a JSON object")?;
     Ok(object
         .iter()
-        .filter_map(|(id, value)| value.as_str().map(|text| (id.clone(), text.to_owned())))
+        .filter_map(|(id, value)| {
+            let answer = match value {
+                Value::String(text) => Answer {
+                    start: None,
+                    text: text.clone(),
+                },
+                Value::Array(parts) => match parts.as_slice() {
+                    [Value::String(start), Value::String(text)] => Answer {
+                        start: Some(start.clone()),
+                        text: text.clone(),
+                    },
+                    _ => return None,
+                },
+                _ => return None,
+            };
+            Some((id.clone(), answer))
+        })
         .collect())
 }
 
@@ -218,10 +256,20 @@ mod tests {
 
     #[test]
     fn answers_are_read_from_the_first_json_object() {
-        let parsed = parse("Here:\n```json\n{\"1\": \"ОК\", \"2\": \"Отмена\", \"3\": 4}\n```")
-            .expect("parsed");
+        let parsed = parse(
+            "Here:\n```json\n{\"1\": [\"OK\", \"ОК\"], \"2\": \"Отмена\", \"3\": 4, \"4\": [\"a\"]}\n```",
+        )
+        .expect("parsed");
         assert_eq!(parsed.len(), 2);
-        assert_eq!(parsed["1"], "ОК");
+        assert_eq!(
+            parsed["1"],
+            Answer {
+                start: Some("OK".to_owned()),
+                text: "ОК".to_owned()
+            }
+        );
+        assert_eq!(parsed["2"].start, None);
+        assert_eq!(parsed["2"].text, "Отмена");
         assert!(parse("no object").is_err());
         assert!(parse("[1, 2]").is_err());
     }
@@ -248,6 +296,7 @@ mod tests {
                     source: "OK".to_owned(),
                     context: vec!["de: Ok".to_owned()],
                     previous: None,
+                    max_length: None,
                 }],
             }],
             &[("Minfilia".to_owned(), "Минфилия".to_owned())],
@@ -268,6 +317,7 @@ mod tests {
             source: source.to_owned(),
             context: context.iter().map(|line| (*line).to_owned()).collect(),
             previous: None,
+            max_length: None,
         };
         let input = input(
             &[FileTask {

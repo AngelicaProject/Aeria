@@ -15,8 +15,9 @@ use tokio::task::JoinSet;
 
 use crate::ModelError;
 use crate::codex::{Codex, Request, Usage};
+use crate::fit;
 use crate::names::{Names, name_sheet_of};
-use crate::prompt::{self, FileTask, Item, Term};
+use crate::prompt::{self, Answer, FileTask, Item, Term};
 
 /// Strings of a scene file that are one request; a longer scene is split.
 const SCENE_BATCH: usize = 150;
@@ -383,6 +384,7 @@ fn file_task(
                         .map(|source| (source, entry.translation.clone()))
                 })
                 .flatten(),
+            max_length: fit::length_budget(&batch.path, &entry.source, &entry.extracted),
         })
         .collect();
     let task = FileTask {
@@ -449,19 +451,48 @@ fn request(shared: &Shared, input: String) -> Request {
     }
 }
 
-/// The problems of a translation of the string `id` of a batch.
-fn problems(shared: &Shared, strings: &Strings, id: &str, text: &str) -> Vec<String> {
-    let Some((_, _, entry)) = strings.iter().find(|(candidate, _, _)| candidate == id) else {
+/// The problems of an answer for the string `id` of a batch: that it
+/// belongs to another string, that an interface label is too long, and what
+/// the translation checks find.
+fn problems(shared: &Shared, strings: &Strings, id: &str, answer: &Answer) -> Vec<String> {
+    let Some((_, path, entry)) = strings.iter().find(|(candidate, _, _)| candidate == id) else {
         return vec!["not a string of the batch".to_owned()];
     };
-    check_translation(
-        &shared.knowledge,
-        &shared.target,
-        &entry.source,
-        text,
-        &entry.extracted,
-    )
-    .problems
+    match &answer.start {
+        None => {
+            return vec![
+                "the answer does not begin with the first words of this string's source".to_owned(),
+            ];
+        }
+        Some(start) if !fit::matches_start(start, &entry.source) => {
+            return vec![format!(
+                "the answer begins with \"{start}\", which is not the start of this string's \
+                 source: its translation belongs to another string; translate this string"
+            )];
+        }
+        Some(_) => {}
+    }
+    let mut found = Vec::new();
+    if let Some(budget) = fit::length_budget(path, &entry.source, &entry.extracted) {
+        let length = fit::visible_length(&answer.text);
+        if length > budget {
+            found.push(format!(
+                "the translation shows {length} characters and the interface fits {budget}: \
+                 shorten it, with the usual abbreviations when needed"
+            ));
+        }
+    }
+    found.extend(
+        check_translation(
+            &shared.knowledge,
+            &shared.target,
+            &entry.source,
+            &answer.text,
+            &entry.extracted,
+        )
+        .problems,
+    );
+    found
 }
 
 /// Sends the translations that failed the checks back once with their
@@ -469,14 +500,14 @@ fn problems(shared: &Shared, strings: &Strings, id: &str, text: &str) -> Vec<Str
 async fn settle(
     shared: &Shared,
     built: &Built,
-    answers: &mut HashMap<String, String>,
+    answers: &mut HashMap<String, Answer>,
     usage: &mut Usage,
 ) -> Result<Vec<Rejected>, ModelError> {
-    let failing: Vec<(String, String, Vec<String>)> = answers
+    let failing: Vec<(String, Answer, Vec<String>)> = answers
         .iter()
-        .filter_map(|(id, text)| {
-            let found = problems(shared, &built.strings, id, text);
-            (!found.is_empty()).then(|| (id.clone(), text.clone(), found))
+        .filter_map(|(id, answer)| {
+            let found = problems(shared, &built.strings, id, answer);
+            (!found.is_empty()).then(|| (id.clone(), answer.clone(), found))
         })
         .collect();
     if failing.is_empty() {
@@ -485,23 +516,27 @@ async fn settle(
     for (id, _, _) in &failing {
         answers.remove(id);
     }
+    let sent: Vec<(String, String, Vec<String>)> = failing
+        .iter()
+        .map(|(id, answer, found)| (id.clone(), answer.text.clone(), found.clone()))
+        .collect();
     let retry = shared
         .codex
-        .respond(&request(
-            shared,
-            prompt::retry_input(&built.input, &failing),
-        ))
+        .respond(&request(shared, prompt::retry_input(&built.input, &sent)))
         .await?;
     add(usage, retry.usage);
     let fixed = prompt::parse(&retry.text).unwrap_or_default();
     let mut rejected = Vec::new();
     for (id, first, first_problems) in failing {
-        let (translation, found) = match fixed.get(&id) {
-            Some(text) => (text.clone(), problems(shared, &built.strings, &id, text)),
+        let (answer, found) = match fixed.get(&id) {
+            Some(answer) => (
+                answer.clone(),
+                problems(shared, &built.strings, &id, answer),
+            ),
             None => (first, first_problems),
         };
         if found.is_empty() {
-            answers.insert(id, translation);
+            answers.insert(id, answer);
         } else if let Some((_, path, entry)) = built
             .strings
             .iter()
@@ -510,7 +545,7 @@ async fn settle(
             rejected.push(Rejected {
                 path: path.clone(),
                 context: entry.context.clone(),
-                translation,
+                translation: answer.text,
                 problems: found,
             });
         }
@@ -545,11 +580,11 @@ async fn translate(shared: Arc<Shared>, pack: Pack) -> Result<Done, ModelError> 
     let rejected = settle(&shared, &built, &mut answers, &mut usage).await?;
     let mut by_file: BTreeMap<String, Vec<(String, String)>> = BTreeMap::new();
     for (id, path, entry) in &built.strings {
-        if let Some(text) = answers.get(id).filter(|text| !text.is_empty()) {
+        if let Some(answer) = answers.get(id).filter(|answer| !answer.text.is_empty()) {
             by_file
                 .entry(path.clone())
                 .or_default()
-                .push((entry.context.clone(), text.clone()));
+                .push((entry.context.clone(), answer.text.clone()));
         }
     }
     let written = {

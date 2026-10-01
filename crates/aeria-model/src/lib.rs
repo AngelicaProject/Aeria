@@ -12,6 +12,7 @@
 
 pub mod auth;
 pub mod codex;
+pub mod fit;
 pub mod names;
 pub mod prompt;
 pub mod run;
