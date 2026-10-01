@@ -103,7 +103,8 @@ The task is JSON built from the file as it is when the batch is sent:
   title as whole words,
   with their translations from the name sheets of `po/` (`Action`,
   `BNpcName`, `ENpcResident`, `Item`, `PlaceName`, `Quest`, `Status`, and
-  others; short, capitalized strings without macros), at most 80;
+  others; short, capitalized strings without macros; a name translated
+  several ways gives its most frequent translation), at most 80;
 - `terms`: terms of `terms.csv` that occur in the sources, with their notes
   and forbidden variants, at most 60;
 - `examples`: up to 40 translated strings of the same file, nearest to the

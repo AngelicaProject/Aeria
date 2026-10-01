@@ -71,6 +71,29 @@ pub struct Names {
     labels: BTreeMap<String, usize>,
 }
 
+/// Each name once, with the translation it has most often; between equally
+/// frequent translations, the one seen first. The same name in many rows of
+/// the name sheets (a character in every place they stand) can be translated
+/// several ways, and the most frequent is the project's usual one.
+fn most_frequent(pairs: Vec<(String, String)>) -> Vec<(String, String)> {
+    let mut counts: BTreeMap<String, Vec<(String, usize)>> = BTreeMap::new();
+    for (source, translation) in pairs {
+        let variants = counts.entry(source).or_default();
+        match variants.iter_mut().find(|(seen, _)| *seen == translation) {
+            Some((_, count)) => *count += 1,
+            None => variants.push((translation, 1)),
+        }
+    }
+    counts
+        .into_iter()
+        .filter_map(|(source, variants)| {
+            // `max_by_key` keeps the last of equals; reversed, the first seen.
+            let (translation, _) = variants.into_iter().rev().max_by_key(|(_, count)| *count)?;
+            Some((source, translation))
+        })
+        .collect()
+}
+
 /// A name's letters and digits in upper case.
 fn label(text: &str) -> String {
     text.chars()
@@ -81,10 +104,11 @@ fn label(text: &str) -> String {
 
 impl Names {
     /// Reads the translated names from the name sheets' files under `po/`.
-    /// A name translated two ways keeps the first.
+    /// A name translated more than one way keeps its most frequent
+    /// translation (see [`most_frequent`]).
     #[must_use]
     pub fn load(root: &Path) -> Self {
-        let mut found: BTreeMap<String, String> = BTreeMap::new();
+        let mut found: Vec<(String, String)> = Vec::new();
         let paths = aeria_po::list(root).unwrap_or_default();
         for path in paths {
             if name_sheet_of(&path).is_none() {
@@ -100,11 +124,11 @@ impl Names {
                 if Identity::parse(&entry.context)
                     .is_ok_and(|identity| NAME_SHEETS.contains(&identity.sheet.as_str()))
                 {
-                    found.entry(entry.source).or_insert(entry.translation);
+                    found.push((entry.source, entry.translation));
                 }
             }
         }
-        Self::new(found.into_iter().collect())
+        Self::new(most_frequent(found))
     }
 
     /// Names from pairs of source and translation.
@@ -214,6 +238,21 @@ mod tests {
             Some(("Limsa Lominsa".to_owned(), "Лимса Ломинса".to_owned()))
         );
         assert_eq!(names.speaker("FORTEMPSGUARD00054"), None);
+        let pairs = |list: &[(&str, &str)]| {
+            list.iter()
+                .map(|(source, translation)| ((*source).to_owned(), (*translation).to_owned()))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            most_frequent(pairs(&[
+                ("Y'shtola", "Йштола"),
+                ("Y'shtola", "Я'штола"),
+                ("Y'shtola", "Я'штола"),
+                ("Krile", "Крил"),
+                ("Krile", "Крилэ"),
+            ])),
+            pairs(&[("Krile", "Крил"), ("Y'shtola", "Я'штола")])
+        );
         assert_eq!(name_sheet_of("PlaceName.po"), Some(0));
         assert_eq!(name_sheet_of("Item/31000.po"), Some(9));
         assert_eq!(name_sheet_of("Quest~.po"), Some(NAME_SHEETS.len() - 1));
