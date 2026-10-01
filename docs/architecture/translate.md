@@ -134,9 +134,13 @@ out stays for a later run.
 In a long run of short, similar strings the model can slip and give a string
 the next one's translation; numbered IDs alone do not show it, and the
 translation passes every check. The repeated words do: an answer whose words,
-compared by letters and digits only, are not the start of its own source, or
-that gives a bare translation, is refused as belonging to another string
-(`fit::matches_start`).
+compared by letters and digits only and case ignored, do not occur in its own
+source (macro tags included, since the model may copy from them or skip a
+conditional opening such as `<if $n2>Lv. …</if>`), or that gives a bare
+translation, is refused as belonging to another string
+(`fit::matches_start`). Empty words are accepted only for a source that
+begins with a macro. Macro tags are read whole: a `>` inside parentheses or
+quotes, as in `<if ($n1 > 0)>`, does not end a tag.
 
 ## Interface labels
 

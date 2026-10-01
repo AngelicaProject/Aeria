@@ -41,23 +41,81 @@ pub fn sheet_of(path: &str) -> &str {
         .trim_end_matches('~')
 }
 
+/// Calls `visit` with each character of macro text and whether it is part of
+/// a macro tag. A tag runs from `<` to the `>` that closes it outside
+/// parentheses and quotes, so `<if ($n1 > 0)>` and
+/// `<sheet Addon 1 "<noun-en …>">` are one tag each.
+fn scan(text: &str, mut visit: impl FnMut(char, bool)) {
+    let mut in_tag = false;
+    let mut depth = 0usize;
+    let mut quoted = false;
+    let mut escaped = false;
+    for c in text.chars() {
+        if !in_tag {
+            if c == '<' {
+                in_tag = true;
+                depth = 0;
+                quoted = false;
+                visit(c, true);
+            } else {
+                visit(c, false);
+            }
+            continue;
+        }
+        visit(c, true);
+        if escaped {
+            escaped = false;
+        } else if c == '\\' {
+            escaped = true;
+        } else if c == '"' {
+            quoted = !quoted;
+        } else if !quoted {
+            match c {
+                '(' => depth += 1,
+                ')' => depth = depth.saturating_sub(1),
+                '>' if depth == 0 => in_tag = false,
+                _ => {}
+            }
+        }
+    }
+}
+
 /// The characters a string shows: macros left out, `<nbsp>` one character,
 /// `<shy>` none.
 #[must_use]
 pub fn visible_length(text: &str) -> usize {
     let mut count = 0;
-    let mut rest = text;
-    while let Some(at) = rest.find('<') {
-        count += rest[..at].chars().count();
-        let Some(end) = rest[at..].find('>') else {
-            return count + rest[at..].chars().count();
-        };
-        if &rest[at..=at + end] == "<nbsp>" {
+    let mut tag = String::new();
+    scan(text, |c, in_tag| {
+        if in_tag {
+            tag.push(c);
+            if c == '>' && tag.starts_with('<') && is_closed(&tag) {
+                if tag == "<nbsp>" {
+                    count += 1;
+                }
+                tag.clear();
+            }
+        } else {
+            tag.clear();
             count += 1;
         }
-        rest = &rest[at + end + 1..];
+    });
+    count
+}
+
+/// Whether a collected tag is complete: its parentheses and quotes closed.
+fn is_closed(tag: &str) -> bool {
+    let mut depth = 0i32;
+    let mut quoted = false;
+    for c in tag.chars() {
+        match c {
+            '"' => quoted = !quoted,
+            '(' if !quoted => depth += 1,
+            ')' if !quoted => depth -= 1,
+            _ => {}
+        }
     }
-    count + rest.chars().count()
+    depth <= 0 && !quoted
 }
 
 /// The longest a translation of a short interface string may be: the length
@@ -80,30 +138,36 @@ pub fn length_budget(path: &str, source: &str, context: &[String]) -> Option<usi
     Some(others.fold(own, usize::max))
 }
 
-/// Whether `start`, the words an answer repeats, begins the string's source,
-/// comparing letters and digits only, without macros and case.
+/// Whether `start`, the words an answer repeats, are words of the string's
+/// source, comparing letters and digits only, case ignored. The words may
+/// come from inside its macros or after a conditional part the model left
+/// out, so they need not begin the source; another string's words do not
+/// occur in it. An empty `start` is accepted only for a source that begins
+/// with a macro, whose first words the model cannot tell.
 #[must_use]
 pub fn matches_start(start: &str, source: &str) -> bool {
-    let source = letters(source);
-    if source.is_empty() {
+    let all = letters(source, true);
+    if all.is_empty() {
         return true;
     }
-    let start = letters(start);
-    !start.is_empty() && source.starts_with(&start)
+    let start = letters(start, true);
+    if start.is_empty() {
+        return source
+            .trim_start_matches(|c: char| c.is_whitespace())
+            .starts_with('<');
+    }
+    all.contains(&start)
 }
 
-fn letters(text: &str) -> String {
+/// The lowercase letters and digits of macro text, with or without those
+/// inside macro tags.
+fn letters(text: &str, with_macros: bool) -> String {
     let mut out = String::new();
-    let mut in_macro = false;
-    for c in text.chars() {
-        match c {
-            '<' => in_macro = true,
-            '>' if in_macro => in_macro = false,
-            _ if in_macro => {}
-            _ if c.is_alphanumeric() => out.extend(c.to_lowercase()),
-            _ => {}
+    scan(text, |c, in_tag| {
+        if (with_macros || !in_tag) && c.is_alphanumeric() {
+            out.extend(c.to_lowercase());
         }
-    }
+    });
     out
 }
 
@@ -125,6 +189,14 @@ mod tests {
         assert_eq!(visible_length("Butin<nbsp>!"), 7);
         assert_eq!(visible_length("in<shy>struc<shy>tions"), 12);
         assert_eq!(visible_length("Шанс прям. удара"), 16);
+        assert_eq!(
+            visible_length("<if ($n1 > 0)>Crystalline Conflict<else>???</if>"),
+            23
+        );
+        assert_eq!(
+            visible_length(r#"<sheet Addon 15955 0 "<noun-en PlaceName 2 $n18 2 1>" $n14>"#),
+            0
+        );
     }
 
     #[test]
@@ -157,8 +229,29 @@ mod tests {
         ));
         assert!(matches_start("Type 1:", "Type 1: Ignore Depth"));
         assert!(!matches_start("Play Style", "Loot"));
+        assert!(!matches_start("Objective", "None"));
         assert!(!matches_start("", "Loot"));
         assert!(matches_start("", "<icon 77>"));
         assert!(matches_start("!", "!"));
+        assert!(matches_start(
+            "Crystalline Conflict",
+            "<if ($n1 > 0)>Crystalline Conflict<else>???</if>"
+        ));
+        assert!(matches_start(
+            "HP:",
+            "<sheet ActStr $n1 0><br><if $n2>Lv. <num $n2> </if>HP: <num $n3>"
+        ));
+        assert!(matches_start(
+            "Average-sized",
+            "\u{3000}<if ($n2 > 0)>Average-sized<else>Large-sized</if> = <num $n1> pts"
+        ));
+        assert!(matches_start(
+            "<capitalize>",
+            "<capitalize><sheet ActStr $n1 0></capitalize><br>MP: <num $n3>"
+        ));
+        assert!(matches_start(
+            "",
+            r#"<sheet Addon 15955 0 "<noun-en PlaceName 2 $n18 2 1>" $n14 $n12>"#
+        ));
     }
 }
