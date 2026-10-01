@@ -203,7 +203,12 @@ when it:
   `<br>`);
 - uses a forbidden variant of a term of its source (see
   [`knowledge.md`](./knowledge.md));
-- for Russian, writes both genders at once (`готов(а)`).
+- for Russian, writes both genders at once (`готов(а)`);
+- for a language written in Cyrillic, has a slip of letters the source does
+  not have: a stress or other combining mark (`эле́зен`), a word that mixes
+  Cyrillic with Latin or Greek letters (`Танalanе`), or letters of another
+  writing system (`цели无属性`). A letter the source spells with, such as the
+  æ of Pandæmonium, is not a slip.
 
 Advice does not make a translation wrong: a term whose translation does not
 seem to be used, a condition on the player character's gender that may be

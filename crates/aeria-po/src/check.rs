@@ -19,6 +19,95 @@ pub struct Verdict {
     pub advice: Vec<String>,
 }
 
+/// Languages written in Cyrillic, by their primary language subtag.
+const CYRILLIC_LANGUAGES: [&str; 10] = ["ru", "uk", "be", "bg", "sr", "mk", "kk", "ky", "tg", "mn"];
+
+fn is_cyrillic(letter: char) -> bool {
+    matches!(letter, '\u{0400}'..='\u{052F}')
+}
+
+fn is_latin(letter: char) -> bool {
+    letter.is_ascii_alphabetic()
+        || matches!(letter, '\u{00C0}'..='\u{024F}' | '\u{1E00}'..='\u{1EFF}')
+}
+
+fn is_greek(letter: char) -> bool {
+    matches!(letter, '\u{0370}'..='\u{03FF}')
+}
+
+/// The text of a string with each tag as a space, where only words are read.
+fn words_of(text: &str) -> String {
+    let mut plain = String::with_capacity(text.len());
+    let mut depth = 0_usize;
+    let mut escaped = false;
+    for character in text.chars() {
+        match character {
+            '\\' if !escaped => escaped = true,
+            '<' if !escaped => {
+                depth += 1;
+                plain.push(' ');
+            }
+            '>' if !escaped && depth > 0 => depth -= 1,
+            _ => {
+                escaped = false;
+                if depth == 0 {
+                    plain.push(character);
+                }
+            }
+        }
+    }
+    plain
+}
+
+/// Slips of letters in a translation into a language written in Cyrillic:
+/// stress and other combining marks, a word that mixes Cyrillic with Latin
+/// or Greek letters, and letters of another writing system. What the source
+/// has itself, such as the æ of Pandæmonium or a line of Japanese, is not a
+/// slip.
+fn letter_slips(target_language: &str, source: &str, text: &str) -> Vec<String> {
+    let primary = target_language.split('-').next().unwrap_or_default();
+    if !CYRILLIC_LANGUAGES
+        .iter()
+        .any(|language| language.eq_ignore_ascii_case(primary))
+    {
+        return Vec::new();
+    }
+    let plain = words_of(text);
+    let mut slips = Vec::new();
+    if let Some(mark) = plain
+        .chars()
+        .find(|c| matches!(c, '\u{0300}'..='\u{036F}') && !source.contains(*c))
+    {
+        slips.push(format!(
+            "the translation has the mark U+{:04X} (a stress or accent); write the word without it",
+            u32::from(mark)
+        ));
+    }
+    for word in plain.split(|c: char| !c.is_alphanumeric() && !matches!(c, '\u{0300}'..='\u{036F}'))
+    {
+        // A plain Latin letter never belongs in a Cyrillic word; a letter
+        // such as æ does when the source spells the name with it.
+        let mixed = word.chars().any(is_cyrillic)
+            && word.chars().any(|c| {
+                c.is_ascii_alphabetic() || ((is_latin(c) || is_greek(c)) && !source.contains(c))
+            });
+        let other = word.chars().any(|c| {
+            c.is_alphabetic()
+                && !is_cyrillic(c)
+                && !is_latin(c)
+                && !is_greek(c)
+                && !source.contains(c)
+        });
+        if (mixed || other) && !source.contains(word) {
+            slips.push(format!(
+                "«{word}» mixes letters of different alphabets; write it in Cyrillic only"
+            ));
+            break;
+        }
+    }
+    slips
+}
+
 /// Russian forms that write both genders at once, such as `готов(а)`.
 const BOTH_GENDERS: [&str; 6] = ["(а)", "(ла)", "(ая)", "(на)", "(ен)", "(ой)"];
 
@@ -47,6 +136,9 @@ pub fn check_translation(
     verdict
         .problems
         .extend(knowledge.terms.forbidden_in(source, text));
+    verdict
+        .problems
+        .extend(letter_slips(target_language, source, text));
     let russian = target_language.eq_ignore_ascii_case("ru");
     if russian
         && let Some(form) = BOTH_GENDERS
@@ -139,6 +231,48 @@ pub fn check_file(file: &PoFile, knowledge: &Knowledge, target_language: &str) -
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn slips_of_letters_are_problems_unless_the_source_has_them() {
+        let knowledge = Knowledge::default();
+        let problems = |source: &str, text: &str| {
+            check_translation(&knowledge, "ru", source, text, &[]).problems
+        };
+        for (source, text) in [
+            ("Elezen boy", "юный эле\u{301}зен"),
+            ("deep palace sarcosuchus", "сарcosух Дворца мёртвых"),
+            ("Thancred", "Тан\u{915}\u{94D}ред"),
+            ("Pharmakon", "Фарма\u{3BA}он"),
+            ("Mauto", "Маут\u{14D}"),
+        ] {
+            assert!(!problems(source, text).is_empty(), "{text}");
+        }
+        for (source, text) in [
+            ("Pand\u{e6}monium: Abyssos", "Панд\u{e6}мониум: Абиссос"),
+            ("Seed of Magic Alpha", "Зёрна магии \u{3B1}"),
+            (
+                "Use <ui-color 500>Fast Blade</ui-color>.",
+                "Используйте <ui-color 500>Быстрый клинок</ui-color>.",
+            ),
+            ("Hingan andon lamp", "Хинганский фонарь «andon»"),
+            ("A 4K display", "Монитор 4K"),
+            (
+                "ALIASES:<br>/qchat<br>USAGE:",
+                "ПСЕВДОНИМЫ:<br>/qchat<br>ИСПОЛЬЗОВАНИЕ:",
+            ),
+        ] {
+            assert!(
+                problems(source, text).is_empty(),
+                "{text}: {:?}",
+                problems(source, text)
+            );
+        }
+        assert!(
+            check_translation(&knowledge, "de", "Hello", "Hall\u{f6}", &[])
+                .problems
+                .is_empty()
+        );
+    }
 
     #[test]
     fn broken_macros_and_both_genders_are_problems() {
