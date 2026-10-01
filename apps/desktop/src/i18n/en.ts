@@ -1110,7 +1110,7 @@ export const en = {
   "export.release.versionHintGitHub": "Aeria sets the version itself: the date and the release's number on that day. When publishing it checks GitHub and takes the next free number if someone has published in the meantime. Harmonia uses it to tell that an update is out.",
   "export.pack.team": "Team",
   "export.pack.teamHint": "Your team or project name. Players see it in Harmonia and when they first trust the pack.",
-  "export.pack.teamPlaceholder": "Pokeslop team",
+  "export.pack.teamPlaceholder": "Team or project name",
   "export.pack.teamUrl": "Website",
   "export.pack.teamUrlHint": "A page about the translation Harmonia links to.",
   "export.pack.authors": "Authors",

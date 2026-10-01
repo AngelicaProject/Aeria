@@ -1134,7 +1134,7 @@ export const ru: Catalog = {
   "export.release.versionHintGitHub": "Версию Aeria ставит сама: дата и номер выпуска за этот день. При публикации она сверяется с GitHub и, если кто-то уже выпустил обновление, берёт следующий свободный номер. По версии Harmonia понимает, что вышло обновление.",
   "export.pack.team": "Команда",
   "export.pack.teamHint": "Название команды или проекта. Игроки видят его в Harmonia и когда впервые доверяют пакету.",
-  "export.pack.teamPlaceholder": "Команда Pokeslop",
+  "export.pack.teamPlaceholder": "Название команды или проекта",
   "export.pack.teamUrl": "Сайт",
   "export.pack.teamUrlHint": "Страница перевода, на которую сошлётся Harmonia.",
   "export.pack.authors": "Авторы",
