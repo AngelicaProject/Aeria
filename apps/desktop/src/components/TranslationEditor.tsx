@@ -1,6 +1,6 @@
 import { forwardRef, memo, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
 import { bindingKey, domKey, rowKey } from "../binding";
-import type { ReviewState, SourceBinding, TranslationCellDto, TranslationRowDto, UnitChangeKind } from "../types";
+import type { EntryChangeKind, SourceBinding, TranslationCellDto, TranslationRowDto } from "../types";
 import { diffWords } from "../textDiff";
 import { IconButton } from "../ui/primitives/IconButton";
 import { Segmented } from "../ui/primitives/Segmented";
@@ -9,8 +9,9 @@ import { MacroEditor, focusMacroEditor, type MacroEditorApi } from "./MacroEdito
 import { InsertMacroButton, InsertMacroContextMenu } from "./InsertMacroMenu";
 import { useMacroView } from "../ui/useMacroView";
 import { speakerMarkers } from "../macroTokens";
-import { ReviewDot, reviewLabel } from "./ReviewDot";
+import { ReviewDot, stateLabel, stringState } from "./ReviewDot";
 import { OtherLanguages } from "./OtherLanguages";
+import { StringFindings } from "./StringFindings";
 import { StringHistory } from "./StringHistory";
 import { useI18n } from "../ui/i18n";
 import { usePreferences } from "../ui/preferences";
@@ -23,7 +24,7 @@ export type CellDraft = {
 };
 
 export type CellMutation = {
-  kind: "target" | "note" | "review";
+  kind: "target" | "note";
   bindingKey: string;
 };
 
@@ -31,16 +32,16 @@ export type SaveTargetHandler = (cell: TranslationCellDto, draft: CellDraft, oth
 
 /** The committed state of the selected string when it has uncommitted changes. */
 export type CheckpointBaseline = {
-  kind: UnitChangeKind;
-  /** Target at the last checkpoint; null when the string is new since then. */
+  kind: EntryChangeKind;
+  /** Target at the last checkpoint; null when the string was not translated then. */
   target: string | null;
-  reviewChanged: boolean;
+  fuzzyChanged: boolean;
   noteChanged: boolean;
 };
 
 function unchangedTextLabel(baseline: CheckpointBaseline): MessageKey {
-  if (baseline.reviewChanged && baseline.noteChanged) return "editor.diff.reviewAndNoteChanged";
-  if (baseline.reviewChanged) return "editor.diff.reviewChanged";
+  if (baseline.fuzzyChanged && baseline.noteChanged) return "editor.diff.fuzzyAndNoteChanged";
+  if (baseline.fuzzyChanged) return "editor.diff.fuzzyChanged";
   if (baseline.noteChanged) return "editor.diff.noteChanged";
   return "editor.diff.same";
 }
@@ -85,18 +86,13 @@ type TranslationEditorProps = {
   onSaveTarget: SaveTargetHandler;
   onApprove: ApproveHandler;
   onSaveNote: (cell: TranslationCellDto, draft: CellDraft, otherDirty: boolean, discardOtherDrafts: () => void) => void;
-  onReviewChange: (cell: TranslationCellDto, reviewState: ReviewState, discardDrafts: () => void) => void;
   onNavigate: (direction: 1 | -1) => void;
   /** Returns true once when the target should take focus after navigation. */
   takeFocusRequest: () => boolean;
   checkpoint: CheckpointBaseline | null;
-  /** Drafts a translation with Angelica; resolves to `null` when it failed. */
-  onDraftWithAngelica?: ((cell: TranslationCellDto) => Promise<string | null>) | undefined;
   /** Bumps when the string's history may have changed (save, checkpoint, sync). */
   historyRevision?: number | undefined;
 };
-
-const reviewOptions: readonly ReviewState[] = ["draft", "needsReview", "reviewed"];
 
 function draftsForRow(row: TranslationRowDto | null): Record<string, CellDraft> {
   if (!row) return {};
@@ -115,7 +111,7 @@ function draftForCell(cell: TranslationCellDto, drafts: Record<string, CellDraft
 
 function cellIsDirty(cell: TranslationCellDto, draft: CellDraft): boolean {
   return draft.target !== (cell.translation?.targetMacro ?? "") ||
-    (cell.translation !== null && draft.note !== (cell.translation.translatorNote ?? ""));
+    draft.note !== (cell.translation?.translatorNote ?? "");
 }
 
 function hasOtherDirtyDraft(row: TranslationRowDto, targetCell: TranslationCellDto, drafts: Record<string, CellDraft>, field: "target" | "note"): boolean {
@@ -125,7 +121,7 @@ function hasOtherDirtyDraft(row: TranslationRowDto, targetCell: TranslationCellD
     const draft = draftForCell(cell, drafts);
     if (key !== targetKey) return cellIsDirty(cell, draft);
     return field === "target"
-      ? cell.translation !== null && draft.note !== (cell.translation.translatorNote ?? "")
+      ? draft.note !== (cell.translation?.translatorNote ?? "")
       : draft.target !== (cell.translation?.targetMacro ?? "");
   });
 }
@@ -160,11 +156,9 @@ const TranslationEditorImpl = forwardRef<TranslationEditorHandle, TranslationEdi
   onSaveTarget,
   onApprove,
   onSaveNote,
-  onReviewChange,
   onNavigate,
   takeFocusRequest,
   checkpoint,
-  onDraftWithAngelica,
   historyRevision = 0,
 }, ref) {
   const { t } = useI18n();
@@ -256,7 +250,8 @@ const TranslationEditorImpl = forwardRef<TranslationEditorHandle, TranslationEdi
     const currentDraft = draftForCell(selectedCell, draftsRef.current);
     const dirtyTarget = currentDraft.target !== (selectedCell.translation?.targetMacro ?? "");
     if (currentDraft.target.trim().length === 0) return;
-    if (!dirtyTarget && selectedCell.translation?.reviewState === "reviewed") {
+    // A saved translation whose source did not change is accepted already.
+    if (!dirtyTarget && selectedCell.translation !== null && !selectedCell.translation.fuzzy) {
       onNavigate(1);
       return;
     }
@@ -280,18 +275,6 @@ const TranslationEditorImpl = forwardRef<TranslationEditorHandle, TranslationEdi
     if (selectedCell && !cellBusy) updateDraft(selectedCell, "target", selectedCell.sourceMacro);
   }, [cellBusy, selectedCell, updateDraft]);
 
-  const [drafting, setDrafting] = useState(false);
-  const draftWithAngelica = useCallback(async () => {
-    if (!selectedCell || cellBusy || !onDraftWithAngelica) return;
-    const cell = selectedCell;
-    setDrafting(true);
-    try {
-      const target = await onDraftWithAngelica(cell);
-      if (target !== null) updateDraft(cell, "target", target);
-    } finally {
-      setDrafting(false);
-    }
-  }, [cellBusy, onDraftWithAngelica, selectedCell, updateDraft]);
 
   useImperativeHandle(ref, () => ({ saveTarget, approve, revert, copySource }), [approve, copySource, revert, saveTarget]);
 
@@ -318,7 +301,7 @@ const TranslationEditorImpl = forwardRef<TranslationEditorHandle, TranslationEdi
     <section className="editor" aria-label={t("editor.label")} aria-busy={cellBusy}>
       <header className="editor-bar">
         <div className="editor-ident">
-          <ReviewDot state={translation?.reviewState ?? null} />
+          <ReviewDot state={stringState(translation)} />
           <span className="editor-coord mono" title={t("editor.rowTitle", { sheet: row.sheetName, row: String(row.rowId), subrow: String(row.subrowId) })}>{row.rowId}:{row.subrowId}</span>
           {row.cells.length > 1 ? (
             <div className="field-tabs" role="tablist" aria-label={t("editor.fields")}>
@@ -328,7 +311,7 @@ const TranslationEditorImpl = forwardRef<TranslationEditorHandle, TranslationEdi
                 const dirty = cellIsDirty(cell, draftForCell(cell, drafts));
                 return (
                   <button className={active ? "field-tab active" : "field-tab"} type="button" role="tab" aria-selected={active} key={key} onClick={() => onSelectCell(cell.sourceBinding)}>
-                    <ReviewDot state={cell.translation?.reviewState ?? null} />
+                    <ReviewDot state={stringState(cell.translation)} />
                     {t("common.column", { column: String(cell.sourceBinding.columnIndex) })}
                     {dirty ? <span className="dirty-mark" aria-label={t("common.edited")} /> : null}
                   </button>
@@ -339,15 +322,7 @@ const TranslationEditorImpl = forwardRef<TranslationEditorHandle, TranslationEdi
         </div>
         <div className="editor-bar-end">
           {rowDirty ? <span className="pill pill-warn">{t("common.unsaved")}</span> : null}
-          <div className="review-control" title={translation ? undefined : t("editor.saveTargetFirst")}>
-            <Segmented
-              label={t("editor.reviewState")}
-              value={translation?.reviewState ?? null}
-              disabled={!translation || cellBusy}
-              onChange={(state) => onReviewChange(selectedCell, state, () => discardDrafts(null, null))}
-              options={reviewOptions.map((state) => ({ value: state, label: <><ReviewDot decorative state={state} />{t(reviewLabel(state))}</>, className: `review-${state}` }))}
-            />
-          </div>
+          {translation?.fuzzy ? <span className="pill pill-warn" title={t("editor.fuzzyHint")}>{t("review.fuzzy")}</span> : null}
           <IconButton icon="undo" label={t("editor.revert")} disabled={!rowDirty || mutations.length > 0} onClick={revert} />
         </div>
       </header>
@@ -359,11 +334,16 @@ const TranslationEditorImpl = forwardRef<TranslationEditorHandle, TranslationEdi
             <span className="chip">{sourceLanguage.toUpperCase()}</span>
             {selectedCell.formattingOnly ? <span className="chip" title={t("list.formattingHint")}>{t("list.kind.formatting")}</span> : null}
             <span className="spacer" />
-            {onDraftWithAngelica ? <IconButton icon="sparkles" label={drafting ? t("editor.drafting") : t("editor.draftWithAngelica")} disabled={cellBusy || drafting} onClick={() => void draftWithAngelica()} /> : null}
             <IconButton icon="copyPlus" label={t("editor.copySource")} disabled={cellBusy} onClick={copySource} />
             <PaneModeSwitch value={sourceMode} onChange={(mode) => setPreference("sourcePaneMode", mode)} />
           </div>
           <MacroEditor className="editor-surface" value={selectedCell.sourceMacro} readOnly view={sourceView} presentation={sourceMode === "code" ? "code" : "chips"} onPick={cellBusy ? undefined : (pick) => targetApi.current?.apply(pick)} ariaLabel={t("editor.sourceText", { column: String(selectedCell.sourceBinding.columnIndex) })} placeholder={t("editor.emptySource")} onNavigate={onNavigate} />
+          {translation?.fuzzy && translation.previousSource !== null ? (
+            <div className="editor-previous-source">
+              <span className="eyebrow">{t("editor.previousSource")}</span>
+              <div className="git-diff">{diffWords(translation.previousSource, selectedCell.sourceMacro).map((part, index) => part.kind === "removed" ? <del key={index}>{part.text}</del> : part.kind === "added" ? <ins key={index}>{part.text}</ins> : <span key={index}>{part.text}</span>)}</div>
+            </div>
+          ) : null}
           {row.context.length > 0 ? (
             <details className="context-block">
               <summary><UiIcon icon="chevronRight" size="xs" />{t("editor.context")} <span className="count">{row.context.length}</span></summary>
@@ -379,7 +359,7 @@ const TranslationEditorImpl = forwardRef<TranslationEditorHandle, TranslationEdi
             {mutation === "target" ? <span className="saving-label"><span className="spinner spinner-xs" />{t("editor.savingInline")}</span> : null}
             <span className="spacer" />
             <InsertMacroButton editor={targetApi} disabled={cellBusy} />
-            {checkpoint ? <IconButton icon="gitCompareArrows" label={t(showDiff ? "editor.hideDiff" : "editor.showDiff")} pressed={showDiff} onClick={() => setShowDiff((current) => !current)} className={`git-mark git-mark-${checkpoint.kind}`} /> : null}
+            {checkpoint ? <IconButton icon="gitCompareArrows" label={t(showDiff ? "editor.hideDiff" : "editor.showDiff")} pressed={showDiff} onClick={() => setShowDiff((current) => !current)} className={`git-mark git-mark-${checkpoint.kind === "translated" ? "added" : "modified"}`} /> : null}
             <PaneModeSwitch value={targetMode} onChange={(mode) => setPreference("targetPaneMode", mode)} />
           </div>
           {checkpoint && showDiff ? <CheckpointDiff baseline={checkpoint} current={draft.target} /> : null}
@@ -429,6 +409,7 @@ const TranslationEditorImpl = forwardRef<TranslationEditorHandle, TranslationEdi
                 { value: "note", label: <>{t("editor.note")}{noteDirty ? <span className="dirty-mark" aria-label={t("common.edited")} /> : null}</> },
                 { value: "languages", label: t("editor.languages") },
                 { value: "history", label: t("editor.history") },
+                { value: "checks", label: t("editor.checks") },
               ]}
             />
           </div>
@@ -440,10 +421,14 @@ const TranslationEditorImpl = forwardRef<TranslationEditorHandle, TranslationEdi
                 onPick={cellBusy ? undefined : (pick) => targetApi.current?.apply(pick)}
               />
             </div>
+          ) : sideTab === "checks" ? (
+            <div className="editor-checks">
+              <StringFindings binding={selectedCell.sourceBinding} revision={historyRevision} />
+            </div>
           ) : sideTab === "history" ? (
             <div className="editor-history">
               <StringHistory
-                unitId={translation?.translationUnitId ?? null}
+                binding={selectedCell.sourceBinding}
                 revision={historyRevision}
                 onUseText={(target) => updateDraft(selectedCell, "target", target)}
               />
@@ -456,11 +441,11 @@ const TranslationEditorImpl = forwardRef<TranslationEditorHandle, TranslationEdi
             value={draft.note}
             onChange={(event) => updateDraft(selectedCell, "note", event.target.value)}
             onKeyDown={(event) => { if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s") { event.preventDefault(); saveNote(); } }}
-            placeholder={t(translation ? "editor.notePlaceholder" : "editor.noteDisabled")}
-            disabled={!translation || cellBusy}
+            placeholder={t("editor.notePlaceholder")}
+            disabled={cellBusy}
           />
           <div className="editor-pane-foot">
-            <span className="editor-hint">{t(translation ? reviewLabel(translation.reviewState) : "editor.noTranslation")}</span>
+            <span className="editor-hint">{t(stateLabel(stringState(translation)))}</span>
             <button className="button button-secondary" type="button" onClick={saveNote} disabled={!noteCanSave}>{t(mutation === "note" ? "common.saving" : "editor.saveNote")}</button>
           </div>
           </>}

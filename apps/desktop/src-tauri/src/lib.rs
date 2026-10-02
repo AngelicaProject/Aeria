@@ -1,5 +1,3 @@
-mod ai;
-mod angelica;
 mod check_workflow;
 mod commands;
 mod dto;
@@ -9,8 +7,6 @@ mod fonts;
 mod games;
 mod git;
 mod guide;
-mod job_workers;
-mod jobs;
 mod macros;
 mod paths;
 mod project_changes;
@@ -18,50 +14,39 @@ mod scene;
 mod search;
 mod source;
 mod state;
+mod sync;
 #[cfg(test)]
 mod test_support;
+mod translate;
 mod updates;
-mod web;
 
 use serde::Serialize;
 use tauri::Manager;
 
-pub use ai::{
-    AiConnectionCheckDto, AiProviderDto, AiProviderInputDto, AiProviderPresetDto, AiSettingsDto,
-    ApiKeyStateDto, ChatGptLoginDto, ChatGptLoginEventDto, ai_chatgpt_login_cancel,
-    ai_chatgpt_login_start, ai_clear_api_key, ai_list_remote_models, ai_remove_provider,
-    ai_save_provider, ai_set_agent_model, ai_set_api_key, ai_set_web_domains, ai_set_worker_model,
-    ai_settings, ai_test_connection,
-};
-pub use angelica::{
-    AngelicaDraftDto, AngelicaEventDto, ConversationDto, ConversationSummaryDto,
-    TranslationAppliedDto, angelica_apply_proposal, angelica_cancel, angelica_conversation,
-    angelica_conversations, angelica_delete_conversation, angelica_draft, angelica_image,
-    angelica_proposals, angelica_reject_proposal, angelica_send,
-};
 pub use check_workflow::{
     CheckWorkflowDto, git_check_workflow, git_install_check_workflow, git_open_branch_settings,
 };
 pub use commands::{
     close_project, current_project, default_projects_directory_path, forget_recent_project,
-    initialize_project_from_game, list_detached_units, list_recent_projects,
-    open_project_from_game, open_recent_project, page_translation_rows, preview_source_update,
-    set_project_target_language, set_translation_note, set_translation_review_state,
-    set_translation_target, sheet_dialogue, source_in_other_languages, translation_progress,
+    initialize_project_from_game, list_recent_projects, open_project_from_game,
+    open_recent_project, page_translation_rows, set_project_target_language, set_translation_note,
+    set_translation_target, set_translation_term_exception, sheet_dialogue,
+    source_in_other_languages, translation_findings, translation_progress,
     update_project_from_game,
 };
 pub use dto::{
-    DetachReasonDto, DetachedUnitDto, GameOpenResultDto, OtherLanguageTextDto,
-    ProjectOpenResultDto, ProjectSheetDto, ProjectSummaryDto, RecentProjectAvailability,
-    RecentProjectDto, ReviewStateDto, SheetLayoutUpdateDto, SheetProgressDto, SourceBindingDto,
-    SourceUpdateReportDto, TranslationCellDto, TranslationContextCellDto, TranslationOverlayDto,
-    TranslationRowCursorDto, TranslationRowDto, TranslationRowPageDto, TranslationUnitIdDto,
+    GameOpenResultDto, OtherLanguageTextDto, ProjectOpenResultDto, ProjectSheetDto,
+    ProjectSummaryDto, RecentProjectAvailability, RecentProjectDto, SheetProgressDto,
+    SourceBindingDto, SourceUpdateNeededDto, SourceUpdateReportDto, TranslationCellDto,
+    TranslationContextCellDto, TranslationOverlayDto, TranslationRowCursorDto, TranslationRowDto,
+    TranslationRowPageDto,
 };
 pub use error::CommandError;
 pub use export::{
     ExportOverviewDto, LocalExportDto, PackSettingsDto, PublishedReleaseDto, ReleaseInputDto,
-    export_backup_key, export_generate_key, export_import_key, export_install_workflow,
-    export_overview, export_pack, export_publish, export_remove_key, export_save_settings,
+    export_backup_key, export_generate_key, export_git_authors, export_import_key,
+    export_install_workflow, export_overview, export_pack, export_publish, export_remove_key,
+    export_save_settings,
 };
 pub use fonts::{
     FontsOverviewDto, fonts_import_file, fonts_overview, fonts_preview, fonts_save,
@@ -71,24 +56,26 @@ pub use games::{
     GameInstallationDto, GameOriginDto, GameSettingsDto, game_settings, set_game_path,
 };
 pub use git::{
-    git_branches, git_checkpoint, git_clone_repository, git_commit_changes, git_contributors,
-    git_create_branch, git_delete_branch, git_fetch, git_fetch_main, git_finish_contribution,
-    git_initialize, git_log, git_merge_contribution, git_merge_driver, git_overview,
-    git_pending_changes, git_project_changes, git_pull, git_push, git_remote_branches,
-    git_remove_remote, git_set_identity, git_set_main_branch, git_set_merge_driver, git_set_remote,
-    git_set_upstream, git_state_stamp, git_switch_branch, git_sync, git_unit_attribution,
-    git_unit_history,
+    git_branches, git_checkpoint, git_clone_repository, git_commit_changes, git_create_branch,
+    git_delete_branch, git_delete_remote_branch, git_fetch, git_initialize, git_log, git_overview,
+    git_pending_changes, git_pending_sheet_changes, git_project_changes, git_pull, git_push,
+    git_remote_branches, git_remove_remote, git_set_identity, git_set_remote, git_set_upstream,
+    git_state_stamp, git_string_history, git_switch_branch,
 };
 pub use guide::{
-    GlossaryEntryInput, ProjectGuideDto, project_guide, save_project_glossary,
-    save_project_guidance, save_project_voices,
+    ProjectKnowledgeDto, TermInput, project_knowledge, save_knowledge_style, save_knowledge_terms,
 };
-pub use jobs::{
-    angelica_job_control, angelica_job_events, angelica_job_remove, angelica_job_retry,
-    angelica_job_set_concurrency, angelica_job_set_limit, angelica_job_units, angelica_job_workers,
-    angelica_jobs,
+pub use search::{
+    SearchState, project_edit_undo, project_replace_apply, project_replace_preview,
+    project_retranslate, project_search, project_search_cancel, project_term_exception,
 };
 pub use state::{Activity, DesktopState};
+pub use translate::{
+    ModelAccountDto, ModelSignInDto, Translation, model_account, model_list,
+    model_open_sign_in_page, model_sign_in_poll, model_sign_in_start, model_sign_out,
+    translation_name_sheets, translation_retry, translation_start, translation_status,
+    translation_stop,
+};
 pub use updates::{
     AvailableUpdateDto, UpdateChannel, UpdateDownloadDto, UpdateStatusDto, Updates, update_check,
     update_download, update_install, update_open_release, update_set_channel, update_status,
@@ -108,40 +95,6 @@ fn app_info() -> AppInfo {
     }
 }
 
-/// Handles the command-line modes that run without a window and returns
-/// their exit code, or `None` to start the application.
-///
-/// `merge-driver BASE OURS THEIRS PATH` is Git's merge driver for unit
-/// shards (`%O %A %B %P`): it merges per translation unit and exits 0 when
-/// clean, 1 when units conflict (they are marked in the file), and 2 when a
-/// version is not a valid shard, which leaves the local version for Git.
-#[must_use]
-pub fn run_command_line() -> Option<i32> {
-    let args: Vec<String> = std::env::args().skip(1).collect();
-    if args.first().map(String::as_str) != Some("merge-driver") {
-        return None;
-    }
-    let [base, ours, theirs, path] = &args[1..] else {
-        eprintln!("usage: aeria merge-driver BASE OURS THEIRS PATH");
-        return Some(2);
-    };
-    Some(
-        match aeria_git::run_merge_driver(base.as_ref(), ours.as_ref(), theirs.as_ref(), path) {
-            Ok(0) => 0,
-            Ok(conflicts) => {
-                eprintln!(
-                    "aeria: {conflicts} translation unit(s) in {path} changed differently on both sides"
-                );
-                1
-            }
-            Err(error) => {
-                eprintln!("aeria: cannot merge {path} per unit: {error}");
-                2
-            }
-        },
-    )
-}
-
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 /// Starts the Aeria desktop application.
 ///
@@ -157,10 +110,13 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(DesktopState::new())
         .manage(Updates::default())
+        .manage(Translation::default())
+        .manage(SearchState::default())
         .setup(|app| {
             paths::migrate_legacy_directories(app.handle());
             app.state::<DesktopState>()
                 .set_git(git::resolve_git(app.handle()));
+            sync::start_file_watcher(app.handle());
             updates::start_background_checks(app.handle());
             Ok(())
         })
@@ -178,8 +134,6 @@ pub fn run() {
             default_projects_directory_path,
             initialize_project_from_game,
             update_project_from_game,
-            preview_source_update,
-            list_detached_units,
             current_project,
             close_project,
             list_recent_projects,
@@ -190,7 +144,8 @@ pub fn run() {
             sheet_dialogue,
             set_translation_target,
             set_translation_note,
-            set_translation_review_state,
+            set_translation_term_exception,
+            translation_findings,
             translation_progress,
             set_project_target_language,
             macros::macro_view,
@@ -203,70 +158,31 @@ pub fn run() {
             git_set_identity,
             git_set_remote,
             git_pending_changes,
+            git_pending_sheet_changes,
             git_checkpoint,
             git_log,
             git_commit_changes,
-            git_unit_history,
-            git_contributors,
-            git_sync,
+            git_string_history,
             git_fetch,
             git_pull,
             git_push,
-            git_merge_driver,
-            git_set_merge_driver,
             git_check_workflow,
             git_install_check_workflow,
             git_open_branch_settings,
             git_clone_repository,
-            git_unit_attribution,
             git_branches,
             git_create_branch,
             git_switch_branch,
-            git_set_main_branch,
             git_state_stamp,
-            git_merge_contribution,
             git_delete_branch,
+            git_delete_remote_branch,
             git_project_changes,
             git_remove_remote,
-            git_fetch_main,
             git_remote_branches,
             git_set_upstream,
-            git_finish_contribution,
-            ai_settings,
-            ai_save_provider,
-            ai_remove_provider,
-            ai_set_api_key,
-            ai_clear_api_key,
-            ai_set_agent_model,
-            ai_set_worker_model,
-            ai_set_web_domains,
-            ai_list_remote_models,
-            ai_test_connection,
-            ai_chatgpt_login_start,
-            ai_chatgpt_login_cancel,
-            angelica_conversations,
-            angelica_conversation,
-            angelica_delete_conversation,
-            angelica_image,
-            angelica_cancel,
-            angelica_send,
-            angelica_proposals,
-            angelica_apply_proposal,
-            angelica_reject_proposal,
-            angelica_draft,
-            angelica_jobs,
-            angelica_job_units,
-            angelica_job_events,
-            angelica_job_control,
-            angelica_job_retry,
-            angelica_job_remove,
-            angelica_job_set_limit,
-            angelica_job_set_concurrency,
-            angelica_job_workers,
-            project_guide,
-            save_project_guidance,
-            save_project_glossary,
-            save_project_voices,
+            project_knowledge,
+            save_knowledge_style,
+            save_knowledge_terms,
             export_overview,
             export_save_settings,
             export_generate_key,
@@ -274,13 +190,32 @@ pub fn run() {
             export_backup_key,
             export_remove_key,
             export_install_workflow,
+            export_git_authors,
             export_pack,
             export_publish,
             fonts_overview,
             fonts_use_recommended,
             fonts_save,
             fonts_import_file,
-            fonts_preview
+            fonts_preview,
+            model_account,
+            model_sign_in_start,
+            model_open_sign_in_page,
+            model_sign_in_poll,
+            model_sign_out,
+            model_list,
+            translation_name_sheets,
+            translation_start,
+            translation_status,
+            translation_retry,
+            translation_stop,
+            project_search,
+            project_search_cancel,
+            project_replace_preview,
+            project_replace_apply,
+            project_edit_undo,
+            project_retranslate,
+            project_term_exception
         ])
         .run(tauri::generate_context!())
         .expect("failed to run Aeria desktop application");

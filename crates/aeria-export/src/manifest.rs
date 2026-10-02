@@ -1,6 +1,7 @@
 use serde::Serialize;
 
 use crate::error::ExportError;
+use crate::version::PackVersion;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -9,154 +10,110 @@ pub enum Channel {
     Testing,
 }
 
-/// Which review states a pack contains; chosen per export.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "lowercase")]
-pub enum ContentPolicy {
-    /// Only units a person reviewed.
-    Reviewed,
-    /// Also `draft` and `needs-review` units, marked unreviewed per cell.
-    All,
-}
-
+/// The team that publishes the pack: the name players see.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct Publisher {
+pub struct Team {
     pub name: String,
     pub url: Option<String>,
 }
 
 /// The game the pack is built from.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct PackSource {
+pub struct PackGame {
+    /// The client language the project translates from.
     pub language: String,
-    pub game_version: String,
+    /// The text of `game/ffxivgame.ver`.
+    pub version: String,
 }
 
-/// Release metadata of one pack. `sequence` is an explicit export input so
+/// Release metadata of one pack. `version` is an explicit export input so
 /// identical projects exported for the same release produce identical bytes.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PackManifest {
-    pub pack_id: String,
     pub title: String,
-    pub publisher: Publisher,
+    pub team: Team,
+    /// The people credited in the pack, in the order the project lists them.
+    pub authors: Vec<String>,
     pub license: Option<String>,
-    pub sequence: u64,
-    pub version: String,
+    pub version: PackVersion,
     pub channel: Channel,
-    pub target_language: String,
-    pub source: PackSource,
-    pub content_policy: ContentPolicy,
-    pub project_commit: String,
-    pub exporter_aeria: String,
+    /// The language of the translations.
+    pub language: String,
+    pub game: PackGame,
+    /// The producing Aeria version.
+    pub aeria: String,
+    /// The Git commit of the exported project.
+    pub commit: String,
     pub min_harmonia: String,
 }
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ManifestJson<'a> {
-    pack_id: &'a str,
     title: &'a str,
-    publisher: PublisherJson<'a>,
+    team: TeamJson<'a>,
+    authors: &'a [String],
     license: Option<&'a str>,
-    release: ReleaseJson<'a>,
-    target: LanguageJson<'a>,
-    source: SourceJson<'a>,
-    content_policy: ContentPolicy,
-    project: ProjectJson<'a>,
-    exporter: ExporterJson<'a>,
+    version: String,
+    channel: Channel,
+    language: &'a str,
+    game: GameJson<'a>,
+    built: BuiltJson<'a>,
     min_harmonia: &'a str,
-    counts: CountsJson,
 }
 
 #[derive(Serialize)]
-struct PublisherJson<'a> {
+struct TeamJson<'a> {
     name: &'a str,
     url: Option<&'a str>,
 }
 
 #[derive(Serialize)]
-struct ReleaseJson<'a> {
-    sequence: u64,
+struct GameJson<'a> {
+    language: &'a str,
     version: &'a str,
-    channel: Channel,
 }
 
 #[derive(Serialize)]
-struct LanguageJson<'a> {
-    language: &'a str,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct SourceJson<'a> {
-    language: &'a str,
-    game_version: &'a str,
-}
-
-#[derive(Serialize)]
-struct ProjectJson<'a> {
-    commit: &'a str,
-}
-
-#[derive(Serialize)]
-struct ExporterJson<'a> {
+struct BuiltJson<'a> {
     aeria: &'a str,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct CountsJson {
-    pub sheets: u64,
-    pub rows: u64,
-    pub cells: u64,
-    pub reviewed_cells: u64,
-    pub strings: u64,
+    commit: &'a str,
 }
 
 impl PackManifest {
     pub(crate) fn validate(&self) -> Result<(), ExportError> {
         let fail = |reason: &str| Err(ExportError::Manifest(reason.to_owned()));
-        if !is_pack_id(&self.pack_id) {
-            return fail("packId must match [a-z0-9][a-z0-9-]{0,63}");
-        }
         for (field, value) in [
             ("title", &self.title),
-            ("publisher.name", &self.publisher.name),
-            ("release.version", &self.version),
-            ("target.language", &self.target_language),
-            ("source.language", &self.source.language),
-            ("source.gameVersion", &self.source.game_version),
-            ("exporter.aeria", &self.exporter_aeria),
+            ("team.name", &self.team.name),
+            ("language", &self.language),
+            ("game.language", &self.game.language),
+            ("game.version", &self.game.version),
+            ("built.aeria", &self.aeria),
         ] {
-            if value.trim().is_empty() || value.trim() != value {
+            if !is_display_text(value) {
                 return Err(ExportError::Manifest(format!(
                     "{field} must be non-empty without surrounding whitespace"
                 )));
             }
         }
-        for (field, value) in [
-            ("publisher.url", &self.publisher.url),
-            ("license", &self.license),
-        ] {
-            if value
-                .as_ref()
-                .is_some_and(|v| v.trim().is_empty() || v.trim() != v)
-            {
+        for (field, value) in [("team.url", &self.team.url), ("license", &self.license)] {
+            if value.as_ref().is_some_and(|v| !is_display_text(v)) {
                 return Err(ExportError::Manifest(format!(
                     "{field} must be absent or non-empty"
                 )));
             }
         }
-        if !aeria_core::is_target_language(&self.target_language) {
+        if let Err(reason) = check_authors(&self.authors) {
+            return fail(&reason);
+        }
+        if !aeria_core::is_target_language(&self.language) {
             return fail(
-                "target.language must be a BCP 47 language tag other than und; choose the project's target language",
+                "language must be a BCP 47 language tag other than und; choose the project's target language",
             );
         }
-        if self.sequence == 0 || self.sequence > i64::MAX as u64 {
-            return fail("release.sequence must be positive");
-        }
-        if self.project_commit.len() != 40 || !is_lower_hex(&self.project_commit) {
-            return fail("project.commit must be 40 lowercase hex digits");
+        if self.commit.len() != 40 || !is_lower_hex(&self.commit) {
+            return fail("built.commit must be 40 lowercase hex digits");
         }
         if !is_version(&self.min_harmonia) {
             return fail("minHarmonia must be a dotted numeric version");
@@ -164,36 +121,27 @@ impl PackManifest {
         Ok(())
     }
 
-    pub(crate) fn to_json(&self, counts: CountsJson) -> Vec<u8> {
+    pub(crate) fn to_json(&self) -> Vec<u8> {
         let json = ManifestJson {
-            pack_id: &self.pack_id,
             title: &self.title,
-            publisher: PublisherJson {
-                name: &self.publisher.name,
-                url: self.publisher.url.as_deref(),
+            team: TeamJson {
+                name: &self.team.name,
+                url: self.team.url.as_deref(),
             },
+            authors: &self.authors,
             license: self.license.as_deref(),
-            release: ReleaseJson {
-                sequence: self.sequence,
-                version: &self.version,
-                channel: self.channel,
+            version: self.version.to_string(),
+            channel: self.channel,
+            language: &self.language,
+            game: GameJson {
+                language: &self.game.language,
+                version: &self.game.version,
             },
-            target: LanguageJson {
-                language: &self.target_language,
-            },
-            source: SourceJson {
-                language: &self.source.language,
-                game_version: &self.source.game_version,
-            },
-            content_policy: self.content_policy,
-            project: ProjectJson {
-                commit: &self.project_commit,
-            },
-            exporter: ExporterJson {
-                aeria: &self.exporter_aeria,
+            built: BuiltJson {
+                aeria: &self.aeria,
+                commit: &self.commit,
             },
             min_harmonia: &self.min_harmonia,
-            counts,
         };
         let mut bytes =
             serde_json::to_vec_pretty(&json).expect("manifest serialization cannot fail");
@@ -202,14 +150,22 @@ impl PackManifest {
     }
 }
 
-pub(crate) fn is_pack_id(value: &str) -> bool {
-    let bytes = value.as_bytes();
-    !bytes.is_empty()
-        && bytes.len() <= 64
-        && bytes[0] != b'-'
-        && bytes
-            .iter()
-            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || *b == b'-')
+/// Non-empty, without surrounding whitespace.
+pub(crate) fn is_display_text(value: &str) -> bool {
+    !value.trim().is_empty() && value.trim() == value
+}
+
+/// Each author is display text, and none appears twice.
+pub(crate) fn check_authors(authors: &[String]) -> Result<(), String> {
+    for (index, author) in authors.iter().enumerate() {
+        if !is_display_text(author) {
+            return Err("authors must be non-empty without surrounding whitespace".to_owned());
+        }
+        if authors[..index].contains(author) {
+            return Err(format!("authors lists {author:?} twice"));
+        }
+    }
+    Ok(())
 }
 
 fn is_lower_hex(value: &str) -> bool {

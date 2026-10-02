@@ -4,6 +4,7 @@ import { open as openNativeDialog, save as saveNativeDialog } from "@tauri-apps/
 import {
   exportBackupKey,
   exportGenerateKey,
+  exportGitAuthors,
   exportImportKey,
   exportInstallWorkflow,
   exportOverview,
@@ -13,7 +14,7 @@ import {
   exportSaveSettings,
   normalizeCommandError,
 } from "../ipc";
-import type { CommandError, ContentPolicy, ExportOverviewDto, ExportReportDto, PackSettings, ReleaseChannel } from "../types";
+import type { CommandError, ExportOverviewDto, ExportReportDto, PackSettings, ReleaseChannel } from "../types";
 import { useI18n } from "../ui/i18n";
 import { Segmented } from "../ui/primitives/Segmented";
 import { UiIcon, type UiIconName } from "../ui/primitives/UiIcon";
@@ -30,38 +31,29 @@ type ExportDialogProps = {
 
 type Section = "release" | "pack" | "fonts" | "key" | "github";
 
-type Result = { report: ExportReportDto; path?: string; releaseUrl?: string; feedUrl?: string; sequence?: number };
+type Result = { report: ExportReportDto; version: string; path?: string; releaseUrl?: string; feedUrl?: string; published?: boolean };
 
 type Release = {
-  /** Empty means today's date. */
-  label: string;
   channel: ReleaseChannel;
-  contentPolicy: ContentPolicy;
   changelog: string;
 };
 
-const DEFAULT_MIN_HARMONIA = "0.1.1.2";
-const emptySettings: PackSettings = { packId: "", title: "", publisherName: "", publisherUrl: null, license: null, minHarmonia: DEFAULT_MIN_HARMONIA };
+const DEFAULT_MIN_HARMONIA = "0.1.2.0";
+const emptySettings: PackSettings = { title: "", teamName: "", teamUrl: null, authors: [], license: null, minHarmonia: DEFAULT_MIN_HARMONIA };
 
-const TRANSLITERATION: Record<string, string> = {
-  а: "a", б: "b", в: "v", г: "g", д: "d", е: "e", ё: "e", ж: "zh", з: "z", и: "i", й: "y", к: "k", л: "l", м: "m", н: "n", о: "o", п: "p",
-  р: "r", с: "s", т: "t", у: "u", ф: "f", х: "h", ц: "ts", ч: "ch", ш: "sh", щ: "sch", ъ: "", ы: "y", ь: "", э: "e", ю: "yu", я: "ya",
-};
-
-/** A pack ID slug: `Русский перевод` → `russkiy-perevod`. */
-export function packIdFrom(text: string): string {
-  return [...text.toLowerCase()]
-    .map((character) => TRANSLITERATION[character] ?? character)
-    .join("")
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 64)
-    .replace(/-+$/g, "");
+/**
+ * The version after `version` (`YYYY.MM.DD.NNNN`) on the same day. Versions
+ * have fixed widths, so text order is version order.
+ */
+export function versionAfter(version: string): string {
+  const match = /^(\d{4}\.\d{2}\.\d{2})\.(\d{4})$/.exec(version);
+  if (!match) return version;
+  return `${match[1]}.${String(Number(match[2]) + 1).padStart(4, "0")}`;
 }
 
-function today(): string {
-  const now = new Date();
-  return `${now.getFullYear()}.${String(now.getMonth() + 1).padStart(2, "0")}.${String(now.getDate()).padStart(2, "0")}`;
+/** Authors as the settings keep them: trimmed, without blanks or repeats. */
+function cleanAuthors(authors: string[]): string[] {
+  return [...new Set(authors.map((author) => author.trim()).filter((author) => author !== ""))];
 }
 
 function shortFingerprint(fingerprint: string): string {
@@ -69,13 +61,15 @@ function shortFingerprint(fingerprint: string): string {
 }
 
 function settingsFrom(overview: ExportOverviewDto): PackSettings {
-  if (!overview.settings) return { ...emptySettings, publisherName: overview.github?.owner ?? "" };
+  if (!overview.settings) return { ...emptySettings, teamName: overview.github?.owner ?? "" };
   const { signingKeyFingerprint: _fingerprint, ...settings } = overview.settings;
   return settings;
 }
 
 function sameSettings(left: PackSettings, right: PackSettings): boolean {
-  return (Object.keys(left) as (keyof PackSettings)[]).every((key) => (left[key] ?? "") === (right[key] ?? ""));
+  return (Object.keys(left) as (keyof PackSettings)[]).every((key) => key === "authors"
+    ? cleanAuthors(left.authors).join("\n") === cleanAuthors(right.authors).join("\n")
+    : (left[key] ?? "") === (right[key] ?? ""));
 }
 
 /** One line of the release readiness list. */
@@ -96,9 +90,9 @@ export const ExportDialog = memo(function ExportDialog({ open, onOpenChange, onO
   const [overview, setOverview] = useState<ExportOverviewDto | null>(null);
   const [section, setSection] = useState<Section>("release");
   const [settings, setSettings] = useState<PackSettings>(emptySettings);
-  const [release, setRelease] = useState<Release>({ label: "", channel: "stable", contentPolicy: "reviewed", changelog: "" });
-  /** The last number published from this dialog, ahead of the fetched tags. */
-  const [publishedHere, setPublishedHere] = useState(0);
+  const [release, setRelease] = useState<Release>({ channel: "stable", changelog: "" });
+  /** The last version published from this dialog: GitHub has its tag, the local repository not yet. */
+  const [publishedHere, setPublishedHere] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<CommandError | null>(null);
   const [result, setResult] = useState<Result | null>(null);
@@ -113,7 +107,7 @@ export const ExportDialog = memo(function ExportDialog({ open, onOpenChange, onO
     if (!open) return;
     setError(null);
     setResult(null);
-    setPublishedHere(0);
+    setPublishedHere("");
     void exportOverview()
       .then((next) => {
         show(next);
@@ -150,36 +144,28 @@ export const ExportDialog = memo(function ExportDialog({ open, onOpenChange, onO
   const localKey = overview?.key.fingerprint ?? null;
   const keyMatches = localKey !== null && localKey === fingerprint;
   const project = overview?.project;
-  const published = Math.max(overview?.latestReleaseTag ?? 0, publishedHere);
-  const sequence = published + 1;
+  const afterPublished = publishedHere ? versionAfter(publishedHere) : "";
+  const nextVersion = overview ? (afterPublished > overview.nextVersion ? afterPublished : overview.nextVersion) : "";
   const committed = project !== undefined && project.commit !== null && !project.uncommitted;
   const pushed = committed && project.upstream !== null && project.ahead === 0;
   const packReady = overview?.settings != null && !settingsDirty;
   const canExport = packReady && committed && busy === null;
   const canPublish = canExport && overview?.github != null && keyMatches && pushed;
-  const requiredFilled = settings.title.trim() !== "" && settings.publisherName.trim() !== "" && settings.packId.trim() !== "";
+  const requiredFilled = settings.title.trim() !== "" && settings.teamName.trim() !== "";
 
   const releaseInput = () => ({
-    sequence,
-    version: release.label.trim() || today(),
     channel: release.channel,
-    contentPolicy: release.contentPolicy,
     changelog: release.changelog.trim() || null,
   });
 
-  // The pack ID is made once, when the pack is created, and never edited
-  // here: Harmonia pins trust and finds updates by it. A GitHub repository
-  // name is unique to the publisher; without one the name is used.
-  const automaticPackId = (title: string) => (overview?.github ? packIdFrom(`${overview.github.owner}-${overview.github.name}`) : "") || packIdFrom(title) || packIdFrom(overview?.project.targetLanguage ?? "");
-  const updateTitle = (title: string) => setSettings((current) => ({
-    ...current,
-    title,
-    packId: firstSetup ? automaticPackId(title) : current.packId,
-  }));
+  const addGitAuthors = async () => {
+    const found = await run(t("common.loading"), exportGitAuthors);
+    if (found) setSettings((current) => ({ ...current, authors: cleanAuthors([...current.authors, ...found]) }));
+  };
 
   const partKeys = { translations: "export.check.part.translations", pack: "export.check.part.pack", fonts: "export.check.part.fonts" } as const;
   const saveSettings = async () => {
-    const next = await refresh(() => exportSaveSettings({ ...settings, minHarmonia: settings.minHarmonia.trim() || DEFAULT_MIN_HARMONIA }), t("common.saving"));
+    const next = await refresh(() => exportSaveSettings({ ...settings, authors: cleanAuthors(settings.authors), minHarmonia: settings.minHarmonia.trim() || DEFAULT_MIN_HARMONIA }), t("common.saving"));
     if (next && firstSetup) setSection("release");
   };
 
@@ -187,7 +173,7 @@ export const ExportDialog = memo(function ExportDialog({ open, onOpenChange, onO
     const filters = [{ name: t("export.key.backupFilter"), extensions: ["json"] }];
     const selection = mode === "open"
       ? await openNativeDialog({ multiple: false, directory: false, filters })
-      : await saveNativeDialog({ filters, defaultPath: `${overview?.settings?.packId ?? "pack"}-signing-key.json` });
+      : await saveNativeDialog({ filters, defaultPath: `${overview?.settings?.title ?? "pack"} signing key.json` });
     return typeof selection === "string" ? selection : null;
   };
 
@@ -212,20 +198,20 @@ export const ExportDialog = memo(function ExportDialog({ open, onOpenChange, onO
     const directory = await openNativeDialog({ directory: true, multiple: false });
     if (typeof directory !== "string") return;
     const exported = await run(t("export.building"), () => exportPack(releaseInput(), directory, keyMatches));
-    if (exported) setResult({ report: exported.report, path: exported.path });
+    if (exported) setResult({ report: exported.report, version: exported.version, path: exported.path });
   };
 
   const publish = () => setConfirm({
-    message: t("export.publish.confirm", { sequence, repository: `${overview?.github?.owner}/${overview?.github?.name}` }),
+    message: t("export.publish.confirm", { version: nextVersion, repository: `${overview?.github?.owner}/${overview?.github?.name}` }),
     confirmLabel: t("export.publish.action"),
     run: () => void run(t("export.publishing"), () => exportPublish(releaseInput())).then((done) => {
       if (!done) return;
-      setResult({ report: done.report, releaseUrl: done.releaseUrl, feedUrl: done.feedUrl, sequence: done.sequence });
-      setPublishedHere(done.sequence);
+      setResult({ report: done.report, version: done.version, releaseUrl: done.releaseUrl, feedUrl: done.feedUrl, published: true });
+      setPublishedHere(done.version);
     }),
   });
 
-  const field = (key: keyof PackSettings, label: string, hint: string, options: { placeholder?: string; optional?: boolean; onChange?: (value: string) => void } = {}) => (
+  const field = (key: Exclude<keyof PackSettings, "authors">, label: string, hint: string, options: { placeholder?: string; optional?: boolean; onChange?: (value: string) => void } = {}) => (
     <label className="field">
       <span className="field-label">{label}{options.optional ? <span className="export-optional">{t("export.optional")}</span> : null}</span>
       <input
@@ -285,22 +271,12 @@ export const ExportDialog = memo(function ExportDialog({ open, onOpenChange, onO
           : <Check state="info">{t("export.check.notPushed")}</Check>) : null}
       </ul>
 
-      <div className="export-block">
-        <span className="field-label">{t("export.release.content")}</span>
-        <Segmented<ContentPolicy> label={t("export.release.content")} value={release.contentPolicy} disabled={busy !== null} onChange={(contentPolicy) => setRelease((current) => ({ ...current, contentPolicy }))} options={[{ value: "reviewed", label: t("export.release.reviewed") }, { value: "all", label: t("export.release.all") }]} />
-        <span className="field-hint">{t(release.contentPolicy === "reviewed" ? "export.release.reviewedHint" : "export.release.allHint")}</span>
-      </div>
+      <p className="field-hint">{t("export.release.contentHint")}</p>
 
       <div className="export-block">
-        <span className="field-label">{t("export.release.number", { sequence })}</span>
-        <span className="field-hint">{t(overview.github ? "export.release.numberHintGitHub" : "export.release.numberHint")}</span>
+        <span className="field-label">{t("export.release.version", { version: nextVersion })}</span>
+        <span className="field-hint">{t(overview.github ? "export.release.versionHintGitHub" : "export.release.versionHint")}</span>
       </div>
-
-      <label className="field">
-        <span className="field-label">{t("export.release.label")}<span className="export-optional">{t("export.optional")}</span></span>
-        <input className="input" value={release.label} placeholder={today()} disabled={busy !== null} onChange={(event) => setRelease((current) => ({ ...current, label: event.target.value }))} />
-        <span className="field-hint">{t("export.release.labelHint")}</span>
-      </label>
 
       <label className="field">
         <span className="field-label">{t("export.release.changelog")}<span className="export-optional">{t("export.optional")}</span></span>
@@ -317,14 +293,14 @@ export const ExportDialog = memo(function ExportDialog({ open, onOpenChange, onO
 
       {result ? (
         <div className="export-result" aria-live="polite">
-          <h4 className="export-heading"><UiIcon icon="circleCheck" size="sm" />{result.sequence ? t("export.result.published", { sequence: result.sequence }) : t("export.result.exported")}</h4>
+          <h4 className="export-heading"><UiIcon icon="circleCheck" size="sm" />{result.published ? t("export.result.published", { version: result.version }) : t("export.result.exported", { version: result.version })}</h4>
           <p className="export-facts">
             <span>{t("export.result.counts", { exported: result.report.exported, sheets: result.report.sheets })}</span>
             {result.report.fontTargets > 0 ? <span>{t("export.result.fonts", { glyphs: result.report.fontGlyphs, sizes: result.report.fontTargets })}</span> : null}
             <span>{result.report.signedBy ? t("export.result.signed", { fingerprint: shortFingerprint(result.report.signedBy) }) : t("export.result.unsigned")}</span>
           </p>
-          {result.report.skippedUnreviewed + result.report.skippedDetached > 0 ? (
-            <p className="field-hint">{t("export.result.skipped", { unreviewed: result.report.skippedUnreviewed, detached: result.report.skippedDetached })}</p>
+          {result.report.skippedFuzzy > 0 ? (
+            <p className="field-hint">{t("export.result.skippedFuzzy", { fuzzy: result.report.skippedFuzzy })}</p>
           ) : null}
           {result.path ? <code className="export-selectable">{result.path}</code> : null}
           {result.releaseUrl ? <code className="export-selectable">{result.releaseUrl}</code> : null}
@@ -338,19 +314,32 @@ export const ExportDialog = memo(function ExportDialog({ open, onOpenChange, onO
     <>
       <p className="field-hint">{t(firstSetup ? "export.pack.welcome" : "export.pack.intro")}</p>
       {overview.settingsError ? <p className="ai-test-result failed"><UiIcon icon="circleAlert" size="xs" />{overview.settingsError}</p> : null}
-      {field("title", t("export.pack.packTitle"), t("export.pack.packTitleHint"), { placeholder: t("export.pack.packTitlePlaceholder"), onChange: updateTitle })}
-      {field("publisherName", t("export.pack.publisher"), t("export.pack.publisherHint"), { placeholder: t("export.pack.publisherPlaceholder") })}
+      {field("title", t("export.pack.packTitle"), t("export.pack.packTitleHint"), { placeholder: t("export.pack.packTitlePlaceholder") })}
+      {field("teamName", t("export.pack.team"), t("export.pack.teamHint"), { placeholder: t("export.pack.teamPlaceholder") })}
+      <label className="field">
+        <span className="field-label">{t("export.pack.authors")}<span className="export-optional">{t("export.optional")}</span></span>
+        <textarea
+          className="input export-changelog"
+          value={settings.authors.join("\n")}
+          placeholder={t("export.pack.authorsPlaceholder")}
+          spellCheck={false}
+          disabled={busy !== null}
+          onChange={(event) => {
+            const authors = event.target.value.split("\n");
+            setSettings((current) => ({ ...current, authors }));
+          }}
+        />
+        <span className="field-hint">{t("export.pack.authorsHint")}</span>
+      </label>
+      <div className="dialog-actions export-actions-start">
+        <button className="button button-ghost" type="button" disabled={busy !== null} onClick={() => void addGitAuthors()}>{t("export.pack.authorsFromGit")}</button>
+      </div>
       <details className="export-details">
         <summary>{t("export.pack.more")}</summary>
         <div className="export-details-body">
-          {field("publisherUrl", t("export.pack.publisherUrl"), t("export.pack.publisherUrlHint"), { placeholder: "https://github.com/…", optional: true })}
+          {field("teamUrl", t("export.pack.teamUrl"), t("export.pack.teamUrlHint"), { placeholder: "https://github.com/…", optional: true })}
           {field("license", t("export.pack.license"), t("export.pack.licenseHint"), { placeholder: "CC-BY-NC-SA-4.0", optional: true })}
           {field("minHarmonia", t("export.pack.minHarmonia"), t("export.pack.minHarmoniaHint"), { placeholder: DEFAULT_MIN_HARMONIA })}
-          <div className="field">
-            <span className="field-label">{t("export.pack.packId")}</span>
-            <code className="export-id">{settings.packId || "—"}</code>
-            <span className="field-hint">{t(firstSetup ? (overview.github ? "export.pack.packIdNewGitHub" : "export.pack.packIdNew") : "export.pack.packIdFixed")}</span>
-          </div>
         </div>
       </details>
       <div className="dialog-actions export-actions-start">

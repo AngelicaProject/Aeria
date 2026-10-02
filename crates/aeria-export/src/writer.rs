@@ -5,7 +5,7 @@ use aeria_fonts::{FONTS_SECTION_KIND, FontSection};
 use sha2::{Digest, Sha256};
 
 use crate::error::ExportError;
-use crate::manifest::{ContentPolicy, CountsJson, PackManifest};
+use crate::manifest::PackManifest;
 use crate::signing::{KeyEndorsement, PackSigner, SIGNATURE_DOMAIN};
 
 const MAGIC: &[u8; 8] = b"AERIAHPK";
@@ -36,12 +36,6 @@ pub enum SheetVariant {
     Subrows,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum CellState {
-    Reviewed,
-    Unreviewed,
-}
-
 /// One String column of the source sheet: its column index and row offset.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct LayoutColumn {
@@ -56,7 +50,6 @@ pub struct PackCell {
     pub row_id: u32,
     pub subrow_id: u16,
     pub column_index: u32,
-    pub state: CellState,
     pub text: Vec<u8>,
     pub source_guard: [u8; 8],
 }
@@ -76,7 +69,6 @@ pub struct PackCounts {
     pub sheets: u64,
     pub rows: u64,
     pub cells: u64,
-    pub reviewed_cells: u64,
     pub strings: u64,
 }
 
@@ -169,7 +161,6 @@ pub fn write_pack_with_fonts(
         sheets: len_u64(sheets.len()),
         rows: 0,
         cells: 0,
-        reviewed_cells: 0,
         strings: 0,
     };
     let mut strings: HashMap<Vec<u8>, u32> = HashMap::new();
@@ -183,17 +174,11 @@ pub fn write_pack_with_fonts(
         }
     }
     for sheet in &sheets {
-        write_sheet(manifest, sheet, &mut sections, &mut counts, &mut strings)?;
+        write_sheet(sheet, &mut sections, &mut counts, &mut strings)?;
     }
     counts.strings = len_u64(strings.len());
 
-    let manifest_bytes = manifest.to_json(CountsJson {
-        sheets: counts.sheets,
-        rows: counts.rows,
-        cells: counts.cells,
-        reviewed_cells: counts.reviewed_cells,
-        strings: counts.strings,
-    });
+    let manifest_bytes = manifest.to_json();
 
     let mut table = vec![
         (KIND_MANIFEST, manifest_bytes.as_slice()),
@@ -234,13 +219,12 @@ struct Sections {
 type KeyedCell<'a> = ((u32, u16, u16), &'a PackCell);
 
 fn write_sheet(
-    manifest: &PackManifest,
     sheet: &PackSheet,
     sections: &mut Sections,
     counts: &mut PackCounts,
     strings: &mut HashMap<Vec<u8>, u32>,
 ) -> Result<(), ExportError> {
-    let keyed = canonical_cells(manifest, sheet)?;
+    let keyed = canonical_cells(sheet)?;
     let variant = match sheet.variant {
         SheetVariant::DefaultRows => 0u8,
         SheetVariant::Subrows => 1u8,
@@ -317,11 +301,7 @@ fn write_row(
             }
         };
         put_u16(&mut sections.cells, *ordinal);
-        sections.cells.push(match cell.state {
-            CellState::Reviewed => 1,
-            CellState::Unreviewed => 2,
-        });
-        sections.cells.push(0);
+        sections.cells.extend_from_slice(&[0, 0]);
         put_u32(
             &mut sections.cells,
             to_u32(len_u64(cell.text.len()), "string length")?,
@@ -330,19 +310,13 @@ fn write_row(
         put_u32(&mut sections.cells, 0);
         sections.cells.extend_from_slice(&cell.source_guard);
         counts.cells += 1;
-        if cell.state == CellState::Reviewed {
-            counts.reviewed_cells += 1;
-        }
     }
     Ok(())
 }
 
 // Validates a sheet and returns its cells keyed and sorted by
 // (row, subrow, ordinal).
-fn canonical_cells<'a>(
-    manifest: &PackManifest,
-    sheet: &'a PackSheet,
-) -> Result<Vec<KeyedCell<'a>>, ExportError> {
+fn canonical_cells(sheet: &PackSheet) -> Result<Vec<KeyedCell<'_>>, ExportError> {
     let sheet_error = |reason: &str| ExportError::Sheet {
         sheet: sheet.name.clone(),
         reason: reason.to_owned(),
@@ -398,9 +372,6 @@ fn canonical_cells<'a>(
         }
         if !aeria_se::bytes::is_well_formed(&cell.text) {
             return Err(cell_error("encoded string is not a well-formed SeString"));
-        }
-        if manifest.content_policy == ContentPolicy::Reviewed && cell.state != CellState::Reviewed {
-            return Err(cell_error("unreviewed cell in a reviewed-only pack"));
         }
         keyed.push(((cell.row_id, cell.subrow_id, ordinal), cell));
     }

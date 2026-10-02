@@ -50,14 +50,14 @@ jobs:
       - run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
       - run: cargo test --workspace --locked
 
-  workspace-windows:
+  po-windows:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: 1.98.1
-      - run: cargo test -p aeria-workspace --locked
+      - run: cargo test -p aeria-po --locked
 
   desktop-windows:
     runs-on: windows-latest
@@ -87,6 +87,6 @@ jobs:
           $env:TMP = $temp
           $env:TEMP = $temp
           $env:AERIA_GIT_PATH = (Resolve-Path apps/desktop/src-tauri/binaries/mingit/cmd/git.exe).Path
-          cargo test --locked --all-targets -p aeria-sqpack -p aeria-source -p aeria-workspace -p aeria-search -p aeria-projects -p aeria-git
+          cargo test --locked --all-targets -p aeria-sqpack -p aeria-source -p aeria-po -p aeria-search -p aeria-projects -p aeria-git
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo test --locked -p aeria-desktop --lib

@@ -1,421 +1,690 @@
-//! Desktop adapter for project search and translation memory.
-//!
-//! The source index of the active project's game is built once per source
-//! language and game version, in the background from the session's shared
-//! game source, so building never holds the project lock. Searches read the
-//! index without the lock and take it only to add translations from the
-//! workspace.
+//! Project search and bulk edits in the desktop: searching the open
+//! project's files, replacing in translations after a preview, undoing the
+//! last bulk edit, and translating found strings again (see
+//! `docs/architecture/search.md`).
 
-use std::fmt::Write as _;
-use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, PoisonError};
 
-use aeria_ai::search::{
-    GlossaryCandidate, MemoryMatch, ProjectSearch, SearchMatch, SearchMatches, SearchQuery,
+use aeria_model::Options;
+use aeria_po::{
+    CheckFilter, EditKind, EditsApplied, EntryEdit, Field, Fields, Issue, MatchKind, Pattern,
+    Query, Replacement, Session, SkipReason, State,
 };
-use aeria_ai::tools::{ToolError, UnitLocation};
-use aeria_core::SourceBinding;
-use aeria_search::{
-    SearchError, SimilarSource, SourceHit, SourceIndex, SourceQuery, TermCandidate, Tokenizer,
-};
-use aeria_source::GameSource;
-use aeria_workspace::ProjectSession;
-use sha2::{Digest, Sha256};
+use serde::{Deserialize, Serialize};
 use tauri::Manager;
 
-use crate::angelica::review_label;
-use crate::paths::AeriaPaths;
+use crate::commands::run_blocking;
+use crate::dto::{IssueDto, SourceBindingDto};
+use crate::error::CommandError;
 use crate::state::DesktopState;
+use crate::translate::{is_running, running, start_run};
 
-const SEARCH_DIRECTORY: &str = "search";
-/// Index candidates read to find translated similar strings.
-const MEMORY_CANDIDATES: usize = 100;
+type CommandResult<T> = Result<T, CommandError>;
 
-/// The index state of one source language and game version.
-#[derive(Clone, Debug)]
-pub(crate) enum IndexState {
-    Building,
-    Ready(SourceIndex),
-    Failed(String),
+/// The search in progress and the last bulk edit, which one undo reverts.
+#[derive(Default)]
+pub struct SearchState {
+    cancel: Mutex<Arc<AtomicBool>>,
+    undo: Mutex<Option<Vec<EntryEdit>>>,
 }
 
-/// The key of the game data an index is built from.
-fn source_key(source: &GameSource) -> String {
-    format!("{}/{}", source.language(), source.version())
-}
-
-fn index_path(app: &tauri::AppHandle, key: &str) -> Result<PathBuf, ToolError> {
-    let data = app.aeria_data_dir().map_err(|error| {
-        ToolError::new(format!(
-            "could not resolve the Aeria app-data directory: {error}"
-        ))
-    })?;
-    let digest = Sha256::digest(key.as_bytes());
-    let key = digest[..16]
-        .iter()
-        .fold(String::with_capacity(32), |mut key, byte| {
-            let _ = write!(key, "{byte:02x}");
-            key
-        });
-    Ok(data.join(SEARCH_DIRECTORY).join(format!("{key}.sqlite3")))
-}
-
-/// What building an index needs, read under the project lock.
-struct BuildInput {
-    key: String,
-    source: Arc<GameSource>,
-    tokenizer: Tokenizer,
-}
-
-fn active_source_key(app: &tauri::AppHandle) -> Result<String, ToolError> {
-    let state = app.state::<DesktopState>();
-    let project = state
-        .lock_project()
-        .map_err(|error| ToolError::new(error.message))?;
-    let session = project
-        .as_ref()
-        .ok_or_else(|| ToolError::new("no project is open"))?;
-    Ok(source_key(session.source()))
-}
-
-fn build_input(app: &tauri::AppHandle) -> Result<BuildInput, ToolError> {
-    let state = app.state::<DesktopState>();
-    let project = state
-        .lock_project()
-        .map_err(|error| ToolError::new(error.message))?;
-    let session = project
-        .as_ref()
-        .ok_or_else(|| ToolError::new("no project is open"))?;
-    let source = session.source_handle();
-    Ok(BuildInput {
-        key: source_key(&source),
-        tokenizer: Tokenizer::for_language(source.language().code()),
-        source,
-    })
-}
-
-fn build(app: &tauri::AppHandle, input: &BuildInput) -> Result<SourceIndex, SearchError> {
-    let path = index_path(app, &input.key)
-        .map_err(|error| SearchError::Io(std::io::Error::other(error.0)))?;
-    SourceIndex::build(path, &input.key, input.tokenizer, &input.source, &|| true)
-}
-
-/// Returns the active game data's key and index, or starts building the
-/// index and reports that it is not ready yet. A failed build is retried on
-/// the next request.
-pub(crate) fn source_index(app: &tauri::AppHandle) -> Result<(String, SourceIndex), ToolError> {
-    let key = active_source_key(app)?;
-    let state = app.state::<DesktopState>();
-    match state.search_index(&key) {
-        Some(IndexState::Ready(index)) => return Ok((key, index)),
-        Some(IndexState::Building) => {
-            return Err(ToolError::new(
-                "the search index is still being built; try again in a minute",
-            ));
-        }
-        Some(IndexState::Failed(message)) => {
-            state.forget_search_index(&key);
-            return Err(ToolError::new(format!(
-                "the search index could not be built: {message}"
-            )));
-        }
-        None => {}
+impl SearchState {
+    /// Cancels the search in progress and returns the flag of a new one.
+    fn begin(&self) -> Arc<AtomicBool> {
+        let mut cancel = self.cancel.lock().unwrap_or_else(PoisonError::into_inner);
+        cancel.store(true, Ordering::Relaxed);
+        *cancel = Arc::new(AtomicBool::new(false));
+        Arc::clone(&cancel)
     }
-    let path = index_path(app, &key)?;
-    if let Some(index) = SourceIndex::open(&path, &key).ok().flatten() {
-        state.set_search_index(&key, IndexState::Ready(index.clone()));
-        return Ok((key, index));
+
+    fn cancel(&self) {
+        self.cancel
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .store(true, Ordering::Relaxed);
     }
-    if state.claim_search_build(&key) {
-        let input = match build_input(app) {
-            Ok(input) if input.key == key => input,
-            Ok(_) | Err(_) => {
-                state.forget_search_index(&key);
-                return Err(ToolError::new("the project changed; try again"));
-            }
-        };
-        let task_app = app.clone();
-        tauri::async_runtime::spawn_blocking(move || {
-            let result = build(&task_app, &input);
-            task_app.state::<DesktopState>().set_search_index(
-                &input.key,
-                match result {
-                    Ok(index) => IndexState::Ready(index),
-                    Err(error) => IndexState::Failed(error.to_string()),
+
+    fn set_undo(&self, applied: &EditsApplied) {
+        *self.undo.lock().unwrap_or_else(PoisonError::into_inner) = (!applied.done.is_empty())
+            .then(|| applied.done.iter().map(aeria_po::EditDone::undo).collect());
+    }
+
+    fn take_undo(&self) -> Option<Vec<EntryEdit>> {
+        self.undo
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take()
+    }
+
+    fn has_undo(&self) -> bool {
+        self.undo
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .is_some()
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum MatchKindDto {
+    Text,
+    Word,
+    Regex,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum FieldDto {
+    Translation,
+    Source,
+    Note,
+    Context,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub enum StateDto {
+    Untranslated,
+    Translated,
+    Fuzzy,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub enum CheckDto {
+    #[default]
+    Any,
+    Problems,
+    Advice,
+}
+
+/// A search from the renderer.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchQueryDto {
+    /// Empty to keep every string the filters keep.
+    pub text: String,
+    pub kind: MatchKindDto,
+    pub case_sensitive: bool,
+    /// The fields the text is matched in.
+    pub fields: Vec<FieldDto>,
+    /// Files and folders relative to `po/`; empty for the whole project.
+    #[serde(default)]
+    pub paths: Vec<String>,
+    /// Only these strings, by `msgctxt`.
+    #[serde(default)]
+    pub contexts: Vec<String>,
+    #[serde(default)]
+    pub states: Vec<StateDto>,
+    #[serde(default)]
+    pub check: CheckDto,
+    /// With a check filter, only strings with an issue of this group.
+    #[serde(default)]
+    pub issue: Option<String>,
+}
+
+impl SearchQueryDto {
+    fn query(&self) -> Query {
+        let has = |field| self.fields.contains(&field);
+        Query {
+            pattern: (!self.text.is_empty()).then(|| Pattern {
+                text: self.text.clone(),
+                kind: match self.kind {
+                    MatchKindDto::Text => MatchKind::Text,
+                    MatchKindDto::Word => MatchKind::Word,
+                    MatchKindDto::Regex => MatchKind::Regex,
                 },
-            );
-        });
-    }
-    Err(ToolError::new(
-        "the search index is being built for this source; try again in a minute",
-    ))
-}
-
-/// Starts building the active project's index if it is missing.
-pub(crate) fn prepare_source_index(app: &tauri::AppHandle) {
-    let _ = source_index(app);
-}
-
-fn binding_of(hit: &SourceHit) -> SourceBinding {
-    SourceBinding::new(hit.sheet.clone(), hit.row, hit.subrow, hit.column)
-}
-
-fn location_of(binding: &SourceBinding) -> UnitLocation {
-    UnitLocation {
-        sheet: binding.sheet_name().to_owned(),
-        row: binding.row_id(),
-        subrow: binding.subrow_id(),
-        column: Some(binding.column_index()),
-    }
-}
-
-/// Search over the active project for Angelica and job workers.
-pub(crate) struct DesktopSearch {
-    pub(crate) app: tauri::AppHandle,
-}
-
-impl DesktopSearch {
-    /// Runs `read` on the session of the index's game source.
-    fn with_session<T>(
-        &self,
-        key: Option<&str>,
-        read: impl FnOnce(&ProjectSession) -> Result<T, ToolError>,
-    ) -> Result<T, ToolError> {
-        let state = self.app.state::<DesktopState>();
-        let project = state
-            .lock_project()
-            .map_err(|error| ToolError::new(error.message))?;
-        let session = project
-            .as_ref()
-            .ok_or_else(|| ToolError::new("no project is open"))?;
-        if key.is_some_and(|id| id != source_key(session.source())) {
-            return Err(ToolError::new("the project changed during the search"));
+                case_sensitive: self.case_sensitive,
+            }),
+            fields: Fields {
+                translation: has(FieldDto::Translation),
+                source: has(FieldDto::Source),
+                note: has(FieldDto::Note),
+                context: has(FieldDto::Context),
+            },
+            paths: self.paths.clone(),
+            contexts: self.contexts.clone(),
+            states: self
+                .states
+                .iter()
+                .map(|state| match state {
+                    StateDto::Untranslated => State::Untranslated,
+                    StateDto::Translated => State::Translated,
+                    StateDto::Fuzzy => State::Fuzzy,
+                })
+                .collect(),
+            check: match self.check {
+                CheckDto::Any => CheckFilter::Any,
+                CheckDto::Problems => CheckFilter::Problems,
+                CheckDto::Advice => CheckFilter::Advice,
+            },
+            issue: self.issue.clone(),
         }
-        read(session)
     }
 }
 
-impl ProjectSearch for DesktopSearch {
-    fn search_source(&self, query: &SearchQuery) -> Result<SearchMatches, ToolError> {
-        let (key, index) = source_index(&self.app)?;
-        let page = index
-            .search(&SourceQuery {
-                text: &query.text,
-                sheet: query.sheet.as_deref(),
-                offset: query.offset,
-                limit: query.limit,
-            })
-            .map_err(|error| ToolError::new(error.to_string()))?;
-        self.with_session(Some(&key), |session| {
-            Ok(SearchMatches {
-                matches: page
-                    .hits
-                    .into_iter()
-                    .map(|hit| {
-                        let binding = binding_of(&hit);
-                        let unit = session.workspace().unit_by_source_binding(&binding);
-                        SearchMatch {
-                            location: location_of(&binding),
-                            source: hit.source,
-                            target: unit.map(|unit| unit.target_macro().to_owned()),
-                            review_state: unit.map(|unit| review_label(unit.review_state())),
-                        }
-                    })
-                    .collect(),
-                more: page.more,
-            })
-        })
-    }
+fn issues_dto(issues: &[Issue]) -> Vec<IssueDto> {
+    issues.iter().map(IssueDto::from).collect()
+}
 
-    fn search_translations(&self, query: &SearchQuery) -> Result<SearchMatches, ToolError> {
-        self.with_session(None, |session| Ok(translation_matches(session, query)))
-    }
-
-    fn similar_translations(
-        &self,
-        source: &str,
-        exclude: Option<&UnitLocation>,
-        limit: usize,
-    ) -> Result<Vec<MemoryMatch>, ToolError> {
-        let (key, index) = source_index(&self.app)?;
-        let exclude = exclude.map(|location| {
-            (
-                location.sheet.as_str(),
-                location.row,
-                location.subrow,
-                location.column.unwrap_or(0),
-            )
-        });
-        let candidates = index
-            .similar(source, exclude, MEMORY_CANDIDATES)
-            .map_err(|error| ToolError::new(error.to_string()))?;
-        self.with_session(Some(&key), |session| {
-            Ok(memory_matches(session, candidates, limit))
-        })
-    }
-
-    fn glossary_candidates(&self) -> Result<Arc<[GlossaryCandidate]>, ToolError> {
-        let (key, index) = source_index(&self.app)?;
-        let state = self.app.state::<DesktopState>();
-        if let Some(candidates) = state.glossary_candidates(&key) {
-            return Ok(candidates);
-        }
-        let candidates: Arc<[GlossaryCandidate]> = index
-            .term_candidates(1)
-            .map_err(|error| ToolError::new(error.to_string()))?
-            .into_iter()
-            .map(glossary_candidate)
-            .collect();
-        state.set_glossary_candidates(&key, Arc::clone(&candidates));
-        Ok(candidates)
+/// A message without a kind, such as a broken file.
+fn other_issue(message: &str) -> IssueDto {
+    IssueDto {
+        kind: "other".to_owned(),
+        group: "other".to_owned(),
+        message: message.to_owned(),
+        ..IssueDto::default()
     }
 }
 
-fn glossary_candidate(candidate: TermCandidate) -> GlossaryCandidate {
-    GlossaryCandidate {
-        term: candidate.term,
-        locations: candidate
-            .locations
-            .iter()
-            .map(|hit| location_of(&binding_of(hit)))
-            .collect(),
-        names: candidate.names,
-        strings: candidate.strings,
-        occurrences: candidate.occurrences,
-    }
+/// The matches in one field, as UTF-16 ranges of its text for the renderer.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FieldMatchDto {
+    pub field: FieldDto,
+    pub ranges: Vec<[usize; 2]>,
 }
 
-/// Bound translations whose plain text contains the query, in binding order.
-fn translation_matches(session: &ProjectSession, query: &SearchQuery) -> SearchMatches {
-    let mut found: Vec<_> = session
-        .workspace()
-        .units()
-        .filter(|unit| unit.is_bound())
-        .filter(|unit| {
-            query
-                .sheet
-                .as_deref()
-                .is_none_or(|sheet| unit.source_binding().sheet_name() == sheet)
-        })
-        .filter(|unit| aeria_search::text_contains(unit.target_macro(), &query.text))
-        .collect();
-    found.sort_by(|left, right| left.source_binding().cmp(right.source_binding()));
-    let start = usize::try_from(query.offset).unwrap_or(usize::MAX);
-    let limit = usize::try_from(query.limit).unwrap_or(usize::MAX);
-    let more = found.len() > start.saturating_add(limit);
-    SearchMatches {
-        matches: found
-            .into_iter()
-            .skip(start)
-            .take(limit)
-            .map(|unit| SearchMatch {
-                location: location_of(unit.source_binding()),
-                source: session
-                    .source_macro(unit.source_binding())
-                    .unwrap_or_default(),
-                target: Some(unit.target_macro().to_owned()),
-                review_state: Some(review_label(unit.review_state())),
-            })
-            .collect(),
-        more,
-    }
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchHitDto {
+    pub path: String,
+    pub context: String,
+    /// The string in the game; `None` when the game no longer has it.
+    pub binding: Option<SourceBindingDto>,
+    pub source: String,
+    pub translation: String,
+    pub fuzzy: bool,
+    pub note: Option<String>,
+    pub matches: Vec<FieldMatchDto>,
+    /// Problems, or terms not used, when the search filters by them.
+    pub findings: Vec<IssueDto>,
 }
 
-/// The similar source strings that have a non-empty translation.
-fn memory_matches(
-    session: &ProjectSession,
-    candidates: Vec<SimilarSource>,
-    limit: usize,
-) -> Vec<MemoryMatch> {
-    candidates
-        .into_iter()
-        .filter_map(|candidate| {
-            let binding = binding_of(&candidate.hit);
-            let unit = session.workspace().unit_by_source_binding(&binding)?;
-            (!unit.target_macro().trim().is_empty()).then(|| MemoryMatch {
-                location: location_of(&binding),
-                source: candidate.hit.source,
-                target: unit.target_macro().to_owned(),
-                review_state: review_label(unit.review_state()),
-                similarity: (candidate.score * 100.0).round() / 100.0,
-            })
-        })
-        .take(limit)
+/// The strings found in one file.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileHitsDto {
+    pub path: String,
+    pub sheet: String,
+    pub count: usize,
+}
+
+/// How many strings have issues of one group.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IssueCountDto {
+    pub issue: IssueDto,
+    pub count: usize,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchResultDto {
+    pub hits: Vec<SearchHitDto>,
+    /// Every string found; more than `hits` when the result was cut.
+    pub total: usize,
+    pub matches: usize,
+    /// Every file with a string found, with counts, in file order.
+    pub files: Vec<FileHitsDto>,
+    /// With a check filter, the issues of every string found by group.
+    pub issues: Vec<IssueCountDto>,
+    pub cancelled: bool,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReplacementDto {
+    pub text: String,
+    pub preserve_case: bool,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReplaceChangeDto {
+    pub path: String,
+    pub context: String,
+    pub binding: Option<SourceBindingDto>,
+    pub source: String,
+    pub before: String,
+    pub after: String,
+    pub fuzzy: bool,
+    /// A change with problems is not written.
+    pub problems: Vec<IssueDto>,
+}
+
+/// A string to change, as the renderer last saw it.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EntryRefDto {
+    pub path: String,
+    pub context: String,
+    pub expected_text: String,
+    pub expected_fuzzy: bool,
+}
+
+/// A replacement to write.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReplaceEditDto {
+    #[serde(flatten)]
+    pub entry: EntryRefDto,
+    pub after: String,
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SkipReasonDto {
+    Changed,
+    Missing,
+    Invalid,
+    Broken,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SkippedDto {
+    pub path: String,
+    pub context: String,
+    pub binding: Option<SourceBindingDto>,
+    pub reason: SkipReasonDto,
+    pub problems: Vec<IssueDto>,
+}
+
+/// What a bulk edit did.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BulkEditDto {
+    pub done: usize,
+    pub skipped: Vec<SkippedDto>,
+    /// An undo of the last bulk edit is available.
+    pub undo_available: bool,
+}
+
+pub(crate) fn binding(session: &Session, context: &str) -> Option<SourceBindingDto> {
+    session
+        .coordinate_of(context)
+        .map(
+            |(sheet_name, row_id, subrow_id, column_index)| SourceBindingDto {
+                sheet_name,
+                row_id,
+                subrow_id,
+                column_index,
+            },
+        )
+}
+
+/// UTF-16 offsets of byte ranges of `text`.
+fn utf16_ranges(text: &str, ranges: &[std::ops::Range<usize>]) -> Vec<[usize; 2]> {
+    let offset = |byte: usize| text[..byte].encode_utf16().count();
+    ranges
+        .iter()
+        .map(|range| [offset(range.start), offset(range.end)])
         .collect()
+}
+
+fn hit_dto(session: &Session, hit: aeria_po::Hit) -> SearchHitDto {
+    let matches = hit
+        .matches
+        .iter()
+        .map(|found| {
+            let (field, text) = match found.field {
+                Field::Translation => (FieldDto::Translation, hit.translation.as_str()),
+                Field::Source => (FieldDto::Source, hit.source.as_str()),
+                Field::Note => (FieldDto::Note, hit.note.as_deref().unwrap_or_default()),
+                Field::Context => (FieldDto::Context, hit.context.as_str()),
+            };
+            FieldMatchDto {
+                field,
+                ranges: utf16_ranges(text, &found.ranges),
+            }
+        })
+        .collect();
+    SearchHitDto {
+        binding: binding(session, &hit.context),
+        path: hit.path,
+        context: hit.context,
+        source: hit.source,
+        translation: hit.translation,
+        fuzzy: hit.fuzzy,
+        note: hit.note,
+        matches,
+        findings: issues_dto(&hit.findings),
+    }
+}
+
+fn search_error(error: &aeria_po::SearchError) -> CommandError {
+    let code = match error {
+        aeria_po::SearchError::Pattern(_) | aeria_po::SearchError::EmptyPattern => "searchPattern",
+        aeria_po::SearchError::Read { .. } => "translationRead",
+    };
+    CommandError::new(code, error.to_string())
+}
+
+fn bulk_dto(session: &Session, applied: &EditsApplied, state: &SearchState) -> BulkEditDto {
+    BulkEditDto {
+        done: applied.done.len(),
+        skipped: applied
+            .skipped
+            .iter()
+            .map(|skipped| {
+                let (reason, problems) = match &skipped.reason {
+                    SkipReason::Changed => (SkipReasonDto::Changed, Vec::new()),
+                    SkipReason::Missing => (SkipReasonDto::Missing, Vec::new()),
+                    SkipReason::Invalid(problems) => (SkipReasonDto::Invalid, issues_dto(problems)),
+                    SkipReason::Broken(message) => {
+                        (SkipReasonDto::Broken, vec![other_issue(message)])
+                    }
+                };
+                SkippedDto {
+                    binding: binding(session, &skipped.context),
+                    path: skipped.path.clone(),
+                    context: skipped.context.clone(),
+                    reason,
+                    problems,
+                }
+            })
+            .collect(),
+        undo_available: state.has_undo(),
+    }
+}
+
+#[tauri::command(rename_all = "camelCase")]
+/// Searches the open project's files. A new search cancels the one in
+/// progress.
+///
+/// # Errors
+///
+/// Returns `searchPattern` for an invalid pattern, `noProjectOpen`, or
+/// `translationRead` when a file cannot be read.
+pub async fn project_search(
+    app: tauri::AppHandle,
+    query: SearchQueryDto,
+) -> CommandResult<SearchResultDto> {
+    let cancel = app.state::<SearchState>().begin();
+    run_blocking(move || {
+        let session = app.state::<DesktopState>().session()?;
+        let knowledge = session.knowledge();
+        let target = session.settings().target_language;
+        let found = aeria_po::search(session.root(), &query.query(), &knowledge, &target, &cancel)
+            .map_err(|error| search_error(&error))?;
+        Ok(SearchResultDto {
+            total: found.total,
+            matches: found.matches,
+            files: found
+                .files
+                .into_iter()
+                .map(|file| FileHitsDto {
+                    path: file.path,
+                    sheet: file.sheet,
+                    count: file.count,
+                })
+                .collect(),
+            issues: found
+                .issues
+                .iter()
+                .map(|count| IssueCountDto {
+                    issue: IssueDto::from(&count.issue),
+                    count: count.count,
+                })
+                .collect(),
+            cancelled: found.cancelled,
+            hits: found
+                .hits
+                .into_iter()
+                .map(|hit| hit_dto(&session, hit))
+                .collect(),
+        })
+    })
+    .await
+}
+
+#[tauri::command(rename_all = "camelCase")]
+/// Cancels the search in progress.
+#[allow(clippy::needless_pass_by_value)]
+pub fn project_search_cancel(app: tauri::AppHandle) {
+    app.state::<SearchState>().cancel();
+}
+
+#[tauri::command(rename_all = "camelCase")]
+/// The changes a replacement would make to the translations the query
+/// finds, each with the problems that would keep it from being written.
+///
+/// # Errors
+///
+/// Returns `searchPattern` for an invalid or empty pattern, `noProjectOpen`,
+/// or `translationRead`.
+pub async fn project_replace_preview(
+    app: tauri::AppHandle,
+    query: SearchQueryDto,
+    replacement: ReplacementDto,
+) -> CommandResult<Vec<ReplaceChangeDto>> {
+    let cancel = app.state::<SearchState>().begin();
+    run_blocking(move || {
+        let session = app.state::<DesktopState>().session()?;
+        let knowledge = session.knowledge();
+        let target = session.settings().target_language;
+        let changes = aeria_po::preview_replace(
+            session.root(),
+            &query.query(),
+            &Replacement {
+                text: replacement.text,
+                preserve_case: replacement.preserve_case,
+            },
+            &knowledge,
+            &target,
+            &cancel,
+        )
+        .map_err(|error| search_error(&error))?;
+        Ok(changes
+            .into_iter()
+            .map(|change| ReplaceChangeDto {
+                binding: binding(&session, &change.context),
+                path: change.path,
+                context: change.context,
+                source: change.source,
+                before: change.before,
+                after: change.after,
+                fuzzy: change.fuzzy,
+                problems: issues_dto(&change.problems),
+            })
+            .collect())
+    })
+    .await
+}
+
+fn edit(entry: EntryRefDto, kind: EditKind) -> EntryEdit {
+    EntryEdit {
+        path: entry.path,
+        context: entry.context,
+        expected_text: entry.expected_text,
+        expected_fuzzy: entry.expected_fuzzy,
+        kind,
+    }
+}
+
+#[tauri::command(rename_all = "camelCase")]
+/// Writes replacements of translations. A string changed since the preview,
+/// or whose new translation has problems, is skipped and reported. The edit
+/// becomes the one an undo reverts.
+///
+/// # Errors
+///
+/// Returns `noProjectOpen` or `translationPersistence` when a file cannot be
+/// written.
+pub async fn project_replace_apply(
+    app: tauri::AppHandle,
+    edits: Vec<ReplaceEditDto>,
+) -> CommandResult<BulkEditDto> {
+    run_blocking(move || {
+        let session = app.state::<DesktopState>().session()?;
+        let edits: Vec<EntryEdit> = edits
+            .into_iter()
+            .map(|edit_dto| edit(edit_dto.entry, EditKind::Replace(edit_dto.after)))
+            .collect();
+        let applied = session.apply_edits(&edits)?;
+        let state = app.state::<SearchState>();
+        state.set_undo(&applied);
+        Ok(bulk_dto(&session, &applied, &state))
+    })
+    .await
+}
+
+#[tauri::command(rename_all = "camelCase")]
+/// Reverts the last bulk edit for the strings that did not change since;
+/// the others are reported.
+///
+/// # Errors
+///
+/// Returns `nothingToUndo`, `noProjectOpen`, or `translationPersistence`.
+pub async fn project_edit_undo(app: tauri::AppHandle) -> CommandResult<BulkEditDto> {
+    run_blocking(move || {
+        let session = app.state::<DesktopState>().session()?;
+        let state = app.state::<SearchState>();
+        let Some(undo) = state.take_undo() else {
+            return Err(CommandError::new(
+                "nothingToUndo",
+                "there is no bulk edit to undo",
+            ));
+        };
+        let applied = session.apply_edits(&undo)?;
+        Ok(bulk_dto(&session, &applied, &state))
+    })
+    .await
+}
+
+#[tauri::command(rename_all = "camelCase")]
+/// Adds or removes a term exception of the given strings. A string changed
+/// since it was found is skipped and reported. The edit becomes the one an
+/// undo reverts.
+///
+/// # Errors
+///
+/// Returns `termExceptionInvalid`, `noProjectOpen`, or
+/// `translationPersistence` when a file cannot be written.
+pub async fn project_term_exception(
+    app: tauri::AppHandle,
+    entries: Vec<EntryRefDto>,
+    term: String,
+    add: bool,
+) -> CommandResult<BulkEditDto> {
+    if add && !aeria_po::can_be_exception(&term) {
+        return Err(crate::commands::term_exception_invalid(&term));
+    }
+    run_blocking(move || {
+        let session = app.state::<DesktopState>().session()?;
+        let edits: Vec<EntryEdit> = entries
+            .into_iter()
+            .map(|entry| {
+                edit(
+                    entry,
+                    EditKind::TermException {
+                        term: term.clone(),
+                        add,
+                    },
+                )
+            })
+            .collect();
+        let applied = session.apply_edits(&edits)?;
+        let state = app.state::<SearchState>();
+        state.set_undo(&applied);
+        Ok(bulk_dto(&session, &applied, &state))
+    })
+    .await
+}
+
+#[tauri::command(rename_all = "camelCase")]
+/// Clears the translations of the given strings and starts machine
+/// translation of exactly those strings. The clear is the edit an undo
+/// reverts. A stopped run leaves the rest untranslated, so any later run
+/// takes them.
+///
+/// # Errors
+///
+/// Returns `translationRunning` while a run goes, `noProjectOpen`,
+/// `translationPersistence`, or an error of the credential store.
+pub async fn project_retranslate(
+    app: tauri::AppHandle,
+    entries: Vec<EntryRefDto>,
+    model: String,
+    effort: Option<String>,
+) -> CommandResult<BulkEditDto> {
+    if is_running(&app) {
+        return Err(running());
+    }
+    let (applied_dto, contexts, paths) = {
+        let app = app.clone();
+        run_blocking(move || {
+            let session = app.state::<DesktopState>().session()?;
+            let edits: Vec<EntryEdit> = entries
+                .into_iter()
+                .map(|entry| edit(entry, EditKind::Clear))
+                .collect();
+            let applied = session.apply_edits(&edits)?;
+            let state = app.state::<SearchState>();
+            state.set_undo(&applied);
+            let contexts: Vec<String> = applied
+                .done
+                .iter()
+                .map(|done| done.context.clone())
+                .collect();
+            let mut paths: Vec<String> =
+                applied.done.iter().map(|done| done.path.clone()).collect();
+            paths.sort();
+            paths.dedup();
+            Ok((bulk_dto(&session, &applied, &state), contexts, paths))
+        })
+        .await?
+    };
+    if !contexts.is_empty() {
+        start_run(
+            &app,
+            Options {
+                paths,
+                fuzzy: false,
+                contexts,
+                model,
+                effort: effort.filter(|effort| !effort.is_empty()),
+            },
+        )?;
+    }
+    Ok(applied_dto)
 }
 
 #[cfg(test)]
 mod tests {
-
-    use aeria_ai::tools::ReviewLabel;
-
     use super::*;
 
-    fn session() -> (
-        (tempfile::TempDir, crate::test_support::TestGame),
-        ProjectSession,
-    ) {
-        let directory = tempfile::tempdir().expect("directory");
-        let game = crate::test_support::test_game();
-        let session = crate::test_support::test_session(directory.path(), &game);
-        ((directory, game), session)
+    #[test]
+    fn ranges_are_utf16_offsets() {
+        let text = "Ёж 🦔 повар";
+        let start = text.find("повар").expect("found");
+        assert_eq!(
+            utf16_ranges(text, std::slice::from_ref(&(start..text.len()))),
+            vec![[6, 11]],
+            "the hedgehog is two UTF-16 units"
+        );
     }
 
     #[test]
-    fn translations_and_memory_come_from_bound_units() {
-        let ((directory, _game), mut session) = session();
-        let source = session.source_handle();
-        let index = SourceIndex::build(
-            directory.path().join("index.sqlite3"),
-            "en/test",
-            Tokenizer::Words,
-            &source,
-            &|| true,
-        )
-        .expect("index");
-        let hit = SourceHit {
-            sheet: "Synthetic".to_owned(),
-            row: 42,
-            subrow: 0,
-            column: 0,
-            source: "Hello there".to_owned(),
-        };
-        let binding = binding_of(&hit);
-        let query = |text: &str| SearchQuery {
-            text: text.to_owned(),
-            sheet: None,
-            offset: 0,
-            limit: 10,
-        };
-
-        assert!(
-            memory_matches(
-                &session,
-                index.similar(&hit.source, None, 10).expect("similar"),
-                5
-            )
-            .is_empty()
+    fn a_query_from_the_renderer_maps_to_the_core_query() {
+        let dto: SearchQueryDto = serde_json::from_value(serde_json::json!({
+            "text": "повар",
+            "kind": "word",
+            "caseSensitive": false,
+            "fields": ["translation"],
+            "states": ["fuzzy"],
+            "check": "problems"
+        }))
+        .expect("query");
+        let query = dto.query();
+        assert_eq!(
+            query.pattern.map(|pattern| pattern.kind),
+            Some(MatchKind::Word)
         );
-        assert!(
-            translation_matches(&session, &query("эфирный"))
-                .matches
-                .is_empty()
-        );
-
-        let target = format!("{} эфирный", hit.source);
-        session.set_target(&binding, &target).expect("target");
-        let found = translation_matches(&session, &query("ЭФИРНЫЙ"));
-        assert_eq!(found.matches.len(), 1);
-        assert_eq!(found.matches[0].source, hit.source);
-        assert_eq!(found.matches[0].review_state, Some(ReviewLabel::Draft));
-        assert!(!found.more);
-
-        let memory = memory_matches(
-            &session,
-            index.similar(&hit.source, None, 10).expect("similar"),
-            5,
-        );
-        assert_eq!(memory[0].target, target);
-        assert!((memory[0].similarity - 1.0).abs() < f64::EPSILON);
+        assert!(query.fields.translation && !query.fields.source);
+        assert_eq!(query.states, vec![State::Fuzzy]);
+        assert_eq!(query.check, CheckFilter::Problems);
     }
 }

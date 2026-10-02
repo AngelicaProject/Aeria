@@ -1,20 +1,16 @@
 //! Fetch, integrate, and push.
 //!
-//! Integration merges one or more upstream references atomically: either
-//! every merge succeeds and the caller accepts the result, or the branch is
-//! reset to where it started. Textual conflicts in unit shards are merged per
-//! translation unit; only real same-unit conflicts are reported.
+//! Integration merges the upstream atomically: either the merge succeeds and
+//! the caller accepts the result, or the branch is reset to where it
+//! started. A PO file both sides changed is joined per
+//! string; only strings both sides changed differently are reported.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 
-use aeria_core::TranslationUnitId;
-use aeria_workspace::encode_unit_shard;
-
 use crate::GitError;
-use crate::merge::{ConflictResolution, merge_shard};
+use crate::entries::{ConflictResolution, is_po_path, merge_file};
 use crate::repository::{GitRepository, strip_prefix};
-use crate::semantic::is_shard_path;
 
 /// How incoming commits were integrated.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -70,42 +66,6 @@ impl GitRepository {
         Ok(())
     }
 
-    /// Updates only the remote-tracking ref of the main branch from the
-    /// current branch's sync remote, for noticing that main moved. It never
-    /// asks for credentials, so it can run in the background; a remote that
-    /// needs a new sign-in fails instead. Returns whether the ref changed.
-    ///
-    /// Without a main branch, a branch, or a remote there is nothing to
-    /// fetch and the result is `false`.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the fetch fails, for example without network
-    /// access.
-    pub fn fetch_main_branch(&self) -> Result<bool, GitError> {
-        let (Some(main), Some(branch)) = (self.main_branch()?, self.current_branch()?) else {
-            return Ok(false);
-        };
-        let remote = match self.sync_remote(&branch) {
-            Ok(remote) => remote,
-            Err(GitError::NoRemote) => return Ok(false),
-            Err(error) => return Err(error),
-        };
-        let tracking = format!("refs/remotes/{remote}/{main}");
-        let before = self.verify_ref(&tracking)?;
-        let refspec = format!("+refs/heads/{main}:{tracking}");
-        self.run(&[
-            "-c",
-            "credential.interactive=never",
-            "fetch",
-            "--quiet",
-            "--no-tags",
-            &remote,
-            &refspec,
-        ])?;
-        Ok(self.verify_ref(&tracking)? != before)
-    }
-
     /// Fetches every remote, for listing their branches.
     ///
     /// # Errors
@@ -118,19 +78,17 @@ impl GitRepository {
         Ok(())
     }
 
-    /// Integrates already fetched commits into the current branch: its
-    /// upstream and, on a contribution branch under the pull-request policy,
-    /// the remote main branch.
+    /// Integrates the already fetched commits of the current branch's
+    /// upstream.
     ///
-    /// Translation changes must be checkpointed first. Shards that conflict
-    /// textually are merged per translation unit. Same-unit conflicts are
-    /// resolved only by an explicit entry in `resolutions`; otherwise the
-    /// merge is aborted and they are returned as
-    /// [`GitError::TranslationConflicts`]. Once everything merged, `accept`
-    /// must validate the resulting project; on failure the branch is reset
-    /// to its starting commit. `accept` may rewrite Aeria-managed files to
-    /// reconcile merged units with the current source; such changes stay
-    /// uncommitted, like any other change, until the next checkpoint.
+    /// Translation changes must be checkpointed first. PO files that
+    /// conflict textually are joined per string (see
+    /// [`crate::entries::merge_file`]). A string both sides changed
+    /// differently is resolved only by its entry in `resolutions`, keyed by
+    /// `msgctxt`; otherwise the merge is aborted and the strings are
+    /// returned as [`GitError::TranslationConflicts`]. Once everything
+    /// merged, `accept` must validate the resulting project; on failure the
+    /// branch is reset to its starting commit.
     ///
     /// # Errors
     ///
@@ -139,7 +97,7 @@ impl GitRepository {
     /// or another typed Git error. The branch is unchanged after an error.
     pub fn integrate<F>(
         &self,
-        resolutions: &BTreeMap<TranslationUnitId, ConflictResolution>,
+        resolutions: &BTreeMap<String, ConflictResolution>,
         accept: F,
     ) -> Result<IntegrateOutcome, GitError>
     where
@@ -148,40 +106,20 @@ impl GitRepository {
         let branch = self.require_branch()?;
         self.require_clean_translations()?;
 
-        let mut sources = Vec::new();
-        if let Some(upstream) = self.upstream(&branch)? {
-            sources.push(upstream);
-        }
-        if let Some(main) = self.main_branch()?
-            && main != branch
-        {
-            let remote = self.sync_remote(&branch)?;
-            let main_ref = format!("{remote}/{main}");
-            if self
-                .verify_ref(&format!("refs/remotes/{main_ref}"))?
-                .is_some()
-                && !sources.contains(&main_ref)
-            {
-                sources.push(main_ref);
-            }
-        }
-        if sources.is_empty() {
+        let Some(upstream) = self.upstream(&branch)? else {
             return Ok(IntegrateOutcome::UpToDate);
-        }
+        };
         let Some(before) = self.head()? else {
             return Err(GitError::UnbornHead);
         };
 
-        let mut outcome = IntegrateOutcome::UpToDate;
-        for source in &sources {
-            match self.merge_from(source, resolutions) {
-                Ok(step) => outcome = outcome.max(step),
-                Err(error) => {
-                    self.reset_to(&before)?;
-                    return Err(error);
-                }
+        let outcome = match self.merge_from(&upstream, resolutions) {
+            Ok(outcome) => outcome,
+            Err(error) => {
+                self.reset_to(&before)?;
+                return Err(error);
             }
-        }
+        };
         if outcome.changed_working_tree()
             && let Err(reason) = accept()
         {
@@ -214,7 +152,7 @@ impl GitRepository {
     pub(crate) fn merge_from(
         &self,
         source: &str,
-        resolutions: &BTreeMap<TranslationUnitId, ConflictResolution>,
+        resolutions: &BTreeMap<String, ConflictResolution>,
     ) -> Result<IntegrateOutcome, GitError> {
         let (ahead, behind) = self.ahead_behind(source)?;
         if behind == 0 {
@@ -238,66 +176,48 @@ impl GitRepository {
         if conflicted.is_empty() {
             crate::process::require_success(&args, &output)?;
         }
-        let other: Vec<String> = conflicted
-            .iter()
-            .filter(|path| !is_shard_path(path))
-            .cloned()
-            .collect();
-        if !other.is_empty() {
-            return Err(GitError::MergeConflict { files: other });
-        }
-
         let mut conflicts = Vec::new();
         let mut merged = Vec::new();
+        let mut other = Vec::new();
         for path in &conflicted {
+            if !is_po_path(path) {
+                other.push(path.clone());
+                continue;
+            }
             let top = self.top_level_path(path);
             let stages = self.read_blobs(&[
                 format!(":1:{top}"),
                 format!(":2:{top}"),
                 format!(":3:{top}"),
             ])?;
-            let [base, ours, theirs] = stages.as_slice() else {
-                return Err(GitError::Parse {
-                    message: format!("missing merge stages for {path}"),
-                });
+            let joined = match stages.as_slice() {
+                [base, Some(ours), Some(theirs)] => {
+                    merge_file(path, base.as_deref(), ours, theirs, resolutions)
+                }
+                _ => None,
             };
-            let shard = merge_shard(
-                path,
-                base.as_deref(),
-                ours.as_deref(),
-                theirs.as_deref(),
-                resolutions,
-            )?;
-            conflicts.extend(shard.conflicts);
-            merged.push((path, shard.units));
+            match joined {
+                Some((text, found)) => {
+                    conflicts.extend(found);
+                    merged.push((path, text));
+                }
+                None => other.push(path.clone()),
+            }
+        }
+        if !other.is_empty() {
+            return Err(GitError::MergeConflict { files: other });
         }
         if !conflicts.is_empty() {
             return Err(GitError::TranslationConflicts { conflicts });
         }
-
-        for (path, units) in merged {
+        for (path, text) in merged {
             let full = self.root().join(path);
-            if units.is_empty() {
-                match fs::remove_file(&full) {
-                    Ok(()) => {}
-                    Err(source) if source.kind() == std::io::ErrorKind::NotFound => {}
-                    Err(source) => {
-                        return Err(GitError::Io {
-                            operation: "remove merged unit shard",
-                            path: full,
-                            source,
-                        });
-                    }
-                }
-            } else {
-                let bytes = encode_unit_shard(&units, std::path::Path::new(path))?;
-                fs::write(&full, bytes).map_err(|source| GitError::Io {
-                    operation: "write merged unit shard",
-                    path: full.clone(),
-                    source,
-                })?;
-            }
-            self.run(&["add", "--all", "--", path])?;
+            fs::write(&full, text).map_err(|source| GitError::Io {
+                operation: "write merged PO file",
+                path: full.clone(),
+                source,
+            })?;
+            self.run(&["add", "--", path])?;
         }
         let mut commit = self.identity_options()?;
         commit.extend(["commit", "--no-edit", "--quiet"]);
@@ -324,10 +244,6 @@ impl GitRepository {
             let (ahead, _) = self.ahead_behind(&upstream)?;
             if ahead == 0 {
                 return Ok(false);
-            }
-            // The published main branch changes only through pull requests.
-            if self.main_branch()?.as_deref() == Some(branch.as_str()) {
-                return Err(GitError::MainBranchProtected { branch });
             }
             let merge_key = format!("branch.{branch}.merge");
             let (merge_ref, _) = self

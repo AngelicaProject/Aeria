@@ -26,7 +26,7 @@ Examples:
 
 ```text
 feat(sqpack): read Excel sheets from the installed game
-fix(rebase): preserve ambiguous source matches
+fix(po): keep a translation fuzzy when its source changes
 
 docs: organize contributor guidance
 ```

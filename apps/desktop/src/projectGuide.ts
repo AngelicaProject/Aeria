@@ -1,7 +1,11 @@
-import type { GlossaryEntry, GlossaryEntryInput } from "./types";
+import type { GlossaryEntry, TermInput } from "./types";
 
-/** One editable glossary row. `forbidden` is the `;`-separated text. */
-export type GlossaryRow = { key: number; term: string; translation: string; note: string; forbidden: string };
+/**
+ * One editable term row. `forbidden` is the `;`-separated text; `settled`
+ * marks a term a person decided, which agents do not change without asking;
+ * `matchCase` a term that matches only with its case as written.
+ */
+export type GlossaryRow = { key: number; term: string; translation: string; note: string; forbidden: string; settled: boolean; matchCase: boolean };
 
 export type RowProblem = "emptyTerm" | "emptyTranslation" | "duplicateTerm";
 
@@ -12,15 +16,19 @@ export function rowsFromEntries(entries: readonly GlossaryEntry[]): GlossaryRow[
     translation: entry.translation,
     note: entry.note ?? "",
     forbidden: (entry.forbidden ?? []).join("; "),
+    settled: entry.settled ?? false,
+    matchCase: entry.matchCase ?? false,
   }));
 }
 
-export function inputsFromRows(rows: readonly GlossaryRow[]): GlossaryEntryInput[] {
+export function inputsFromRows(rows: readonly GlossaryRow[]): TermInput[] {
   return rows.map((row) => ({
     term: row.term.trim(),
     translation: row.translation.trim(),
     note: row.note.trim() || null,
     forbidden: row.forbidden.split(";").map((variant) => variant.trim()).filter(Boolean),
+    settled: row.settled,
+    matchCase: row.matchCase,
   }));
 }
 

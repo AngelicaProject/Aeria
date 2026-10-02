@@ -1,0 +1,31 @@
+[package]
+name = "aeria-model"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Machine translation of the project: the ChatGPT subscription sign-in, the Codex Responses client, and the run that translates the untranslated strings of po/."
+
+[dependencies]
+aeria-knowledge = { path = "../aeria-knowledge" }
+aeria-po = { path = "../aeria-po" }
+aeria-se = { path = "../aeria-se" }
+aho-corasick = "1.1.5"
+base64 = "0.23.1"
+keyring = "4.2.0"
+reqwest = { version = "0.13.5", default-features = false, features = ["form", "http2", "json", "query", "rustls-no-provider", "system-proxy"] }
+rustls = { version = "0.23.45", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+thiserror = "2.0.20"
+tokio = { version = "1.53.1", features = ["rt", "sync", "time", "macros"] }
+
+[dev-dependencies]
+aeria-source = { path = "../aeria-source" }
+aeria-sqpack = { path = "../aeria-sqpack", features = ["testing"] }
+tempfile = "3.27.0"
+tokio = { version = "1.53.1", features = ["rt-multi-thread"] }
+
+[lints]
+workspace = true

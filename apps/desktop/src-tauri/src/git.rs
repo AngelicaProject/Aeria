@@ -6,25 +6,23 @@
 //! operations do not.
 
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::path::PathBuf;
 
-use aeria_core::TranslationUnit;
 use aeria_git::{
-    Attribution, BranchInfo, CheckpointOutcome, CollaborationSettings, CommitSummary, ConfigScope,
-    ConflictResolution, ContributionStatus, ContributorSummary, FileChangeKind, FileStatus,
-    GitError, GitExecutable, GitOrigin, GitRepository, IntegrateOutcome, RecordVersion, RemoteInfo,
-    RepositoryStatus, TranslatorIdentity, UnitAttribution, UnitChange, UnitChangeKind,
-    UnitConflict, UnitHistory, UnitRevision, summarize_changes, summarize_contributors,
+    BranchInfo, CheckpointOutcome, CommitSummary, ConfigScope, ConflictResolution, EntryChange,
+    EntryChangeKind, EntryConflict, EntryHistory, EntryRevision, EntryState, FileChangeKind,
+    FileStatus, GitError, GitExecutable, GitOrigin, GitRepository, IntegrateOutcome, RemoteInfo,
+    RepositoryStatus, TranslatorIdentity, summarize_changes,
 };
+use aeria_po::Session;
 use serde::{Deserialize, Serialize};
 use tauri::Manager;
 
-use crate::commands::{parse_translation_unit_id, run_blocking};
-use crate::dto::{ReviewStateDto, SourceBindingDto};
+use crate::commands::run_blocking;
+use crate::dto::SourceBindingDto;
 use crate::error::CommandError;
 use crate::project_changes::{self, ProjectChangeDto};
-use crate::state::{Activity, AttributionCache, DesktopState};
+use crate::state::{Activity, DesktopState};
 
 type CommandResult<T> = Result<T, CommandError>;
 
@@ -39,9 +37,6 @@ pub struct GitOverviewDto {
     pub repository: Option<GitStatusDto>,
     pub identity: Option<TranslatorIdentityDto>,
     pub remotes: Vec<GitRemoteDto>,
-    pub collaboration: Option<CollaborationDto>,
-    /// Present under the pull-request policy.
-    pub contribution: Option<ContributionDto>,
 }
 
 /// The Git executable Aeria uses.
@@ -67,62 +62,6 @@ impl From<GitOrigin> for GitOriginDto {
             GitOrigin::System => Self::System,
             GitOrigin::Bundled => Self::Bundled,
             GitOrigin::Override => Self::Override,
-        }
-    }
-}
-
-/// Changes reach the main branch only through pull requests.
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct CollaborationDto {
-    /// The main branch set in `aeria-collaboration.json`, if any.
-    pub configured_main_branch: Option<String>,
-    /// The main branch in effect: configured or detected.
-    pub main_branch: Option<String>,
-    /// Why the settings file cannot be used, when it exists but is invalid.
-    pub error: Option<String>,
-}
-
-fn collaboration_dto(repository: &GitRepository) -> Result<CollaborationDto, GitError> {
-    match repository.collaboration() {
-        Ok(settings) => Ok(CollaborationDto {
-            main_branch: repository.main_branch()?,
-            configured_main_branch: settings.main_branch,
-            error: None,
-        }),
-        Err(error @ GitError::InvalidSettings { .. }) => Ok(CollaborationDto {
-            configured_main_branch: None,
-            main_branch: None,
-            error: Some(error.to_string()),
-        }),
-        Err(error) => Err(error),
-    }
-}
-
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ContributionDto {
-    pub main_branch: String,
-    pub branch: Option<String>,
-    pub published: bool,
-    pub unmerged_commits: u32,
-    /// Commits on the remote main branch, as last fetched, that the
-    /// contribution branch does not contain yet.
-    pub main_ahead: u32,
-    /// No remote: the contribution is merged locally instead of through a
-    /// pull request.
-    pub local: bool,
-}
-
-impl From<ContributionStatus> for ContributionDto {
-    fn from(status: ContributionStatus) -> Self {
-        Self {
-            main_branch: status.main_branch,
-            branch: status.branch,
-            published: status.published,
-            unmerged_commits: status.unmerged_commits,
-            main_ahead: status.main_ahead,
-            local: status.local,
         }
     }
 }
@@ -286,103 +225,105 @@ impl From<CommitSummary> for GitCommitDto {
     }
 }
 
+/// What a person can change about a string at one point in time.
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct UnitVersionDto {
-    pub source_binding: SourceBindingDto,
+pub struct EntryVersionDto {
     pub target_macro: String,
-    pub review_state: ReviewStateDto,
+    pub fuzzy: bool,
     pub translator_note: Option<String>,
 }
 
-impl From<&TranslationUnit> for UnitVersionDto {
-    fn from(unit: &TranslationUnit) -> Self {
+impl From<&EntryState> for EntryVersionDto {
+    fn from(state: &EntryState) -> Self {
         Self {
-            source_binding: unit.source_binding().into(),
-            target_macro: unit.target_macro().to_owned(),
-            review_state: unit.review_state().into(),
-            translator_note: unit.translator_note().map(str::to_owned),
+            target_macro: state.translation.clone(),
+            fuzzy: state.fuzzy,
+            translator_note: state.note.clone(),
         }
     }
 }
 
 #[derive(Clone, Copy, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub enum UnitChangeKindDto {
-    Added,
-    Modified,
-    Removed,
+pub enum EntryChangeKindDto {
+    Translated,
+    Changed,
+    Cleared,
+    Marked,
 }
 
-impl From<UnitChangeKind> for UnitChangeKindDto {
-    fn from(kind: UnitChangeKind) -> Self {
+impl From<EntryChangeKind> for EntryChangeKindDto {
+    fn from(kind: EntryChangeKind) -> Self {
         match kind {
-            UnitChangeKind::Added => Self::Added,
-            UnitChangeKind::Modified => Self::Modified,
-            UnitChangeKind::Removed => Self::Removed,
+            EntryChangeKind::Translated => Self::Translated,
+            EntryChangeKind::Changed => Self::Changed,
+            EntryChangeKind::Cleared => Self::Cleared,
+            EntryChangeKind::Marked => Self::Marked,
         }
     }
 }
 
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct UnitChangeDto {
-    pub translation_unit_id: String,
-    pub kind: UnitChangeKindDto,
-    pub before: Option<UnitVersionDto>,
-    pub after: Option<UnitVersionDto>,
-    pub target_changed: bool,
-    pub review_changed: bool,
-    pub note_changed: bool,
+/// The coordinate of an entry's string in the open project's game.
+fn coordinate(session: Option<&Session>, context: &str) -> Option<SourceBindingDto> {
+    let (sheet_name, row_id, subrow_id, column_index) = session?.coordinate_of(context)?;
+    Some(SourceBindingDto {
+        sheet_name,
+        row_id,
+        subrow_id,
+        column_index,
+    })
 }
 
-impl From<&UnitChange> for UnitChangeDto {
-    fn from(change: &UnitChange) -> Self {
+/// A change of one string.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EntryChangeDto {
+    /// The entry's `msgctxt`.
+    pub context: String,
+    /// The PO file, relative to the project root.
+    pub path: String,
+    /// Where the string is in the game; `None` when the game has no such
+    /// string.
+    pub source_binding: Option<SourceBindingDto>,
+    pub source_macro: String,
+    pub kind: EntryChangeKindDto,
+    pub before: EntryVersionDto,
+    pub after: EntryVersionDto,
+}
+
+impl EntryChangeDto {
+    fn new(change: &EntryChange, session: Option<&Session>) -> Self {
         Self {
-            translation_unit_id: change.id.to_string(),
+            context: change.context.clone(),
+            path: change.path.clone(),
+            source_binding: coordinate(session, &change.context),
+            source_macro: change.source.clone(),
             kind: change.kind.into(),
-            before: change.before.as_ref().map(Into::into),
-            after: change.after.as_ref().map(Into::into),
-            target_changed: change.target_changed(),
-            review_changed: change.review_changed(),
-            note_changed: change.note_changed(),
+            before: (&change.before).into(),
+            after: (&change.after).into(),
         }
     }
 }
 
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase", tag = "state")]
-pub enum RecordVersionDto {
-    Absent,
-    Valid { unit: UnitVersionDto },
-    Invalid { message: String },
-}
-
-impl From<&RecordVersion> for RecordVersionDto {
-    fn from(version: &RecordVersion) -> Self {
-        match version {
-            RecordVersion::Absent => Self::Absent,
-            RecordVersion::Valid(unit) => Self::Valid {
-                unit: unit.as_ref().into(),
-            },
-            RecordVersion::Invalid { message } => Self::Invalid {
-                message: message.clone(),
-            },
-        }
-    }
+fn changes_dto(changes: &[EntryChange], session: Option<&Session>) -> Vec<EntryChangeDto> {
+    changes
+        .iter()
+        .map(|change| EntryChangeDto::new(change, session))
+        .collect()
 }
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct UnitRevisionDto {
+pub struct EntryRevisionDto {
     pub commit: GitCommitDto,
-    pub kind: UnitChangeKindDto,
-    pub before: RecordVersionDto,
-    pub after: RecordVersionDto,
+    pub kind: EntryChangeKindDto,
+    pub before: EntryVersionDto,
+    pub after: EntryVersionDto,
 }
 
-impl From<UnitRevision> for UnitRevisionDto {
-    fn from(revision: UnitRevision) -> Self {
+impl From<EntryRevision> for EntryRevisionDto {
+    fn from(revision: EntryRevision) -> Self {
         Self {
             kind: revision.kind.into(),
             before: (&revision.before).into(),
@@ -392,66 +333,24 @@ impl From<UnitRevision> for UnitRevisionDto {
     }
 }
 
+/// The history of one string.
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct AttributionDto {
-    pub commit: String,
-    pub author_name: String,
-    pub author_email: String,
-    pub authored_at: i64,
-}
-
-impl From<&Attribution> for AttributionDto {
-    fn from(attribution: &Attribution) -> Self {
-        Self {
-            commit: attribution.commit.clone(),
-            author_name: attribution.author_name.clone(),
-            author_email: attribution.author_email.clone(),
-            authored_at: attribution.authored_at,
-        }
-    }
-}
-
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct UnitHistoryDto {
-    pub translation_unit_id: String,
-    pub pending: Option<UnitChangeDto>,
-    pub revisions: Vec<UnitRevisionDto>,
+pub struct StringHistoryDto {
+    pub pending: Option<EntryChangeDto>,
+    pub revisions: Vec<EntryRevisionDto>,
     pub truncated: bool,
-    pub translated_by: Option<AttributionDto>,
-    pub reviewed_by: Option<AttributionDto>,
 }
 
-impl From<UnitHistory> for UnitHistoryDto {
-    fn from(history: UnitHistory) -> Self {
+impl StringHistoryDto {
+    fn new(history: EntryHistory, session: Option<&Session>) -> Self {
         Self {
-            translation_unit_id: history.id.to_string(),
-            pending: history.pending.as_ref().map(Into::into),
+            pending: history
+                .pending
+                .as_ref()
+                .map(|change| EntryChangeDto::new(change, session)),
             revisions: history.revisions.into_iter().map(Into::into).collect(),
             truncated: history.truncated,
-            translated_by: history.translated_by.as_ref().map(Into::into),
-            reviewed_by: history.reviewed_by.as_ref().map(Into::into),
-        }
-    }
-}
-
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct UnitAttributionDto {
-    pub translation_unit_id: String,
-    pub translated_by: Option<AttributionDto>,
-    pub reviewed_by: Option<AttributionDto>,
-    pub last_changed_by: Option<AttributionDto>,
-}
-
-impl From<&UnitAttribution> for UnitAttributionDto {
-    fn from(attribution: &UnitAttribution) -> Self {
-        Self {
-            translation_unit_id: attribution.id.to_string(),
-            translated_by: attribution.translated_by.as_ref().map(Into::into),
-            reviewed_by: attribution.reviewed_by.as_ref().map(Into::into),
-            last_changed_by: attribution.last_changed_by.as_ref().map(Into::into),
         }
     }
 }
@@ -460,43 +359,17 @@ impl From<&UnitAttribution> for UnitAttributionDto {
 #[serde(rename_all = "camelCase")]
 pub struct GitCommitChangesDto {
     pub commit: GitCommitDto,
-    pub changes: Vec<UnitChangeDto>,
+    pub changes: Vec<EntryChangeDto>,
     /// Glossary, guidance, settings, and font file changes.
     pub project_changes: Vec<ProjectChangeDto>,
-    /// The contribution branch created by a checkpoint under the
-    /// pull-request policy.
-    pub branch_created: Option<String>,
 }
 
-impl From<CheckpointOutcome> for GitCommitChangesDto {
-    fn from(outcome: CheckpointOutcome) -> Self {
+impl GitCommitChangesDto {
+    fn new(outcome: CheckpointOutcome, session: Option<&Session>) -> Self {
         Self {
+            changes: changes_dto(&outcome.changes, session),
             commit: outcome.commit.into(),
-            changes: outcome.changes.iter().map(Into::into).collect(),
             project_changes: Vec::new(),
-            branch_created: outcome.branch_created,
-        }
-    }
-}
-
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ContributorDto {
-    pub name: String,
-    pub email: String,
-    pub translated: usize,
-    pub reviewed: usize,
-    pub last_authored_at: i64,
-}
-
-impl From<ContributorSummary> for ContributorDto {
-    fn from(summary: ContributorSummary) -> Self {
-        Self {
-            name: summary.name,
-            email: summary.email,
-            translated: summary.translated,
-            reviewed: summary.reviewed,
-            last_authored_at: summary.last_authored_at,
         }
     }
 }
@@ -519,23 +392,29 @@ impl From<IntegrateOutcome> for GitIntegrationDto {
     }
 }
 
-/// One translation unit changed differently here and on the remote.
+/// One string changed differently here and on the remote.
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct UnitConflictDto {
-    pub translation_unit_id: String,
-    pub base: Option<UnitVersionDto>,
-    pub ours: Option<UnitVersionDto>,
-    pub theirs: Option<UnitVersionDto>,
+pub struct EntryConflictDto {
+    pub context: String,
+    pub path: String,
+    pub source_binding: Option<SourceBindingDto>,
+    pub source_macro: String,
+    pub base: EntryVersionDto,
+    pub ours: EntryVersionDto,
+    pub theirs: EntryVersionDto,
 }
 
-impl From<&UnitConflict> for UnitConflictDto {
-    fn from(conflict: &UnitConflict) -> Self {
+impl EntryConflictDto {
+    fn new(conflict: &EntryConflict, session: Option<&Session>) -> Self {
         Self {
-            translation_unit_id: conflict.id.to_string(),
-            base: conflict.base.as_ref().map(Into::into),
-            ours: conflict.ours.as_ref().map(Into::into),
-            theirs: conflict.theirs.as_ref().map(Into::into),
+            context: conflict.context.clone(),
+            path: conflict.path.clone(),
+            source_binding: coordinate(session, &conflict.context),
+            source_macro: conflict.source.clone(),
+            base: (&conflict.base).into(),
+            ours: (&conflict.ours).into(),
+            theirs: (&conflict.theirs).into(),
         }
     }
 }
@@ -547,26 +426,23 @@ pub enum ConflictResolutionDto {
     Theirs,
 }
 
+/// Which side of a conflicting string to keep.
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct UnitResolutionDto {
-    pub translation_unit_id: String,
+pub struct EntryResolutionDto {
+    pub context: String,
     pub resolution: ConflictResolutionDto,
 }
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct GitSyncDto {
+pub struct GitPullDto {
     pub integration: GitIntegrationDto,
-    pub pushed: bool,
     /// Whether the renderer must reload translation data.
     pub workspace_changed: bool,
-    /// Same-unit conflicts. When non-empty nothing was integrated or pushed;
-    /// sync again with a resolution for every conflict.
-    pub conflicts: Vec<UnitConflictDto>,
-    /// Integration left uncommitted changes: merged translations reconciled
-    /// with the current game source. They wait for a checkpoint.
-    pub reconciled: bool,
+    /// Strings changed differently on both sides. When non-empty nothing was
+    /// integrated; pull again with a resolution for every conflict.
+    pub conflicts: Vec<EntryConflictDto>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -576,8 +452,13 @@ pub struct GitBranchDto {
     pub remote: bool,
     pub current: bool,
     pub upstream: Option<String>,
-    /// Every commit of the local branch is in the main branch.
-    pub merged: bool,
+    /// Commits that deleting the branch would lose: commits no other branch,
+    /// remote-tracking branch, or tag contains. For a remote branch, deleting
+    /// it on the remote.
+    pub lost_commits: u32,
+    /// For a local branch with an upstream on a remote, the commits deleting
+    /// both would lose.
+    pub lost_with_upstream: Option<u32>,
     /// Why the open project cannot switch to this branch, or `None`.
     pub blocked: Option<BranchBlockDto>,
 }
@@ -588,33 +469,29 @@ pub struct GitBranchDto {
 pub enum BranchBlockDto {
     /// The branch has no Aeria project.
     NoProject,
-    /// The branch stores an older Workspace Format that must be migrated.
+    /// The branch stores a project format this version does not read.
     OlderFormat,
-    /// The branch is bound to another game source.
+    /// The branch's files are for another game version.
     OtherSource,
 }
 
-/// Compares the workspace manifest a branch stores with the open session:
-/// same Workspace Format and same source content. Unreadable manifests are
-/// left to the switch itself, which validates everything.
+/// Compares the `aeria.json` a branch stores with the open session: the
+/// same format and the same game version. Unreadable settings are left to
+/// the switch itself.
 fn branch_block(
     repository: &GitRepository,
     branch: &str,
     game_version: &str,
 ) -> Option<BranchBlockDto> {
     let revision = repository.branch_head(branch).ok().flatten()?;
-    let Ok(manifest) = repository.file_at(&revision, ".aeria/manifest.json") else {
+    let Ok(settings) = repository.file_at(&revision, aeria_po::SETTINGS_FILE) else {
         return None;
     };
-    let Some(manifest) = manifest else {
+    let Some(settings) = settings else {
         return Some(BranchBlockDto::NoProject);
     };
-    let value: serde_json::Value = serde_json::from_slice(&manifest).ok()?;
-    if value
-        .get("formatVersion")
-        .and_then(serde_json::Value::as_u64)
-        != Some(u64::from(aeria_workspace::WORKSPACE_FORMAT_VERSION))
-    {
+    let value: serde_json::Value = serde_json::from_slice(&settings).ok()?;
+    if value.get("format").and_then(serde_json::Value::as_str) != Some(aeria_po::FORMAT) {
         return Some(BranchBlockDto::OlderFormat);
     }
     (value.get("gameVersion").and_then(serde_json::Value::as_str) != Some(game_version))
@@ -628,23 +505,15 @@ impl From<BranchInfo> for GitBranchDto {
             remote: branch.remote,
             current: branch.current,
             upstream: branch.upstream,
-            merged: false,
+            lost_commits: 0,
+            lost_with_upstream: None,
             blocked: None,
         }
     }
 }
 
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct GitFinishDto {
-    pub integration: GitIntegrationDto,
-    pub deleted_branch: Option<String>,
-}
-
 fn project_root(state: &DesktopState) -> CommandResult<PathBuf> {
-    let project = state.lock_project()?;
-    let project = project.as_ref().ok_or_else(CommandError::no_project)?;
-    Ok(project.repository_root().to_owned())
+    Ok(state.session()?.root().to_owned())
 }
 
 pub(crate) fn open_repository(state: &DesktopState) -> CommandResult<GitRepository> {
@@ -677,11 +546,10 @@ pub(crate) fn resolve_git(app: &tauri::AppHandle) -> GitExecutable {
     GitExecutable::discover(bundled.as_deref())
 }
 
-/// Runs a Git operation that can change the working tree while holding the
-/// project lock; `accept` reloads the session and reconciles merged units
-/// that do not describe the session source (for example translations made
-/// on a branch that had not applied the latest game update). The outer
-/// result reports state errors, the inner one the Git operation.
+/// Runs a Git operation that can change the working tree while the
+/// session's writes are held. `accept` checks the result: the project must
+/// still be for the open game version. The outer result reports state
+/// errors, the inner one the Git operation.
 fn with_session_reload<T>(
     state: &DesktopState,
     operation: impl FnOnce(
@@ -689,17 +557,26 @@ fn with_session_reload<T>(
         &mut dyn FnMut() -> Result<(), String>,
     ) -> Result<T, GitError>,
 ) -> CommandResult<Result<T, GitError>> {
-    let git = state.git();
-    let mut project = state.lock_project()?;
-    let session = project.as_mut().ok_or_else(CommandError::no_project)?;
-    let repository = GitRepository::open(session.repository_root(), git)?;
+    let session = state.session()?;
+    let _writes = session.hold_writes();
+    let repository = GitRepository::open(session.root(), state.git())?;
+    let game_version = session.source().version().to_string();
     let mut accept = || {
-        session
-            .reload_and_reconcile_workspace()
-            .map(|_| ())
-            .map_err(|error| error.to_string())
+        let settings =
+            aeria_po::read_settings(session.root()).map_err(|error| error.to_string())?;
+        if settings.game_version == game_version {
+            Ok(())
+        } else {
+            Err(format!(
+                "its files are for game version {}, and the open game is {game_version}",
+                settings.game_version
+            ))
+        }
     };
-    Ok(operation(&repository, &mut accept))
+    let result = operation(&repository, &mut accept);
+    // The working tree may have changed: views of the files read them again.
+    session.touch();
+    Ok(result)
 }
 
 pub(crate) fn git_overview_with_state(state: &DesktopState) -> CommandResult<GitOverviewDto> {
@@ -715,8 +592,6 @@ pub(crate) fn git_overview_with_state(state: &DesktopState) -> CommandResult<Git
             repository: None,
             identity: None,
             remotes: Vec::new(),
-            collaboration: None,
-            contribution: None,
         });
     };
     Ok(GitOverviewDto {
@@ -724,12 +599,6 @@ pub(crate) fn git_overview_with_state(state: &DesktopState) -> CommandResult<Git
         repository: Some(repository.status()?.into()),
         identity: Some(repository.identity()?.into()),
         remotes: repository.remotes()?.into_iter().map(Into::into).collect(),
-        collaboration: Some(collaboration_dto(&repository)?),
-        contribution: repository
-            .contribution_status()
-            .ok()
-            .flatten()
-            .map(Into::into),
     })
 }
 
@@ -737,47 +606,39 @@ pub(crate) fn git_checkpoint_with_state(
     state: &DesktopState,
     message: Option<&str>,
 ) -> CommandResult<GitCommitChangesDto> {
-    let git = state.git();
-    let project = state.lock_project()?;
-    let project = project.as_ref().ok_or_else(CommandError::no_project)?;
-    let repository = GitRepository::open(project.repository_root(), git)?;
-    let project_files = project_changes::pending(&repository, project.repository_root())?;
+    let session = state.session()?;
+    let _writes = session.hold_writes();
+    let repository = GitRepository::open(session.root(), state.git())?;
+    let project_files = project_changes::pending(&repository, session.root())?;
     let message = if let Some(message) = message.map(str::trim).filter(|text| !text.is_empty()) {
         Some(message.to_owned())
     } else {
-        let units = repository.pending_changes()?;
-        let translations = (!units.is_empty()).then(|| summarize_changes(&units));
+        let changes = repository.pending_changes()?;
+        let translations = (!changes.is_empty()).then(|| summarize_changes(&changes));
         project_changes::checkpoint_message(translations.as_deref(), &project_files)
     };
-    let mut outcome: GitCommitChangesDto = repository.checkpoint(message.as_deref())?.into();
+    let mut outcome =
+        GitCommitChangesDto::new(repository.checkpoint(message.as_deref())?, Some(&session));
     outcome.project_changes = project_files;
     Ok(outcome)
 }
 
-pub(crate) fn git_sync_with_state(
-    state: &DesktopState,
-    resolutions: &[UnitResolutionDto],
-) -> CommandResult<GitSyncDto> {
-    pull_with_state(state, resolutions, true)
-}
-
-/// Fetches and integrates the upstream like Sync (per-unit merge and project
-/// validation included) and, with `push`, pushes afterwards.
+/// Fetches and integrates the upstream, with the per-string merge of PO files
+/// and validation of the resulting project.
 pub(crate) fn pull_with_state(
     state: &DesktopState,
-    resolutions: &[UnitResolutionDto],
-    push: bool,
-) -> CommandResult<GitSyncDto> {
-    let resolutions = resolutions
+    resolutions: &[EntryResolutionDto],
+) -> CommandResult<GitPullDto> {
+    let resolutions: BTreeMap<String, ConflictResolution> = resolutions
         .iter()
         .map(|entry| {
             let resolution = match entry.resolution {
                 ConflictResolutionDto::Ours => ConflictResolution::Ours,
                 ConflictResolutionDto::Theirs => ConflictResolution::Theirs,
             };
-            parse_translation_unit_id(&entry.translation_unit_id).map(|id| (id, resolution))
+            (entry.context.clone(), resolution)
         })
-        .collect::<CommandResult<BTreeMap<_, _>>>()?;
+        .collect();
 
     let repository = open_repository(state)?;
     repository.fetch()?;
@@ -786,50 +647,30 @@ pub(crate) fn pull_with_state(
     })?;
     let integration = match integration {
         Ok(integration) => integration,
-        // Nothing was integrated or pushed; the repository is unchanged.
+        // Nothing was integrated; the repository is unchanged.
         Err(GitError::TranslationConflicts { conflicts }) => {
-            return Ok(GitSyncDto {
+            let session = state.session().ok();
+            return Ok(GitPullDto {
                 integration: GitIntegrationDto::UpToDate,
-                pushed: false,
                 workspace_changed: false,
-                conflicts: conflicts.iter().map(Into::into).collect(),
-                reconciled: false,
+                conflicts: conflicts
+                    .iter()
+                    .map(|conflict| EntryConflictDto::new(conflict, session.as_deref()))
+                    .collect(),
             });
         }
         Err(error) => return Err(error.into()),
     };
-    let pushed = push && repository.push()?;
-    let reconciled =
-        integration.changed_working_tree() && repository.status()?.has_translation_changes();
-    Ok(GitSyncDto {
+    Ok(GitPullDto {
         integration: integration.into(),
-        pushed,
         workspace_changed: integration.changed_working_tree(),
         conflicts: Vec::new(),
-        reconciled,
     })
 }
 
-fn attribution_with_state(state: &DesktopState) -> CommandResult<Arc<Vec<UnitAttribution>>> {
-    let repository = open_repository(state)?;
-    let Some(head) = repository.head()? else {
-        return Ok(Arc::new(Vec::new()));
-    };
-    if let Some(cached) = state.cached_attribution(repository.root(), &head) {
-        return Ok(cached);
-    }
-    let units = Arc::new(repository.attribution()?);
-    state.store_attribution(AttributionCache {
-        root: repository.root().to_owned(),
-        head,
-        units: Arc::clone(&units),
-    });
-    Ok(units)
-}
-
 #[tauri::command(rename_all = "camelCase")]
-/// Returns the Git runtime, repository status, translator identity, remotes,
-/// and collaboration policy for the active project.
+/// Returns the Git runtime, repository status, translator identity, and
+/// remotes for the active project.
 ///
 /// # Errors
 ///
@@ -894,28 +735,103 @@ pub async fn git_set_remote(
     .await
 }
 
+/// The most uncommitted string changes listed at once; a project without a
+/// first commit can have hundreds of thousands.
+const PENDING_LISTED: usize = 500;
+
+/// The uncommitted string changes: how many there are, and the first of
+/// them in file order.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PendingChangesDto {
+    pub total: usize,
+    pub changes: Vec<EntryChangeDto>,
+}
+
+fn pending_changes_with_state(state: &DesktopState) -> CommandResult<PendingChangesDto> {
+    let session = state.session()?;
+    let repository = GitRepository::open(session.root(), state.git())?;
+    let files = repository.pending_files(&mut state.pending_cache())?;
+    let total = files.iter().map(|(_, changes)| changes.len()).sum();
+    let listed: Vec<EntryChange> = files
+        .iter()
+        .flat_map(|(_, changes)| changes.iter())
+        .take(PENDING_LISTED)
+        .cloned()
+        .collect();
+    Ok(PendingChangesDto {
+        total,
+        changes: changes_dto(&listed, Some(&session)),
+    })
+}
+
+/// Whether `path` (`po/...`) is a file of the sheet whose files are named
+/// after `base`: `po/{base}.po`, or `po/{base}/{start}.po` for a sheet split
+/// by row range.
+fn is_sheet_file(path: &str, base: &str) -> bool {
+    let Some(rest) = path
+        .strip_prefix(aeria_git::PO_DIR)
+        .and_then(|rest| rest.strip_prefix('/'))
+        .and_then(|rest| rest.strip_prefix(base))
+    else {
+        return false;
+    };
+    rest == ".po"
+        || rest
+            .strip_prefix('/')
+            .and_then(|file| file.strip_suffix(".po"))
+            .is_some_and(|start| {
+                !start.is_empty() && start.bytes().all(|byte| byte.is_ascii_digit())
+            })
+}
+
+fn pending_sheet_changes_with_state(
+    state: &DesktopState,
+    sheet_name: &str,
+) -> CommandResult<Vec<EntryChangeDto>> {
+    let session = state.session()?;
+    let repository = GitRepository::open(session.root(), state.git())?;
+    let base = session.sheet_base(sheet_name);
+    let files = repository.pending_files(&mut state.pending_cache())?;
+    let changes: Vec<EntryChange> = files
+        .iter()
+        .filter(|(path, _)| is_sheet_file(path, &base))
+        .flat_map(|(_, changes)| changes.iter().cloned())
+        .collect();
+    Ok(changes_dto(&changes, Some(&session)))
+}
+
 #[tauri::command(rename_all = "camelCase")]
-/// Returns uncommitted translation-unit changes.
+/// Returns how many strings have uncommitted changes, and the first
+/// [`PENDING_LISTED`] of those changes.
 ///
 /// # Errors
 ///
-/// Returns a typed command error when Git fails or workspace data is invalid.
-pub async fn git_pending_changes(app: tauri::AppHandle) -> CommandResult<Vec<UnitChangeDto>> {
+/// Returns a typed command error when no project is open or Git fails.
+pub async fn git_pending_changes(app: tauri::AppHandle) -> CommandResult<PendingChangesDto> {
+    run_blocking(move || pending_changes_with_state(&app.state::<DesktopState>())).await
+}
+
+#[tauri::command(rename_all = "camelCase")]
+/// Returns every uncommitted string change of one sheet.
+///
+/// # Errors
+///
+/// Returns a typed command error when no project is open or Git fails.
+pub async fn git_pending_sheet_changes(
+    app: tauri::AppHandle,
+    sheet_name: String,
+) -> CommandResult<Vec<EntryChangeDto>> {
     run_blocking(move || {
-        let repository = open_repository(&app.state::<DesktopState>())?;
-        Ok(repository
-            .pending_changes()?
-            .iter()
-            .map(Into::into)
-            .collect())
+        pending_sheet_changes_with_state(&app.state::<DesktopState>(), &sheet_name)
     })
     .await
 }
 
 #[tauri::command(rename_all = "camelCase")]
 /// Commits Aeria-managed project data as the translator identity. A blank
-/// message is replaced by a generated summary. Under the pull-request policy
-/// a checkpoint on the main branch starts a contribution branch.
+/// message is replaced by a generated summary. The commit is made on the
+/// current branch.
 ///
 /// # Errors
 ///
@@ -986,21 +902,6 @@ pub async fn git_remove_remote(
 }
 
 #[tauri::command(rename_all = "camelCase")]
-/// Updates the remote main branch's tracking ref in the background, without
-/// asking for credentials. Returns whether it moved.
-///
-/// # Errors
-///
-/// Returns a typed command error when Git fails, for example offline.
-pub async fn git_fetch_main(app: tauri::AppHandle) -> CommandResult<bool> {
-    run_blocking(move || {
-        let repository = open_repository(&app.state::<DesktopState>())?;
-        Ok(repository.fetch_main_branch()?)
-    })
-    .await
-}
-
-#[tauri::command(rename_all = "camelCase")]
 /// Fetches every remote and lists their branches, for choosing the upstream.
 ///
 /// # Errors
@@ -1058,7 +959,7 @@ pub async fn git_log(
 }
 
 #[tauri::command(rename_all = "camelCase")]
-/// Returns the translation-unit changes introduced by one commit.
+/// Returns the string changes introduced by one commit.
 ///
 /// # Errors
 ///
@@ -1068,106 +969,52 @@ pub async fn git_commit_changes(
     commit_id: String,
 ) -> CommandResult<GitCommitChangesDto> {
     run_sync(app, move |state| {
-        let repository = open_repository(state)?;
+        let session = state.session()?;
+        let repository = GitRepository::open(session.root(), state.git())?;
         let (commit, changes) = repository.commit_changes(&commit_id)?;
         Ok(GitCommitChangesDto {
             project_changes: project_changes::of_commit(&repository, &commit.id)?,
             commit: commit.into(),
-            changes: changes.iter().map(Into::into).collect(),
-            branch_created: None,
+            changes: changes_dto(&changes, Some(&session)),
         })
     })
     .await
 }
 
+/// Commits of a file read to find the history of one of its strings.
+const HISTORY_SCAN: usize = 200;
+
 #[tauri::command(rename_all = "camelCase")]
-/// Returns the history of one translation unit: who translated and reviewed
-/// it, and every committed change.
+/// Returns the history of one string: its uncommitted change and the commits
+/// that changed it, newest first.
 ///
 /// # Errors
 ///
-/// Returns a typed command error for an invalid ID or limit, or a Git failure.
-pub async fn git_unit_history(
+/// Returns a typed command error for an invalid limit, a string that is not
+/// in the project, or a Git failure.
+pub async fn git_string_history(
     app: tauri::AppHandle,
-    translation_unit_id: String,
+    source_binding: SourceBindingDto,
     limit: u32,
-) -> CommandResult<UnitHistoryDto> {
+) -> CommandResult<StringHistoryDto> {
     run_blocking(move || {
-        let id = parse_translation_unit_id(&translation_unit_id)?;
         let limit = bounded_limit(limit)?;
-        let repository = open_repository(&app.state::<DesktopState>())?;
-        Ok(repository.unit_history(id, limit)?.into())
-    })
-    .await
-}
-
-#[tauri::command(rename_all = "camelCase")]
-/// Returns committed attribution (translator, reviewer, last change) for the
-/// requested units. Unknown or uncommitted units are omitted. The complete
-/// attribution is computed once per `HEAD` and cached in memory.
-///
-/// # Errors
-///
-/// Returns a typed command error for an invalid ID or a Git failure.
-pub async fn git_unit_attribution(
-    app: tauri::AppHandle,
-    translation_unit_ids: Vec<String>,
-) -> CommandResult<Vec<UnitAttributionDto>> {
-    run_blocking(move || {
-        let ids = translation_unit_ids
-            .iter()
-            .map(|id| parse_translation_unit_id(id))
-            .collect::<CommandResult<Vec<_>>>()?;
-        let attribution = attribution_with_state(&app.state::<DesktopState>())?;
-        Ok(ids
-            .into_iter()
-            .filter_map(|id| {
-                attribution
-                    .binary_search_by_key(&id, |entry| entry.id)
-                    .ok()
-                    .map(|index| (&attribution[index]).into())
-            })
-            .collect())
-    })
-    .await
-}
-
-#[tauri::command(rename_all = "camelCase")]
-/// Counts committed strings by the translators who translated and reviewed
-/// their current text.
-///
-/// # Errors
-///
-/// Returns a typed command error when Git fails or history data is invalid.
-pub async fn git_contributors(app: tauri::AppHandle) -> CommandResult<Vec<ContributorDto>> {
-    run_blocking(move || {
-        let attribution = attribution_with_state(&app.state::<DesktopState>())?;
-        Ok(summarize_contributors(&attribution)
-            .into_iter()
-            .map(Into::into)
-            .collect())
-    })
-    .await
-}
-
-#[tauri::command(rename_all = "camelCase")]
-/// Fetches, integrates incoming commits, and pushes local checkpoints.
-///
-/// Shards are merged per translation unit. Same-unit conflicts are returned
-/// in the result without changing the repository; the renderer syncs again
-/// with a resolution for each. Integration is rolled back when the resulting
-/// workspace does not reload against the open game source.
-///
-/// # Errors
-///
-/// Returns a typed command error for uncommitted translations, non-translation
-/// conflicts, rejected incoming changes, or a Git/network failure.
-pub async fn git_sync(
-    app: tauri::AppHandle,
-    resolutions: Option<Vec<UnitResolutionDto>>,
-) -> CommandResult<GitSyncDto> {
-    run_sync(app, move |state| {
-        git_sync_with_state(state, resolutions.as_deref().unwrap_or_default())
+        let state = app.state::<DesktopState>();
+        let session = state.session()?;
+        let (path, context, _) = session.locate(
+            &source_binding.sheet_name,
+            source_binding.row_id,
+            source_binding.subrow_id,
+            source_binding.column_index,
+        )?;
+        let repository = GitRepository::open(session.root(), state.git())?;
+        let history = repository.entry_history(
+            &format!("{}/{path}", aeria_po::PO_DIR),
+            &context,
+            limit,
+            HISTORY_SCAN,
+        )?;
+        Ok(StringHistoryDto::new(history, Some(&session)))
     })
     .await
 }
@@ -1182,11 +1029,8 @@ pub async fn git_branches(app: tauri::AppHandle) -> CommandResult<Vec<GitBranchD
     run_blocking(move || {
         let state = app.state::<DesktopState>();
         let repository = open_repository(&state)?;
-        let game_version = {
-            let project = state.lock_project()?;
-            let session = project.as_ref().ok_or_else(CommandError::no_project)?;
-            session.workspace().metadata().game_version().to_string()
-        };
+        let game_version = state.session()?.source().version().to_string();
+        let remotes = repository.remotes()?;
         Ok(repository
             .branches()?
             .into_iter()
@@ -1194,13 +1038,27 @@ pub async fn git_branches(app: tauri::AppHandle) -> CommandResult<Vec<GitBranchD
                 let blocked = (!branch.remote && !branch.current)
                     .then(|| branch_block(&repository, &branch.name, &game_version))
                     .flatten();
-                let merged = !branch.remote
-                    && !branch.current
-                    && repository
-                        .is_merged_into_main(&branch.name)
-                        .unwrap_or(false);
+                let (lost_commits, lost_with_upstream) = if branch.remote {
+                    (
+                        repository.lost_remote_commits(&branch.name).unwrap_or(0),
+                        None,
+                    )
+                } else {
+                    let remote_upstream = branch.upstream.as_deref().is_some_and(|upstream| {
+                        remotes
+                            .iter()
+                            .any(|remote| upstream.starts_with(&format!("{}/", remote.name)))
+                    });
+                    (
+                        repository.lost_commits(&branch.name, false).unwrap_or(0),
+                        remote_upstream
+                            .then(|| repository.lost_commits(&branch.name, true).ok())
+                            .flatten(),
+                    )
+                };
                 GitBranchDto {
-                    merged,
+                    lost_commits,
+                    lost_with_upstream,
                     blocked,
                     ..branch.into()
                 }
@@ -1252,86 +1110,49 @@ pub async fn git_switch_branch(app: tauri::AppHandle, name: String) -> CommandRe
 }
 
 #[tauri::command(rename_all = "camelCase")]
-/// Deletes a local branch other than the current one; `force` is required
-/// for a branch with commits outside the main branch.
+/// Deletes a local branch other than the current one, and with
+/// `with_upstream` its upstream branch on the remote too. `force` is
+/// required when the deletion would lose commits that exist on no other
+/// branch.
 ///
 /// # Errors
 ///
-/// Returns a typed command error for the current, an unknown, or an unmerged
-/// branch without `force`.
+/// Returns a typed command error for the current or an unknown branch, for
+/// lost commits without `force`, or when the remote refuses the deletion.
 pub async fn git_delete_branch(
     app: tauri::AppHandle,
     name: String,
+    with_upstream: bool,
     force: bool,
 ) -> CommandResult<()> {
     run_blocking(move || {
-        open_repository(&app.state::<DesktopState>())?.delete_branch(&name, force)?;
+        open_repository(&app.state::<DesktopState>())?.delete_branch(
+            &name,
+            with_upstream,
+            force,
+        )?;
         Ok(())
     })
     .await
 }
 
 #[tauri::command(rename_all = "camelCase")]
-/// Sets the main branch contributions are reviewed into, or clears it so it
-/// is detected. Writes `aeria-collaboration.json`; nothing is committed.
+/// Deletes a branch on its remote, given by its remote-tracking name
+/// (`origin/feature`). `force` is required when the deletion would lose
+/// commits that exist on no other branch.
 ///
 /// # Errors
 ///
-/// Returns a typed command error for an invalid branch name or a Git failure.
-pub async fn git_set_main_branch(
+/// Returns a typed command error for an unknown branch, for lost commits
+/// without `force`, or when the remote refuses the deletion.
+pub async fn git_delete_remote_branch(
     app: tauri::AppHandle,
-    main_branch: Option<String>,
-) -> CommandResult<CollaborationDto> {
+    name: String,
+    force: bool,
+) -> CommandResult<()> {
     run_blocking(move || {
-        let repository = open_repository(&app.state::<DesktopState>())?;
-        repository.set_collaboration(&CollaborationSettings {
-            main_branch: main_branch
-                .map(|branch| branch.trim().to_owned())
-                .filter(|branch| !branch.is_empty()),
-        })?;
-        Ok(collaboration_dto(&repository)?)
-    })
-    .await
-}
-
-#[tauri::command(rename_all = "camelCase")]
-/// Returns to the main branch after a reviewed contribution was merged and
-/// deletes the contribution branch when Git confirms it is merged.
-///
-/// # Errors
-///
-/// Returns a typed command error outside the pull-request policy, for
-/// uncommitted translations, or for a Git failure.
-pub async fn git_finish_contribution(app: tauri::AppHandle) -> CommandResult<GitFinishDto> {
-    run_sync(app, move |state| {
-        let outcome = with_session_reload(state, |repository, accept| {
-            repository.finish_contribution(accept)
-        })??;
-        Ok(GitFinishDto {
-            integration: outcome.integration.into(),
-            deleted_branch: outcome.deleted_branch,
-        })
-    })
-    .await
-}
-
-#[tauri::command(rename_all = "camelCase")]
-/// Merges the current contribution branch into the main branch in a
-/// repository without remotes, reloading and validating the project.
-///
-/// # Errors
-///
-/// Returns a typed command error when the repository has a remote, the
-/// merge conflicts, or the merged project is not valid.
-pub async fn git_merge_contribution(app: tauri::AppHandle) -> CommandResult<GitFinishDto> {
-    run_sync(app, move |state| {
-        let outcome = with_session_reload(state, |repository, accept| {
-            repository.merge_contribution_locally(accept)
-        })??;
-        Ok(GitFinishDto {
-            integration: outcome.integration.into(),
-            deleted_branch: outcome.deleted_branch,
-        })
+        open_repository(&app.state::<DesktopState>())?.delete_remote_branch(&name, force)?;
+        Ok(())
     })
     .await
 }
@@ -1374,18 +1195,21 @@ pub async fn git_fetch(app: tauri::AppHandle) -> CommandResult<()> {
 }
 
 #[tauri::command(rename_all = "camelCase")]
-/// Fetches and integrates the upstream like Sync, without pushing. Same-unit
-/// conflicts are returned for explicit resolutions, as with Sync.
+/// Fetches and integrates the upstream, without pushing. PO files both sides
+/// changed are joined per string; strings changed differently on both sides
+/// are returned without changing the repository, and the renderer pulls
+/// again with a resolution for each. Integration is rolled back when the
+/// result is for another game version.
 ///
 /// # Errors
 ///
 /// Returns a typed Git error, for example with uncommitted translations.
 pub async fn git_pull(
     app: tauri::AppHandle,
-    resolutions: Option<Vec<UnitResolutionDto>>,
-) -> CommandResult<GitSyncDto> {
+    resolutions: Option<Vec<EntryResolutionDto>>,
+) -> CommandResult<GitPullDto> {
     run_sync(app, move |state| {
-        pull_with_state(state, resolutions.as_deref().unwrap_or_default(), false)
+        pull_with_state(state, resolutions.as_deref().unwrap_or_default())
     })
     .await
 }
@@ -1417,70 +1241,6 @@ pub async fn git_push(app: tauri::AppHandle) -> CommandResult<bool> {
     .await
 }
 
-/// Whether command-line Git in this repository merges unit shards with
-/// Aeria's driver.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct MergeDriverDto {
-    pub enabled: bool,
-}
-
-/// Keeps an enabled merge driver pointing at this executable after Aeria
-/// moved or updated. Best effort: the project opens regardless.
-pub(crate) fn refresh_merge_driver(state: &DesktopState, root: &Path) {
-    let (Ok(executable), Ok(Some(repository))) = (
-        std::env::current_exe(),
-        GitRepository::discover(root.to_owned(), state.git()),
-    ) else {
-        return;
-    };
-    let _ = repository.update_merge_driver(&executable);
-}
-
-#[tauri::command(rename_all = "camelCase")]
-/// Whether command-line Git merges unit shards with Aeria's driver.
-///
-/// # Errors
-///
-/// Returns `noProjectOpen` or a Git error.
-pub async fn git_merge_driver(app: tauri::AppHandle) -> CommandResult<MergeDriverDto> {
-    run_blocking(move || {
-        let repository = open_repository(&app.state::<DesktopState>())?;
-        Ok(MergeDriverDto {
-            enabled: repository.merge_driver()?.is_some(),
-        })
-    })
-    .await
-}
-
-#[tauri::command(rename_all = "camelCase")]
-/// Makes command-line `git merge` and `git pull` merge unit shards per
-/// translation unit with this Aeria, or stops doing so. Enabling adds a rule
-/// to `.gitattributes`, which the next checkpoint commits.
-///
-/// # Errors
-///
-/// Returns `noProjectOpen`, `gitMergeDriver` when this executable cannot be
-/// located, or a Git error.
-pub async fn git_set_merge_driver(
-    app: tauri::AppHandle,
-    enabled: bool,
-) -> CommandResult<MergeDriverDto> {
-    run_blocking(move || {
-        let repository = open_repository(&app.state::<DesktopState>())?;
-        if enabled {
-            let executable = std::env::current_exe().map_err(|error| {
-                CommandError::new("gitMergeDriver", format!("cannot locate Aeria: {error}"))
-            })?;
-            repository.set_merge_driver(Some(&executable))?;
-        } else {
-            repository.set_merge_driver(None)?;
-        }
-        Ok(MergeDriverDto { enabled })
-    })
-    .await
-}
-
 /// Runs a Git operation that fetches, pushes, commits, or changes the working
 /// tree, and that an application update therefore waits for.
 async fn run_sync<T, F>(app: tauri::AppHandle, operation: F) -> CommandResult<T>
@@ -1501,11 +1261,10 @@ mod tests {
     use std::fs;
     use std::path::Path;
 
-    use aeria_core::SourceBinding;
-
     use super::*;
     use crate::commands::{
-        initialize_with_game, open_with_game, set_translation_target_with_state,
+        initialize_with_game, open_with_game, page_translation_rows_with_state,
+        set_translation_target_with_state,
     };
     use crate::dto::SourceBindingDto;
 
@@ -1525,35 +1284,32 @@ mod tests {
         let sandbox = tempfile::tempdir().expect("sandbox");
         let git = isolated_git(sandbox.path());
         let root = sandbox.path().join("project");
-        fs::create_dir_all(root.join(".aeria")).expect("project");
+        fs::create_dir_all(&root).expect("project");
         let repository = GitRepository::init(&root, git).expect("init");
         repository
             .set_identity("Ada", None, false)
             .expect("identity");
-        let commit = |manifest: &str, message: &str| {
-            fs::write(root.join(".aeria/manifest.json"), manifest).expect("manifest");
+        let commit = |settings: &str, message: &str| {
+            fs::write(root.join("aeria.json"), settings).expect("settings");
             repository.checkpoint(Some(message)).expect("commit");
         };
-        commit(r#"{"formatVersion":2,"contentId":"sha256:old"}"#, "old");
+        commit(r#"{"formatVersion":3}"#, "old");
         let old = repository.status().expect("status").branch.expect("branch");
-        let current = r#"{"formatVersion":3,"gameVersion":"2026.10.01.0000.0000"}"#;
-        commit(current, "migrated");
-        let migrated = repository.status().expect("status").branch.expect("branch");
-        assert_ne!(
-            old, migrated,
-            "the second checkpoint started a contribution branch"
-        );
+        let migrated = "migrated";
+        repository.create_branch(migrated).expect("branch");
+        let current = r#"{"format":"aeria-po/1","gameVersion":"2026.10.01.0000.0000"}"#;
+        commit(current, "current");
 
         assert_eq!(
             branch_block(&repository, &old, "2026.10.01.0000.0000"),
             Some(BranchBlockDto::OlderFormat)
         );
         assert_eq!(
-            branch_block(&repository, &migrated, "2026.10.01.0000.0000"),
+            branch_block(&repository, migrated, "2026.10.01.0000.0000"),
             None
         );
         assert_eq!(
-            branch_block(&repository, &migrated, "2026.11.01.0000.0000"),
+            branch_block(&repository, migrated, "2026.11.01.0000.0000"),
             Some(BranchBlockDto::OtherSource)
         );
     }
@@ -1568,7 +1324,8 @@ mod tests {
     }
 
     #[test]
-    fn pull_and_sync_reload_the_active_session_with_incoming_translations() {
+    #[allow(clippy::too_many_lines)] // one scenario
+    fn pull_and_sync_bring_incoming_translations_into_the_open_project() {
         let sandbox = tempfile::tempdir().expect("sandbox");
         let git = isolated_git(sandbox.path());
         let game = crate::test_support::test_game();
@@ -1595,7 +1352,7 @@ mod tests {
             &ada_root,
             crate::test_support::open(game.path()),
             &sandbox.path().join("cache-ada"),
-            "fr".to_owned(),
+            "fr",
         )
         .expect("initialize");
         let ada_repository = GitRepository::init(&ada_root, git.clone()).expect("init");
@@ -1608,7 +1365,7 @@ mod tests {
         git_checkpoint_with_state(&ada, None).expect("initial checkpoint");
         ada_repository.push().expect("publish");
 
-        // Grace clones it and opens the same source.
+        // Grace clones it and opens it with the same game.
         let grace_root = sandbox.path().join("grace");
         let grace_repository =
             GitRepository::clone_from(&remote_url, &grace_root, git.clone()).expect("clone");
@@ -1622,7 +1379,6 @@ mod tests {
             &grace_root,
             crate::test_support::open(game.path()),
             &sandbox.path().join("cache-grace"),
-            false,
         )
         .expect("open clone");
         assert!(matches!(
@@ -1630,38 +1386,44 @@ mod tests {
             crate::commands::GameOpenOutcome::Opened { .. }
         ));
 
-        set_translation_target_with_state(&ada, binding(), "Bonjour").expect("translate");
-        // The checkpoint on main starts a contribution branch; Ada publishes it.
+        set_translation_target_with_state(&ada, &binding(), "Bonjour").expect("translate");
+        let pending = git_pending_changes_of(&ada);
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].source_binding.as_ref(), Some(&binding()));
+        // Ada commits on main and pushes it.
         let outcome = git_checkpoint_with_state(&ada, None).expect("checkpoint");
-        assert!(outcome.branch_created.is_some());
-        ada_repository.push().expect("push contribution");
-        // The hosting service merges the pull request into main.
-        let merged = std::process::Command::new(
-            std::env::var_os("AERIA_GIT_PATH")
-                .filter(|path| !path.is_empty())
-                .unwrap_or_else(|| "git".into()),
-        )
-        .current_dir(&ada_root)
-        .args(["push", "--quiet", "origin", "HEAD:refs/heads/main"])
-        .status()
-        .expect("merge pull request");
-        assert!(merged.success());
+        assert_eq!(outcome.changes.len(), 1);
+        assert!(ada_repository.push().expect("push main"));
 
-        // Pull integrates like Sync but never pushes.
-        let result = pull_with_state(&grace, &[], false).expect("pull");
+        let result = pull_with_state(&grace, &[]).expect("pull");
         assert!(result.workspace_changed);
         assert!(result.conflicts.is_empty());
-        assert!(!result.pushed);
-        let again = git_sync_with_state(&grace, &[]).expect("sync");
+        let again = pull_with_state(&grace, &[]).expect("pull again");
         assert!(matches!(again.integration, GitIntegrationDto::UpToDate));
-        let project = grace.lock_project().expect("lock");
-        let unit = project
+        let page = page_translation_rows_with_state(&grace, "Synthetic", None, 10).expect("page");
+        let translation = page.rows[1].cells[0]
+            .translation
             .as_ref()
-            .expect("project")
-            .workspace()
-            .unit_by_source_binding(&SourceBinding::from(binding()))
-            .expect("incoming unit")
-            .clone();
-        assert_eq!(unit.target_macro(), "Bonjour");
+            .expect("incoming");
+        assert_eq!(translation.target_macro, "Bonjour");
+    }
+
+    fn git_pending_changes_of(state: &DesktopState) -> Vec<EntryChangeDto> {
+        let pending = pending_changes_with_state(state).expect("pending");
+        let sheet = pending_sheet_changes_with_state(state, "Synthetic").expect("sheet");
+        assert_eq!(pending.total, pending.changes.len());
+        assert_eq!(sheet.len(), pending.total);
+        pending.changes
+    }
+
+    #[test]
+    fn sheet_files_are_matched_by_base() {
+        assert!(is_sheet_file("po/Addon.po", "Addon"));
+        assert!(is_sheet_file("po/Item/2000.po", "Item"));
+        assert!(is_sheet_file("po/quest/001/Q_1.po", "quest/001/Q_1"));
+        assert!(!is_sheet_file("po/AddonTransient.po", "Addon"));
+        assert!(!is_sheet_file("po/Item/x/2000.po", "Item"));
+        assert!(!is_sheet_file("po/Item/.po", "Item"));
+        assert!(!is_sheet_file("Addon.po", "Addon"));
     }
 }

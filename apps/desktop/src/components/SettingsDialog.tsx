@@ -1,14 +1,14 @@
 import { memo, useEffect, useState, type CSSProperties, type ReactNode } from "react";
 import { Dialog } from "radix-ui";
 import { appInfo } from "../ipc";
-import { AiProvidersSettings } from "./AiProvidersSettings";
 import { GameSettings } from "./GameSettings";
+import { MachineTranslationSettings } from "./MachineTranslationSettings";
 import { TargetLanguageSetting } from "./ProjectSettings";
 import type { ProjectSummaryDto } from "../types";
 import { keyboardShortcuts, shortcutGroupLabels } from "../shortcuts";
 import { Segmented } from "../ui/primitives/Segmented";
 import { UiIcon, type UiIconName } from "../ui/primitives/UiIcon";
-import { BranchesSetting, IdentitySetting, MainBranchSetting, MergeDriverSetting, OtherFilesSetting, RemotesSetting, UpstreamSetting } from "./RepositorySettings";
+import { BranchesSetting, IdentitySetting, OtherFilesSetting, RemotesSetting, UpstreamSetting } from "./RepositorySettings";
 import { UpdateChannelSetting, UpdatesSetting } from "./UpdateSettings";
 import { editorFontSizes, interfaceZoomOptions, usePreferences } from "../ui/preferences";
 import { useTheme } from "../ui/theme/theme";
@@ -26,14 +26,14 @@ export const accentPresets: readonly { value: string; label: MessageKey }[] = [
   { value: "#98c379", label: "settings.accent.green" },
 ];
 
-export type SettingsSection = "appearance" | "editor" | "workflow" | "game" | "ai" | "project" | "repository" | "keyboard" | "about";
+export type SettingsSection = "appearance" | "editor" | "workflow" | "game" | "translation" | "project" | "repository" | "keyboard" | "about";
 
 const sections: ReadonlyArray<{ id: SettingsSection; label: MessageKey; icon: UiIconName }> = [
   { id: "appearance", label: "settings.section.appearance", icon: "palette" },
   { id: "editor", label: "settings.section.editor", icon: "languages" },
   { id: "workflow", label: "settings.section.workflow", icon: "arrowRight" },
   { id: "game", label: "settings.section.game", icon: "gamepad" },
-  { id: "ai", label: "settings.section.ai", icon: "sparkles" },
+  { id: "translation", label: "settings.section.translation", icon: "sparkles" },
   { id: "project", label: "settings.section.project", icon: "languages" },
   { id: "repository", label: "settings.section.repository", icon: "gitBranch" },
   { id: "keyboard", label: "settings.section.keyboard", icon: "listFilter" },
@@ -192,8 +192,8 @@ export const SettingsDialog = memo(function SettingsDialog({ open, onOpenChange,
       control: <GameSettings />,
     },
     {
-      id: "ai-providers", section: "ai", title: t("settings.ai.title"), description: t("settings.ai.description"), keywords: t("settings.ai.keywords"), wide: true,
-      control: <AiProvidersSettings />,
+      id: "machine-translation", section: "translation", title: t("translate.settings.title"), description: t("translate.settings.description"), keywords: t("translate.settings.keywords"), wide: true,
+      control: <MachineTranslationSettings />,
     },
     {
       id: "shortcuts", section: "keyboard", title: t("settings.shortcuts.title"), keywords: keyboardShortcuts.map((shortcut) => `${shortcut.keys} ${t(shortcut.action)}`).join(" "), wide: true,
@@ -227,10 +227,8 @@ export const SettingsDialog = memo(function SettingsDialog({ open, onOpenChange,
     ...(projectOpen ? [
       { id: "remotes", section: "repository" as const, title: t("repository.remotes"), description: t("repository.remotesHint"), keywords: t("repository.keywords"), wide: true, control: <RemotesSetting /> },
       { id: "upstream", section: "repository" as const, title: t("repository.upstream"), description: t("repository.upstreamHint"), keywords: t("repository.keywords"), wide: true, control: <UpstreamSetting /> },
-      { id: "main-branch", section: "repository" as const, title: t("repository.mainBranch"), description: t("repository.mainBranchHint"), keywords: t("repository.keywords"), wide: true, control: <MainBranchSetting /> },
       { id: "branches", section: "repository" as const, title: t("repository.branches"), description: t("repository.branchesHint"), keywords: t("repository.keywords"), wide: true, control: <BranchesSetting /> },
       { id: "identity", section: "repository" as const, title: t("git.identity"), description: t("repository.identityHint"), keywords: t("repository.keywords"), wide: true, control: <IdentitySetting /> },
-      { id: "merge-driver", section: "repository" as const, title: t("repository.mergeDriver"), description: t("repository.mergeDriverHint"), keywords: t("repository.keywords"), wide: true, control: <MergeDriverSetting /> },
       { id: "other-files", section: "repository" as const, title: t("repository.otherFiles"), description: t("repository.otherFilesHint"), keywords: t("repository.keywords"), wide: true, control: <OtherFilesSetting /> },
     ] : [
       { id: "repository-closed", section: "repository" as const, title: t("repository.noProject"), description: t("repository.noProjectHint"), control: null },

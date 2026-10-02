@@ -16,12 +16,11 @@ Documentation is maintained with the code it describes and is the source of trut
 | Understand product scope or user behavior | [`product/README.md`](./product/README.md) |
 | Change a subsystem boundary or data flow | [`architecture/README.md`](./architecture/README.md) |
 | Read source text from the installed game | [`architecture/source.md`](./architecture/source.md) |
-| Open or initialize an Aeria project session | [`architecture/project-session.md`](./architecture/project-session.md) |
+| Change the project's PO files, game updates, or the checks of a translation | [`architecture/po-project.md`](./architecture/po-project.md) |
 | Work with SeString / macro structure | [`architecture/strings.md`](./architecture/strings.md) |
-| Change translation identity or source updates | [`architecture/identity.md`](./architecture/identity.md), [`architecture/rebase.md`](./architecture/rebase.md) |
-| Change workspace persistence | [`architecture/workspace.md`](./architecture/workspace.md), [`formats/workspace-v3.md`](./formats/workspace-v3.md) |
 | Change Git collaboration behavior in Aeria | [`architecture/git.md`](./architecture/git.md) |
-| Change translation assistance | [`architecture/ai.md`](./architecture/ai.md), [`formats/glossary-v1.md`](./formats/glossary-v1.md), [`formats/voices-v1.md`](./formats/voices-v1.md) |
+| Change machine translation | [`architecture/translate.md`](./architecture/translate.md) |
+| Change the project knowledge | [`architecture/knowledge.md`](./architecture/knowledge.md), [`formats/knowledge-v1.md`](./formats/knowledge-v1.md), [`formats/glossary-v1.md`](./formats/glossary-v1.md) |
 | Change export behavior | [`architecture/export.md`](./architecture/export.md), [`formats/pack-v1.md`](./formats/pack-v1.md), [`formats/feed-v1.md`](./formats/feed-v1.md), [`formats/pack-settings-v1.md`](./formats/pack-settings-v1.md), [`formats/font-settings-v1.md`](./formats/font-settings-v1.md) |
 | Implement Rust or frontend code | [`development/README.md`](./development/README.md) |
 | Add or upgrade a dependency | [`development/dependencies.md`](./development/dependencies.md) |

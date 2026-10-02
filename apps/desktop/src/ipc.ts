@@ -6,7 +6,6 @@ import type {
   MacroViewDto,
   UpdateChannel,
   UpdateStatusDto,
-  AgentMode,
   ExportOverviewDto,
   FontPreviewSizeDto,
   ProjectChangeDto,
@@ -17,55 +16,43 @@ import type {
   PackSettings,
   PublishedReleaseDto,
   ReleaseInput,
-  GlossaryEntryInput,
-  ProjectGuideDto,
-  JobAction,
-  JobEvent,
-  JobSummary,
-  WorkerActivity,
-  JobUnit,
-  JobUnitStatus,
-  ProposalRecord,
-  AiConnectionCheckDto,
-  AiModelConfig,
-  ChatGptLoginDto,
-  ConversationDto,
-  ConversationSummaryDto,
-  EditorContextDto,
-  AiModelSelection,
-  AiProviderInput,
-  AiSettingsDto,
+  TermInput,
+  ProjectKnowledgeDto,
   CommandError,
-  ReasoningEffort,
-  CollaborationDto,
-  DetachedUnitDto,
   GameOpenResultDto,
   GameSettingsDto,
-  ContributorDto,
   GitBranchDto,
   GitCommitChangesDto,
-  GitFinishDto,
   GitCommitDto,
   GitOverviewDto,
   GitRemoteDto,
-  GitSyncDto,
+  GitPullDto,
   TranslatorIdentityDto,
-  UnitAttributionDto,
-  UnitChangeDto,
-  UnitHistoryDto,
-  UnitResolutionDto,
+  EntryChangeDto,
+  PendingChangesDto,
+  StringHistoryDto,
+  EntryResolutionDto,
   ProjectOpenResultDto,
   ProjectSummaryDto,
   RecentProjectDto,
-  ReviewState,
   SheetProgressDto,
   SourceBinding,
-  SourceUpdateReportDto,
   TranslationRowCursorDto,
   TranslationRowPageDto,
+  TranslationFindingsDto,
   TranslationOverlayDto,
   OtherLanguageTextDto,
   SheetDialogueDto,
+  ModelAccountDto,
+  ModelInfo,
+  ModelSignInDto,
+  TranslationStatus,
+  BulkEditDto,
+  EntryRefDto,
+  ReplaceChangeDto,
+  ReplacementDto,
+  SearchQueryDto,
+  SearchResultDto,
 } from "./types";
 
 export function normalizeCommandError(error: unknown): CommandError {
@@ -81,7 +68,8 @@ export function normalizeCommandError(error: unknown): CommandError {
         ? candidate.message
         : "The desktop command failed.";
 
-    return { code, message };
+    const issues = Array.isArray(candidate.issues) ? (candidate.issues as CommandError["issues"]) : undefined;
+    return issues && issues.length > 0 ? { code, message, issues } : { code, message };
   }
 
   return { code: "commandFailed", message: "The desktop command failed." };
@@ -162,14 +150,10 @@ export function translationProgress(): Promise<SheetProgressDto[]> {
   return call<SheetProgressDto[]>("translation_progress");
 }
 
-/** Plans the source update opening would apply, without writing anything. */
-export function previewSourceUpdate(repositoryRoot: string): Promise<SourceUpdateReportDto> {
-  return call<SourceUpdateReportDto>("preview_source_update", { repositoryRoot });
-}
-
 /**
- * Opens a project with the configured game installation. When the project
- * needs a source update, nothing is written and the plan is returned.
+ * Opens a project with the configured game installation. When the project's
+ * files are for an older game version, nothing is written and the versions
+ * are returned.
  */
 export function openProjectFromGame(repositoryRoot: string): Promise<GameOpenResultDto> {
   return call<GameOpenResultDto>("open_project_from_game", { repositoryRoot });
@@ -185,13 +169,13 @@ export function setGamePath(path: string | null): Promise<GameSettingsDto> {
   return call<GameSettingsDto>("set_game_path", { path });
 }
 
-/** Opens the project with the configured game and applies a required source update. */
+/**
+ * Updates the project to the configured game and opens it: every file is
+ * made again, translations are carried over (fuzzy where their source
+ * changed), and the update is committed.
+ */
 export function updateProjectFromGame(repositoryRoot: string): Promise<ProjectOpenResultDto> {
   return call<ProjectOpenResultDto>("update_project_from_game", { repositoryRoot });
-}
-
-export function listDetachedUnits(): Promise<DetachedUnitDto[]> {
-  return call<DetachedUnitDto[]>("list_detached_units");
 }
 
 /** Creates a project for the configured game installation. */
@@ -254,28 +238,40 @@ export function sheetDialogue(sheetName: string): Promise<SheetDialogueDto | nul
   return call<SheetDialogueDto | null>("sheet_dialogue", { sheetName });
 }
 
+/**
+ * Saves the translation of one string; an empty text leaves it untranslated.
+ * Refused with `translationInvalid` when the checks find a problem. Returns
+ * what the string's entry holds afterwards.
+ */
 export function setTranslationTarget(
   sourceBinding: SourceBinding,
   targetMacro: string,
-): Promise<TranslationOverlayDto> {
-  return call<TranslationOverlayDto>("set_translation_target", {
+): Promise<TranslationOverlayDto | null> {
+  return call<TranslationOverlayDto | null>("set_translation_target", {
     sourceBinding,
     targetMacro,
   });
 }
 
 export function setTranslationNote(
-  translationUnitId: string,
+  sourceBinding: SourceBinding,
   note: string | null,
-): Promise<TranslationOverlayDto> {
-  return call<TranslationOverlayDto>("set_translation_note", { translationUnitId, note });
+): Promise<TranslationOverlayDto | null> {
+  return call<TranslationOverlayDto | null>("set_translation_note", { sourceBinding, note });
 }
 
-export function setTranslationReviewState(
-  translationUnitId: string,
-  reviewState: ReviewState,
-): Promise<TranslationOverlayDto> {
-  return call<TranslationOverlayDto>("set_translation_review_state", { translationUnitId, reviewState });
+/** What the checks find in the saved translation of one string, and its term exceptions. */
+export function translationFindings(sourceBinding: SourceBinding): Promise<TranslationFindingsDto> {
+  return call<TranslationFindingsDto>("translation_findings", { sourceBinding });
+}
+
+/** Adds or removes a term exception of one string: the glossary term does not apply to it. */
+export function setTranslationTermException(
+  sourceBinding: SourceBinding,
+  term: string,
+  add: boolean,
+): Promise<TranslationOverlayDto | null> {
+  return call<TranslationOverlayDto | null>("set_translation_term_exception", { sourceBinding, term, add });
 }
 
 export function gitOverview(): Promise<GitOverviewDto> {
@@ -294,8 +290,14 @@ export function gitSetRemote(name: string, url: string): Promise<GitRemoteDto[]>
   return call<GitRemoteDto[]>("git_set_remote", { name, url });
 }
 
-export function gitPendingChanges(): Promise<UnitChangeDto[]> {
-  return call<UnitChangeDto[]>("git_pending_changes");
+/** How many strings have uncommitted changes, with the first few hundred of them. */
+export function gitPendingChanges(): Promise<PendingChangesDto> {
+  return call<PendingChangesDto>("git_pending_changes");
+}
+
+/** Every uncommitted string change of one sheet. */
+export function gitPendingSheetChanges(sheetName: string): Promise<EntryChangeDto[]> {
+  return call<EntryChangeDto[]>("git_pending_sheet_changes", { sheetName });
 }
 
 export function gitCheckpoint(message: string | null): Promise<GitCommitChangesDto> {
@@ -310,12 +312,9 @@ export function gitCommitChanges(commitId: string): Promise<GitCommitChangesDto>
   return call<GitCommitChangesDto>("git_commit_changes", { commitId });
 }
 
-export function gitUnitHistory(translationUnitId: string, limit: number): Promise<UnitHistoryDto> {
-  return call<UnitHistoryDto>("git_unit_history", { translationUnitId, limit });
-}
-
-export function gitContributors(): Promise<ContributorDto[]> {
-  return call<ContributorDto[]>("git_contributors");
+/** The history of one string: its uncommitted change and the commits that changed it. */
+export function gitStringHistory(sourceBinding: SourceBinding, limit: number): Promise<StringHistoryDto> {
+  return call<StringHistoryDto>("git_string_history", { sourceBinding, limit });
 }
 
 export function gitProjectChanges(): Promise<ProjectChangeDto[]> {
@@ -327,11 +326,6 @@ export function gitRemoveRemote(name: string): Promise<GitOverviewDto> {
 }
 
 /** Fetches every remote first, so it needs the network. */
-/** Checks the remote main branch in the background; true when it moved. */
-export function gitFetchMain(): Promise<boolean> {
-  return call<boolean>("git_fetch_main");
-}
-
 export function gitRemoteBranches(): Promise<string[]> {
   return call<string[]>("git_remote_branches");
 }
@@ -344,8 +338,8 @@ export function gitFetch(): Promise<void> {
   return call<void>("git_fetch");
 }
 
-export function gitPull(resolutions: UnitResolutionDto[] = []): Promise<GitSyncDto> {
-  return call<GitSyncDto>("git_pull", { resolutions });
+export function gitPull(resolutions: EntryResolutionDto[] = []): Promise<GitPullDto> {
+  return call<GitPullDto>("git_pull", { resolutions });
 }
 
 export function gitPush(): Promise<boolean> {
@@ -364,22 +358,6 @@ export function gitOpenBranchSettings(): Promise<void> {
   return call<void>("git_open_branch_settings");
 }
 
-export function gitMergeDriver(): Promise<{ enabled: boolean }> {
-  return call<{ enabled: boolean }>("git_merge_driver");
-}
-
-export function gitSetMergeDriver(enabled: boolean): Promise<{ enabled: boolean }> {
-  return call<{ enabled: boolean }>("git_set_merge_driver", { enabled });
-}
-
-export function gitSync(resolutions: UnitResolutionDto[] = []): Promise<GitSyncDto> {
-  return call<GitSyncDto>("git_sync", { resolutions });
-}
-
-export function gitUnitAttribution(translationUnitIds: string[]): Promise<UnitAttributionDto[]> {
-  return call<UnitAttributionDto[]>("git_unit_attribution", { translationUnitIds });
-}
-
 export function gitBranches(): Promise<GitBranchDto[]> {
   return call<GitBranchDto[]>("git_branches");
 }
@@ -392,28 +370,22 @@ export function gitSwitchBranch(name: string): Promise<void> {
   return call<void>("git_switch_branch", { name });
 }
 
-/** Sets the main branch, or clears it so Aeria detects it. Writes the settings file only. */
-export function gitSetMainBranch(mainBranch: string | null): Promise<CollaborationDto> {
-  return call<CollaborationDto>("git_set_main_branch", { mainBranch });
-}
-
 /** A fingerprint of the repository state; null outside a repository. */
 export function gitStateStamp(): Promise<string | null> {
   return call<string | null>("git_state_stamp");
 }
 
-export function gitFinishContribution(): Promise<GitFinishDto> {
-  return call<GitFinishDto>("git_finish_contribution");
+/**
+ * Deletes a local branch, and with `withUpstream` its upstream on the remote too.
+ * `force` is needed when the deletion loses commits no other branch has.
+ */
+export function gitDeleteBranch(name: string, withUpstream: boolean, force: boolean): Promise<void> {
+  return call<void>("git_delete_branch", { name, withUpstream, force });
 }
 
-/** Deletes a local branch; `force` is needed when it has commits outside the main branch. */
-export function gitDeleteBranch(name: string, force: boolean): Promise<void> {
-  return call<void>("git_delete_branch", { name, force });
-}
-
-/** Merges the contribution into the main branch; only for repositories without a remote. */
-export function gitMergeContribution(): Promise<GitFinishDto> {
-  return call<GitFinishDto>("git_merge_contribution");
+/** Deletes a branch on its remote, named like `origin/feature`; `force` as for local branches. */
+export function gitDeleteRemoteBranch(name: string, force: boolean): Promise<void> {
+  return call<void>("git_delete_remote_branch", { name, force });
 }
 
 /** Clones into a folder named after the repository; `parent` defaults to the default projects directory. */
@@ -426,146 +398,74 @@ export function defaultProjectsDirectory(): Promise<string> {
   return call<string>("default_projects_directory_path");
 }
 
-export function aiSettings(): Promise<AiSettingsDto> {
-  return call<AiSettingsDto>("ai_settings");
+/** Whether a ChatGPT subscription is signed in for machine translation. */
+export function modelAccount(): Promise<ModelAccountDto> {
+  return call<ModelAccountDto>("model_account");
 }
 
-export function aiSaveProvider(provider: AiProviderInput): Promise<AiSettingsDto> {
-  return call<AiSettingsDto>("ai_save_provider", { provider });
+/** Starts signing in with a ChatGPT subscription; the code is entered on OpenAI's page. */
+export function modelSignInStart(): Promise<ModelSignInDto> {
+  return call<ModelSignInDto>("model_sign_in_start");
 }
 
-export function aiRemoveProvider(providerId: string): Promise<AiSettingsDto> {
-  return call<AiSettingsDto>("ai_remove_provider", { providerId });
+/** Opens OpenAI's page where the sign-in code is entered. */
+export function modelOpenSignInPage(): Promise<void> {
+  return call<void>("model_open_sign_in_page");
 }
 
-export function aiSetApiKey(providerId: string, apiKey: string): Promise<AiSettingsDto> {
-  return call<AiSettingsDto>("ai_set_api_key", { providerId, apiKey });
+/** Polls the sign-in once; true once it finished. */
+export function modelSignInPoll(): Promise<boolean> {
+  return call<boolean>("model_sign_in_poll");
 }
 
-export function aiClearApiKey(providerId: string): Promise<AiSettingsDto> {
-  return call<AiSettingsDto>("ai_clear_api_key", { providerId });
+export function modelSignOut(): Promise<void> {
+  return call<void>("model_sign_out");
 }
 
-export function aiSetAgentModel(selection: AiModelSelection | null): Promise<AiSettingsDto> {
-  return call<AiSettingsDto>("ai_set_agent_model", { selection });
+/** The models the signed-in account can use. */
+export function modelList(): Promise<ModelInfo[]> {
+  return call<ModelInfo[]>("model_list");
 }
 
-export function aiSetWorkerModel(selection: AiModelSelection | null): Promise<AiSettingsDto> {
-  return call<AiSettingsDto>("ai_set_worker_model", { selection });
+/**
+ * What a machine translation of `scope` would translate. The scope names
+ * sheets, and folders of sheets ending with "/"; empty is the whole project.
+ */
+/** The sheets whose strings are the game's names, in the order a run translates them first. */
+export function translationNameSheets(): Promise<string[]> {
+  return call<string[]>("translation_name_sheets");
 }
 
-export function aiSetWebDomains(domains: string[]): Promise<AiSettingsDto> {
-  return call<AiSettingsDto>("ai_set_web_domains", { domains });
+export function translationStart(scope: string[], fuzzy: boolean, model: string, effort: string | null): Promise<void> {
+  return call<void>("translation_start", { scope, fuzzy, model, effort });
 }
 
-export function aiListRemoteModels(providerId: string): Promise<AiModelConfig[]> {
-  return call<AiModelConfig[]>("ai_list_remote_models", { providerId });
+/** Translates the given strings again, by `msgctxt`: those still untranslated or fuzzy. */
+export function translationRetry(contexts: string[], model: string, effort: string | null): Promise<void> {
+  return call<void>("translation_retry", { contexts, model, effort });
 }
 
-export function aiChatGptLoginStart(providerId: string): Promise<ChatGptLoginDto> {
-  return call<ChatGptLoginDto>("ai_chatgpt_login_start", { providerId });
+/** The progress of the last machine translation run; null before one started. */
+export function translationStatus(): Promise<TranslationStatus | null> {
+  return call<TranslationStatus | null>("translation_status");
 }
 
-export function aiChatGptLoginCancel(loginId: string): Promise<void> {
-  return call<void>("ai_chatgpt_login_cancel", { loginId });
+export function translationStop(): Promise<void> {
+  return call<void>("translation_stop");
 }
 
-export function aiTestConnection(providerId: string, modelId: string, effort: ReasoningEffort | null): Promise<AiConnectionCheckDto> {
-  return call<AiConnectionCheckDto>("ai_test_connection", { providerId, modelId, effort });
+
+export function projectKnowledge(): Promise<ProjectKnowledgeDto> {
+  return call<ProjectKnowledgeDto>("project_knowledge");
 }
 
-export function angelicaConversations(): Promise<ConversationSummaryDto[]> {
-  return call<ConversationSummaryDto[]>("angelica_conversations");
+export function saveKnowledgeStyle(expected: string | null, text: string): Promise<ProjectKnowledgeDto> {
+  return call<ProjectKnowledgeDto>("save_knowledge_style", { expected, text });
 }
 
-export function angelicaConversation(conversationId: string): Promise<ConversationDto> {
-  return call<ConversationDto>("angelica_conversation", { conversationId });
-}
 
-export function angelicaDeleteConversation(conversationId: string): Promise<void> {
-  return call<void>("angelica_delete_conversation", { conversationId });
-}
-
-export function angelicaCancel(conversationId: string): Promise<void> {
-  return call<void>("angelica_cancel", { conversationId });
-}
-
-/** Sends a message; `images` are base64 PNG or JPEG files. */
-export function angelicaSend(conversationId: string | null, text: string, images: readonly string[], model: AiModelSelection, editor: EditorContextDto | null, mode: AgentMode): Promise<ConversationDto> {
-  return call<ConversationDto>("angelica_send", { conversationId, text, images, model, editor, mode });
-}
-
-/** One conversation image as a `data:` URL. */
-export function angelicaImage(conversationId: string, imageId: string): Promise<string> {
-  return call<string>("angelica_image", { conversationId, imageId });
-}
-
-export function angelicaProposals(conversationId: string): Promise<ProposalRecord[]> {
-  return call<ProposalRecord[]>("angelica_proposals", { conversationId });
-}
-
-export function angelicaApplyProposal(conversationId: string, proposalId: string): Promise<ProposalRecord[]> {
-  return call<ProposalRecord[]>("angelica_apply_proposal", { conversationId, proposalId });
-}
-
-export function angelicaRejectProposal(conversationId: string, proposalId: string): Promise<ProposalRecord[]> {
-  return call<ProposalRecord[]>("angelica_reject_proposal", { conversationId, proposalId });
-}
-
-export function angelicaDraft(sourceBinding: SourceBinding): Promise<{ target: string }> {
-  return call<{ target: string }>("angelica_draft", { sourceBinding });
-}
-
-export function angelicaJobs(): Promise<JobSummary[]> {
-  return call<JobSummary[]>("angelica_jobs");
-}
-
-export function angelicaJobUnits(jobId: string, statuses: JobUnitStatus[]): Promise<JobUnit[]> {
-  return call<JobUnit[]>("angelica_job_units", { jobId, statuses });
-}
-
-export function angelicaJobEvents(jobId: string): Promise<JobEvent[]> {
-  return call<JobEvent[]>("angelica_job_events", { jobId });
-}
-
-export function angelicaJobWorkers(jobId: string): Promise<WorkerActivity[]> {
-  return call<WorkerActivity[]>("angelica_job_workers", { jobId });
-}
-
-export function angelicaJobControl(jobId: string, action: JobAction): Promise<JobSummary> {
-  return call<JobSummary>("angelica_job_control", { jobId, action });
-}
-
-export function angelicaJobSetConcurrency(jobId: string, concurrency: number): Promise<JobSummary> {
-  return call<JobSummary>("angelica_job_set_concurrency", { jobId, concurrency });
-}
-
-export function angelicaJobSetLimit(jobId: string, tokenLimit: number, resume: boolean): Promise<JobSummary> {
-  return call<JobSummary>("angelica_job_set_limit", { jobId, tokenLimit, resume });
-}
-
-export function angelicaJobRemove(jobId: string): Promise<void> {
-  return call<void>("angelica_job_remove", { jobId });
-}
-
-export function angelicaJobRetry(jobId: string, statuses: JobUnitStatus[]): Promise<JobSummary> {
-  return call<JobSummary>("angelica_job_retry", { jobId, statuses });
-}
-
-export function projectGuide(): Promise<ProjectGuideDto> {
-  return call<ProjectGuideDto>("project_guide");
-}
-
-export function saveProjectGuidance(expected: string | null, text: string): Promise<ProjectGuideDto> {
-  return call<ProjectGuideDto>("save_project_guidance", { expected, text });
-}
-
-export function saveProjectVoices(expected: string | null, text: string): Promise<ProjectGuideDto> {
-  return call<ProjectGuideDto>("save_project_voices", { expected, text });
-}
-
-export function saveProjectGlossary(expected: string | null, entries: GlossaryEntryInput[]): Promise<ProjectGuideDto> {
-  return call<ProjectGuideDto>("save_project_glossary", { expected, entries });
+export function saveKnowledgeTerms(expected: string | null, entries: TermInput[]): Promise<ProjectKnowledgeDto> {
+  return call<ProjectKnowledgeDto>("save_knowledge_terms", { expected, entries });
 }
 
 export function exportOverview(): Promise<ExportOverviewDto> {
@@ -596,6 +496,11 @@ export function exportInstallWorkflow(): Promise<ExportOverviewDto> {
   return call<ExportOverviewDto>("export_install_workflow");
 }
 
+/** The project's commit authors, most commits first. */
+export function exportGitAuthors(): Promise<string[]> {
+  return call<string[]>("export_git_authors");
+}
+
 export function exportPack(release: ReleaseInput, directory: string, sign: boolean): Promise<LocalExportDto> {
   return call<LocalExportDto>("export_pack", { release, directory, sign });
 }
@@ -622,4 +527,38 @@ export function fontsImportFile(path: string): Promise<ImportedFontFileDto> {
 
 export function fontsPreview(settings: FontSettings, font: string, text: string): Promise<FontPreviewSizeDto[]> {
   return call<FontPreviewSizeDto[]>("fonts_preview", { settings, font, text });
+}
+
+/** Searches the project's files; a new search cancels the one in progress. */
+export function projectSearch(query: SearchQueryDto): Promise<SearchResultDto> {
+  return call<SearchResultDto>("project_search", { query });
+}
+
+export function projectSearchCancel(): Promise<void> {
+  return call<void>("project_search_cancel");
+}
+
+/** The changes a replacement would make to the translations the query finds. */
+export function projectReplacePreview(query: SearchQueryDto, replacement: ReplacementDto): Promise<ReplaceChangeDto[]> {
+  return call<ReplaceChangeDto[]>("project_replace_preview", { query, replacement });
+}
+
+/** Writes replacements; strings changed since the preview or with problems are skipped. */
+export function projectReplaceApply(edits: (EntryRefDto & { after: string })[]): Promise<BulkEditDto> {
+  return call<BulkEditDto>("project_replace_apply", { edits });
+}
+
+/** Reverts the last bulk edit for the strings unchanged since. */
+export function projectEditUndo(): Promise<BulkEditDto> {
+  return call<BulkEditDto>("project_edit_undo");
+}
+
+/** Clears the strings' translations and machine-translates exactly them. */
+/** Adds or removes a term exception of strings found by a search; an undo reverts it. */
+export function projectTermException(entries: EntryRefDto[], term: string, add: boolean): Promise<BulkEditDto> {
+  return call<BulkEditDto>("project_term_exception", { entries, term, add });
+}
+
+export function projectRetranslate(entries: EntryRefDto[], model: string, effort: string | null): Promise<BulkEditDto> {
+  return call<BulkEditDto>("project_retranslate", { entries, model, effort });
 }

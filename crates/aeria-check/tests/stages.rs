@@ -4,9 +4,27 @@ use std::process::Command;
 
 use aeria_check::{Severity, Stage, run_stage};
 
-fn fixture() -> std::path::PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../aeria-workspace/tests/fixtures/workspace-v3")
-}
+const SETTINGS: &str = "{\n  \"format\": \"aeria-po/1\",\n  \"sourceLanguage\": \"en\",\n  \"targetLanguage\": \"ru\",\n  \"gameVersion\": \"2026.09.15.0000.0000\"\n}\n";
+
+const ADDON: &str = "# Addon
+msgid \"\"
+msgstr \"\"
+\"Language: ru\\n\"
+\"X-Game-Version: 2026.09.15.0000.0000\\n\"
+
+#. de: Ok
+msgctxt \"Addon:1:0:0\"
+msgid \"OK\"
+msgstr \"ОК\"
+
+msgctxt \"Addon:2:0:0\"
+msgid \"Cancel\"
+msgstr \"Отмена\"
+
+msgctxt \"Addon:3:0:0\"
+msgid \"Quit <If(PlayerParameter(4))>now<Else/>later</If>\"
+msgstr \"\"
+";
 
 fn git(root: &Path, args: &[&str]) {
     let status = Command::new(
@@ -29,26 +47,14 @@ fn git(root: &Path, args: &[&str]) {
     assert!(status.success(), "git {args:?}");
 }
 
-/// A repository whose project is in `project/`, with the fixture committed.
+/// A repository whose project is in `project/`, committed.
 fn repository() -> tempfile::TempDir {
     let folder = tempfile::tempdir().expect("folder");
-    let aeria = folder.path().join("project/.aeria/units");
-    fs::create_dir_all(&aeria).expect("units");
-    fs::copy(
-        fixture().join("manifest.json"),
-        folder.path().join("project/.aeria/manifest.json"),
-    )
-    .expect("manifest");
-    for shard in ["00.jsonl", "ff.jsonl"] {
-        fs::copy(fixture().join("units").join(shard), aeria.join(shard)).expect("shard");
-    }
-    // As in every Aeria project: workspace files stay LF on checkout.
-    fs::write(
-        folder.path().join("project/.gitattributes"),
-        "/.aeria/** text eol=lf
-",
-    )
-    .expect("attributes");
+    let project = folder.path().join("project");
+    fs::create_dir_all(project.join("po")).expect("po");
+    fs::write(project.join("aeria.json"), SETTINGS).expect("settings");
+    fs::write(project.join("po/Addon.po"), ADDON).expect("addon");
+    fs::write(project.join(".gitattributes"), "*.po text eol=lf\n").expect("attributes");
     git(folder.path(), &["init", "--quiet"]);
     git(folder.path(), &["add", "."]);
     git(folder.path(), &["commit", "--quiet", "-m", "base"]);
@@ -56,7 +62,7 @@ fn repository() -> tempfile::TempDir {
 }
 
 #[test]
-fn a_canonical_project_passes_every_stage() {
+fn a_valid_project_passes_every_stage() {
     let repository = repository();
     let project = repository.path().join("project");
     for stage in [Stage::Integrity, Stage::Translations] {
@@ -73,68 +79,20 @@ fn a_canonical_project_passes_every_stage() {
         merge
             .findings
             .iter()
-            .all(|finding| finding.severity == Severity::Notice)
+            .all(|finding| finding.severity == Severity::Notice),
+        "{:?}",
+        merge.findings
     );
 }
 
 #[test]
-fn command_line_git_merges_adjacent_units_with_the_driver() {
-    let repository = repository();
-    let root = repository.path();
-    let project = root.join("project");
-    let shard = project.join(".aeria/units/00.jsonl");
-    let text = fs::read_to_string(&shard).expect("shard");
-    let lines: Vec<String> = text.lines().map(str::to_owned).collect();
-    assert!(lines.len() > 1, "the fixture shard has several units");
-    let edit = |line: &str, target: &str| {
-        let mut record: serde_json::Value = serde_json::from_str(line).expect("record");
-        record["target"] = serde_json::Value::from(target);
-        serde_json::to_string(&record).expect("record")
-    };
-    let write = |first: &str, second: &str| {
-        let mut changed = lines.clone();
-        changed[0] = first.to_owned();
-        changed[1] = second.to_owned();
-        fs::write(&shard, format!("{}\n", changed.join("\n"))).expect("shard");
-    };
-
-    let repository_handle =
-        aeria_git::GitRepository::open(&project, aeria_git::GitExecutable::system()).expect("open");
-    repository_handle
-        .set_merge_driver(Some(Path::new(env!("CARGO_BIN_EXE_aeria-check"))))
-        .expect("driver");
-    git(root, &["add", "."]);
-    git(root, &["commit", "--quiet", "-m", "driver"]);
-
-    // Adjacent records change on two branches: a text merge conflicts.
-    git(root, &["switch", "--quiet", "-c", "other"]);
-    write(&edit(&lines[0], "left"), &lines[1]);
-    git(root, &["commit", "--quiet", "-am", "left"]);
-    git(root, &["switch", "--quiet", "-"]);
-    write(&lines[0], &edit(&lines[1], "right"));
-    git(root, &["commit", "--quiet", "-am", "right"]);
-    git(root, &["merge", "--quiet", "--no-edit", "other"]);
-
-    let merged = fs::read_to_string(&shard).expect("merged");
-    assert!(merged.contains("\"target\":\"left\""));
-    assert!(merged.contains("\"target\":\"right\""));
-    for stage in [Stage::Integrity, Stage::Translations] {
-        let report = run_stage(stage, &project, None);
-        assert!(!report.failed(), "{stage:?}: {:?}", report.findings);
-    }
-}
-
-#[test]
-fn text_edits_fail_and_removed_units_are_reported() {
+fn broken_translations_fail_and_removed_ones_are_reported() {
     let repository = repository();
     let project = repository.path().join("project");
-    let shard = project.join(".aeria/units/00.jsonl");
-    let text = fs::read_to_string(&shard).expect("shard");
-    let lines: Vec<&str> = text.lines().collect();
-    assert!(lines.len() > 1, "the fixture shard has several units");
+    let path = project.join("po/Addon.po");
 
-    // Dropping a unit keeps the shard canonical, but the merge notices it.
-    fs::write(&shard, format!("{}\n", lines[1..].join("\n"))).expect("remove a unit");
+    // Removing a translation is noticed by the merge stage.
+    fs::write(&path, ADDON.replace("msgstr \"Отмена\"", "msgstr \"\"")).expect("remove");
     git(repository.path(), &["commit", "--quiet", "-am", "remove"]);
     let merge = run_stage(Stage::Merge, &project, Some("HEAD^1"));
     let warning = merge
@@ -143,24 +101,32 @@ fn text_edits_fail_and_removed_units_are_reported() {
         .find(|finding| finding.severity == Severity::Warning)
         .expect("removal warning");
     assert!(
-        warning.message.contains("removes 1 translation unit"),
+        warning.message.contains("removes 1 translation(s)")
+            && warning.message.contains("Addon:2:0:0"),
         "{}",
         warning.message
     );
 
-    // CRLF is readable but not what Aeria writes.
-    fs::write(&shard, text.replace('\n', "\r\n")).expect("CRLF");
+    // A translation that breaks the source's macros fails.
+    fs::write(
+        &path,
+        ADDON.replace(
+            "msgstr \"\"\n",
+            "msgstr \"Выйти <If(PlayerParameter(4))>сейчас\"\n",
+        ),
+    )
+    .expect("broken");
     let translations = run_stage(Stage::Translations, &project, None);
-    assert!(translations.failed());
+    assert!(translations.failed(), "{:?}", translations.findings);
     assert_eq!(
         translations.findings[0].path.as_deref(),
-        Some(".aeria/units/00.jsonl")
+        Some("po/Addon.po")
     );
 
-    // A conflict marker breaks the shard.
+    // A conflict marker breaks the file.
     fs::write(
-        &shard,
-        format!("<<<<<<< HEAD\n{text}=======\n>>>>>>> branch\n"),
+        &path,
+        format!("<<<<<<< HEAD\n{ADDON}=======\n>>>>>>> branch\n"),
     )
     .expect("conflict");
     let integrity = run_stage(Stage::Integrity, &project, None);

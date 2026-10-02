@@ -5,10 +5,10 @@ Status: **implemented**. Harmonia reads feeds; `aeria-export` produces the
 releases and supplies the feed workflow
 ([`../architecture/export.md`](../architecture/export.md#publishing)).
 
-A feed is a small JSON document that tells Harmonia which
-[Harmonia packs](./pack-v1.md) a project has published and where to download
-them. The feed is a hint, not a trust anchor. Every decision that matters
-(pack identity, sequence, source compatibility, publisher) is verified against
+A feed is a small JSON document that tells Harmonia the newest
+[Harmonia pack](./pack-v1.md) of each channel a project has published and
+where to download it. The feed is a hint, not a trust anchor. Every decision
+that matters (version, game, publisher key) is verified against
 the downloaded pack itself, so the feed needs no signature of its own.
 
 ## Hosting
@@ -18,7 +18,7 @@ repository:
 
 | Artifact | Location |
 | --- | --- |
-| Pack | Release asset `<packId>-<sequence>.hpk.br` on release tag `harmonia/<sequence>` |
+| Pack | Release asset `pack-<version>.hpk.br` on release tag `harmonia/<version>` |
 | Release entry | Release asset `feed-entry.json` on the same release: the exact `releases[]` object below |
 | Feed | `https://<owner>.github.io/<repo>/harmonia/feed-v1.json` on GitHub Pages |
 
@@ -28,8 +28,8 @@ Aeria creates the release and uploads both assets. A GitHub Actions workflow,
 supplied by Aeria as a template for the translation repository
 (`.github/workflows/harmonia-feed.yml`), is started by `release` events, runs
 on the repository's default branch, collects the
-`feed-entry.json` assets of the published releases, takes `packId`, `title`,
-and `publisherKeyFingerprint` from the committed
+`feed-entry.json` assets of the published releases, takes `title` and
+`publisherKeyFingerprint` from the committed
 [`aeria-pack.json`](./pack-settings-v1.md), and deploys the feed to Pages. The
 workflow never needs signing keys. Pack files are never stored in Pages or in
 Git history.
@@ -44,22 +44,18 @@ UTF-8 JSON without BOM.
 {
   "format": "harmonia-feed",
   "version": 1,
-  "packId": "ru-main",
-  "title": "Russian translation",
-  "homepage": "https://github.com/<owner>/<repo>",
+  "title": "Русский перевод",
   "publisherKeyFingerprint": "<64 hex>",
   "releases": [
     {
-      "sequence": 42,
-      "version": "2026.09.25",
+      "version": "2026.10.01.0002",
       "channel": "stable",
+      "language": "ru",
+      "game": { "language": "en", "version": "2026.08.12.0000.0000" },
+      "minHarmonia": "0.1.2.0",
       "packHash": "sha256:<hex>",
-      "source": { "language": "en", "gameVersion": "2026.08.12.0000.0000" },
-      "target": { "language": "ru" },
-      "contentPolicy": "reviewed",
-      "minHarmonia": "1.4.0",
       "download": {
-        "url": "https://github.com/<owner>/<repo>/releases/download/harmonia/42/ru-main-42.hpk.br",
+        "url": "https://github.com/<owner>/<repo>/releases/download/harmonia/2026.10.01.0002/pack-2026.10.01.0002.hpk.br",
         "encoding": "br",
         "size": 15234567,
         "sha256": "<hex>",
@@ -74,15 +70,20 @@ UTF-8 JSON without BOM.
 | Field | Rule |
 | --- | --- |
 | `format`, `version` | exactly `"harmonia-feed"` and `1` |
-| `packId` | equals every listed pack's manifest `packId` |
+| `title` | the pack's title, shown when the feed is added; optional for readers |
 | `publisherKeyFingerprint` | fingerprint of the current signing key, or `null` for unsigned feeds; shown to the user when the feed is added |
-| `releases` | sorted by `sequence` descending; the generator keeps at most the 10 newest per channel |
-| `sequence`, `version`, `channel`, `source`, `target`, `contentPolicy`, `minHarmonia` | copies of the pack manifest |
+| `releases` | the newest release of each channel, at most one `stable` and one `testing`, newest version first |
+| `version`, `channel`, `language`, `game`, `minHarmonia` | copies of the pack manifest |
 | `packHash` | the pack's `packHash` |
 | `download.encoding` | `br` for `.hpk.br`, `identity` for a plain `.hpk` |
 | `download.size`, `download.sha256` | size and SHA-256 of the downloaded bytes |
 | `download.unpackedSize` | size of the `.hpk` after decoding |
 | `changelog` | optional display text |
+
+The feed holds no release history. Players update the game through the
+launcher and Harmonia through Dalamud, so only the newest release of a channel
+is installed from a feed; an older release is installed from its file (manual
+import).
 
 Readers ignore unknown fields in version 1 documents. An incompatible change
 publishes a new document (`feed-v2.json`) next to this one instead of changing
@@ -90,13 +91,14 @@ publishes a new document (`feed-v2.json`) next to this one instead of changing
 
 ## Release selection (Harmonia)
 
-1. Keep releases whose channel the user follows, whose `minHarmonia` is
-   satisfied, and whose `source.language` equals the client language.
-2. Prefer a release whose `source.gameVersion` equals the running game
-   version; among equals, the highest `sequence`.
-3. Offer or install it only when its `sequence` is higher than the installed
-   pack's, or when it matches the game version and the installed pack does
-   not. A lower `sequence` is installed only by explicit user action.
+1. Take the `stable` release, and the `testing` release when the user follows
+   testing releases; of these, the one with the highest `version`.
+2. When its `game.language` differs from the client language, the feed offers
+   nothing for this client.
+3. When its `minHarmonia` is not satisfied, Harmonia asks the user to update
+   Harmonia instead of installing it.
+4. Offer or install it only when its `version` is higher than the installed
+   pack's. A lower version is installed only by explicit user action.
 
 Checks run on the configured interval, on demand, and once after the running
 game version changes. Requests send `If-None-Match` with the last `ETag`.
@@ -107,24 +109,34 @@ game version changes. Requests send `If-None-Match` with the last `ETag`.
    `download.sha256`.
 2. Decode with an output limit of `download.unpackedSize`.
 3. Verify the pack completely (see [pack reader requirements](./pack-v1.md#reader-requirements-harmonia)).
-4. Verify that the pack's `packHash`, `packId`, `sequence`, and `source` equal
-   the feed entry, and apply the publisher trust rules below.
-5. Move the file atomically to `packs/<packId>/<packHash>.hpk` and atomically
-   update the installed-pack record. The new pack becomes active on the next
-   game start; the previous file is kept for rollback until then.
+4. Verify that the pack's `packHash`, `version`, and `game` equal the feed
+   entry, and apply the publisher trust rules below.
+5. Install the file atomically as the feed's translation, replacing its
+   previous pack. The new pack becomes active on the next game start; the
+   previous file is kept for rollback until then.
 
 ## Publisher trust (Harmonia)
 
-Trust is pinned per `packId` to a signing key fingerprint. Feed installs and
-manual imports follow the same rules:
+A pack carries no identifier. Harmonia keeps each installed translation under
+a name of its own and pins one signing key fingerprint to it: the key of its
+first signed pack, which the user confirmed. A translation added by its feed
+link also remembers the feed; the feed's `publisherKeyFingerprint` is shown
+before the first download. A pack updates a translation when it comes from
+that translation's feed, or, from a file, when it is signed by the
+translation's pinned key:
 
-| Pack | Pinned key for `packId` | Result |
-| --- | --- | --- |
-| Signed, key = pinned | any | accepted |
-| Signed, endorsed by the pinned key | pinned | accepted; pin moves to the new key |
-| Signed | none | user confirms the fingerprint; key is pinned |
-| Signed, other key, no valid endorsement | pinned | rejected for feeds; manual import requires the user to explicitly replace the pin |
-| Unsigned | any | rejected for feeds; manual import only after an explicit "unsigned build" confirmation, shown as unsigned in the UI |
+| Pack | Result |
+| --- | --- |
+| Signed by the pinned key of the translation it updates | accepted |
+| Signed by a key the pinned key endorsed | accepted; the pin moves to the new key |
+| From a feed with nothing installed yet, signed | the user confirms the fingerprint; a new translation with that key pinned |
+| From the feed of a translation, signed by another key without an endorsement | rejected |
+| From a file, signed by a key no translation pins | the user confirms the fingerprint; a new translation with that key pinned |
+| Unsigned, from a feed | rejected |
+| Unsigned, from a file | only after an explicit "unsigned build" confirmation; shown as unsigned. It replaces an installed unsigned translation with the same `title` and `team.name`, or becomes a new one |
+
+A translation installed from a file is connected to a feed only when the
+feed's `publisherKeyFingerprint` is the translation's pinned key.
 
 Manual import accepts a single `.hpk` or `.hpk.br` file; the signature is
 inside the pack.

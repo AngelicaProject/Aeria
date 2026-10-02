@@ -22,7 +22,7 @@ Operations that can affect translation data should prefer transactional or atomi
 - validate/flush as appropriate
 - atomically replace destination where supported
 
-Bulk rebase, workspace migration, semantic merge, and large AI operations should create local recovery points when doing so materially improves recoverability beyond ordinary Git working-tree state.
+Game updates, per-string merges, and machine translation runs should create local recovery points when doing so materially improves recoverability beyond ordinary Git working-tree state.
 
 Expected data/user failures are typed errors and user-visible diagnostics, not panics.
 
@@ -34,12 +34,11 @@ Highest-value regression coverage:
 - structured string parsing/serialization golden tests
 - unknown/opaque macro preservation
 - parser fuzz/property tests
-- deterministic workspace serialization
-- workspace migration tests
-- rebase regression corpus across real/synthetic source changes
-- semantic merge cases
+- deterministic PO file serialization
+- game update tests across real/synthetic source changes
+- per-string merge cases
 - export determinism/compatibility
-- AI response validation using deterministic mocked providers
+- machine translation runs against a fake model server
 
 CI should prefer synthetic fixtures or legally safe minimized fixtures. Real game content should not be required in public CI.
 

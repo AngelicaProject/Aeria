@@ -31,14 +31,23 @@ const CATALOG_THREADS: usize = 4;
 /// installation is available, `invalidInput` for an unknown language, or
 /// `gameRead` when the game cannot be read.
 pub(crate) fn open_game(app: &tauri::AppHandle, language: &str) -> CommandResult<Arc<GameSource>> {
+    open_game_at(&resolve_game_path(app)?, language)
+}
+
+/// Opens the installation at `game_path` in `language`.
+///
+/// # Errors
+///
+/// Returns `invalidInput` for an unknown language or `gameRead` when the
+/// game cannot be read.
+pub(crate) fn open_game_at(game_path: &str, language: &str) -> CommandResult<Arc<GameSource>> {
     let language: SourceLanguage =
         language
             .parse()
             .map_err(|error: aeria_source::SourceLanguageError| {
                 CommandError::new("invalidInput", error.to_string())
             })?;
-    let game_path = resolve_game_path(app)?;
-    Ok(Arc::new(GameSource::open(&game_path, language)?))
+    Ok(Arc::new(GameSource::open(game_path, language)?))
 }
 
 #[derive(Deserialize, Serialize)]

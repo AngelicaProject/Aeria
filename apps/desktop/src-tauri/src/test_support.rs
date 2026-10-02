@@ -5,7 +5,6 @@ use std::sync::Arc;
 
 use aeria_source::{GameSource, SourceLanguage};
 use aeria_sqpack::testing::{FakeGame, TextSheet};
-use aeria_workspace::ProjectSession;
 use tempfile::TempDir;
 
 /// The game version of [`test_game`].
@@ -16,7 +15,6 @@ pub(crate) const GAME_VERSION: &str = "2026.09.15.0000.0000";
 /// column 0 with text in column 1.
 pub(crate) struct TestGame {
     folder: TempDir,
-    pub(crate) source: Arc<GameSource>,
 }
 
 impl TestGame {
@@ -43,8 +41,7 @@ pub(crate) fn test_game() -> TestGame {
         )
         .write(folder.path())
         .expect("write game");
-    let source = open(folder.path());
-    TestGame { folder, source }
+    TestGame { folder }
 }
 
 /// Opens a synthetic game in English with its sheet catalog.
@@ -56,11 +53,4 @@ pub(crate) fn open(game_path: &Path) -> Arc<GameSource> {
         .expect("not cancelled");
     source.set_catalog(Arc::new(catalog));
     Arc::new(source)
-}
-
-/// A new Russian project over [`test_game`] in `directory/repository`.
-pub(crate) fn test_session(directory: &Path, game: &TestGame) -> ProjectSession {
-    let root = directory.join("repository");
-    std::fs::create_dir_all(&root).expect("repository");
-    ProjectSession::initialize(root, Arc::clone(&game.source), "ru").expect("session")
 }

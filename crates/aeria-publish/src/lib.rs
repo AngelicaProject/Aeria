@@ -13,7 +13,7 @@ mod workflow;
 
 pub use github::{
     ExistingRelease, GITHUB_HOST, GitHubClient, GitHubRepository, PublishError, PublishedRelease,
-    RELEASE_TAG_PREFIX, ReleaseAsset, ReleaseRequest, pack_asset_name, release_tag,
+    RELEASE_TAG_PREFIX, ReleaseAsset, ReleaseRequest, pack_asset_name, release_tag, tag_version,
 };
 pub use keys::{
     KEYRING_SERVICE, KeyError, KeyringSigningKeyStore, MemorySigningKeyStore, SigningKeyStore,

@@ -1,8 +1,8 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Dialog } from "radix-ui";
-import { normalizeCommandError, projectGuide, saveProjectGlossary, saveProjectGuidance, saveProjectVoices } from "../ipc";
+import { normalizeCommandError, projectKnowledge, saveKnowledgeStyle, saveKnowledgeTerms } from "../ipc";
 import { filterRows, inputsFromRows, rowProblems, rowsChanged, rowsFromEntries, type GlossaryRow, type RowProblem } from "../projectGuide";
-import type { CommandError, ProjectGuideDto } from "../types";
+import type { CommandError, ProjectKnowledgeDto } from "../types";
 import type { MessageKey } from "../i18n/translate";
 import { useI18n } from "../ui/i18n";
 import { Segmented } from "../ui/primitives/Segmented";
@@ -10,7 +10,7 @@ import { UiIcon } from "../ui/primitives/UiIcon";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { ErrorBanner } from "./ErrorBanner";
 
-export type ProjectGuideTab = "glossary" | "guidance" | "voices";
+export type ProjectGuideTab = "terms" | "style";
 
 type ProjectGuideDialogProps = {
   open: boolean;
@@ -24,38 +24,38 @@ const problemLabels: Readonly<Record<RowProblem, MessageKey>> = {
   duplicateTerm: "guide.problem.duplicateTerm",
 };
 
-/** Rows rendered at once; the filter narrows larger glossaries. */
+/** Rows rendered at once; the filter narrows larger term lists. */
 const ROWS_SHOWN = 300;
-const GUIDANCE_LIMIT = 64 * 1024;
-const VOICES_LIMIT = 256 * 1024;
+/** The largest knowledge file Aeria reads. */
+const FILE_LIMIT = 8 * 1024 * 1024;
 
-/** The project's shared glossary, guidance, and voice profiles, edited by translators. */
-/** Memoized so the closed dialog does not re-render with the workbench. */
+/**
+ * The project's knowledge in `aeria-knowledge/`: terms and style.
+ * Memoized so the closed dialog does not re-render with the workbench.
+ */
 export const ProjectGuideDialog = memo(function ProjectGuideDialog({ open, initialTab, onOpenChange }: ProjectGuideDialogProps) {
   const { t } = useI18n();
   const [tab, setTab] = useState<ProjectGuideTab>(initialTab);
-  const [saved, setSaved] = useState<ProjectGuideDto | null>(null);
+  const [saved, setSaved] = useState<ProjectKnowledgeDto | null>(null);
   const [rows, setRows] = useState<GlossaryRow[]>([]);
-  const [guidance, setGuidance] = useState("");
-  const [voices, setVoices] = useState("");
+  const [style, setStyle] = useState("");
   const [query, setQuery] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<CommandError | null>(null);
   const [confirm, setConfirm] = useState<{ message: string; confirmLabel?: string; run: () => void } | null>(null);
   const nextKey = useRef(0);
 
-  const show = useCallback((guide: ProjectGuideDto) => {
-    setSaved(guide);
-    const next = rowsFromEntries(guide.entries);
+  const show = useCallback((knowledge: ProjectKnowledgeDto) => {
+    setSaved(knowledge);
+    const next = rowsFromEntries(knowledge.entries);
     nextKey.current = next.length;
     setRows(next);
-    setGuidance(guide.guidance ?? "");
-    setVoices(guide.voices ?? "");
+    setStyle(knowledge.style ?? "");
   }, []);
 
   const load = useCallback(() => {
     setError(null);
-    void projectGuide().then(show).catch((reason: unknown) => setError(normalizeCommandError(reason)));
+    void projectKnowledge().then(show).catch((reason: unknown) => setError(normalizeCommandError(reason)));
   }, [show]);
 
   useEffect(() => {
@@ -66,14 +66,12 @@ export const ProjectGuideDialog = memo(function ProjectGuideDialog({ open, initi
   }, [initialTab, load, open]);
 
   const problems = useMemo(() => rowProblems(rows), [rows]);
-  const glossaryDirty = saved !== null && rowsChanged(rows, saved.entries);
-  const guidanceDirty = saved !== null && guidance !== (saved.guidance ?? "");
-  const guidanceBytes = useMemo(() => new TextEncoder().encode(guidance).length, [guidance]);
-  const voicesDirty = saved !== null && voices !== (saved.voices ?? "");
-  const voicesBytes = useMemo(() => new TextEncoder().encode(voices).length, [voices]);
+  const termsDirty = saved !== null && rowsChanged(rows, saved.entries);
+  const styleDirty = saved !== null && style !== (saved.style ?? "");
+  const styleBytes = useMemo(() => new TextEncoder().encode(style).length, [style]);
   const filtered = useMemo(() => filterRows(rows, query), [query, rows]);
 
-  const run = async (operation: () => Promise<ProjectGuideDto>) => {
+  const run = async (operation: () => Promise<ProjectKnowledgeDto>) => {
     setBusy(true);
     setError(null);
     try {
@@ -85,10 +83,10 @@ export const ProjectGuideDialog = memo(function ProjectGuideDialog({ open, initi
     }
   };
 
-  const saveGlossary = () => {
+  const saveTerms = () => {
     if (!saved) return;
-    const write = () => void run(() => saveProjectGlossary(saved.glossaryText, inputsFromRows(rows)));
-    if (saved.glossaryError && saved.glossaryText !== null) {
+    const write = () => void run(() => saveKnowledgeTerms(saved.termsText, inputsFromRows(rows)));
+    if (saved.termsError && saved.termsText !== null) {
       setConfirm({ message: t("guide.glossary.replaceBroken"), confirmLabel: t("guide.save"), run: write });
     } else if (saved.diagnostics.length > 0) {
       setConfirm({ message: t("guide.glossary.dropExcluded", { count: saved.diagnostics.length }), confirmLabel: t("guide.save"), run: write });
@@ -97,28 +95,32 @@ export const ProjectGuideDialog = memo(function ProjectGuideDialog({ open, initi
     }
   };
 
-  const saveGuidance = () => {
+  const saveStyle = () => {
     if (!saved) return;
-    void run(() => saveProjectGuidance(saved.guidance, guidance));
+    void run(() => saveKnowledgeStyle(saved.style, style));
   };
 
-  const saveVoices = () => {
-    if (!saved) return;
-    void run(() => saveProjectVoices(saved.voices, voices));
+  // A term a person edits is one a person decided.
+  const update = (key: number, field: "term" | "translation" | "note" | "forbidden", value: string) => {
+    setRows((current) => current.map((row) => row.key === key ? { ...row, [field]: value, settled: true } : row));
   };
 
-  const update = (key: number, field: keyof Omit<GlossaryRow, "key">, value: string) => {
-    setRows((current) => current.map((row) => row.key === key ? { ...row, [field]: value } : row));
+  const setSettled = (key: number, settled: boolean) => {
+    setRows((current) => current.map((row) => row.key === key ? { ...row, settled } : row));
+  };
+
+  const setMatchCase = (key: number, matchCase: boolean) => {
+    setRows((current) => current.map((row) => row.key === key ? { ...row, matchCase, settled: true } : row));
   };
 
   const addRow = () => {
     const key = nextKey.current++;
     setQuery("");
-    setRows((current) => [...current, { key, term: "", translation: "", note: "", forbidden: "" }]);
+    setRows((current) => [...current, { key, term: "", translation: "", note: "", forbidden: "", settled: true, matchCase: false }]);
   };
 
   const close = (next: boolean) => {
-    if (next || !(glossaryDirty || guidanceDirty || voicesDirty)) { onOpenChange(next); return; }
+    if (next || !(termsDirty || styleDirty)) { onOpenChange(next); return; }
     setConfirm({ message: t("guide.discard"), run: () => onOpenChange(false) });
   };
 
@@ -134,9 +136,8 @@ export const ProjectGuideDialog = memo(function ProjectGuideDialog({ open, initi
               value={tab}
               onChange={setTab}
               options={[
-                { value: "glossary", label: glossaryDirty ? `${t("guide.tab.glossary")} •` : t("guide.tab.glossary") },
-                { value: "guidance", label: guidanceDirty ? `${t("guide.tab.guidance")} •` : t("guide.tab.guidance") },
-                { value: "voices", label: voicesDirty ? `${t("guide.tab.voices")} •` : t("guide.tab.voices") },
+                { value: "terms", label: termsDirty ? `${t("guide.tab.terms")} •` : t("guide.tab.terms") },
+                { value: "style", label: styleDirty ? `${t("guide.tab.style")} •` : t("guide.tab.style") },
               ]}
             />
             <Dialog.Close className="icon-button icon-button-ghost" aria-label={t("settings.closeLabel")}><UiIcon icon="x" size="sm" /></Dialog.Close>
@@ -146,10 +147,10 @@ export const ProjectGuideDialog = memo(function ProjectGuideDialog({ open, initi
 
           {saved === null ? (
             error ? null : <p className="muted">{t("common.loading")}</p>
-          ) : tab === "glossary" ? (
+          ) : tab === "terms" ? (
             <section className="guide-body">
-              <p className="field-hint">{t("guide.glossary.hint")}</p>
-              {saved.glossaryError ? <p className="ai-test-result failed"><UiIcon icon="circleAlert" size="xs" />{saved.glossaryError}</p> : null}
+              <p className="field-hint">{t("guide.terms.hint")}</p>
+              {saved.termsError ? <p className="ai-test-result failed"><UiIcon icon="circleAlert" size="xs" />{saved.termsError}</p> : null}
               {saved.diagnostics.length > 0 ? (
                 <details className="guide-diagnostics">
                   <summary>{t("guide.glossary.excluded", { count: saved.diagnostics.length })}</summary>
@@ -161,12 +162,14 @@ export const ProjectGuideDialog = memo(function ProjectGuideDialog({ open, initi
                 <span className="muted">{t("guide.glossary.count", { count: rows.length })}</span>
                 <button className="button button-secondary" type="button" disabled={busy} onClick={addRow}><UiIcon icon="plus" size="sm" />{t("guide.glossary.add")}</button>
               </div>
-              <div className="guide-table" role="table" aria-label={t("guide.tab.glossary")}>
+              <div className="guide-table" role="table" aria-label={t("guide.tab.terms")}>
                 <div className="guide-row guide-head" role="row">
                   <span role="columnheader">{t("guide.glossary.term")}</span>
                   <span role="columnheader">{t("guide.glossary.translation")}</span>
                   <span role="columnheader">{t("guide.glossary.note")}</span>
                   <span role="columnheader">{t("guide.glossary.forbidden")}</span>
+                  <span role="columnheader" title={t("guide.terms.matchCaseHint")}>{t("guide.terms.matchCase")}</span>
+                  <span role="columnheader" title={t("guide.terms.settledHint")}>{t("guide.terms.settled")}</span>
                   <span />
                 </div>
                 {filtered.slice(0, ROWS_SHOWN).map((row) => {
@@ -177,6 +180,8 @@ export const ProjectGuideDialog = memo(function ProjectGuideDialog({ open, initi
                       <input className="input" value={row.translation} aria-label={t("guide.glossary.translation")} onChange={(event) => update(row.key, "translation", event.target.value)} />
                       <input className="input" value={row.note} aria-label={t("guide.glossary.note")} onChange={(event) => update(row.key, "note", event.target.value)} />
                       <input className="input" value={row.forbidden} placeholder={t("guide.glossary.forbiddenHint")} aria-label={t("guide.glossary.forbidden")} onChange={(event) => update(row.key, "forbidden", event.target.value)} />
+                      <input type="checkbox" checked={row.matchCase} aria-label={t("guide.terms.matchCase")} title={t("guide.terms.matchCaseHint")} onChange={(event) => setMatchCase(row.key, event.target.checked)} />
+                      <input type="checkbox" checked={row.settled} aria-label={t("guide.terms.settled")} title={t("guide.terms.settledHint")} onChange={(event) => setSettled(row.key, event.target.checked)} />
                       <button className="icon-button icon-button-ghost" type="button" aria-label={t("guide.glossary.remove")} title={t("guide.glossary.remove")} onClick={() => setRows((current) => current.filter((candidate) => candidate.key !== row.key))}><UiIcon icon="trash" size="sm" /></button>
                     </div>
                   );
@@ -186,36 +191,19 @@ export const ProjectGuideDialog = memo(function ProjectGuideDialog({ open, initi
               </div>
               <div className="dialog-actions">
                 {problems.size > 0 ? <span className="guide-problems">{t("guide.glossary.problems", { count: problems.size })}</span> : null}
-                <button className="button button-ghost" type="button" disabled={busy || !glossaryDirty} onClick={() => show(saved)}>{t("guide.revert")}</button>
-                <button className="button button-primary" type="button" disabled={busy || !glossaryDirty || problems.size > 0} onClick={saveGlossary}>{t("guide.save")}</button>
-              </div>
-            </section>
-          ) : tab === "voices" ? (
-            <section className="guide-body">
-              <p className="field-hint">{t("guide.voices.hint")}</p>
-              {saved.voicesError ? <p className="ai-test-result failed"><UiIcon icon="circleAlert" size="xs" />{saved.voicesError}</p> : null}
-              {saved.voiceDiagnostics.length > 0 ? (
-                <details className="guide-diagnostics">
-                  <summary>{t("guide.voices.ignored", { count: saved.voiceDiagnostics.length })}</summary>
-                  <ul>{saved.voiceDiagnostics.map((problem) => <li key={problem.line}>{t("guide.glossary.line", { line: problem.line })}: {problem.message}</li>)}</ul>
-                </details>
-              ) : null}
-              <textarea className="input guide-guidance" value={voices} spellCheck placeholder={t("guide.voices.placeholder")} aria-label={t("guide.tab.voices")} onChange={(event) => setVoices(event.target.value)} />
-              <div className="dialog-actions">
-                <span className={voicesBytes > VOICES_LIMIT ? "guide-problems" : "muted"}>{t("guide.voices.size", { kib: (voicesBytes / 1024).toFixed(1) })}</span>
-                <button className="button button-ghost" type="button" disabled={busy || !voicesDirty} onClick={() => setVoices(saved.voices ?? "")}>{t("guide.revert")}</button>
-                <button className="button button-primary" type="button" disabled={busy || !voicesDirty || voicesBytes > VOICES_LIMIT} onClick={saveVoices}>{t("guide.save")}</button>
+                <button className="button button-ghost" type="button" disabled={busy || !termsDirty} onClick={() => show(saved)}>{t("guide.revert")}</button>
+                <button className="button button-primary" type="button" disabled={busy || !termsDirty || problems.size > 0} onClick={saveTerms}>{t("guide.save")}</button>
               </div>
             </section>
           ) : (
             <section className="guide-body">
-              <p className="field-hint">{t("guide.guidance.hint")}</p>
-              {saved.guidanceError ? <p className="ai-test-result failed"><UiIcon icon="circleAlert" size="xs" />{saved.guidanceError}</p> : null}
-              <textarea className="input guide-guidance" value={guidance} spellCheck placeholder={t("guide.guidance.placeholder")} aria-label={t("guide.tab.guidance")} onChange={(event) => setGuidance(event.target.value)} />
+              <p className="field-hint">{t("guide.style.hint")}</p>
+              {saved.styleError ? <p className="ai-test-result failed"><UiIcon icon="circleAlert" size="xs" />{saved.styleError}</p> : null}
+              <textarea className="input guide-guidance" value={style} spellCheck placeholder={t("guide.style.placeholder")} aria-label={t("guide.tab.style")} onChange={(event) => setStyle(event.target.value)} />
               <div className="dialog-actions">
-                <span className={guidanceBytes > GUIDANCE_LIMIT ? "guide-problems" : "muted"}>{t("guide.guidance.size", { kib: (guidanceBytes / 1024).toFixed(1) })}</span>
-                <button className="button button-ghost" type="button" disabled={busy || !guidanceDirty} onClick={() => setGuidance(saved.guidance ?? "")}>{t("guide.revert")}</button>
-                <button className="button button-primary" type="button" disabled={busy || !guidanceDirty || guidanceBytes > GUIDANCE_LIMIT} onClick={saveGuidance}>{t("guide.save")}</button>
+                <span className={styleBytes > FILE_LIMIT ? "guide-problems" : "muted"}>{t("guide.size", { kib: (styleBytes / 1024).toFixed(1) })}</span>
+                <button className="button button-ghost" type="button" disabled={busy || !styleDirty} onClick={() => setStyle(saved.style ?? "")}>{t("guide.revert")}</button>
+                <button className="button button-primary" type="button" disabled={busy || !styleDirty || styleBytes > FILE_LIMIT} onClick={saveStyle}>{t("guide.save")}</button>
               </div>
             </section>
           )}

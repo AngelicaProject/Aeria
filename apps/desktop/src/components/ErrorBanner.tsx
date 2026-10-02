@@ -1,5 +1,6 @@
 import type { CommandError } from "../types";
 import { UiIcon } from "../ui/primitives/UiIcon";
+import { errorText } from "../issueText";
 import { useI18n } from "../ui/i18n";
 
 type ErrorBannerProps = {
@@ -16,7 +17,7 @@ export function ErrorBanner({ title, error, onDismiss, tone = "error" }: ErrorBa
       <UiIcon icon={tone === "error" ? "circleAlert" : "triangleAlert"} size="md" className="notice-icon" />
       <div className="notice-text">
         <strong>{title}</strong>
-        <p>{error.message}</p>
+        <p>{errorText(error, t)}</p>
         <code className="notice-code">{error.code}</code>
       </div>
       <button className="icon-button icon-button-ghost" type="button" aria-label={t("common.dismiss")} onClick={onDismiss}>

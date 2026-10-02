@@ -21,7 +21,7 @@ import type {
   ProjectOpenResultDto,
   RecentProjectAvailability,
   RecentProjectDto,
-  SourceUpdateReportDto,
+  SourceUpdateNeededDto,
 } from "../types";
 import { ErrorBanner } from "./ErrorBanner";
 import { gameInstallationFacts } from "./GameSettings";
@@ -54,7 +54,7 @@ type LauncherJob = "open" | "clone" | "create" | "update";
 
 /** A source update that opening requires and the user has not yet accepted. */
 type PendingSourceUpdate = {
-  report: SourceUpdateReportDto;
+  needed: SourceUpdateNeededDto;
   operation: LauncherErrorOperation;
   apply: () => Promise<ProjectOpenResultDto>;
 };
@@ -315,7 +315,7 @@ export function ProjectLauncher({ initialError, onProjectReady }: ProjectLaunche
         if (opened.status === "opened") {
           onProjectReady(opened.result);
         } else {
-          setPendingUpdate({ report: opened.report, operation, apply: () => updateProjectFromGame(root) });
+          setPendingUpdate({ needed: opened.update, operation, apply: () => updateProjectFromGame(root) });
         }
         return;
       }
@@ -340,7 +340,7 @@ export function ProjectLauncher({ initialError, onProjectReady }: ProjectLaunche
         onProjectReady(opened.result);
       } else {
         setPendingUpdate({
-          report: opened.report,
+          needed: opened.update,
           operation: "recentOpen",
           apply: async () => {
             const updated = await openRecentProject(project.id, true);
@@ -532,7 +532,7 @@ export function ProjectLauncher({ initialError, onProjectReady }: ProjectLaunche
       <SourceUpdateDialog
         open={pendingUpdate !== null}
         mode="confirm"
-        report={pendingUpdate?.report ?? null}
+        needed={pendingUpdate?.needed ?? null}
         busy={applyingUpdate}
         onConfirm={() => void handleApplySourceUpdate()}
         onClose={() => setPendingUpdate(null)}

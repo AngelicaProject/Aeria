@@ -6,15 +6,15 @@ members = [
   "crates/aeria-se",
   "crates/aeria-sqpack",
   "crates/aeria-source",
-  "crates/aeria-workspace",
-  "crates/aeria-rebase",
   "crates/aeria-search",
-  "crates/aeria-ai",
+  "crates/aeria-knowledge",
   "crates/aeria-git",
   "crates/aeria-export",
   "crates/aeria-fonts",
   "crates/aeria-publish",
   "crates/aeria-check",
+  "crates/aeria-po",
+  "crates/aeria-model",
   "apps/desktop/src-tauri",
 ]
 

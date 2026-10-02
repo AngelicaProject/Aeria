@@ -1,5 +1,5 @@
 import type { MessageKey } from "./i18n/translate";
-import type { DetachReason, SourceUpdateReportDto } from "./types";
+import type { SourceUpdateReportDto } from "./types";
 
 export type SourceUpdateFact = {
   key: MessageKey;
@@ -8,33 +8,14 @@ export type SourceUpdateFact = {
 };
 
 /**
- * Lists the non-empty outcome counts of a source update in reading order.
- * Units that need review or are detached are highlighted; nothing is hidden.
- * `applied` selects past-tense wording for an update that already ran.
+ * Lists the non-empty outcome counts of an update to a new game version in
+ * reading order. Translations to check again are highlighted.
  */
-export function sourceUpdateFacts(report: SourceUpdateReportDto, applied: boolean): SourceUpdateFact[] {
+export function sourceUpdateFacts(report: SourceUpdateReportDto): SourceUpdateFact[] {
   const facts: SourceUpdateFact[] = [
-    { key: "sourceUpdate.fact.unchanged", count: report.unchanged, tone: "neutral" },
-    { key: "sourceUpdate.fact.sourceChanged", count: report.sourceChanged, tone: "attention" },
-    { key: "sourceUpdate.fact.rowMoved", count: report.rowMoved, tone: "neutral" },
-    { key: "sourceUpdate.fact.columnMapped", count: report.columnMapped, tone: "neutral" },
-    { key: "sourceUpdate.fact.reattached", count: report.reattached, tone: "neutral" },
-    {
-      key: applied ? "sourceUpdate.fact.wereDetached" : "sourceUpdate.fact.newlyDetached",
-      count: report.newlyDetached,
-      tone: "attention",
-    },
-    { key: "sourceUpdate.fact.stillDetached", count: report.detached - report.newlyDetached, tone: "neutral" },
+    { key: "sourceUpdate.fact.fuzzy", count: report.fuzzy, tone: "attention" },
+    { key: "sourceUpdate.fact.obsolete", count: report.obsolete, tone: "attention" },
+    { key: "sourceUpdate.fact.files", count: report.files, tone: "neutral" },
   ];
   return facts.filter((fact) => fact.count > 0);
 }
-
-export const detachReasonLabels: Readonly<Record<DetachReason, MessageKey>> = {
-  sheetRemoved: "sourceUpdate.reason.sheetRemoved",
-  sheetUnavailable: "sourceUpdate.reason.sheetUnavailable",
-  rowRemoved: "sourceUpdate.reason.rowRemoved",
-  cellRemoved: "sourceUpdate.reason.cellRemoved",
-  columnUnresolved: "sourceUpdate.reason.columnUnresolved",
-  notTranslatable: "sourceUpdate.reason.notTranslatable",
-  bindingConflict: "sourceUpdate.reason.bindingConflict",
-};

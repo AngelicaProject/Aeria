@@ -2,9 +2,10 @@
 # repository.
 #
 # Rebuilds harmonia/feed-v1.json on GitHub Pages from the feed-entry.json
-# assets of this repository's harmonia/<sequence> releases, which Aeria
-# publishes. The workflow needs no signing keys, and pack files are never
-# copied to Pages. Set Settings -> Pages -> Source to "GitHub Actions".
+# assets of this repository's harmonia/<version> releases, which Aeria
+# publishes. The feed lists the newest release of each channel. The workflow
+# needs no signing keys, and pack files are never copied to Pages. Set
+# Settings -> Pages -> Source to "GitHub Actions".
 #
 # The feed is built and deployed only from the default branch. A release
 # event runs with the release tag as its ref, which the github-pages
@@ -93,7 +94,7 @@ jobs:
           while True:
               releases = json.loads(get(f"{api}/repos/{repository}/releases?per_page=100&page={page}"))
               for release in releases:
-                  match = re.fullmatch(r"harmonia/([1-9][0-9]*)", release["tag_name"])
+                  match = re.fullmatch(r"harmonia/([0-9]{4}\.[0-9]{2}\.[0-9]{2}\.[0-9]{4})", release["tag_name"])
                   if release["draft"] or not match:
                       continue
                   assets = [a for a in release["assets"] if a["name"] == "feed-entry.json"]
@@ -101,8 +102,8 @@ jobs:
                       print(f"::warning::{release['tag_name']} has no feed-entry.json; skipped")
                       continue
                   entry = json.loads(get(assets[0]["url"], "application/octet-stream").decode("utf-8"))
-                  if entry.get("sequence") != int(match.group(1)):
-                      raise SystemExit(f"{release['tag_name']}: feed-entry.json has another sequence")
+                  if entry.get("version") != match.group(1):
+                      raise SystemExit(f"{release['tag_name']}: feed-entry.json has another version")
                   if entry.get("channel") not in ("stable", "testing"):
                       raise SystemExit(f"{release['tag_name']}: unknown channel")
                   entries.append(entry)
@@ -110,21 +111,20 @@ jobs:
                   break
               page += 1
 
-          sequences = [entry["sequence"] for entry in entries]
-          if len(sequences) != len(set(sequences)):
-              raise SystemExit("two releases have the same sequence")
-          entries.sort(key=lambda entry: entry["sequence"], reverse=True)
+          versions = [entry["version"] for entry in entries]
+          if len(versions) != len(set(versions)):
+              raise SystemExit("two releases have the same version")
+          # Versions have fixed widths, so text order is version order.
+          entries.sort(key=lambda entry: entry["version"], reverse=True)
           kept = []
           for channel in ("stable", "testing"):
-              kept += [entry for entry in entries if entry["channel"] == channel][:10]
-          kept.sort(key=lambda entry: entry["sequence"], reverse=True)
+              kept += [entry for entry in entries if entry["channel"] == channel][:1]
+          kept.sort(key=lambda entry: entry["version"], reverse=True)
 
           feed = {
               "format": "harmonia-feed",
               "version": 1,
-              "packId": settings["packId"],
               "title": settings["title"],
-              "homepage": f"{os.environ['GITHUB_SERVER_URL']}/{repository}",
               "publisherKeyFingerprint": settings.get("signingKeyFingerprint"),
               "releases": kept,
           }

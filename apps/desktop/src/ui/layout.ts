@@ -71,9 +71,9 @@ export const initialWorkbenchLayout: WorkbenchLayoutState = {
     },
     rightDock: {
       id: "rightDock",
-      panelIds: ["ai", "git"],
+      panelIds: ["git"],
       documentIds: [],
-      activeTabId: "ai",
+      activeTabId: "git",
       visible: true,
       size: 340,
       minSize: 260,

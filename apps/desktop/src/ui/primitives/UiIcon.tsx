@@ -4,6 +4,7 @@ import {
   ArrowRight,
   ArrowUp,
   ArrowUpRight,
+  BookX,
   Check,
   ChevronDown,
   ChevronRight,
@@ -66,6 +67,12 @@ import {
   Users,
   X,
   type LucideIcon,
+  ALargeSmall,
+  CaseSensitive,
+  Regex,
+  Replace,
+  ReplaceAll,
+  WholeWord,
 } from "lucide-react";
 
 export type UiIconSize = "xs" | "sm" | "md" | "lg" | "xl";
@@ -84,6 +91,8 @@ const ICONS = {
   arrowRight: ArrowRight,
   arrowUp: ArrowUp,
   arrowUpRight: ArrowUpRight,
+  bookX: BookX,
+  caseSensitive: CaseSensitive,
   check: Check,
   chevronDown: ChevronDown,
   chevronRight: ChevronRight,
@@ -131,8 +140,12 @@ const ICONS = {
   panelLeft: PanelLeft,
   panelRight: PanelRight,
   play: Play,
+  preserveCase: ALargeSmall,
   plus: Plus,
   refreshCw: RefreshCw,
+  regex: Regex,
+  replace: Replace,
+  replaceAll: ReplaceAll,
   save: Save,
   search: Search,
   settings: Settings,
@@ -144,6 +157,7 @@ const ICONS = {
   undo: Undo2,
   user: User,
   users: Users,
+  wholeWord: WholeWord,
   x: X,
 } satisfies Record<string, LucideIcon>;
 

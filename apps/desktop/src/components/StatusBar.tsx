@@ -13,8 +13,9 @@ type StatusBarProps = {
   selectedBinding: SourceBinding | null;
   dirty: boolean;
   projectProgress: { translated: number; total: number } | null;
-  detachedCount: number;
-  onShowDetached: () => void;
+  /** Translations in the project whose source changed since they were written. */
+  fuzzyCount: number;
+  onShowFuzzy: () => void;
 };
 
 function shortenPath(path: string): string {
@@ -28,7 +29,7 @@ function formatPercent(share: number, locale: string): string {
   return (share * 100).toLocaleString(locale, { minimumFractionDigits: digits, maximumFractionDigits: digits });
 }
 
-export function StatusBar({ sheetName, rowCount, loading, repositoryRoot, sourceLanguage, gameVersion, selectedBinding, dirty, projectProgress, detachedCount, onShowDetached }: StatusBarProps) {
+export function StatusBar({ sheetName, rowCount, loading, repositoryRoot, sourceLanguage, gameVersion, selectedBinding, dirty, projectProgress, fuzzyCount, onShowFuzzy }: StatusBarProps) {
   const { t, locale } = useI18n();
   const selection = selectedBinding
     ? t("common.cellLocation", { sheet: selectedBinding.sheetName, row: String(selectedBinding.rowId), subrow: String(selectedBinding.subrowId), column: String(selectedBinding.columnIndex) })
@@ -47,9 +48,9 @@ export function StatusBar({ sheetName, rowCount, loading, repositoryRoot, source
           {t("status.translated", { percent: formatPercent(share, locale) })}
         </span>
       ) : null}
-      {detachedCount > 0 ? (
-        <button className="status-item status-button status-attention" type="button" title={t("status.showDetached")} onClick={onShowDetached}>
-          <UiIcon icon="triangleAlert" size="xs" />{t("status.detached", { count: detachedCount })}
+      {fuzzyCount > 0 ? (
+        <button className="status-item status-button status-attention" type="button" title={t("status.showFuzzy")} onClick={onShowFuzzy}>
+          <UiIcon icon="triangleAlert" size="xs" />{t("status.fuzzy", { count: fuzzyCount })}
         </button>
       ) : null}
       <span className="status-item" title={t("status.sourceLanguage")}><UiIcon icon="languages" size="xs" />{sourceLanguage.toUpperCase()}</span>

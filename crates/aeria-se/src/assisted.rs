@@ -10,12 +10,17 @@
 //!   `<num $n1>` or `<string $gs1>`, game data references such as `<sheet …>`,
 //!   icons, sounds, constructs Aeria does not understand, and raw bytes. They
 //!   may move and repeat, and the translation adds none the source lacks;
-//! - the source's formatting stays, as many times as in the source, in any
-//!   order;
+//! - formatting (`<i>`, `<b>`, colors) may be added, dropped, and moved, as
+//!   the official localizations do; what it opens it closes as the source
+//!   does, so no color or style runs past the string;
 //! - conditions such as `<if>`, `<switch>`, and `<if-gender>` may be added,
 //!   dropped, and restructured, as long as they test only values the source
 //!   uses or globals whose meaning is established (`catalog::GLOBALS`);
-//! - line breaks, spaces, and text transforms such as `<capitalize>` are free;
+//! - line breaks and spaces are free;
+//! - letter case transforms such as `<capitalize>` may be added or dropped,
+//!   and the model is told that game data inside one shows in that case
+//!   only through it: a name the game stores in lower case stays lower case
+//!   without it;
 //! - a speaker name (see [`crate::speaker`]) stays exactly when the source has
 //!   one.
 
@@ -23,7 +28,7 @@ use std::collections::HashSet;
 use std::fmt::Write as _;
 
 use crate::bytes::Expr;
-use crate::catalog::{self, MacroSpec, NULLARY, PARAMETERS, Role, SemanticFamily};
+use crate::catalog::{self, Close, Form, MacroSpec, NULLARY, PARAMETERS, Role, SemanticFamily};
 use crate::semantic::family;
 use crate::speaker::{SPEAKER_CLOSE, SPEAKER_OPEN, speaker_name};
 use crate::syntax::{
@@ -56,12 +61,16 @@ impl StructureError {
 pub enum ConstructRule {
     /// Game data: it stays, and may move or repeat.
     Keep,
-    /// Formatting: it stays as often as in the source, in any order.
+    /// Formatting: it may be added, dropped, or moved; what it opens is
+    /// closed as in the source.
     Formatting,
     /// A condition: it may be reworded, restructured, added, or dropped.
     Condition,
-    /// Layout or a text transform: it may be added or dropped.
+    /// Layout: it may be added or dropped.
     Free,
+    /// A letter case transform: it may be added or dropped, but game data
+    /// inside it shows in that case only through it.
+    LetterCase,
 }
 
 /// One construct of a source string, explained for the model.
@@ -85,11 +94,16 @@ impl Construct {
         }
         let rule = match self.rule {
             ConstructRule::Keep => "game data: keep it; it may move or repeat",
-            ConstructRule::Formatting => "formatting: keep it as often as the source has it",
+            ConstructRule::Formatting => {
+                "formatting: may be added, dropped, or moved; close what you open, as the source does"
+            }
             ConstructRule::Condition => {
                 "condition: may be reworded, restructured, added, or dropped"
             }
             ConstructRule::Free => "may be added or dropped",
+            ConstructRule::LetterCase => {
+                "letter case: game data inside it, such as a name the game stores in lower case, shows in this case only through it, so keep a case transform around game data, with <capitalize> in place of <title-case> where your language capitalizes only the first word; around text you write it may be dropped"
+            }
         };
         format!("{spelling} — {} ({rule})", self.description)
     }
@@ -106,12 +120,12 @@ fn rule(syntax: &MacroSyntax) -> ConstructRule {
         SemanticFamily::LayoutTextualControl if FREE_LAYOUT.contains(&spec.name) => {
             ConstructRule::Free
         }
-        // `<capitalize>…</capitalize>` only changes its text; `<string $gs1>`
-        // shows a value.
+        // `<capitalize>…</capitalize>` only changes the case of its text;
+        // `<string $gs1>` shows a value.
         SemanticFamily::TranslatableText
             if (0..syntax.args.len()).all(|index| spec.is_translatable_arg(index)) =>
         {
-            ConstructRule::Free
+            ConstructRule::LetterCase
         }
         _ => ConstructRule::Keep,
     }
@@ -305,11 +319,47 @@ fn shape(syntax: &MacroSyntax) -> Shape {
     }
 }
 
+/// A formatting tag of a string, in string order.
+struct Mark {
+    code: u8,
+    name: &'static str,
+    /// It closes what a tag of its macro opened: `</i>`, `</ui-color>`.
+    close: bool,
+}
+
+/// Whether a formatting macro is the closing tag of its pair.
+fn closes(syntax: &MacroSyntax) -> bool {
+    let Some(MacroSpec {
+        form: Form::Pair { close, .. },
+        ..
+    }) = syntax.spec
+    else {
+        return false;
+    };
+    match (close, syntax.args.first().map(|arg| &arg.kind)) {
+        (Close::Int(value), Some(ExprKind::Int(found))) => found == value,
+        (Close::StackColor, Some(ExprKind::Nullary(0xEC))) => true,
+        _ => false,
+    }
+}
+
+/// How far a string's tags of one macro stand open at its end, and the
+/// lowest they reach on the way (below zero when it closes what an earlier
+/// string opened).
+fn balance(marks: &[Mark], code: u8) -> (i64, i64) {
+    let (mut depth, mut lowest) = (0_i64, 0_i64);
+    for mark in marks.iter().filter(|mark| mark.code == code) {
+        depth += if mark.close { -1 } else { 1 };
+        lowest = lowest.min(depth);
+    }
+    (depth, lowest)
+}
+
 /// What the policy compares in one string.
 #[derive(Default)]
 struct Facts<'a> {
     data: Vec<(Shape, &'a str)>,
-    formatting: Vec<(Shape, &'a str)>,
+    formatting: Vec<Mark>,
     /// Conditions, with the parameters their own arguments test.
     conditions: Vec<(&'a str, Vec<(u8, u32)>)>,
     /// Every parameter the string uses, as `(type byte, index)`.
@@ -335,9 +385,13 @@ fn collect<'a>(document: &'a MacroString, nodes: &'a [SyntaxNode], facts: &mut F
                 facts.parameters.extend(tested.iter().copied());
                 match rule(syntax) {
                     ConstructRule::Keep => facts.data.push((shape(syntax), spelling)),
-                    ConstructRule::Formatting => facts.formatting.push((shape(syntax), spelling)),
+                    ConstructRule::Formatting => facts.formatting.push(Mark {
+                        code: syntax.code,
+                        name: syntax.spec.map_or("formatting", |spec| spec.name),
+                        close: closes(syntax),
+                    }),
                     ConstructRule::Condition => facts.conditions.push((spelling, tested)),
-                    ConstructRule::Free => {}
+                    ConstructRule::Free | ConstructRule::LetterCase => {}
                 }
                 // Game data inside a kept construct is part of its shape;
                 // anything else nested is compared on its own.
@@ -447,32 +501,11 @@ pub fn check_assisted_structure(source: &str, target: &str) -> Result<(), Vec<St
             )));
         }
     }
-    let count = |facts: &Facts<'_>, shape: &Shape| {
-        facts
-            .formatting
-            .iter()
-            .filter(|(candidate, _)| candidate == shape)
-            .count()
-    };
-    for (index, (shape, spelling)) in source_facts
-        .formatting
-        .iter()
-        .chain(&target_facts.formatting)
-        .enumerate()
-    {
-        let earlier = source_facts
-            .formatting
-            .iter()
-            .chain(&target_facts.formatting)
-            .take(index)
-            .any(|(candidate, _)| candidate == shape);
-        let (expected, found) = (count(&source_facts, shape), count(&target_facts, shape));
-        if !earlier && expected != found {
-            errors.push(StructureError::new(format!(
-                "{spelling} appears {expected}× in the source and {found}× in the translation; keep the source's formatting, in any order"
-            )));
-        }
-    }
+    check_formatting(
+        &source_facts.formatting,
+        &target_facts.formatting,
+        &mut errors,
+    );
     for (spelling, tested) in &target_facts.conditions {
         for (kind, index) in tested {
             if !source_facts.parameters.contains(&(*kind, *index))
@@ -489,6 +522,39 @@ pub fn check_assisted_structure(source: &str, target: &str) -> Result<(), Vec<St
         Ok(())
     } else {
         Err(errors)
+    }
+}
+
+/// Formatting may be added, dropped, or moved, but a translation leaves each
+/// macro's tags no more open at its end than the source does (it may close
+/// what a source forgot to close), and closes no more than the source closes
+/// of what came before it.
+fn check_formatting(source: &[Mark], target: &[Mark], errors: &mut Vec<StructureError>) {
+    let mut seen: Vec<u8> = Vec::new();
+    for mark in source.iter().chain(target) {
+        if seen.contains(&mark.code) {
+            continue;
+        }
+        seen.push(mark.code);
+        let (expected, lowest) = balance(source, mark.code);
+        let (found, reached) = balance(target, mark.code);
+        let name = mark.name;
+        // Between closing everything and leaving open, or closing early,
+        // exactly what the source does.
+        let (fewest, most) = (expected.min(0), expected.max(0));
+        if found > most {
+            errors.push(StructureError::new(format!(
+                "every <{name}> of the translation needs its </{name}> after it; formatting may be added, dropped, or moved, but nothing it opens may stay open"
+            )));
+        } else if found < fewest {
+            errors.push(StructureError::new(format!(
+                "the translation has a </{name}> without its <{name}>; close only what it opens"
+            )));
+        } else if reached < lowest.min(found) {
+            errors.push(StructureError::new(format!(
+                "a </{name}> of the translation comes before the <{name}> it closes; put each closing tag after its opening tag"
+            )));
+        }
     }
 }
 

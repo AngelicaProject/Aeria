@@ -1,15 +1,14 @@
 //! Collecting a project's translations from a synthetic game.
 
+use std::path::Path;
 use std::sync::Arc;
 
-use aeria_core::ReviewState;
 use aeria_export::{
-    Channel, ContentPolicy, ExportError, PackManifest, Publisher, StringEncoder, collect_project,
-    pack_source, source_guard, write_pack,
+    Channel, ExportError, PackManifest, StringEncoder, Team, collect_project, pack_game,
+    source_guard, write_pack,
 };
-use aeria_source::{GameSource, SheetLookup, SourceLanguage};
+use aeria_source::{GameSource, SourceLanguage};
 use aeria_sqpack::testing::{FakeGame, TextSheet};
-use aeria_workspace::Workspace;
 use tempfile::TempDir;
 
 // Plain text encodes to its UTF-8 bytes.
@@ -66,38 +65,43 @@ fn sheet() -> TextSheet {
         .row(42, &[(0, "One")])
 }
 
-fn workspace(source: &GameSource, review_seven: bool) -> Workspace {
-    let SheetLookup::Present(sheet) = source.sheet("Synthetic").expect("sheet") else {
-        panic!("sheet");
+/// A project for `source` with row 42 translated, row 7 translated and
+/// marked fuzzy when `fuzzy_seven`, and the other string untranslated.
+fn project(source: &GameSource, fuzzy_seven: bool) -> TempDir {
+    let folder = tempfile::tempdir().expect("project");
+    aeria_po::create(folder.path(), source, "ru", 1).expect("create");
+    let path = folder.path().join("po/Synthetic.po");
+    let text = std::fs::read_to_string(&path).expect("file");
+    let seven = if fuzzy_seven {
+        "#, fuzzy\nmsgctxt \"Synthetic:7:0:0\"\nmsgid \"Two\"\nmsgstr \"Два\""
+    } else {
+        "msgctxt \"Synthetic:7:0:0\"\nmsgid \"Two\"\nmsgstr \"Два\""
     };
-    let mut workspace = Workspace::for_source(source, "ru").expect("workspace");
-    workspace
-        .create_unit(sheet.facts(42, 0, 0).expect("facts"), "Раз")
-        .expect("unit");
-    let seven = workspace
-        .create_unit(sheet.facts(7, 0, 0).expect("facts"), "Два")
-        .expect("unit");
-    if review_seven {
-        workspace
-            .update_review_state(seven, ReviewState::Reviewed)
-            .expect("review");
-    }
-    workspace
+    let text = text
+        .replace(
+            "msgctxt \"Synthetic:7:0:0\"\nmsgid \"Two\"\nmsgstr \"\"",
+            seven,
+        )
+        .replace(
+            "msgctxt \"Synthetic:42:0:0\"\nmsgid \"One\"\nmsgstr \"\"",
+            "msgctxt \"Synthetic:42:0:0\"\nmsgid \"One\"\nmsgstr \"Раз\"",
+        );
+    std::fs::write(&path, text).expect("write");
+    folder
+}
+
+fn root(folder: &TempDir) -> &Path {
+    folder.path()
 }
 
 #[test]
-fn the_reviewed_policy_exports_reviewed_units_with_the_games_layout_and_guard() {
+fn translations_are_exported_with_the_games_layout_and_guard_and_fuzzy_ones_are_not() {
     let game = game(&sheet());
-    let workspace = workspace(&game.source, true);
-    let export = collect_project(
-        &workspace,
-        &game.source,
-        ContentPolicy::Reviewed,
-        &mut encoder(),
-    )
-    .expect("export");
+    let folder = project(&game.source, true);
+    let export = collect_project(root(&folder), &game.source, &mut encoder()).expect("export");
     assert_eq!(export.report.exported, 1);
-    assert_eq!(export.report.skipped_unreviewed, 1);
+    assert_eq!(export.report.skipped_fuzzy, 1);
+    assert_eq!(export.report.skipped_untranslated, 1);
     let sheet = &export.sheets[0];
     assert_eq!(sheet.name, "Synthetic");
     let layout: Vec<_> = sheet
@@ -107,60 +111,54 @@ fn the_reviewed_policy_exports_reviewed_units_with_the_games_layout_and_guard() 
         .collect();
     assert_eq!(layout, [(0, 0), (2, 8)], "every String column of the game");
     assert_eq!(sheet.cells.len(), 1);
-    assert_eq!(sheet.cells[0].row_id, 7);
-    assert_eq!(sheet.cells[0].text, "Два".as_bytes());
-    assert_eq!(sheet.cells[0].source_guard, source_guard(b"Two"));
+    assert_eq!(sheet.cells[0].row_id, 42);
+    assert_eq!(sheet.cells[0].text, "Раз".as_bytes());
+    assert_eq!(sheet.cells[0].source_guard, source_guard(b"One"));
 }
 
 #[test]
 fn a_collected_project_writes_a_pack_for_the_games_version() {
     let game = game(&sheet());
-    let workspace = workspace(&game.source, false);
-    let export = collect_project(&workspace, &game.source, ContentPolicy::All, &mut encoder())
-        .expect("export");
+    let folder = project(&game.source, false);
+    let export = collect_project(root(&folder), &game.source, &mut encoder()).expect("export");
     assert_eq!(export.report.exported, 2);
-    let source = pack_source(&game.source);
-    assert_eq!(source.language, "en");
-    assert_eq!(source.game_version, "2026.09.15.0000.0000");
+    let game_facts = pack_game(&game.source);
+    assert_eq!(game_facts.language, "en");
+    assert_eq!(game_facts.version, "2026.09.15.0000.0000");
     let manifest = PackManifest {
-        pack_id: "synthetic".to_owned(),
         title: "Synthetic".to_owned(),
-        publisher: Publisher {
+        team: Team {
             name: "Tests".to_owned(),
             url: None,
         },
+        authors: Vec::new(),
         license: None,
-        sequence: 1,
-        version: "1".to_owned(),
+        version: "2026.10.01.0001".parse().expect("version"),
         channel: Channel::Testing,
-        target_language: "ru".to_owned(),
-        source,
-        content_policy: ContentPolicy::All,
-        project_commit: "0".repeat(40),
-        exporter_aeria: "0.1.0".to_owned(),
+        language: "ru".to_owned(),
+        game: game_facts,
+        aeria: "0.1.0".to_owned(),
+        commit: "0".repeat(40),
         min_harmonia: "0.1.0".to_owned(),
     };
     let pack = write_pack(&manifest, export.sheets, None, None).expect("pack");
     assert_eq!(pack.counts.cells, 2);
-    assert_eq!(pack.counts.reviewed_cells, 0);
 }
 
 #[test]
-fn a_unit_that_no_longer_describes_the_game_fails_the_export() {
+fn a_translation_whose_source_changed_in_the_game_fails_the_export() {
     let old = game(&sheet());
-    let workspace = workspace(&old.source, true);
+    let folder = project(&old.source, false);
     let patched = game(
         &TextSheet::new(3, &[0, 2])
             .row(7, &[(0, "Two, revised"), (2, "Other")])
             .row(42, &[(0, "One")]),
     );
-    let result = collect_project(
-        &workspace,
-        &patched.source,
-        ContentPolicy::All,
-        &mut encoder(),
+    let result = collect_project(root(&folder), &patched.source, &mut encoder());
+    assert!(
+        matches!(&result, Err(ExportError::Project(message)) if message.contains("Synthetic:7:0:0")),
+        "{result:?}"
     );
-    assert!(matches!(result, Err(ExportError::Cell { row_id: 7, .. })));
 }
 
 #[test]
@@ -173,15 +171,15 @@ fn a_failed_encoding_or_a_short_encoder_fails_the_export() {
     }
 
     let game = game(&sheet());
-    let workspace = workspace(&game.source, true);
+    let folder = project(&game.source, false);
     let mut rejecting = FakeEncoder {
         calls: 0,
         reject: Some("Два"),
     };
-    let result = collect_project(&workspace, &game.source, ContentPolicy::All, &mut rejecting);
+    let result = collect_project(root(&folder), &game.source, &mut rejecting);
     assert!(matches!(result, Err(ExportError::Cell { row_id: 7, .. })));
     assert_eq!(rejecting.calls, 1);
 
-    let result = collect_project(&workspace, &game.source, ContentPolicy::All, &mut Short);
+    let result = collect_project(root(&folder), &game.source, &mut Short);
     assert!(matches!(result, Err(ExportError::Encoder(_))));
 }

@@ -7,36 +7,30 @@ Pages at <https://angelicaproject.github.io/Aeria/>.
 
 - `site/index.html` is the English page and `site/ru/index.html` the Russian
   one. Both carry the same content; change them together. There is no build
-  step and no external fonts or libraries.
-- `site/style.css` is shared by both pages. It uses the system sans-serif
-  font (monospace only for tags) and flat colors on a warm light
-  background, regardless of the system theme.
-- `site/lang.js` remembers the language a visitor picks with the switch in
-  the masthead. Until they pick one, the English page sends browsers whose
-  language is Russian to `ru/`.
-- The page describes Aeria plainly, as a community tool for fan
-  translations in any language; it is not written as product marketing.
-  Angelica, the translation agent, is the main feature and has the first
-  section after the introduction. Describe only what is implemented (see
-  [`../architecture/ai.md`](../architecture/ai.md#angelica)), not the
-  proposals in `ai-agent.md`.
-- The string specimen shows an English source line translated in several
-  fan projects (Russian, Spanish, Portuguese), none of which the game ships.
-- `site/downloads.js` fills the download block with direct links to the
-  installer and portable archive of the current stable and nightly releases
-  (see [`releases.md`](./releases.md#distribution)), with their version,
-  date, and size. It reads `releases.json`, which the Pages workflow writes;
-  without it, as in a local preview, it asks the GitHub API. If both fail,
-  the buttons keep linking to the release pages. A channel without a release
-  is shown as such, and without a stable release the nightly button becomes
-  the primary one.
-- The Harmonia section gives players short installation steps. They follow
-  the Installing and Using it sections of the
-  [Harmonia README](https://github.com/AngelicaProject/Harmonia#installing),
-  including its custom repository address; update the steps when that README
-  changes. `site/copy.js` handles the button that copies the address.
-- `site/icon.png` and `site/favicon.png` are copies of
-  `apps/desktop/src-tauri/icons/128x128@2x.png` and `32x32.png`. Copy them
+  step, and nothing is loaded from other sites except the GitHub API
+  (below).
+- The page is a minimal single column: a headline, one paragraph on what
+  Aeria does, the download button with its release line, five one- or two-sentence
+  points whose subject is Aeria, the game, or the project,
+  one line for players with a link to Harmonia, and a footer with project
+  links and the trademark notice. It describes Aeria plainly, as a community
+  tool for fan translations in any language, holds only what a visitor can
+  use, describes only what is implemented, and leaves out how machine
+  translation is provided.
+- `site/style.css` is shared by both pages: the system font, black on white,
+  and white on black when the system prefers a dark theme.
+- `site/lang.js` remembers the language a visitor picks in the header. Until
+  they pick one, the English page sends browsers whose language is Russian
+  to `ru/`.
+- `site/downloads.js` points the download button at the installer of the
+  current stable release, or of the nightly release while there is no stable
+  one, and writes its version, date, and size under the button; the portable
+  archive and the nightly build are links below it (see
+  [`releases.md`](./releases.md#distribution)). It reads `releases.json`,
+  which the Pages workflow writes; without it, as in a local preview, it asks
+  the GitHub API. If both fail, the links keep pointing at the release pages.
+- `site/icon.png` (the link preview image) and `site/favicon.png` are copies
+  of `apps/desktop/src-tauri/icons/128x128@2x.png` and `32x32.png`. Copy them
   again when the application icon changes.
 
 The page describes the product as documented in

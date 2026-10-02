@@ -15,10 +15,10 @@ test("dock layout moves a singleton panel between regions", () => {
 });
 
 test("dock layout supports floating and restoring a panel", () => {
-  const floating = reduceDockLayout(initialDockLayout, { type: "float", panelId: "ai" });
-  assert.equal(floating.placements.find((placement) => placement.panelId === "ai")?.region, "floating");
-  const restored = reduceDockLayout(floating, { type: "restore", panelId: "ai", region: "right" });
-  assert.equal(restored.placements.find((placement) => placement.panelId === "ai")?.region, "right");
+  const floating = reduceDockLayout(initialDockLayout, { type: "float", panelId: "git" });
+  assert.equal(floating.placements.find((placement) => placement.panelId === "git")?.region, "floating");
+  const restored = reduceDockLayout(floating, { type: "restore", panelId: "git", region: "right" });
+  assert.equal(restored.placements.find((placement) => placement.panelId === "git")?.region, "right");
 });
 
 test("dock layout serializes and rejects malformed state", () => {

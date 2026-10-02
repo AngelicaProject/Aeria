@@ -79,7 +79,7 @@ fn calls(log: &Mutex<Vec<Recorded>>) -> Vec<String> {
 fn draft(base: &str, id: u32) -> String {
     json!({
         "id": id,
-        "tag_name": "harmonia/7",
+        "tag_name": "harmonia/2026.10.01.0007",
         "draft": true,
         "upload_url": format!("{base}/uploads/repos/owner/ru/releases/{id}/assets{{?name,label}}"),
     })
@@ -95,14 +95,14 @@ fn repository() -> GitHubRepository {
 
 fn request() -> ReleaseRequest {
     ReleaseRequest {
-        sequence: 7,
+        version: "2026.10.01.0007".parse().expect("version"),
         commit: "a".repeat(40),
         name: "Russian 2026.09.25".to_owned(),
         body: "Notes".to_owned(),
         prerelease: false,
         assets: vec![
             ReleaseAsset {
-                name: "ru-main-7.hpk.br".to_owned(),
+                name: "pack-2026.10.01.0007.hpk.br".to_owned(),
                 content_type: "application/octet-stream",
                 bytes: vec![1, 2, 3],
             },
@@ -131,8 +131,8 @@ fn release_is_drafted_filled_and_then_published() {
             200,
             json!({
                 "id": 5,
-                "tag_name": "harmonia/7",
-                "html_url": "https://github.com/owner/ru/releases/tag/harmonia/7",
+                "tag_name": "harmonia/2026.10.01.0007",
+                "html_url": "https://github.com/owner/ru/releases/tag/harmonia/2026.10.01.0007",
             })
             .to_string(),
         ),
@@ -144,13 +144,13 @@ fn release_is_drafted_filled_and_then_published() {
         .expect("published");
     assert_eq!(
         published.html_url,
-        "https://github.com/owner/ru/releases/tag/harmonia/7"
+        "https://github.com/owner/ru/releases/tag/harmonia/2026.10.01.0007"
     );
     assert_eq!(
         calls(&log),
         [
             "POST /repos/owner/ru/releases",
-            "POST /uploads/repos/owner/ru/releases/5/assets?name=ru-main-7.hpk.br",
+            "POST /uploads/repos/owner/ru/releases/5/assets?name=pack-2026.10.01.0007.hpk.br",
             "POST /uploads/repos/owner/ru/releases/5/assets?name=feed-entry.json",
             "PATCH /repos/owner/ru/releases/5",
         ]
@@ -161,7 +161,7 @@ fn release_is_drafted_filled_and_then_published() {
             .all(|call| call.authorization == "Bearer token-1")
     );
     let created: Value = serde_json::from_slice(&log[0].body).expect("json");
-    assert_eq!(created["tag_name"], "harmonia/7");
+    assert_eq!(created["tag_name"], "harmonia/2026.10.01.0007");
     assert_eq!(created["target_commitish"], "a".repeat(40));
     assert_eq!(created["draft"], true);
     assert_eq!(log[1].body, [1, 2, 3]);
@@ -201,7 +201,7 @@ fn upload_urls_off_github_are_refused_before_sending_the_token() {
             201,
             json!({
                 "id": 3,
-                "tag_name": "harmonia/7",
+                "tag_name": "harmonia/2026.10.01.0007",
                 "upload_url": "https://evil.example/assets{?name}",
             })
             .to_string(),
@@ -229,11 +229,11 @@ fn pack_releases_are_read_from_every_page() {
         let releases: Vec<Value> = if target.ends_with("page=1") {
             (0..99)
                 .map(|index| json!({ "id": index, "tag_name": format!("v{index}") }))
-                .chain([json!({ "id": 100, "tag_name": "harmonia/3" })])
+                .chain([json!({ "id": 100, "tag_name": "harmonia/2026.09.30.0003" })])
                 .collect()
         } else {
             vec![
-                json!({ "id": 101, "tag_name": "harmonia/12", "draft": true }),
+                json!({ "id": 101, "tag_name": "harmonia/2026.10.01.0012", "draft": true }),
                 json!({ "id": 102, "tag_name": "harmonia/x" }),
             ]
         };
@@ -243,9 +243,15 @@ fn pack_releases_are_read_from_every_page() {
     let releases = runtime()
         .block_on(client.pack_releases(&repository(), "token-1"))
         .expect("releases");
-    let found: Vec<(u64, bool)> = releases
+    let found: Vec<(String, bool)> = releases
         .iter()
-        .map(|release| (release.sequence, release.draft))
+        .map(|release| (release.version.to_string(), release.draft))
         .collect();
-    assert_eq!(found, [(12, true), (3, false)]);
+    assert_eq!(
+        found,
+        [
+            ("2026.10.01.0012".to_owned(), true),
+            ("2026.09.30.0003".to_owned(), false)
+        ]
+    );
 }

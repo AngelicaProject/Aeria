@@ -2,7 +2,7 @@
 
 Aeria helps communities create, maintain, and review translations for FINAL FANTASY XIV.
 
-Aeria brings source management, structured game text editing, translation assistance, review, collaboration, game-update migration, and pack export into one desktop application. Each project represents one target language and can be maintained by one person or by a large community.
+Aeria brings source management, structured game text editing, machine translation, review, collaboration, game-update migration, and pack export into one desktop application. Each project represents one target language and can be maintained by one person or by a large community.
 
 ## Project status
 
@@ -12,10 +12,10 @@ Aeria is under active development. The repository currently establishes the appl
 
 The project is a Rust and TypeScript monorepo:
 
-- Rust implements source access, structured string handling, workspace persistence, rebase, search, Git integration, translation assistance, and export.
+- Rust implements source access, structured string handling, the project's PO files and game updates, search, Git integration, machine translation, and export.
 - Tauri provides the desktop application boundary.
 - React, TypeScript, and Vite implement the user interface.
-- SQLite is used for rebuildable local indexes, caches, and resumable local job state.
+- SQLite is used for rebuildable local indexes.
 - Git stores project history and enables collaboration.
 
 Start with:

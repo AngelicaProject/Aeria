@@ -6,18 +6,19 @@
 //! `docs/architecture/export.md`.
 
 use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use aeria_export::{
-    BuiltPack, Channel, ContentPolicy, ExportError, ExportReport, FeedDownload, PACK_SETTINGS_FILE,
-    PackManifest, PackSettings, Publisher, SeStringEncoder, collect_project,
-    compress_for_transport, feed_entry, pack_source, write_file_atomically, write_pack_with_fonts,
+    BuiltPack, Channel, ExportError, ExportReport, FeedDownload, PACK_SETTINGS_FILE, PackManifest,
+    PackSettings, PackVersion, ReleaseDate, SeStringEncoder, Team, collect_project,
+    compress_for_transport, feed_entry, pack_game, write_file_atomically, write_pack_with_fonts,
 };
 use aeria_fonts::{FontSection, FontSettings};
 use aeria_git::{GitExecutable, GitRepository, HostCredential};
 use aeria_publish::{
     GITHUB_HOST, GitHubClient, GitHubRepository, KeyError, KeyringSigningKeyStore, PublishError,
     RELEASE_TAG_PREFIX, ReleaseAsset, ReleaseRequest, SigningKeyStore, SigningSecret,
-    WorkflowState, feed_workflow_state, install_feed_workflow, pack_asset_name,
+    WorkflowState, feed_workflow_state, install_feed_workflow, pack_asset_name, tag_version,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -44,15 +45,17 @@ pub struct ExportOverviewDto {
     /// The GitHub repository of `origin`, when it is one.
     pub github: Option<GitHubTargetDto>,
     pub workflow: WorkflowStateDto,
-    /// The main branch on GitHub (as of the last fetch) has the workflow
+    /// The default branch on GitHub (as of the last fetch) has the workflow
     /// this Aeria installs. Release events run the workflow from there, so
     /// without it published releases never reach the feed.
     pub workflow_on_github: bool,
-    /// The main branch the workflow must reach.
+    /// The default branch the workflow must reach: the one Git last recorded
+    /// for `origin` (`origin/HEAD`), else `main`.
     pub main_branch: Option<String>,
-    /// Highest `harmonia/<n>` release tag in the local repository: the last
-    /// published release Git knows of without asking GitHub.
-    pub latest_release_tag: Option<u64>,
+    /// The version the next release gets from today's date and the
+    /// `harmonia/<version>` tags Git knows of; publishing may raise it when
+    /// GitHub has newer releases.
+    pub next_version: String,
     /// `aeria-fonts.json` exists, so the pack will carry font glyphs.
     pub fonts_configured: bool,
 }
@@ -60,10 +63,11 @@ pub struct ExportOverviewDto {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PackSettingsDto {
-    pub pack_id: String,
     pub title: String,
-    pub publisher_name: String,
-    pub publisher_url: Option<String>,
+    pub team_name: String,
+    pub team_url: Option<String>,
+    #[serde(default)]
+    pub authors: Vec<String>,
     pub license: Option<String>,
     pub min_harmonia: String,
     /// Only reported; changed through the key commands.
@@ -128,10 +132,7 @@ pub enum WorkflowStateDto {
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ReleaseInputDto {
-    pub sequence: u64,
-    pub version: String,
     pub channel: ChannelDto,
-    pub content_policy: ContentPolicyDto,
     #[serde(default)]
     pub changelog: Option<String>,
 }
@@ -143,20 +144,14 @@ pub enum ChannelDto {
     Testing,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub enum ContentPolicyDto {
-    Reviewed,
-    All,
-}
-
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ExportReportDto {
     pub exported: u64,
-    pub skipped_detached: u64,
     pub skipped_untranslated: u64,
-    pub skipped_unreviewed: u64,
+    /// Translations left out because their source changed since they were
+    /// written.
+    pub skipped_fuzzy: u64,
     pub sheets: u64,
     pub strings: u64,
     pub pack_hash: String,
@@ -170,6 +165,7 @@ pub struct ExportReportDto {
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LocalExportDto {
+    pub version: String,
     pub path: String,
     pub report: ExportReportDto,
 }
@@ -177,7 +173,7 @@ pub struct LocalExportDto {
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PublishedReleaseDto {
-    pub sequence: u64,
+    pub version: String,
     pub release_url: String,
     pub feed_url: String,
     pub report: ExportReportDto,
@@ -227,10 +223,10 @@ impl From<PublishError> for CommandError {
 impl From<&PackSettings> for PackSettingsDto {
     fn from(settings: &PackSettings) -> Self {
         Self {
-            pack_id: settings.pack_id.clone(),
             title: settings.title.clone(),
-            publisher_name: settings.publisher.name.clone(),
-            publisher_url: settings.publisher.url.clone(),
+            team_name: settings.team.name.clone(),
+            team_url: settings.team.url.clone(),
+            authors: settings.authors.clone(),
             license: settings.license.clone(),
             min_harmonia: settings.min_harmonia.clone(),
             signing_key_fingerprint: settings.signing_key_fingerprint.clone(),
@@ -245,9 +241,7 @@ fn optional(value: Option<String>) -> Option<String> {
 }
 
 fn project_root(state: &DesktopState) -> CommandResult<PathBuf> {
-    let project = state.lock_project()?;
-    let session = project.as_ref().ok_or_else(CommandError::no_project)?;
-    Ok(session.repository_root().to_owned())
+    Ok(state.session()?.root().to_owned())
 }
 
 fn load_settings(root: &Path) -> CommandResult<PackSettings> {
@@ -270,14 +264,13 @@ fn github_target(repository: &GitRepository) -> Option<GitHubRepository> {
 
 fn overview(state: &DesktopState, store: &dyn SigningKeyStore) -> CommandResult<ExportOverviewDto> {
     let (root, source_language, game_version, target_language) = {
-        let project = state.lock_project()?;
-        let session = project.as_ref().ok_or_else(CommandError::no_project)?;
-        let metadata = session.workspace().metadata();
+        let session = state.session()?;
+        let settings = session.settings();
         (
-            session.repository_root().to_owned(),
-            metadata.source_language().to_owned(),
-            metadata.game_version().to_string(),
-            metadata.target_language().to_owned(),
+            session.root().to_owned(),
+            settings.source_language,
+            session.source().version().to_string(),
+            settings.target_language,
         )
     };
     let (settings, settings_error) = match PackSettings::load(&root) {
@@ -286,7 +279,8 @@ fn overview(state: &DesktopState, store: &dyn SigningKeyStore) -> CommandResult<
     };
     let key = match settings
         .as_ref()
-        .map(|settings| store.get(&settings.pack_id))
+        .and_then(|settings| settings.signing_key_fingerprint.as_deref())
+        .map(|fingerprint| store.get(fingerprint))
     {
         None | Some(Ok(None)) => SigningKeyDto {
             state: KeyStateDto::Missing,
@@ -335,9 +329,11 @@ fn overview(state: &DesktopState, store: &dyn SigningKeyStore) -> CommandResult<
         Ok(WorkflowState::Different) => WorkflowStateDto::Different,
         Ok(WorkflowState::Missing) | Err(_) => WorkflowStateDto::Missing,
     };
+    // GitHub runs the feed workflow from the repository's default branch.
     let main_branch = repository
         .as_ref()
-        .and_then(|repository| repository.main_branch().ok().flatten());
+        .and_then(|repository| repository.remote_default_branch().ok().flatten())
+        .or_else(|| Some("main".to_owned()));
     let workflow_on_github = match (&repository, &main_branch) {
         (Some(repository), Some(main)) => repository
             .remote_file(&format!("{ORIGIN}/{main}"), aeria_git::FEED_WORKFLOW_FILE)
@@ -349,16 +345,12 @@ fn overview(state: &DesktopState, store: &dyn SigningKeyStore) -> CommandResult<
             }),
         _ => false,
     };
-    let latest_release_tag = repository
-        .as_ref()
-        .and_then(|repository| repository.tags_with_prefix(RELEASE_TAG_PREFIX).ok())
-        .and_then(|tags| {
-            tags.iter()
-                .filter_map(|tag| tag.strip_prefix(RELEASE_TAG_PREFIX)?.parse::<u64>().ok())
-                .max()
-        });
+    let next_version = next_version(
+        today(),
+        [repository.as_ref().and_then(latest_tagged_version)],
+    )?;
     Ok(ExportOverviewDto {
-        latest_release_tag,
+        next_version: next_version.to_string(),
         fonts_configured: root.join(aeria_fonts::FONT_SETTINGS_FILE).exists(),
         settings: settings.as_ref().map(PackSettingsDto::from),
         settings_error,
@@ -401,28 +393,79 @@ fn has_export_changes(status: &aeria_git::RepositoryStatus) -> bool {
             .any(|file| file.path == PACK_SETTINGS_FILE || crate::fonts::is_font_path(&file.path))
 }
 
+/// Writes the settings. The key fingerprint is kept from the existing file.
 fn save_settings(root: &Path, input: PackSettingsDto) -> CommandResult<()> {
-    let existing = PackSettings::load(root).ok().flatten();
+    let signing_key_fingerprint =
+        PackSettings::load(root)?.and_then(|existing| existing.signing_key_fingerprint);
+    let mut authors: Vec<String> = Vec::new();
+    for author in input.authors {
+        let author = author.trim().to_owned();
+        if !author.is_empty() && !authors.contains(&author) {
+            authors.push(author);
+        }
+    }
     let settings = PackSettings {
-        pack_id: input.pack_id.trim().to_owned(),
         title: input.title.trim().to_owned(),
-        publisher: Publisher {
-            name: input.publisher_name.trim().to_owned(),
-            url: optional(input.publisher_url),
+        team: Team {
+            name: input.team_name.trim().to_owned(),
+            url: optional(input.team_url),
         },
+        authors,
         license: optional(input.license),
         min_harmonia: input.min_harmonia.trim().to_owned(),
-        // The key belongs to the pack identity; a new packId starts without one.
-        signing_key_fingerprint: existing
-            .filter(|existing| existing.pack_id == input.pack_id.trim())
-            .and_then(|existing| existing.signing_key_fingerprint),
+        signing_key_fingerprint,
     };
     settings.save(root)?;
     Ok(())
 }
 
-/// Stores `secret` as the pack's key and records its fingerprint in the
-/// settings when the project has none yet.
+fn today() -> ReleaseDate {
+    let seconds = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |elapsed| elapsed.as_secs());
+    ReleaseDate::from_unix_seconds(seconds)
+}
+
+/// The newest `harmonia/<version>` tag of the local repository.
+fn latest_tagged_version(repository: &GitRepository) -> Option<PackVersion> {
+    repository
+        .tags_with_prefix(RELEASE_TAG_PREFIX)
+        .ok()?
+        .iter()
+        .filter_map(|tag| tag_version(tag))
+        .max()
+}
+
+/// The version of the next release: after the newest of the known releases
+/// (local tags, GitHub), so versions never repeat or go back.
+fn next_version(
+    today: ReleaseDate,
+    known: impl IntoIterator<Item = Option<PackVersion>>,
+) -> CommandResult<PackVersion> {
+    let latest = known.into_iter().flatten().max();
+    PackVersion::next(today, latest)
+        .map_err(|error| export_error("exportInvalidRelease", error.to_string()))
+}
+
+/// `<title> <version>.hpk`, with characters file names cannot hold replaced.
+fn pack_file_name(title: &str, version: PackVersion) -> String {
+    let title: String = title
+        .chars()
+        .map(|c| {
+            if c.is_control() || r#"<>:"/\|?*"#.contains(c) {
+                '-'
+            } else {
+                c
+            }
+        })
+        .collect();
+    let title = title.trim().trim_end_matches('.');
+    format!("{title} {version}.hpk")
+}
+
+/// Stores `secret` as the project's key and records its fingerprint in the
+/// settings. Replacing a recorded key removes the old one from this
+/// computer.
 fn adopt_key(
     root: &Path,
     store: &dyn SigningKeyStore,
@@ -442,33 +485,34 @@ fn adopt_key(
         }
         _ => {}
     }
-    store.set(&settings.pack_id, secret)?;
-    if settings.signing_key_fingerprint.as_deref() != Some(fingerprint.as_str()) {
-        settings.signing_key_fingerprint = Some(fingerprint);
-        settings.save(root)?;
+    store.set(secret)?;
+    if let Some(previous) = settings
+        .signing_key_fingerprint
+        .replace(fingerprint.clone())
+        && previous != fingerprint
+    {
+        store.delete(&previous)?;
     }
+    settings.save(root)?;
     Ok(())
 }
 
-/// The key that signs this project's packs. It must be the key recorded in
-/// the settings.
+/// The key that signs this project's packs: the one the settings record.
 fn project_signer(
     settings: &PackSettings,
     store: &dyn SigningKeyStore,
 ) -> CommandResult<SigningSecret> {
-    let secret = store.get(&settings.pack_id)?.ok_or_else(|| {
+    let missing = || {
         export_error(
             "exportKeyMissing",
-            "no signing key for this pack is stored on this computer",
+            "the project's signing key is not stored on this computer",
         )
-    })?;
-    if settings.signing_key_fingerprint.as_deref() != Some(secret.fingerprint().as_str()) {
-        return Err(export_error(
-            "exportKeyMismatch",
-            "the signing key on this computer is not the key recorded in the pack settings",
-        ));
-    }
-    Ok(secret)
+    };
+    let fingerprint = settings
+        .signing_key_fingerprint
+        .as_deref()
+        .ok_or_else(missing)?;
+    store.get(fingerprint)?.ok_or_else(missing)
 }
 
 struct BuiltRelease {
@@ -483,16 +527,16 @@ struct BuiltRelease {
 fn build(
     app: &tauri::AppHandle,
     release: &ReleaseInputDto,
+    version: PackVersion,
     settings: &PackSettings,
     signer: Option<&SigningSecret>,
 ) -> CommandResult<BuiltRelease> {
-    let version = release.version.trim();
     let state = app.state::<DesktopState>();
-    // The project stays locked so the workspace cannot change between the
-    // commit check and the end of collection.
-    let project = state.lock_project()?;
-    let session = project.as_ref().ok_or_else(CommandError::no_project)?;
-    let status = GitRepository::open(session.repository_root(), state.git())?.status()?;
+    // Writes are held so the files cannot change between the commit check
+    // and the end of collection.
+    let session = state.session()?;
+    let writes = session.hold_writes();
+    let status = GitRepository::open(session.root(), state.git())?.status()?;
     if has_export_changes(&status) {
         return Err(export_error(
             "exportUncommitted",
@@ -513,34 +557,24 @@ fn build(
         ));
     }
     let manifest = PackManifest {
-        pack_id: settings.pack_id.clone(),
         title: settings.title.clone(),
-        publisher: settings.publisher.clone(),
+        team: settings.team.clone(),
+        authors: settings.authors.clone(),
         license: settings.license.clone(),
-        sequence: release.sequence,
-        version: version.to_owned(),
+        version,
         channel: match release.channel {
             ChannelDto::Stable => Channel::Stable,
             ChannelDto::Testing => Channel::Testing,
         },
-        target_language: session.workspace().metadata().target_language().to_owned(),
-        source: pack_source(session.source()),
-        content_policy: match release.content_policy {
-            ContentPolicyDto::Reviewed => ContentPolicy::Reviewed,
-            ContentPolicyDto::All => ContentPolicy::All,
-        },
-        project_commit: commit,
-        exporter_aeria: env!("CARGO_PKG_VERSION").to_owned(),
+        language: session.settings().target_language,
+        game: pack_game(session.source()),
+        aeria: env!("CARGO_PKG_VERSION").to_owned(),
+        commit,
         min_harmonia: settings.min_harmonia.clone(),
     };
-    let export = collect_project(
-        session.workspace(),
-        session.source(),
-        manifest.content_policy,
-        &mut SeStringEncoder,
-    )?;
-    let root = session.repository_root().to_owned();
-    drop(project);
+    let export = collect_project(session.root(), session.source(), &mut SeStringEncoder)?;
+    let root = session.root().to_owned();
+    drop(writes);
 
     // The font files are committed (checked above), so HEAD is what renders.
     let fonts = FontSettings::load(&root)
@@ -571,9 +605,8 @@ fn report_dto(built: &BuiltRelease) -> ExportReportDto {
     let report = &built.report;
     ExportReportDto {
         exported: report.exported,
-        skipped_detached: report.skipped_detached,
         skipped_untranslated: report.skipped_untranslated,
-        skipped_unreviewed: report.skipped_unreviewed,
+        skipped_fuzzy: report.skipped_fuzzy,
         sheets: built.pack.counts.sheets,
         strings: built.pack.counts.strings,
         pack_hash: built.pack.pack_hash_text(),
@@ -587,29 +620,6 @@ fn report_dto(built: &BuiltRelease) -> ExportReportDto {
             .map_or(0, |fonts| fonts.glyph_count() as u64),
         signed_by: built.signed_by.clone(),
     }
-}
-
-/// The number of a published release: the suggested one, raised above the
-/// latest GitHub release when local tags were behind (another maintainer
-/// published, or tags were not fetched). Release numbers never repeat.
-fn next_sequence(suggested: u64, latest_on_github: Option<u64>) -> u64 {
-    latest_on_github.map_or(suggested, |latest| suggested.max(latest + 1))
-}
-
-fn validate_release(release: &ReleaseInputDto) -> CommandResult<()> {
-    if release.sequence == 0 {
-        return Err(export_error(
-            "exportInvalidRelease",
-            "the release number must be positive",
-        ));
-    }
-    if release.version.trim().is_empty() {
-        return Err(export_error(
-            "exportInvalidRelease",
-            "the release version must not be empty",
-        ));
-    }
-    Ok(())
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -694,13 +704,8 @@ pub async fn export_import_key(
 pub async fn export_backup_key(app: tauri::AppHandle, path: String) -> CommandResult<()> {
     run_blocking(move || {
         let settings = load_settings(&project_root(&app.state::<DesktopState>())?)?;
-        let secret = KeyringSigningKeyStore
-            .get(&settings.pack_id)?
-            .ok_or_else(|| export_error("exportKeyMissing", "no signing key is stored"))?;
-        write_file_atomically(
-            Path::new(&path),
-            secret.to_backup(&settings.pack_id).as_bytes(),
-        )?;
+        let secret = project_signer(&settings, &KeyringSigningKeyStore)?;
+        write_file_atomically(Path::new(&path), secret.to_backup().as_bytes())?;
         Ok(())
     })
     .await
@@ -717,7 +722,9 @@ pub async fn export_remove_key(app: tauri::AppHandle) -> CommandResult<ExportOve
     run_blocking(move || {
         let state = app.state::<DesktopState>();
         let settings = load_settings(&project_root(&state)?)?;
-        KeyringSigningKeyStore.delete(&settings.pack_id)?;
+        if let Some(fingerprint) = &settings.signing_key_fingerprint {
+            KeyringSigningKeyStore.delete(fingerprint)?;
+        }
         overview(&state, &KeyringSigningKeyStore)
     })
     .await
@@ -740,8 +747,24 @@ pub async fn export_install_workflow(app: tauri::AppHandle) -> CommandResult<Exp
 }
 
 #[tauri::command(rename_all = "camelCase")]
-/// Builds a pack and writes it as `<packId>-<sequence>.hpk` into
-/// `directory`. Signing is optional for local exports.
+/// The names of the project's commit authors, most commits first, for the
+/// maintainer to choose the pack's authors from.
+///
+/// # Errors
+///
+/// Returns `noProjectOpen` or the Git error.
+pub async fn export_git_authors(app: tauri::AppHandle) -> CommandResult<Vec<String>> {
+    run_blocking(move || {
+        let state = app.state::<DesktopState>();
+        Ok(GitRepository::open(&project_root(&state)?, state.git())?.authors()?)
+    })
+    .await
+}
+
+#[tauri::command(rename_all = "camelCase")]
+/// Builds a pack and writes it as `<title> <version>.hpk` into
+/// `directory`. The version follows the local release tags; signing is
+/// optional for local exports.
 ///
 /// # Errors
 ///
@@ -752,21 +775,23 @@ pub async fn export_pack(
     directory: String,
     sign: bool,
 ) -> CommandResult<LocalExportDto> {
-    validate_release(&release)?;
     run_blocking(move || {
         let state = app.state::<DesktopState>();
         let _export = state.begin_activity(Activity::Export);
-        let settings = load_settings(&project_root(&state)?)?;
+        let root = project_root(&state)?;
+        let settings = load_settings(&root)?;
         let secret = if sign {
             Some(project_signer(&settings, &KeyringSigningKeyStore)?)
         } else {
             None
         };
-        let built = build(&app, &release, &settings, secret.as_ref())?;
-        let path =
-            Path::new(&directory).join(format!("{}-{}.hpk", settings.pack_id, release.sequence));
+        let tagged = latest_tagged_version(&GitRepository::open(&root, state.git())?);
+        let version = next_version(today(), [tagged])?;
+        let built = build(&app, &release, version, &settings, secret.as_ref())?;
+        let path = Path::new(&directory).join(pack_file_name(&settings.title, version));
         write_file_atomically(&path, &built.pack.bytes)?;
         Ok(LocalExportDto {
+            version: version.to_string(),
             path: path.to_string_lossy().into_owned(),
             report: report_dto(&built),
         })
@@ -831,21 +856,21 @@ fn publish_target(state: &DesktopState) -> CommandResult<PublishTarget> {
     })
 }
 
-async fn latest_sequence(
+async fn latest_published_version(
     client: &GitHubClient,
     target: &PublishTarget,
-) -> CommandResult<Option<u64>> {
+) -> CommandResult<Option<PackVersion>> {
     let releases = client
         .pack_releases(&target.repository, target.credential.expose())
         .await;
     settle_credential(&target.git, &target.root, &target.credential, &releases).await;
-    Ok(releases?.first().map(|release| release.sequence))
+    Ok(releases?.first().map(|release| release.version))
 }
 
 #[tauri::command(rename_all = "camelCase")]
 /// Builds, signs, and publishes a release on GitHub. The project must be
-/// committed and pushed. The release number is raised above the latest
-/// GitHub release when needed; the result reports the number used.
+/// committed and pushed. The version follows the newest release on GitHub
+/// and in the local tags; the result reports the version used.
 ///
 /// # Errors
 ///
@@ -854,15 +879,15 @@ pub async fn export_publish(
     app: tauri::AppHandle,
     release: ReleaseInputDto,
 ) -> CommandResult<PublishedReleaseDto> {
-    validate_release(&release)?;
     let export_app = app.clone();
     let export_state = export_app.state::<DesktopState>();
     let _export = export_state.begin_activity(Activity::Export);
     let session = app.clone();
-    let (target, settings, secret) = run_blocking(move || {
+    let (target, settings, secret, tagged) = run_blocking(move || {
         let state = session.state::<DesktopState>();
         let root = project_root(&state)?;
-        let status = GitRepository::open(&root, state.git())?.status()?;
+        let repository = GitRepository::open(&root, state.git())?;
+        let status = repository.status()?;
         if status.upstream.is_none() || status.ahead > 0 {
             return Err(export_error(
                 "exportNotPushed",
@@ -871,28 +896,27 @@ pub async fn export_publish(
         }
         let settings = load_settings(&root)?;
         let secret = project_signer(&settings, &KeyringSigningKeyStore)?;
-        Ok((publish_target(&state)?, settings, secret))
+        let tagged = latest_tagged_version(&repository);
+        Ok((publish_target(&state)?, settings, secret, tagged))
     })
     .await?;
 
     let client = GitHubClient::new()?;
-    let mut release = release;
-    release.sequence = next_sequence(release.sequence, latest_sequence(&client, &target).await?);
+    let published = latest_published_version(&client, &target).await?;
+    let version = next_version(today(), [tagged, published])?;
 
     let built = {
         let (release, settings) = (release.clone(), settings.clone());
-        run_blocking(move || build(&app, &release, &settings, Some(&secret))).await?
+        run_blocking(move || build(&app, &release, version, &settings, Some(&secret))).await?
     };
     let transport = compress_for_transport(&built.pack.bytes)?;
-    let asset = pack_asset_name(&settings.pack_id, release.sequence);
+    let asset = pack_asset_name(version);
     let changelog = optional(release.changelog.clone());
     let entry = feed_entry(
         &built.manifest,
         &built.pack,
         &FeedDownload {
-            url: target
-                .repository
-                .asset_download_url(release.sequence, &asset),
+            url: target.repository.asset_download_url(version, &asset),
             brotli: true,
             size: transport.len() as u64,
             sha256: Sha256::digest(&transport).into(),
@@ -901,8 +925,8 @@ pub async fn export_publish(
         changelog.as_deref(),
     );
     let request = ReleaseRequest {
-        sequence: release.sequence,
-        commit: built.manifest.project_commit.clone(),
+        version,
+        commit: built.manifest.commit.clone(),
         name: format!("{} {}", settings.title, built.manifest.version),
         body: changelog.unwrap_or_default(),
         prerelease: matches!(release.channel, ChannelDto::Testing),
@@ -924,7 +948,7 @@ pub async fn export_publish(
         .await;
     settle_credential(&target.git, &target.root, &target.credential, &published).await;
     Ok(PublishedReleaseDto {
-        sequence: release.sequence,
+        version: version.to_string(),
         release_url: published?.html_url,
         feed_url: target.repository.feed_url(),
         report: report_dto(&built),
@@ -939,12 +963,12 @@ mod tests {
 
     fn settings(root: &Path) -> PackSettings {
         let settings = PackSettings {
-            pack_id: "ru-main".to_owned(),
             title: "Russian".to_owned(),
-            publisher: Publisher {
+            team: Team {
                 name: "Team".to_owned(),
                 url: None,
             },
+            authors: Vec::new(),
             license: None,
             min_harmonia: "1.0.0".to_owned(),
             signing_key_fingerprint: None,
@@ -954,11 +978,38 @@ mod tests {
     }
 
     #[test]
-    fn published_numbers_never_repeat() {
-        assert_eq!(next_sequence(1, None), 1);
-        assert_eq!(next_sequence(5, Some(3)), 5);
-        assert_eq!(next_sequence(2, Some(7)), 8);
-        assert_eq!(next_sequence(8, Some(8)), 9);
+    fn versions_follow_the_newest_known_release() {
+        let today = ReleaseDate {
+            year: 2026,
+            month: 10,
+            day: 1,
+        };
+        let version = |text: &str| Some(text.parse::<PackVersion>().expect("version"));
+        let next =
+            |known: [Option<PackVersion>; 2]| next_version(today, known).expect("next").to_string();
+        assert_eq!(next([None, None]), "2026.10.01.0001");
+        assert_eq!(next([version("2026.09.30.0002"), None]), "2026.10.01.0001");
+        assert_eq!(
+            next([version("2026.10.01.0001"), version("2026.10.01.0003")]),
+            "2026.10.01.0004"
+        );
+        assert_eq!(
+            next([version("2026.10.01.0002"), version("2026.10.01.0001")]),
+            "2026.10.01.0003"
+        );
+    }
+
+    #[test]
+    fn pack_files_are_named_after_the_title() {
+        let version: PackVersion = "2026.10.01.0002".parse().expect("version");
+        assert_eq!(
+            pack_file_name("Русский перевод", version),
+            "Русский перевод 2026.10.01.0002.hpk"
+        );
+        assert_eq!(
+            pack_file_name("A/B: \"C\"?.", version),
+            "A-B- -C-- 2026.10.01.0002.hpk"
+        );
     }
 
     #[test]
@@ -988,39 +1039,41 @@ mod tests {
         let second = SigningSecret::generate().expect("key");
         let refused = adopt_key(temp.path(), &store, &second, false).expect_err("mismatch");
         assert_eq!(refused.code, "exportKeyMismatch");
-        assert_eq!(store.get("ru-main").expect("get"), Some(first.clone()));
+        assert_eq!(store.get(&second.fingerprint()).expect("get"), None);
 
         adopt_key(temp.path(), &store, &second, true).expect("replace");
-        assert_eq!(
-            load_settings(temp.path())
-                .expect("settings")
-                .signing_key_fingerprint,
-            Some(second.fingerprint())
-        );
+        let replaced = load_settings(temp.path()).expect("settings");
+        assert_eq!(replaced.signing_key_fingerprint, Some(second.fingerprint()));
+        assert_eq!(project_signer(&replaced, &store).expect("signer"), second);
+        assert_eq!(store.get(&first.fingerprint()).expect("get"), None);
     }
 
     #[test]
-    fn a_key_other_than_the_recorded_one_cannot_sign() {
+    fn only_the_recorded_key_signs() {
         let temp = tempfile::tempdir().expect("temp");
         let mut recorded = settings(temp.path());
         let store = MemorySigningKeyStore::default();
+        let key = SigningSecret::generate().expect("key");
+        store.set(&key).expect("set");
         assert_eq!(
-            project_signer(&recorded, &store).expect_err("missing").code,
+            project_signer(&recorded, &store)
+                .expect_err("none recorded")
+                .code,
             "exportKeyMissing"
         );
-        let key = SigningSecret::generate().expect("key");
-        store.set("ru-main", &key).expect("set");
         recorded.signing_key_fingerprint = Some("0".repeat(64));
         assert_eq!(
             project_signer(&recorded, &store)
-                .expect_err("mismatch")
+                .expect_err("another key")
                 .code,
-            "exportKeyMismatch"
+            "exportKeyMissing"
         );
+        recorded.signing_key_fingerprint = Some(key.fingerprint());
+        assert_eq!(project_signer(&recorded, &store).expect("signer"), key);
     }
 
     #[test]
-    fn saving_settings_keeps_the_key_of_the_same_pack_only() {
+    fn saving_settings_keeps_the_key() {
         let temp = tempfile::tempdir().expect("temp");
         let mut recorded = settings(temp.path());
         recorded.signing_key_fingerprint = Some("a".repeat(64));
@@ -1028,19 +1081,12 @@ mod tests {
         let mut input = PackSettingsDto::from(&recorded);
         input.title = " Russian translation ".to_owned();
         input.license = Some("  ".to_owned());
-        save_settings(temp.path(), input.clone()).expect("save");
+        input.authors = vec![" Анна ".to_owned(), String::new(), "Анна".to_owned()];
+        save_settings(temp.path(), input).expect("save");
         let saved = load_settings(temp.path()).expect("settings");
         assert_eq!(saved.title, "Russian translation");
         assert_eq!(saved.license, None);
+        assert_eq!(saved.authors, ["Анна"]);
         assert_eq!(saved.signing_key_fingerprint, Some("a".repeat(64)));
-
-        input.pack_id = "ru-other".to_owned();
-        save_settings(temp.path(), input).expect("save");
-        assert_eq!(
-            load_settings(temp.path())
-                .expect("settings")
-                .signing_key_fingerprint,
-            None
-        );
     }
 }

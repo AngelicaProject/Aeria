@@ -2,7 +2,7 @@ import { memo, useEffect, useMemo, useRef, useState, useSyncExternalStore, type 
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { bindingKey, domKey } from "../binding";
 import { emptyOccurrenceFilter, isOccurrenceFilterActive, occurrenceIndex, type OccurrenceFilter, type OccurrenceKindFilter, type OccurrenceStatusFilter, type TranslationOccurrenceView } from "../translationOccurrences";
-import type { SheetDialogueDto, SourceBinding, UnitChangeKind } from "../types";
+import type { ChangeMark, SheetDialogueDto, SourceBinding } from "../types";
 import { mayHaveScene } from "../dialogueScene";
 import { sheetDialogue } from "../ipc";
 import { Segmented } from "../ui/primitives/Segmented";
@@ -24,7 +24,7 @@ type TranslationListProps = {
   allOccurrences: readonly TranslationOccurrenceView[];
   loadedOccurrenceCount: number;
   /** Sheet-wide coverage from the Workspace, not just loaded rows. */
-  sheetProgress: { translated: number; reviewed: number; total: number } | null;
+  sheetProgress: { translated: number; fuzzy: number; total: number } | null;
   filter: OccurrenceFilter;
   onFilterChange: (filter: OccurrenceFilter) => void;
   selectedBinding: SourceBinding | null;
@@ -41,7 +41,7 @@ type TranslationListProps = {
   onSelect: (occurrence: TranslationOccurrenceView) => void;
   onNavigate: (direction: 1 | -1) => void;
   /** Uncommitted change kind per binding key, for Git markers. */
-  changedKinds: ReadonlyMap<string, UnitChangeKind>;
+  changedKinds: ReadonlyMap<string, ChangeMark>;
   /** Opens a string of another sheet, such as a quest's name. */
   onReveal: (binding: SourceBinding) => void;
   /** Opens another sheet, such as another version of a quest; with a cutscene file's path, at that cutscene. */
@@ -75,9 +75,8 @@ function useSheetDialogue(sheetName: string | null): SheetDialogueDto | null | u
 const statusOptions: ReadonlyArray<{ value: OccurrenceStatusFilter; label: MessageKey }> = [
   { value: "all", label: "list.all" },
   { value: "untranslated", label: "review.untranslated" },
-  { value: "draft", label: "review.draft" },
-  { value: "needsReview", label: "review.needsReview" },
-  { value: "reviewed", label: "review.reviewed" },
+  { value: "translated", label: "review.translated" },
+  { value: "fuzzy", label: "review.fuzzy" },
 ];
 
 /** A toggle pair: selecting the active kind again shows every kind. */
@@ -86,10 +85,9 @@ const kindOptions: ReadonlyArray<{ value: Exclude<OccurrenceKindFilter, "all">; 
   { value: "formatting", label: "list.formattingTag", title: "list.kind.formattingHint" },
 ];
 
-const changedLabels: Readonly<Record<UnitChangeKind, MessageKey>> = {
+const changedLabels: Readonly<Record<ChangeMark, MessageKey>> = {
   added: "list.changed.added",
   modified: "list.changed.modified",
-  removed: "list.changed.removed",
 };
 
 /** Subscribes to the streaming count on its own so the list does not re-render per page. */
@@ -184,7 +182,7 @@ export const TranslationList = memo(function TranslationList({
   }
 
   const translatedShare = sheetProgress && sheetProgress.total > 0 ? Math.min(1, sheetProgress.translated / sheetProgress.total) : 0;
-  const reviewedShare = sheetProgress && sheetProgress.total > 0 ? Math.min(1, sheetProgress.reviewed / sheetProgress.total) : 0;
+  const fuzzyShare = sheetProgress && sheetProgress.total > 0 ? Math.min(1, sheetProgress.fuzzy / sheetProgress.total) : 0;
 
   return (
     <section className="lens" aria-label={t("list.label")} aria-busy={loading}>
@@ -224,12 +222,12 @@ export const TranslationList = memo(function TranslationList({
         </div>
         <span className="spacer" />
         {sheetProgress ? (
-          <div className="lens-stats" title={t("list.stats", { translated: sheetProgress.translated, reviewed: sheetProgress.reviewed, total: sheetProgress.total })}>
+          <div className="lens-stats" title={t("list.stats", { translated: sheetProgress.translated, fuzzy: sheetProgress.fuzzy, total: sheetProgress.total })}>
             <span className="mono">{Math.floor(translatedShare * 100)}%</span>
             <span className="lens-stats-of">{formatNumber(sheetProgress.translated)} / {formatNumber(sheetProgress.total)}</span>
             <span className="meter" aria-hidden="true">
               <span className="meter-translated" style={{ width: `${translatedShare * 100}%` }} />
-              <span className="meter-reviewed" style={{ width: `${reviewedShare * 100}%` }} />
+              <span className="meter-fuzzy" style={{ width: `${fuzzyShare * 100}%` }} />
             </span>
           </div>
         ) : null}
@@ -331,7 +329,7 @@ export const TranslationList = memo(function TranslationList({
                   style={{ transform: `translateY(${item.start}px)`, height: item.size }}
                   onClick={() => { if (!disabled) onSelect(occurrence); }}
                 >
-                  <span className="lens-status"><ReviewDot state={occurrence.reviewState} /></span>
+                  <span className="lens-status"><ReviewDot state={occurrence.state} /></span>
                   <span className="lens-coord mono">{continuation ? "" : `${occurrence.binding.rowId}:${occurrence.binding.subrowId}`}</span>
                   <span className="lens-field mono">{t("common.column", { column: String(occurrence.binding.columnIndex) })}</span>
                   <span className="lens-text lens-source" title={occurrence.sourceMacro}>{occurrence.formattingOnly ? <span className="lens-tag" title={t("list.formattingHint")}>{t("list.formattingTag")}</span> : null}<MacroPreview text={occurrence.sourceMacro} empty="" /></span>

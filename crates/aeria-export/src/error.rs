@@ -18,6 +18,8 @@ pub enum ExportError {
         column_index: u32,
         reason: String,
     },
+    #[error("the project cannot be read: {0}")]
+    Project(String),
     #[error("pack exceeds format limits: {0}")]
     Limit(String),
     #[error("string encoder failed: {0}")]

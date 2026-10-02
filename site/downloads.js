@@ -1,7 +1,7 @@
-// Points the download buttons at the current stable and nightly builds.
-// The Pages workflow writes releases.json on every deploy; without it (a
-// local preview), the GitHub API is asked directly. If both fail, the
-// buttons keep linking to the release pages.
+// Points the download button at the current build: the stable release, or
+// the nightly one while there is no stable release. The Pages workflow writes
+// releases.json on every deploy; without it (a local preview), the GitHub API
+// is asked directly. If both fail, the links keep pointing at the release pages.
 const REPO = "AngelicaProject/Aeria";
 const snapshotUrl = new URL("releases.json", document.currentScript.src);
 
@@ -27,39 +27,24 @@ function findAsset(release, pattern) {
   return asset && asset.browser_download_url.startsWith(`https://github.com/${REPO}/releases/download/`) ? asset : null;
 }
 
-function render(row, release, strings) {
+// The installer, portable archive, version, and date of a release, or null without an installer.
+function build(release) {
   const installer = findAsset(release, /^Aeria_.+_x64-setup\.exe$/);
-  const portable = findAsset(release, /^Aeria_.+_x64-portable\.zip$/);
-  const version = row.querySelector(".ver");
-  if (!installer) {
-    row.classList.add("missing");
-    version.textContent = version.dataset.none || "";
-    return false;
-  }
-  const date = new Date(release.published_at).toLocaleDateString(document.documentElement.lang, {
-    day: "numeric",
-    month: "long",
-    year: "numeric",
-  });
-  version.textContent = `${installer.name.replace(/^Aeria_(.+)_x64-setup\.exe$/, "$1")} · ${date}`;
-  for (const [link, asset] of [
-    [row.querySelector('[data-asset="installer"]'), installer],
-    [row.querySelector('[data-asset="portable"]'), portable],
-  ]) {
-    if (!link) continue;
-    if (!asset) {
-      link.hidden = true;
-      continue;
-    }
-    link.href = asset.browser_download_url;
-    const size = link.querySelector(".size");
-    if (size) size.textContent = `${Math.round(asset.size / 1048576)} ${strings.mb}`;
-  }
-  return true;
+  if (!installer) return null;
+  return {
+    installer,
+    portable: findAsset(release, /^Aeria_.+_x64-portable\.zip$/),
+    version: installer.name.replace(/^Aeria_(.+)_x64-setup\.exe$/, "$1"),
+    date: new Date(release.published_at).toLocaleDateString(document.documentElement.lang, {
+      day: "numeric",
+      month: "long",
+      year: "numeric",
+    }),
+  };
 }
 
 (async () => {
-  const box = document.querySelector(".downloads");
+  const box = document.querySelector(".get");
   if (!box) return;
   let releases;
   try {
@@ -67,9 +52,23 @@ function render(row, release, strings) {
   } catch (e) {
     return;
   }
-  const strings = { mb: box.dataset.mb || "MB" };
-  const hasStable = render(box.querySelector('[data-channel="stable"]'), releases.stable, strings);
-  render(box.querySelector('[data-channel="nightly"]'), releases.nightly, strings);
-  // Without a stable release, the nightly build is the one to take.
-  if (!hasStable) box.querySelector('[data-channel="nightly"] .button')?.classList.remove("secondary");
+  const stable = build(releases.stable);
+  const nightly = build(releases.nightly);
+  const current = stable || nightly;
+  if (!current) return;
+  const link = (role) => box.querySelector(`[data-role="${role}"]`);
+  const mb = `${Math.round(current.installer.size / 1048576)} ${box.dataset.mb || "MB"}`;
+  link("installer").href = current.installer.browser_download_url;
+  const label = stable ? box.dataset.stable : box.dataset.nightly;
+  const facts = [`${label} ${current.version}`, current.date, mb];
+  if (!stable && box.dataset.unstable) facts.push(box.dataset.unstable);
+  box.querySelector(".ver").textContent = facts.join(" · ");
+  if (current.portable) link("portable").href = current.portable.browser_download_url;
+  else link("portable").hidden = true;
+  // The nightly link is for the build that is not the button's.
+  if (!stable) link("nightly").hidden = true;
+  else if (nightly) {
+    link("nightly").href = nightly.installer.browser_download_url;
+    link("nightly").title = `${nightly.version} · ${nightly.date}`;
+  }
 })();

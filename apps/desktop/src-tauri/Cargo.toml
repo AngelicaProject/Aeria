@@ -5,6 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
+default-run = "aeria"
 
 [lib]
 name = "aeria_desktop_lib"
@@ -18,18 +19,17 @@ path = "src/main.rs"
 tauri-build = { version = "2.6.3", features = [] }
 
 [dependencies]
-aeria-ai = { path = "../../../crates/aeria-ai" }
 aeria-core = { path = "../../../crates/aeria-core" }
 aeria-export = { path = "../../../crates/aeria-export" }
 aeria-fonts = { path = "../../../crates/aeria-fonts" }
 aeria-git = { path = "../../../crates/aeria-git" }
+aeria-knowledge = { path = "../../../crates/aeria-knowledge" }
 aeria-projects = { path = "../../../crates/aeria-projects" }
 aeria-publish = { path = "../../../crates/aeria-publish" }
-aeria-rebase = { path = "../../../crates/aeria-rebase" }
 aeria-se = { path = "../../../crates/aeria-se" }
-aeria-search = { path = "../../../crates/aeria-search" }
+aeria-po = { path = "../../../crates/aeria-po" }
+aeria-model = { path = "../../../crates/aeria-model" }
 aeria-source = { path = "../../../crates/aeria-source" }
-aeria-workspace = { path = "../../../crates/aeria-workspace" }
 serde = { version = "1.0", features = ["derive"] }
 semver = "1.0.28"
 serde_json = "1.0.151"

@@ -1,14 +1,10 @@
 import { useCallback, useEffect, useState } from "react";
 import {
   gitBranches,
-  gitDeleteBranch,
-  gitMergeDriver,
   gitOverview,
   gitRemoteBranches,
   gitRemoveRemote,
   gitSetIdentity,
-  gitSetMainBranch,
-  gitSetMergeDriver,
   gitSetRemote,
   gitSetUpstream,
   normalizeCommandError,
@@ -19,6 +15,7 @@ import { useI18n } from "../ui/i18n";
 import { Select } from "../ui/primitives/Select";
 import { UiIcon } from "../ui/primitives/UiIcon";
 import { ConfirmDialog } from "./ConfirmDialog";
+import { GitBranchDelete } from "./GitBranchDelete";
 
 const fileKindLabel: Record<GitFileKind, MessageKey> = {
   added: "git.file.added",
@@ -31,7 +28,7 @@ const fileKindLabel: Record<GitFileKind, MessageKey> = {
   conflicted: "git.file.conflicted",
 };
 
-const PROJECT_FILES = ["aeria-pack.json", "aeria-fonts.json", "aeria-glossary.csv", "aeria-guidance.md", "aeria-collaboration.json", ".gitattributes", ".github/workflows/harmonia-feed.yml"];
+const PROJECT_FILES = ["aeria-pack.json", "aeria-fonts.json", "aeria-glossary.csv", "aeria-guidance.md", ".gitattributes", ".github/workflows/harmonia-feed.yml"];
 
 /** Files a checkpoint does not commit: neither translations nor project files. */
 function isOtherFile(path: string): boolean {
@@ -147,27 +144,6 @@ export function UpstreamSetting() {
   );
 }
 
-/** The branch contributions are reviewed into. */
-export function MainBranchSetting() {
-  const { t } = useI18n();
-  const { overview, busy, run, feedback } = useRepository();
-  const [draft, setDraft] = useState<string | null>(null);
-  const collaboration = overview?.collaboration;
-  if (!overview?.repository || !collaboration) return feedback;
-  const value = draft ?? collaboration.configuredMainBranch ?? "";
-  return (
-    <div className="repository-setting">
-      {feedback}
-      {collaboration.error ? <p className="git-hint warn">{collaboration.error}</p> : null}
-      <p className="field-hint">{collaboration.configuredMainBranch ? t("repository.mainConfigured", { branch: collaboration.configuredMainBranch }) : collaboration.mainBranch ? t("repository.mainDetected", { branch: collaboration.mainBranch }) : t("repository.mainUnknown")}</p>
-      <form className="export-inline" onSubmit={(event) => { event.preventDefault(); void run("main", async () => { await gitSetMainBranch(value.trim() === "" ? null : value.trim()); setDraft(null); return t("repository.mainSaved"); }); }}>
-        <input className="input" value={value} placeholder={collaboration.mainBranch ?? "main"} aria-label={t("repository.mainBranch")} spellCheck={false} disabled={busy !== null} onChange={(event) => setDraft(event.target.value)} />
-        <button className="button button-secondary" type="submit" disabled={busy !== null || draft === null || collaboration.error !== null && value.trim() === ""}>{t("common.save")}</button>
-      </form>
-    </div>
-  );
-}
-
 /** The translator name commits are signed with. */
 export function IdentitySetting() {
   const { t } = useI18n();
@@ -206,46 +182,16 @@ export function OtherFilesSetting() {
   );
 }
 
-/** Aeria's per-string merge for command-line `git merge` and `git pull`. */
-export function MergeDriverSetting() {
-  const { t } = useI18n();
-  const { overview, busy, run, feedback } = useRepository();
-  const [enabled, setEnabled] = useState<boolean | null>(null);
-  useEffect(() => { void gitMergeDriver().then((state) => setEnabled(state.enabled)).catch(() => setEnabled(null)); }, [overview]);
-  if (!overview?.repository) return feedback;
-  return (
-    <div className="repository-setting">
-      {feedback}
-      <p className="field-hint">{t(enabled ? "repository.mergeDriverOn" : "repository.mergeDriverOff")}</p>
-      <div className="git-form-actions">
-        <button
-          className={enabled ? "button button-ghost" : "button button-primary"}
-          type="button"
-          disabled={busy !== null || enabled === null}
-          onClick={() => void run("mergeDriver", async () => {
-            const next = await gitSetMergeDriver(!enabled);
-            setEnabled(next.enabled);
-            return t(next.enabled ? "repository.mergeDriverEnabled" : "repository.mergeDriverDisabled");
-          })}
-        >
-          {t(enabled ? "repository.mergeDriverDisable" : "repository.mergeDriverEnable")}
-        </button>
-      </div>
-    </div>
-  );
-}
-
 /** Local branches other than the current one, deleted only on request. */
 export function BranchesSetting() {
   const { t } = useI18n();
   const { overview, busy, run, feedback } = useRepository();
   const [branches, setBranches] = useState<GitBranchDto[] | null>(null);
-  const [confirm, setConfirm] = useState<GitBranchDto | null>(null);
+  const [deleting, setDeleting] = useState<GitBranchDto | null>(null);
   const reload = useCallback(async () => setBranches(await gitBranches()), []);
   useEffect(() => { void reload().catch(() => setBranches([])); }, [reload]);
   if (!overview?.repository) return feedback;
-  const main = overview.collaboration?.mainBranch ?? null;
-  const others = (branches ?? []).filter((branch) => !branch.remote && !branch.current && branch.name !== main);
+  const others = (branches ?? []).filter((branch) => !branch.remote && !branch.current);
   return (
     <div className="repository-setting">
       {feedback}
@@ -254,20 +200,13 @@ export function BranchesSetting() {
           {others.map((branch) => (
             <li key={branch.name}>
               <code>{branch.name}</code>
-              <span className={branch.merged ? "chip" : "chip chip-warn"}>{t(branch.merged ? "repository.branchMerged" : "repository.branchUnmerged", { branch: main ?? "main" })}</span>
-              <button className="button button-ghost" type="button" disabled={busy !== null} onClick={() => setConfirm(branch)}>{t("repository.deleteBranch")}</button>
+              <span className={branch.lostCommits === 0 ? "chip" : "chip chip-warn"}>{branch.lostCommits === 0 ? t("repository.branchSafe") : t("repository.branchOnlyHere", { count: branch.lostCommits })}</span>
+              <button className="button button-ghost" type="button" disabled={busy !== null} onClick={() => setDeleting(branch)}>{t("repository.deleteBranch")}</button>
             </li>
           ))}
         </ul>
       )}
-      <ConfirmDialog
-        open={confirm !== null}
-        message={confirm ? t(confirm.merged ? "repository.deleteMergedConfirm" : "repository.deleteUnmergedConfirm", { name: confirm.name, branch: main ?? "main" }) : ""}
-        confirmLabel={t("repository.deleteBranch")}
-        cancelLabel={t("common.cancel")}
-        onKeepEditing={() => setConfirm(null)}
-        onDiscard={() => { const branch = confirm; setConfirm(null); if (branch) void run("delete", async () => { await gitDeleteBranch(branch.name, !branch.merged); await reload(); return t("repository.branchDeleted", { name: branch.name }); }); }}
-      />
+      <GitBranchDelete branch={deleting} onCancel={() => setDeleting(null)} onDeleted={reload} run={(label, action) => void run(label, action)} />
     </div>
   );
 }

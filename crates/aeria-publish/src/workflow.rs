@@ -86,7 +86,9 @@ mod tests {
         for needle in [
             "aeria-pack.json",
             "feed-entry.json",
-            "harmonia/([1-9][0-9]*)",
+            r"harmonia/([0-9]{4}\.[0-9]{2}\.[0-9]{2}\.[0-9]{4})",
+            "entry.get(\"version\")",
+            "[:1]",
             "site/harmonia",
             "feed-v1.json",
             "signingKeyFingerprint",

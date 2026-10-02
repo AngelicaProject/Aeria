@@ -1,9 +1,15 @@
 export type CommandError = {
   code: string;
   message: string;
+  /** The problems of a refused translation, to word in the interface language. */
+  issues?: IssueDto[];
 };
 
-export type ReviewState = "draft" | "reviewed" | "needsReview";
+/**
+ * What a string's entry says about it: `translated`, `fuzzy` (translated,
+ * but its source changed since), or `null` for untranslated.
+ */
+export type StringState = "translated" | "fuzzy";
 
 export type SourceBinding = {
   sheetName: string;
@@ -142,68 +148,43 @@ export type ProjectSummaryDto = {
   /** The game installation the project reads. */
   gamePath: string;
   sheets: ProjectSheetDto[];
-  /** Translations preserved without a current source occurrence. */
-  detachedUnitCount: number;
 };
 
-/** Workspace coverage for one sheet; sheets without translations are omitted. */
+/** How much of one sheet is translated; sheets without strings are omitted. */
 export type SheetProgressDto = {
   sheetName: string;
+  /** The sheet's strings in the project. */
+  strings: number;
   translated: number;
-  reviewed: number;
-  needsReview: number;
+  /** Translations whose source changed since they were written. */
+  fuzzy: number;
 };
 
 export type ProjectOpenResultDto = {
   project: ProjectSummaryDto;
   warning: CommandError | null;
-  /** Present when opening applied a source update. */
+  /** Present when opening updated the project to the installed game. */
   sourceUpdate: SourceUpdateReportDto | null;
 };
 
-/** Why a translation is preserved without a current source occurrence. */
-export type DetachReason =
-  | "sheetRemoved"
-  | "sheetUnavailable"
-  | "rowRemoved"
-  | "cellRemoved"
-  | "columnUnresolved"
-  | "notTranslatable"
-  | "bindingConflict";
-
-export type SheetLayoutUpdateDto = {
-  sheetName: string;
-  removed: boolean;
-  /** The sheet still exists in the game but cannot be read. */
-  unavailable: boolean;
-  mappedColumns: number;
-  unresolvedColumns: number;
+/** The game versions of a project whose files are for an older game version. */
+export type SourceUpdateNeededDto = {
+  previousGameVersion: string;
+  gameVersion: string;
 };
 
-/** Counts of a previewed or applied deterministic source update. */
+/** What updating a project to the installed game did. */
 export type SourceUpdateReportDto = {
   previousGameVersion: string;
   gameVersion: string;
-  unchanged: number;
-  sourceChanged: number;
-  detached: number;
-  newlyDetached: number;
-  reattached: number;
-  columnMapped: number;
-  rowMoved: number;
-  changedUnits: number;
-  sheetLayoutUpdates: SheetLayoutUpdateDto[];
-};
-
-export type DetachedUnitDto = {
-  translationUnitId: string;
-  lastSourceBinding: SourceBinding;
-  /** The source text the translation was last bound to. */
-  lastSourceText: string;
-  reason: DetachReason;
-  targetMacro: string;
-  reviewState: ReviewState;
-  translatorNote: string | null;
+  /** Files written or removed. */
+  files: number;
+  /** Translations marked fuzzy because their source changed. */
+  fuzzy: number;
+  /** Translations kept as obsolete because their string left the game. */
+  obsolete: number;
+  /** The commit that recorded the update, when one was made. */
+  commit: string | null;
 };
 
 export type RecentProjectAvailability = "ready" | "repositoryMissing";
@@ -214,7 +195,7 @@ export type GameOpenResultDto =
   | {
     /** Nothing was written; confirm, then update the project from the game. */
     status: "sourceUpdateRequired";
-    report: SourceUpdateReportDto;
+    update: SourceUpdateNeededDto;
   };
 
 export type GameOrigin = "settings" | "squareEnix" | "steam" | "xivLauncher" | "defaultLocation";
@@ -245,11 +226,17 @@ export type RecentProjectDto = {
   availability: RecentProjectAvailability;
 };
 
+/** The translation of one string as its entry holds it. */
 export type TranslationOverlayDto = {
-  translationUnitId: string;
+  /** The translation; empty when the string is not translated. */
   targetMacro: string;
-  reviewState: ReviewState;
+  /** The source changed since the translation was written. */
+  fuzzy: boolean;
   translatorNote: string | null;
+  /** The source the translation was written for, while it is fuzzy. */
+  previousSource: string | null;
+  /** Terms a person decided do not apply to the string. */
+  termExceptions?: string[];
 };
 
 export type TranslationRowCursorDto = {
@@ -282,10 +269,6 @@ export type TranslationRowDto = {
 export type TranslationRowPageDto = {
   rows: TranslationRowDto[];
   nextAfter: TranslationRowCursorDto | null;
-};
-
-export type TranslationUnitIdDto = {
-  translationUnitId: string;
 };
 
 export type GitFileKind =
@@ -339,35 +322,11 @@ export type GitRuntimeDto = {
 };
 
 
-/** Changes reach the main branch only through pull requests. */
-export type CollaborationDto = {
-  /** The main branch set in aeria-collaboration.json, if any. */
-  configuredMainBranch: string | null;
-  /** The main branch in effect: configured or detected. */
-  mainBranch: string | null;
-  /** Why aeria-collaboration.json cannot be used. */
-  error: string | null;
-};
-
-export type ContributionDto = {
-  mainBranch: string;
-  /** Null while on the main branch. */
-  branch: string | null;
-  published: boolean;
-  unmergedCommits: number;
-  /** Commits on the remote main branch, as last fetched, that this branch does not contain yet. */
-  mainAhead: number;
-  /** No remote: the contribution is merged locally instead of through a pull request. */
-  local: boolean;
-};
-
 export type GitOverviewDto = {
   runtime: GitRuntimeDto;
   repository: GitStatusDto | null;
   identity: TranslatorIdentityDto | null;
   remotes: GitRemoteDto[];
-  collaboration: CollaborationDto | null;
-  contribution: ContributionDto | null;
 };
 
 export type GitBranchDto = {
@@ -375,24 +334,12 @@ export type GitBranchDto = {
   remote: boolean;
   current: boolean;
   upstream: string | null;
-  /** Every commit of the local branch is in the main branch. */
-  merged: boolean;
+  /** Commits deleting the branch would lose (for a remote branch, deleting it on the remote). */
+  lostCommits: number;
+  /** For a local branch with an upstream on a remote, the commits deleting both would lose. */
+  lostWithUpstream: number | null;
   /** Why the open project cannot switch to this branch. */
   blocked: "noProject" | "olderFormat" | "otherSource" | null;
-};
-
-export type AttributionDto = {
-  commit: string;
-  authorName: string;
-  authorEmail: string;
-  authoredAt: number;
-};
-
-export type UnitAttributionDto = {
-  translationUnitId: string;
-  translatedBy: AttributionDto | null;
-  reviewedBy: AttributionDto | null;
-  lastChangedBy: AttributionDto | null;
 };
 
 export type GitCommitDto = {
@@ -407,47 +354,61 @@ export type GitCommitDto = {
   subject: string;
 };
 
-export type UnitVersionDto = {
-  sourceBinding: SourceBinding;
+/** What a person can change about a string at one point in time. */
+export type EntryVersionDto = {
   targetMacro: string;
-  reviewState: ReviewState;
+  fuzzy: boolean;
   translatorNote: string | null;
 };
 
-export type UnitChangeKind = "added" | "modified" | "removed";
+export type EntryChangeKind = "translated" | "changed" | "cleared" | "marked";
 
-export type UnitChangeDto = {
-  translationUnitId: string;
-  kind: UnitChangeKind;
-  before: UnitVersionDto | null;
-  after: UnitVersionDto | null;
-  targetChanged: boolean;
-  reviewChanged: boolean;
-  noteChanged: boolean;
+/** A change of one string. */
+export type EntryChangeDto = {
+  /** The entry's msgctxt. */
+  context: string;
+  /** The PO file, relative to the project root. */
+  path: string;
+  /** Where the string is in the game; null when the game has no such string. */
+  sourceBinding: SourceBinding | null;
+  sourceMacro: string;
+  kind: EntryChangeKind;
+  before: EntryVersionDto;
+  after: EntryVersionDto;
 };
 
-export type RecordVersionDto =
-  | { state: "absent" }
-  | { state: "valid"; unit: UnitVersionDto }
-  | { state: "invalid"; message: string };
+/** How many strings have uncommitted changes, and the first of those changes. */
+export type PendingChangesDto = {
+  total: number;
+  changes: EntryChangeDto[];
+};
 
-export type UnitRevisionDto = {
+export type EntryRevisionDto = {
   commit: GitCommitDto;
-  kind: UnitChangeKind;
-  before: RecordVersionDto;
-  after: RecordVersionDto;
+  kind: EntryChangeKind;
+  before: EntryVersionDto;
+  after: EntryVersionDto;
 };
 
-export type UnitHistoryDto = {
-  translationUnitId: string;
-  pending: UnitChangeDto | null;
-  revisions: UnitRevisionDto[];
+/** The history of one string, newest first. */
+export type StringHistoryDto = {
+  pending: EntryChangeDto | null;
+  revisions: EntryRevisionDto[];
   truncated: boolean;
-  translatedBy: AttributionDto | null;
-  reviewedBy: AttributionDto | null;
 };
 
-export type ProjectArea = "glossary" | "guidance" | "packSettings" | "fontSettings" | "fontFile" | "collaboration" | "gitAttributes" | "feedWorkflow" | "checkWorkflow";
+/** How a project file changed. */
+export type ChangeKind = "added" | "modified" | "removed";
+
+/** How the list marks a string with uncommitted changes. */
+export type ChangeMark = "added" | "modified";
+
+/** The list mark of a string change: a new translation, or any other change. */
+export function changeMark(kind: EntryChangeKind): ChangeMark {
+  return kind === "translated" ? "added" : "modified";
+}
+
+export type ProjectArea = "terms" | "knowledge" | "projectSettings" | "packSettings" | "fontSettings" | "fontFile" | "gitAttributes" | "feedWorkflow" | "checkWorkflow";
 
 /** The GitHub workflow that runs aeria-check on pull requests. */
 export type CheckWorkflowDto = {
@@ -462,7 +423,7 @@ export type CheckWorkflowDto = {
 };
 
 export type ProjectChangeDetailDto = {
-  kind: UnitChangeKind;
+  kind: ChangeKind;
   /** The term, the settings path ("fonts › MiedingerMid › source"), or "" for a guidance line. */
   label: string;
   before: string | null;
@@ -473,7 +434,7 @@ export type ProjectChangeDetailDto = {
 export type ProjectChangeDto = {
   path: string;
   area: ProjectArea;
-  kind: UnitChangeKind;
+  kind: ChangeKind;
   details: ProjectChangeDetailDto[];
   truncated: boolean;
   unreadable: boolean;
@@ -482,305 +443,119 @@ export type ProjectChangeDto = {
 
 export type GitCommitChangesDto = {
   commit: GitCommitDto;
-  changes: UnitChangeDto[];
+  changes: EntryChangeDto[];
   projectChanges: ProjectChangeDto[];
-  branchCreated: string | null;
 };
 
-export type ContributorDto = {
-  name: string;
-  email: string;
-  translated: number;
-  reviewed: number;
-  lastAuthoredAt: number;
-};
-
-export type UnitConflictDto = {
-  translationUnitId: string;
-  base: UnitVersionDto | null;
-  ours: UnitVersionDto | null;
-  theirs: UnitVersionDto | null;
+/** A string changed differently here and on the remote. */
+export type EntryConflictDto = {
+  context: string;
+  path: string;
+  sourceBinding: SourceBinding | null;
+  sourceMacro: string;
+  base: EntryVersionDto;
+  ours: EntryVersionDto;
+  theirs: EntryVersionDto;
 };
 
 export type ConflictResolution = "ours" | "theirs";
 
-export type UnitResolutionDto = {
-  translationUnitId: string;
+export type EntryResolutionDto = {
+  context: string;
   resolution: ConflictResolution;
 };
 
 export type GitIntegration = "upToDate" | "fastForward" | "merged";
 
-export type GitSyncDto = {
+export type GitPullDto = {
   integration: GitIntegration;
-  pushed: boolean;
   workspaceChanged: boolean;
-  /** When non-empty nothing was integrated; sync again with resolutions. */
-  conflicts: UnitConflictDto[];
-  /** Merged translations were reconciled with the current source and wait for a checkpoint. */
-  reconciled: boolean;
+  /** When non-empty nothing was integrated; pull again with resolutions. */
+  conflicts: EntryConflictDto[];
 };
 
-export type GitFinishDto = {
-  integration: GitIntegration;
-  deletedBranch: string | null;
+/** Whether a ChatGPT subscription is signed in for machine translation. */
+export type ModelAccountDto = {
+  signedIn: boolean;
+  /** The account's e-mail address, once a request read it. */
+  account: string | null;
 };
 
-export type AiProviderKind = "openCodeGo" | "openRouter" | "custom" | "chatGpt";
-export type ReasoningEffort = "minimal" | "low" | "medium" | "high" | "xhigh";
-export type ApiKeyState = "stored" | "missing" | "unavailable";
+/** A device sign-in to finish on OpenAI's page. */
+export type ModelSignInDto = {
+  userCode: string;
+  verificationUrl: string;
+  /** Seconds between polls. */
+  interval: number;
+};
 
-export type AiModelConfig = {
+/** A model the signed-in account can use. */
+export type ModelInfo = {
   id: string;
-  contextWindow: number | null;
-  reasoningEfforts: ReasoningEffort[];
-  /** Whether the model accepts images; omitted when it does not. */
-  vision?: boolean;
+  efforts: string[];
 };
 
-export type AiHeaderConfig = { name: string; value: string };
-
-export type AiProviderDto = {
-  id: string;
-  kind: AiProviderKind;
-  name: string;
-  baseUrl: string;
-  models: AiModelConfig[];
-  sessionHeader: string | null;
-  headers: AiHeaderConfig[];
-  apiKey: ApiKeyState;
+/** A string whose machine translation still failed the checks after the retries; it stays as it was. */
+export type TranslationRejected = {
+  path: string;
+  context: string;
+  binding: SourceBinding | null;
+  /** The model's last translation, which was not written. */
+  translation: string;
+  problems: IssueDto[];
 };
 
-export type AiProviderPresetDto = {
-  kind: AiProviderKind;
-  name: string;
-  baseUrl: string | null;
-  sessionHeader: string | null;
-};
+export type TranslationStop =
+  | { reason: "finished" }
+  | { reason: "cancelled" }
+  | { reason: "usageLimit"; resetsAt: number | null }
+  | { reason: "signInRequired" }
+  | { reason: "failed"; message: string };
 
-export type AiModelSelection = {
-  providerId: string;
-  modelId: string;
-  effort: ReasoningEffort | null;
-};
-
-export type AiSettingsDto = {
-  providers: AiProviderDto[];
-  agentModel: AiModelSelection | null;
-  /** The model for translation-job workers; Angelica's model when null. */
-  workerModel: AiModelSelection | null;
-  /** Domains whose pages Angelica reads without asking. */
-  webDomains: string[];
-  presets: AiProviderPresetDto[];
-};
-
-export type AiProviderInput = {
-  id: string | null;
-  kind: AiProviderKind;
-  name: string;
-  baseUrl: string;
-  models: AiModelConfig[];
-  sessionHeader: string | null;
-  headers: AiHeaderConfig[];
-};
-
-export type ChatGptLoginDto = { loginId: string; userCode: string; verificationUrl: string; browserOpened: boolean };
-
-export type ChatGptLoginEventDto = { loginId: string; providerId: string; succeeded: boolean; code: string | null; message: string | null };
-
-export type AiConnectionCheckDto = {
-  latencyMs: number;
-  model: string | null;
-};
-
-export type ChatToolCall = { id: string; name: string; arguments: string };
-
-/** An image attached to a message, stored beside its conversation. */
-export type ImageRef = { id: string; format: "png" | "jpeg"; width: number; height: number };
-
-export type ChatMessage =
-  | { role: "user"; content: string; automatic?: boolean; images?: ImageRef[] }
-  | { role: "assistant"; content: string; reasoning?: string; toolCalls?: ChatToolCall[] }
-  | { role: "tool"; toolCallId: string; name: string; content: string };
-
-export type AiUsage = { promptTokens: number; completionTokens: number };
-
-export type ConversationDto = {
-  id: string;
-  title: string;
-  model: AiModelSelection | null;
-  messages: ChatMessage[];
-  usage: AiUsage;
+/** Where a machine translation run is. */
+export type TranslationStatus = {
   running: boolean;
-};
-
-export type ConversationSummaryDto = { id: string; title: string; updatedAtUnixMs: number; running: boolean };
-
-export type AgentEvent =
-  | { type: "textDelta"; text: string }
-  | { type: "reasoningDelta"; text: string }
-  | { type: "responseFinished" }
-  | { type: "toolStarted"; id: string; name: string; arguments: string }
-  | { type: "toolFinished"; id: string; name: string; content: string; isError: boolean }
-  | ({ type: "usage" } & AiUsage)
-  | { type: "turnFinished"; outcome: "completed" | "roundLimit"; usage: AiUsage }
-  | { type: "turnFailed"; code: string; message: string }
-  | { type: "turnCancelled" };
-
-export type AngelicaEventDto = { conversationId: string; event: AgentEvent };
-
-export type UnitLocationDto = { sheet: string; row: number; subrow: number; column: number | null };
-
-export type EditorContextDto = { sheet: string | null; selection: UnitLocationDto | null; unsavedDraft: boolean };
-
-export type AgentMode = "chat" | "ask" | "autoDraft";
-
-export type ProposalRecord = {
-  id: string;
-  /** The changed project file; null for a translation. */
-  file: "guidance" | "glossary" | "voices" | null;
-  /** A job to start; `target` then holds its one-line summary. */
-  job?: JobProposal | null;
-  /** A domain Angelica asked to read; `target` then holds the link. */
-  web?: string | null;
-  /** Translations Angelica suggests marking reviewed; `target` holds her reason. */
-  review?: { reason: string; items: { location: UnitLocationDto; source: string; target: string }[] } | null;
-  /** A new token limit for a job; `target` holds its one-line summary. */
-  jobLimit?: JobLimitProposal | null;
-  location: UnitLocationDto | null;
-  source: string;
-  target: string;
-  expected: { target: string | null; reviewState: ReviewState | null };
-  status: "pending" | "applied" | "rejected" | "conflict" | "failed";
+  files: number;
+  batches: number;
+  batchesDone: number;
+  strings: number;
+  written: number;
+  rejected: number;
+  rejections: TranslationRejected[];
+  inputTokens: number;
+  cachedTokens: number;
+  outputTokens: number;
+  pace: number;
+  stop: TranslationStop | null;
   message: string | null;
-  createdAtUnixMs: number;
+  /** Unix milliseconds. */
+  startedAt: number;
 };
 
-export type TranslationAppliedDto = { sourceBinding: SourceBinding; overlay: TranslationOverlayDto };
+/** One term of `aeria-knowledge/terms.csv`; `settled` when a person decided it. */
+export type GlossaryEntry = { term: string; translation: string; note?: string; forbidden?: string[]; settled?: boolean; matchCase?: boolean };
 
-export type JobFilter = "untranslated" | "needsReview" | "untranslatedAndDrafts";
+export type TermInput = { term: string; translation: string; note: string | null; forbidden: string[]; settled: boolean; matchCase: boolean };
 
-export type JobScope = { sheets: string[]; filter: JobFilter };
-
-export type JobEstimate = {
-  units: number;
-  chunks: number;
-  estimatedTokens: number;
-  /** Average tokens per chunk of earlier jobs with the same model, when the estimate uses it. */
-  historyChunkTokens?: number;
-};
-
-export type JobLimitProposal = { jobId: string; tokenLimit: number; previousLimit: number; usedTokens: number; projectedTokens: number | null };
-
-export type JobProposal = { scope: JobScope; instructions: string; concurrency: number; estimate: JobEstimate; tokenLimit: number };
-
-export type JobSpec = { scope: JobScope; instructions: string; model: AiModelSelection; tokenLimit: number; concurrency: number };
-
-export type JobStatus = "running" | "paused" | "completed" | "cancelled";
-
-export type JobUnitStatus = "pending" | "running" | "drafted" | "rejected" | "failed" | "conflict";
-
-export type JobCounts = { total: number; pending: number; running: number; drafted: number; rejected: number; failed: number; conflict: number };
-
-export type JobSummary = {
-  id: string;
-  conversationId: string;
-  status: JobStatus;
-  /** Why a paused job paused. */
-  reason: string | null;
-  spec: JobSpec;
-  createdAtUnixMs: number;
-  counts: JobCounts;
-  /** Chunks being translated right now, one per busy worker. */
-  activeWorkers: number;
-  usage: AiUsage;
-  chunks: number;
-  /** Chunks with no pending or running strings. */
-  finishedChunks: number;
-  /** Tokens the whole job will likely use; null until a chunk finished. */
-  projectedTokens: number | null;
-};
-
-export type JobUnit = {
-  seq: number;
-  chunk: number;
-  location: UnitLocationDto;
-  status: JobUnitStatus;
-  attempts: number;
-  message: string | null;
-  expected: { target: string | null; reviewState: ReviewState | null };
-};
-
-export type JobEvent = { seq: number; createdAtUnixMs: number; kind: string; message: string; location: UnitLocationDto | null };
-
-export type JobAction = "pause" | "resume" | "cancel";
-
-export type WorkerPhase = "idle" | "preparing" | "waiting" | "reasoning" | "writing" | "tool" | "recording" | "backoff" | "stopped";
-
-/** What one lane of a running job is doing; live state, never stored. */
-export type WorkerActivity = {
-  lane: number;
-  phase: WorkerPhase;
-  chunk: number | null;
-  sheet: string | null;
-  units: number;
-  finishedUnits: number;
-  round: number;
-  maxRounds: number;
-  tool: string | null;
-  chunkTokens: number;
-  chunksDone: number;
-  phaseStartedUnixMs: number;
-  lastActivityUnixMs: number;
-  retryAtUnixMs: number | null;
-  lastError: string | null;
-  /** The end of the lane's latest streamed reasoning. */
-  thought: string | null;
-  /** The first and last source row of the current chunk. */
-  firstRow: number | null;
-  lastRow: number | null;
-  /** Strings whose translation the current response has streamed so far. */
-  streamedUnits: number;
-  /** Translations in the submission the `tool` phase checks and writes. */
-  toolUnits: number;
-  /** The string the lane is writing, checking, or reading about. */
-  target: WorkerTarget | null;
-};
-
-export type WorkerTarget = {
-  /** The string's number in the chunk, from 1; null for a context read. */
-  unit: number | null;
-  address: string;
-  /** The start of the source as plain text; empty when unknown. */
-  source: string;
-};
-
-export type GlossaryEntry = { term: string; translation: string; note?: string; forbidden?: string[] };
-
-export type GlossaryEntryInput = { term: string; translation: string; note: string | null; forbidden: string[] };
-
-export type ProjectGuideDto = {
-  /** The guidance text; null when the file does not exist. */
-  guidance: string | null;
-  /** The glossary file's exact content, sent back when saving. */
-  glossaryText: string | null;
+/** The project's style and terms in `aeria-knowledge/`. */
+export type ProjectKnowledgeDto = {
+  /** `style.md`; null when the file does not exist. */
+  style: string | null;
+  /** `terms.csv` exactly as read, sent back when saving. */
+  termsText: string | null;
   entries: GlossaryEntry[];
   diagnostics: { line: number; message: string }[];
-  guidanceError: string | null;
-  glossaryError: string | null;
-  /** The voice profile text; null when the file does not exist. */
-  voices: string | null;
-  /** Profiles the voice file ignores, with the reason. */
-  voiceDiagnostics: { line: number; message: string }[];
-  voicesError: string | null;
+  styleError: string | null;
+  termsError: string | null;
 };
 
-/** Project-shared pack identity in aeria-pack.json. */
+/** Project-shared pack settings in aeria-pack.json. */
 export type PackSettings = {
-  packId: string;
   title: string;
-  publisherName: string;
-  publisherUrl: string | null;
+  teamName: string;
+  teamUrl: string | null;
+  /** People credited in the pack; may be empty. */
+  authors: string[];
   license: string | null;
   minHarmonia: string;
 };
@@ -808,28 +583,24 @@ export type ExportOverviewDto = {
   /** The main branch on GitHub (as of the last fetch) has this Aeria's feed workflow. */
   workflowOnGithub: boolean;
   mainBranch: string | null;
-  /** Highest harmonia/<n> release tag in the local repository. */
-  latestReleaseTag: number | null;
+  /** The next release's version (YYYY.MM.DD.NNNN) from today and the local release tags. */
+  nextVersion: string;
   /** aeria-fonts.json exists. */
   fontsConfigured: boolean;
 };
 
 export type ReleaseChannel = "stable" | "testing";
-export type ContentPolicy = "reviewed" | "all";
 
 export type ReleaseInput = {
-  sequence: number;
-  version: string;
   channel: ReleaseChannel;
-  contentPolicy: ContentPolicy;
   changelog: string | null;
 };
 
 export type ExportReportDto = {
   exported: number;
-  skippedDetached: number;
   skippedUntranslated: number;
-  skippedUnreviewed: number;
+  /** Translations left out because their source changed since they were written. */
+  skippedFuzzy: number;
   sheets: number;
   strings: number;
   packHash: string;
@@ -838,8 +609,8 @@ export type ExportReportDto = {
   signedBy: string | null;
 };
 
-export type LocalExportDto = { path: string; report: ExportReportDto };
-export type PublishedReleaseDto = { sequence: number; releaseUrl: string; feedUrl: string; report: ExportReportDto };
+export type LocalExportDto = { version: string; path: string; report: ExportReportDto };
+export type PublishedReleaseDto = { version: string; releaseUrl: string; feedUrl: string; report: ExportReportDto };
 
 /** aeria-fonts.json: source fonts for glyphs the game fonts lack. */
 export type FontCaseMapping = "none" | "upper";
@@ -992,4 +763,108 @@ export type MacroConditionDto = {
 export type MacroViewDto = {
   diagnostics: MacroDiagnosticDto[];
   tags: MacroTagDto[];
+};
+
+/** How project search text matches. */
+export type SearchMatchKind = "text" | "word" | "regex";
+/** The parts of a string project search looks in. */
+export type SearchField = "translation" | "source" | "note" | "context";
+export type SearchState = "untranslated" | "translated" | "fuzzy";
+/** Keep only translations with problems, which are not exported, or with advice: what may be wrong. */
+export type SearchCheck = "any" | "problems" | "advice";
+
+export type SearchQueryDto = {
+  /** Empty to keep every string the filters keep. */
+  text: string;
+  kind: SearchMatchKind;
+  caseSensitive: boolean;
+  fields: SearchField[];
+  /** Files and folders relative to `po/`; empty for the whole project. */
+  paths: string[];
+  /** Only these strings, by `msgctxt`. */
+  contexts: string[];
+  states: SearchState[];
+  check: SearchCheck;
+  /** With a check filter, only strings with an issue of this group. */
+  issue?: string | null;
+};
+
+/** One finding of the checks, as data; `message` is the English text for unknown kinds. */
+export type IssueDto = {
+  kind: "lineBreak" | "structure" | "forbiddenTerm" | "mark" | "mixedAlphabets" | "bothGenders" | "termNotUsed" | "genderNotVaried" | "genderInOtherLanguages" | "machinePhrasing" | "staleTermException" | "other";
+  /** What may be wrong rather than a problem: it does not keep the translation from being saved or exported. */
+  advice: boolean;
+  /** Groups issues in the summary and filters by them. */
+  group: string;
+  message: string;
+  term: string | null;
+  translation: string | null;
+  variant: string | null;
+  text: string | null;
+  phrases: string[];
+};
+
+/** What the checks find in a string's saved translation, and its term exceptions. */
+export type TranslationFindingsDto = { issues: IssueDto[]; termExceptions: string[] };
+
+export type SearchFileDto = { path: string; sheet: string; count: number };
+export type IssueCountDto = { issue: IssueDto; count: number };
+
+export type SearchFieldMatchDto = {
+  field: SearchField;
+  /** UTF-16 ranges of the field's text. */
+  ranges: [number, number][];
+};
+
+export type SearchHitDto = {
+  path: string;
+  context: string;
+  binding: SourceBinding | null;
+  source: string;
+  translation: string;
+  fuzzy: boolean;
+  note: string | null;
+  matches: SearchFieldMatchDto[];
+  findings: IssueDto[];
+};
+
+export type SearchResultDto = {
+  hits: SearchHitDto[];
+  /** Every string found; more than `hits` when the result was cut. */
+  total: number;
+  matches: number;
+  /** Every file with a string found, with counts. */
+  files: SearchFileDto[];
+  /** With a check filter, the issues of every string found by group. */
+  issues: IssueCountDto[];
+  cancelled: boolean;
+};
+
+export type ReplacementDto = { text: string; preserveCase: boolean };
+
+export type ReplaceChangeDto = {
+  path: string;
+  context: string;
+  binding: SourceBinding | null;
+  source: string;
+  before: string;
+  after: string;
+  fuzzy: boolean;
+  /** A change with problems is not written. */
+  problems: IssueDto[];
+};
+
+/** A string to change, as last seen. */
+export type EntryRefDto = { path: string; context: string; expectedText: string; expectedFuzzy: boolean };
+
+export type BulkEditDto = {
+  done: number;
+  skipped: {
+    path: string;
+    context: string;
+    binding: SourceBinding | null;
+    reason: "changed" | "missing" | "invalid" | "broken";
+    problems: IssueDto[];
+  }[];
+  undoAvailable: boolean;
 };

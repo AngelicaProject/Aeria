@@ -23,8 +23,8 @@ data.
   even when the game version string did not change.
 - One self-contained file carries content, metadata, integrity digest, and an
   optional publisher signature, so manual import is a single file.
-- Identical project, source, policy, release parameters, and signing key
-  produce byte-identical output.
+- Identical project, source, release parameters, and signing key produce
+  byte-identical output.
 
 ## Container
 
@@ -94,38 +94,48 @@ followed by one LF. Readers reject unknown, missing, and duplicate fields.
 
 ```json
 {
-  "packId": "ru-main",
-  "title": "Russian translation",
-  "publisher": { "name": "Example team", "url": "https://example.com" },
+  "title": "Русский перевод",
+  "team": { "name": "Example team", "url": "https://example.com" },
+  "authors": ["Анна", "pokeda"],
   "license": "CC-BY-NC-SA-4.0",
-  "release": { "sequence": 42, "version": "2026.09.25", "channel": "stable" },
-  "target": { "language": "ru" },
-  "source": { "language": "en", "gameVersion": "2026.08.12.0000.0000" },
-  "contentPolicy": "reviewed",
-  "project": { "commit": "<40 hex>" },
-  "exporter": { "aeria": "0.9.0" },
-  "minHarmonia": "1.4.0",
-  "counts": { "sheets": 0, "rows": 0, "cells": 0, "reviewedCells": 0, "strings": 0 }
+  "version": "2026.10.01.0001",
+  "channel": "stable",
+  "language": "ru",
+  "game": { "language": "en", "version": "2026.08.12.0000.0000" },
+  "built": { "aeria": "0.9.0", "commit": "<40 hex>" },
+  "minHarmonia": "0.1.2.0"
 }
 ```
 
 | Field | Rule |
 | --- | --- |
-| `packId` | `[a-z0-9][a-z0-9-]{0,63}`; stable for the project's whole release history |
-| `title`, `publisher.name` | non-empty display strings |
-| `publisher.url`, `license` | optional; `null` when absent |
-| `release.sequence` | positive integer, strictly increasing across releases of one `packId` |
-| `release.version` | display string; never compared |
-| `release.channel` | `stable` or `testing` |
-| `target.language`, `source.language` | BCP 47 language tags; `source.language` is the game language the project translates from. `target.language` is never `und`: Aeria refuses to export a project without a target language |
-| `source.gameVersion` | the text of `game/ffxivgame.ver` of the game the pack was built from |
-| `contentPolicy` | `reviewed` or `all` (see [Cell state](#cell-state)) |
-| `project.commit` | Git commit of the exported workspace state |
-| `exporter.aeria` | producing Aeria version, a non-empty display string that also identifies the string encoder |
-| `minHarmonia` | lowest Harmonia version that implements this format minor |
-| `counts` | exact counts; readers verify them. `strings` is the number of distinct stored strings |
+| `title`, `team.name` | non-empty display strings without surrounding whitespace; `team.name` is the team or project players see as the pack's publisher |
+| `team.url`, `license` | display strings, or `null` when absent |
+| `authors` | display strings, each at most once, in the project's order; `[]` when nobody is credited |
+| `version` | the release version, below |
+| `channel` | `stable` or `testing` |
+| `language` | BCP 47 tag of the translations; never `und`: Aeria refuses to export a project without a target language |
+| `game.language` | BCP 47 tag of the game client language the project translates from |
+| `game.version` | the text of `game/ffxivgame.ver` of the game the pack was built from |
+| `built.aeria` | producing Aeria version, a display string that also identifies the string encoder |
+| `built.commit` | Git commit of the exported project, 40 lowercase hex digits |
+| `minHarmonia` | lowest Harmonia version that implements this format minor, two to four dot-separated numbers |
 
-The manifest carries no timestamps, local paths, or credentials.
+The manifest carries no timestamps, local paths, or credentials, and no
+identifier of the pack: a pack is recognized by its publisher key and, for
+updates, by the feed it came from (see
+[`feed-v1.md`](./feed-v1.md#publisher-trust-harmonia)).
+
+### Release version
+
+`version` is `YYYY.MM.DD.NNNN`: the UTC date of the release and its number on
+that day, from `0001`, every part zero-padded to its width. The versions of a
+project's releases strictly increase; readers compare them by date, then number, which
+for this fixed-width form is also their text order. Aeria gives a release the
+first number of today or, when the newest known release (local
+`harmonia/<version>` tags, and the GitHub releases when publishing) is from
+today or later, the next number of that release's day, so a version never
+repeats or goes back.
 
 ### `NAMES`
 
@@ -182,8 +192,7 @@ the index Harmonia uses when it enumerates String column definitions in order.
 | Type | Field |
 | --- | --- |
 | `u16` | ordinal (< the sheet's layoutCount) |
-| `u8` | state: `1` reviewed, `2` unreviewed |
-| `u8` | reserved, zero |
+| `u8[2]` | reserved, zero |
 | `u32` | stringLength (1..=65535, excluding the terminator) |
 | `u32` | stringOffset into `STRINGS` |
 | `u32` | reserved, zero |
@@ -367,13 +376,6 @@ computes the same value from the string it is about to replace and writes the
 translation only on an exact match. The domain string keeps its historical
 spelling.
 
-## Cell state
-
-`contentPolicy: "reviewed"` means every cell has state `1`. `all` also exports
-`draft` and `needs-review` units as state `2`. Harmonia may let the player
-choose whether state-`2` cells are applied; the pack never mixes in other
-states.
-
 ## Signature block
 
 Present only in signed packs; an unsigned pack ends at `bodyLength`.
@@ -397,8 +399,8 @@ Present only in signed packs; an unsigned pack ends at `bodyLength`.
 - Key fingerprint: SHA-256 of the 65-byte public key, shown in hex.
 - Nothing may follow the block.
 
-The signature covers `packHash`, which covers the manifest, so `packId`,
-`release.sequence`, `source`, and `minHarmonia` are all authenticated.
+The signature covers `packHash`, which covers the manifest, so `version`,
+`game`, and `minHarmonia` are all authenticated.
 
 ## Transport encoding
 
@@ -414,7 +416,7 @@ Before a pack is installed or loaded, the reader verifies:
 1. header, section table, alignment, bounds, and required sections;
 2. `packHash`;
 3. the signature and endorsement when present;
-4. manifest schema and that `counts` match the sections;
+4. the manifest schema;
 5. when present, every `FONTS` rule above;
 6. every ordering, uniqueness, range, and cross-reference rule above;
 7. every string range, its terminator, and that the string is
@@ -424,7 +426,7 @@ Any failure rejects the whole pack.
 
 At runtime, for each sheet row Harmonia is about to rewrite:
 
-1. The pack is used only when `source.language` equals the game client
+1. The pack is used only when `game.language` equals the game client
    language.
 2. A sheet is used only when the running sheet's String column definitions,
    in order, equal its `LAYOUT` records exactly (same count, index, and
@@ -434,7 +436,7 @@ At runtime, for each sheet row Harmonia is about to rewrite:
    `sourceGuard`. Otherwise the original text stays and a per-sheet mismatch
    counter is incremented.
 
-A game version different from `source.gameVersion` does not reject the pack.
+A game version different from `game.version` does not reject the pack.
 The per-cell guard and layout check keep application safe, and the consumer
 reports the pack as built for a different game version together with the
 share of guarded cells that matched.
@@ -446,6 +448,6 @@ offsets are at most 65535.
 
 ## Open decisions
 
-- Whether `source.gameVersion` (the text of `ffxivgame.ver`) and the client's
+- Whether `game.version` (the text of `ffxivgame.ver`) and the client's
   `GameVersionString` always use the same representation. A difference only
   makes Harmonia report every pack as built for another game version.

@@ -1,20 +1,18 @@
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::str::FromStr;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use aeria_core::{ReviewState, SourceBinding, TranslationUnitId};
+use aeria_git::GitRepository;
+use aeria_po::{OpenError, Session};
 use aeria_projects::{ProjectMetadata, ProjectRegistry, REGISTRY_FILE_NAME, RegistryEntry};
 use aeria_source::GameSource;
-use aeria_workspace::{ProjectSession, ProjectSessionError, WorkspaceStore};
-use aeria_workspace::{TranslationReadError, TranslationRowCursor, TranslationRowView};
 
 use tauri::{Manager, State};
 
 use crate::dto::{
-    DetachedUnitDto, GameOpenResultDto, OtherLanguageTextDto, ProjectOpenResultDto,
-    ProjectSummaryDto, RecentProjectDto, ReviewStateDto, SheetProgressDto, SourceBindingDto,
+    GameOpenResultDto, OtherLanguageTextDto, ProjectOpenResultDto, ProjectSummaryDto,
+    RecentProjectDto, SheetProgressDto, SourceBindingDto, SourceUpdateNeededDto,
     SourceUpdateReportDto, TranslationOverlayDto, TranslationRowCursorDto, TranslationRowPageDto,
 };
 use crate::error::CommandError;
@@ -25,6 +23,9 @@ use crate::state::DesktopState;
 
 type CommandResult<T> = Result<T, CommandError>;
 
+/// The most rows one page request reads.
+pub(crate) const MAX_TRANSLATION_PAGE_SIZE: u32 = 256;
+
 pub(crate) async fn run_blocking<T, F>(operation: F) -> CommandResult<T>
 where
     T: Send + 'static,
@@ -33,6 +34,11 @@ where
     tauri::async_runtime::spawn_blocking(operation)
         .await
         .map_err(|error| CommandError::internal_state(format!("desktop worker failed: {error}")))?
+}
+
+/// Threads that read the game when a project is made or updated.
+fn threads() -> usize {
+    std::thread::available_parallelism().map_or(2, std::num::NonZero::get)
 }
 
 fn app_registry_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
@@ -89,56 +95,38 @@ fn remember_project(
 
 /// Opens the configured game in the project's source language.
 fn project_game(app: &tauri::AppHandle, repository_root: &Path) -> CommandResult<Arc<GameSource>> {
-    let metadata = WorkspaceStore::new(repository_root)
-        .read_metadata()
-        .map_err(CommandError::from)?;
-    open_game(app, metadata.source_language())
+    let settings = aeria_po::read_settings(repository_root)?;
+    open_game(app, &settings.source_language)
 }
 
-/// Opens a project against `source`. When it needs a source update, nothing
-/// is written: with `accept_source_update` the update is applied, otherwise
-/// the plan is returned for confirmation.
+/// Opens a project against `source`. Nothing is written: a project whose
+/// files are for an older game version is reported for an update.
 pub(crate) fn open_with_game(
     state: &DesktopState,
     repository_root: &Path,
     source: Arc<GameSource>,
     cache_root: &Path,
-    accept_source_update: bool,
 ) -> CommandResult<GameOpenOutcome> {
     load_catalog_with_cache(cache_root, &source)?;
-    if accept_source_update {
-        let (session, report) = ProjectSession::open_with_source_update(repository_root, source)
-            .map_err(CommandError::from)?;
-        let report = report.as_ref().map(SourceUpdateReportDto::from);
-        return Ok(GameOpenOutcome::Opened {
-            project: replace_project(state, session)?,
-            source_update: report,
-        });
-    }
-    match ProjectSession::open(repository_root, Arc::clone(&source)) {
+    match Session::open(repository_root, source) {
         Ok(session) => Ok(GameOpenOutcome::Opened {
             project: replace_project(state, session)?,
-            source_update: None,
         }),
-        Err(ProjectSessionError::SourceUpdateRequired { .. }) => {
-            let report = ProjectSession::preview_source_update(repository_root, &source)
-                .map_err(CommandError::from)?;
+        Err(OpenError::UpdateRequired { project, game }) => {
             Ok(GameOpenOutcome::SourceUpdateRequired {
-                report: SourceUpdateReportDto::from(&report),
+                update: SourceUpdateNeededDto {
+                    previous_game_version: project,
+                    game_version: game,
+                },
             })
         }
-        Err(error) => Err(CommandError::from(error)),
+        Err(error) => Err(error.into()),
     }
 }
 
 pub(crate) enum GameOpenOutcome {
-    Opened {
-        project: ProjectSummaryDto,
-        source_update: Option<SourceUpdateReportDto>,
-    },
-    SourceUpdateRequired {
-        report: SourceUpdateReportDto,
-    },
+    Opened { project: ProjectSummaryDto },
+    SourceUpdateRequired { update: SourceUpdateNeededDto },
 }
 
 fn remembered_outcome(
@@ -147,32 +135,25 @@ fn remembered_outcome(
     registry_path: Result<PathBuf, String>,
 ) -> GameOpenResultDto {
     match outcome {
-        GameOpenOutcome::Opened {
-            project,
-            source_update,
-        } => GameOpenResultDto::Opened {
-            result: Box::new(remember_project(
-                state,
-                project,
-                registry_path,
-                source_update,
-            )),
+        GameOpenOutcome::Opened { project } => GameOpenResultDto::Opened {
+            result: Box::new(remember_project(state, project, registry_path, None)),
         },
-        GameOpenOutcome::SourceUpdateRequired { report } => {
-            GameOpenResultDto::SourceUpdateRequired { report }
+        GameOpenOutcome::SourceUpdateRequired { update } => {
+            GameOpenResultDto::SourceUpdateRequired { update }
         }
     }
 }
 
 /// Opens an existing project with the configured game installation.
 ///
-/// The project's source language is read from its workspace manifest. When
-/// the project needs a source update, nothing is written and the plan is
-/// returned for confirmation; [`update_project_from_game`] applies it.
+/// The project's source language is read from `aeria.json`. When the
+/// project's files are for an older game version, nothing is written and the
+/// versions are returned for confirmation; [`update_project_from_game`]
+/// updates it.
 ///
 /// # Errors
 ///
-/// Returns a typed error when the workspace cannot be read, no game
+/// Returns a typed error when the settings cannot be read, no game
 /// installation is available, the game is older than the project, or the
 /// project cannot be opened.
 #[tauri::command(rename_all = "camelCase")]
@@ -186,20 +167,63 @@ pub async fn open_project_from_game(
         let state = app.state::<DesktopState>();
         let root = PathBuf::from(&repository_root);
         let source = project_game(&app, &root)?;
-        let outcome = open_with_game(&state, &root, source, &cache_root, false)?;
+        let outcome = open_with_game(&state, &root, source, &cache_root)?;
         Ok(remembered_outcome(&state, outcome, registry_path))
     })
     .await
 }
 
-/// Opens an existing project with the configured game installation and
-/// applies the deterministic source update when it is required.
+/// Brings a project's files to the installed game (see
+/// `docs/architecture/po-project.md`) and records the update as one commit,
+/// then opens the project. A project in a Git repository must have no
+/// uncommitted changes in `po/` or `aeria.json` first.
+pub(crate) fn update_with_game(
+    state: &DesktopState,
+    repository_root: &Path,
+    source: Arc<GameSource>,
+    cache_root: &Path,
+) -> CommandResult<(ProjectSummaryDto, SourceUpdateReportDto)> {
+    load_catalog_with_cache(cache_root, &source)?;
+    let previous = aeria_po::read_settings(repository_root)?.game_version;
+    let repository = GitRepository::discover(repository_root, state.git())?;
+    if let Some(repository) = &repository {
+        let status = repository.status()?;
+        if status
+            .files
+            .iter()
+            .any(|file| file.is_translation_data() || file.path == aeria_po::SETTINGS_FILE)
+        {
+            return Err(CommandError::new(
+                "gitUncommittedTranslations",
+                "commit the project's changes before updating it to the game",
+            ));
+        }
+    }
+    let game_version = source.version().to_string();
+    let updated = aeria_po::update(repository_root, &source, threads())?;
+    let commit = match &repository {
+        Some(repository) if updated.files > 0 => repository
+            .checkpoint(Some(&format!("Update to game version {game_version}")))
+            .ok()
+            .map(|outcome| outcome.commit.id),
+        _ => None,
+    };
+    let session = Session::open(repository_root, source)?;
+    let project = replace_project(state, session)?;
+    Ok((
+        project,
+        SourceUpdateReportDto::new(previous, game_version, updated, commit),
+    ))
+}
+
+/// Updates an existing project to the configured game installation and
+/// opens it; see [`update_with_game`].
 ///
 /// # Errors
 ///
-/// Returns a typed error when the workspace cannot be read, no game
-/// installation is available, the game is older than the project, or the
-/// source update fails.
+/// Returns a typed error when the settings cannot be read, no game
+/// installation is available, the project has uncommitted changes, or the
+/// update fails.
 #[tauri::command(rename_all = "camelCase")]
 pub async fn update_project_from_game(
     app: tauri::AppHandle,
@@ -211,70 +235,15 @@ pub async fn update_project_from_game(
         let state = app.state::<DesktopState>();
         let root = PathBuf::from(&repository_root);
         let source = project_game(&app, &root)?;
-        match open_with_game(&state, &root, source, &cache_root, true)? {
-            GameOpenOutcome::Opened {
-                project,
-                source_update,
-            } => Ok(remember_project(
-                &state,
-                project,
-                registry_path,
-                source_update,
-            )),
-            GameOpenOutcome::SourceUpdateRequired { .. } => Err(CommandError::internal_state(
-                "an accepted source update was not applied",
-            )),
-        }
+        let (project, report) = update_with_game(&state, &root, source, &cache_root)?;
+        Ok(remember_project(
+            &state,
+            project,
+            registry_path,
+            Some(report),
+        ))
     })
     .await
-}
-
-#[tauri::command(rename_all = "camelCase")]
-#[allow(clippy::needless_pass_by_value)]
-/// Plans the source update that opening a project with the configured game
-/// would apply, without writing anything or changing the active project.
-///
-/// # Errors
-///
-/// Returns a typed command error when the workspace or game cannot be read,
-/// the source language differs, the game is older than the project, or the
-/// plan cannot be built.
-pub async fn preview_source_update(
-    app: tauri::AppHandle,
-    repository_root: String,
-) -> CommandResult<SourceUpdateReportDto> {
-    run_blocking(move || {
-        let root = PathBuf::from(&repository_root);
-        let source = project_game(&app, &root)?;
-        ProjectSession::preview_source_update(&root, &source)
-            .map(|report| SourceUpdateReportDto::from(&report))
-            .map_err(CommandError::from)
-    })
-    .await
-}
-
-#[tauri::command(rename_all = "camelCase")]
-#[allow(clippy::needless_pass_by_value)]
-/// Lists translation units of the active project that are preserved without
-/// a current source occurrence.
-///
-/// # Errors
-///
-/// Returns a typed command error when no project is open or the desktop state
-/// lock cannot be read.
-pub fn list_detached_units(state: State<'_, DesktopState>) -> CommandResult<Vec<DetachedUnitDto>> {
-    list_detached_units_with_state(&state)
-}
-
-pub(crate) fn list_detached_units_with_state(
-    state: &DesktopState,
-) -> CommandResult<Vec<DetachedUnitDto>> {
-    let project = state.lock_project()?;
-    let project = project.as_ref().ok_or_else(CommandError::no_project)?;
-    Ok(project
-        .detached_units()
-        .filter_map(DetachedUnitDto::from_unit)
-        .collect())
 }
 
 /// Creates a project for the configured game installation, in a new or empty
@@ -283,8 +252,8 @@ pub(crate) fn list_detached_units_with_state(
 /// # Errors
 ///
 /// Returns a typed error when the folder cannot be created, no game
-/// installation is available, the source language is unknown, or workspace
-/// initialization fails.
+/// installation is available, the source language is unknown, or the
+/// project cannot be written.
 #[tauri::command(rename_all = "camelCase")]
 pub async fn initialize_project_from_game(
     app: tauri::AppHandle,
@@ -299,7 +268,7 @@ pub async fn initialize_project_from_game(
         let root = PathBuf::from(&repository_root);
         let created = create_project_directory(&root)?;
         let result = open_game(&app, &source_language).and_then(|source| {
-            initialize_with_game(&state, &root, source, &cache_root, target_language)
+            initialize_with_game(&state, &root, source, &cache_root, &target_language)
         });
         if result.is_err() && created {
             // Only an empty folder is removed; anything written into it stays.
@@ -315,17 +284,18 @@ pub(crate) fn initialize_with_game(
     repository_root: &Path,
     source: Arc<GameSource>,
     cache_root: &Path,
-    target_language: String,
+    target_language: &str,
 ) -> CommandResult<ProjectSummaryDto> {
-    if !aeria_core::is_target_language(&target_language) {
-        return Err(ProjectSessionError::InvalidTargetLanguage {
-            tag: target_language,
-        }
-        .into());
+    if !aeria_core::is_target_language(target_language) {
+        return Err(CommandError::new(
+            "invalidTargetLanguage",
+            format!("{target_language:?} is not a language tag of a target language"),
+        ));
     }
     load_catalog_with_cache(cache_root, &source)?;
-    let session = ProjectSession::initialize(repository_root, source, target_language)
-        .map_err(CommandError::from)?;
+    let session = aeria_po::session::create(repository_root, source, target_language, threads())?;
+    aeria_knowledge::create_empty(repository_root)
+        .map_err(|message| CommandError::new("projectStore", message))?;
     replace_project(state, session)
 }
 
@@ -336,7 +306,7 @@ pub(crate) fn initialize_with_game(
 ///
 /// Returns `invalidTargetLanguage` for a value that is not a BCP 47 language
 /// tag or is `und`, `noProjectOpen` without a project, and a store error
-/// when the manifest cannot be written. A failed Recent projects update is
+/// when `aeria.json` cannot be written. A failed Recent projects update is
 /// returned as the result's warning.
 #[tauri::command(rename_all = "camelCase")]
 pub async fn set_project_target_language(
@@ -346,14 +316,16 @@ pub async fn set_project_target_language(
     let registry_path = app_registry_path(&app);
     run_blocking(move || {
         let state = app.state::<DesktopState>();
-        let summary = {
-            let mut project = state.lock_project()?;
-            let project = project.as_mut().ok_or_else(CommandError::no_project)?;
-            project
-                .set_target_language(target_language.trim())
-                .map_err(CommandError::from)?;
-            ProjectSummaryDto::from_session(project)
-        };
+        let tag = target_language.trim();
+        if !aeria_core::is_target_language(tag) {
+            return Err(CommandError::new(
+                "invalidTargetLanguage",
+                format!("{tag:?} is not a language tag of a target language"),
+            ));
+        }
+        let session = state.session()?;
+        session.set_target_language(tag)?;
+        let summary = ProjectSummaryDto::from_session(&session);
         Ok(remember_project(&state, summary, registry_path, None))
     })
     .await
@@ -389,7 +361,8 @@ pub async fn list_recent_projects(app: tauri::AppHandle) -> CommandResult<Vec<Re
 #[tauri::command(rename_all = "camelCase")]
 #[allow(clippy::needless_pass_by_value)]
 /// Opens one exact local recent-project entry with the configured game and
-/// refreshes its cached metadata.
+/// refreshes its cached metadata; with `accept_source_update` a project for
+/// an older game version is updated first.
 ///
 /// # Errors
 ///
@@ -409,13 +382,18 @@ pub async fn open_recent_project(
         let entry = recent_entry(&state, &registry_path, &project_id)?;
         let root = recent_repository(&entry)?;
         let source = open_game(&app, &entry.source_language)?;
-        let outcome = open_with_game(
-            &state,
-            &root,
-            source,
-            &cache_root,
-            accept_source_update.unwrap_or(false),
-        )?;
+        if accept_source_update.unwrap_or(false) {
+            let (project, report) = update_with_game(&state, &root, source, &cache_root)?;
+            return Ok(GameOpenResultDto::Opened {
+                result: Box::new(remember_project(
+                    &state,
+                    project,
+                    Ok(registry_path),
+                    Some(report),
+                )),
+            });
+        }
+        let outcome = open_with_game(&state, &root, source, &cache_root)?;
         Ok(remembered_outcome(&state, outcome, Ok(registry_path)))
     })
     .await
@@ -536,16 +514,9 @@ pub fn default_projects_directory_path(app: tauri::AppHandle) -> CommandResult<S
     default_projects_directory(&app).map(|path| path.to_string_lossy().into_owned())
 }
 
-fn replace_project(
-    state: &DesktopState,
-    replacement: ProjectSession,
-) -> CommandResult<ProjectSummaryDto> {
+fn replace_project(state: &DesktopState, replacement: Session) -> CommandResult<ProjectSummaryDto> {
     let summary = ProjectSummaryDto::from_session(&replacement);
-    let root = replacement.repository_root().to_owned();
-    let mut project = state.lock_project()?;
-    *project = Some(replacement);
-    drop(project);
-    crate::git::refresh_merge_driver(state, &root);
+    *state.lock_project()? = Some(Arc::new(replacement));
     Ok(summary)
 }
 
@@ -564,30 +535,30 @@ pub(crate) fn current_project_with_state(
     state: &DesktopState,
 ) -> CommandResult<Option<ProjectSummaryDto>> {
     let project = state.lock_project()?;
-    Ok(project.as_ref().map(ProjectSummaryDto::from_session))
+    Ok(project
+        .as_ref()
+        .map(|session| ProjectSummaryDto::from_session(session)))
 }
 
 #[tauri::command(rename_all = "camelCase")]
-#[allow(clippy::needless_pass_by_value)]
-/// Returns per-sheet Workspace coverage for the active project.
+/// Returns how much of each sheet of the active project is translated. The
+/// first call reads every file of the project; later calls read only the
+/// files that changed.
 ///
 /// # Errors
 ///
-/// Returns a typed command error when no project is open or the desktop state
-/// lock cannot be read.
-pub fn translation_progress(
-    state: State<'_, DesktopState>,
-) -> CommandResult<Vec<SheetProgressDto>> {
-    translation_progress_with_state(&state)
+/// Returns a typed command error when no project is open or a file cannot
+/// be read.
+pub async fn translation_progress(app: tauri::AppHandle) -> CommandResult<Vec<SheetProgressDto>> {
+    run_blocking(move || translation_progress_with_state(&app.state::<DesktopState>())).await
 }
 
 pub(crate) fn translation_progress_with_state(
     state: &DesktopState,
 ) -> CommandResult<Vec<SheetProgressDto>> {
-    let project = state.lock_project()?;
-    let project = project.as_ref().ok_or_else(CommandError::no_project)?;
-    Ok(project
-        .translation_progress()
+    Ok(state
+        .session()?
+        .progress()?
         .into_iter()
         .map(SheetProgressDto::from)
         .collect())
@@ -605,19 +576,18 @@ pub fn close_project(state: State<'_, DesktopState>) -> CommandResult<()> {
 }
 
 pub(crate) fn close_project_with_state(state: &DesktopState) -> CommandResult<()> {
-    let mut project = state.lock_project()?;
-    *project = None;
+    *state.lock_project()? = None;
     Ok(())
 }
 
 #[tauri::command(rename_all = "camelCase")]
 #[allow(clippy::needless_pass_by_value)]
-/// Reads one bounded page of logical source rows and workspace overlays.
+/// Reads one bounded page of a sheet's rows with their translations.
 ///
 /// # Errors
 ///
 /// Returns a typed command error when no project is open, the page request is
-/// invalid, the source cannot be read, or source integrity fails.
+/// invalid, or the game or a file cannot be read.
 pub async fn page_translation_rows(
     app: tauri::AppHandle,
     sheet_name: String,
@@ -637,13 +607,32 @@ pub(crate) fn page_translation_rows_with_state(
     after: Option<TranslationRowCursorDto>,
     limit: u32,
 ) -> CommandResult<TranslationRowPageDto> {
-    let after = after.map(TranslationRowCursor::from);
-    let project = state.lock_project()?;
-    let project = project.as_ref().ok_or_else(CommandError::no_project)?;
-    project
-        .page_translation_rows(sheet_name, after.as_ref(), limit)
-        .map(Into::into)
-        .map_err(CommandError::from)
+    if !(1..=MAX_TRANSLATION_PAGE_SIZE).contains(&limit) {
+        return Err(CommandError::new(
+            "translationRead",
+            format!(
+                "translation page limit {limit} must be between 1 and {MAX_TRANSLATION_PAGE_SIZE}"
+            ),
+        ));
+    }
+    if let Some(after) = &after
+        && after.sheet_name != sheet_name
+    {
+        return Err(CommandError::new(
+            "translationRead",
+            format!(
+                "the cursor belongs to sheet {:?}, not {sheet_name:?}",
+                after.sheet_name
+            ),
+        ));
+    }
+    let session = state.session()?;
+    let page = session.page(
+        sheet_name,
+        after.map(|after| (after.row_id, after.subrow_id)),
+        limit as usize,
+    )?;
+    Ok(TranslationRowPageDto::new(sheet_name, page))
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -659,14 +648,7 @@ pub async fn source_in_other_languages(
     source_binding: SourceBindingDto,
 ) -> CommandResult<Vec<OtherLanguageTextDto>> {
     run_blocking(move || {
-        let source = {
-            let state = app.state::<DesktopState>();
-            let project = state.lock_project()?;
-            project
-                .as_ref()
-                .ok_or_else(CommandError::no_project)?
-                .source_handle()
-        };
+        let source = app.state::<DesktopState>().session()?.source_handle();
         let texts = source.cell_in_other_languages(
             &source_binding.sheet_name,
             source_binding.row_id,
@@ -710,26 +692,38 @@ pub(crate) fn sheet_dialogue_with_state(
     state: &DesktopState,
     sheet_name: &str,
 ) -> CommandResult<Option<SheetDialogueDto>> {
-    let source = {
-        let project = state.lock_project()?;
-        project
-            .as_ref()
-            .ok_or_else(CommandError::no_project)?
-            .source_handle()
-    };
+    let session = state.session()?;
+    let source = session.source_handle();
     let Some(dialogue) = source.dialogue(sheet_name)? else {
         return Ok(None);
     };
     let quest = match source.quest_row(sheet_name)? {
         Some((row_id, subrow_id)) => {
-            let project = state.lock_project()?;
-            let session = project.as_ref().ok_or_else(CommandError::no_project)?;
-            translation_row(session, QUEST_SHEET, row_id, subrow_id)?
+            let page = session.page(
+                QUEST_SHEET,
+                match (row_id, subrow_id) {
+                    (0, 0) => None,
+                    (row, 0) => Some((row - 1, u16::MAX)),
+                    (row, subrow) => Some((row, subrow - 1)),
+                },
+                1,
+            )?;
+            page.rows
+                .into_iter()
+                .find(|row| row.row == row_id && row.subrow == subrow_id)
                 .and_then(|row| row.cells.into_iter().next())
                 .map(|cell| QuestNameDto {
-                    source_binding: SourceBindingDto::from(&cell.source_binding),
-                    source_macro: cell.source_macro,
-                    target_macro: cell.translation.map(|overlay| overlay.target_macro),
+                    source_binding: SourceBindingDto {
+                        sheet_name: QUEST_SHEET.to_owned(),
+                        row_id,
+                        subrow_id,
+                        column_index: cell.column,
+                    },
+                    source_macro: cell.source,
+                    target_macro: cell
+                        .translation
+                        .map(|translation| translation.text)
+                        .filter(|text| !text.is_empty()),
                 })
         }
         None => None,
@@ -758,157 +752,162 @@ pub(crate) fn sheet_dialogue_with_state(
 /// The sheet whose rows name quests.
 const QUEST_SHEET: &str = "Quest";
 
-/// One logical row with its workspace overlays; `None` when the row has no
-/// translatable string.
-///
-/// # Errors
-///
-/// Returns an error when the sheet cannot be read.
-pub(crate) fn translation_row(
-    session: &ProjectSession,
-    sheet: &str,
-    row_id: u32,
-    subrow_id: u16,
-) -> Result<Option<TranslationRowView>, TranslationReadError> {
-    // The page cursor is exclusive, so start just before the row.
-    let cursor = match (row_id, subrow_id) {
-        (0, 0) => None,
-        (row, 0) => Some(TranslationRowCursor::new(sheet, row - 1, u16::MAX)),
-        (row, subrow) => Some(TranslationRowCursor::new(sheet, row, subrow - 1)),
-    };
-    let page = session.page_translation_rows(sheet, cursor.as_ref(), 1)?;
-    Ok(page
-        .rows
-        .into_iter()
-        .find(|view| view.row_id == row_id && view.subrow_id == subrow_id))
-}
-
 #[tauri::command(rename_all = "camelCase")]
 #[allow(clippy::needless_pass_by_value)]
-/// Creates or updates the target for one source occurrence.
+/// Sets the translation of one string; an empty text leaves it
+/// untranslated. Returns what its entry holds afterwards.
 ///
 /// # Errors
 ///
-/// Returns a typed command error when no project is open or the backend rejects
-/// the source, target, or persistence operation.
+/// Returns `translationInvalid` with the problems when the checks refuse the
+/// translation, or another typed command error when no project is open or
+/// the string or its file cannot be written.
 pub async fn set_translation_target(
     app: tauri::AppHandle,
     source_binding: SourceBindingDto,
     target_macro: String,
-) -> CommandResult<TranslationOverlayDto> {
+) -> CommandResult<Option<TranslationOverlayDto>> {
     run_blocking(move || {
         let state = app.state::<DesktopState>();
-        set_translation_target_with_state(&state, source_binding, &target_macro)
+        set_translation_target_with_state(&state, &source_binding, &target_macro)
     })
     .await
 }
 
 pub(crate) fn set_translation_target_with_state(
     state: &DesktopState,
-    source_binding: SourceBindingDto,
+    binding: &SourceBindingDto,
     target_macro: &str,
-) -> CommandResult<TranslationOverlayDto> {
-    let source_binding = SourceBinding::from(source_binding);
-    let mut project = state.lock_project()?;
-    let project = project.as_mut().ok_or_else(CommandError::no_project)?;
-    project
-        .set_target(&source_binding, target_macro)
-        .map_err(CommandError::from)
-        .and_then(|id| translation_overlay(project, id))
-}
-
-fn translation_overlay(
-    project: &ProjectSession,
-    translation_unit_id: TranslationUnitId,
-) -> CommandResult<TranslationOverlayDto> {
-    let unit = project
-        .workspace()
-        .unit(translation_unit_id)
-        .ok_or_else(|| {
-            CommandError::new(
-                "translationWorkspace",
-                format!("translation unit was not found: {translation_unit_id}"),
-            )
-        })?;
-    Ok(TranslationOverlayDto {
-        translation_unit_id: unit.id().to_string(),
-        target_macro: unit.target_macro().to_owned(),
-        review_state: unit.review_state().into(),
-        translator_note: unit.translator_note().map(str::to_owned),
-    })
+) -> CommandResult<Option<TranslationOverlayDto>> {
+    Ok(state
+        .session()?
+        .set_translation(
+            &binding.sheet_name,
+            binding.row_id,
+            binding.subrow_id,
+            binding.column_index,
+            target_macro,
+        )?
+        .map(Into::into))
 }
 
 #[tauri::command(rename_all = "camelCase")]
 #[allow(clippy::needless_pass_by_value)]
-/// Replaces or clears the note for one translation unit.
+/// Replaces or clears the translator's note of one string.
 ///
 /// # Errors
 ///
-/// Returns a typed command error when the ID is invalid, no project is open,
-/// or the backend rejects the operation.
+/// Returns a typed command error when no project is open or the string or
+/// its file cannot be written.
 pub async fn set_translation_note(
     app: tauri::AppHandle,
-    translation_unit_id: String,
+    source_binding: SourceBindingDto,
     note: Option<String>,
-) -> CommandResult<TranslationOverlayDto> {
+) -> CommandResult<Option<TranslationOverlayDto>> {
     run_blocking(move || {
         let state = app.state::<DesktopState>();
-        set_translation_note_with_state(&state, &translation_unit_id, note)
+        set_translation_note_with_state(&state, &source_binding, note.as_deref())
     })
     .await
 }
 
 pub(crate) fn set_translation_note_with_state(
     state: &DesktopState,
-    translation_unit_id: &str,
-    note: Option<String>,
-) -> CommandResult<TranslationOverlayDto> {
-    let mut project = state.lock_project()?;
-    let project = project.as_mut().ok_or_else(CommandError::no_project)?;
-    let translation_unit_id = parse_translation_unit_id(translation_unit_id)?;
-    project
-        .set_note(translation_unit_id, note)
-        .map_err(CommandError::from)
-        .and_then(|()| translation_overlay(project, translation_unit_id))
+    binding: &SourceBindingDto,
+    note: Option<&str>,
+) -> CommandResult<Option<TranslationOverlayDto>> {
+    Ok(state
+        .session()?
+        .set_note(
+            &binding.sheet_name,
+            binding.row_id,
+            binding.subrow_id,
+            binding.column_index,
+            note,
+        )?
+        .map(Into::into))
 }
 
 #[tauri::command(rename_all = "camelCase")]
 #[allow(clippy::needless_pass_by_value)]
-/// Sets the explicit review state for one translation unit.
+/// Adds or removes a term exception of one string: the glossary term does
+/// not apply to it.
 ///
 /// # Errors
 ///
-/// Returns a typed command error when the ID is invalid, no project is open,
-/// or the backend rejects the operation.
-pub async fn set_translation_review_state(
+/// Returns `termExceptionInvalid` for a term that cannot be written as a
+/// flag, or a typed command error when no project is open or the string or
+/// its file cannot be written.
+pub async fn set_translation_term_exception(
     app: tauri::AppHandle,
-    translation_unit_id: String,
-    review_state: ReviewStateDto,
-) -> CommandResult<TranslationOverlayDto> {
+    source_binding: SourceBindingDto,
+    term: String,
+    add: bool,
+) -> CommandResult<Option<TranslationOverlayDto>> {
     run_blocking(move || {
+        if add && !aeria_po::can_be_exception(&term) {
+            return Err(term_exception_invalid(&term));
+        }
         let state = app.state::<DesktopState>();
-        set_translation_review_state_with_state(&state, &translation_unit_id, review_state)
+        Ok(state
+            .session()?
+            .set_term_exception(
+                &source_binding.sheet_name,
+                source_binding.row_id,
+                source_binding.subrow_id,
+                source_binding.column_index,
+                &term,
+                add,
+            )?
+            .map(Into::into))
     })
     .await
 }
 
-pub(crate) fn set_translation_review_state_with_state(
-    state: &DesktopState,
-    translation_unit_id: &str,
-    review_state: ReviewStateDto,
-) -> CommandResult<TranslationOverlayDto> {
-    let mut project = state.lock_project()?;
-    let project = project.as_mut().ok_or_else(CommandError::no_project)?;
-    let translation_unit_id = parse_translation_unit_id(translation_unit_id)?;
-    let review_state: ReviewState = review_state.into();
-    project
-        .set_review_state(translation_unit_id, review_state)
-        .map_err(CommandError::from)
-        .and_then(|()| translation_overlay(project, translation_unit_id))
+/// What the checks find in a string's saved translation, and its term
+/// exceptions.
+#[derive(Clone, Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TranslationFindingsDto {
+    pub issues: Vec<crate::dto::IssueDto>,
+    pub term_exceptions: Vec<String>,
 }
 
-pub(crate) fn parse_translation_unit_id(value: &str) -> CommandResult<TranslationUnitId> {
-    TranslationUnitId::from_str(value).map_err(CommandError::from)
+#[tauri::command(rename_all = "camelCase")]
+#[allow(clippy::needless_pass_by_value)]
+/// What the checks find in the saved translation of one string, problems
+/// then advice, with its term exceptions.
+///
+/// # Errors
+///
+/// Returns a typed command error when no project is open or the string or
+/// its file cannot be read.
+pub async fn translation_findings(
+    app: tauri::AppHandle,
+    source_binding: SourceBindingDto,
+) -> CommandResult<TranslationFindingsDto> {
+    run_blocking(move || {
+        let state = app.state::<DesktopState>();
+        let (issues, term_exceptions) = state.session()?.findings(
+            &source_binding.sheet_name,
+            source_binding.row_id,
+            source_binding.subrow_id,
+            source_binding.column_index,
+        )?;
+        Ok(TranslationFindingsDto {
+            issues: issues.iter().map(crate::dto::IssueDto::from).collect(),
+            term_exceptions,
+        })
+    })
+    .await
+}
+
+/// The error of a term that cannot be written as a term exception.
+pub(crate) fn term_exception_invalid(term: &str) -> CommandError {
+    CommandError::new(
+        "termExceptionInvalid",
+        format!("the term {term:?} cannot be an exception: it is empty or has a comma"),
+    )
 }
 
 #[cfg(test)]
@@ -919,7 +918,7 @@ mod tests {
     use aeria_sqpack::testing::{FakeGame, TextSheet};
 
     use super::*;
-    use crate::dto::{ProjectSheetDto, ReviewStateDto, SourceBindingDto};
+    use crate::dto::ProjectSheetDto;
     use crate::scene::{DialogueKindDto, DialogueRoleDto};
     use crate::test_support::{GAME_VERSION, TestGame, open, test_game};
 
@@ -933,19 +932,12 @@ mod tests {
     }
 
     fn initialize(state: &DesktopState, root: &Path, game: &TestGame) -> ProjectSummaryDto {
-        initialize_with_game(
-            state,
-            root,
-            open(game.path()),
-            &root.join("../cache"),
-            "fr".to_owned(),
-        )
-        .expect("initialize project")
+        initialize_with_game(state, root, open(game.path()), &root.join("../cache"), "fr")
+            .expect("initialize project")
     }
 
     fn open_project(state: &DesktopState, root: &Path, game_path: &Path) -> GameOpenOutcome {
-        open_with_game(state, root, open(game_path), &root.join("../cache"), false)
-            .expect("open project")
+        open_with_game(state, root, open(game_path), &root.join("../cache")).expect("open project")
     }
 
     fn registry_path(directory: &Path) -> PathBuf {
@@ -994,7 +986,7 @@ mod tests {
             &root,
             open(&game_folder),
             &directory.path().join("cache"),
-            "fr".to_owned(),
+            "fr",
         )
         .expect("initialize project");
         let quest_name = SourceBindingDto {
@@ -1003,7 +995,7 @@ mod tests {
             subrow_id: 0,
             column_index: 0,
         };
-        set_translation_target_with_state(&state, quest_name.clone(), "Comme à la maison")
+        set_translation_target_with_state(&state, &quest_name, "Comme à la maison")
             .expect("target");
 
         let scene = sheet_dialogue_with_state(&state, "quest/001/ManFst004_00124")
@@ -1060,6 +1052,12 @@ mod tests {
             page_translation_rows_with_state(&state, "Synthetic", None, 1).expect_err("no project"),
             CommandError::no_project()
         );
+        assert_eq!(
+            set_translation_target_with_state(&state, &binding(), "t")
+                .expect_err("no project")
+                .code,
+            "noProjectOpen"
+        );
         close_project_with_state(&state).expect("first close");
         close_project_with_state(&state).expect("second close");
     }
@@ -1086,6 +1084,8 @@ mod tests {
             "{:?}",
             summary.sheets
         );
+        assert!(root.join("po/Synthetic.po").is_file());
+        assert!(root.join("aeria-knowledge/terms.csv").is_file());
         assert_eq!(
             current_project_with_state(&state).expect("current"),
             Some(summary)
@@ -1094,61 +1094,60 @@ mod tests {
         let page = page_translation_rows_with_state(&state, "Synthetic", None, 10).expect("page");
         assert_eq!(page.rows[1].cells[0].source_macro, "Hello there");
         assert!(page.rows[1].cells[0].translation.is_none());
-        assert_eq!(
-            set_translation_note_with_state(&state, "not-an-id", None)
-                .expect_err("invalid ID")
-                .code,
-            "invalidTranslationUnitId"
-        );
 
-        let id = set_translation_target_with_state(&state, binding(), "Bonjour")
-            .expect("target")
-            .translation_unit_id;
-        set_translation_target_with_state(&state, binding(), "Salut").expect("edit");
-        let noted =
-            set_translation_note_with_state(&state, &id, Some("checked".to_owned())).expect("note");
+        set_translation_target_with_state(&state, &binding(), "Bonjour").expect("target");
+        set_translation_target_with_state(&state, &binding(), "Salut").expect("edit");
+        let noted = set_translation_note_with_state(&state, &binding(), Some("checked"))
+            .expect("note")
+            .expect("overlay");
         assert_eq!(noted.translator_note.as_deref(), Some("checked"));
-        let reviewed =
-            set_translation_review_state_with_state(&state, &id, ReviewStateDto::Reviewed)
-                .expect("review");
-        assert_eq!(reviewed.review_state, ReviewStateDto::Reviewed);
+        assert_eq!(
+            set_translation_target_with_state(&state, &binding(), "Salut <If(")
+                .expect_err("invalid")
+                .code,
+            "translationInvalid"
+        );
         assert_eq!(
             translation_progress_with_state(&state).expect("progress"),
-            vec![SheetProgressDto {
-                sheet_name: "Synthetic".to_owned(),
-                translated: 1,
-                reviewed: 1,
-                needs_review: 0,
-            }]
+            vec![
+                SheetProgressDto {
+                    sheet_name: "Addon".to_owned(),
+                    strings: 2,
+                    translated: 0,
+                    fuzzy: 0,
+                },
+                SheetProgressDto {
+                    sheet_name: "Synthetic".to_owned(),
+                    strings: 2,
+                    translated: 1,
+                    fuzzy: 0,
+                }
+            ]
         );
 
         close_project_with_state(&state).expect("close");
         assert!(matches!(
             open_project(&state, &root, game.path()),
-            GameOpenOutcome::Opened {
-                source_update: None,
-                ..
-            }
+            GameOpenOutcome::Opened { .. }
         ));
         let page = page_translation_rows_with_state(&state, "Synthetic", None, 10).expect("page");
         let overlay = page.rows[1].cells[0].translation.as_ref().expect("overlay");
-        assert_eq!(overlay.translation_unit_id, id);
         assert_eq!(overlay.target_macro, "Salut");
-        assert_eq!(overlay.review_state, ReviewStateDto::Reviewed);
+        assert!(!overlay.fuzzy);
         assert_eq!(overlay.translator_note.as_deref(), Some("checked"));
     }
 
     #[test]
-    fn a_newer_game_plans_the_update_without_writing_and_an_older_game_is_refused() {
+    fn a_newer_game_asks_for_an_update_and_an_older_game_is_refused() {
         let directory = tempfile::tempdir().expect("directory");
         let root = directory.path().join("project");
         fs::create_dir_all(&root).expect("root");
         let game = test_game();
         let state = DesktopState::new();
         initialize(&state, &root, &game);
-        set_translation_target_with_state(&state, binding(), "Bonjour").expect("target");
+        set_translation_target_with_state(&state, &binding(), "Bonjour").expect("target");
         close_project_with_state(&state).expect("close");
-        let manifest = fs::read(root.join(".aeria/manifest.json")).expect("manifest");
+        let settings = fs::read(root.join("aeria.json")).expect("settings");
 
         let newer = tempfile::tempdir().expect("newer game");
         FakeGame::new("2026.10.01.0000.0000")
@@ -1158,34 +1157,31 @@ mod tests {
             )
             .write(newer.path())
             .expect("write");
-        let GameOpenOutcome::SourceUpdateRequired { report } =
+        let GameOpenOutcome::SourceUpdateRequired { update } =
             open_project(&state, &root, newer.path())
         else {
             panic!("an update is required");
         };
-        assert_eq!(report.previous_game_version, GAME_VERSION);
-        assert_eq!(report.source_changed, 1);
+        assert_eq!(update.previous_game_version, GAME_VERSION);
         assert_eq!(
-            fs::read(root.join(".aeria/manifest.json")).expect("manifest"),
-            manifest
+            fs::read(root.join("aeria.json")).expect("settings"),
+            settings
         );
         assert_eq!(current_project_with_state(&state).expect("state"), None);
 
-        let updated = open_with_game(
+        let (project, report) = update_with_game(
             &state,
             &root,
             open(newer.path()),
             &directory.path().join("cache"),
-            true,
         )
         .expect("update");
-        assert!(matches!(
-            updated,
-            GameOpenOutcome::Opened {
-                source_update: Some(_),
-                ..
-            }
-        ));
+        assert_eq!(project.game_version, "2026.10.01.0000.0000");
+        assert_eq!(report.fuzzy, 1);
+        let page = page_translation_rows_with_state(&state, "Synthetic", None, 10).expect("page");
+        let overlay = page.rows[0].cells[0].translation.as_ref().expect("kept");
+        assert_eq!(overlay.target_macro, "Bonjour");
+        assert!(overlay.fuzzy);
         close_project_with_state(&state).expect("close");
 
         let error = open_with_game(
@@ -1193,7 +1189,6 @@ mod tests {
             &root,
             open(game.path()),
             &directory.path().join("cache"),
-            false,
         )
         .err()
         .expect("an older game is refused");
@@ -1241,7 +1236,7 @@ mod tests {
         forget_recent_project_from_registry(&state, &path, &entry.id).expect("forget");
         assert!(ProjectRegistry::new(&path).load().expect("load").is_empty());
         assert!(current_project_with_state(&state).expect("state").is_some());
-        assert!(root.join(".aeria").is_dir());
+        assert!(root.join("po").is_dir());
     }
 
     #[test]
@@ -1280,35 +1275,6 @@ mod tests {
                 .expect_err("empty")
                 .code,
             "invalidInput"
-        );
-    }
-
-    #[test]
-    fn mutation_commands_check_for_a_project_after_parsing_ids() {
-        let state = DesktopState::new();
-        assert_eq!(
-            set_translation_note_with_state(&state, "not-an-id", None)
-                .expect_err("no project")
-                .code,
-            "noProjectOpen"
-        );
-        assert_eq!(
-            set_translation_review_state_with_state(&state, "x", ReviewStateDto::Reviewed)
-                .expect_err("no project")
-                .code,
-            "noProjectOpen"
-        );
-        assert_eq!(
-            set_translation_target_with_state(&state, binding(), "t")
-                .expect_err("no project")
-                .code,
-            "noProjectOpen"
-        );
-        assert_eq!(
-            parse_translation_unit_id("not-an-id")
-                .expect_err("invalid")
-                .code,
-            "invalidTranslationUnitId"
         );
     }
 }

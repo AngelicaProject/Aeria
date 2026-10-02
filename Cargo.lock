@@ -9,34 +9,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
 
 [[package]]
-name = "aeria-ai"
-version = "0.1.0"
-dependencies = [
- "aeria-se",
- "base64 0.23.1",
- "csv",
- "fs2",
- "html2text",
- "keyring",
- "reqwest",
- "rusqlite",
- "rustls",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror 2.0.20",
- "tokio",
- "uuid",
-]
-
-[[package]]
 name = "aeria-check"
 version = "0.1.0"
 dependencies = [
  "aeria-export",
  "aeria-fonts",
  "aeria-git",
- "aeria-workspace",
+ "aeria-knowledge",
+ "aeria-po",
  "serde_json",
  "tempfile",
 ]
@@ -45,7 +25,6 @@ dependencies = [
 name = "aeria-core"
 version = "0.1.0"
 dependencies = [
- "sha2 0.11.0",
  "thiserror 2.0.20",
 ]
 
@@ -53,19 +32,18 @@ dependencies = [
 name = "aeria-desktop"
 version = "0.1.0"
 dependencies = [
- "aeria-ai",
  "aeria-core",
  "aeria-export",
  "aeria-fonts",
  "aeria-git",
+ "aeria-knowledge",
+ "aeria-model",
+ "aeria-po",
  "aeria-projects",
  "aeria-publish",
- "aeria-rebase",
  "aeria-se",
- "aeria-search",
  "aeria-source",
  "aeria-sqpack",
- "aeria-workspace",
  "semver",
  "serde",
  "serde_json",
@@ -86,10 +64,10 @@ version = "0.1.0"
 dependencies = [
  "aeria-core",
  "aeria-fonts",
+ "aeria-po",
  "aeria-se",
  "aeria-source",
  "aeria-sqpack",
- "aeria-workspace",
  "brotli",
  "p256",
  "serde",
@@ -115,8 +93,53 @@ dependencies = [
 name = "aeria-git"
 version = "0.1.0"
 dependencies = [
- "aeria-core",
- "aeria-workspace",
+ "aeria-po",
+ "tempfile",
+ "thiserror 2.0.20",
+]
+
+[[package]]
+name = "aeria-knowledge"
+version = "0.1.0"
+dependencies = [
+ "aho-corasick",
+ "csv",
+ "serde",
+ "tempfile",
+ "thiserror 2.0.20",
+]
+
+[[package]]
+name = "aeria-model"
+version = "0.1.0"
+dependencies = [
+ "aeria-knowledge",
+ "aeria-po",
+ "aeria-se",
+ "aeria-source",
+ "aeria-sqpack",
+ "aho-corasick",
+ "base64 0.23.1",
+ "keyring",
+ "reqwest",
+ "rustls",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.20",
+ "tokio",
+]
+
+[[package]]
+name = "aeria-po"
+version = "0.1.0"
+dependencies = [
+ "aeria-knowledge",
+ "aeria-se",
+ "aeria-source",
+ "aeria-sqpack",
+ "regex",
+ "serde",
  "serde_json",
  "tempfile",
  "thiserror 2.0.20",
@@ -148,17 +171,6 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.20",
  "tokio",
-]
-
-[[package]]
-name = "aeria-rebase"
-version = "0.1.0"
-dependencies = [
- "aeria-core",
- "aeria-source",
- "aeria-sqpack",
- "tempfile",
- "thiserror 2.0.20",
 ]
 
 [[package]]
@@ -196,22 +208,6 @@ version = "0.1.0"
 dependencies = [
  "crc32fast",
  "flate2",
- "thiserror 2.0.20",
-]
-
-[[package]]
-name = "aeria-workspace"
-version = "0.1.0"
-dependencies = [
- "aeria-core",
- "aeria-rebase",
- "aeria-se",
- "aeria-source",
- "aeria-sqpack",
- "serde",
- "serde_json",
- "sha2 0.11.0",
- "tempfile",
  "thiserror 2.0.20",
 ]
 
@@ -1223,7 +1219,7 @@ dependencies = [
  "bit-set",
  "cssparser",
  "foldhash",
- "html5ever 0.38.0",
+ "html5ever",
  "precomputed-hash",
  "selectors",
  "tendril",
@@ -2032,35 +2028,13 @@ dependencies = [
 ]
 
 [[package]]
-name = "html2text"
-version = "0.17.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d1c97eea9d3e6524d8d2a4643ce0e3135500c4c7ca1d02393a485f871bef69d8"
-dependencies = [
- "html5ever 0.39.0",
- "tendril",
- "thiserror 2.0.20",
- "unicode-width",
-]
-
-[[package]]
 name = "html5ever"
 version = "0.38.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1054432bae2f14e0061e33d23402fbaa67a921d319d56adc6bcf887ddad1cbc2"
 dependencies = [
  "log",
- "markup5ever 0.38.0",
-]
-
-[[package]]
-name = "html5ever"
-version = "0.39.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "46a1761807faccc9a19e86944bbf40610014066306f96edcdedc2fb714bcb7b8"
-dependencies = [
- "log",
- "markup5ever 0.39.0",
+ "markup5ever",
 ]
 
 [[package]]
@@ -2708,17 +2682,6 @@ name = "markup5ever"
 version = "0.38.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8983d30f2915feeaaab2d6babdd6bc7e9ed1a00b66b5e6d74df19aa9c0e91862"
-dependencies = [
- "log",
- "tendril",
- "web_atoms",
-]
-
-[[package]]
-name = "markup5ever"
-version = "0.39.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7122d987ec5f704ee56f6e5b41a7d93722e9aae27ae07cafa4036c4d3f9757de"
 dependencies = [
  "log",
  "tendril",
@@ -5062,7 +5025,19 @@ dependencies = [
  "mio",
  "pin-project-lite",
  "socket2",
+ "tokio-macros",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "tokio-macros"
+version = "2.7.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "78773a2a397f451582ce068015985c33193cf6dea8b74d2a639fe457b2f07b0e"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 3.0.6",
 ]
 
 [[package]]
@@ -5388,12 +5363,6 @@ name = "unicode-segmentation"
 version = "1.13.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c6f5d3c3b1bf09027a88a6bc961fc00497d651009560b5463668dc81b0fa87a8"
-
-[[package]]
-name = "unicode-width"
-version = "0.2.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b4ac048d71ede7ee76d585517add45da530660ef4390e49b098733c6e897f254"
 
 [[package]]
 name = "untrusted"

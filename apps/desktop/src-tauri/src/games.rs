@@ -21,7 +21,7 @@ type CommandResult<T> = Result<T, CommandError>;
 
 const STEAM_FOLDER: &str = "FINAL FANTASY XIV Online";
 const MAX_VERSION_FILE_BYTES: u64 = 256;
-const SETTINGS_FILE: &str = "game-settings.json";
+pub(crate) const SETTINGS_FILE: &str = "game-settings.json";
 const SETTINGS_VERSION: u32 = 1;
 const MAX_SETTINGS_FILE_BYTES: u64 = 64 * 1024;
 
@@ -178,7 +178,13 @@ fn settings_dto(configured_path: Option<String>) -> GameSettingsDto {
 /// installation, `gameInstallationRequired` when none is chosen or detected,
 /// or `gameSettings` when the setting cannot be read.
 pub(crate) fn resolve_game_path(app: &tauri::AppHandle) -> CommandResult<String> {
-    match load_game_path(&settings_path(app)?)? {
+    resolve_game_path_with(&settings_path(app)?)
+}
+
+/// [`resolve_game_path`] with the settings file at `settings_path`, for use
+/// without a running application.
+pub(crate) fn resolve_game_path_with(settings_path: &Path) -> CommandResult<String> {
+    match load_game_path(settings_path)? {
         Some(path) if installation_version(Path::new(&path)).is_some() => Ok(path),
         Some(path) => Err(CommandError::new(
             "gameInstallationInvalid",

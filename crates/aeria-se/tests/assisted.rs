@@ -122,14 +122,32 @@ fn game_data_inside_a_dropped_condition_stays() {
 }
 
 #[test]
-fn formatting_stays_as_often_as_the_source_has_it_in_any_order() {
+fn formatting_may_change_but_what_it_opens_it_closes() {
     let source = "<i>Heavens</i> and <b>earth</b>";
+    // As the official localizations do: moved, dropped, added, repeated.
     assert!(check_assisted_structure(source, "<b>Земля</b> и <i>небеса</i>").is_ok());
-    assert!(refused(source, "<i>Небеса</i> и земля").contains("keep the source's formatting"));
-    assert!(
-        refused(source, "<i>Небеса</i> и <b>земля</b> <i>!</i>")
-            .contains("appears 1× in the source and 2× in the translation")
-    );
+    assert!(check_assisted_structure(source, "Небеса и земля").is_ok());
+    assert!(check_assisted_structure(source, "<i>Небеса</i> и <b>земля</b> <i>!</i>").is_ok());
+    assert!(check_assisted_structure("Heavens and earth", "<i>Небеса</i> и земля").is_ok());
+    let colored = "Use <ui-color 500><ui-edge-color 501>Fast Blade</ui-edge-color></ui-color>.";
+    assert!(check_assisted_structure(colored, "Используйте «Быстрый клинок».").is_ok());
+
+    // Nothing may stay open past the string, or close before it opens.
+    assert!(refused(source, "<i>Небеса и земля").contains("needs its </i>"));
+    assert!(refused(colored, "Используйте <ui-color 500>Быстрый клинок.").contains("</ui-color>"));
+    assert!(refused(source, "Небеса</i> и <i>земля").contains("comes before the <i>"));
+    assert!(refused(source, "<i>Небеса</i></i> и земля").contains("without its <i>"));
+    // What a source forgot to close may stay open or be closed, never more.
+    let open = "<i>Danger";
+    assert!(check_assisted_structure(open, "<i>Опасно").is_ok());
+    assert!(check_assisted_structure(open, "<i>Опасно</i>").is_ok());
+    assert!(check_assisted_structure(open, "Опасно").is_ok());
+    assert!(refused(open, "<i><i>Опасно").contains("needs its </i>"));
+    // A stray closing tag of the source may be dropped, not added to.
+    let stray = "I </i>loathe</i> lemons!";
+    assert!(check_assisted_structure(stray, "Я <i>ненавижу</i> лимоны!").is_ok());
+    assert!(check_assisted_structure(stray, "Я ненавижу</i> лимоны!").is_ok());
+    assert!(refused(stray, "Я </i>ненавижу</i></i> лимоны!").contains("without its <i>"));
 }
 
 #[test]
@@ -141,6 +159,25 @@ fn layout_and_text_transforms_are_free() {
         refused("You, <string $gs1>!", "Ты!").contains("<string $gs1> of the source is missing"),
         "a transform that shows a value is game data"
     );
+}
+
+#[test]
+fn a_letter_case_transform_is_explained_as_what_capitalizes_game_data() {
+    // The game stores "paladin" and shows "Paladin" through the transform;
+    // a translation that drops it shows the name in lower case.
+    let found = constructs("<title-case><sheet ClassJob $n1 0></title-case>").expect("constructs");
+    assert!(found[0].spelling.starts_with("<title-case>"));
+    assert_eq!(found[0].rule, ConstructRule::LetterCase);
+    let legend = found[0].legend();
+    assert!(
+        legend.contains("keep a case transform around game data"),
+        "{legend}"
+    );
+    assert!(
+        legend.contains("<capitalize> in place of <title-case>"),
+        "{legend}"
+    );
+    assert_eq!(found[1].rule, ConstructRule::Keep);
 }
 
 #[test]

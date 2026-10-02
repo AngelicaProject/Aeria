@@ -1,7 +1,7 @@
 //! Project-shared pack settings (Pack Settings v1, `aeria-pack.json`).
 //!
 //! The file is committed with the project so every maintainer exports the
-//! same pack identity and the repository's feed workflow can build the feed
+//! same pack and the repository's feed workflow can build the feed
 //! without Aeria. See `docs/formats/pack-settings-v1.md`.
 
 use std::fs;
@@ -11,7 +11,7 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 
 use crate::error::ExportError;
-use crate::manifest::{Publisher, is_pack_id, is_version};
+use crate::manifest::{Team, check_authors, is_version};
 use crate::transport::write_file_atomically;
 
 /// The project-root file name of Pack Settings v1.
@@ -21,9 +21,10 @@ const FORMAT_VERSION: u64 = 1;
 /// Release-independent pack metadata shared by all maintainers.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PackSettings {
-    pub pack_id: String,
     pub title: String,
-    pub publisher: Publisher,
+    pub team: Team,
+    /// The people credited in the pack; may be empty.
+    pub authors: Vec<String>,
     pub license: Option<String>,
     pub min_harmonia: String,
     /// Fingerprint of the key that signs published packs; `None` until a
@@ -35,9 +36,10 @@ pub struct PackSettings {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct SettingsJson {
     format_version: u64,
-    pack_id: String,
     title: String,
-    publisher: PublisherJson,
+    team: TeamJson,
+    #[serde(default)]
+    authors: Vec<String>,
     #[serde(default)]
     license: Option<String>,
     min_harmonia: String,
@@ -47,7 +49,7 @@ struct SettingsJson {
 
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-struct PublisherJson {
+struct TeamJson {
     name: String,
     #[serde(default)]
     url: Option<String>,
@@ -95,12 +97,12 @@ impl PackSettings {
         let json: SettingsJson = serde_json::from_value(value)
             .map_err(|error| ExportError::Settings(error.to_string()))?;
         let settings = Self {
-            pack_id: json.pack_id,
             title: json.title,
-            publisher: Publisher {
-                name: json.publisher.name,
-                url: json.publisher.url,
+            team: Team {
+                name: json.team.name,
+                url: json.team.url,
             },
+            authors: json.authors,
             license: json.license,
             min_harmonia: json.min_harmonia,
             signing_key_fingerprint: json.signing_key_fingerprint,
@@ -115,13 +117,10 @@ impl PackSettings {
     /// Returns [`ExportError::Settings`] naming the first invalid field.
     pub fn validate(&self) -> Result<(), ExportError> {
         let fail = |reason: &str| Err(ExportError::Settings(reason.to_owned()));
-        if !is_pack_id(&self.pack_id) {
-            return fail("packId must match [a-z0-9][a-z0-9-]{0,63}");
-        }
         for (field, value) in [
             ("title", Some(&self.title)),
-            ("publisher.name", Some(&self.publisher.name)),
-            ("publisher.url", self.publisher.url.as_ref()),
+            ("team.name", Some(&self.team.name)),
+            ("team.url", self.team.url.as_ref()),
             ("license", self.license.as_ref()),
         ] {
             if value.is_some_and(|v| v.trim().is_empty() || v.trim() != v) {
@@ -129,6 +128,9 @@ impl PackSettings {
                     "{field} must be non-empty without surrounding whitespace"
                 )));
             }
+        }
+        if let Err(reason) = check_authors(&self.authors) {
+            return fail(&reason);
         }
         if !is_version(&self.min_harmonia) {
             return fail("minHarmonia must be a dotted numeric version");
@@ -152,12 +154,12 @@ impl PackSettings {
     pub fn to_canonical_json(&self) -> String {
         let json = SettingsJson {
             format_version: FORMAT_VERSION,
-            pack_id: self.pack_id.clone(),
             title: self.title.clone(),
-            publisher: PublisherJson {
-                name: self.publisher.name.clone(),
-                url: self.publisher.url.clone(),
+            team: TeamJson {
+                name: self.team.name.clone(),
+                url: self.team.url.clone(),
             },
+            authors: self.authors.clone(),
             license: self.license.clone(),
             min_harmonia: self.min_harmonia.clone(),
             signing_key_fingerprint: self.signing_key_fingerprint.clone(),
@@ -187,12 +189,12 @@ mod tests {
 
     fn settings() -> PackSettings {
         PackSettings {
-            pack_id: "ru-main".to_owned(),
             title: "Русский перевод".to_owned(),
-            publisher: Publisher {
+            team: Team {
                 name: "Example team".to_owned(),
                 url: None,
             },
+            authors: vec!["Анна".to_owned(), "pokeda".to_owned()],
             license: Some("CC-BY-NC-SA-4.0".to_owned()),
             min_harmonia: "1.0.0".to_owned(),
             signing_key_fingerprint: Some("ab".repeat(32)),
@@ -205,7 +207,7 @@ mod tests {
         assert_eq!(
             text,
             format!(
-                "{{\n  \"formatVersion\": 1,\n  \"packId\": \"ru-main\",\n  \"title\": \"Русский перевод\",\n  \"publisher\": {{\n    \"name\": \"Example team\",\n    \"url\": null\n  }},\n  \"license\": \"CC-BY-NC-SA-4.0\",\n  \"minHarmonia\": \"1.0.0\",\n  \"signingKeyFingerprint\": \"{}\"\n}}\n",
+                "{{\n  \"formatVersion\": 1,\n  \"title\": \"Русский перевод\",\n  \"team\": {{\n    \"name\": \"Example team\",\n    \"url\": null\n  }},\n  \"authors\": [\n    \"Анна\",\n    \"pokeda\"\n  ],\n  \"license\": \"CC-BY-NC-SA-4.0\",\n  \"minHarmonia\": \"1.0.0\",\n  \"signingKeyFingerprint\": \"{}\"\n}}\n",
                 "ab".repeat(32)
             )
         );
@@ -221,7 +223,9 @@ mod tests {
         let valid = settings().to_canonical_json();
         for text in [
             valid.replace("\"formatVersion\": 1", "\"formatVersion\": 2"),
-            valid.replace("ru-main", "RU"),
+            valid.replace("\"title\"", "\"packId\": \"ru-main\",\n  \"title\""),
+            valid.replace("\"pokeda\"", "\"Анна\""),
+            valid.replace("\"pokeda\"", "\" \""),
             valid.replace("1.0.0", "1"),
             valid.replace("Example team", " "),
             valid.replace(&"ab".repeat(32), "AB"),

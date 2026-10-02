@@ -1,16 +1,16 @@
 //! Readable changes of the project files a checkpoint commits besides the
-//! translations: glossary terms, guidance lines, settings fields, and font
-//! files. Used for uncommitted changes and for commits in history, so both
+//! translations: terms, lines of the other knowledge files, settings fields,
+//! and font files. Used for uncommitted changes and for commits in history, so both
 //! read the same way. See `docs/architecture/git.md`.
 
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use aeria_ai::guidance::{GlossaryEntry, parse_glossary};
 use aeria_git::{
-    ATTRIBUTES_FILE, COLLABORATION_FILE, FEED_WORKFLOW_FILE, FONT_SETTINGS_FILE, FONTS_DIR,
-    GLOSSARY_FILE, GUIDANCE_FILE, GitError, GitRepository, PACK_SETTINGS_FILE, PROJECT_PATHS,
+    ATTRIBUTES_FILE, FEED_WORKFLOW_FILE, FONT_SETTINGS_FILE, FONTS_DIR, GitError, GitRepository,
+    KNOWLEDGE_DIR, PACK_SETTINGS_FILE, PROJECT_PATHS,
 };
+use aeria_knowledge::{GlossaryEntry, parse_glossary};
 use serde::Serialize;
 
 /// Details beyond this many are summarized as truncated.
@@ -19,12 +19,15 @@ const MAX_DETAILS: usize = 200;
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ProjectAreaDto {
-    Glossary,
-    Guidance,
+    /// `aeria-knowledge/terms.csv`.
+    Terms,
+    /// The other files of `aeria-knowledge/`.
+    Knowledge,
+    /// `aeria.json`: the project's languages and game version.
+    ProjectSettings,
     PackSettings,
     FontSettings,
     FontFile,
-    Collaboration,
     GitAttributes,
     FeedWorkflow,
     CheckWorkflow,
@@ -69,22 +72,29 @@ pub struct ProjectChangeDto {
 /// Whether a project-relative path is a project file (not a translation shard).
 #[must_use]
 pub fn is_project_path(path: &str) -> bool {
-    PROJECT_PATHS
-        .iter()
-        .any(|project| path == *project || (*project == FONTS_DIR && path.starts_with("fonts/")))
+    PROJECT_PATHS.iter().any(|project| {
+        path == *project
+            || ((*project == FONTS_DIR || *project == KNOWLEDGE_DIR)
+                && path
+                    .strip_prefix(project)
+                    .is_some_and(|rest| rest.starts_with('/')))
+    })
 }
+
+/// `aeria-knowledge/terms.csv`.
+const TERMS_PATH: &str = "aeria-knowledge/terms.csv";
 
 fn area_of(path: &str) -> Option<ProjectAreaDto> {
     Some(match path {
-        GLOSSARY_FILE => ProjectAreaDto::Glossary,
-        GUIDANCE_FILE => ProjectAreaDto::Guidance,
+        TERMS_PATH => ProjectAreaDto::Terms,
+        aeria_git::SETTINGS_FILE => ProjectAreaDto::ProjectSettings,
         PACK_SETTINGS_FILE => ProjectAreaDto::PackSettings,
         FONT_SETTINGS_FILE => ProjectAreaDto::FontSettings,
-        COLLABORATION_FILE => ProjectAreaDto::Collaboration,
         ATTRIBUTES_FILE => ProjectAreaDto::GitAttributes,
         FEED_WORKFLOW_FILE => ProjectAreaDto::FeedWorkflow,
         aeria_git::CHECK_WORKFLOW_FILE => ProjectAreaDto::CheckWorkflow,
         _ if path.starts_with("fonts/") => ProjectAreaDto::FontFile,
+        _ if path.starts_with("aeria-knowledge/") => ProjectAreaDto::Knowledge,
         _ => return None,
     })
 }
@@ -110,11 +120,11 @@ pub fn compare(
         ProjectAreaDto::FontFile | ProjectAreaDto::FeedWorkflow | ProjectAreaDto::CheckWorkflow => {
             Some(Vec::new())
         }
-        ProjectAreaDto::Glossary => glossary_details(before, after),
-        ProjectAreaDto::Guidance | ProjectAreaDto::GitAttributes => text_details(before, after),
+        ProjectAreaDto::Terms => glossary_details(before, after),
+        ProjectAreaDto::Knowledge | ProjectAreaDto::GitAttributes => text_details(before, after),
         ProjectAreaDto::PackSettings
-        | ProjectAreaDto::FontSettings
-        | ProjectAreaDto::Collaboration => json_details(before, after),
+        | ProjectAreaDto::ProjectSettings
+        | ProjectAreaDto::FontSettings => json_details(before, after),
     };
     let unreadable = details.is_none();
     let mut details = details.unwrap_or_default();
@@ -202,8 +212,8 @@ fn text_lines(bytes: Option<&[u8]>) -> Option<Vec<String>> {
 /// Added and removed lines from a longest-common-subsequence diff.
 fn text_details(before: Option<&[u8]>, after: Option<&[u8]>) -> Option<Vec<ChangeDetailDto>> {
     let (old, new) = (text_lines(before)?, text_lines(after)?);
-    // Guidance is at most 64 KiB, so the quadratic table stays small; beyond
-    // that only the file-level change is reported.
+    // The table is quadratic; beyond this size only the file-level change
+    // is reported.
     if old.len().saturating_mul(new.len()) > 4_000_000 {
         return None;
     }
@@ -369,11 +379,11 @@ pub fn checkpoint_message(
     let mut areas: Vec<&str> = Vec::new();
     for change in changes {
         let name = match change.area {
-            ProjectAreaDto::Glossary => "glossary",
-            ProjectAreaDto::Guidance => "guidance",
+            ProjectAreaDto::Terms => "terms",
+            ProjectAreaDto::Knowledge => "knowledge",
+            ProjectAreaDto::ProjectSettings => "project settings",
             ProjectAreaDto::PackSettings => "pack settings",
             ProjectAreaDto::FontSettings | ProjectAreaDto::FontFile => "game fonts",
-            ProjectAreaDto::Collaboration => "collaboration policy",
             ProjectAreaDto::GitAttributes => "Git attributes",
             ProjectAreaDto::FeedWorkflow => "feed workflow",
             ProjectAreaDto::CheckWorkflow => "merge check workflow",
@@ -401,9 +411,12 @@ mod tests {
 
     #[test]
     fn project_paths_are_recognized() {
-        assert!(is_project_path("aeria-glossary.csv"));
+        assert!(is_project_path("aeria-knowledge/terms.csv"));
+        assert!(is_project_path("aeria-knowledge/style.md"));
+        assert!(!is_project_path("aeria-knowledgex/style.md"));
         assert!(is_project_path("fonts/Unbounded-Variable.ttf"));
-        assert!(!is_project_path(".aeria/units/10.jsonl"));
+        assert!(!is_project_path("po/Addon/0.po"));
+        assert!(is_project_path("aeria.json"));
         assert!(!is_project_path("fontsx"));
         assert!(is_project_path(".github/workflows/harmonia-feed.yml"));
         assert!(is_project_path(".github/workflows/aeria-check.yml"));
@@ -439,10 +452,10 @@ mod tests {
     }
 
     #[test]
-    fn glossary_is_compared_by_term() {
+    fn terms_are_compared_by_term() {
         let before = "term,translation,note\nGil,гил,\nChocobo,чокобо,\n".as_bytes();
         let after = "term,translation,note\nChocobo,чокобо,птица\nAether,эфир,\n".as_bytes();
-        let change = compare(GLOSSARY_FILE, Some(before), Some(after)).expect("change");
+        let change = compare(TERMS_PATH, Some(before), Some(after)).expect("change");
         let summary: Vec<(ChangeKindDto, &str)> = change
             .details
             .iter()
@@ -460,9 +473,14 @@ mod tests {
     }
 
     #[test]
-    fn guidance_is_compared_by_line() {
-        let change =
-            compare(GUIDANCE_FILE, Some(b"a\nb\nc\n"), Some(b"a\nB\nc\nd\n")).expect("change");
+    fn knowledge_is_compared_by_line() {
+        let change = compare(
+            "aeria-knowledge/style.md",
+            Some(b"a\nb\nc\n"),
+            Some(b"a\nB\nc\nd\n"),
+        )
+        .expect("change");
+        assert_eq!(change.area, ProjectAreaDto::Knowledge);
         let lines: Vec<(ChangeKindDto, Option<&str>, Option<&str>)> = change
             .details
             .iter()
@@ -487,17 +505,17 @@ mod tests {
     fn default_messages_name_the_changed_areas() {
         let change = |path: &str| compare(path, None, Some(b"x")).expect("change");
         let changes = [
-            change(GLOSSARY_FILE),
+            change(TERMS_PATH),
             change("fonts/a.ttf"),
             change(FONT_SETTINGS_FILE),
         ];
         assert_eq!(
             checkpoint_message(None, &changes).as_deref(),
-            Some("Update glossary, game fonts")
+            Some("Update terms, game fonts")
         );
         assert_eq!(
             checkpoint_message(Some("Translate 3 strings"), &changes[..1]).as_deref(),
-            Some("Translate 3 strings; update glossary")
+            Some("Translate 3 strings; update terms")
         );
         assert_eq!(checkpoint_message(None, &[]), None);
     }

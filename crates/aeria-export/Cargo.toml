@@ -12,7 +12,7 @@ aeria-core = { path = "../aeria-core" }
 aeria-fonts = { path = "../aeria-fonts" }
 aeria-se = { path = "../aeria-se" }
 aeria-source = { path = "../aeria-source" }
-aeria-workspace = { path = "../aeria-workspace" }
+aeria-po = { path = "../aeria-po" }
 brotli = "8.0.4"
 p256 = { version = "0.14.0", default-features = false, features = ["ecdsa", "std"] }
 serde = { version = "1.0.229", features = ["derive"] }

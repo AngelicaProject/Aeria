@@ -14,8 +14,8 @@ Aeria must never treat these constructs as disposable decoration.
   has a code and argument expressions: integers, strings, named game values,
   parameters, and comparisons.
 - **Macro text.** The written form of the model, read and edited by people
-  and the translation agent, and stored in workspaces as the source and
-  target text of units. `aeria_se::print` writes it and `aeria_se::parse`
+  and machine translation, and stored in the project's PO files as the
+  source (`msgid`) and translation (`msgstr`). `aeria_se::print` writes it and `aeria_se::parse`
   reads it into a syntax tree with source spans and diagnostics.
 
 `aeria_se::codec` combines them: `decode` prints bytes as macro text, and
@@ -103,22 +103,22 @@ and text for every form and every catalog entry.
 `aeria_se::catalog` is the single table of named macros. Each entry holds
 the code, tag name, form, arguments (name, role, and whether inline or
 block), required and repeating arguments, semantic family, and a one-line
-summary. Printing, parsing, validation, the agent's constructs, and the editor
+summary. Printing, parsing, validation, the machine translation instructions, and the editor
 all read it, so naming a new macro code is one new entry with a golden
 vector.
 
-Tag names and forms are part of the persisted format: workspaces store
+Tag names and forms are part of the persisted format: the PO files store
 macro text, so renaming an entry or changing its form changes stored text
-and requires a workspace format change. Naming a previously unnamed code
-changes how its strings print, and a source update then reports those units
-as changed.
+and requires a project format change. Naming a previously unnamed code
+changes how its strings print, and a game update then marks those
+translations fuzzy.
 
 ### Macros added by the game
 
 A game patch can add macro codes or change the arguments of a known one. The
 byte layer needs no catalog, so such a macro still reads, prints generically
 as `<code:XX …>`, encodes back to the same bytes, and is opaque to the
-editor and the translation agent. Strings that contain it stay
+editor and machine translation. Strings that contain it stay
 translatable. A new kind of expression inside a macro is different: its bytes
 stay raw, and those strings cannot be translated until the byte model learns
 it.
@@ -133,7 +133,7 @@ a new macro never needs a Harmonia release.
 
 `parse` never fails. It returns the source, a syntax tree, and diagnostics
 with byte spans, kinds, and messages written for people and the translation
-agent, such as `<colour> is not a macro; did you mean <color>?`, `<if> is
+model, such as `<colour> is not a macro; did you mean <color>?`, `<if> is
 missing its closing </if>`, or `<sheet> takes 2 or more (sheet, row, column,
 parameter, …)`. After an error the parser skips to the end of the tag and
 continues, so later text is still read. Nesting is bounded by 128 levels of
@@ -151,7 +151,7 @@ strings establish, each written as one exact macro text:
 (13,280 strings of the current game) and `<split " " 2><string $gs1></split>`
 the last name (850). An idiom is still its macros: macro text, encoding,
 validation, and the structure policy treat them as before. The editor shows
-it as one value with the macros in its tooltip, and the agent's list of the
+it as one value with the macros in its tooltip, and the list of the
 source's constructs describes it by its meaning. The editor reads the table from the `macro_idioms`
 command. Naming another idiom is one entry whose text is canonical macro
 text.
@@ -227,8 +227,8 @@ The desktop editor shows macro text in two ways (see
 
 The document is always the exact macro text, parsed and validated by Rust
 before save. The editor does not evaluate conditions or fill in values. A
-person's translation is not held to the assisted structure policy; it only
-has to be valid.
+person's translation is held to the same structure policy as a machine
+translation (see [Structure policy](#structure-policy)).
 
 ### Known global parameters
 
@@ -241,12 +241,12 @@ Company ranks, `$gn68` is the class or job as a `ClassJob` row (`($gn68 ==
 row, and `$gn72` is the level (compared with trait levels). Other globals
 have no name until strings establish their meaning.
 
-## AI boundary
+## Structure of a translation
 
-The translation agent reads and writes macro text, as people do in the
-editor's code mode, and localizes a string's structure as its language needs.
-What the game fills in is kept by a deterministic policy, not by the agent's
-judgment. `aeria_se::assisted` owns both parts.
+People and machine translation read and write macro text, as in the editor's
+code mode, and localize a string's structure as its language needs. What the
+game fills in is kept by a deterministic policy, not by anyone's judgment.
+`aeria_se::assisted` owns both parts.
 
 ### Constructs
 
@@ -259,15 +259,16 @@ meaning) and the rule a translation follows for it:
 | Rule | Constructs | A translation |
 | --- | --- | --- |
 | Game data | runtime values (`num`, `player-name`, `string $gs1`), game data references (`sheet`, `noun-en`), icons, sounds, waits, links, opaque constructs, unknown codes, raw bytes | keeps it; it may move or repeat |
-| Formatting | `i`, `b`, `color`, `ui-color`, and their ends | keeps it as often as the source has it, in any order |
+| Formatting | `i`, `b`, `color`, `ui-color`, and their ends | may add, drop, or move it, and closes what it opens as the source does |
 | Condition | `if`, `switch`, `if-gender`, `if-self`, and other conditional selection | may reword, restructure, add, or drop it |
-| Free | `br`, `nbsp`, `shy`, `hyphen`, and text transforms such as `capitalize` | may add or drop it |
+| Free | `br`, `nbsp`, `shy`, `hyphen` | may add or drop it |
+| Letter case | `upper`, `capitalize`, `title-case`, `lower`, `lower-first` | may add or drop it; the explanation says that game data inside one, such as a name the game stores in lower case, shows in that case only through it, so a case transform stays around game data, with `capitalize` in place of `title-case` in a language that capitalizes only the first word |
 
-A malformed source has no constructs and is not offered for assisted
-translation. `aeria_se::authoring_reference()` is a short reference of
-condition syntax and the known globals for the agent's instructions.
+A malformed source has no constructs and cannot be translated.
+`aeria_se::authoring_reference()` is a short reference of condition syntax
+and the known globals for the machine translation instructions.
 
-### Assisted structure policy
+### Structure policy
 
 `aeria_se::check_assisted_structure(source, target)` accepts a target that:
 
@@ -277,8 +278,12 @@ condition syntax and the known globals for the agent's instructions.
   parameter is other data. Game data may move and repeat, anywhere in the
   string, including into or out of a condition's branches, and the target
   adds none the source lacks;
-- has each formatting construct of the source as many times as the source,
-  in any order;
+- leaves each formatting macro (`i`, `b`, the colors) no more open at its
+  end than the source does (it may close what the source forgot to close),
+  and closes no more than the source does of what came before; otherwise
+  formatting is the translation's own, since the official localizations
+  format about four in five formatted strings differently from the English
+  (italics above all), so it may be added, dropped, or moved;
 - tests, in conditions it has, only parameters the source uses or globals
   whose meaning is established (see [Known global
   parameters](#known-global-parameters)); constants and game values such as

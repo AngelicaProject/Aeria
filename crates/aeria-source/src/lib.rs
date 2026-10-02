@@ -105,6 +105,24 @@ impl FromStr for SourceLanguage {
     }
 }
 
+/// A sheet's String cells in another client language: see
+/// [`GameSource::sheet_in_language`].
+pub struct SheetInLanguage {
+    sheet: Arc<SourceSheet>,
+    strings: Option<sheet::StringRows>,
+}
+
+impl SheetInLanguage {
+    /// The macro text of a cell, or `None` when that language has no such
+    /// cell or its sheet does not match this one.
+    #[must_use]
+    pub fn text(&self, row: u32, subrow: u16, column: u32) -> Option<String> {
+        self.strings
+            .as_ref()
+            .and_then(|strings| self.sheet.text_in(strings, row, subrow, column))
+    }
+}
+
 /// Errors from reading the game.
 #[derive(Debug, Error)]
 pub enum SourceError {
@@ -527,6 +545,25 @@ impl GameSource {
     }
 
     /// Reads `own` in another language, or takes it from memory.
+    /// A sheet in another client language, read once, to look up many of its
+    /// cells: faster than [`Self::cell_in_other_languages`] for every cell of
+    /// a sheet, and without the shared cache several threads would take from
+    /// each other.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when a game file cannot be read.
+    pub fn sheet_in_language(
+        &self,
+        sheet: &Arc<SourceSheet>,
+        language: SourceLanguage,
+    ) -> Result<SheetInLanguage, SourceError> {
+        Ok(SheetInLanguage {
+            sheet: Arc::clone(sheet),
+            strings: sheet.strings_in(&self.game, language)?,
+        })
+    }
+
     fn other_language_sheet(
         &self,
         own: &SourceSheet,

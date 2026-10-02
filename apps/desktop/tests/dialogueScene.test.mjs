@@ -159,7 +159,7 @@ test("scene lines join the loaded strings", () => {
       rowId: 5,
       subrowId: 0,
       context: [],
-      cells: [{ sourceBinding: binding(5), sourceMacro: "line 5", formattingOnly: false, translation: { translationUnitId: "tu", targetMacro: "строка 5", reviewState: "draft", translatorNote: null } }],
+      cells: [{ sourceBinding: binding(5), sourceMacro: "line 5", formattingOnly: false, translation: { targetMacro: "строка 5", fuzzy: false, translatorNote: null } }],
     },
   ]);
   const rows = buildSceneRows({ kind: "quest", quest: null, versions: [], lines, scenes, scriptError: null }, occurrences).rows;
