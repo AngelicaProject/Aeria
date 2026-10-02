@@ -45,11 +45,12 @@ pub struct ExportOverviewDto {
     /// The GitHub repository of `origin`, when it is one.
     pub github: Option<GitHubTargetDto>,
     pub workflow: WorkflowStateDto,
-    /// The main branch on GitHub (as of the last fetch) has the workflow
+    /// The default branch on GitHub (as of the last fetch) has the workflow
     /// this Aeria installs. Release events run the workflow from there, so
     /// without it published releases never reach the feed.
     pub workflow_on_github: bool,
-    /// The main branch the workflow must reach.
+    /// The default branch the workflow must reach: the one Git last recorded
+    /// for `origin` (`origin/HEAD`), else `main`.
     pub main_branch: Option<String>,
     /// The version the next release gets from today's date and the
     /// `harmonia/<version>` tags Git knows of; publishing may raise it when
@@ -328,9 +329,11 @@ fn overview(state: &DesktopState, store: &dyn SigningKeyStore) -> CommandResult<
         Ok(WorkflowState::Different) => WorkflowStateDto::Different,
         Ok(WorkflowState::Missing) | Err(_) => WorkflowStateDto::Missing,
     };
+    // GitHub runs the feed workflow from the repository's default branch.
     let main_branch = repository
         .as_ref()
-        .and_then(|repository| repository.main_branch().ok().flatten());
+        .and_then(|repository| repository.remote_default_branch().ok().flatten())
+        .or_else(|| Some("main".to_owned()));
     let workflow_on_github = match (&repository, &main_branch) {
         (Some(repository), Some(main)) => repository
             .remote_file(&format!("{ORIGIN}/{main}"), aeria_git::FEED_WORKFLOW_FILE)

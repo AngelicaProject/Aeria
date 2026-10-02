@@ -5,11 +5,8 @@ import {
   gitCheckWorkflow,
   gitCreateBranch,
   gitFetch,
-  gitFetchMain,
-  gitFinishContribution,
   gitInitialize,
   gitInstallCheckWorkflow,
-  gitMergeContribution,
   gitOpenBranchSettings,
   gitOverview,
   gitPendingChanges,
@@ -19,7 +16,6 @@ import {
   gitSetIdentity,
   gitStateStamp,
   gitSwitchBranch,
-  gitSync,
   normalizeCommandError,
 } from "../ipc";
 import type {
@@ -29,7 +25,7 @@ import type {
   ConflictResolution,
   GitBranchDto,
   GitCommitDto,
-  GitSyncDto,
+  GitPullDto,
   EntryConflictDto,
   GitOverviewDto,
   ProjectChangeDto,
@@ -39,17 +35,13 @@ import { IconButton } from "../ui/primitives/IconButton";
 import { UiIcon } from "../ui/primitives/UiIcon";
 import { useI18n } from "../ui/i18n";
 import type { MessageKey } from "../i18n/translate";
-import { ConfirmDialog } from "./ConfirmDialog";
+import { GitBranchDelete } from "./GitBranchDelete";
 import { GitBranchPicker } from "./GitBranchPicker";
 import { GitHistoryList } from "./GitHistory";
 import { ProjectChangeList, Section, TranslationChangeGroups, bindingLabel, useStickyState } from "./GitShared";
 
 /** How often the dock checks whether the repository changed. */
 const POLL_MS = 2000;
-/** How often, and at most how often on focus, a contribution branch checks
- * whether the remote main branch moved. */
-const MAIN_CHECK_MS = 5 * 60_000;
-const MAIN_CHECK_MIN_MS = 60_000;
 
 type GitPanelProps = {
   /** The key of the selected string (see `changeKey`), when one is selected. */
@@ -72,10 +64,10 @@ type GitPanelProps = {
 
 const NO_PENDING: PendingChangesDto = { total: 0, changes: [] };
 
-const syncLabels: Record<GitSyncDto["integration"], { plain: MessageKey; pushed: MessageKey }> = {
-  upToDate: { plain: "git.sync.upToDate", pushed: "git.sync.upToDatePushed" },
-  fastForward: { plain: "git.sync.fastForward", pushed: "git.sync.fastForwardPushed" },
-  merged: { plain: "git.sync.merged", pushed: "git.sync.mergedPushed" },
+const pullLabels: Record<GitPullDto["integration"], MessageKey> = {
+  upToDate: "git.pull.upToDate",
+  fastForward: "git.pull.fastForward",
+  merged: "git.pull.merged",
 };
 
 const blockLabels: Record<NonNullable<GitBranchDto["blocked"]>, MessageKey> = {
@@ -101,14 +93,11 @@ export function GitPanel({ selectedKey, workspaceRevision, projectRevision, onWo
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<CommandError | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  const [confirmMerge, setConfirmMerge] = useState(false);
-  // The operation that reported same-unit conflicts, repeated with the choices.
-  const [conflictAction, setConflictAction] = useState<"sync" | "pull">("sync");
+  const [deleting, setDeleting] = useState<GitBranchDto | null>(null);
   const [checkWorkflow, setCheckWorkflow] = useState<CheckWorkflowDto | null>(null);
   const [checkDismissed, setCheckDismissed] = useStickyState("git.checkWorkflowDismissed", false);
   const [checkInstalled, setCheckInstalled] = useState(false);
   const stamp = useRef<string | null | undefined>(undefined);
-  const lastMainCheck = useRef(0);
 
   const identity = overview?.identity ?? null;
   // Git requires only a name; the email is optional (see aeria-git identity rules).
@@ -165,33 +154,6 @@ export function GitPanel({ selectedKey, workspaceRevision, projectRevision, onWo
     };
   }, [busy, refresh]);
 
-  // On a contribution branch, notice when the remote main branch moves (for
-  // example when another pull request was merged), so the translator can
-  // sync before the pull request conflicts. The fetch never asks to sign in.
-  const watchMain = Boolean(overview?.contribution?.branch && !overview.contribution.local);
-  useEffect(() => {
-    if (!watchMain) return;
-    let cancelled = false;
-    const check = async () => {
-      if (document.visibilityState !== "visible" || busy !== null || Date.now() - lastMainCheck.current < MAIN_CHECK_MIN_MS) return;
-      lastMainCheck.current = Date.now();
-      try {
-        if (await gitFetchMain() && !cancelled) await refresh();
-      } catch {
-        // Offline or signed out: the next sync reports it.
-      }
-    };
-    void check();
-    const timer = window.setInterval(() => void check(), MAIN_CHECK_MS);
-    const onFocus = () => void check();
-    window.addEventListener("focus", onFocus);
-    return () => {
-      cancelled = true;
-      window.clearInterval(timer);
-      window.removeEventListener("focus", onFocus);
-    };
-  }, [watchMain, busy, refresh]);
-
   const pending = externalPending ? externalPending.summary ?? NO_PENDING : ownPending;
 
   const run = useCallback(async (label: string, action: () => Promise<string | null | void>) => {
@@ -209,17 +171,15 @@ export function GitPanel({ selectedKey, workspaceRevision, projectRevision, onWo
     }
   }, [refresh]);
 
-  const describeSync = (result: GitSyncDto, action: "sync" | "pull" = "sync"): string => {
+  const describePull = (result: GitPullDto): string => {
     if (result.conflicts.length > 0) {
-      setConflictAction(action);
       setConflicts(result.conflicts);
       setChoices({});
       return t("git.conflicts", { count: result.conflicts.length });
     }
     setConflicts([]);
     if (result.workspaceChanged) onWorkspaceChanged?.();
-    const labels = syncLabels[result.integration];
-    return t(result.pushed ? labels.pushed : labels.plain);
+    return t(pullLabels[result.integration]);
   };
 
   const feedback = <>
@@ -249,9 +209,6 @@ export function GitPanel({ selectedKey, workspaceRevision, projectRevision, onWo
   const status = overview.repository;
   const hasRemote = overview.remotes.length > 0;
   const changeCount = pending.total + projectChanges.length;
-  const mainBranch = overview.collaboration?.mainBranch ?? null;
-  const onMain = mainBranch !== null && status.branch === mainBranch && status.head !== null;
-  const localBranches = branches.filter((branch) => !branch.remote);
   const syncState = status.upstream
     ? status.ahead === 0 && status.behind === 0 ? t("git.inSync") : [status.ahead > 0 ? t("git.toSend", { count: status.ahead }) : null, status.behind > 0 ? t("git.toReceive", { count: status.behind }) : null].filter(Boolean).join(" · ")
     : t(hasRemote ? "git.notPublished" : "git.noRemote");
@@ -265,12 +222,12 @@ export function GitPanel({ selectedKey, workspaceRevision, projectRevision, onWo
             <GitBranchPicker
               branches={branches}
               current={status.branch}
-              mainBranch={mainBranch}
               switchBlocked={status.hasTranslationChanges ? t("git.switchBlocked") : null}
               disabled={busy !== null}
               blockLabels={blockLabels}
               onSwitch={(name) => void run("switch", async () => { await gitSwitchBranch(name); onWorkspaceChanged?.(); return t("git.switched", { name }); })}
               onCreate={(name) => void run("branch", async () => { await gitCreateBranch(name); return t("git.branch.created", { name }); })}
+              onDelete={setDeleting}
             />
             <span className="muted">{syncState}{status.upstream ? <> · <span className="mono">{status.upstream}</span></> : null}</span>
           </div>
@@ -281,27 +238,19 @@ export function GitPanel({ selectedKey, workspaceRevision, projectRevision, onWo
             <button className="button button-ghost" type="button" disabled={busy !== null} title={t("git.fetchTitle")} onClick={() => void run("fetch", async () => { await gitFetch(); return t("git.fetched"); })}>
               <UiIcon icon="cloud" size="sm" className={busy === "fetch" ? "spin" : undefined} />{t("git.fetch")}
             </button>
-            <button className="button button-ghost" type="button" disabled={busy !== null || status.hasTranslationChanges} title={t(status.hasTranslationChanges ? "git.pullBlocked" : "git.pullTitle")} onClick={() => void run("pull", async () => describeSync(await gitPull(), "pull"))}>
+            <button className="button button-ghost" type="button" disabled={busy !== null || status.hasTranslationChanges} title={t(status.hasTranslationChanges ? "git.pullBlocked" : "git.pullTitle")} onClick={() => void run("pull", async () => describePull(await gitPull()))}>
               <UiIcon icon="arrowDown" size="sm" />{t("git.pull")}{status.behind > 0 ? <span className="git-ops-count">{status.behind}</span> : null}
             </button>
-            <button className="button button-ghost" type="button" disabled={busy !== null || status.head === null || (status.upstream !== null && status.behind > 0) || onMain} title={t(onMain ? "git.pushMain" : status.upstream !== null && status.behind > 0 ? "git.pushBehind" : status.upstream === null ? "git.pushPublish" : "git.pushTitle")} onClick={() => void run("push", async () => t(await gitPush() ? "git.pushed" : "git.nothingToPush"))}>
+            <button className="button button-ghost" type="button" disabled={busy !== null || status.head === null || (status.upstream !== null && status.behind > 0)} title={t(status.upstream !== null && status.behind > 0 ? "git.pushBehind" : status.upstream === null ? "git.pushPublish" : "git.pushTitle")} onClick={() => void run("push", async () => t(await gitPush() ? "git.pushed" : "git.nothingToPush"))}>
               <UiIcon icon="arrowUp" size="sm" />{t("git.push")}{status.ahead > 0 ? <span className="git-ops-count">{status.ahead}</span> : null}
-            </button>
-            <button className="button button-secondary" type="button" disabled={busy !== null || status.hasTranslationChanges} title={t(status.hasTranslationChanges ? "git.syncBlocked" : "git.syncTitle")} onClick={() => void run("sync", async () => describeSync(await gitSync()))}>
-              <UiIcon icon="refreshCw" size="sm" className={busy === "sync" ? "spin" : undefined} />{t(busy === "sync" ? "git.syncing" : "git.sync")}
             </button>
           </div>
         ) : null}
         {!hasRemote && onOpenSettings ? <button className="link-button git-summary-link" type="button" onClick={onOpenSettings}>{t("git.connectRemote")}</button> : null}
-        {overview.collaboration?.error ? <p className="git-hint warn">{overview.collaboration.error}</p> : null}
-        {onMain ? <p className="git-hint">{t(hasRemote ? "git.onMainHint" : "git.onMainLocalHint", { branch: mainBranch })}</p> : null}
-        {(() => {
-          const main = localBranches.find((branch) => branch.name === mainBranch && branch.blocked !== null);
-          return main ? <p className="git-hint">{t(hasRemote ? "git.mainBehind" : "git.mainBehindLocal", { branch: main.name })}</p> : null;
-        })()}
       </div>
 
       {feedback}
+      <GitBranchDelete branch={deleting} onCancel={() => setDeleting(null)} run={(label, action) => void run(label, action)} />
 
       {conflicts.length > 0 ? (
         <Section title={t("git.chooseVersions")} icon="gitMerge" meta={conflicts.length}>
@@ -326,10 +275,10 @@ export function GitPanel({ selectedKey, workspaceRevision, projectRevision, onWo
               </li>
             ))}
           </ul>
-          <button className="button button-primary button-block" type="button" disabled={busy !== null || conflicts.some((conflict) => !choices[conflict.context])} onClick={() => void run(conflictAction, async () => {
+          <button className="button button-primary button-block" type="button" disabled={busy !== null || conflicts.some((conflict) => !choices[conflict.context])} onClick={() => void run("pull", async () => {
             const resolutions = conflicts.map((conflict) => ({ context: conflict.context, resolution: choices[conflict.context] ?? "ours" }));
-            return conflictAction === "pull" ? describeSync(await gitPull(resolutions), "pull") : describeSync(await gitSync(resolutions));
-          })}>{t(conflictAction === "pull" ? "git.pullWithChoices" : "git.syncWithChoices")}</button>
+            return describePull(await gitPull(resolutions));
+          })}>{t("git.pullWithChoices")}</button>
         </Section>
       ) : null}
 
@@ -366,31 +315,6 @@ export function GitPanel({ selectedKey, workspaceRevision, projectRevision, onWo
         </div>
       ) : null}
 
-      {overview.contribution?.branch && overview.contribution.local ? (
-        <Section title={t("git.contribution")} icon="gitPullRequest" meta={t("git.contributionInto", { branch: overview.contribution.mainBranch })}>
-          <p className="muted">{t("git.localMergeHint", { branch: overview.contribution.mainBranch })}</p>
-          <button className="button button-secondary" type="button" disabled={busy !== null || status.hasTranslationChanges} title={status.hasTranslationChanges ? t("git.switchBlocked") : undefined} onClick={() => setConfirmMerge(true)}>
-            <UiIcon icon="gitMerge" size="sm" />{t(busy === "merge" ? "git.merging" : "git.localMerge", { branch: overview.contribution.mainBranch })}
-          </button>
-          <ConfirmDialog
-            open={confirmMerge}
-            message={t("git.localMergeConfirm", { source: overview.contribution.branch, branch: overview.contribution.mainBranch })}
-            confirmLabel={t("git.localMerge", { branch: overview.contribution.mainBranch })}
-            cancelLabel={t("common.cancel")}
-            onKeepEditing={() => setConfirmMerge(false)}
-            onDiscard={() => { setConfirmMerge(false); void run("merge", async () => { const result = await gitMergeContribution(); onWorkspaceChanged?.(); return t("git.localMerged", { branch: overview.contribution?.mainBranch ?? "" }) + (result.deletedBranch ? ` ${t("git.localMergedDeleted", { source: result.deletedBranch })}` : ""); }); }}
-          />
-        </Section>
-      ) : overview.contribution?.branch ? (
-        <Section title={t("git.contribution")} icon="gitPullRequest" meta={t("git.contributionInto", { branch: overview.contribution.mainBranch })}>
-          <p className="muted">{t(overview.contribution.published ? "git.contributionSent" : "git.contributionNotSent")} · {overview.contribution.unmergedCommits === 0 ? t("git.contributionAccepted") : t("git.contributionWaiting", { count: overview.contribution.unmergedCommits })}</p>
-          {overview.contribution.mainAhead > 0 && overview.contribution.unmergedCommits > 0 ? (
-            <div className="git-feedback warning" role="status"><UiIcon icon="circleAlert" size="sm" /><span>{t("git.mainAhead", { count: overview.contribution.mainAhead, branch: overview.contribution.mainBranch })}</span></div>
-          ) : null}
-          {overview.contribution.unmergedCommits === 0 && overview.contribution.published ? <button className="button button-secondary" type="button" disabled={busy !== null || status.hasTranslationChanges} onClick={() => void run("finish", async () => { const result = await gitFinishContribution(); onWorkspaceChanged?.(); return t(result.deletedBranch ? "git.contributionFinished" : "git.contributionKept"); })}>{t("git.finishContribution", { branch: overview.contribution.mainBranch })}</button> : null}
-        </Section>
-      ) : null}
-
       <section className="git-section" aria-label={t("git.changes")}>
         <button className="git-section-head git-section-toggle" type="button" aria-expanded={changesOpen} onClick={() => setChangesOpen(!changesOpen)}>
           <UiIcon icon={changesOpen ? "chevronDown" : "chevronRight"} size="xs" />
@@ -399,7 +323,7 @@ export function GitPanel({ selectedKey, workspaceRevision, projectRevision, onWo
           <span className="git-count">{changeCount}</span>
         </button>
         {changesOpen ? <>
-          <form className="git-composer" onSubmit={(event) => { event.preventDefault(); const text = message.trim(); void run("checkpoint", async () => { const result = await gitCheckpoint(text === "" ? null : text); setMessage(""); return result.branchCreated ? t("git.checkpointOnBranch", { branch: result.branchCreated, subject: result.commit.subject }) : t("git.checkpointCreated", { id: result.commit.id.slice(0, 8), subject: result.commit.subject }); }); }}>
+          <form className="git-composer" onSubmit={(event) => { event.preventDefault(); const text = message.trim(); void run("checkpoint", async () => { const result = await gitCheckpoint(text === "" ? null : text); setMessage(""); return t("git.checkpointCreated", { id: result.commit.id.slice(0, 8), subject: result.commit.subject }); }); }}>
             <textarea className="input" aria-label={t("git.checkpointMessage")} rows={2} placeholder={t("git.checkpointPlaceholder")} value={message} onChange={(event) => setMessage(event.target.value)} />
             <div className="git-composer-foot">
               {identityDraft ? null : identityComplete ? (

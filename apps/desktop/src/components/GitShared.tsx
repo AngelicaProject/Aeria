@@ -207,7 +207,6 @@ const areaInfo: Record<ProjectArea, { icon: UiIconName; title: MessageKey; order
   packSettings: { icon: "arrowUpRight", title: "git.area.packSettings", order: 2 },
   fontSettings: { icon: "palette", title: "git.area.fonts", order: 3 },
   fontFile: { icon: "palette", title: "git.area.fonts", order: 3 },
-  collaboration: { icon: "users", title: "git.area.collaboration", order: 4 },
   gitAttributes: { icon: "settings", title: "git.area.gitAttributes", order: 5 },
   feedWorkflow: { icon: "cloud", title: "git.area.feedWorkflow", order: 6 },
   checkWorkflow: { icon: "circleCheck", title: "git.area.checkWorkflow", order: 7 },

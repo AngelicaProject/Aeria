@@ -1,10 +1,7 @@
-//! Branches and the pull-request contribution workflow.
-
-use std::time::{SystemTime, UNIX_EPOCH};
+//! Branches: listing, creating, switching, and deleting them.
 
 use crate::GitError;
 use crate::repository::GitRepository;
-use crate::sync::IntegrateOutcome;
 
 /// One branch.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -15,38 +12,6 @@ pub struct BranchInfo {
     pub current: bool,
     /// Upstream of a local branch, such as `origin/main`.
     pub upstream: Option<String>,
-}
-
-/// The state of the current contribution under the pull-request policy.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ContributionStatus {
-    /// The branch contributions are reviewed into.
-    pub main_branch: String,
-    /// The current contribution branch, or `None` while on the main branch.
-    pub branch: Option<String>,
-    /// Whether the contribution branch has been published.
-    pub published: bool,
-    /// Commits on the contribution branch that the remote main branch does
-    /// not contain yet. Zero after a merge-commit or fast-forward review
-    /// merge; squash merges keep this non-zero.
-    pub unmerged_commits: u32,
-    /// Commits on the remote main branch, as last fetched, that the
-    /// contribution branch does not contain yet. A pull request of a branch
-    /// behind main may conflict on the hosting service until a sync merges
-    /// main into it.
-    pub main_ahead: u32,
-    /// The repository has no remote, so there is nowhere to open a pull
-    /// request; the contribution is merged locally instead.
-    pub local: bool,
-}
-
-/// The result of finishing a contribution.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct FinishOutcome {
-    pub integration: IntegrateOutcome,
-    /// The finished contribution branch, when it was deleted locally because
-    /// Git confirmed it was merged.
-    pub deleted_branch: Option<String>,
 }
 
 impl GitRepository {
@@ -150,315 +115,175 @@ impl GitRepository {
         Ok(())
     }
 
-    /// Whether every commit of a local branch is in the main branch.
+    /// Commits of a local branch that would be lost by deleting it, and its
+    /// upstream on the remote too when `with_upstream`: commits no other
+    /// branch, remote-tracking branch, or tag contains.
     ///
     /// # Errors
     ///
-    /// Returns an error for an invalid name, a missing main branch, or when
-    /// Git fails.
-    pub fn is_merged_into_main(&self, branch: &str) -> Result<bool, GitError> {
+    /// Returns [`GitError::InvalidInput`] for an invalid or unknown branch,
+    /// or an error when Git fails.
+    pub fn lost_commits(&self, branch: &str, with_upstream: bool) -> Result<u32, GitError> {
         self.validate_branch_name(branch)?;
-        let Some(main) = self.main_branch()? else {
-            return Ok(false);
-        };
-        if self.branch_head(&main)?.is_none() || self.branch_head(branch)?.is_none() {
-            return Ok(false);
+        let reference = format!("refs/heads/{branch}");
+        if self.verify_ref(&reference)?.is_none() {
+            return Err(unknown_branch());
         }
-        let branch_ref = format!("refs/heads/{branch}");
-        let main_ref = format!("refs/heads/{main}");
-        Ok(self
-            .output(&["merge-base", "--is-ancestor", &branch_ref, &main_ref])?
-            .status
-            .success())
+        let mut leaving = vec![reference.clone()];
+        if with_upstream && let Some(upstream) = self.upstream(branch)? {
+            leaving.push(format!("refs/remotes/{upstream}"));
+        }
+        self.commits_only_in(&reference, &leaving)
     }
 
-    /// Deletes a local branch other than the current one. Without `force`
-    /// only a branch merged into the main branch is deleted; `force` also
-    /// deletes one whose commits exist nowhere else.
+    /// Commits of a remote-tracking branch (`origin/feature`) that would be
+    /// lost by deleting the branch on the remote: commits no other branch,
+    /// remote-tracking branch, or tag contains.
     ///
     /// # Errors
     ///
-    /// Returns [`GitError::InvalidInput`] for the current, an unknown, or an
-    /// unmerged branch without `force`, or an error when Git fails.
-    pub fn delete_branch(&self, branch: &str, force: bool) -> Result<(), GitError> {
-        let invalid = |reason: &str| GitError::InvalidInput {
-            field: "branch",
-            reason: reason.to_owned(),
-        };
-        self.validate_branch_name(branch)?;
+    /// Returns [`GitError::InvalidInput`] for an unknown branch, or an error
+    /// when Git fails.
+    pub fn lost_remote_commits(&self, remote_branch: &str) -> Result<u32, GitError> {
+        self.split_remote_branch(remote_branch)?;
+        let reference = format!("refs/remotes/{remote_branch}");
+        self.commits_only_in(&reference, std::slice::from_ref(&reference))
+    }
+
+    /// Deletes a local branch other than the current one, and with
+    /// `with_upstream` also its upstream branch on the remote. The remote
+    /// branch goes first, so a remote that refuses (for example for its
+    /// default branch) leaves the local branch in place. Without `force`, a
+    /// deletion that would lose commits (see [`Self::lost_commits`]) is
+    /// refused.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`GitError::InvalidInput`] for the current or an unknown
+    /// branch, or for one with commits that exist nowhere else without
+    /// `force`; or an error when Git or the push fails.
+    pub fn delete_branch(
+        &self,
+        branch: &str,
+        with_upstream: bool,
+        force: bool,
+    ) -> Result<(), GitError> {
         if self.current_branch()?.as_deref() == Some(branch) {
-            return Err(invalid("is the current branch"));
+            return Err(GitError::InvalidInput {
+                field: "branch",
+                reason: "is the current branch".to_owned(),
+            });
         }
-        if self.branch_head(branch)?.is_none() {
-            return Err(invalid("does not exist"));
+        if !force && self.lost_commits(branch, with_upstream)? > 0 {
+            return Err(unmerged_branch());
         }
-        if !force && !self.is_merged_into_main(branch)? {
-            return Err(invalid("has commits that are not in the main branch"));
+        if with_upstream && let Some(upstream) = self.upstream(branch)? {
+            self.delete_on_remote(&upstream)?;
         }
+        self.validate_branch_name(branch)?;
         self.run(&["branch", "--quiet", "-D", "--", branch])?;
         Ok(())
     }
 
-    /// Returns the contribution state, or `None` when no main branch can be
-    /// determined or `HEAD` is detached.
+    /// Deletes a branch on its remote, given by its remote-tracking name
+    /// (`origin/feature`). Without `force`, a deletion that would lose
+    /// commits (see [`Self::lost_remote_commits`]) is refused.
     ///
     /// # Errors
     ///
-    /// Returns an error for invalid settings or a Git failure.
-    pub fn contribution_status(&self) -> Result<Option<ContributionStatus>, GitError> {
-        let Some(main_branch) = self.main_branch()? else {
-            return Ok(None);
-        };
-        let Some(branch) = self.current_branch()? else {
-            return Ok(None);
-        };
-        if branch == main_branch {
-            return Ok(Some(ContributionStatus {
-                main_branch,
-                branch: None,
-                published: false,
-                unmerged_commits: 0,
-                main_ahead: 0,
-                local: self.remotes()?.is_empty(),
-            }));
+    /// Returns [`GitError::InvalidInput`] for an unknown branch, or for one
+    /// with commits that exist nowhere else without `force`; or an error
+    /// when the push fails, for example because the remote protects the
+    /// branch.
+    pub fn delete_remote_branch(&self, remote_branch: &str, force: bool) -> Result<(), GitError> {
+        if !force && self.lost_remote_commits(remote_branch)? > 0 {
+            return Err(unmerged_branch());
         }
-        let published = self.upstream(&branch)?.is_some();
-        let remote_main = match self.sync_remote(&branch) {
-            Ok(remote) => Some(format!("{remote}/{main_branch}")).filter(|reference| {
-                self.verify_ref(&format!("refs/remotes/{reference}"))
-                    .is_ok_and(|found| found.is_some())
-            }),
-            Err(GitError::NoRemote) => None,
-            Err(error) => return Err(error),
-        };
-        let local = self.remotes()?.is_empty();
-        let base = remote_main.unwrap_or_else(|| main_branch.clone());
-        let (unmerged_commits, main_ahead) = if self.verify_ref(&base)?.is_some() {
-            self.ahead_behind(&base)?
-        } else {
-            (0, 0)
-        };
-        Ok(Some(ContributionStatus {
-            main_branch,
-            branch: Some(branch),
-            published,
-            unmerged_commits,
-            main_ahead,
-            local,
-        }))
+        self.delete_on_remote(remote_branch)
     }
 
-    /// Returns to the main branch after a contribution was reviewed:
-    /// switches to it, integrates its upstream, and deletes the contribution
-    /// branch when Git confirms it is merged. `accept` validates the
-    /// resulting project; on failure the contribution branch is restored.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`GitError::InvalidSettings`] without a main branch,
-    /// [`GitError::UncommittedTranslations`], [`GitError::IncomingRejected`],
-    /// or another typed Git error.
-    pub fn finish_contribution<F>(&self, accept: F) -> Result<FinishOutcome, GitError>
-    where
-        F: FnOnce() -> Result<(), String>,
-    {
-        let Some(main) = self.main_branch()? else {
-            return Err(GitError::InvalidSettings {
-                reason: "the main branch cannot be determined; set it in the repository settings"
-                    .to_owned(),
-            });
+    /// `origin/feature` as the remote `origin` and the branch `feature`, for
+    /// a remote-tracking branch that exists.
+    fn split_remote_branch(&self, remote_branch: &str) -> Result<(String, String), GitError> {
+        let found = self.remotes()?.into_iter().find_map(|remote| {
+            remote_branch
+                .strip_prefix(&format!("{}/", remote.name))
+                .map(|branch| (remote.name.clone(), branch.to_owned()))
+        });
+        let Some((remote, branch)) = found else {
+            return Err(unknown_branch());
         };
-        self.require_clean_translations()?;
-        let contribution = self.require_branch()?;
-        if contribution == main {
-            return Ok(FinishOutcome {
-                integration: IntegrateOutcome::UpToDate,
-                deleted_branch: None,
-            });
+        self.validate_branch_name(&branch)?;
+        if self
+            .verify_ref(&format!("refs/remotes/{remote_branch}"))?
+            .is_none()
+        {
+            return Err(unknown_branch());
         }
-        self.run(&["switch", "--quiet", &main])?;
-        let integration = match self.upstream(&main)? {
-            Some(upstream) if self.ahead_behind(&upstream)?.1 > 0 => {
-                match self.run(&["merge", "--ff-only", "--quiet", &upstream]) {
-                    Ok(_) => IntegrateOutcome::FastForward,
-                    Err(error) => {
-                        self.run(&["switch", "--quiet", &contribution])?;
-                        return Err(error);
-                    }
-                }
+        Ok((remote, branch))
+    }
+
+    /// Deletes the branch behind a remote-tracking branch on its remote. Git
+    /// removes the remote-tracking branch with it; a recorded default branch
+    /// of the remote (`<remote>/HEAD`) that named it is removed too.
+    fn delete_on_remote(&self, remote_branch: &str) -> Result<(), GitError> {
+        let (remote, branch) = self.split_remote_branch(remote_branch)?;
+        let reference = format!("refs/heads/{branch}");
+        self.run(&["push", "--quiet", &remote, "--delete", &reference])?;
+        let head = format!("refs/remotes/{remote}/HEAD");
+        let target = self.output(&["symbolic-ref", "--quiet", &head])?.stdout;
+        if String::from_utf8_lossy(&target).trim() == format!("refs/remotes/{remote_branch}") {
+            self.run(&["symbolic-ref", "--delete", &head])?;
+        }
+        Ok(())
+    }
+
+    /// Counts the commits of `reference` that no branch, remote-tracking
+    /// branch, or tag outside `leaving` contains.
+    fn commits_only_in(&self, reference: &str, leaving: &[String]) -> Result<u32, GitError> {
+        let refs = self.run_text(&[
+            "for-each-ref",
+            "--format=%(refname)%00%(symref)",
+            "refs/heads",
+            "refs/remotes",
+            "refs/tags",
+        ])?;
+        let mut input = String::new();
+        for line in refs.lines() {
+            let mut fields = line.split('\0');
+            let (Some(name), Some(symref)) = (fields.next(), fields.next()) else {
+                continue;
+            };
+            if symref.is_empty() && !leaving.iter().any(|gone| gone == name) {
+                input.push('^');
+                input.push_str(name);
+                input.push('\n');
             }
-            _ => IntegrateOutcome::UpToDate,
-        };
-        if let Err(reason) = accept() {
-            self.run(&["switch", "--quiet", &contribution])?;
-            return Err(GitError::IncomingRejected { reason });
         }
-        let deleted = self
-            .output(&["branch", "--quiet", "-d", &contribution])?
-            .status
-            .success();
-        Ok(FinishOutcome {
-            integration,
-            deleted_branch: deleted.then_some(contribution),
-        })
-    }
-
-    /// Merges the current contribution branch into the main branch in a
-    /// repository without remotes, where there is nowhere to open a pull
-    /// request. Switches to the main branch, integrates the contribution (a
-    /// fast-forward when the main branch has not moved, otherwise a merge
-    /// with per-unit merging of translations), lets `accept` validate the
-    /// project, and deletes the merged contribution branch. On any failure
-    /// the main branch is reset and the contribution branch restored.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`GitError::InvalidSettings`] when the repository has a remote
-    /// (merge through a pull request there) or no main branch,
-    /// [`GitError::UncommittedTranslations`],
-    /// [`GitError::TranslationConflicts`], [`GitError::MergeConflict`],
-    /// [`GitError::IncomingRejected`], or another typed Git error.
-    pub fn merge_contribution_locally<F>(&self, accept: F) -> Result<FinishOutcome, GitError>
-    where
-        F: FnOnce() -> Result<(), String>,
-    {
-        if !self.remotes()?.is_empty() {
-            return Err(GitError::InvalidSettings {
-                reason: "the repository has a remote; contributions reach the main branch through a pull request there".to_owned(),
-            });
-        }
-        let Some(main) = self.main_branch()? else {
-            return Err(GitError::InvalidSettings {
-                reason: "the main branch cannot be determined; set it in the repository settings"
-                    .to_owned(),
-            });
-        };
-        self.require_clean_translations()?;
-        let contribution = self.require_branch()?;
-        let Some(before) = self.branch_head(&main)? else {
-            return Err(GitError::InvalidSettings {
-                reason: format!("the main branch {main} does not exist"),
-            });
-        };
-        if contribution == main {
-            return Ok(FinishOutcome {
-                integration: IntegrateOutcome::UpToDate,
-                deleted_branch: None,
-            });
-        }
-        self.run(&["switch", "--quiet", &main])?;
-        let restore = |repository: &Self| -> Result<(), GitError> {
-            repository.reset_to(&before)?;
-            repository.run(&["switch", "--quiet", &contribution])?;
-            Ok(())
-        };
-        let integration = match self.merge_from(&contribution, &std::collections::BTreeMap::new()) {
-            Ok(integration) => integration,
-            Err(error) => {
-                restore(self)?;
-                return Err(error);
-            }
-        };
-        if let Err(reason) = accept() {
-            restore(self)?;
-            return Err(GitError::IncomingRejected { reason });
-        }
-        let deleted = self
-            .output(&["branch", "--quiet", "-d", &contribution])?
-            .status
-            .success();
-        Ok(FinishOutcome {
-            integration,
-            deleted_branch: deleted.then_some(contribution),
-        })
-    }
-
-    /// Returns a new branch name such as `translations/ada-20260923-141502`,
-    /// derived from the translator name and the current UTC time.
-    pub(crate) fn new_contribution_branch_name(&self) -> Result<String, GitError> {
-        let identity = self.identity()?;
-        let slug = slug(identity.name.as_deref().unwrap_or_default())
-            .or_else(|| {
-                identity
-                    .email
-                    .as_deref()
-                    .and_then(|email| email.split('@').next())
-                    .and_then(slug)
+        let args = ["rev-list", "--count", "--stdin", reference];
+        let output = self
+            .git()
+            .output_with_input(self.root(), &args, input.into_bytes())?;
+        crate::process::require_success(&args, &output)?;
+        String::from_utf8_lossy(&output.stdout)
+            .trim()
+            .parse()
+            .map_err(|_| GitError::Parse {
+                message: "unexpected rev-list count output".to_owned(),
             })
-            .unwrap_or_else(|| "translator".to_owned());
-        let seconds = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_or(0, |duration| duration.as_secs());
-        let base = format!("translations/{slug}-{}", utc_stamp(seconds));
-        let mut name = base.clone();
-        let mut suffix = 2;
-        while self.verify_ref(&format!("refs/heads/{name}"))?.is_some() {
-            name = format!("{base}-{suffix}");
-            suffix += 1;
-        }
-        Ok(name)
     }
 }
 
-/// Lowercase ASCII letters and digits separated by single hyphens.
-fn slug(text: &str) -> Option<String> {
-    let mut slug = String::new();
-    for character in text.chars() {
-        if character.is_ascii_alphanumeric() {
-            slug.push(character.to_ascii_lowercase());
-        } else if !slug.is_empty() && !slug.ends_with('-') {
-            slug.push('-');
-        }
-        if slug.len() >= 32 {
-            break;
-        }
+fn unknown_branch() -> GitError {
+    GitError::InvalidInput {
+        field: "branch",
+        reason: "does not exist".to_owned(),
     }
-    let slug = slug.trim_end_matches('-').to_owned();
-    (!slug.is_empty()).then_some(slug)
 }
 
-/// Formats Unix seconds as `YYYYMMDD-HHMMSS` in UTC.
-fn utc_stamp(seconds: u64) -> String {
-    let days = i64::try_from(seconds / 86_400).unwrap_or(0);
-    let second_of_day = seconds % 86_400;
-    // Civil-from-days (Howard Hinnant).
-    let z = days + 719_468;
-    let era = z.div_euclid(146_097);
-    let day_of_era = z.rem_euclid(146_097);
-    let year_of_era =
-        (day_of_era - day_of_era / 1_460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
-    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
-    let month_index = (5 * day_of_year + 2) / 153;
-    let day = day_of_year - (153 * month_index + 2) / 5 + 1;
-    let month = if month_index < 10 {
-        month_index + 3
-    } else {
-        month_index - 9
-    };
-    let year = year_of_era + era * 400 + i64::from(month <= 2);
-    format!(
-        "{year:04}{month:02}{day:02}-{:02}{:02}{:02}",
-        second_of_day / 3_600,
-        second_of_day % 3_600 / 60,
-        second_of_day % 60
-    )
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn branch_slugs_are_ascii_and_bounded() {
-        assert_eq!(slug("Ada Lovelace").as_deref(), Some("ada-lovelace"));
-        assert_eq!(slug("  --Grace__H. "), Some("grace-h".to_owned()));
-        assert_eq!(slug("Анна"), None);
-    }
-
-    #[test]
-    fn utc_stamps_use_the_civil_calendar() {
-        assert_eq!(utc_stamp(0), "19700101-000000");
-        assert_eq!(utc_stamp(951_782_400), "20000229-000000");
-        assert_eq!(utc_stamp(1_790_172_902), "20260923-141502");
+fn unmerged_branch() -> GitError {
+    GitError::InvalidInput {
+        field: "branch",
+        reason: "has commits that exist on no other branch".to_owned(),
     }
 }

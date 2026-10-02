@@ -7,8 +7,8 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use aeria_git::{
-    ATTRIBUTES_FILE, COLLABORATION_FILE, FEED_WORKFLOW_FILE, FONT_SETTINGS_FILE, FONTS_DIR,
-    GitError, GitRepository, KNOWLEDGE_DIR, PACK_SETTINGS_FILE, PROJECT_PATHS,
+    ATTRIBUTES_FILE, FEED_WORKFLOW_FILE, FONT_SETTINGS_FILE, FONTS_DIR, GitError, GitRepository,
+    KNOWLEDGE_DIR, PACK_SETTINGS_FILE, PROJECT_PATHS,
 };
 use aeria_knowledge::{GlossaryEntry, parse_glossary};
 use serde::Serialize;
@@ -28,7 +28,6 @@ pub enum ProjectAreaDto {
     PackSettings,
     FontSettings,
     FontFile,
-    Collaboration,
     GitAttributes,
     FeedWorkflow,
     CheckWorkflow,
@@ -91,7 +90,6 @@ fn area_of(path: &str) -> Option<ProjectAreaDto> {
         aeria_git::SETTINGS_FILE => ProjectAreaDto::ProjectSettings,
         PACK_SETTINGS_FILE => ProjectAreaDto::PackSettings,
         FONT_SETTINGS_FILE => ProjectAreaDto::FontSettings,
-        COLLABORATION_FILE => ProjectAreaDto::Collaboration,
         ATTRIBUTES_FILE => ProjectAreaDto::GitAttributes,
         FEED_WORKFLOW_FILE => ProjectAreaDto::FeedWorkflow,
         aeria_git::CHECK_WORKFLOW_FILE => ProjectAreaDto::CheckWorkflow,
@@ -126,8 +124,7 @@ pub fn compare(
         ProjectAreaDto::Knowledge | ProjectAreaDto::GitAttributes => text_details(before, after),
         ProjectAreaDto::PackSettings
         | ProjectAreaDto::ProjectSettings
-        | ProjectAreaDto::FontSettings
-        | ProjectAreaDto::Collaboration => json_details(before, after),
+        | ProjectAreaDto::FontSettings => json_details(before, after),
     };
     let unreadable = details.is_none();
     let mut details = details.unwrap_or_default();
@@ -387,7 +384,6 @@ pub fn checkpoint_message(
             ProjectAreaDto::ProjectSettings => "project settings",
             ProjectAreaDto::PackSettings => "pack settings",
             ProjectAreaDto::FontSettings | ProjectAreaDto::FontFile => "game fonts",
-            ProjectAreaDto::Collaboration => "collaboration policy",
             ProjectAreaDto::GitAttributes => "Git attributes",
             ProjectAreaDto::FeedWorkflow => "feed workflow",
             ProjectAreaDto::CheckWorkflow => "merge check workflow",

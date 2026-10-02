@@ -142,7 +142,49 @@ textarea.input,
   color: var(--fg-muted);
   font-size: var(--text-sm);
 }
-.checkbox input { width: 14px; height: 14px; margin: 0; accent-color: var(--accent); }
+.checkbox input { margin: 0; }
+
+/* Every checkbox but a switch: a box drawn in the theme's colors, with a
+   check or, for a partly chosen group, a dash. */
+input[type="checkbox"]:not(.switch) {
+  position: relative;
+  flex: none;
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  border: 1px solid var(--line-strong);
+  border-radius: 3px;
+  background: var(--field);
+  appearance: none;
+  cursor: pointer;
+  transition: background var(--duration), border-color var(--duration);
+}
+input[type="checkbox"]:not(.switch):hover:not(:disabled) { border-color: var(--accent); }
+input[type="checkbox"]:not(.switch):focus-visible { outline: 2px solid var(--line-focus); outline-offset: 1px; }
+input[type="checkbox"]:not(.switch):checked,
+input[type="checkbox"]:not(.switch):indeterminate { border-color: var(--accent); background: var(--accent); }
+input[type="checkbox"]:not(.switch):checked::after {
+  position: absolute;
+  top: 1px;
+  left: 4px;
+  width: 4px;
+  height: 8px;
+  border: solid var(--accent-fg);
+  border-width: 0 2px 2px 0;
+  content: "";
+  transform: rotate(45deg);
+}
+input[type="checkbox"]:not(.switch):indeterminate::after {
+  position: absolute;
+  top: 5px;
+  left: 2px;
+  width: 8px;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--accent-fg);
+  content: "";
+}
+input[type="checkbox"]:not(.switch):disabled { opacity: 0.45; cursor: default; }
 
 .switch {
   position: relative;

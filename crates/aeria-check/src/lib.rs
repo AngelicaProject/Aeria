@@ -8,8 +8,8 @@
 //! The checks run in stages:
 //!
 //! 1. **Integrity**: no merge conflict markers in project files, readable
-//!    `aeria.json`, and valid collaboration, pack, and font settings with
-//!    their font files present.
+//!    `aeria.json`, and valid pack and font settings with their font files
+//!    present.
 //! 2. **Translations**: every PO file reads without a problem, every
 //!    `msgctxt` is an identity once per file, and every translation passes
 //!    the checks of a translation against its `msgid`.
@@ -27,7 +27,7 @@ use std::process::Command;
 
 use aeria_export::PackSettings;
 use aeria_fonts::{FontSettings, project_path};
-use aeria_git::{CollaborationSettings, PROJECT_PATHS};
+use aeria_git::PROJECT_PATHS;
 use aeria_knowledge::Knowledge;
 use aeria_po::{PO_DIR, PoFile, SETTINGS_FILE, Settings, check_file, list, read_settings};
 
@@ -222,7 +222,7 @@ fn integrity(report: &mut Reporter<'_>) {
                 Some(&path),
                 Some(*first),
                 format!(
-                    "unresolved merge conflict markers on {} line(s); merge in Aeria (Pull or Sync), which joins translations per string",
+                    "unresolved merge conflict markers on {} line(s); merge in Aeria (Pull), which joins translations per string",
                     lines.len()
                 ),
             );
@@ -233,13 +233,6 @@ fn integrity(report: &mut Reporter<'_>) {
         report.add(
             Severity::Error,
             Some(&root.join(SETTINGS_FILE)),
-            error.to_string(),
-        );
-    }
-    if let Err(error) = CollaborationSettings::load(&root) {
-        report.add(
-            Severity::Error,
-            Some(&root.join(aeria_git::COLLABORATION_FILE)),
             error.to_string(),
         );
     }
@@ -487,18 +480,14 @@ mod tests {
     #[test]
     fn broken_settings_and_missing_fonts_are_errors() {
         let folder = tempfile::tempdir().expect("folder");
-        fs::write(
-            folder.path().join("aeria-collaboration.json"),
-            "<<<<<<< HEAD\n{}\n",
-        )
-        .expect("write");
+        fs::write(folder.path().join("aeria-pack.json"), "<<<<<<< HEAD\n{}\n").expect("write");
         let report = run_stage(Stage::Integrity, folder.path(), None);
         let paths: Vec<_> = report
             .findings
             .iter()
             .filter_map(|finding| finding.path.as_deref())
             .collect();
-        assert!(paths.contains(&"aeria-collaboration.json"));
+        assert!(paths.contains(&"aeria-pack.json"));
         let marker = report
             .findings
             .iter()

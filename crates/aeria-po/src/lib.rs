@@ -10,19 +10,28 @@ pub mod identity;
 pub mod merge;
 pub mod po;
 pub mod project;
+pub mod search;
 pub mod session;
 
-pub use check::{Finding, Verdict, check_file, check_translation};
+pub use check::{Finding, Issue, Verdict, check_file, check_translation};
 pub use generate::{GenerateError, Languages, identity_keys, identity_of, is_entry, sheet_files};
 pub use identity::{Identity, ROWS_PER_FILE, RowName, SheetPaths, is_scene, splits};
 pub use merge::{merge, merge_files};
-pub use po::{Entry, Header, PoFile, Problem, quote, unquote};
+pub use po::{
+    Entry, Header, PoFile, Problem, TERM_EXCEPTION_FLAG, can_be_exception, quote, unquote,
+};
 pub use project::{
     FORMAT, FileProblems, GAME_VERSION_FIELD, PO_DIR, ProjectError, README_PATH, SETTINGS_FILE,
     Settings, Updated, create, list, make, read, read_settings, update, versions, write,
     write_settings,
 };
+pub use search::{
+    Change, CheckFilter, Field, FieldMatch, Fields, FileHits, Found, Hit, IssueCount, MAX_HITS,
+    MatchKind, Matcher, Pattern, Query, Replacement, SearchError, State, path_selected,
+    preview_replace, replace_in_text, search, text_ranges,
+};
 pub use session::{
-    CellView, EditError, OpenError, Page, RowView, Session, SheetProgress, Translation,
+    CellView, EditDone, EditError, EditKind, EditSkipped, EditsApplied, EntryEdit, EntryState,
+    OpenError, Page, RowView, Session, SheetProgress, SkipReason, Translation, set_term_exception,
     write_atomically,
 };

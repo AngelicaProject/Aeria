@@ -15,6 +15,9 @@ pub struct Entry {
     pub fuzzy: bool,
     /// `#| msgid`: the source the translation was written for.
     pub previous: Option<String>,
+    /// `#, aeria-term-exception: <term>` flags: terms of the glossary a
+    /// person decided do not apply to this string.
+    pub term_exceptions: Vec<String>,
     /// `msgctxt`: the entry's identity.
     pub context: String,
     /// `msgid`: the source text.
@@ -98,6 +101,17 @@ pub fn unquote(literal: &str) -> Option<String> {
     Some(text)
 }
 
+/// The flag of a term exception: `#, aeria-term-exception: the Maelstrom`.
+pub const TERM_EXCEPTION_FLAG: &str = "aeria-term-exception";
+
+/// Whether a term can be written in a term exception flag: flags are
+/// separated by commas and end with the line.
+#[must_use]
+pub fn can_be_exception(term: &str) -> bool {
+    let term = term.trim();
+    !term.is_empty() && !term.contains([',', '\n', '\r'])
+}
+
 /// A comment's text on one line.
 fn comment_line(text: &str) -> String {
     text.replace('\r', "").replace('\n', "\\n")
@@ -155,8 +169,18 @@ fn write_entry(text: &mut String, entry: &Entry, prefix: &str) {
             let _ = writeln!(text, "# {}", comment_line(note));
         }
     }
+    let mut flags: Vec<String> = Vec::new();
     if entry.fuzzy {
-        text.push_str("#, fuzzy\n");
+        flags.push("fuzzy".to_owned());
+    }
+    flags.extend(
+        entry
+            .term_exceptions
+            .iter()
+            .map(|term| format!("{TERM_EXCEPTION_FLAG}: {term}")),
+    );
+    if !flags.is_empty() {
+        let _ = writeln!(text, "#, {}", flags.join(", "));
     }
     if let Some(previous) = &entry.previous {
         let _ = writeln!(text, "#| msgid {}", quote(previous));
@@ -306,8 +330,22 @@ impl Parser {
         if let Some(rest) = line.strip_prefix("#.") {
             target.entry.extracted.push(unescape_comment(rest));
         } else if let Some(rest) = line.strip_prefix("#,") {
-            if rest.split(',').any(|flag| flag.trim() == "fuzzy") {
-                target.entry.fuzzy = true;
+            for flag in rest.split(',').map(str::trim) {
+                if flag == "fuzzy" {
+                    target.entry.fuzzy = true;
+                } else if let Some(term) = flag
+                    .strip_prefix(TERM_EXCEPTION_FLAG)
+                    .and_then(|rest| rest.strip_prefix(':'))
+                    .map(str::trim)
+                    .filter(|term| !term.is_empty())
+                    && !target
+                        .entry
+                        .term_exceptions
+                        .iter()
+                        .any(|known| known == term)
+                {
+                    target.entry.term_exceptions.push(term.to_owned());
+                }
             }
         } else if let Some(rest) = line.strip_prefix("#|") {
             let rest = rest.trim();
@@ -425,6 +463,7 @@ mod tests {
                     notes: vec!["a note".to_owned()],
                     fuzzy: true,
                     previous: Some("Old \"name\"".to_owned()),
+                    term_exceptions: vec!["the Maelstrom".to_owned(), "Scions".to_owned()],
                     context: "quest/000/A:TEXT_A_SEQ_00:1".to_owned(),
                     source: "Name <if $gn4>a<else>b</if>".to_owned(),
                     translation: "Имя \\<".to_owned(),
@@ -461,6 +500,22 @@ mod tests {
         assert_eq!(without_lines(read.clone()), sample());
         assert_eq!(read.write(), text);
         assert_eq!(read.field("Language"), Some("ru"));
+        assert!(text.contains(
+            "#, fuzzy, aeria-term-exception: the Maelstrom, aeria-term-exception: Scions\n"
+        ));
+    }
+
+    #[test]
+    fn term_exceptions_are_read_without_fuzzy_and_other_flags_are_left() {
+        let text = "msgctxt \"S:1:0:0\"\nmsgid \"x\"\nmsgstr \"\"\n";
+        let with = |flags: &str| PoFile::parse(&format!("{flags}\n{text}")).0.entries[0].clone();
+        let entry = with("#, aeria-term-exception:  Maelstrom , c-format");
+        assert!(!entry.fuzzy);
+        assert_eq!(entry.term_exceptions, ["Maelstrom"]);
+        assert!(with("#, aeria-term-exception:").term_exceptions.is_empty());
+        assert!(can_be_exception("the Maelstrom"));
+        assert!(!can_be_exception("Sage, elder"));
+        assert!(!can_be_exception(" "));
     }
 
     #[test]

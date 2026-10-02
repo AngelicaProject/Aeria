@@ -43,18 +43,126 @@ pub struct Translation {
     pub note: Option<String>,
     /// The source the translation was written for, while it is fuzzy.
     pub previous: Option<String>,
+    /// Terms a person decided do not apply to the string.
+    pub term_exceptions: Vec<String>,
 }
 
 impl Translation {
     fn of(entry: &crate::po::Entry) -> Option<Self> {
         let note = (!entry.notes.is_empty()).then(|| entry.notes.join("\n"));
-        (!entry.translation.is_empty() || entry.fuzzy || note.is_some()).then(|| Self {
+        (!entry.translation.is_empty()
+            || entry.fuzzy
+            || note.is_some()
+            || !entry.term_exceptions.is_empty())
+        .then(|| Self {
             text: entry.translation.clone(),
             fuzzy: entry.fuzzy,
             note,
             previous: entry.previous.clone().filter(|_| entry.fuzzy),
+            term_exceptions: entry.term_exceptions.clone(),
         })
     }
+}
+
+/// The translation state of one entry, exactly as its file holds it.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct EntryState {
+    /// `msgstr`; empty when untranslated.
+    pub text: String,
+    pub fuzzy: bool,
+    /// The source the translation was written for, while it is fuzzy.
+    pub previous: Option<String>,
+    pub term_exceptions: Vec<String>,
+}
+
+impl EntryState {
+    fn of(entry: &crate::po::Entry) -> Self {
+        Self {
+            text: entry.translation.clone(),
+            fuzzy: entry.fuzzy,
+            previous: entry.previous.clone(),
+            term_exceptions: entry.term_exceptions.clone(),
+        }
+    }
+}
+
+/// What an edit does to an entry.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum EditKind {
+    /// A new translation, checked as a saved one; the fuzzy mark stays, so a
+    /// replacement never passes for a review.
+    Replace(String),
+    /// The translation is cleared, so machine translation takes the string
+    /// again; the fuzzy mark and previous source go with it.
+    Clear,
+    /// The entry goes back to an earlier state, as the file had it.
+    Restore(EntryState),
+    /// A term exception is added or removed: the glossary term does not
+    /// apply to the string (see [`set_term_exception`]).
+    TermException { term: String, add: bool },
+}
+
+/// An edit of one entry, made only while the entry still has the
+/// translation and fuzzy mark it was made from.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct EntryEdit {
+    /// The file, relative to `po/`.
+    pub path: String,
+    pub context: String,
+    pub expected_text: String,
+    pub expected_fuzzy: bool,
+    pub kind: EditKind,
+}
+
+/// An edit that was written.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct EditDone {
+    pub path: String,
+    pub context: String,
+    pub before: EntryState,
+    pub after: EntryState,
+}
+
+impl EditDone {
+    /// The edit that undoes this one while the entry is unchanged since.
+    #[must_use]
+    pub fn undo(&self) -> EntryEdit {
+        EntryEdit {
+            path: self.path.clone(),
+            context: self.context.clone(),
+            expected_text: self.after.text.clone(),
+            expected_fuzzy: self.after.fuzzy,
+            kind: EditKind::Restore(self.before.clone()),
+        }
+    }
+}
+
+/// Why an edit was not written.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum SkipReason {
+    /// The entry's translation changed since the edit was made.
+    Changed,
+    /// The file has no such entry.
+    Missing,
+    /// The new translation has problems.
+    Invalid(Vec<crate::check::Issue>),
+    /// The file breaks the PO format.
+    Broken(String),
+}
+
+/// An edit that was not written.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct EditSkipped {
+    pub path: String,
+    pub context: String,
+    pub reason: SkipReason,
+}
+
+/// What [`Session::apply_edits`] did.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct EditsApplied {
+    pub done: Vec<EditDone>,
+    pub skipped: Vec<EditSkipped>,
 }
 
 /// The translations of one file by `msgctxt`, and its counts.
@@ -131,8 +239,8 @@ pub enum EditError {
         "the text of {0} in the project is not the installed game's; update the project to the game"
     )]
     SourceMismatch(String),
-    #[error("{}", .0.join("; "))]
-    Invalid(Vec<String>),
+    #[error("{}", .0.iter().map(ToString::to_string).collect::<Vec<_>>().join("; "))]
+    Invalid(Vec<crate::check::Issue>),
 }
 
 /// One string of a row, with its translation.
@@ -184,6 +292,10 @@ pub struct Session {
     knowledge: Mutex<Option<(Vec<Stamp>, Arc<Knowledge>)>>,
     /// Writes one at a time, so two edits of one file never race.
     writing: Mutex<()>,
+    /// Counts the changes of the files: every write of the session, and
+    /// every change underneath it that the caller reports with
+    /// [`Session::touch`].
+    revision: std::sync::atomic::AtomicU64,
 }
 
 /// The game version a project's files are for: `aeria.json`, or the header
@@ -246,6 +358,7 @@ impl Session {
             viewed: Mutex::new(HashMap::new()),
             knowledge: Mutex::new(None),
             writing: Mutex::new(()),
+            revision: std::sync::atomic::AtomicU64::new(0),
         }
     }
 
@@ -258,6 +371,20 @@ impl Session {
     #[must_use]
     pub fn settings(&self) -> Settings {
         lock(&self.settings).clone()
+    }
+
+    /// How many times the project's files changed through the session or
+    /// [`Session::touch`]: a view of them is current while it is the same.
+    #[must_use]
+    pub fn revision(&self) -> u64 {
+        self.revision.load(std::sync::atomic::Ordering::Acquire)
+    }
+
+    /// Reports a change of the files made underneath the session, such as a
+    /// Git branch switch.
+    pub fn touch(&self) {
+        self.revision
+            .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
     }
 
     /// Holds every write of the session until the guard drops, for an
@@ -552,6 +679,7 @@ impl Session {
         let translation = Translation::of(entry);
         if *entry != before {
             write_atomically(&full, &file.write())?;
+            self.touch();
         }
         let state = Arc::new(FileState::of(&file));
         let now = stamp(&full);
@@ -584,10 +712,22 @@ impl Session {
         let target = self.settings().target_language;
         self.edit(sheet_name, row, subrow, column, |entry| {
             if !text.is_empty() {
-                let verdict =
-                    check_translation(&knowledge, &target, &entry.source, text, &entry.extracted);
+                let verdict = check_translation(
+                    &knowledge,
+                    &target,
+                    &entry.source,
+                    text,
+                    &entry.extracted,
+                    &entry.term_exceptions,
+                );
                 if !verdict.problems.is_empty() {
-                    return Err(EditError::Invalid(verdict.problems));
+                    return Err(EditError::Invalid(
+                        verdict
+                            .issues
+                            .into_iter()
+                            .filter(crate::check::Issue::is_problem)
+                            .collect(),
+                    ));
                 }
             }
             text.clone_into(&mut entry.translation);
@@ -595,6 +735,77 @@ impl Session {
             entry.previous = None;
             Ok(())
         })
+    }
+
+    /// Adds or removes a term exception of a string: the glossary term does
+    /// not apply to it, so the checks neither ask for its translation nor
+    /// forbid its variants there, and machine translation is told so.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the string is not an entry, or its file is
+    /// broken, does not match the game, or cannot be written.
+    pub fn set_term_exception(
+        &self,
+        sheet_name: &str,
+        row: u32,
+        subrow: u16,
+        column: u32,
+        term: &str,
+        add: bool,
+    ) -> Result<Option<Translation>, EditError> {
+        self.edit(sheet_name, row, subrow, column, |entry| {
+            set_term_exception(entry, term, add);
+            Ok(())
+        })
+    }
+
+    /// What the checks find in the saved translation of a string, problems
+    /// then advice, and its term exceptions. An untranslated string has no
+    /// findings.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the string is not an entry, or its file cannot
+    /// be read or is broken.
+    pub fn findings(
+        &self,
+        sheet_name: &str,
+        row: u32,
+        subrow: u16,
+        column: u32,
+    ) -> Result<(Vec<crate::check::Issue>, Vec<String>), EditError> {
+        let (path, identity, _) = self.locate(sheet_name, row, subrow, column)?;
+        let full = self.root.join(PO_DIR).join(&path);
+        let text = std::fs::read_to_string(&full).map_err(|source| ProjectError::Io {
+            path: full.clone(),
+            source,
+        })?;
+        let (file, problems) = PoFile::parse(&text);
+        if let Some(problem) = problems.first() {
+            return Err(EditError::Broken {
+                path,
+                line: problem.line,
+                message: problem.message.clone(),
+            });
+        }
+        let Some(entry) = file.entries.iter().find(|entry| entry.context == identity) else {
+            return Ok((Vec::new(), Vec::new()));
+        };
+        let issues = if entry.translation.is_empty() {
+            Vec::new()
+        } else {
+            check_translation(
+                &self.knowledge(),
+                &self.settings().target_language,
+                &entry.source,
+                &entry.translation,
+                &entry.extracted,
+                &entry.term_exceptions,
+            )
+            .issues
+        };
+        Ok((issues, entry.term_exceptions.clone()))
     }
 
     /// Sets or clears the translator's note of a string.
@@ -676,6 +887,7 @@ impl Session {
         }
         if !written.is_empty() {
             write_atomically(&full, &file.write())?;
+            self.touch();
         }
         let now = stamp(&full);
         lock(&self.files).insert(path.to_owned(), (now, Arc::new(FileState::of(&file))));
@@ -686,6 +898,89 @@ impl Session {
             }
         }
         Ok(written)
+    }
+
+    /// Applies edits of many entries, writing each file once. An edit is
+    /// made only while its entry still has the expected translation and
+    /// fuzzy mark; a replacement with a problem (see
+    /// [`crate::check::check_translation`]) is not written. Skipped edits
+    /// are reported, never fatal.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when a file cannot be read or written.
+    pub fn apply_edits(&self, edits: &[EntryEdit]) -> Result<EditsApplied, EditError> {
+        let knowledge = self.knowledge();
+        let target = self.settings().target_language;
+        let _writing = lock(&self.writing);
+        let mut by_file: std::collections::BTreeMap<&str, Vec<&EntryEdit>> =
+            std::collections::BTreeMap::new();
+        for edit in edits {
+            by_file.entry(edit.path.as_str()).or_default().push(edit);
+        }
+        let mut applied = EditsApplied::default();
+        for (path, edits) in by_file {
+            let skip_all = |applied: &mut EditsApplied, reason: SkipReason| {
+                applied.skipped.extend(edits.iter().map(|edit| EditSkipped {
+                    path: edit.path.clone(),
+                    context: edit.context.clone(),
+                    reason: reason.clone(),
+                }));
+            };
+            let full = self.root.join(PO_DIR).join(path);
+            let text = match std::fs::read_to_string(&full) {
+                Ok(text) => text,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    skip_all(&mut applied, SkipReason::Missing);
+                    continue;
+                }
+                Err(source) => return Err(ProjectError::Io { path: full, source }.into()),
+            };
+            let (mut file, problems) = PoFile::parse(&text);
+            if let Some(problem) = problems.first() {
+                skip_all(
+                    &mut applied,
+                    SkipReason::Broken(format!("line {}: {}", problem.line, problem.message)),
+                );
+                continue;
+            }
+            let mut written = 0;
+            for edit in edits {
+                let Some(entry) = file
+                    .entries
+                    .iter_mut()
+                    .find(|entry| entry.context == edit.context)
+                else {
+                    applied.skipped.push(EditSkipped {
+                        path: edit.path.clone(),
+                        context: edit.context.clone(),
+                        reason: SkipReason::Missing,
+                    });
+                    continue;
+                };
+                match apply_edit(entry, edit, &knowledge, &target) {
+                    Ok(Some(done)) => {
+                        written += 1;
+                        applied.done.push(done);
+                    }
+                    Ok(None) => {}
+                    Err(reason) => applied.skipped.push(EditSkipped {
+                        path: edit.path.clone(),
+                        context: edit.context.clone(),
+                        reason,
+                    }),
+                }
+            }
+            if written > 0 {
+                write_atomically(&full, &file.write())?;
+                self.touch();
+            }
+            // The editor learns of the change through `changed_sheets`, as
+            // for a change by Git: its stamp of the file stays the old one.
+            let now = stamp(&full);
+            lock(&self.files).insert(path.to_owned(), (now, Arc::new(FileState::of(&file))));
+        }
+        Ok(applied)
     }
 
     /// How much of each sheet with entries is translated, by sheet name.
@@ -714,6 +1009,77 @@ impl Session {
             progress.fuzzy += state.fuzzy;
         }
         Ok(by_sheet.into_values().collect())
+    }
+}
+
+/// Applies one edit to its entry: the edit done, `None` when it changed
+/// nothing, or why it was not made.
+fn apply_edit(
+    entry: &mut crate::po::Entry,
+    edit: &EntryEdit,
+    knowledge: &Knowledge,
+    target: &str,
+) -> Result<Option<EditDone>, SkipReason> {
+    if entry.translation != edit.expected_text || entry.fuzzy != edit.expected_fuzzy {
+        return Err(SkipReason::Changed);
+    }
+    let before = EntryState::of(entry);
+    match &edit.kind {
+        EditKind::Replace(new) => {
+            if !new.is_empty() {
+                let verdict = check_translation(
+                    knowledge,
+                    target,
+                    &entry.source,
+                    new,
+                    &entry.extracted,
+                    &entry.term_exceptions,
+                );
+                if !verdict.problems.is_empty() {
+                    return Err(SkipReason::Invalid(
+                        verdict
+                            .issues
+                            .into_iter()
+                            .filter(crate::check::Issue::is_problem)
+                            .collect(),
+                    ));
+                }
+            }
+            new.clone_into(&mut entry.translation);
+        }
+        EditKind::Clear => {
+            entry.translation.clear();
+            entry.fuzzy = false;
+            entry.previous = None;
+        }
+        EditKind::Restore(state) => {
+            state.text.clone_into(&mut entry.translation);
+            entry.fuzzy = state.fuzzy;
+            entry.previous.clone_from(&state.previous);
+            entry.term_exceptions.clone_from(&state.term_exceptions);
+        }
+        EditKind::TermException { term, add } => set_term_exception(entry, term, *add),
+    }
+    let after = EntryState::of(entry);
+    Ok((after != before).then(|| EditDone {
+        path: edit.path.clone(),
+        context: edit.context.clone(),
+        before,
+        after,
+    }))
+}
+
+/// Adds or removes the exception of `term`, compared ignoring case. A term
+/// that cannot be written as a flag (see [`crate::po::can_be_exception`]) is
+/// not added.
+pub fn set_term_exception(entry: &mut crate::po::Entry, term: &str, add: bool) {
+    let term = term.trim();
+    let lower = term.to_lowercase();
+    entry
+        .term_exceptions
+        .retain(|known| known.to_lowercase() != lower);
+    if add && crate::po::can_be_exception(term) {
+        entry.term_exceptions.push(term.to_owned());
     }
 }
 

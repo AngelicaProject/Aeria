@@ -9,8 +9,8 @@ export type ListDensity = "compact" | "comfortable";
 /** A pane shows the string as text with tag chips, or as its macro code. */
 export type PaneMode = "text" | "code";
 /** The tab the translation editor's side pane shows. */
-export type SidePaneTab = "note" | "languages" | "history";
-export const sidePaneTabs = ["note", "languages", "history"] as const;
+export type SidePaneTab = "note" | "languages" | "history" | "checks";
+export const sidePaneTabs = ["note", "languages", "history", "checks"] as const;
 /** How quest and cutscene sheets are shown: as the strings list, or as a scene. */
 export type DialogueView = "strings" | "scene";
 

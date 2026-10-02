@@ -207,6 +207,33 @@ pub async fn translation_start(
     model: String,
     effort: Option<String>,
 ) -> CommandResult<()> {
+    let session = app.state::<DesktopState>().session()?;
+    start_run(
+        &app,
+        Options {
+            paths: paths_of(&session, &scope),
+            fuzzy,
+            contexts: Vec::new(),
+            model,
+            effort: effort.filter(|effort| !effort.is_empty()),
+        },
+    )
+}
+
+/// Whether a run is going.
+pub(crate) fn is_running(app: &tauri::AppHandle) -> bool {
+    app.state::<Translation>()
+        .run()
+        .is_some_and(|run| run.status().running)
+}
+
+/// Starts a run of the open project; one run at a time.
+///
+/// # Errors
+///
+/// Returns `translationRunning` while a run goes, `noProjectOpen`, or an
+/// error of the credential store.
+pub(crate) fn start_run(app: &tauri::AppHandle, options: Options) -> CommandResult<()> {
     let translation = app.state::<Translation>();
     let codex = translation.codex()?;
     let session = app.state::<DesktopState>().session()?;
@@ -216,31 +243,115 @@ pub async fn translation_start(
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
         if current.as_ref().is_some_and(|run| run.status().running) {
-            return Err(CommandError::new(
-                "translationRunning",
-                "a machine translation is running; stop it or wait for it to finish",
-            ));
+            return Err(running());
         }
         let run = Arc::new(Run::new());
         *current = Some(Arc::clone(&run));
         run
     };
-    let options = Options {
-        paths: paths_of(&session, &scope),
-        fuzzy,
-        model,
-        effort: effort.filter(|effort| !effort.is_empty()),
-    };
     tauri::async_runtime::spawn(aeria_model::run::run(session, codex, options, run));
     Ok(())
+}
+
+/// The error of a second run.
+pub(crate) fn running() -> CommandError {
+    CommandError::new(
+        "translationRunning",
+        "a machine translation is running; stop it or wait for it to finish",
+    )
+}
+
+/// A string whose translation the checks rejected, with where it is in the
+/// game and its problems as data.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RejectionDto {
+    pub path: String,
+    pub context: String,
+    pub binding: Option<crate::dto::SourceBindingDto>,
+    /// The model's last translation, which was not written.
+    pub translation: String,
+    pub problems: Vec<crate::dto::IssueDto>,
+}
+
+/// The progress of a run, with its rejected strings.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StatusDto {
+    #[serde(flatten)]
+    pub status: Status,
+    pub rejections: Vec<RejectionDto>,
+}
+
+fn rejection_dto(
+    session: Option<&aeria_po::Session>,
+    rejected: &aeria_model::Rejected,
+) -> RejectionDto {
+    let mut problems: Vec<crate::dto::IssueDto> = rejected
+        .problems
+        .iter()
+        .filter(|message| {
+            !rejected
+                .issues
+                .iter()
+                .any(|issue| issue.to_string() == **message)
+        })
+        .map(|message| crate::dto::IssueDto {
+            kind: "other".to_owned(),
+            group: "other".to_owned(),
+            message: message.clone(),
+            ..crate::dto::IssueDto::default()
+        })
+        .collect();
+    problems.extend(rejected.issues.iter().map(crate::dto::IssueDto::from));
+    RejectionDto {
+        path: rejected.path.clone(),
+        context: rejected.context.clone(),
+        binding: session.and_then(|session| crate::search::binding(session, &rejected.context)),
+        translation: rejected.translation.clone(),
+        problems,
+    }
 }
 
 #[tauri::command(rename_all = "camelCase")]
 /// The progress of the last run; `None` before one started.
 #[must_use]
 #[allow(clippy::needless_pass_by_value)]
-pub fn translation_status(app: tauri::AppHandle) -> Option<Status> {
-    app.state::<Translation>().run().map(|run| run.status())
+pub fn translation_status(app: tauri::AppHandle) -> Option<StatusDto> {
+    let status = app.state::<Translation>().run()?.status();
+    let session = app.state::<DesktopState>().session().ok();
+    let rejections = status
+        .rejections
+        .iter()
+        .map(|rejected| rejection_dto(session.as_deref(), rejected))
+        .collect();
+    Some(StatusDto { status, rejections })
+}
+
+#[tauri::command(rename_all = "camelCase")]
+/// Translates the given strings again, by `msgctxt`: those still
+/// untranslated, or fuzzy, as rejected strings stay.
+///
+/// # Errors
+///
+/// Returns `translationRunning` while a run goes, or `noProjectOpen`.
+pub async fn translation_retry(
+    app: tauri::AppHandle,
+    contexts: Vec<String>,
+    model: String,
+    effort: Option<String>,
+) -> CommandResult<()> {
+    app.state::<DesktopState>().session()?;
+    start_run(
+        &app,
+        Options {
+            paths: Vec::new(),
+            fuzzy: true,
+            contexts,
+            model,
+            effort: effort.filter(|effort| !effort.is_empty()),
+        },
+    )
 }
 
 #[tauri::command(rename_all = "camelCase")]

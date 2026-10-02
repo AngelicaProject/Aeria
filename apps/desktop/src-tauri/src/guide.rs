@@ -48,6 +48,8 @@ pub struct TermInput {
     pub forbidden: Vec<String>,
     #[serde(default)]
     pub settled: bool,
+    #[serde(default)]
+    pub match_case: bool,
 }
 
 fn knowledge_error(message: impl Into<String>) -> CommandError {
@@ -116,6 +118,7 @@ fn terms_file(entries: Vec<TermInput>) -> CommandResult<String> {
                 .filter(|variant| !variant.is_empty())
                 .collect(),
             settled: entry.settled,
+            match_case: entry.match_case,
         })
         .collect();
     let text = write_glossary(&entries);
@@ -243,6 +246,7 @@ mod tests {
             note: Some("  ".to_owned()),
             forbidden: vec![" Хай ".to_owned(), String::new()],
             settled: true,
+            match_case: false,
         }
     }
 

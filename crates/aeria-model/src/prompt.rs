@@ -57,7 +57,10 @@ pub fn instructions(source_language: &str, target_language: &str, style: Option<
          every word that agrees with the player character, unless it is phrased so that \
          nothing does. A string with `previous` was translated before its \
          source changed: `previous.source` is the old source and `previous.translation` its \
-         translation; keep what still fits. A string with `maxLength` is an interface label: \
+         translation; keep what still fits. A string with `termExceptions` names terms of \
+         `terms` that do not apply to it, as a person decided: there the word means something \
+         else, so you translate it by its meaning and may use the `never` variants. A string \
+         with `maxLength` is an interface label: \
          its translation shows at most that many characters (macros not counted), as the \
          official localizations fit the game's layout; shorten it, with the usual \
          abbreviations of the language when needed (Шанс прям. удара).\n\n\
@@ -80,6 +83,8 @@ pub struct Item {
     pub previous: Option<(String, String)>,
     /// The most characters an interface label's translation may show.
     pub max_length: Option<usize>,
+    /// Terms a person decided do not apply to the string.
+    pub term_exceptions: Vec<String>,
 }
 
 /// One answer: the words it repeats from the start of its source, and the
@@ -167,6 +172,9 @@ fn file_value(task: &FileTask) -> Value {
                 if let Some(max) = item.max_length {
                     value["maxLength"] = Value::from(max);
                 }
+                if !item.term_exceptions.is_empty() {
+                    value["termExceptions"] = Value::from(item.term_exceptions.clone());
+                }
                 value
             })
             .collect::<Vec<_>>(),
@@ -250,9 +258,157 @@ pub fn parse(text: &str) -> Result<HashMap<String, Answer>, String> {
         .collect())
 }
 
+/// Reads an answer as [`parse`] does, and when it is not valid JSON, takes
+/// what can still be read: each entry `"id": ["first words", "translation"]`
+/// on its own, where a quote the model did not escape inside a string is read
+/// as part of it. A string read this way is checked like any other, so a
+/// wrong reading is refused, never written. Entries that cannot be read are
+/// left out, and the caller asks for them again.
+#[must_use]
+pub fn parse_lenient(text: &str) -> HashMap<String, Answer> {
+    parse(text).unwrap_or_else(|_| salvage(text))
+}
+
+/// Where each entry `"id": [` of an answer starts: its id and the byte
+/// after its `[`. Ids are the decimal numbers a request gives its strings.
+fn entry_starts(text: &str) -> Vec<(String, usize)> {
+    let bytes = text.as_bytes();
+    let mut starts = Vec::new();
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] != b'"' {
+            index += 1;
+            continue;
+        }
+        let digits = bytes[index + 1..]
+            .iter()
+            .take_while(|byte| byte.is_ascii_digit())
+            .count();
+        let close = index + 1 + digits;
+        if digits == 0 || bytes.get(close) != Some(&b'"') {
+            index += 1;
+            continue;
+        }
+        let mut at = close + 1;
+        let skip = |at: &mut usize| {
+            while bytes.get(*at).is_some_and(u8::is_ascii_whitespace) {
+                *at += 1;
+            }
+        };
+        skip(&mut at);
+        if bytes.get(at) != Some(&b':') {
+            index = close;
+            continue;
+        }
+        at += 1;
+        skip(&mut at);
+        if bytes.get(at) != Some(&b'[') {
+            index = close;
+            continue;
+        }
+        starts.push((text[index + 1..close].to_owned(), at + 1));
+        index = at + 1;
+    }
+    starts
+}
+
+/// The text of a JSON string's content as the model wrote it, with quotes it
+/// did not escape kept as quotes; `None` when an escape is invalid.
+fn unescape_loosely(raw: &str) -> Option<String> {
+    let mut json = String::with_capacity(raw.len() + 2);
+    json.push('"');
+    let mut characters = raw.chars();
+    while let Some(character) = characters.next() {
+        match character {
+            '\\' => {
+                json.push('\\');
+                json.push(characters.next()?);
+            }
+            '"' => json.push_str("\\\""),
+            '\n' => json.push_str("\\n"),
+            '\r' => json.push_str("\\r"),
+            '\t' => json.push_str("\\t"),
+            other => json.push(other),
+        }
+    }
+    json.push('"');
+    serde_json::from_str(&json).ok()
+}
+
+/// Whether `rest` starts with whitespace, then `then`.
+fn followed_by(rest: &str, then: char) -> bool {
+    rest.trim_start().starts_with(then)
+}
+
+/// The entries of an answer that is not valid JSON (see [`parse_lenient`]).
+fn salvage(text: &str) -> HashMap<String, Answer> {
+    let starts = entry_starts(text);
+    let mut answers = HashMap::new();
+    for (position, (id, from)) in starts.iter().enumerate() {
+        let to = starts
+            .get(position + 1)
+            .map_or(text.len(), |(_, next)| *next);
+        let region = &text[*from..to];
+        let Some(open) = region
+            .find('"')
+            .filter(|open| region[..*open].trim().is_empty())
+        else {
+            continue;
+        };
+        let body = &region[open + 1..];
+        // The first words end at the first quote followed by `, "`.
+        let Some(first_end) = body.match_indices('"').map(|(at, _)| at).find(|at| {
+            let rest = &body[at + 1..];
+            followed_by(rest, ',') && followed_by(&rest.trim_start()[1..], '"')
+        }) else {
+            continue;
+        };
+        let after = body[first_end + 1..].trim_start()[1..].trim_start();
+        let Some(second) = after.strip_prefix('"') else {
+            continue;
+        };
+        // The translation ends at the last quote followed by `]`.
+        let Some(second_end) = second
+            .rmatch_indices('"')
+            .map(|(at, _)| at)
+            .find(|at| followed_by(&second[at + 1..], ']'))
+        else {
+            continue;
+        };
+        if let (Some(start), Some(translation)) = (
+            unescape_loosely(&body[..first_end]),
+            unescape_loosely(&second[..second_end]),
+        ) {
+            answers.insert(
+                id.clone(),
+                Answer {
+                    start: Some(start),
+                    text: translation,
+                },
+            );
+        }
+    }
+    answers
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_answer_with_an_unescaped_quote_keeps_its_readable_entries() {
+        let text = r#"{"1": ["Talk to", "Поговорите с <sheet Item "x" 1>."], "2": ["Hello", "Привет"], "3": ["Broken", "Сло\qмано"], "4": ["Bye", "Пока, "друг"!"]}"#;
+        assert!(parse(text).is_err());
+        let answers = parse_lenient(text);
+        assert_eq!(answers["1"].text, r#"Поговорите с <sheet Item "x" 1>."#);
+        assert_eq!(answers["1"].start.as_deref(), Some("Talk to"));
+        assert_eq!(answers["2"].text, "Привет");
+        assert!(!answers.contains_key("3"), "an invalid escape is left out");
+        assert_eq!(answers["4"].text, r#"Пока, "друг"!"#);
+        // Valid JSON is read as before.
+        assert_eq!(parse_lenient(r#"{"1": ["a", "б"]}"#)["1"].text, "б");
+        assert!(parse_lenient("no json").is_empty());
+    }
 
     #[test]
     fn answers_are_read_from_the_first_json_object() {
@@ -297,6 +453,7 @@ mod tests {
                     context: vec!["de: Ok".to_owned()],
                     previous: None,
                     max_length: None,
+                    term_exceptions: vec!["Maelstrom".to_owned()],
                 }],
             }],
             &[("Minfilia".to_owned(), "Минфилия".to_owned())],
@@ -308,6 +465,11 @@ mod tests {
         assert_eq!(value["files"][0]["speakers"][0]["speaker"], "MINFILIA");
         assert_eq!(value["files"][0]["about"], "Addon");
         assert!(value["files"][0]["strings"][0].get("gendered").is_none());
+        assert_eq!(
+            value["files"][0]["strings"][0]["termExceptions"][0],
+            "Maelstrom"
+        );
+        assert!(text.contains("`termExceptions`"));
     }
 
     #[test]
@@ -318,6 +480,7 @@ mod tests {
             context: context.iter().map(|line| (*line).to_owned()).collect(),
             previous: None,
             max_length: None,
+            term_exceptions: Vec::new(),
         };
         let input = input(
             &[FileTask {

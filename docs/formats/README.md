@@ -5,7 +5,6 @@ This section owns Aeria-defined persisted and exported contracts.
 - [`../architecture/po-project.md`](../architecture/po-project.md) — the project's PO files (`po/`) and project settings (`aeria.json`), described with the project they hold.
 - [`knowledge-v1.md`](./knowledge-v1.md) — project knowledge: the `aeria-knowledge` directory of style and terms.
 - [`glossary-v1.md`](./glossary-v1.md) — the project's terms (`aeria-knowledge/terms.csv`).
-- [`collaboration-v1.md`](./collaboration-v1.md) — project-shared collaboration policy (`aeria-collaboration.json`).
 - [`pack-settings-v1.md`](./pack-settings-v1.md) — project-shared pack settings and signing key fingerprint (`aeria-pack.json`).
 - [`font-settings-v1.md`](./font-settings-v1.md) — project-shared source fonts for glyphs the game fonts lack (`aeria-fonts.json`).
 - [`pack-v1.md`](./pack-v1.md) — compiled translation pack format version 1 for Harmonia (proposal).

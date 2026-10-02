@@ -35,6 +35,12 @@ const NAMES: usize = 80;
 const TERMS: usize = 60;
 /// Rejected strings a status lists; the count is kept for all.
 const LISTED_REJECTIONS: usize = 200;
+/// Times the translations that fail the checks go back to the model, with
+/// what is wrong, before they are rejected.
+const RETRIES: usize = 2;
+/// The problem of a string the answer did not translate readably.
+const MISSING: &str = "the answer has no readable translation of this string: answer it as \
+     [\"first words\", \"translation\"], with every quote inside a string escaped as \\\"";
 /// Failures of the service in a row that stop a run.
 const FAILURES: u32 = 3;
 /// Wait after a failure, times the failures in a row.
@@ -47,19 +53,28 @@ pub struct Options {
     pub paths: Vec<String>,
     /// Translate fuzzy strings too, with their old translation.
     pub fuzzy: bool,
+    /// Only these strings, by `msgctxt`; empty for every string of `paths`.
+    pub contexts: Vec<String>,
     pub model: String,
     pub effort: Option<String>,
 }
 
-/// A string whose translation failed the checks twice; it stays untranslated.
+/// A string whose translation still failed the checks after the retries; it
+/// stays as it was.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Rejected {
     /// The file, relative to `po/`.
     pub path: String,
     pub context: String,
+    /// The model's last translation, which was not written.
     pub translation: String,
+    /// Every problem in English, as the model was told.
     pub problems: Vec<String>,
+    /// The problems the translation checks found, as data; the rest of
+    /// `problems` (another string's answer, a label too long) has none.
+    #[serde(skip)]
+    pub issues: Vec<aeria_po::Issue>,
 }
 
 /// Why a run stopped.
@@ -96,6 +111,9 @@ pub struct Status {
     pub strings: usize,
     pub written: usize,
     pub rejected: usize,
+    /// The first rejected strings; an interface sends them with what it
+    /// knows of them.
+    #[serde(skip_serializing)]
     pub rejections: Vec<Rejected>,
     pub input_tokens: u64,
     pub cached_tokens: u64,
@@ -197,13 +215,19 @@ fn selected(path: &str, paths: &[String]) -> bool {
 }
 
 /// The batches of a run: the strings of the chosen files that need a
-/// translation, in file order.
+/// translation, in file order; with `contexts`, only those strings.
 ///
 /// # Errors
 ///
 /// Returns a description when `po/` cannot be listed or a file cannot be
 /// read.
-pub fn plan(root: &std::path::Path, paths: &[String], fuzzy: bool) -> Result<Vec<Batch>, String> {
+pub fn plan(
+    root: &std::path::Path,
+    paths: &[String],
+    fuzzy: bool,
+    contexts: &[String],
+) -> Result<Vec<Batch>, String> {
+    let only: std::collections::HashSet<&str> = contexts.iter().map(String::as_str).collect();
     let files = aeria_po::list(root).map_err(|error| error.to_string())?;
     let mut batches = Vec::new();
     for path in files.into_iter().filter(|path| selected(path, paths)) {
@@ -214,7 +238,10 @@ pub fn plan(root: &std::path::Path, paths: &[String], fuzzy: bool) -> Result<Vec
             .entries
             .iter()
             .enumerate()
-            .filter(|(_, entry)| needs_work(entry, fuzzy))
+            .filter(|(_, entry)| {
+                needs_work(entry, fuzzy)
+                    && (only.is_empty() || only.contains(entry.context.as_str()))
+            })
             .map(|(index, _)| index)
             .collect();
         let scene = file
@@ -385,6 +412,7 @@ fn file_task(
                 })
                 .flatten(),
             max_length: fit::length_budget(&batch.path, &entry.source, &entry.extracted),
+            term_exceptions: entry.term_exceptions.clone(),
         })
         .collect();
     let task = FileTask {
@@ -417,6 +445,8 @@ fn build(shared: &Shared, pack: &[Batch]) -> Result<Option<Built>, String> {
         .iter()
         .map(|(_, _, entry)| entry.source.as_str())
         .collect();
+    // A term goes with the batch when it applies to one of its strings: a
+    // string's term exceptions keep its term out.
     let names = shared.names.in_texts(
         titles
             .iter()
@@ -425,8 +455,12 @@ fn build(shared: &Shared, pack: &[Batch]) -> Result<Option<Built>, String> {
         NAMES,
     );
     let mut terms: Vec<Term> = Vec::new();
-    for source in &sources {
-        for entry in shared.knowledge.terms_in(source) {
+    for (_, _, string) in &strings {
+        for entry in shared
+            .knowledge
+            .terms
+            .matches_except(&string.source, &string.term_exceptions)
+        {
             if terms.len() < TERMS && !terms.iter().any(|term| term.term == entry.term) {
                 terms.push(Term {
                     term: entry.term.clone(),
@@ -489,71 +523,111 @@ fn problems(shared: &Shared, strings: &Strings, id: &str, answer: &Answer) -> Ve
             &entry.source,
             &answer.text,
             &entry.extracted,
+            &entry.term_exceptions,
         )
         .problems,
     );
     found
 }
 
-/// Sends the translations that failed the checks back once with their
-/// problems; what fails again is rejected and stays untranslated.
+/// Sends the translations that fail the checks back with their problems,
+/// up to [`RETRIES`] times; what still fails is rejected and stays as it was.
 async fn settle(
     shared: &Shared,
     built: &Built,
     answers: &mut HashMap<String, Answer>,
     usage: &mut Usage,
 ) -> Result<Vec<Rejected>, ModelError> {
-    let failing: Vec<(String, Answer, Vec<String>)> = answers
+    let mut failing: Vec<(String, Answer, Vec<String>)> = answers
         .iter()
         .filter_map(|(id, answer)| {
             let found = problems(shared, &built.strings, id, answer);
             (!found.is_empty()).then(|| (id.clone(), answer.clone(), found))
         })
         .collect();
-    if failing.is_empty() {
-        return Ok(Vec::new());
-    }
+    // A string the answer has no translation of, or whose entry could not be
+    // read, is asked for again like a failing one.
+    failing.extend(
+        built
+            .strings
+            .iter()
+            .filter(|(id, _, _)| !answers.contains_key(id))
+            .map(|(id, _, _)| {
+                (
+                    id.clone(),
+                    Answer {
+                        start: None,
+                        text: String::new(),
+                    },
+                    vec![MISSING.to_owned()],
+                )
+            }),
+    );
     for (id, _, _) in &failing {
         answers.remove(id);
     }
-    let sent: Vec<(String, String, Vec<String>)> = failing
-        .iter()
-        .map(|(id, answer, found)| (id.clone(), answer.text.clone(), found.clone()))
-        .collect();
-    let retry = shared
-        .codex
-        .respond(&request(shared, prompt::retry_input(&built.input, &sent)))
-        .await?;
-    add(usage, retry.usage);
-    let fixed = prompt::parse(&retry.text).unwrap_or_default();
-    let mut rejected = Vec::new();
-    for (id, first, first_problems) in failing {
-        let (answer, found) = match fixed.get(&id) {
-            Some(answer) => (
-                answer.clone(),
-                problems(shared, &built.strings, &id, answer),
-            ),
-            None => (first, first_problems),
-        };
-        if found.is_empty() {
-            answers.insert(id, answer);
-        } else if let Some((_, path, entry)) = built
-            .strings
+    for _ in 0..RETRIES {
+        if failing.is_empty() {
+            break;
+        }
+        let sent: Vec<(String, String, Vec<String>)> = failing
             .iter()
-            .find(|(candidate, _, _)| *candidate == id)
-        {
-            rejected.push(Rejected {
+            .map(|(id, answer, found)| (id.clone(), answer.text.clone(), found.clone()))
+            .collect();
+        let retry = shared
+            .codex
+            .respond(&request(shared, prompt::retry_input(&built.input, &sent)))
+            .await?;
+        add(usage, retry.usage);
+        let fixed = prompt::parse_lenient(&retry.text);
+        let mut still = Vec::new();
+        for (id, last, last_problems) in failing {
+            let (answer, found) = match fixed.get(&id) {
+                Some(answer) => (
+                    answer.clone(),
+                    problems(shared, &built.strings, &id, answer),
+                ),
+                None => (last, last_problems),
+            };
+            if found.is_empty() {
+                answers.insert(id, answer);
+            } else {
+                still.push((id, answer, found));
+            }
+        }
+        failing = still;
+    }
+    Ok(failing
+        .into_iter()
+        .filter_map(|(id, answer, found)| {
+            let (_, path, entry) = built
+                .strings
+                .iter()
+                .find(|(candidate, _, _)| *candidate == id)?;
+            let issues = check_translation(
+                &shared.knowledge,
+                &shared.target,
+                &entry.source,
+                &answer.text,
+                &entry.extracted,
+                &entry.term_exceptions,
+            )
+            .issues
+            .into_iter()
+            .filter(aeria_po::Issue::is_problem)
+            .collect();
+            Some(Rejected {
                 path: path.clone(),
                 context: entry.context.clone(),
                 translation: answer.text,
                 problems: found,
-            });
-        }
-    }
-    Ok(rejected)
+                issues,
+            })
+        })
+        .collect())
 }
 
-/// Translates one pack: one request, one more for the translations that
+/// Translates one pack: one request, up to [`RETRIES`] more for the translations that
 /// fail the checks, and one write per file of what passes.
 async fn translate(shared: Arc<Shared>, pack: Pack) -> Result<Done, ModelError> {
     let built = {
@@ -576,7 +650,7 @@ async fn translate(shared: Arc<Shared>, pack: Pack) -> Result<Done, ModelError> 
         .respond(&request(&shared, built.input.clone()))
         .await?;
     add(&mut usage, reply.usage);
-    let mut answers = prompt::parse(&reply.text).map_err(ModelError::Invalid)?;
+    let mut answers = prompt::parse_lenient(&reply.text);
     let rejected = settle(&shared, &built, &mut answers, &mut usage).await?;
     let mut by_file: BTreeMap<String, Vec<(String, String)>> = BTreeMap::new();
     for (id, path, entry) in &built.strings {
@@ -638,7 +712,12 @@ async fn prepare(
         let session = Arc::clone(&session);
         let options = options.clone();
         tokio::task::spawn_blocking(move || {
-            let batches = plan(session.root(), &options.paths, options.fuzzy)?;
+            let batches = plan(
+                session.root(),
+                &options.paths,
+                options.fuzzy,
+                &options.contexts,
+            )?;
             Ok::<_, String>((batches, Arc::new(Names::load(session.root()))))
         })
         .await
@@ -944,7 +1023,7 @@ pub fn count(
     fuzzy: bool,
 ) -> Result<HashMap<String, usize>, String> {
     let mut counts = HashMap::new();
-    for batch in plan(root, paths, fuzzy)? {
+    for batch in plan(root, paths, fuzzy, &[])? {
         *counts.entry(batch.path).or_insert(0) += batch.contexts.len();
     }
     Ok(counts)

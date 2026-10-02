@@ -9,7 +9,6 @@ description = "Git repository operations and semantic collaboration helpers."
 
 [dependencies]
 aeria-po = { path = "../aeria-po" }
-serde_json = "1.0.151"
 thiserror = "2.0.20"
 
 [dev-dependencies]

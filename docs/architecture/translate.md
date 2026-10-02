@@ -58,6 +58,11 @@ model the previous source and translation, and clears the mark of each one it
 writes. Before starting, the dialog shows how many strings the chosen sheets
 still need, from the project's progress.
 
+A run can also take a list of strings by `msgctxt` (`Options::contexts`);
+it then translates only those of them that are untranslated. Project
+search uses it to translate found strings again after clearing them (see
+[`search.md`](./search.md#translating-again)).
+
 There is no job store and no state outside the files. What is left is exactly
 the strings still untranslated, so a run after a stop, a usage limit, or a
 failed batch continues where the last one stopped. One run goes at a time.
@@ -105,7 +110,8 @@ The task is JSON built from the files as they are when the request is sent:
   others; short, capitalized strings without macros; a name translated
   several ways gives its most frequent translation), at most 80;
 - `terms`: terms of `terms.csv` that occur in the sources, with their notes
-  and forbidden variants, at most 60;
+  and forbidden variants, at most 60; a term goes only when it applies to a
+  string of the request, not counting the strings with an exception for it;
 - `files`: each file of the request on its own, with
   - `about`: the file's header comment: its sheet, a quest's title, and
     whether its strings are in play order;
@@ -118,7 +124,10 @@ The task is JSON built from the files as they are when the request is sent:
     cells, macro legends), `gendered`: the texts (`source`, `fr`, `de`)
     whose line has a condition on the player character's gender, so the
     translation most likely needs one too, `maxLength` for an interface
-    label (below), and the previous source and translation of a fuzzy one.
+    label (below), the previous source and translation of a fuzzy one, and
+    `termExceptions`: the terms of `terms` that do not apply to it (see
+    [`po-project.md`](./po-project.md#term-exceptions)), which the
+    instructions say to translate by their meaning.
 
 All requests of a run share one `prompt_cache_key`. A probe of this provider
 measured that requests with the same key and prefix got 99 % of the prompt
@@ -160,10 +169,19 @@ tooltips show them whole.
 
 Every translation is checked like a save in the editor
 ([`po-project.md`](./po-project.md#checking)), after the answer's first
-words and an interface label's length. A batch's failing translations
-go back once, in one request, with each problem stated; what fails again stays
-untranslated and is listed in the run's status with its problems. Advice does
-not reject a translation.
+words and an interface label's length. An answer that is not valid JSON,
+most often for a quote the model did not escape inside macro text, is read
+entry by entry (`"id": ["first words", "translation"]`, a bare quote read as
+part of its string); what is read this way is checked like any answer, so a
+wrong reading is refused, never written. A string the answer has no
+readable translation of is asked for again with the failing ones. A batch's
+failing translations go back up to twice, each time in one request with each problem stated; what
+still fails stays as it was and is listed in the run's status with its
+problems and the model's last translation, which is never written. Advice
+does not reject a translation. The listed strings can be translated again
+in one run of exactly those strings (`translation_retry`), after a person
+fixed what refused them, such as a term that does not apply (see
+[`po-project.md`](./po-project.md#term-exceptions)).
 
 A batch is written as soon as it is checked: its file is read, the `msgstr`
 of each string that is still untranslated (or still fuzzy, when those are

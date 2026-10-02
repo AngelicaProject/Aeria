@@ -19,16 +19,14 @@ import type {
   TermInput,
   ProjectKnowledgeDto,
   CommandError,
-  CollaborationDto,
   GameOpenResultDto,
   GameSettingsDto,
   GitBranchDto,
   GitCommitChangesDto,
-  GitFinishDto,
   GitCommitDto,
   GitOverviewDto,
   GitRemoteDto,
-  GitSyncDto,
+  GitPullDto,
   TranslatorIdentityDto,
   EntryChangeDto,
   PendingChangesDto,
@@ -41,6 +39,7 @@ import type {
   SourceBinding,
   TranslationRowCursorDto,
   TranslationRowPageDto,
+  TranslationFindingsDto,
   TranslationOverlayDto,
   OtherLanguageTextDto,
   SheetDialogueDto,
@@ -48,6 +47,12 @@ import type {
   ModelInfo,
   ModelSignInDto,
   TranslationStatus,
+  BulkEditDto,
+  EntryRefDto,
+  ReplaceChangeDto,
+  ReplacementDto,
+  SearchQueryDto,
+  SearchResultDto,
 } from "./types";
 
 export function normalizeCommandError(error: unknown): CommandError {
@@ -63,7 +68,8 @@ export function normalizeCommandError(error: unknown): CommandError {
         ? candidate.message
         : "The desktop command failed.";
 
-    return { code, message };
+    const issues = Array.isArray(candidate.issues) ? (candidate.issues as CommandError["issues"]) : undefined;
+    return issues && issues.length > 0 ? { code, message, issues } : { code, message };
   }
 
   return { code: "commandFailed", message: "The desktop command failed." };
@@ -254,6 +260,20 @@ export function setTranslationNote(
   return call<TranslationOverlayDto | null>("set_translation_note", { sourceBinding, note });
 }
 
+/** What the checks find in the saved translation of one string, and its term exceptions. */
+export function translationFindings(sourceBinding: SourceBinding): Promise<TranslationFindingsDto> {
+  return call<TranslationFindingsDto>("translation_findings", { sourceBinding });
+}
+
+/** Adds or removes a term exception of one string: the glossary term does not apply to it. */
+export function setTranslationTermException(
+  sourceBinding: SourceBinding,
+  term: string,
+  add: boolean,
+): Promise<TranslationOverlayDto | null> {
+  return call<TranslationOverlayDto | null>("set_translation_term_exception", { sourceBinding, term, add });
+}
+
 export function gitOverview(): Promise<GitOverviewDto> {
   return call<GitOverviewDto>("git_overview");
 }
@@ -306,11 +326,6 @@ export function gitRemoveRemote(name: string): Promise<GitOverviewDto> {
 }
 
 /** Fetches every remote first, so it needs the network. */
-/** Checks the remote main branch in the background; true when it moved. */
-export function gitFetchMain(): Promise<boolean> {
-  return call<boolean>("git_fetch_main");
-}
-
 export function gitRemoteBranches(): Promise<string[]> {
   return call<string[]>("git_remote_branches");
 }
@@ -323,8 +338,8 @@ export function gitFetch(): Promise<void> {
   return call<void>("git_fetch");
 }
 
-export function gitPull(resolutions: EntryResolutionDto[] = []): Promise<GitSyncDto> {
-  return call<GitSyncDto>("git_pull", { resolutions });
+export function gitPull(resolutions: EntryResolutionDto[] = []): Promise<GitPullDto> {
+  return call<GitPullDto>("git_pull", { resolutions });
 }
 
 export function gitPush(): Promise<boolean> {
@@ -343,10 +358,6 @@ export function gitOpenBranchSettings(): Promise<void> {
   return call<void>("git_open_branch_settings");
 }
 
-export function gitSync(resolutions: EntryResolutionDto[] = []): Promise<GitSyncDto> {
-  return call<GitSyncDto>("git_sync", { resolutions });
-}
-
 export function gitBranches(): Promise<GitBranchDto[]> {
   return call<GitBranchDto[]>("git_branches");
 }
@@ -359,28 +370,22 @@ export function gitSwitchBranch(name: string): Promise<void> {
   return call<void>("git_switch_branch", { name });
 }
 
-/** Sets the main branch, or clears it so Aeria detects it. Writes the settings file only. */
-export function gitSetMainBranch(mainBranch: string | null): Promise<CollaborationDto> {
-  return call<CollaborationDto>("git_set_main_branch", { mainBranch });
-}
-
 /** A fingerprint of the repository state; null outside a repository. */
 export function gitStateStamp(): Promise<string | null> {
   return call<string | null>("git_state_stamp");
 }
 
-export function gitFinishContribution(): Promise<GitFinishDto> {
-  return call<GitFinishDto>("git_finish_contribution");
+/**
+ * Deletes a local branch, and with `withUpstream` its upstream on the remote too.
+ * `force` is needed when the deletion loses commits no other branch has.
+ */
+export function gitDeleteBranch(name: string, withUpstream: boolean, force: boolean): Promise<void> {
+  return call<void>("git_delete_branch", { name, withUpstream, force });
 }
 
-/** Deletes a local branch; `force` is needed when it has commits outside the main branch. */
-export function gitDeleteBranch(name: string, force: boolean): Promise<void> {
-  return call<void>("git_delete_branch", { name, force });
-}
-
-/** Merges the contribution into the main branch; only for repositories without a remote. */
-export function gitMergeContribution(): Promise<GitFinishDto> {
-  return call<GitFinishDto>("git_merge_contribution");
+/** Deletes a branch on its remote, named like `origin/feature`; `force` as for local branches. */
+export function gitDeleteRemoteBranch(name: string, force: boolean): Promise<void> {
+  return call<void>("git_delete_remote_branch", { name, force });
 }
 
 /** Clones into a folder named after the repository; `parent` defaults to the default projects directory. */
@@ -433,6 +438,11 @@ export function translationNameSheets(): Promise<string[]> {
 
 export function translationStart(scope: string[], fuzzy: boolean, model: string, effort: string | null): Promise<void> {
   return call<void>("translation_start", { scope, fuzzy, model, effort });
+}
+
+/** Translates the given strings again, by `msgctxt`: those still untranslated or fuzzy. */
+export function translationRetry(contexts: string[], model: string, effort: string | null): Promise<void> {
+  return call<void>("translation_retry", { contexts, model, effort });
 }
 
 /** The progress of the last machine translation run; null before one started. */
@@ -517,4 +527,38 @@ export function fontsImportFile(path: string): Promise<ImportedFontFileDto> {
 
 export function fontsPreview(settings: FontSettings, font: string, text: string): Promise<FontPreviewSizeDto[]> {
   return call<FontPreviewSizeDto[]>("fonts_preview", { settings, font, text });
+}
+
+/** Searches the project's files; a new search cancels the one in progress. */
+export function projectSearch(query: SearchQueryDto): Promise<SearchResultDto> {
+  return call<SearchResultDto>("project_search", { query });
+}
+
+export function projectSearchCancel(): Promise<void> {
+  return call<void>("project_search_cancel");
+}
+
+/** The changes a replacement would make to the translations the query finds. */
+export function projectReplacePreview(query: SearchQueryDto, replacement: ReplacementDto): Promise<ReplaceChangeDto[]> {
+  return call<ReplaceChangeDto[]>("project_replace_preview", { query, replacement });
+}
+
+/** Writes replacements; strings changed since the preview or with problems are skipped. */
+export function projectReplaceApply(edits: (EntryRefDto & { after: string })[]): Promise<BulkEditDto> {
+  return call<BulkEditDto>("project_replace_apply", { edits });
+}
+
+/** Reverts the last bulk edit for the strings unchanged since. */
+export function projectEditUndo(): Promise<BulkEditDto> {
+  return call<BulkEditDto>("project_edit_undo");
+}
+
+/** Clears the strings' translations and machine-translates exactly them. */
+/** Adds or removes a term exception of strings found by a search; an undo reverts it. */
+export function projectTermException(entries: EntryRefDto[], term: string, add: boolean): Promise<BulkEditDto> {
+  return call<BulkEditDto>("project_term_exception", { entries, term, add });
+}
+
+export function projectRetranslate(entries: EntryRefDto[], model: string, effort: string | null): Promise<BulkEditDto> {
+  return call<BulkEditDto>("project_retranslate", { entries, model, effort });
 }

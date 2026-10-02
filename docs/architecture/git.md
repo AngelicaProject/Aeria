@@ -18,16 +18,15 @@ project to a new game version, which is recorded as one commit of its own
 files it builds from to be committed and points to the uncommitted changes
 instead of committing them.
 
-"Checkpoint" and "contribution branch" name Aeria's operations in this
-documentation and in code. The interface calls them what Git users know: a
-checkpoint is a commit (the button is labelled Commit), and a contribution
-branch is a branch for a pull request.
+"Checkpoint" names Aeria's commit operation in this documentation and in
+code. The interface calls it what Git users know: a commit (the button is
+labelled Commit).
 
 ## Git in the desktop
 
 - The **Git dock** is the whole everyday view and follows the repository on
-  its own (below): the branch, which can be switched there, sync state and
-  Sync, the uncommitted changes (strings grouped by sheet, and project files
+  its own (below): the branch, which can be switched there, its state against
+  the upstream with Fetch, Pull, and Push, the uncommitted changes (strings grouped by sheet, and project files
   grouped by area), the checkpoint composer, and the project history with a
   commit graph. Clicking a commit opens it in a document tab.
 - **Settings → Repository** holds the setup: remotes, the upstream, the main
@@ -42,12 +41,16 @@ window is visible and when it gains focus, and reloads only when the
 fingerprint changed; it has no refresh button. Changes made outside Aeria
 therefore show up by themselves.
 
-## Collaboration policy
+## Branches are ordinary Git
 
-Translations reach the main branch (`main` or `master`) **only through pull
-requests**. Nobody commits to it directly: a checkpoint on the main branch
-starts a contribution branch, and Aeria never pushes local commits to the
-published main branch. There is no direct mode.
+Aeria has no collaboration policy of its own. A checkpoint commits on the
+current branch, Push pushes the current branch, and Aeria neither creates
+branches on its own nor merges one branch into another (Pull integrates only
+the current branch's upstream). Which branch work goes to,
+and whether it reaches another branch through a pull request, is up to the
+translators and the hosting service. Protecting a branch on the hosting
+service (for example GitHub branch protection) is how a team requires pull
+requests; a push the remote refuses is reported as a Git failure.
 
 ## Attribution and credentials
 
@@ -127,8 +130,7 @@ never invents an author.
 ### Checkpoint
 
 A checkpoint stages and commits only Aeria-managed paths (`git commit
---only`): `po/` and the project files `aeria.json`, `.gitattributes`,
-`aeria-collaboration.json`, `aeria-pack.json`, `aeria-fonts.json`, the
+--only`): `po/` and the project files `aeria.json`, `.gitattributes`, `aeria-pack.json`, `aeria-fonts.json`, the
 `fonts/` directory of source fonts, the `aeria-knowledge/` directory of
 [project knowledge](../formats/knowledge-v1.md), and the workflows
 `.github/workflows/harmonia-feed.yml` and `.github/workflows/aeria-check.yml`
@@ -140,9 +142,8 @@ update 1 translation (Addon, Quest)`, followed by the changed project areas
 (`; update terms, game fonts`), or `Update glossary, pack settings` when no
 string changed.
 
-Whether a checkpoint first moves to a contribution branch follows the
-collaboration policy committed in `HEAD`, not the working copy, so committing
-a policy change does not move its author to a contribution branch.
+A file `aeria-collaboration.json` left by an earlier Aeria is not a project
+file: Aeria neither reads nor commits it, and it can be deleted with Git.
 
 ### Project file changes
 
@@ -153,7 +154,7 @@ form, computed in the desktop (`project_changes.rs`):
 - the glossary is compared by term: added, removed, and changed entries with
   translation, note, and forbidden translations;
 - the style and `.gitattributes` are compared by line;
-- project, pack, font, and collaboration settings are compared by field, with
+- project, pack, and font settings are compared by field, with
   list entries keyed by their `id` or `font` (`fonts › MiedingerMid › source:
   tektur → unbounded`);
 - font files are reported as added, replaced, or removed with their size;
@@ -181,36 +182,30 @@ The desktop maps each change to the string's coordinate in the game, so the
 Git dock can open it; a string the game no longer has keeps only its
 `msgctxt`.
 
-### Sync
+### Fetch, Pull, and Push
 
-Sync is fetch, integrate, push:
+The Git dock offers the three steps of exchanging commits with the remote of
+the current branch (its configured remote, else `origin`, else the only
+remote). None of them rebases or force-pushes.
 
-1. Fetch the current branch's remote (its configured remote, else `origin`,
-   else the only remote).
-2. Integrate incoming commits: the branch's upstream and, on a contribution
-   branch under the pull-request policy, the remote main branch.
-   Uncommitted changes in `po/` block integration. A branch that is only
-   behind fast-forwards; a diverged branch is merged. PO files that conflict
-   textually are joined per string (see [Per-string merge](#per-string-merge)).
-   Any other conflicted file, or a string changed differently on both sides
-   without an explicit resolution, aborts the merge and leaves the repository
-   unchanged. After everything merged, the result must still be for the open
-   game version (`aeria.json` `gameVersion`); otherwise the branch is reset
-   to its starting commit with `git reset --merge`, and the project must
-   first be updated to that game version.
-3. Push local commits. A branch without an upstream is published to the
-   sync remote and tracked. A push rejected by the remote (for example a
-   protected branch) is reported as a Git failure.
-
-Sync never rebases or force-pushes. The editor's writes are held while it
-changes the working tree, and the editor reads a file again when it changed,
-so the merged strings show up without reopening the project.
-
-The steps are also available one by one, with the same rules: **Fetch** runs
-step 1 only; **Pull** runs steps 1 and 2, including the per-string merge and
-explicit conflict resolutions, and never pushes; **Push** runs step 3 and
-refuses while the upstream, as last fetched, has commits the branch lacks,
-so a push never needs to be forced.
+- **Fetch** fetches that remote.
+- **Pull** fetches, then integrates the incoming commits of the branch's
+  upstream. Uncommitted changes in `po/` block it. A branch that is only
+  behind fast-forwards; a diverged branch is merged. PO files that conflict
+  textually are joined per string (see [Per-string merge](#per-string-merge)).
+  Any other conflicted file, or a string changed differently on both sides
+  without an explicit resolution, aborts the merge and leaves the repository
+  unchanged. After everything merged, the result must still be for the open
+  game version (`aeria.json` `gameVersion`); otherwise the branch is reset to
+  its starting commit with `git reset --merge`, and the project must first be
+  updated to that game version. The editor's writes are held while Pull
+  changes the working tree, and the editor reads a file again when it
+  changed, so the merged strings show up without reopening the project.
+- **Push** pushes the local commits of the current branch, whichever branch
+  it is. A branch without an upstream is published to the remote and
+  tracked. Push refuses while the upstream, as last fetched, has commits the
+  branch lacks, so a push never needs to be forced; a push rejected by the
+  remote (for example a protected branch) is reported as a Git failure.
 
 ## Per-string merge
 
@@ -227,84 +222,40 @@ joins them entry by entry (`aeria-git::merge_file`):
 - For each entry, a side equal to the base takes the other side; two equal
   sides take either. Two sides that changed the string differently are a
   conflict, resolved only by an explicit choice of the local or incoming
-  version supplied to a repeated sync; Aeria never chooses on its own.
+  version supplied to a repeated Pull; Aeria never chooses on its own.
 
 Joined files are written in the canonical format and committed as the merge
 commit. Conflicting strings are reported with their base, local, and incoming
 versions and their coordinate in the game. Command-line `git merge` merges PO
 files as text; a real conflict there is resolved by editing the file.
 
-## Branches and contributions
+## Branches
 
-The Git dock switches between local branches. A switch requires checkpointed
-translations and is undone when the branch holds a project for another game
-version.
+The Git dock switches between branches: local branches, and remote branches
+without a local one, which check out as tracking branches. A switch requires
+committed translations and is undone when the branch holds a project for
+another game version or in an older format. A new branch is created from
+`HEAD` on request; upstreams need no setup, since the first Push of a branch
+publishes it and sets its upstream. Settings → Repository can point a branch
+with commits at another fetched remote branch, and explains when there is
+nothing to choose (no commits yet, or an empty remote).
 
-The **main branch** is the one set in
-[`aeria-collaboration.json`](../formats/collaboration-v1.md); without a
-setting it is detected: the sync remote's default branch (`<remote>/HEAD`),
-else a local or remote `main`, else `master`, else the current branch of a
-repository without commits. Settings → Repository shows which applies and
-can set it; saving writes the file, and the next checkpoint commits it. The
-checkpoint decides by the main branch committed in `HEAD`, so committing a
-setting does not redirect its own checkpoint.
+Branches are deleted only on request, from the branch switcher or Settings →
+Repository, after a confirmation, and never the current branch:
 
-- A checkpoint on the main branch first creates a contribution branch named
-  `translations/<name>-<UTC timestamp>` from the translator name (ASCII
-  letters and digits; otherwise the email local part or `translator`) and
-  commits there. The only commit made on the current branch directly is the
-  first commit of a repository; when the project names a main branch and the
-  unborn branch has another name (for example `git init` chose `master` and
-  the project says `main`), the first checkpoint starts the named branch.
-- Upstreams need no setup: the first sync of a branch publishes it and sets
-  its upstream. Settings → Repository can point a branch with commits at
-  another fetched remote branch, and explains when there is nothing to choose
-  (no commits yet, or an empty remote).
-- Sync publishes the main branch only while the remote does not have it yet.
-  When the published main branch has local commits, push is refused
-  (`MainBranchProtected`) and the commits must move to a contribution branch.
-- Sync keeps a contribution branch up to date with the remote main branch and
-  publishes it for review on the hosting service. The contribution status
-  reports whether the branch is published, how many of its commits the
-  remote main branch does not contain yet, and how many commits of the
-  remote main branch, as last fetched, the branch does not contain.
-- The hosting service merges pull requests as plain text. When another
-  contribution changed the same strings, syncing the contribution branch
-  joins main per string and asks for the choices; the hosting service's own
-  conflict resolution would commit conflict markers into PO files. While
-  the Git dock shows a contribution branch with a remote, it therefore
-  fetches only the remote main branch's ref every five minutes and when the
-  window gains focus (at most once a minute), with credential prompts
-  disabled so it never asks to sign in, and fetch failures are ignored.
-  When main has commits the branch lacks and the branch still waits for
-  review, the dock asks the translator to sync and warns against the
-  hosting service's update and conflict-resolution buttons. **Finish contribution** switches
-  back to the main branch, fast-forwards it, and deletes the contribution
-  branch only when Git confirms it is merged; branches merged by squash are
-  kept.
-
-- **Without a remote** there is nowhere to open a pull request. The Git dock
-  then offers **Merge into `<main>`** on a contribution branch, after an
-  explicit confirmation: Aeria switches to the main branch, integrates the
-  contribution (a fast-forward when the main branch has not moved, otherwise
-  a merge with the per-string merge of PO files), checks the result, and
-  deletes the merged branch. A rejected result resets the main branch and
-  returns to the contribution branch. As soon as the repository has a remote,
-  this action is unavailable and pull requests are the only way in.
-
-- Branches are deleted only on request. "Finish contribution" and "Merge
-  into `<main>`" delete the branch they finish; otherwise Settings →
-  Repository lists the other local branches, whether each is merged into the
-  main branch (`merge-base --is-ancestor`), and deletes one after a
-  confirmation. A branch with commits outside the main branch needs a second,
-  explicit warning. Branches on the remote are never deleted by Aeria.
-
-Several translators may share one contribution branch; they sync with each
-other through it exactly as described under Sync. Protecting the main branch
-on the hosting service (for example GitHub branch protection) is still
-recommended, because Git tools other than Aeria are not bound by these rules.
-Opening the pull request itself is left to the hosting service or a future
-optional adapter.
+- A **local branch** is deleted with `git branch -D`. When its upstream is a
+  branch on a remote, the confirmation offers to delete that branch too
+  (`git push <remote> --delete`); the remote branch goes first, so a remote
+  that refuses (GitHub refuses to delete the repository's default branch)
+  leaves the local branch in place.
+- A **remote branch** without a local one is deleted on its remote. Git then
+  drops its remote-tracking branch, and a recorded default branch of the
+  remote (`<remote>/HEAD`) that named it.
+- A deletion that would lose commits, meaning commits that no other local
+  branch, remote-tracking branch, or tag contains (`git rev-list` of the
+  branch excluding every other ref), names how many and needs an explicit
+  "Delete anyway". Remote branches are judged by their remote-tracking
+  branches as last fetched.
 
 ## Merge check CI
 
@@ -346,17 +297,16 @@ the dock offers an update when the file differs from what this Aeria writes.
 Making the check required is a branch protection setting on GitHub, which
 Aeria cannot change; the dock links to the repository's branch settings and
 also recommends "Require branches to be up to date before merging". With it,
-a pull request merges only when its branch already contains the base, which
-Sync or Pull in Aeria achieves with the per-string merge; GitHub's merge then
-produces exactly the branch's tree, and the check remains a second line of
-defense.
+a pull request merges only when its branch already contains the base;
+GitHub's merge then produces exactly the branch's tree, and the check remains
+a second line of defense.
 
 ## Remotes and upstream
 
 Settings → Repository lists every remote with its URL, which can be edited
 (`git remote set-url`) or removed (`git remote remove`; nothing is deleted on
-the server), and add a remote. The upstream of the current branch, which sync
-receives from and pushes to, is chosen from the remote-tracking branches
+the server), and add a remote. The upstream of the current branch, which Pull
+receives from and Push pushes to, is chosen from the remote-tracking branches
 after fetching every remote (`git fetch --all --prune`) and set with
 `git branch --set-upstream-to`.
 

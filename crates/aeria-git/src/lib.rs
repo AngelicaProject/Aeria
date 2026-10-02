@@ -10,7 +10,6 @@
 #![forbid(unsafe_code)]
 
 mod branches;
-mod collaboration;
 mod credential;
 mod entries;
 mod process;
@@ -22,8 +21,7 @@ use std::path::PathBuf;
 
 use thiserror::Error;
 
-pub use branches::{BranchInfo, ContributionStatus, FinishOutcome};
-pub use collaboration::{COLLABORATION_FILE, CollaborationSettings};
+pub use branches::BranchInfo;
 pub use credential::HostCredential;
 pub use entries::{
     ConflictResolution, EntryChange, EntryChangeKind, EntryConflict, EntryHistory, EntryRevision,
@@ -82,8 +80,8 @@ pub enum GitError {
     #[error("there are no translation changes to commit")]
     NothingToCommit,
 
-    /// Sync requires translation changes to be checkpointed first.
-    #[error("translation changes are not committed; commit them before syncing")]
+    /// Integration requires translation changes to be checkpointed first.
+    #[error("translation changes are not committed; commit them first")]
     UncommittedTranslations,
 
     /// The repository is not on a branch.
@@ -98,8 +96,8 @@ pub enum GitError {
     #[error("a merge is already in progress; finish or abort it with Git first")]
     MergeInProgress,
 
-    /// No remote is configured for sync.
-    #[error("no remote is configured; add a remote before syncing")]
+    /// No remote is configured to fetch from or push to.
+    #[error("no remote is configured; add a remote first")]
     NoRemote,
 
     /// Incoming changes conflict textually with local commits. The merge was
@@ -111,16 +109,6 @@ pub enum GitError {
     /// merge was aborted; retry with explicit resolutions.
     #[error("{} translated strings were changed differently here and on the remote", conflicts.len())]
     TranslationConflicts { conflicts: Vec<EntryConflict> },
-
-    /// The published main branch accepts changes only through pull requests.
-    #[error(
-        "{branch} has commits that are not on the remote; changes reach {branch} only through a pull request, so move them to a contribution branch"
-    )]
-    MainBranchProtected { branch: String },
-
-    /// Collaboration settings are invalid or not applicable.
-    #[error("invalid collaboration settings: {reason}")]
-    InvalidSettings { reason: String },
 
     /// Incoming changes merged cleanly but were rejected by workspace
     /// validation. The merge was rolled back.

@@ -3,6 +3,7 @@ import { flushSync } from "react-dom";
 import { Effect, getCurrentWindow } from "@tauri-apps/api/window";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { listen } from "@tauri-apps/api/event";
+import { listenToToolWindows } from "../workbenchEvents";
 import {
   closeProject,
   gitPendingChanges,
@@ -258,6 +259,8 @@ export function EditorShell({
     if (!open) setProjectRevision((current) => current + 1);
   }, []);
   const [translateOpen, setTranslateOpen] = useState(false);
+  const openTranslate = useCallback(() => setTranslateOpen(true), []);
+  const [searchSeed, setSearchSeed] = useState<{ text: string; nonce: number } | undefined>(undefined);
   const [exportOpen, setExportOpenState] = useState(false);
   const setExportOpen = useCallback((open: boolean) => {
     setExportOpenState(open);
@@ -856,6 +859,21 @@ export function EditorShell({
   const stableWorkspaceChanged = useStableCallback(handleWorkspaceChanged);
   // Agents write through the `aeria` command; the backend reloads the
   // workspace after their writes and the open sheet follows.
+  // Requests of floated tool windows: the editor lives in this window, which
+  // comes to the front for a string opened from one.
+  useEffect(() => listenToToolWindows({
+    revealString: (binding) => {
+      stableRevealBinding(binding);
+      void getCurrentWindow().setFocus().catch(() => undefined);
+    },
+    workspaceChanged: stableWorkspaceChanged,
+    openTranslate: () => {
+      setTranslateOpen(true);
+      void getCurrentWindow().setFocus().catch(() => undefined);
+    },
+    openCommit: stableOpenCommit,
+  }), [stableOpenCommit, stableRevealBinding, stableWorkspaceChanged]);
+
   useEffect(() => {
     // A file of a shown sheet changed outside the editor, by Git or by hand.
     const subscription = listen<string[]>("project://files-changed", () => stableWorkspaceChanged());
@@ -1072,7 +1090,7 @@ export function EditorShell({
       return <SheetSidebar sheets={project.sheets} selectedSheetName={selectedSheetName} disabled={closing} active={active} hideEmpty={hideEmptySheets} onHideEmptyChange={setHideEmptySheets} filterOpen={sheetFilterOpen} onFilterOpenChange={setSheetFilterOpen} onOpenFilter={focusSheetFilter} quickFindSignal={quickFindSignal} revealSignal={revealSheetSignal} collapseSignal={collapseSheetsSignal} onSelect={handleSheetSelect} progress={progressBySheet} />;
     }
     const tool: WorkbenchTool = panelId === "search" ? "search" : "git";
-    return <WorkbenchToolDock activeTool={tool} selectedBinding={selectedBinding} onOpenCommit={stableOpenCommit} selectedCommitId={activeCommitId} onOpenRepositorySettings={openRepositorySettings} projectRevision={projectRevision} selectedKey={selectedKey} workspaceRevision={workspaceRevision} onWorkspaceChanged={stableWorkspaceChanged} pending={pendingState} onRevealBinding={stableRevealBinding} />;
+    return <WorkbenchToolDock activeTool={tool} selectedBinding={selectedBinding} onOpenCommit={stableOpenCommit} selectedCommitId={activeCommitId} onOpenRepositorySettings={openRepositorySettings} projectRevision={projectRevision} selectedKey={selectedKey} workspaceRevision={workspaceRevision} onWorkspaceChanged={stableWorkspaceChanged} pending={pendingState} onRevealBinding={stableRevealBinding} onOpenTranslate={openTranslate} searchSeed={searchSeed} />;
   };
 
   const renderDock = (region: "left" | "right", panelId: string | null, open: boolean) => {
@@ -1392,7 +1410,7 @@ export function EditorShell({
       <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} initialSection={settingsSection} projectOpen project={project} onProjectChanged={onProjectChanged} />
       <ProjectGuideDialog open={guide.open} initialTab={guide.tab} onOpenChange={setGuideOpen} />
       <ExportDialog open={exportOpen} onOpenChange={setExportOpen} onOpenChanges={() => { setExportOpen(false); showPanel("git", "right", false); }} />
-      <TranslateDialog open={translateOpen} onOpenChange={setTranslateOpen} sheets={project.sheets} progress={progressBySheet} sheetName={selectedSheetName} onOpenSettings={() => { setTranslateOpen(false); openSettings("translation"); }} onFilesChanged={handleWorkspaceChanged} />
+      <TranslateDialog open={translateOpen} onOpenChange={setTranslateOpen} sheets={project.sheets} progress={progressBySheet} sheetName={selectedSheetName} onOpenSettings={() => { setTranslateOpen(false); openSettings("translation"); }} onFilesChanged={handleWorkspaceChanged} onRevealBinding={stableRevealBinding} />
       {palette.open ? (
         <CommandPalette
           key={palette.key}
@@ -1406,6 +1424,8 @@ export function EditorShell({
           currentSheet={selectedSheetName}
           onOpenSheet={(sheetName) => void handleSheetSelect(sheetName, true)}
           onGoToRow={(target) => { if (selectedSheetName) void revealString(selectedSheetName, target); }}
+          onRevealString={stableRevealBinding}
+          onOpenSearch={(text) => { setSearchSeed((current) => ({ text, nonce: (current?.nonce ?? 0) + 1 })); showPanel("search", "left"); }}
         />
       ) : null}
     </main>

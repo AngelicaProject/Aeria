@@ -4,12 +4,18 @@ use aeria_projects::RegistryError;
 use aeria_source::SourceError;
 use serde::{Deserialize, Serialize};
 
+use crate::dto::IssueDto;
+
 /// A typed error returned by every application command.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CommandError {
     pub code: String,
     pub message: String,
+    /// The problems of a refused translation, for the renderer to word in
+    /// its language; `message` has them in English.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub issues: Vec<IssueDto>,
 }
 
 impl CommandError {
@@ -17,6 +23,7 @@ impl CommandError {
         Self {
             code: code.to_owned(),
             message: message.into(),
+            issues: Vec::new(),
         }
     }
 
@@ -109,7 +116,14 @@ impl From<EditError> for CommandError {
             EditError::SourceMismatch(_) => "translationSourceIntegrity",
             EditError::Invalid(_) => "translationInvalid",
         };
-        Self::new(code, error.to_string())
+        let issues = match &error {
+            EditError::Invalid(issues) => issues.iter().map(IssueDto::from).collect(),
+            _ => Vec::new(),
+        };
+        Self {
+            issues,
+            ..Self::new(code, error.to_string())
+        }
     }
 }
 
@@ -132,8 +146,6 @@ impl From<GitError> for CommandError {
             GitError::MergeConflict { .. } => "gitMergeConflict",
             GitError::IncomingRejected { .. } => "gitIncomingRejected",
             GitError::TranslationConflicts { .. } => "gitTranslationConflicts",
-            GitError::InvalidSettings { .. } => "gitInvalidSettings",
-            GitError::MainBranchProtected { .. } => "gitMainBranchProtected",
             GitError::Io { .. } => "gitIo",
         };
         Self::new(code, error.to_string())
@@ -168,7 +180,9 @@ mod tests {
 
     #[test]
     fn edit_failures_use_stable_codes() {
-        let invalid = CommandError::from(EditError::Invalid(vec!["broken macro".to_owned()]));
+        let invalid = CommandError::from(EditError::Invalid(vec![aeria_po::Issue::Structure(
+            "broken macro".to_owned(),
+        )]));
         assert_eq!(invalid.code, "translationInvalid");
         assert_eq!(invalid.message, "broken macro");
         let missing = CommandError::from(EditError::NotAnEntry("Addon:9:0:0".to_owned()));

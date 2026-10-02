@@ -1,6 +1,8 @@
 export type CommandError = {
   code: string;
   message: string;
+  /** The problems of a refused translation, to word in the interface language. */
+  issues?: IssueDto[];
 };
 
 /**
@@ -233,6 +235,8 @@ export type TranslationOverlayDto = {
   translatorNote: string | null;
   /** The source the translation was written for, while it is fuzzy. */
   previousSource: string | null;
+  /** Terms a person decided do not apply to the string. */
+  termExceptions?: string[];
 };
 
 export type TranslationRowCursorDto = {
@@ -318,35 +322,11 @@ export type GitRuntimeDto = {
 };
 
 
-/** Changes reach the main branch only through pull requests. */
-export type CollaborationDto = {
-  /** The main branch set in aeria-collaboration.json, if any. */
-  configuredMainBranch: string | null;
-  /** The main branch in effect: configured or detected. */
-  mainBranch: string | null;
-  /** Why aeria-collaboration.json cannot be used. */
-  error: string | null;
-};
-
-export type ContributionDto = {
-  mainBranch: string;
-  /** Null while on the main branch. */
-  branch: string | null;
-  published: boolean;
-  unmergedCommits: number;
-  /** Commits on the remote main branch, as last fetched, that this branch does not contain yet. */
-  mainAhead: number;
-  /** No remote: the contribution is merged locally instead of through a pull request. */
-  local: boolean;
-};
-
 export type GitOverviewDto = {
   runtime: GitRuntimeDto;
   repository: GitStatusDto | null;
   identity: TranslatorIdentityDto | null;
   remotes: GitRemoteDto[];
-  collaboration: CollaborationDto | null;
-  contribution: ContributionDto | null;
 };
 
 export type GitBranchDto = {
@@ -354,8 +334,10 @@ export type GitBranchDto = {
   remote: boolean;
   current: boolean;
   upstream: string | null;
-  /** Every commit of the local branch is in the main branch. */
-  merged: boolean;
+  /** Commits deleting the branch would lose (for a remote branch, deleting it on the remote). */
+  lostCommits: number;
+  /** For a local branch with an upstream on a remote, the commits deleting both would lose. */
+  lostWithUpstream: number | null;
   /** Why the open project cannot switch to this branch. */
   blocked: "noProject" | "olderFormat" | "otherSource" | null;
 };
@@ -426,7 +408,7 @@ export function changeMark(kind: EntryChangeKind): ChangeMark {
   return kind === "translated" ? "added" : "modified";
 }
 
-export type ProjectArea = "terms" | "knowledge" | "projectSettings" | "packSettings" | "fontSettings" | "fontFile" | "collaboration" | "gitAttributes" | "feedWorkflow" | "checkWorkflow";
+export type ProjectArea = "terms" | "knowledge" | "projectSettings" | "packSettings" | "fontSettings" | "fontFile" | "gitAttributes" | "feedWorkflow" | "checkWorkflow";
 
 /** The GitHub workflow that runs aeria-check on pull requests. */
 export type CheckWorkflowDto = {
@@ -463,7 +445,6 @@ export type GitCommitChangesDto = {
   commit: GitCommitDto;
   changes: EntryChangeDto[];
   projectChanges: ProjectChangeDto[];
-  branchCreated: string | null;
 };
 
 /** A string changed differently here and on the remote. */
@@ -486,17 +467,11 @@ export type EntryResolutionDto = {
 
 export type GitIntegration = "upToDate" | "fastForward" | "merged";
 
-export type GitSyncDto = {
+export type GitPullDto = {
   integration: GitIntegration;
-  pushed: boolean;
   workspaceChanged: boolean;
-  /** When non-empty nothing was integrated; sync again with resolutions. */
+  /** When non-empty nothing was integrated; pull again with resolutions. */
   conflicts: EntryConflictDto[];
-};
-
-export type GitFinishDto = {
-  integration: GitIntegration;
-  deletedBranch: string | null;
 };
 
 /** Whether a ChatGPT subscription is signed in for machine translation. */
@@ -520,12 +495,14 @@ export type ModelInfo = {
   efforts: string[];
 };
 
-/** A string whose machine translation failed the checks twice; it stays untranslated. */
+/** A string whose machine translation still failed the checks after the retries; it stays as it was. */
 export type TranslationRejected = {
   path: string;
   context: string;
+  binding: SourceBinding | null;
+  /** The model's last translation, which was not written. */
   translation: string;
-  problems: string[];
+  problems: IssueDto[];
 };
 
 export type TranslationStop =
@@ -556,9 +533,9 @@ export type TranslationStatus = {
 };
 
 /** One term of `aeria-knowledge/terms.csv`; `settled` when a person decided it. */
-export type GlossaryEntry = { term: string; translation: string; note?: string; forbidden?: string[]; settled?: boolean };
+export type GlossaryEntry = { term: string; translation: string; note?: string; forbidden?: string[]; settled?: boolean; matchCase?: boolean };
 
-export type TermInput = { term: string; translation: string; note: string | null; forbidden: string[]; settled: boolean };
+export type TermInput = { term: string; translation: string; note: string | null; forbidden: string[]; settled: boolean; matchCase: boolean };
 
 /** The project's style and terms in `aeria-knowledge/`. */
 export type ProjectKnowledgeDto = {
@@ -786,4 +763,108 @@ export type MacroConditionDto = {
 export type MacroViewDto = {
   diagnostics: MacroDiagnosticDto[];
   tags: MacroTagDto[];
+};
+
+/** How project search text matches. */
+export type SearchMatchKind = "text" | "word" | "regex";
+/** The parts of a string project search looks in. */
+export type SearchField = "translation" | "source" | "note" | "context";
+export type SearchState = "untranslated" | "translated" | "fuzzy";
+/** Keep only translations with problems, which are not exported, or with advice: what may be wrong. */
+export type SearchCheck = "any" | "problems" | "advice";
+
+export type SearchQueryDto = {
+  /** Empty to keep every string the filters keep. */
+  text: string;
+  kind: SearchMatchKind;
+  caseSensitive: boolean;
+  fields: SearchField[];
+  /** Files and folders relative to `po/`; empty for the whole project. */
+  paths: string[];
+  /** Only these strings, by `msgctxt`. */
+  contexts: string[];
+  states: SearchState[];
+  check: SearchCheck;
+  /** With a check filter, only strings with an issue of this group. */
+  issue?: string | null;
+};
+
+/** One finding of the checks, as data; `message` is the English text for unknown kinds. */
+export type IssueDto = {
+  kind: "lineBreak" | "structure" | "forbiddenTerm" | "mark" | "mixedAlphabets" | "bothGenders" | "termNotUsed" | "genderNotVaried" | "genderInOtherLanguages" | "machinePhrasing" | "staleTermException" | "other";
+  /** What may be wrong rather than a problem: it does not keep the translation from being saved or exported. */
+  advice: boolean;
+  /** Groups issues in the summary and filters by them. */
+  group: string;
+  message: string;
+  term: string | null;
+  translation: string | null;
+  variant: string | null;
+  text: string | null;
+  phrases: string[];
+};
+
+/** What the checks find in a string's saved translation, and its term exceptions. */
+export type TranslationFindingsDto = { issues: IssueDto[]; termExceptions: string[] };
+
+export type SearchFileDto = { path: string; sheet: string; count: number };
+export type IssueCountDto = { issue: IssueDto; count: number };
+
+export type SearchFieldMatchDto = {
+  field: SearchField;
+  /** UTF-16 ranges of the field's text. */
+  ranges: [number, number][];
+};
+
+export type SearchHitDto = {
+  path: string;
+  context: string;
+  binding: SourceBinding | null;
+  source: string;
+  translation: string;
+  fuzzy: boolean;
+  note: string | null;
+  matches: SearchFieldMatchDto[];
+  findings: IssueDto[];
+};
+
+export type SearchResultDto = {
+  hits: SearchHitDto[];
+  /** Every string found; more than `hits` when the result was cut. */
+  total: number;
+  matches: number;
+  /** Every file with a string found, with counts. */
+  files: SearchFileDto[];
+  /** With a check filter, the issues of every string found by group. */
+  issues: IssueCountDto[];
+  cancelled: boolean;
+};
+
+export type ReplacementDto = { text: string; preserveCase: boolean };
+
+export type ReplaceChangeDto = {
+  path: string;
+  context: string;
+  binding: SourceBinding | null;
+  source: string;
+  before: string;
+  after: string;
+  fuzzy: boolean;
+  /** A change with problems is not written. */
+  problems: IssueDto[];
+};
+
+/** A string to change, as last seen. */
+export type EntryRefDto = { path: string; context: string; expectedText: string; expectedFuzzy: boolean };
+
+export type BulkEditDto = {
+  done: number;
+  skipped: {
+    path: string;
+    context: string;
+    binding: SourceBinding | null;
+    reason: "changed" | "missing" | "invalid" | "broken";
+    problems: IssueDto[];
+  }[];
+  undoAvailable: boolean;
 };

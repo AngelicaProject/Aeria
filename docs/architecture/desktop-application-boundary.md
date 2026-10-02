@@ -111,8 +111,7 @@ malformed file fails with `updateSettings` and is never replaced with
 defaults.
 
 `DesktopState` records the work an update must not interrupt. Mutating Git
-commands (checkpoint, commit, sync, branch switch, finishing or merging a
-contribution, clone) hold a `Sync` activity guard and pack export and
+commands (checkpoint, commit, sync, branch switch, clone) hold a `Sync` activity guard and pack export and
 publication an `Export` guard for their whole run. A machine translation run
 is not guarded; an update that restarts the application stops it, and
 starting it again continues. `update_install` runs through `DesktopState::while_idle`, which
@@ -241,23 +240,31 @@ a note); the renderer patches that cell instead of reloading the sheet. A
 translation the checks refuse fails with `translationInvalid`, whose message
 lists the problems.
 
+Project search commands (`project_search`, `project_search_cancel`,
+`project_replace_preview`, `project_replace_apply`, `project_edit_undo`, and
+`project_retranslate`) delegate to `aeria-po` search and
+`Session::apply_edits` for the open project; see
+[`search.md`](./search.md#project-search). A new search or preview cancels
+the one in progress. `SearchState` keeps the inverse of the last bulk edit
+for `project_edit_undo`. `project_retranslate` clears the strings and starts
+a machine translation run of exactly them; it refuses while a run goes.
+
 Git collaboration commands (`git_overview`, `git_initialize`,
 `git_set_identity`, `git_set_remote`, `git_remove_remote`,
-`git_remote_branches`, `git_fetch_main`, `git_set_upstream`, `git_pending_changes`,
+`git_remote_branches`, `git_set_upstream`, `git_pending_changes`,
 `git_pending_sheet_changes`,
 `git_project_changes`, `git_checkpoint`, `git_log`, `git_commit_changes`,
-`git_string_history`, `git_sync`, `git_branches`, `git_create_branch`,
-`git_switch_branch`, `git_set_main_branch`, `git_state_stamp`,
-`git_finish_contribution`, `git_merge_contribution`, `git_delete_branch`, and
-`git_clone_repository`) delegate to `aeria-git` for the active project's
+`git_string_history`, `git_branches`, `git_create_branch`,
+`git_switch_branch`, `git_state_stamp`, `git_delete_branch`,
+`git_delete_remote_branch`, and `git_clone_repository`) delegate to `aeria-git` for the active project's
 repository root; see [`git.md`](./git.md). The Git executable is selected
 once at application setup (override, bundled runtime, then `PATH`) and kept in
-`DesktopState`. Checkpoint, the integration step of sync, branch switches,
-and finishing a contribution hold the session's writes so they cannot
+`DesktopState`. Checkpoint, the integration step of pull, and branch switches
+hold the session's writes so they cannot
 interleave with saves; fetch and push run without them. An integration whose
 result is for another game version is rolled back. Strings changed
-differently on both sides are returned in the sync result, not as an error,
-so the renderer can collect a resolution per string and sync again. String
+differently on both sides are returned in the pull result, not as an error,
+so the renderer can collect a resolution per string and pull again. String
 changes carry each string's coordinate in the game when it has one.
 `git_pending_changes` returns how many strings have uncommitted changes and
 the first 500 of those changes, and `git_pending_sheet_changes(sheetName)`
@@ -290,7 +297,11 @@ overwritten; an invalid entry or a file over the size limit is
 A background thread started at setup asks the session every 1.5 seconds which
 of the sheets the editor has shown changed on disk, by Git, by hand, or by a
 machine translation run, and emits `project://files-changed` with their names;
-the renderer reloads the open sheet.
+the renderer reloads the open sheet. The same thread emits `project://changed`
+when the project's files changed in any way the session knows of: the session
+counts its own writes (a save, a bulk edit, machine translation) and Git
+operations that change the working tree report themselves to it. Views of the
+whole project, such as search, read their result again.
 
 Commands that require an active project report `noProjectOpen` before
 validating project-scoped payload.

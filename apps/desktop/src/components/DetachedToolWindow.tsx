@@ -8,6 +8,7 @@ import { ErrorBanner } from "./ErrorBanner";
 import { WindowChrome } from "./WindowChrome";
 import { WorkbenchToolDock, toolTitle, type WorkbenchTool } from "./WorkbenchToolDock";
 import { displayPathName } from "../pathDisplay";
+import { mainWindowRequests } from "../workbenchEvents";
 
 export type DetachedPanel = "search" | "git" | "tasks" | "gitChanges" | "diagnostics";
 
@@ -40,7 +41,7 @@ export function DetachedToolWindow({ panel }: { panel: DetachedPanel }) {
           {tool ? (
             <section className="panel">
               <div className="panel-body">
-                <WorkbenchToolDock activeTool={panel as WorkbenchTool} selectedBinding={null} />
+                <WorkbenchToolDock activeTool={panel as WorkbenchTool} selectedBinding={null} onRevealBinding={mainWindowRequests.revealString} onWorkspaceChanged={mainWindowRequests.workspaceChanged} onOpenTranslate={mainWindowRequests.openTranslate} onOpenCommit={mainWindowRequests.openCommit} />
               </div>
             </section>
           ) : <BottomPanel activeTab={bottomTab} onTabChange={setBottomTab} />}

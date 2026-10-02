@@ -8,6 +8,7 @@ repository.workspace = true
 description = "Project knowledge: style, terms, characters, story, and lessons, and the rules of a good translation."
 
 [dependencies]
+aho-corasick = "1.1.5"
 csv = "1.4.0"
 serde = { version = "1.0.229", features = ["derive"] }
 thiserror = "2.0.20"

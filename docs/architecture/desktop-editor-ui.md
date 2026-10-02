@@ -105,7 +105,11 @@ previews the size through the region's CSS variable and commits it to layout
 state on release, so dragging does not re-render the workbench. Dock panels
 keep serializable presentation state, can move between regions, and floatable
 tools open in real Tauri webview windows that share the active Rust project
-session. The right dock opens on Git; the bottom panel (Tasks, Git changes,
+session. A floated tool asks the main window, which owns the editor, to
+open a string, read changed files again, show the machine translation dialog,
+or open a commit, through events sent to the `main` window
+(`workbenchEvents.ts`); the main window comes to the front for a string or the
+dialog. The right dock opens on Git; the bottom panel (Tasks, Git changes,
 Diagnostics) is hidden by default and shows truthful unavailable states.
 
 Center documents use preview tabs for single-click sheet browsing. A
@@ -126,7 +130,7 @@ its mode:
 | none | Go to a sheet by fuzzy name match; empty input lists recently opened sheets first |
 | `>` | Run a workbench command, including theme switching (Ctrl+Shift+P) |
 | `:` | Go to `row`, `row:subrow`, or `row:subrow:column` in the active sheet (Ctrl+G) |
-| `#` | Project string search; shown as unavailable until the Search tool is implemented |
+| `#` | Project search in translations and sources: up to 30 strings, Enter opens one in the editor, and the last item shows all in the Search tool |
 | `?` | List the prefixes |
 
 Going to a row always keeps the list in sheet order from the top: the string is
@@ -421,8 +425,63 @@ and clears only the filters that hide it: the name filter when the sheet name
 does not match, and the empty-sheet filter only when the active sheet itself
 has no translatable strings. Collapse all clears the name filter and closes
 every folder. The flattened visible tree is virtualized for large source
-catalogs. Project Search is a separate workbench tool and shows a truthful
-unavailable state until it is implemented.
+catalogs. Project search is the separate Search tool (see
+[Search tool](#search-tool)).
+
+## Search tool
+
+The Search tool (left dock by default, floatable) is project search over
+`po/` (see [`search.md`](./search.md#project-search)).
+
+- The query field has toggles for match case, whole word, and regular
+  expression; a disclosure shows the replace field with *preserve case* and
+  *replace all*. Chips choose the fields (translation, source, notes, ID);
+  **Filters** adds sheets and folders (`quest/, Addon`), entry states, and
+  the checks filter (any, with problems, with advice). The query is kept
+  while the window lives.
+- A search runs 300 ms after typing stops, or on Enter, and cancels the one
+  in progress. The result is live: when the project's files change (a save,
+  a bulk edit, machine translation, a Git operation;
+  `project://changed`), the same query runs again, and the open sheets, the
+  sheets read so far, and the chosen strings that are still found stay. Results are grouped by sheet, the files of a sheet
+  (`Item/10000.po`, `Item/12000.po`) together, with each sheet's count;
+  sheets are open when the search found at most 200 strings and closed
+  otherwise, and opening a sheet whose strings were not all sent reads them
+  then. **Collapse all** and **Expand all** (when every string was sent) act
+  on every sheet. Each string lists its coordinate, a fuzzy chip, the
+  translation with its matches highlighted around the first one, the source
+  when it matched, and the first finding of the checks filter, red for a
+  problem and amber for advice (all of them on hover). Clicking a string opens it in the editor.
+- With a checks filter, chips sum up the issues of every string found by
+  group (`pugilist → кулачный боец` for a term not used, *Macros*, *Extra
+  line break*) with counts, most first; a chip keeps only the strings with
+  that issue, and *All issues* clears it. Advice chips are amber.
+- Problems and advice are worded in the interface language from their data
+  (`issueText.ts`), here and wherever a refused translation is reported, such
+  as the editor's save error; reasons of the macro structure policy, written
+  for the model, stay in English after a localized label.
+- Replacing: a result's replace button replaces in that string at once; a
+  sheet's button and **Replace all…** open the replace preview dialog,
+  which lists every change before and after with the changed words marked.
+  Changes that would break their string show the reason and cannot be
+  chosen; the others can be unchecked. Nothing is written before
+  **Replace**.
+- **Translate again…** (all results, when every result is listed) and a
+  result's own button clear the translations after a confirmation and start
+  a machine translation run of exactly those strings; the AI translation
+  dialog opens on its progress.
+- Checkboxes choose strings, one by one or a sheet's loaded strings at once.
+  With strings chosen, **Translate again…** and **Exception** act on them
+  only; the exception takes the chosen term chip's term, or the term every
+  chosen string has a finding for.
+- A string with a term finding has an exception button, and with a term's
+  chip chosen, **Exception … for all** adds the exception to every string
+  found when every result is listed (see
+  [`po-project.md`](./po-project.md#term-exceptions)); both are bulk edits
+  that Undo reverts.
+- After a bulk edit a notice gives what was written, what was skipped and
+  why (each skipped string opens in the editor), and **Undo** for the last
+  bulk edit. The editor reads changed sheets again.
 
 ## Git dock
 
@@ -431,12 +490,13 @@ The Git dock is the Git view over the commands in
 follows the repository by itself (see [`git.md`](./git.md#git-in-the-desktop))
 and has no refresh button.
 
-- The summary shows the branch with its switcher, the sync state, and a
+- The summary shows the branch with its switcher, its state against the
+  upstream, and a
   button to Settings → Repository (or, without a remote, a link to connect
   one). With a remote, a toolbar offers Fetch, Pull (with the commits to
-  pull), Push (with the commits to push), and Sync. Pull is disabled with
-  uncommitted translations; Push is disabled on the main branch and while
-  the upstream has commits the branch lacks.
+  pull), and Push (with the commits to push). Pull is disabled with
+  uncommitted translations; Push is disabled while the upstream has commits
+  the branch lacks.
 - With a github.com `origin`, the dock offers the merge check workflow (see
   [`git.md`](./git.md#merge-check-ci)) in a card that lists its three
   stages, with "Add workflow" or, when the file differs, "Update workflow".
@@ -446,17 +506,13 @@ and has no refresh button.
   subfolder show why the workflow cannot be added.
 - The branch switcher is a popover below the branch name, not a list over
   it: a filter field, local branches (the current one first and checked,
-  then the main branch, then by name; each with its upstream, a main-branch
-  or merged badge, and why it is blocked), remote branches without a local
-  one (choosing one checks it out as a tracking branch), and "New branch…",
-  which creates a branch from `HEAD` and checks it out. On the main
-  branch it explains that the next checkpoint starts a contribution branch.
-- It offers repository initialization, a per-string "Current (yours) /
-  Incoming" choice for strings both sides changed, and, on a contribution
-  branch, a Pull request section with the branch's push state, its unmerged
-  commits, and "Switch to `<main>` and delete this branch" once it is merged
-  — or, in a repository without a remote, "Merge into `<main>`" with a
-  confirmation.
+  then by name; each with its upstream and why it is blocked), remote
+  branches without a local one (choosing one checks it out as a tracking
+  branch), and "New branch…", which creates a branch from `HEAD` and checks
+  it out. Every branch but the current one has a delete button, which opens
+  the deletion confirmation described in [`git.md`](./git.md#branches).
+- It offers repository initialization and a per-string "Current (yours) /
+  Incoming" choice for strings both sides changed.
 - The dock uses Git's established terms in every interface language rather
   than inventing its own: the checkpoint button is labelled Commit, the
   identity form edits `user.name` and `user.email`, and states and results
@@ -466,8 +522,7 @@ and has no refresh button.
   («коммит», «смержить»).
 - The branch switcher disables branches that hold the project in a state the
   open session cannot load (no project, an earlier project format, or another
-  game version) and says why; when the main branch is such a branch, the dock
-  explains that the work is not merged into it yet.
+  game version) and says why.
 - **Changes** (collapsible; the dock remembers whether it is open while the
   window lives) starts with the composer, which commits everything below and
   edits the translator name and optional email. Below it are how many strings
@@ -496,22 +551,26 @@ A commit tab shows the message, author, time, full id, labels, translation
 changes (which open in the editor), and project file changes.
 
 Dialogs that write project files (export, fonts, project knowledge)
-refresh the dock when they close. A sync, branch switch, or finished
-contribution that changed the working tree reloads the current sheet and
+refresh the dock when they close. A pull or branch switch that changed the
+working tree reloads the current sheet and
 progress, and so does a change of a shown sheet's file by Git, by hand, or by
 machine translation (`project://files-changed`).
 
 ## String history
 
-The translation editor's side pane has three tabs: Note, Languages, and
-History. The open tab is a local preference (`sidePaneTab`), so it stays
+The translation editor's side pane has four tabs: Note, Languages, History,
+and Checks. The open tab is a local preference (`sidePaneTab`), so it stays
 when another string is selected and after a restart. Languages shows the selected source text in the game's other client
 languages, stacked in the source pane's chip or code view, so a translator
 can compare how each language uses tags such as conditions; a tag clicked
 there is added to the translation as from the source pane. A language
 without the string says so. History shows every committed change to the
 selected string with its author, and its uncommitted change; "Use this text"
-puts a historical text into the editor as an unsaved draft.
+puts a historical text into the editor as an unsaved draft. Checks shows what
+the checks find in the saved translation, problems in red and advice in
+amber; a term finding has **Exception**, which adds a term exception to the
+string, and the string's exceptions are listed with a button that removes
+each (see [`po-project.md`](./po-project.md#term-exceptions)).
 
 ## Project knowledge dialog
 
@@ -534,7 +593,7 @@ example by Git.
 
 ## Machine translation
 
-**Machine translation…** opens from the Translation menu and the command
+**AI translation…** (the interface's name for machine translation) opens from the Translation menu and the command
 palette. The dialog chooses what to translate in a tree of the project's
 sheets with checkboxes (a folder's box chooses all its sheets), a search, and
 quick choices (names, quests, all untranslated, clear); every sheet and folder
@@ -543,8 +602,11 @@ It also chooses whether strings with a changed source are included, shows how
 many sheets and strings are chosen, and names the model; without a model it
 links to Settings. **Translate** starts a run, and the
 dialog shows its progress every second: strings written of the run's strings,
-strings refused by the checks with their problems, tokens and the share served
-from the cache, the pace, and why the run stopped. The dialog can be hidden
+strings refused by the checks, tokens and the share served from the cache,
+the pace, and why the run stopped. Each refused string lists its problems in
+the interface language and the model's translation, which was not written;
+it opens in the editor, a term problem has **Exception**, and **Translate
+the refused again** starts a run of the listed strings. The dialog can be hidden
 while the run goes; **Stop** stops it, and a stopped run offers
 **Continue**. See [`translate.md`](./translate.md).
 
@@ -575,7 +637,7 @@ Monokai Pro, Night Owl, Rosé Pine, Ayu, Solarized, Palenight, Kanagawa, and
 Everforest) mapped onto Aeria's layered tokens; Catppuccin, Aeria's own themes,
 and High Contrast Dark are also available.
 
-Settings open as a dialog with Appearance, Editor, Workflow, Game, Machine
+Settings open as a dialog with Appearance, Editor, Workflow, Game, AI
 translation, Project, Repository, Keyboard shortcuts, and About sections and a search across all settings. Theme, accent,
 Reduce transparency, interface zoom (webview zoom), editor text size, macro
 highlighting, control-character display, strings list density, and focusing the

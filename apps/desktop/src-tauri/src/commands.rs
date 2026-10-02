@@ -828,6 +828,88 @@ pub(crate) fn set_translation_note_with_state(
         .map(Into::into))
 }
 
+#[tauri::command(rename_all = "camelCase")]
+#[allow(clippy::needless_pass_by_value)]
+/// Adds or removes a term exception of one string: the glossary term does
+/// not apply to it.
+///
+/// # Errors
+///
+/// Returns `termExceptionInvalid` for a term that cannot be written as a
+/// flag, or a typed command error when no project is open or the string or
+/// its file cannot be written.
+pub async fn set_translation_term_exception(
+    app: tauri::AppHandle,
+    source_binding: SourceBindingDto,
+    term: String,
+    add: bool,
+) -> CommandResult<Option<TranslationOverlayDto>> {
+    run_blocking(move || {
+        if add && !aeria_po::can_be_exception(&term) {
+            return Err(term_exception_invalid(&term));
+        }
+        let state = app.state::<DesktopState>();
+        Ok(state
+            .session()?
+            .set_term_exception(
+                &source_binding.sheet_name,
+                source_binding.row_id,
+                source_binding.subrow_id,
+                source_binding.column_index,
+                &term,
+                add,
+            )?
+            .map(Into::into))
+    })
+    .await
+}
+
+/// What the checks find in a string's saved translation, and its term
+/// exceptions.
+#[derive(Clone, Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TranslationFindingsDto {
+    pub issues: Vec<crate::dto::IssueDto>,
+    pub term_exceptions: Vec<String>,
+}
+
+#[tauri::command(rename_all = "camelCase")]
+#[allow(clippy::needless_pass_by_value)]
+/// What the checks find in the saved translation of one string, problems
+/// then advice, with its term exceptions.
+///
+/// # Errors
+///
+/// Returns a typed command error when no project is open or the string or
+/// its file cannot be read.
+pub async fn translation_findings(
+    app: tauri::AppHandle,
+    source_binding: SourceBindingDto,
+) -> CommandResult<TranslationFindingsDto> {
+    run_blocking(move || {
+        let state = app.state::<DesktopState>();
+        let (issues, term_exceptions) = state.session()?.findings(
+            &source_binding.sheet_name,
+            source_binding.row_id,
+            source_binding.subrow_id,
+            source_binding.column_index,
+        )?;
+        Ok(TranslationFindingsDto {
+            issues: issues.iter().map(crate::dto::IssueDto::from).collect(),
+            term_exceptions,
+        })
+    })
+    .await
+}
+
+/// The error of a term that cannot be written as a term exception.
+pub(crate) fn term_exception_invalid(term: &str) -> CommandError {
+    CommandError::new(
+        "termExceptionInvalid",
+        format!("the term {term:?} cannot be an exception: it is empty or has a comma"),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use std::fs;

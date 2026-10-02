@@ -11,6 +11,7 @@ mod macros;
 mod paths;
 mod project_changes;
 mod scene;
+mod search;
 mod source;
 mod state;
 mod sync;
@@ -29,7 +30,8 @@ pub use commands::{
     close_project, current_project, default_projects_directory_path, forget_recent_project,
     initialize_project_from_game, list_recent_projects, open_project_from_game,
     open_recent_project, page_translation_rows, set_project_target_language, set_translation_note,
-    set_translation_target, sheet_dialogue, source_in_other_languages, translation_progress,
+    set_translation_target, set_translation_term_exception, sheet_dialogue,
+    source_in_other_languages, translation_findings, translation_progress,
     update_project_from_game,
 };
 pub use dto::{
@@ -55,20 +57,24 @@ pub use games::{
 };
 pub use git::{
     git_branches, git_checkpoint, git_clone_repository, git_commit_changes, git_create_branch,
-    git_delete_branch, git_fetch, git_fetch_main, git_finish_contribution, git_initialize, git_log,
-    git_merge_contribution, git_overview, git_pending_changes, git_pending_sheet_changes,
-    git_project_changes, git_pull, git_push, git_remote_branches, git_remove_remote,
-    git_set_identity, git_set_main_branch, git_set_remote, git_set_upstream, git_state_stamp,
-    git_string_history, git_switch_branch, git_sync,
+    git_delete_branch, git_delete_remote_branch, git_fetch, git_initialize, git_log, git_overview,
+    git_pending_changes, git_pending_sheet_changes, git_project_changes, git_pull, git_push,
+    git_remote_branches, git_remove_remote, git_set_identity, git_set_remote, git_set_upstream,
+    git_state_stamp, git_string_history, git_switch_branch,
 };
 pub use guide::{
     ProjectKnowledgeDto, TermInput, project_knowledge, save_knowledge_style, save_knowledge_terms,
+};
+pub use search::{
+    SearchState, project_edit_undo, project_replace_apply, project_replace_preview,
+    project_retranslate, project_search, project_search_cancel, project_term_exception,
 };
 pub use state::{Activity, DesktopState};
 pub use translate::{
     ModelAccountDto, ModelSignInDto, Translation, model_account, model_list,
     model_open_sign_in_page, model_sign_in_poll, model_sign_in_start, model_sign_out,
-    translation_name_sheets, translation_start, translation_status, translation_stop,
+    translation_name_sheets, translation_retry, translation_start, translation_status,
+    translation_stop,
 };
 pub use updates::{
     AvailableUpdateDto, UpdateChannel, UpdateDownloadDto, UpdateStatusDto, Updates, update_check,
@@ -105,6 +111,7 @@ pub fn run() {
         .manage(DesktopState::new())
         .manage(Updates::default())
         .manage(Translation::default())
+        .manage(SearchState::default())
         .setup(|app| {
             paths::migrate_legacy_directories(app.handle());
             app.state::<DesktopState>()
@@ -137,6 +144,8 @@ pub fn run() {
             sheet_dialogue,
             set_translation_target,
             set_translation_note,
+            set_translation_term_exception,
+            translation_findings,
             translation_progress,
             set_project_target_language,
             macros::macro_view,
@@ -154,7 +163,6 @@ pub fn run() {
             git_log,
             git_commit_changes,
             git_string_history,
-            git_sync,
             git_fetch,
             git_pull,
             git_push,
@@ -165,16 +173,13 @@ pub fn run() {
             git_branches,
             git_create_branch,
             git_switch_branch,
-            git_set_main_branch,
             git_state_stamp,
-            git_merge_contribution,
             git_delete_branch,
+            git_delete_remote_branch,
             git_project_changes,
             git_remove_remote,
-            git_fetch_main,
             git_remote_branches,
             git_set_upstream,
-            git_finish_contribution,
             project_knowledge,
             save_knowledge_style,
             save_knowledge_terms,
@@ -202,7 +207,15 @@ pub fn run() {
             translation_name_sheets,
             translation_start,
             translation_status,
-            translation_stop
+            translation_retry,
+            translation_stop,
+            project_search,
+            project_search_cancel,
+            project_replace_preview,
+            project_replace_apply,
+            project_edit_undo,
+            project_retranslate,
+            project_term_exception
         ])
         .run(tauri::generate_context!())
         .expect("failed to run Aeria desktop application");

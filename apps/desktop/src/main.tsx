@@ -9,6 +9,7 @@ import "./styles/launcher.css";
 import "./styles/workbench.css";
 import "./styles/editor.css";
 import "./styles/git.css";
+import "./styles/search.css";
 import "./styles/overlays.css";
 
 const root = document.getElementById("root");

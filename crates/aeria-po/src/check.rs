@@ -17,6 +17,137 @@ pub struct Verdict {
     pub problems: Vec<String>,
     /// What may be wrong; it does not stop the translation.
     pub advice: Vec<String>,
+    /// The problems, then the advice, as data an interface can word in its
+    /// own language; `problems` and `advice` are their messages.
+    pub issues: Vec<Issue>,
+}
+
+impl Verdict {
+    fn of(issues: Vec<Issue>) -> Self {
+        let (problems, advice): (Vec<&Issue>, Vec<&Issue>) =
+            issues.iter().partition(|issue| issue.is_problem());
+        Self {
+            problems: problems.iter().map(ToString::to_string).collect(),
+            advice: advice.iter().map(ToString::to_string).collect(),
+            issues,
+        }
+    }
+}
+
+/// One finding of the checks of a translation.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum Issue {
+    /// A line break the source does not have.
+    LineBreak,
+    /// The structure policy refused the macros (`aeria_se`); the message is
+    /// written for the model that produced the translation.
+    Structure(String),
+    /// A forbidden variant of a term of the source.
+    ForbiddenTerm {
+        term: String,
+        translation: String,
+        variant: String,
+    },
+    /// A stress or other combining mark the source does not have.
+    Mark(char),
+    /// A word that mixes alphabets, or has letters of another writing system.
+    MixedAlphabets(String),
+    /// A Russian form that writes both genders at once, such as `(а)`.
+    BothGenders(String),
+    /// Advice: the translation of a term of the source does not seem used.
+    TermNotUsed { term: String, translation: String },
+    /// Advice: the source varies with the player character's gender and the
+    /// translation does not.
+    GenderNotVaried,
+    /// Advice: the French or German line varies with the player character's
+    /// gender and the translation does not.
+    GenderInOtherLanguages,
+    /// Advice: phrasing that reads machine-written.
+    MachinePhrasing(Vec<String>),
+    /// Advice: a term exception names no term of the source: the term left
+    /// the glossary, or the source changed.
+    StaleTermException(String),
+}
+
+impl Issue {
+    /// What groups issues for a summary: the kind, with the term for term
+    /// issues (`termNotUsed:pugilist`).
+    #[must_use]
+    pub fn group(&self) -> String {
+        match self {
+            Self::LineBreak => "lineBreak".to_owned(),
+            Self::Structure(_) => "structure".to_owned(),
+            Self::ForbiddenTerm { term, .. } => format!("forbiddenTerm:{}", term.to_lowercase()),
+            Self::Mark(_) => "mark".to_owned(),
+            Self::MixedAlphabets(_) => "mixedAlphabets".to_owned(),
+            Self::BothGenders(_) => "bothGenders".to_owned(),
+            Self::TermNotUsed { term, .. } => format!("termNotUsed:{}", term.to_lowercase()),
+            Self::GenderNotVaried => "genderNotVaried".to_owned(),
+            Self::GenderInOtherLanguages => "genderInOtherLanguages".to_owned(),
+            Self::MachinePhrasing(_) => "machinePhrasing".to_owned(),
+            Self::StaleTermException(_) => "staleTermException".to_owned(),
+        }
+    }
+
+    /// A problem stops a translation from being saved and exported; the rest
+    /// is advice.
+    #[must_use]
+    pub fn is_problem(&self) -> bool {
+        !matches!(
+            self,
+            Self::TermNotUsed { .. }
+                | Self::GenderNotVaried
+                | Self::GenderInOtherLanguages
+                | Self::MachinePhrasing(_)
+                | Self::StaleTermException(_)
+        )
+    }
+}
+
+impl std::fmt::Display for Issue {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::LineBreak => f.write_str(
+                "the translation has a line break the source does not; the game breaks lines with <br>",
+            ),
+            Self::Structure(message) => f.write_str(message),
+            Self::ForbiddenTerm {
+                term,
+                translation,
+                variant,
+            } => write!(f, "the terms forbid {variant:?} for {term:?}; use {translation:?}"),
+            Self::Mark(mark) => write!(
+                f,
+                "the translation has the mark U+{:04X} (a stress or accent); write the word without it",
+                u32::from(*mark)
+            ),
+            Self::MixedAlphabets(word) => write!(
+                f,
+                "«{word}» mixes letters of different alphabets; write it in Cyrillic only"
+            ),
+            Self::BothGenders(form) => write!(
+                f,
+                "{form} writes both genders at once; use a condition on $gn4 with the feminine form first, or a phrasing that shows no gender"
+            ),
+            Self::TermNotUsed { term, translation } => write!(
+                f,
+                "the terms translate {term:?} as {translation:?}, which does not seem to be used"
+            ),
+            Self::GenderNotVaried => f.write_str(
+                "the source varies with the player character's gender and the translation does not; make sure nothing in it agrees with the player character's gender",
+            ),
+            Self::GenderInOtherLanguages => f.write_str(
+                "the French or German line varies with the player character's gender; check whether a word about the player character needs a condition on $gn4",
+            ),
+            Self::MachinePhrasing(phrases) => {
+                write!(f, "reads machine-written: {}", phrases.join(", "))
+            }
+            Self::StaleTermException(term) => write!(
+                f,
+                "the string has an exception for the term {term:?}, which its source does not have; remove the exception"
+            ),
+        }
+    }
 }
 
 /// Languages written in Cyrillic, by their primary language subtag.
@@ -64,7 +195,7 @@ fn words_of(text: &str) -> String {
 /// or Greek letters, and letters of another writing system. What the source
 /// has itself, such as the æ of Pandæmonium or a line of Japanese, is not a
 /// slip.
-fn letter_slips(target_language: &str, source: &str, text: &str) -> Vec<String> {
+fn letter_slips(target_language: &str, source: &str, text: &str) -> Vec<Issue> {
     let primary = target_language.split('-').next().unwrap_or_default();
     if !CYRILLIC_LANGUAGES
         .iter()
@@ -78,10 +209,7 @@ fn letter_slips(target_language: &str, source: &str, text: &str) -> Vec<String> 
         .chars()
         .find(|c| matches!(c, '\u{0300}'..='\u{036F}') && !source.contains(*c))
     {
-        slips.push(format!(
-            "the translation has the mark U+{:04X} (a stress or accent); write the word without it",
-            u32::from(mark)
-        ));
+        slips.push(Issue::Mark(mark));
     }
     for word in plain.split(|c: char| !c.is_alphanumeric() && !matches!(c, '\u{0300}'..='\u{036F}'))
     {
@@ -99,9 +227,7 @@ fn letter_slips(target_language: &str, source: &str, text: &str) -> Vec<String> 
                 && !source.contains(c)
         });
         if (mixed || other) && !source.contains(word) {
-            slips.push(format!(
-                "«{word}» mixes letters of different alphabets; write it in Cyrillic only"
-            ));
+            slips.push(Issue::MixedAlphabets(word.to_owned()));
             break;
         }
     }
@@ -112,7 +238,8 @@ fn letter_slips(target_language: &str, source: &str, text: &str) -> Vec<String> 
 const BOTH_GENDERS: [&str; 6] = ["(а)", "(ла)", "(ая)", "(на)", "(ен)", "(ой)"];
 
 /// Checks one translation against its source and the project knowledge.
-/// `extracted` are the entry's `#.` lines, with the other client languages.
+/// `extracted` are the entry's `#.` lines, with the other client languages;
+/// `exceptions` the terms a person decided do not apply to the string.
 #[must_use]
 pub fn check_translation(
     knowledge: &Knowledge,
@@ -120,40 +247,51 @@ pub fn check_translation(
     source: &str,
     text: &str,
     extracted: &[String],
+    exceptions: &[String],
 ) -> Verdict {
-    let mut verdict = Verdict::default();
+    let mut issues = Vec::new();
     if text.contains('\n') && !source.contains('\n') {
-        verdict.problems.push(
-            "the translation has a line break the source does not; the game breaks lines with <br>"
-                .to_owned(),
-        );
+        issues.push(Issue::LineBreak);
     }
     if let Err(errors) = aeria_se::check_assisted_structure(source, text) {
-        verdict
-            .problems
-            .extend(errors.into_iter().map(|error| error.message));
+        issues.extend(
+            errors
+                .into_iter()
+                .map(|error| Issue::Structure(error.message)),
+        );
     }
-    verdict
-        .problems
-        .extend(knowledge.terms.forbidden_in(source, text));
-    verdict
-        .problems
-        .extend(letter_slips(target_language, source, text));
+    let terms = knowledge.terms.review(source, text, exceptions);
+    issues.extend(
+        terms
+            .forbidden
+            .iter()
+            .map(|(entry, variant)| Issue::ForbiddenTerm {
+                term: entry.term.clone(),
+                translation: entry.translation.clone(),
+                variant: (*variant).to_owned(),
+            }),
+    );
+    issues.extend(letter_slips(target_language, source, text));
     let russian = target_language.eq_ignore_ascii_case("ru");
     if russian
         && let Some(form) = BOTH_GENDERS
             .iter()
             .find(|form| text.contains(*form) && !source.contains(*form))
     {
-        verdict.problems.push(format!(
-            "{form} writes both genders at once; use a condition on $gn4 with the feminine form first, or a phrasing that shows no gender"
-        ));
+        issues.push(Issue::BothGenders((*form).to_owned()));
     }
-    verdict
-        .advice
-        .extend(knowledge.terms.missing_in(source, text));
+    issues.extend(terms.unused.iter().map(|entry| Issue::TermNotUsed {
+        term: entry.term.clone(),
+        translation: entry.translation.clone(),
+    }));
+    issues.extend(
+        terms
+            .stale
+            .iter()
+            .map(|term| Issue::StaleTermException((*term).to_owned())),
+    );
     if source.contains("$gn4") && !text.contains("$gn4") {
-        verdict.advice.push("the source varies with the player character's gender and the translation does not; make sure nothing in it agrees with the player character's gender".to_owned());
+        issues.push(Issue::GenderNotVaried);
     } else if russian
         && !source.contains("$gn4")
         && !text.contains("$gn4")
@@ -161,15 +299,15 @@ pub fn check_translation(
             (line.starts_with("fr: ") || line.starts_with("de: ")) && line.contains("$gn4")
         })
     {
-        verdict.advice.push("the French or German line varies with the player character's gender; check whether a word about the player character needs a condition on $gn4".to_owned());
+        issues.push(Issue::GenderInOtherLanguages);
     }
     let phrasing = machine_phrasing(target_language, text);
     if !phrasing.is_empty() {
-        verdict
-            .advice
-            .push(format!("reads machine-written: {}", phrasing.join(", ")));
+        issues.push(Issue::MachinePhrasing(
+            phrasing.into_iter().map(ToString::to_string).collect(),
+        ));
     }
-    verdict
+    Verdict::of(issues)
 }
 
 /// One finding of a file check, at a line of the file.
@@ -213,6 +351,7 @@ pub fn check_file(file: &PoFile, knowledge: &Knowledge, target_language: &str) -
             &entry.source,
             &entry.translation,
             &entry.extracted,
+            &entry.term_exceptions,
         );
         findings.extend(verdict.problems.into_iter().map(|message| Finding {
             line: entry.line,
@@ -236,7 +375,7 @@ mod tests {
     fn slips_of_letters_are_problems_unless_the_source_has_them() {
         let knowledge = Knowledge::default();
         let problems = |source: &str, text: &str| {
-            check_translation(&knowledge, "ru", source, text, &[]).problems
+            check_translation(&knowledge, "ru", source, text, &[], &[]).problems
         };
         for (source, text) in [
             ("Elezen boy", "юный эле\u{301}зен"),
@@ -268,7 +407,7 @@ mod tests {
             );
         }
         assert!(
-            check_translation(&knowledge, "de", "Hello", "Hall\u{f6}", &[])
+            check_translation(&knowledge, "de", "Hello", "Hall\u{f6}", &[], &[])
                 .problems
                 .is_empty()
         );
@@ -278,13 +417,14 @@ mod tests {
     fn broken_macros_and_both_genders_are_problems() {
         let knowledge = Knowledge::default();
         assert!(
-            check_translation(&knowledge, "ru", "Hello.", "Привет.", &[])
+            check_translation(&knowledge, "ru", "Hello.", "Привет.", &[], &[])
                 .problems
                 .is_empty()
         );
-        let verdict = check_translation(&knowledge, "ru", "You are ready.", "Ты готов(а).", &[]);
+        let verdict =
+            check_translation(&knowledge, "ru", "You are ready.", "Ты готов(а).", &[], &[]);
         assert_eq!(verdict.problems.len(), 1, "{verdict:?}");
-        let verdict = check_translation(&knowledge, "ru", "Hello.", "При\nвет.", &[]);
+        let verdict = check_translation(&knowledge, "ru", "Hello.", "При\nвет.", &[], &[]);
         assert_eq!(verdict.problems.len(), 1, "{verdict:?}");
     }
 

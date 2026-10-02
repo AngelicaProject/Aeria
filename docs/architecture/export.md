@@ -202,9 +202,10 @@ The feed is rebuilt by the repository workflow
 replaces from the template in `crates/aeria-publish/templates/`. It is a
 project file: it shows in the Git dock's changes and the next checkpoint
 commits it. GitHub runs release workflows from the default branch, so the
-workflow must reach the main branch through a pull request before releases
-reach the feed; the Export dialog checks the main branch on GitHub (as of the
-last fetch) and warns until it has the current workflow. Releases published
+workflow must reach that branch before releases reach the feed; the Export
+dialog checks the default branch on GitHub as Git last recorded it
+(`origin/HEAD`, else `main`), as of the last fetch, and warns until it has
+the current workflow. Releases published
 before that need one manual run of the workflow (Actions → Harmonia feed →
 Run workflow). The workflow runs on `release` events
 (`published`, `unpublished`, `edited`, `deleted`) and on demand, and builds

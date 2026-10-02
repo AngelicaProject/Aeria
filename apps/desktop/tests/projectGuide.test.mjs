@@ -12,8 +12,10 @@ test("rows round-trip entries and trim edits", () => {
   const rows = rowsFromEntries(entries);
   assert.equal(rows[0].forbidden, "Этер; Эйтер");
   assert.deepEqual(inputsFromRows([{ ...rows[1], term: " Crystal ", note: "  ", forbidden: " ; a ;" }]), [
-    { term: "Crystal", translation: "Кристалл", note: null, forbidden: ["a"], settled: false },
+    { term: "Crystal", translation: "Кристалл", note: null, forbidden: ["a"], settled: false, matchCase: false },
   ]);
+  assert.equal(rowsFromEntries([{ term: "the Maelstrom", translation: "Мальстрём", matchCase: true }])[0].matchCase, true);
+  assert.equal(rowsChanged([{ ...rows[0], matchCase: true }, rows[1]], entries), true);
   assert.equal(rowsChanged(rows, entries), false);
   assert.equal(rowsChanged([{ ...rows[0], translation: "Эфир " }, rows[1]], entries), false);
   assert.equal(rowsChanged([rows[0]], entries), true);

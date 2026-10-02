@@ -13,13 +13,14 @@ use crate::po::{Entry, Header, PoFile};
 /// | `before` | result |
 /// | --- | --- |
 /// | same `msgid` | translation, notes, and marks kept |
-/// | other `msgid` | translation and notes kept; fuzzy, with the source the translation was written for as `#\| msgid` |
+/// | other `msgid` | translation and notes kept; fuzzy, with the source the translation was written for as `#\| msgid`; term exceptions dropped |
 fn carry(before: &Entry, entry: &mut Entry) {
     entry.translation.clone_from(&before.translation);
     entry.notes.clone_from(&before.notes);
     if before.source == entry.source {
         entry.fuzzy = before.fuzzy;
         entry.previous.clone_from(&before.previous);
+        entry.term_exceptions.clone_from(&before.term_exceptions);
     } else if !before.translation.is_empty() {
         entry.fuzzy = true;
         // The source the translation was written for: the previous source,
@@ -232,5 +233,23 @@ mod tests {
             file(vec![entry("S:1:0:0", "Two", "")]),
         );
         assert!(!empty.entries[0].fuzzy);
+    }
+
+    #[test]
+    fn term_exceptions_last_while_the_source_does() {
+        let mut excepted = entry("S:1:0:0", "Maelstrom of Despair", "Вихрь отчаяния");
+        excepted.term_exceptions = vec!["Maelstrom".to_owned()];
+        let previous = file(vec![excepted]);
+        let same = merge(
+            Some(&previous),
+            file(vec![entry("S:1:0:0", "Maelstrom of Despair", "")]),
+        );
+        assert_eq!(same.entries[0].term_exceptions, ["Maelstrom"]);
+        let changed = merge(
+            Some(&previous),
+            file(vec![entry("S:1:0:0", "Maelstrom of Hope", "")]),
+        );
+        assert!(changed.entries[0].fuzzy);
+        assert!(changed.entries[0].term_exceptions.is_empty());
     }
 }

@@ -11,9 +11,8 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use aeria_git::{
-    CollaborationSettings, ConflictResolution, ContributionStatus, EntryChangeKind,
-    FONT_SETTINGS_FILE, FONTS_DIR, GitError, GitExecutable, GitRepository, IntegrateOutcome,
-    KNOWLEDGE_DIR, PACK_SETTINGS_FILE, PendingCache,
+    ConflictResolution, EntryChangeKind, FONT_SETTINGS_FILE, FONTS_DIR, GitError, GitExecutable,
+    GitRepository, IntegrateOutcome, KNOWLEDGE_DIR, PACK_SETTINGS_FILE, PendingCache,
 };
 use tempfile::TempDir;
 
@@ -265,7 +264,6 @@ fn integration_leaves_the_reconciliation_for_a_checkpoint() {
     let (one, two) = (id(0x10, 1), id(0x20, 1));
 
     let ada = sandbox.project("ada", "Ada");
-    share_one_branch(&ada);
     ada.set_remote("origin", &remote).expect("remote");
     write_shard(ada.root(), 0x10, &[(one, 1, "Un", "")]);
     write_shard(ada.root(), 0x20, &[(two, 2, "Deux", "")]);
@@ -355,7 +353,6 @@ fn sync_fast_forwards_and_merges_adjacent_units_semantically() {
     let remote = sandbox.bare_remote();
 
     let ada = sandbox.project("ada", "Ada");
-    share_one_branch(&ada);
     let ada_root = ada.root().to_owned();
     ada.set_remote("origin", &remote).expect("remote");
     let (one, two, three) = (id(0x10, 1), id(0x10, 2), id(0x10, 3));
@@ -439,7 +436,6 @@ fn same_unit_conflicts_are_reported_and_resolved_only_explicitly() {
     let unit = id(0x10, 1);
 
     let ada = sandbox.project("ada", "Ada");
-    share_one_branch(&ada);
     ada.set_remote("origin", &remote).expect("remote");
     write_shard(ada.root(), 0x10, &[(unit, 1, "Un", "")]);
     ada.checkpoint(None).expect("initial");
@@ -483,7 +479,6 @@ fn rejected_incoming_changes_are_rolled_back() {
     let remote = sandbox.bare_remote();
 
     let ada = sandbox.project("ada", "Ada");
-    share_one_branch(&ada);
     ada.set_remote("origin", &remote).expect("remote");
     write_shard(ada.root(), 0x10, &[(id(0x10, 1), 1, "Un", "")]);
     ada.checkpoint(None).expect("initial");
@@ -513,120 +508,6 @@ fn rejected_incoming_changes_are_rolled_back() {
     assert_eq!(current_branch(&grace), "experiment");
     grace.switch_branch("main", || Ok(())).expect("switch");
     assert_eq!(current_branch(&grace), "main");
-}
-
-fn contribution(repository: &GitRepository) -> ContributionStatus {
-    repository
-        .contribution_status()
-        .expect("status")
-        .expect("contribution status")
-}
-
-#[test]
-fn the_pull_request_policy_uses_contribution_branches() {
-    let sandbox = Sandbox::new();
-    let remote = sandbox.bare_remote();
-
-    let maintainer = sandbox.project("maintainer", "Ada");
-    maintainer.set_remote("origin", &remote).expect("remote");
-    write_shard(maintainer.root(), 0x10, &[(id(0x10, 1), 1, "Un", "")]);
-    // The first commit of a repository is the only one made on main.
-    assert_eq!(
-        maintainer.checkpoint(None).expect("initial").branch_created,
-        None
-    );
-    maintainer.push().expect("publish main");
-
-    let translator = sandbox.clone(&remote, "translator", "Grace Hopper");
-    // Without settings the main branch is the remote's default branch.
-    assert_eq!(
-        translator.collaboration().expect("settings").main_branch,
-        None
-    );
-    assert_eq!(
-        translator.main_branch().expect("main").as_deref(),
-        Some("main")
-    );
-    let status = contribution(&translator);
-    assert_eq!(status.branch, None);
-
-    write_shard(translator.root(), 0x20, &[(id(0x20, 1), 2, "Deux", "")]);
-    let outcome = translator.checkpoint(None).expect("checkpoint");
-    let branch = outcome.branch_created.expect("contribution branch");
-    assert!(branch.starts_with("translations/grace-hopper-"), "{branch}");
-
-    translator.fetch().expect("fetch");
-    translator
-        .integrate(&no_resolutions(), || Ok(()))
-        .expect("nothing new");
-    assert!(translator.push().expect("publish contribution"));
-    let status = contribution(&translator);
-    assert_eq!(status.branch.as_deref(), Some(branch.as_str()));
-    assert!(status.published);
-    assert_eq!(status.unmerged_commits, 1);
-
-    // Under the policy a checkpoint on main moves to a contribution branch,
-    // for the maintainer too.
-    write_shard(maintainer.root(), 0x30, &[(id(0x30, 1), 3, "Trois", "")]);
-    let maintainer_work = maintainer.checkpoint(None).expect("maintainer work");
-    assert!(maintainer_work.branch_created.is_some());
-
-    // Main moves on through a reviewed merge; syncing the contribution
-    // brings it in.
-    let identity = [
-        "-c",
-        "user.name=Ada",
-        "-c",
-        "user.email=ada@example.invalid",
-    ];
-    sandbox.raw_git(maintainer.root(), &["switch", "--quiet", "main"]);
-    let mut merge = identity.to_vec();
-    merge.extend(["merge", "--no-edit", "--quiet", "--no-ff", "-"]);
-    sandbox.raw_git(maintainer.root(), &merge);
-    sandbox.raw_git(maintainer.root(), &["push", "--quiet", "origin", "main"]);
-    // Main moving is noticed without a sync; the contribution is behind it
-    // until main is merged in.
-    assert!(translator.fetch_main_branch().expect("fetch main"));
-    assert!(!translator.fetch_main_branch().expect("fetch main again"));
-    let status = contribution(&translator);
-    assert_eq!((status.unmerged_commits, status.main_ahead), (1, 2));
-    translator.fetch().expect("fetch");
-    assert_eq!(
-        translator
-            .integrate(&no_resolutions(), || Ok(()))
-            .expect("merge main"),
-        IntegrateOutcome::Merged
-    );
-    let status = contribution(&translator);
-    assert_eq!(status.main_ahead, 0);
-    assert!(translator.root().join("po/30.po").exists());
-    translator.push().expect("push");
-
-    // The maintainer reviews and merges the contribution on the remote.
-    maintainer.fetch().expect("fetch");
-    let contribution_ref = format!("origin/{branch}");
-    sandbox.raw_git(
-        maintainer.root(),
-        &[
-            "-c",
-            "user.name=Ada",
-            "-c",
-            "user.email=ada@example.invalid",
-            "merge",
-            "--no-edit",
-            "--quiet",
-            &contribution_ref,
-        ],
-    );
-    sandbox.raw_git(maintainer.root(), &["push", "--quiet", "origin", "main"]);
-
-    translator.fetch().expect("fetch");
-    let status = contribution(&translator);
-    assert_eq!(status.unmerged_commits, 0);
-    let finished = translator.finish_contribution(|| Ok(())).expect("finish");
-    assert_eq!(finished.deleted_branch.as_deref(), Some(branch.as_str()));
-    assert!(translator.root().join("po/20.po").exists());
-    assert_eq!(current_branch(&translator), "main");
 }
 
 #[test]
@@ -718,7 +599,6 @@ fn cyrillic_paths_with_spaces_work_for_every_operation() {
     let root = top.join("переводы/русский перевод");
     make_project(&root);
     let ada = GitRepository::open(&root, sandbox.git.clone()).expect("open");
-    share_one_branch(&ada);
     set_translator(&ada, "Ада");
     ada.set_remote("origin", &remote)
         .expect("remote with spaces");
@@ -729,9 +609,7 @@ fn cyrillic_paths_with_spaces_work_for_every_operation() {
             .expect("status")
             .files
             .iter()
-            .all(|file| file.path.starts_with("po/")
-                || file.path == "aeria.json"
-                || file.path == "aeria-collaboration.json")
+            .all(|file| file.path.starts_with("po/") || file.path == "aeria.json")
     );
     ada.checkpoint(None).expect("checkpoint");
     assert!(ada.push().expect("push"));
@@ -785,15 +663,10 @@ fn project_files_are_committed_only_by_checkpoints() {
     )
     .expect("terms");
     fs::write(root.join(KNOWLEDGE_DIR).join("style.md"), "Use ты.\n").expect("style");
-    repository
-        .set_collaboration(&CollaborationSettings {
-            main_branch: Some("main".to_owned()),
-        })
-        .expect("policy");
 
     // Nothing was committed by writing the files.
     assert_eq!(repository.head().expect("head"), first);
-    assert_eq!(repository.status().expect("status").files.len(), 6);
+    assert_eq!(repository.status().expect("status").files.len(), 5);
     assert_eq!(
         repository
             .file_at("HEAD", PACK_SETTINGS_FILE)
@@ -801,9 +674,8 @@ fn project_files_are_committed_only_by_checkpoints() {
         None
     );
 
-    // Work never lands on main: the checkpoint moves to a contribution branch.
     let outcome = repository.checkpoint(None).expect("checkpoint");
-    assert!(outcome.branch_created.is_some());
+    assert_eq!(current_branch(&repository), "main");
     assert_eq!(outcome.commit.subject, "Update project settings");
     assert!(repository.status().expect("status").files.is_empty());
     assert_eq!(
@@ -811,14 +683,6 @@ fn project_files_are_committed_only_by_checkpoints() {
             .file_at("HEAD", "aeria-knowledge/style.md")
             .expect("show"),
         Some("Use ты.\n".as_bytes().to_vec())
-    );
-    assert_eq!(
-        repository
-            .committed_collaboration()
-            .expect("settings")
-            .main_branch
-            .as_deref(),
-        Some("main")
     );
 
     // Removing a font file is committed too.
@@ -891,42 +755,8 @@ fn remotes_and_the_upstream_can_be_changed() {
     assert!(repository.remove_remote("origin").is_err());
 }
 
-/// Makes the repository's main branch `trunk`, so collaborators can share
-/// the current branch the way a team shares one contribution branch.
-fn share_one_branch(repository: &GitRepository) {
-    repository
-        .set_collaboration(&CollaborationSettings {
-            main_branch: Some("trunk".to_owned()),
-        })
-        .expect("settings");
-    // Commit the setting the way an established team already has it.
-    let git = |args: &[&str]| {
-        let status = std::process::Command::new(
-            std::env::var_os("AERIA_GIT_PATH")
-                .filter(|path| !path.is_empty())
-                .unwrap_or_else(|| "git".into()),
-        )
-        .current_dir(repository.root())
-        .args(args)
-        .status()
-        .expect("git");
-        assert!(status.success(), "{args:?}");
-    };
-    git(&["add", "--", "aeria-collaboration.json"]);
-    git(&[
-        "-c",
-        "user.name=Setup",
-        "-c",
-        "user.email=",
-        "commit",
-        "--quiet",
-        "-m",
-        "Share one branch",
-    ]);
-}
-
 #[test]
-fn the_published_main_branch_takes_changes_only_through_pull_requests() {
+fn checkpoints_and_pushes_stay_on_the_current_branch() {
     let sandbox = Sandbox::new();
     let remote = sandbox.bare_remote();
     let repository = sandbox.project("project", "Ada");
@@ -935,156 +765,103 @@ fn the_published_main_branch_takes_changes_only_through_pull_requests() {
     repository.checkpoint(None).expect("initial");
     assert!(repository.push().expect("publish main"));
 
-    // A commit made on main outside Aeria is not pushed.
-    sandbox.raw_git(
-        repository.root(),
-        &[
-            "-c",
-            "user.name=Ada",
-            "-c",
-            "user.email=",
-            "commit",
-            "--quiet",
-            "--allow-empty",
-            "-m",
-            "direct",
-        ],
-    );
-    assert!(matches!(
-        repository.push(),
-        Err(GitError::MainBranchProtected { branch }) if branch == "main"
-    ));
-
-    // A checkpoint on main moves the work to a contribution branch.
+    // A checkpoint on the published main branch is made there and pushed.
     write_shard(repository.root(), 0x10, &[(id(0x10, 1), 1, "Une", "")]);
-    let outcome = repository.checkpoint(None).expect("checkpoint");
-    assert!(
-        outcome
-            .branch_created
-            .expect("branch")
-            .starts_with("translations/")
-    );
-    assert_eq!(
-        repository.main_branch().expect("main").as_deref(),
-        Some("main")
-    );
-}
-
-#[test]
-fn without_a_remote_a_contribution_is_merged_locally() {
-    let sandbox = Sandbox::new();
-    let repository = sandbox.project("project", "Ada");
-    let root = repository.root().to_owned();
-    write_shard(&root, 0x10, &[(id(0x10, 1), 1, "Un", "")]);
-    repository.checkpoint(None).expect("initial");
-    write_shard(&root, 0x10, &[(id(0x10, 1), 1, "Une", "")]);
-    let branch = repository
-        .checkpoint(None)
-        .expect("checkpoint")
-        .branch_created
-        .expect("contribution branch");
-    let status = repository
-        .contribution_status()
-        .expect("status")
-        .expect("contribution");
-    assert!(status.local);
-    assert_eq!(status.branch.as_deref(), Some(branch.as_str()));
-
-    // A rejected project leaves main untouched and returns to the branch.
-    let main_before = repository.branch_head("main").expect("main");
-    assert!(matches!(
-        repository.merge_contribution_locally(|| Err("invalid".to_owned())),
-        Err(GitError::IncomingRejected { .. })
-    ));
-    assert_eq!(repository.branch_head("main").expect("main"), main_before);
-    assert_eq!(
-        repository.status().expect("status").branch.as_deref(),
-        Some(branch.as_str())
-    );
-
-    let outcome = repository
-        .merge_contribution_locally(|| Ok(()))
-        .expect("merge");
-    assert_eq!(outcome.integration, IntegrateOutcome::FastForward);
-    assert_eq!(outcome.deleted_branch.as_deref(), Some(branch.as_str()));
-    assert_eq!(
-        repository.status().expect("status").branch.as_deref(),
-        Some("main")
-    );
-    assert!(shard_text(&root, 0x10).contains("\"Une\""));
-
-    // With a remote, contributions go through pull requests instead.
-    write_shard(&root, 0x10, &[(id(0x10, 1), 1, "Unes", "")]);
     repository.checkpoint(None).expect("checkpoint");
-    repository
-        .set_remote("origin", &sandbox.bare_remote())
-        .expect("remote");
-    assert!(matches!(
-        repository.merge_contribution_locally(|| Ok(())),
-        Err(GitError::InvalidSettings { .. })
-    ));
-}
+    assert_eq!(current_branch(&repository), "main");
+    assert!(repository.push().expect("push main"));
 
-#[test]
-fn the_first_checkpoint_starts_the_configured_main_branch() {
-    let sandbox = Sandbox::new();
-    let repository = sandbox.project("project", "Ada");
-    let root = repository.root().to_owned();
-    sandbox.raw_git(&root, &["symbolic-ref", "HEAD", "refs/heads/master"]);
-    repository
-        .set_collaboration(&CollaborationSettings {
-            main_branch: Some("main".to_owned()),
-        })
-        .expect("settings");
-    write_shard(&root, 0x10, &[(id(0x10, 1), 1, "Un", "")]);
-    let outcome = repository.checkpoint(None).expect("initial");
-    assert_eq!(outcome.branch_created, None);
+    // A clone records the remote's default branch.
+    let clone = sandbox.clone(&remote, "clone", "Grace");
     assert_eq!(
-        repository.status().expect("status").branch.as_deref(),
+        clone.remote_default_branch().expect("default").as_deref(),
         Some("main")
     );
-    assert_eq!(repository.branch_head("master").expect("master"), None);
+    assert_eq!(repository.remote_default_branch().expect("default"), None);
 }
 
 #[test]
-fn branches_are_deleted_only_on_request_and_unmerged_ones_only_with_force() {
+fn branches_are_deleted_locally_and_on_the_remote_and_lost_work_needs_force() {
     let sandbox = Sandbox::new();
+    let remote = sandbox.bare_remote();
     let repository = sandbox.project("project", "Ada");
     let root = repository.root().to_owned();
+    repository.set_remote("origin", &remote).expect("remote");
     write_shard(&root, 0x10, &[(id(0x10, 1), 1, "Un", "")]);
     repository.checkpoint(None).expect("initial");
+    repository.push().expect("publish main");
+
+    // A published branch with work main does not have.
+    repository.create_branch("feature").expect("branch");
     write_shard(&root, 0x10, &[(id(0x10, 1), 1, "Une", "")]);
-    let merged = repository
-        .checkpoint(None)
-        .expect("checkpoint")
-        .branch_created
-        .expect("branch");
-    repository
-        .merge_contribution_locally(|| Ok(()))
-        .expect("merge");
-    // The local merge deleted its branch; recreate a merged and an unmerged one.
-    sandbox.raw_git(&root, &["branch", &merged]);
+    repository.checkpoint(None).expect("feature work");
+    repository.push().expect("publish feature");
+    // A local branch with work that exists nowhere else.
+    sandbox.raw_git(&root, &["switch", "--quiet", "main"]);
+    repository.create_branch("draft").expect("branch");
     write_shard(&root, 0x10, &[(id(0x10, 1), 1, "Unes", "")]);
-    let unmerged = repository
-        .checkpoint(None)
-        .expect("checkpoint")
-        .branch_created
-        .expect("branch");
+    repository.checkpoint(None).expect("draft work");
     sandbox.raw_git(&root, &["switch", "--quiet", "main"]);
 
-    assert!(repository.is_merged_into_main(&merged).expect("merged"));
-    assert!(!repository.is_merged_into_main(&unmerged).expect("unmerged"));
     assert!(
-        repository.delete_branch("main", true).is_err(),
+        repository.delete_branch("main", false, true).is_err(),
         "the current branch stays"
     );
-    assert!(repository.delete_branch(&unmerged, false).is_err());
+    // Published work is kept by the remote branch; deleting both loses it.
+    assert_eq!(repository.lost_commits("feature", false).expect("lost"), 0);
+    assert_eq!(repository.lost_commits("feature", true).expect("lost"), 1);
+    assert_eq!(repository.lost_commits("draft", false).expect("lost"), 1);
+    assert!(repository.delete_branch("draft", false, false).is_err());
     repository
-        .delete_branch(&merged, false)
-        .expect("delete merged");
+        .delete_branch("draft", false, true)
+        .expect("delete draft with force");
+    assert_eq!(repository.branch_head("draft").expect("head"), None);
+
+    assert!(repository.delete_branch("feature", true, false).is_err());
     repository
-        .delete_branch(&unmerged, true)
-        .expect("delete unmerged with force");
-    assert_eq!(repository.branch_head(&merged).expect("head"), None);
-    assert_eq!(repository.branch_head(&unmerged).expect("head"), None);
+        .delete_branch("feature", false, false)
+        .expect("delete the local branch only");
+    assert_eq!(repository.branch_head("feature").expect("head"), None);
+    assert_eq!(
+        repository
+            .lost_remote_commits("origin/feature")
+            .expect("lost"),
+        1
+    );
+    assert!(
+        repository
+            .delete_remote_branch("origin/feature", false)
+            .is_err()
+    );
+    repository
+        .delete_remote_branch("origin/feature", true)
+        .expect("delete on the remote");
+    assert!(
+        !repository
+            .branches()
+            .expect("branches")
+            .iter()
+            .any(|branch| branch.name == "origin/feature")
+    );
+    let remote_heads = sandbox.raw_git(&root, &["ls-remote", "--heads", "origin"]);
+    assert!(
+        !remote_heads.contains("refs/heads/feature"),
+        "{remote_heads}"
+    );
+    assert!(remote_heads.contains("refs/heads/main"), "{remote_heads}");
+
+    // A local branch and its upstream go together.
+    repository.create_branch("merged").expect("branch");
+    repository.push().expect("publish merged");
+    sandbox.raw_git(&root, &["switch", "--quiet", "main"]);
+    assert_eq!(repository.lost_commits("merged", true).expect("lost"), 0);
+    repository
+        .delete_branch("merged", true, false)
+        .expect("delete both");
+    assert_eq!(repository.branch_head("merged").expect("head"), None);
+    let remote_heads = sandbox.raw_git(&root, &["ls-remote", "--heads", "origin"]);
+    assert!(
+        !remote_heads.contains("refs/heads/merged"),
+        "{remote_heads}"
+    );
 }

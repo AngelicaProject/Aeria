@@ -314,6 +314,9 @@ pub struct TranslationOverlayDto {
     pub translator_note: Option<String>,
     /// The source the translation was written for, while it is fuzzy.
     pub previous_source: Option<String>,
+    /// Terms a person decided do not apply to the string.
+    #[serde(default)]
+    pub term_exceptions: Vec<String>,
 }
 
 impl From<Translation> for TranslationOverlayDto {
@@ -323,6 +326,7 @@ impl From<Translation> for TranslationOverlayDto {
             fuzzy: translation.fuzzy,
             translator_note: translation.note,
             previous_source: translation.previous,
+            term_exceptions: translation.term_exceptions,
         }
     }
 }
@@ -351,6 +355,7 @@ mod tests {
                             fuzzy: true,
                             note: Some("check later".to_owned()),
                             previous: None,
+                            term_exceptions: Vec::new(),
                         }),
                     },
                     CellView {
@@ -400,5 +405,102 @@ mod tests {
             RecentProjectDto::from_registry_entry(missing).availability,
             RecentProjectAvailability::RepositoryMissing
         );
+    }
+}
+
+/// One finding of the checks, as data the renderer words in its language;
+/// `message` is the English text for kinds it does not know.
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IssueDto {
+    /// `lineBreak`, `structure`, `forbiddenTerm`, `mark`, `mixedAlphabets`,
+    /// `bothGenders`, `termNotUsed`, `genderNotVaried`,
+    /// `genderInOtherLanguages`, `machinePhrasing`, `staleTermException`, or
+    /// `other`.
+    pub kind: String,
+    /// What may be wrong rather than a problem: it does not keep the
+    /// translation from being saved or exported.
+    #[serde(default)]
+    pub advice: bool,
+    /// What groups issues in the summary, and filters by them.
+    pub group: String,
+    pub message: String,
+    pub term: Option<String>,
+    pub translation: Option<String>,
+    pub variant: Option<String>,
+    /// The word with mixed alphabets, the form with both genders, or the
+    /// mark as `U+0301`.
+    pub text: Option<String>,
+    pub phrases: Vec<String>,
+}
+
+impl From<&aeria_po::Issue> for IssueDto {
+    fn from(issue: &aeria_po::Issue) -> Self {
+        let base = Self {
+            group: issue.group(),
+            message: issue.to_string(),
+            advice: !issue.is_problem(),
+            ..Self::default()
+        };
+        match issue {
+            aeria_po::Issue::LineBreak => Self {
+                kind: "lineBreak".to_owned(),
+                ..base
+            },
+            aeria_po::Issue::Structure(_) => Self {
+                kind: "structure".to_owned(),
+                ..base
+            },
+            aeria_po::Issue::ForbiddenTerm {
+                term,
+                translation,
+                variant,
+            } => Self {
+                kind: "forbiddenTerm".to_owned(),
+                term: Some(term.clone()),
+                translation: Some(translation.clone()),
+                variant: Some(variant.clone()),
+                ..base
+            },
+            aeria_po::Issue::Mark(mark) => Self {
+                kind: "mark".to_owned(),
+                text: Some(format!("U+{:04X}", u32::from(*mark))),
+                ..base
+            },
+            aeria_po::Issue::MixedAlphabets(word) => Self {
+                kind: "mixedAlphabets".to_owned(),
+                text: Some(word.clone()),
+                ..base
+            },
+            aeria_po::Issue::BothGenders(form) => Self {
+                kind: "bothGenders".to_owned(),
+                text: Some(form.clone()),
+                ..base
+            },
+            aeria_po::Issue::TermNotUsed { term, translation } => Self {
+                kind: "termNotUsed".to_owned(),
+                term: Some(term.clone()),
+                translation: Some(translation.clone()),
+                ..base
+            },
+            aeria_po::Issue::GenderNotVaried => Self {
+                kind: "genderNotVaried".to_owned(),
+                ..base
+            },
+            aeria_po::Issue::GenderInOtherLanguages => Self {
+                kind: "genderInOtherLanguages".to_owned(),
+                ..base
+            },
+            aeria_po::Issue::MachinePhrasing(phrases) => Self {
+                kind: "machinePhrasing".to_owned(),
+                phrases: phrases.clone(),
+                ..base
+            },
+            aeria_po::Issue::StaleTermException(term) => Self {
+                kind: "staleTermException".to_owned(),
+                term: Some(term.clone()),
+                ..base
+            },
+        }
     }
 }

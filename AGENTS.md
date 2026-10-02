@@ -20,7 +20,7 @@ Then load the canonical project documentation for the affected area:
 - Game source (reading the installed game): `docs/architecture/source.md`
 - Structured strings / SeString macros: `docs/architecture/strings.md`
 - The project's PO files, translation identity, game updates, checks: `docs/architecture/po-project.md`
-- Git collaboration inside Aeria: `docs/architecture/git.md` and `docs/formats/collaboration-v1.md`
+- Git collaboration inside Aeria: `docs/architecture/git.md`
 - Search and translation memory: `docs/architecture/search.md`
 - Project knowledge (style and terms): `docs/architecture/knowledge.md` and `docs/formats/knowledge-v1.md`
 - Machine translation: `docs/architecture/translate.md`

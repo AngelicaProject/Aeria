@@ -28,7 +28,7 @@ po/                         the game's text and its translation, as PO files
   BNpcName/3000.po
   ...
 aeria-knowledge/            project knowledge: style.md, terms.csv
-aeria-pack.json, aeria-fonts.json, fonts/, aeria-collaboration.json, ...
+aeria-pack.json, aeria-fonts.json, fonts/, ...
 ```
 
 Every translatable string of the game is an entry in `po/`, translated or
@@ -101,12 +101,37 @@ msgstr "Ателина из Гильдии лучников хочет убед�
 | `#.` lines | the other client languages, the speaker or kind of line, the row's other cells, what the macros do | Aeria, from the game; never edited by hand |
 | `# ` lines | translator notes | people |
 | `#, fuzzy` and `#\| msgid` | a game update changed the source; `#\| msgid` is the source the translation was written for | Aeria, in a game update |
+| `#, aeria-term-exception: <term>` | a term of the glossary does not apply to this string; see [Term exceptions](#term-exceptions) | people, through Aeria |
 | `msgctxt` | the entry's identity; see [Identity](#identity) | Aeria |
 | `msgid` | the source text as macro text ([`strings.md`](./strings.md#macro-text)) | Aeria |
 | `msgstr` | the translation as macro text; empty while there is none | people and machine translation |
 
-`fuzzy` is the only mark. It states a fact of the game, not an opinion of a
-translator: the source changed after the translation was written.
+`fuzzy` states a fact of the game, not an opinion of a translator: the
+source changed after the translation was written. A term exception is the one
+decision of a person that Aeria reads: both are flags of the same `#,` line,
+`fuzzy` first, then one `aeria-term-exception` flag per term in the order
+they were added (`#, fuzzy, aeria-term-exception: the Maelstrom`). Aeria
+keeps no other flag; a file written by another tool loses its other flags
+when Aeria writes it.
+
+### Term exceptions
+
+A glossary term can mean something else in a string: `maelstrom` is the
+Grand Company in one string and a whirlpool in another. A person marks such a
+string with an exception for the term. In that string the checks neither ask
+for the term's translation nor forbid its variants, and machine translation
+is told the term does not apply (see
+[`translate.md`](./translate.md#the-request)). Only a person adds or removes
+an exception, from the editor or from search; machine translation never
+does, so which terms apply to a string never depends on AI judgment.
+
+The flag holds the term as the glossary writes it and is compared ignoring
+case. A term with a comma cannot be an exception, since flags are separated
+by commas. An exception stays when the translation changes, since it is about
+the meaning of the source; it is dropped when a game update changes the
+source (see [Game updates](#game-updates)). An exception that names no term
+of the source, because the term left the glossary or matches no longer, is
+advice.
 
 Entries are ordered as the game orders them: play order in a scene, row and
 column order elsewhere. The `#.` lines are derived only from the game, so
@@ -210,9 +235,16 @@ when it:
   writing system (`цели无属性`). A letter the source spells with, such as the
   æ of Pandæmonium, is not a slip.
 
+Each problem and piece of advice is an `Issue` with its data and its English
+message, so an interface can word it in its own language (see
+[`search.md`](./search.md#project-search)).
+
 Advice does not make a translation wrong: a term whose translation does not
 seem to be used, a condition on the player character's gender that may be
-missing, machine phrasing. A file has a problem when a line breaks the PO
+missing, machine phrasing, a term exception that names no term of the
+source. Advice is for the person who reviews a translation: saving,
+export, `aeria-check`, and machine translation ignore it, and it is never
+sent to a model. A file has a problem when a line breaks the PO
 format or is a Git conflict marker, or a `msgctxt` is not an identity or
 appears twice.
 
@@ -236,7 +268,7 @@ reverted. The desktop offers it when it opens a project for an older version.
    | Previous entry | New entry with the same `msgctxt` | Result |
    | --- | --- | --- |
    | same `msgid` | exists | translation, notes, and marks are kept |
-   | other `msgid` | exists | translation and notes are kept; `#, fuzzy` and `#\| msgid` with the previous source |
+   | other `msgid` | exists | translation and notes are kept; `#, fuzzy` and `#\| msgid` with the previous source; term exceptions are dropped |
    | any | none | the entry becomes obsolete (`#~`) at the end of its file, with its translation and notes |
    | none | exists | a new entry with an empty `msgstr` |
 
@@ -286,5 +318,6 @@ per sheet. Most column count changes are in numeric columns.
 
 ## Open question
 
-- Search and translation memory over the files of `po/` (`aeria-search`
-  indexes the game only).
+- Translation memory over the files of `po/` (`aeria-search` indexes the
+  game only; project search reads the files, see
+  [`search.md`](./search.md#project-search)).

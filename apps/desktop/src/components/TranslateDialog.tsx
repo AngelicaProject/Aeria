@@ -1,10 +1,11 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Dialog } from "radix-ui";
-import { normalizeCommandError, translationNameSheets, translationStart, translationStatus, translationStop } from "../ipc";
-import type { CommandError, ProjectSheetDto, SheetProgressDto, TranslationStatus, TranslationStop } from "../types";
+import { normalizeCommandError, translationNameSheets, translationRetry, translationStart, translationStatus, translationStop } from "../ipc";
+import type { CommandError, ProjectSheetDto, SheetProgressDto, SourceBinding, TranslationStatus, TranslationStop } from "../types";
 import type { MessageKey } from "../i18n/translate";
 import { buildSheetTree, findSheetMatches, type SheetTreeEntry, type SheetTreeFolder } from "../sheetExplorer";
 import { ErrorBanner } from "./ErrorBanner";
+import { TranslationRejections } from "./TranslationRejections";
 import { UiIcon } from "../ui/primitives/UiIcon";
 import { useI18n, type Translate } from "../ui/i18n";
 import { usePreferences } from "../ui/preferences";
@@ -19,6 +20,8 @@ type TranslateDialogProps = {
   onOpenSettings: () => void;
   /** A run wrote files: sheets and progress should be read again. */
   onFilesChanged: () => void;
+  /** Opens a string in the editor. */
+  onRevealBinding?: ((binding: SourceBinding) => void) | undefined;
 };
 
 /** How often a running translation's progress is read. */
@@ -86,7 +89,7 @@ function Check({ checked, mixed, label, onChange }: { checked: boolean; mixed: b
 }
 
 /** Machine translation of chosen sheets and folders of sheets, and its progress. */
-export const TranslateDialog = memo(function TranslateDialog({ open, onOpenChange, sheets, progress, sheetName, onOpenSettings, onFilesChanged }: TranslateDialogProps) {
+export const TranslateDialog = memo(function TranslateDialog({ open, onOpenChange, sheets, progress, sheetName, onOpenSettings, onFilesChanged, onRevealBinding }: TranslateDialogProps) {
   const { t, locale, formatNumber } = useI18n();
   const { preferences } = usePreferences();
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set());
@@ -177,6 +180,16 @@ export const TranslateDialog = memo(function TranslateDialog({ open, onOpenChang
     setError(null);
     try {
       await translationStart(scopeOf(tree.children, selected, leaves, allNames.length), fuzzy, preferences.translationModel, preferences.translationEffort || null);
+      await readStatus();
+    } catch (reason) {
+      setError(normalizeCommandError(reason));
+    }
+  }
+
+  async function retry(contexts: string[]) {
+    setError(null);
+    try {
+      await translationRetry(contexts, preferences.translationModel, preferences.translationEffort || null);
       await readStatus();
     } catch (reason) {
       setError(normalizeCommandError(reason));
@@ -288,14 +301,7 @@ export const TranslateDialog = memo(function TranslateDialog({ open, onOpenChang
                   {status.message ? <p className="field-hint">{status.message}</p> : null}
                   {status.stop ? <p className="field-hint"><strong>{describeStop(status.stop, t, locale)}</strong></p> : null}
                   {status.rejections.length > 0 ? (
-                    <details className="guide-diagnostics">
-                      <summary>{t("translate.rejections", { count: status.rejections.length })}</summary>
-                      <ul>
-                        {status.rejections.slice(0, 50).map((entry) => (
-                          <li key={entry.context}><span className="mono">{entry.context}</span>: {entry.problems.join("; ")}</li>
-                        ))}
-                      </ul>
-                    </details>
+                    <TranslationRejections rejections={status.rejections} total={status.rejected} running={running} onReveal={onRevealBinding ? (binding) => { onOpenChange(false); onRevealBinding(binding); } : undefined} onRetry={(contexts) => void retry(contexts)} />
                   ) : null}
                 </div>
               ) : null}

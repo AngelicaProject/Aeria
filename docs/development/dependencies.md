@@ -31,6 +31,9 @@ project's terms, and `serde` and `thiserror`, matching `aeria-projects`.
 
 ## Source, search, and export dependencies
 
+`aeria-po` uses `regex` (MIT OR Apache-2.0), already in the graph, for the
+patterns of project search and replace.
+
 `aeria-sqpack` uses `crc32fast` (MIT OR Apache-2.0) for the CRC-32 path
 hashes of SqPack indexes and `flate2` (MIT OR Apache-2.0) to inflate SqPack
 data blocks. Both are already in the desktop dependency graph through Tauri.
@@ -76,6 +79,9 @@ their license texts; the OFL allows bundling them with software.
   Credential Manager, the Secret Service on Linux, and the macOS Keychain.
 - `getrandom` (MIT OR Apache-2.0), already in the graph through `p256`, to draw
   signing keys from the operating system random source.
+
+`aeria-knowledge` uses `aho-corasick` to find a string's glossary terms in
+one pass.
 
 `aeria-model` uses `reqwest`, `rustls`, and `keyring` as `aeria-publish`
 does, for the Codex Responses API and the ChatGPT sign-in, whose refresh token

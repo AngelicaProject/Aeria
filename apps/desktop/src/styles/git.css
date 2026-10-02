@@ -266,12 +266,15 @@ button.git-change:hover { background: var(--hover); }
 .git-branch-item:disabled { cursor: default; }
 .git-branch-item:disabled:not(.current) { color: var(--fg-faint); }
 .git-branch-item.current { background: var(--hover); }
+.git-branch-row { display: flex; align-items: flex-start; gap: 2px; }
+.git-branch-row .git-branch-delete { flex: none; margin-top: 2px; opacity: 0; }
+.git-branch-row:hover .git-branch-delete, .git-branch-row .git-branch-delete:focus-visible { opacity: 1; }
+.git-branch-delete-option { margin-top: 12px; }
+.confirm-dialog .git-feedback { margin-top: 12px; }
 .git-branch-check { display: inline-grid; flex: none; place-items: center; width: 16px; height: 18px; color: var(--accent-text); }
 .git-branch-text { display: grid; gap: 1px; min-width: 0; }
 .git-branch-name { display: flex; align-items: center; gap: 6px; min-width: 0; line-height: 18px; }
 .git-branch-name .mono { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.git-branch-badge { flex: none; padding: 0 5px; border-radius: var(--radius-xs); background: var(--accent-soft); color: var(--accent-text); font-size: var(--text-2xs); line-height: 16px; }
-.git-branch-badge.muted { background: var(--hover); color: var(--fg-subtle); }
 .git-branch-hint { overflow: hidden; color: var(--fg-subtle); font-size: var(--text-2xs); text-overflow: ellipsis; white-space: nowrap; }
 .git-branch-note { margin: 0; padding: 4px 8px; color: var(--fg-subtle); font-size: var(--text-xs); }
 .git-branch-foot { display: flex; align-items: center; gap: 4px; padding-top: 4px; border-top: 1px solid var(--line); }

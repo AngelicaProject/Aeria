@@ -11,6 +11,7 @@ import { useMacroView } from "../ui/useMacroView";
 import { speakerMarkers } from "../macroTokens";
 import { ReviewDot, stateLabel, stringState } from "./ReviewDot";
 import { OtherLanguages } from "./OtherLanguages";
+import { StringFindings } from "./StringFindings";
 import { StringHistory } from "./StringHistory";
 import { useI18n } from "../ui/i18n";
 import { usePreferences } from "../ui/preferences";
@@ -408,6 +409,7 @@ const TranslationEditorImpl = forwardRef<TranslationEditorHandle, TranslationEdi
                 { value: "note", label: <>{t("editor.note")}{noteDirty ? <span className="dirty-mark" aria-label={t("common.edited")} /> : null}</> },
                 { value: "languages", label: t("editor.languages") },
                 { value: "history", label: t("editor.history") },
+                { value: "checks", label: t("editor.checks") },
               ]}
             />
           </div>
@@ -418,6 +420,10 @@ const TranslationEditorImpl = forwardRef<TranslationEditorHandle, TranslationEdi
                 presentation={sourceMode === "code" ? "code" : "chips"}
                 onPick={cellBusy ? undefined : (pick) => targetApi.current?.apply(pick)}
               />
+            </div>
+          ) : sideTab === "checks" ? (
+            <div className="editor-checks">
+              <StringFindings binding={selectedCell.sourceBinding} revision={historyRevision} />
             </div>
           ) : sideTab === "history" ? (
             <div className="editor-history">

@@ -3,18 +3,20 @@ import { Popover } from "radix-ui";
 import type { GitBranchDto } from "../types";
 import type { MessageKey } from "../i18n/translate";
 import { useI18n } from "../ui/i18n";
+import { IconButton } from "../ui/primitives/IconButton";
 import { UiIcon } from "../ui/primitives/UiIcon";
 
 type GitBranchPickerProps = {
   branches: readonly GitBranchDto[];
   current: string | null;
-  mainBranch: string | null;
   /** Why switching is not possible right now, such as uncommitted translations. */
   switchBlocked: string | null;
   disabled: boolean;
   blockLabels: Readonly<Record<NonNullable<GitBranchDto["blocked"]>, MessageKey>>;
   onSwitch: (name: string) => void;
   onCreate: (name: string) => void;
+  /** Asks to delete a branch other than the current one. */
+  onDelete: (branch: GitBranchDto) => void;
 };
 
 /** `origin/feature` → `feature`: the local name a remote branch checks out as. */
@@ -24,11 +26,12 @@ function localName(remoteBranch: string): string {
 }
 
 /**
- * The branch switcher: local branches (current first, then the main branch,
- * then by name) and remote branches without a local one, which check out as
- * tracking branches. It filters as you type and creates a branch from HEAD.
+ * The branch switcher: local branches (current first, then by name) and
+ * remote branches without a local one, which check out as tracking branches.
+ * It filters as you type, creates a branch from HEAD, and offers to delete
+ * any branch but the current one.
  */
-export function GitBranchPicker({ branches, current, mainBranch, switchBlocked, disabled, blockLabels, onSwitch, onCreate }: GitBranchPickerProps) {
+export function GitBranchPicker({ branches, current, switchBlocked, disabled, blockLabels, onSwitch, onCreate, onDelete }: GitBranchPickerProps) {
   const { t } = useI18n();
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -37,14 +40,14 @@ export function GitBranchPicker({ branches, current, mainBranch, switchBlocked, 
   const { local, remote } = useMemo(() => {
     const locals = branches.filter((branch) => !branch.remote);
     const names = new Set(locals.map((branch) => branch.name));
-    const rank = (branch: GitBranchDto) => (branch.current ? 0 : branch.name === mainBranch ? 1 : 2);
+    const rank = (branch: GitBranchDto) => (branch.current ? 0 : 1);
     return {
       local: [...locals].sort((a, b) => rank(a) - rank(b) || a.name.localeCompare(b.name)),
       remote: branches
         .filter((branch) => branch.remote && !branch.name.endsWith("/HEAD") && !names.has(localName(branch.name)))
         .sort((a, b) => a.name.localeCompare(b.name)),
     };
-  }, [branches, mainBranch]);
+  }, [branches]);
 
   const needle = query.trim().toLocaleLowerCase();
   const matches = (branch: GitBranchDto) => needle === "" || branch.name.toLocaleLowerCase().includes(needle);
@@ -70,7 +73,7 @@ export function GitBranchPicker({ branches, current, mainBranch, switchBlocked, 
     const blocked = branch.blocked ? t(blockLabels[branch.blocked]) : null;
     const unavailable = !branch.current && (blocked !== null || switchBlocked !== null);
     return (
-      <li key={branch.name}>
+      <li key={branch.name} className="git-branch-row">
         <button
           type="button"
           className={branch.current ? "git-branch-item current" : "git-branch-item"}
@@ -83,12 +86,20 @@ export function GitBranchPicker({ branches, current, mainBranch, switchBlocked, 
           <span className="git-branch-text">
             <span className="git-branch-name">
               <span className="mono">{branch.name}</span>
-              {branch.name === mainBranch ? <span className="git-branch-badge">{t("git.branch.main")}</span> : null}
-              {branch.merged ? <span className="git-branch-badge muted">{t("git.branch.merged")}</span> : null}
             </span>
             {blocked ? <span className="git-branch-hint">{blocked}</span> : branch.upstream ? <span className="git-branch-hint mono">{branch.upstream}</span> : null}
           </span>
         </button>
+        {branch.current ? null : (
+          <IconButton
+            className="git-branch-delete"
+            icon="trash"
+            size="xs"
+            label={t("git.branch.deleteNamed", { name: branch.name })}
+            disabled={disabled}
+            onClick={() => { setOpen(false); setQuery(""); onDelete(branch); }}
+          />
+        )}
       </li>
     );
   };

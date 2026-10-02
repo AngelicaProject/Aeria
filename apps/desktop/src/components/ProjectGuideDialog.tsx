@@ -109,10 +109,14 @@ export const ProjectGuideDialog = memo(function ProjectGuideDialog({ open, initi
     setRows((current) => current.map((row) => row.key === key ? { ...row, settled } : row));
   };
 
+  const setMatchCase = (key: number, matchCase: boolean) => {
+    setRows((current) => current.map((row) => row.key === key ? { ...row, matchCase, settled: true } : row));
+  };
+
   const addRow = () => {
     const key = nextKey.current++;
     setQuery("");
-    setRows((current) => [...current, { key, term: "", translation: "", note: "", forbidden: "", settled: true }]);
+    setRows((current) => [...current, { key, term: "", translation: "", note: "", forbidden: "", settled: true, matchCase: false }]);
   };
 
   const close = (next: boolean) => {
@@ -164,6 +168,7 @@ export const ProjectGuideDialog = memo(function ProjectGuideDialog({ open, initi
                   <span role="columnheader">{t("guide.glossary.translation")}</span>
                   <span role="columnheader">{t("guide.glossary.note")}</span>
                   <span role="columnheader">{t("guide.glossary.forbidden")}</span>
+                  <span role="columnheader" title={t("guide.terms.matchCaseHint")}>{t("guide.terms.matchCase")}</span>
                   <span role="columnheader" title={t("guide.terms.settledHint")}>{t("guide.terms.settled")}</span>
                   <span />
                 </div>
@@ -175,6 +180,7 @@ export const ProjectGuideDialog = memo(function ProjectGuideDialog({ open, initi
                       <input className="input" value={row.translation} aria-label={t("guide.glossary.translation")} onChange={(event) => update(row.key, "translation", event.target.value)} />
                       <input className="input" value={row.note} aria-label={t("guide.glossary.note")} onChange={(event) => update(row.key, "note", event.target.value)} />
                       <input className="input" value={row.forbidden} placeholder={t("guide.glossary.forbiddenHint")} aria-label={t("guide.glossary.forbidden")} onChange={(event) => update(row.key, "forbidden", event.target.value)} />
+                      <input type="checkbox" checked={row.matchCase} aria-label={t("guide.terms.matchCase")} title={t("guide.terms.matchCaseHint")} onChange={(event) => setMatchCase(row.key, event.target.checked)} />
                       <input type="checkbox" checked={row.settled} aria-label={t("guide.terms.settled")} title={t("guide.terms.settledHint")} onChange={(event) => setSettled(row.key, event.target.checked)} />
                       <button className="icon-button icon-button-ghost" type="button" aria-label={t("guide.glossary.remove")} title={t("guide.glossary.remove")} onClick={() => setRows((current) => current.filter((candidate) => candidate.key !== row.key))}><UiIcon icon="trash" size="sm" /></button>
                     </div>

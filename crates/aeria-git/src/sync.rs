@@ -1,8 +1,8 @@
 //! Fetch, integrate, and push.
 //!
-//! Integration merges one or more upstream references atomically: either
-//! every merge succeeds and the caller accepts the result, or the branch is
-//! reset to where it started. A PO file both sides changed is joined per
+//! Integration merges the upstream atomically: either the merge succeeds and
+//! the caller accepts the result, or the branch is reset to where it
+//! started. A PO file both sides changed is joined per
 //! string; only strings both sides changed differently are reported.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -66,42 +66,6 @@ impl GitRepository {
         Ok(())
     }
 
-    /// Updates only the remote-tracking ref of the main branch from the
-    /// current branch's sync remote, for noticing that main moved. It never
-    /// asks for credentials, so it can run in the background; a remote that
-    /// needs a new sign-in fails instead. Returns whether the ref changed.
-    ///
-    /// Without a main branch, a branch, or a remote there is nothing to
-    /// fetch and the result is `false`.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the fetch fails, for example without network
-    /// access.
-    pub fn fetch_main_branch(&self) -> Result<bool, GitError> {
-        let (Some(main), Some(branch)) = (self.main_branch()?, self.current_branch()?) else {
-            return Ok(false);
-        };
-        let remote = match self.sync_remote(&branch) {
-            Ok(remote) => remote,
-            Err(GitError::NoRemote) => return Ok(false),
-            Err(error) => return Err(error),
-        };
-        let tracking = format!("refs/remotes/{remote}/{main}");
-        let before = self.verify_ref(&tracking)?;
-        let refspec = format!("+refs/heads/{main}:{tracking}");
-        self.run(&[
-            "-c",
-            "credential.interactive=never",
-            "fetch",
-            "--quiet",
-            "--no-tags",
-            &remote,
-            &refspec,
-        ])?;
-        Ok(self.verify_ref(&tracking)? != before)
-    }
-
     /// Fetches every remote, for listing their branches.
     ///
     /// # Errors
@@ -114,9 +78,8 @@ impl GitRepository {
         Ok(())
     }
 
-    /// Integrates already fetched commits into the current branch: its
-    /// upstream and, on a contribution branch under the pull-request policy,
-    /// the remote main branch.
+    /// Integrates the already fetched commits of the current branch's
+    /// upstream.
     ///
     /// Translation changes must be checkpointed first. PO files that
     /// conflict textually are joined per string (see
@@ -143,40 +106,20 @@ impl GitRepository {
         let branch = self.require_branch()?;
         self.require_clean_translations()?;
 
-        let mut sources = Vec::new();
-        if let Some(upstream) = self.upstream(&branch)? {
-            sources.push(upstream);
-        }
-        if let Some(main) = self.main_branch()?
-            && main != branch
-        {
-            let remote = self.sync_remote(&branch)?;
-            let main_ref = format!("{remote}/{main}");
-            if self
-                .verify_ref(&format!("refs/remotes/{main_ref}"))?
-                .is_some()
-                && !sources.contains(&main_ref)
-            {
-                sources.push(main_ref);
-            }
-        }
-        if sources.is_empty() {
+        let Some(upstream) = self.upstream(&branch)? else {
             return Ok(IntegrateOutcome::UpToDate);
-        }
+        };
         let Some(before) = self.head()? else {
             return Err(GitError::UnbornHead);
         };
 
-        let mut outcome = IntegrateOutcome::UpToDate;
-        for source in &sources {
-            match self.merge_from(source, resolutions) {
-                Ok(step) => outcome = outcome.max(step),
-                Err(error) => {
-                    self.reset_to(&before)?;
-                    return Err(error);
-                }
+        let outcome = match self.merge_from(&upstream, resolutions) {
+            Ok(outcome) => outcome,
+            Err(error) => {
+                self.reset_to(&before)?;
+                return Err(error);
             }
-        }
+        };
         if outcome.changed_working_tree()
             && let Err(reason) = accept()
         {
@@ -301,10 +244,6 @@ impl GitRepository {
             let (ahead, _) = self.ahead_behind(&upstream)?;
             if ahead == 0 {
                 return Ok(false);
-            }
-            // The published main branch changes only through pull requests.
-            if self.main_branch()?.as_deref() == Some(branch.as_str()) {
-                return Err(GitError::MainBranchProtected { branch });
             }
             let merge_key = format!("branch.{branch}.merge");
             let (merge_ref, _) = self

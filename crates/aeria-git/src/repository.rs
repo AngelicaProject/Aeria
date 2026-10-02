@@ -6,7 +6,6 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::GitError;
-use crate::collaboration::{COLLABORATION_FILE, CollaborationSettings};
 use crate::entries::{EntryChange, PO_DIR, is_po_path, summarize_changes};
 use crate::process::{GitExecutable, require_success};
 
@@ -25,10 +24,9 @@ pub const SETTINGS_FILE: &str = "aeria.json";
 /// GitHub from released packs, so it belongs to the project like its settings.
 pub const FEED_WORKFLOW_FILE: &str = ".github/workflows/harmonia-feed.yml";
 /// Every project path a checkpoint commits besides `po/`.
-pub const PROJECT_PATHS: [&str; 9] = [
+pub const PROJECT_PATHS: [&str; 8] = [
     SETTINGS_FILE,
     ATTRIBUTES_FILE,
-    COLLABORATION_FILE,
     PACK_SETTINGS_FILE,
     FONT_SETTINGS_FILE,
     FONTS_DIR,
@@ -166,9 +164,6 @@ pub struct CommitSummary {
 pub struct CheckpointOutcome {
     pub commit: CommitSummary,
     pub changes: Vec<EntryChange>,
-    /// The contribution branch created for this checkpoint under the
-    /// pull-request policy, if any.
-    pub branch_created: Option<String>,
 }
 
 impl GitRepository {
@@ -569,15 +564,6 @@ impl GitRepository {
         Ok(options)
     }
 
-    /// Returns the project-shared collaboration settings.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error for invalid or unreadable settings.
-    pub fn collaboration(&self) -> Result<CollaborationSettings, GitError> {
-        CollaborationSettings::load(&self.root)
-    }
-
     /// Lists configured remotes with their fetch URLs.
     ///
     /// # Errors
@@ -706,9 +692,8 @@ impl GitRepository {
     ///
     /// Only `po/` and the project files of [`PROJECT_PATHS`] are committed;
     /// other staged or unstaged files are left untouched. A blank `message`
-    /// is replaced with a deterministic summary of the string changes. Under the pull-request policy a checkpoint on
-    /// the main branch first moves the uncommitted work to a new contribution
-    /// branch.
+    /// is replaced with a deterministic summary of the string changes. The
+    /// commit is made on the current branch.
     ///
     /// # Errors
     ///
@@ -726,33 +711,6 @@ impl GitRepository {
             return Err(GitError::NothingToCommit);
         }
 
-        // Work never lands on the main branch directly: a checkpoint there
-        // moves the uncommitted work to a new contribution branch first. The
-        // main branch comes from the committed settings, so committing a
-        // settings change does not redirect its own checkpoint. Only the
-        // first commit of a repository is made on the current branch.
-        // The first commit of a repository creates the main branch. When the
-        // project names a main branch other than the unborn one `git init`
-        // chose (for example `main` against `init.defaultBranch=master`), the
-        // unborn branch is renamed first, so the history starts on it.
-        if self.head()?.is_none()
-            && let Some(configured) = self.collaboration()?.main_branch
-            && self.current_branch()?.as_deref() != Some(configured.as_str())
-        {
-            self.validate_branch_name(&configured)?;
-            let reference = format!("refs/heads/{configured}");
-            self.run(&["symbolic-ref", "HEAD", &reference])?;
-        }
-        let main = self.main_branch_from(&self.committed_collaboration()?)?;
-        let branch_created = match (self.head()?, self.current_branch()?, main) {
-            (Some(_), Some(current), Some(main)) if current == main => {
-                let name = self.new_contribution_branch_name()?;
-                self.run(&["switch", "--quiet", "-c", &name])?;
-                Some(name)
-            }
-            _ => None,
-        };
-
         let message = match message.map(str::trim).filter(|text| !text.is_empty()) {
             Some(message) => message.to_owned(),
             None if changes.is_empty() => "Update project settings".to_owned(),
@@ -761,11 +719,7 @@ impl GitRepository {
         self.commit_managed_paths(identity_options, &paths, &message)?;
 
         let commit = self.commit("HEAD")?;
-        Ok(CheckpointOutcome {
-            commit,
-            changes,
-            branch_created,
-        })
+        Ok(CheckpointOutcome { commit, changes })
     }
 
     /// Stages and commits exactly the given Aeria-managed paths.
@@ -802,93 +756,34 @@ impl GitRepository {
         Ok(!self.run(&args)?.is_empty())
     }
 
-    /// Writes project-shared collaboration settings (the main branch).
-    /// Nothing is committed; the change is committed with the next
-    /// checkpoint.
+    /// The default branch of the sync remote, as Git last recorded it
+    /// (`<remote>/HEAD`, set by a clone or `git remote set-head`); `None`
+    /// without a branch, a remote, or that record. A hosting service runs
+    /// workflows from this branch.
     ///
     /// # Errors
     ///
-    /// Returns [`GitError::InvalidInput`] for an invalid main branch, or an
-    /// error when writing fails.
-    pub fn set_collaboration(&self, settings: &CollaborationSettings) -> Result<(), GitError> {
-        if let Some(branch) = &settings.main_branch {
-            self.validate_branch_name(branch)?;
-        }
-        let text = settings.to_canonical_json();
-        CollaborationSettings::parse(&text)?;
-        let path = self.root.join(COLLABORATION_FILE);
-        fs::write(&path, &text).map_err(|source| GitError::Io {
-            operation: "write collaboration settings",
-            path,
-            source,
-        })?;
-        Ok(())
-    }
-
-    /// The main branch contributions are reviewed into: the configured one,
-    /// else the default branch of the sync remote (`<remote>/HEAD`), else a
-    /// local `main` or `master`, else the current branch of a repository
-    /// without commits. `None` when none of these exists.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error for invalid settings or when Git fails.
-    pub fn main_branch(&self) -> Result<Option<String>, GitError> {
-        self.main_branch_from(&self.collaboration()?)
-    }
-
-    pub(crate) fn main_branch_from(
-        &self,
-        settings: &CollaborationSettings,
-    ) -> Result<Option<String>, GitError> {
-        if let Some(main) = &settings.main_branch {
-            return Ok(Some(main.clone()));
-        }
-        let remote = match self.current_branch()? {
-            Some(branch) => self.sync_remote(&branch).ok(),
-            None => None,
+    /// Returns an error when Git fails.
+    pub fn remote_default_branch(&self) -> Result<Option<String>, GitError> {
+        let Some(branch) = self.current_branch()? else {
+            return Ok(None);
         };
-        if let Some(remote) = remote {
-            let head = format!("refs/remotes/{remote}/HEAD");
-            let output = self
-                .git
-                .output(&self.root, &["symbolic-ref", "--quiet", "--short", &head])?;
-            if output.status.success() {
-                let target = String::from_utf8_lossy(&output.stdout).trim().to_owned();
-                if let Some(branch) = target.strip_prefix(&format!("{remote}/")) {
-                    return Ok(Some(branch.to_owned()));
-                }
-            }
+        let remote = match self.sync_remote(&branch) {
+            Ok(remote) => remote,
+            Err(GitError::NoRemote) => return Ok(None),
+            Err(error) => return Err(error),
+        };
+        let head = format!("refs/remotes/{remote}/HEAD");
+        let output = self
+            .git
+            .output(&self.root, &["symbolic-ref", "--quiet", "--short", &head])?;
+        if !output.status.success() {
+            return Ok(None);
         }
-        for candidate in ["main", "master"] {
-            if self
-                .verify_ref(&format!("refs/heads/{candidate}"))?
-                .is_some()
-                || self
-                    .remote_branches()?
-                    .iter()
-                    .any(|name| name.ends_with(&format!("/{candidate}")))
-            {
-                return Ok(Some(candidate.to_owned()));
-            }
-        }
-        if self.head()?.is_none() {
-            return self.current_branch();
-        }
-        Ok(None)
-    }
-
-    /// The collaboration settings committed in `HEAD`; the default when the
-    /// file is not committed.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when Git fails or the committed file is invalid.
-    pub fn committed_collaboration(&self) -> Result<CollaborationSettings, GitError> {
-        match self.file_at("HEAD", COLLABORATION_FILE)? {
-            None => Ok(CollaborationSettings::default()),
-            Some(bytes) => CollaborationSettings::parse(&String::from_utf8_lossy(&bytes)),
-        }
+        let target = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+        Ok(target
+            .strip_prefix(&format!("{remote}/"))
+            .map(str::to_owned))
     }
 
     /// The content of a project-relative file in a commit; `None` when the
