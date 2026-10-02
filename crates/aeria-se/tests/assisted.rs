@@ -162,6 +162,25 @@ fn layout_and_text_transforms_are_free() {
 }
 
 #[test]
+fn a_letter_case_transform_is_explained_as_what_capitalizes_game_data() {
+    // The game stores "paladin" and shows "Paladin" through the transform;
+    // a translation that drops it shows the name in lower case.
+    let found = constructs("<title-case><sheet ClassJob $n1 0></title-case>").expect("constructs");
+    assert!(found[0].spelling.starts_with("<title-case>"));
+    assert_eq!(found[0].rule, ConstructRule::LetterCase);
+    let legend = found[0].legend();
+    assert!(
+        legend.contains("keep a case transform around game data"),
+        "{legend}"
+    );
+    assert!(
+        legend.contains("<capitalize> in place of <title-case>"),
+        "{legend}"
+    );
+    assert_eq!(found[1].rule, ConstructRule::Keep);
+}
+
+#[test]
 fn a_translation_starts_with_a_speaker_name_exactly_when_the_source_does() {
     assert!(check_assisted_structure("(-???-)Hello.", "(-Некто-)Привет.").is_ok());
     assert!(refused("(-???-)Hello.", "Привет.").contains("must start with a speaker name"));

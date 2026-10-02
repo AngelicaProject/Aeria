@@ -261,7 +261,8 @@ meaning) and the rule a translation follows for it:
 | Game data | runtime values (`num`, `player-name`, `string $gs1`), game data references (`sheet`, `noun-en`), icons, sounds, waits, links, opaque constructs, unknown codes, raw bytes | keeps it; it may move or repeat |
 | Formatting | `i`, `b`, `color`, `ui-color`, and their ends | may add, drop, or move it, and closes what it opens as the source does |
 | Condition | `if`, `switch`, `if-gender`, `if-self`, and other conditional selection | may reword, restructure, add, or drop it |
-| Free | `br`, `nbsp`, `shy`, `hyphen`, and text transforms such as `capitalize` | may add or drop it |
+| Free | `br`, `nbsp`, `shy`, `hyphen` | may add or drop it |
+| Letter case | `upper`, `capitalize`, `title-case`, `lower`, `lower-first` | may add or drop it; the explanation says that game data inside one, such as a name the game stores in lower case, shows in that case only through it, so a case transform stays around game data, with `capitalize` in place of `title-case` in a language that capitalizes only the first word |
 
 A malformed source has no constructs and cannot be translated.
 `aeria_se::authoring_reference()` is a short reference of condition syntax

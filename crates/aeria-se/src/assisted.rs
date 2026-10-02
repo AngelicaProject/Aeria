@@ -16,7 +16,11 @@
 //! - conditions such as `<if>`, `<switch>`, and `<if-gender>` may be added,
 //!   dropped, and restructured, as long as they test only values the source
 //!   uses or globals whose meaning is established (`catalog::GLOBALS`);
-//! - line breaks, spaces, and text transforms such as `<capitalize>` are free;
+//! - line breaks and spaces are free;
+//! - letter case transforms such as `<capitalize>` may be added or dropped,
+//!   and the model is told that game data inside one shows in that case
+//!   only through it: a name the game stores in lower case stays lower case
+//!   without it;
 //! - a speaker name (see [`crate::speaker`]) stays exactly when the source has
 //!   one.
 
@@ -62,8 +66,11 @@ pub enum ConstructRule {
     Formatting,
     /// A condition: it may be reworded, restructured, added, or dropped.
     Condition,
-    /// Layout or a text transform: it may be added or dropped.
+    /// Layout: it may be added or dropped.
     Free,
+    /// A letter case transform: it may be added or dropped, but game data
+    /// inside it shows in that case only through it.
+    LetterCase,
 }
 
 /// One construct of a source string, explained for the model.
@@ -94,6 +101,9 @@ impl Construct {
                 "condition: may be reworded, restructured, added, or dropped"
             }
             ConstructRule::Free => "may be added or dropped",
+            ConstructRule::LetterCase => {
+                "letter case: game data inside it, such as a name the game stores in lower case, shows in this case only through it, so keep a case transform around game data, with <capitalize> in place of <title-case> where your language capitalizes only the first word; around text you write it may be dropped"
+            }
         };
         format!("{spelling} — {} ({rule})", self.description)
     }
@@ -110,12 +120,12 @@ fn rule(syntax: &MacroSyntax) -> ConstructRule {
         SemanticFamily::LayoutTextualControl if FREE_LAYOUT.contains(&spec.name) => {
             ConstructRule::Free
         }
-        // `<capitalize>…</capitalize>` only changes its text; `<string $gs1>`
-        // shows a value.
+        // `<capitalize>…</capitalize>` only changes the case of its text;
+        // `<string $gs1>` shows a value.
         SemanticFamily::TranslatableText
             if (0..syntax.args.len()).all(|index| spec.is_translatable_arg(index)) =>
         {
-            ConstructRule::Free
+            ConstructRule::LetterCase
         }
         _ => ConstructRule::Keep,
     }
@@ -381,7 +391,7 @@ fn collect<'a>(document: &'a MacroString, nodes: &'a [SyntaxNode], facts: &mut F
                         close: closes(syntax),
                     }),
                     ConstructRule::Condition => facts.conditions.push((spelling, tested)),
-                    ConstructRule::Free => {}
+                    ConstructRule::Free | ConstructRule::LetterCase => {}
                 }
                 // Game data inside a kept construct is part of its shape;
                 // anything else nested is compared on its own.
