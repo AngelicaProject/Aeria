@@ -1,5 +1,9 @@
 name: CI
 
+# Aeria is released for Windows, so the application is checked on Windows.
+# Linux checks only aeria-check, the one Linux binary Aeria publishes.
+# docs/development/ci.md describes what each job guarantees.
+#
 # Branches are checked through their pull requests; main is checked after
 # every push, which the nightly release waits for.
 on:
@@ -18,7 +22,10 @@ concurrency:
 
 jobs:
   frontend:
-    runs-on: ubuntu-latest
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -39,7 +46,8 @@ jobs:
             sed -n '/start of coverage report/,/end of coverage report/p' test-output.txt
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
-      - run: node --test tools/release/version.test.mjs
+      - name: Test release tooling
+        run: node --test tools/release/version.test.mjs
       - run: pnpm typecheck
       - run: pnpm build
       - uses: actions/upload-artifact@v4
@@ -49,25 +57,12 @@ jobs:
           if-no-files-found: error
 
   rust:
-    runs-on: ubuntu-latest
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version-file: .node-version
-      - name: Install Tauri Linux dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install --yes \
-            libwebkit2gtk-4.1-dev \
-            build-essential \
-            curl \
-            wget \
-            file \
-            libxdo-dev \
-            libssl-dev \
-            libayatana-appindicator3-dev \
-            librsvg2-dev
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: 1.98.1
@@ -76,69 +71,15 @@ jobs:
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-llvm-cov@0.9.1
-      - run: cargo fmt --check
-      - run: cargo build --workspace --locked
-      - run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
-      # Coverage instrumentation on stable does not run doctests.
-      - run: cargo llvm-cov --workspace --locked --lcov --output-path lcov.info
-      - run: cargo test --workspace --locked --doc
-      - name: Coverage report
-        run: |
-          cargo llvm-cov report --html
-          {
-            echo "### Rust coverage (Linux)"
-            echo '<details><summary>Per file</summary>'
-            echo
-            echo '```text'
-            cargo llvm-cov report --summary-only
-            echo '```'
-            echo '</details>'
-          } >> "$GITHUB_STEP_SUMMARY"
-      - uses: actions/upload-artifact@v4
-        with:
-          name: coverage-rust-linux
-          path: |
-            lcov.info
-            target/llvm-cov/html
-          if-no-files-found: error
-
-  po-windows:
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: 1.98.1
-      - uses: Swatinem/rust-cache@v2
-      - run: cargo test -p aeria-po --locked
-
-  desktop-windows:
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: 1.98.1
-          components: llvm-tools-preview
-      - uses: Swatinem/rust-cache@v2
-      - uses: taiki-e/install-action@v2
-        with:
-          tool: cargo-llvm-cov@0.9.1
       - name: Stage pinned MinGit runtime
         run: pwsh -NoProfile -File tools/git/stage-mingit.ps1 -Target win-x64
-      - run: cargo test -p aeria-projects --all-targets --locked
-      - run: cargo test -p aeria-desktop --lib --locked
-      - name: Test Git collaboration with the bundled MinGit
-        shell: pwsh
-        run: |
-          $env:AERIA_GIT_PATH = (Resolve-Path apps/desktop/src-tauri/binaries/mingit/cmd/git.exe).Path
-          cargo test -p aeria-git --all-targets --locked
-      # Every file the path-handling suites create lives under a Cyrillic
-      # folder with a space, as under a Russian Windows user profile. The
+      - run: cargo fmt --check
+      - run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+      # Every test file lives under a Cyrillic folder with a space, as under
+      # a Russian Windows user profile, and Git is the bundled MinGit. The
       # folder name stays short: SQLite on Windows does not accept paths
-      # longer than 260 characters. These suites also measure the coverage
-      # of Windows code.
-      - name: Test path handling under a Cyrillic temporary folder
+      # longer than 260 characters.
+      - name: Test with coverage
         shell: pwsh
         run: |
           $temp = Join-Path $env:RUNNER_TEMP "тест путей"
@@ -146,28 +87,64 @@ jobs:
           $env:TMP = $temp
           $env:TEMP = $temp
           $env:AERIA_GIT_PATH = (Resolve-Path apps/desktop/src-tauri/binaries/mingit/cmd/git.exe).Path
-          cargo llvm-cov --no-report --locked --all-targets -p aeria-sqpack -p aeria-source -p aeria-po -p aeria-search -p aeria-projects -p aeria-git
+          cargo llvm-cov --workspace --all-targets --locked --no-report
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cargo llvm-cov --no-report --locked -p aeria-desktop --lib
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      # cargo llvm-cov does not run doctests on stable Rust.
+      - run: cargo test --workspace --locked --doc
       - name: Coverage report
-        shell: bash
         run: |
           cargo llvm-cov report --lcov --output-path lcov.info
           cargo llvm-cov report --html
+          cargo llvm-cov report --summary-only > coverage.txt
           {
-            echo "### Rust coverage (Windows)"
+            echo "### Rust coverage"
+            echo '```text'
+            head -n 1 coverage.txt
+            tail -n 1 coverage.txt
+            echo '```'
             echo '<details><summary>Per file</summary>'
             echo
             echo '```text'
-            cargo llvm-cov report --summary-only
+            cat coverage.txt
             echo '```'
             echo '</details>'
           } >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v4
         with:
-          name: coverage-rust-windows
+          name: coverage-rust
           path: |
             lcov.info
             target/llvm-cov/html
           if-no-files-found: error
+      # The floor sits below the current line coverage (77.7%). Raise it as
+      # coverage grows; never lower it to pass a change.
+      - name: Coverage floor
+        run: cargo llvm-cov report --fail-under-lines 75
+
+  # aeria-check runs in the CI of translation repositories on Linux; the
+  # release builds it on the same runner.
+  check-linux:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.98.1
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test -p aeria-check --locked
+
+  # The one check the main ruleset requires: it passes only when every job
+  # above passed, so jobs can change without changing the ruleset.
+  ci:
+    if: always()
+    needs: [frontend, rust, check-linux]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every job to pass
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          echo "Results: $RESULTS"
+          for result in $RESULTS; do
+            if [ "$result" != "success" ]; then exit 1; fi
+          done
