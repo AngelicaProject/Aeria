@@ -53,7 +53,8 @@ out; the rest of the knowledge is used.
   conditions on `$gn4` in gendered languages, and how a comparison with the
   player's name (`<if ($gs1 == $gs2)>`) splits a message between the player
   character and someone else, whose words agree inside each branch;
-- how translations are written as macro text;
+- how translations are written as macro text, and that a name the game fills
+  in never declines, so a line puts it where its stored form is right;
 - for Russian, notes on living language and `machine_phrasing`, a word-level
   check for officialese, bookish links, calques, and stacked explanations,
   reported as advice.

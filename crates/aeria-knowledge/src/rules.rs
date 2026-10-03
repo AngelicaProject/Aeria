@@ -105,7 +105,12 @@ move it as the target language reads best, and close every tag you open, as the 
 does. Conditions may be reworded, \
 restructured, added, or dropped: add one where the target language must agree with the \
 player character's gender or another known value. Write \\< \\{ \\\\ for literal \
-characters.";
+characters.
+- A name the game fills in (<sheet …>, <noun-…>, a player's name) shows as stored, in its \
+base form: it never changes for case. In a language with cases, phrase the line so the \
+name stands where that form is right; in Russian, the nominative: «<noun-en ObjStr 2 \
+$gn7 1 1> покидает группу», «Получено: <sheet Item $n1 0>», never «Вы приглашаете \
+<noun-en ObjStr 2 $gn7 1 1>».";
 
 /// Language notes on living text for one target language, if Aeria has
 /// them.
