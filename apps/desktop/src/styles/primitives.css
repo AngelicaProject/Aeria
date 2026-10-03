@@ -145,8 +145,8 @@ textarea.input,
 .checkbox input { margin: 0; }
 
 /* Every checkbox but a switch: a box drawn in the theme's colors, with a
-   check or, for a partly chosen group, a dash. The marks are vector masks
-   painted in --accent-fg, so they stay sharp and centered at any scale. */
+   check or, for a partly chosen group, a dash, in --accent-fg. The check is a
+   polygon (icons stay out of CSS images), so it stays sharp and centered. */
 input[type="checkbox"]:not(.switch) {
   position: relative;
   display: inline-grid;
@@ -161,22 +161,23 @@ input[type="checkbox"]:not(.switch) {
   appearance: none;
   cursor: pointer;
   vertical-align: middle;
-  --checkbox-mark: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12' fill='none' stroke='%23000' stroke-width='1.9' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M2.5 6.3 4.9 8.6 9.5 3.6'/%3E%3C/svg%3E");
   transition: background var(--duration), border-color var(--duration), box-shadow var(--duration);
 }
 input[type="checkbox"]:not(.switch)::after {
-  width: 12px;
-  height: 12px;
+  width: 11px;
+  height: 11px;
   background: var(--accent-fg);
   content: "";
-  -webkit-mask: var(--checkbox-mark) center / contain no-repeat;
-  mask: var(--checkbox-mark) center / contain no-repeat;
+  clip-path: polygon(12% 52%, 26% 38%, 41% 53%, 74% 20%, 88% 34%, 41% 81%);
   opacity: 0;
   transform: scale(0.6);
   transition: opacity var(--duration), transform var(--duration);
 }
-input[type="checkbox"]:not(.switch):indeterminate {
-  --checkbox-mark: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12' fill='none' stroke='%23000' stroke-width='1.9' stroke-linecap='round'%3E%3Cpath d='M3 6h6'/%3E%3C/svg%3E");
+input[type="checkbox"]:not(.switch):indeterminate::after {
+  width: 8px;
+  height: 2px;
+  border-radius: 1px;
+  clip-path: none;
 }
 input[type="checkbox"]:not(.switch):hover:not(:disabled) { border-color: var(--accent); }
 input[type="checkbox"]:not(.switch):focus-visible { outline: 2px solid var(--line-focus); outline-offset: 1px; }
