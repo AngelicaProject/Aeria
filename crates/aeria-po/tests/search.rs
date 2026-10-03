@@ -9,7 +9,7 @@ use std::sync::atomic::AtomicBool;
 use aeria_knowledge::Knowledge;
 use aeria_po::{
     CheckFilter, EditKind, EntryEdit, Field, Fields, Issue, MatchKind, Pattern, Query, Replacement,
-    SkipReason, State, preview_replace, search,
+    SkipReason, State, preview_replace, search, search_all,
 };
 use aeria_source::{GameSource, SourceLanguage};
 use aeria_sqpack::testing::{FakeGame, TextSheet};
@@ -331,4 +331,37 @@ fn a_term_exception_lifts_the_term_and_undo_takes_it_back() {
     let undo: Vec<EntryEdit> = applied.done.iter().map(aeria_po::EditDone::undo).collect();
     assert_eq!(session.apply_edits(&undo).expect("undo").done.len(), 1);
     assert_eq!(problems(&session), 1);
+}
+
+#[test]
+fn search_all_returns_every_entry_past_the_hit_limit() {
+    let directory = tempfile::tempdir().expect("directory");
+    let game_dir = directory.path().join("game");
+    let rows = u32::try_from(aeria_po::MAX_HITS).expect("rows") + 50;
+    let mut sheet = TextSheet::new(1, &[0]);
+    for row in 1..=rows {
+        sheet = sheet.row(row, &[(0, "The cook arrives")]);
+    }
+    FakeGame::new("2026.01.01.0000.0000")
+        .with_text("LogMessage", &sheet)
+        .write(&game_dir)
+        .expect("write");
+    let source = Arc::new(GameSource::open(&game_dir, SourceLanguage::English).expect("game"));
+    let session = aeria_po::session::create(&directory.path().join("project"), source, "ru", 2)
+        .expect("create");
+    let cook = query("cook", MatchKind::Text);
+
+    let found = find(&session, &cook);
+    assert_eq!(found.total, rows as usize);
+    assert_eq!(found.hits.len(), aeria_po::MAX_HITS);
+
+    let all = search_all(session.root(), &cook, &Knowledge::default(), "ru").expect("search");
+    assert_eq!(all.len(), rows as usize);
+    assert_eq!(
+        all[..found.hits.len()],
+        found.hits[..],
+        "the same order as search"
+    );
+    let contexts: std::collections::HashSet<_> = all.iter().map(|hit| &hit.context).collect();
+    assert_eq!(contexts.len(), all.len(), "every entry once");
 }

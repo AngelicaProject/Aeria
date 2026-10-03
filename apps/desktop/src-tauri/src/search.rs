@@ -202,6 +202,19 @@ pub struct SearchHitDto {
     pub findings: Vec<IssueDto>,
 }
 
+/// A string a search found, with what a bulk action on it needs: the
+/// whole result of a search, which is not cut.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchEntryDto {
+    pub path: String,
+    pub context: String,
+    pub translation: String,
+    pub fuzzy: bool,
+    /// Problems, or terms not used, when the search filters by them.
+    pub findings: Vec<IssueDto>,
+}
+
 /// The strings found in one file.
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -445,6 +458,38 @@ pub async fn project_search(
 #[allow(clippy::needless_pass_by_value)]
 pub fn project_search_cancel(app: tauri::AppHandle) {
     app.state::<SearchState>().cancel();
+}
+
+#[tauri::command(rename_all = "camelCase")]
+/// Every string the query finds, without the limit of `project_search`, for
+/// choosing a whole result or sheet. It is not cancelled by a new search, so
+/// it never returns part of the result.
+///
+/// # Errors
+///
+/// As `project_search`.
+pub async fn project_search_entries(
+    app: tauri::AppHandle,
+    query: SearchQueryDto,
+) -> CommandResult<Vec<SearchEntryDto>> {
+    run_blocking(move || {
+        let session = app.state::<DesktopState>().session()?;
+        let knowledge = session.knowledge();
+        let target = session.settings().target_language;
+        let hits = aeria_po::search_all(session.root(), &query.query(), &knowledge, &target)
+            .map_err(|error| search_error(&error))?;
+        Ok(hits
+            .into_iter()
+            .map(|hit| SearchEntryDto {
+                findings: issues_dto(&hit.findings),
+                path: hit.path,
+                context: hit.context,
+                translation: hit.translation,
+                fuzzy: hit.fuzzy,
+            })
+            .collect())
+    })
+    .await
 }
 
 #[tauri::command(rename_all = "camelCase")]

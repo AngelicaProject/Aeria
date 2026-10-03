@@ -51,6 +51,7 @@ import type {
   EntryRefDto,
   ReplaceChangeDto,
   ReplacementDto,
+  SearchEntryDto,
   SearchQueryDto,
   SearchResultDto,
 } from "./types";
@@ -532,6 +533,11 @@ export function fontsPreview(settings: FontSettings, font: string, text: string)
 /** Searches the project's files; a new search cancels the one in progress. */
 export function projectSearch(query: SearchQueryDto): Promise<SearchResultDto> {
   return call<SearchResultDto>("project_search", { query });
+}
+
+/** Every string the query finds, without the limit of a search, for choosing a whole result or sheet. */
+export function projectSearchEntries(query: SearchQueryDto): Promise<SearchEntryDto[]> {
+  return call<SearchEntryDto[]>("project_search_entries", { query });
 }
 
 export function projectSearchCancel(): Promise<void> {

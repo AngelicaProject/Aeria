@@ -431,6 +431,41 @@ pub fn search(
     target_language: &str,
     cancel: &AtomicBool,
 ) -> Result<Found, SearchError> {
+    let results = search_files(root, query, knowledge, target_language, cancel)?;
+    Ok(summarize(results, cancel.load(Ordering::Relaxed)))
+}
+
+/// Every entry a search finds, in file order, without the limit of
+/// [`MAX_HITS`]: what a bulk action on the whole result acts on. It cannot
+/// be cancelled, so it never returns part of the result.
+///
+/// # Errors
+///
+/// As [`search`].
+pub fn search_all(
+    root: &Path,
+    query: &Query,
+    knowledge: &Knowledge,
+    target_language: &str,
+) -> Result<Vec<Hit>, SearchError> {
+    let results = search_files(
+        root,
+        query,
+        knowledge,
+        target_language,
+        &AtomicBool::new(false),
+    )?;
+    Ok(results.into_iter().flat_map(|(_, hits)| hits).collect())
+}
+
+/// The hits of every file with one, by the file's index in path order.
+fn search_files(
+    root: &Path,
+    query: &Query,
+    knowledge: &Knowledge,
+    target_language: &str,
+    cancel: &AtomicBool,
+) -> Result<Vec<(usize, Vec<Hit>)>, SearchError> {
     let matcher = query.pattern.as_ref().map(Matcher::new).transpose()?;
     let search = Search {
         query,
@@ -487,7 +522,7 @@ pub fn search(
         .into_inner()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     results.sort_by_key(|(index, _)| *index);
-    Ok(summarize(results, cancel.load(Ordering::Relaxed)))
+    Ok(results)
 }
 
 /// The result of a search from the hits of each file, in file order.

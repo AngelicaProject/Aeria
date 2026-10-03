@@ -711,6 +711,7 @@ export const ru: Catalog = {
   "search.clearChosen": "Снять выбор",
   "search.choose": "Выбрать строку",
   "search.chooseSheet": "Выбрать все строки {sheet}",
+  "search.chooseAll": "Выбрать все найденные строки",
   "search.files": "файлов: {count}",
   "search.sheetCut": "Показаны первые {shown} из {count}; сузьте поиск, чтобы увидеть остальные.",
   "search.excepted": "Исключение добавлено строкам: {count}.",
@@ -719,7 +720,7 @@ export const ru: Catalog = {
   "search.exceptAllTitle": "Термин «{term}» не применяется ко всем найденным строкам: проверки не требуют его перевода и не запрещают варианты",
   "search.retranslateOne": "Перевести заново",
   "search.retranslateTitle": "Очистить найденные переводы и заново перевести их ИИ-переводом",
-  "search.retranslateIncomplete": "Уточните поиск: для повторного перевода нужны все результаты в списке",
+  "search.nothingTranslated": "Среди найденного нет переводов.",
   "search.retranslateConfirmTitle": "Перевести заново",
   "search.retranslateConfirm": {
     one: "Очистить перевод {count} строки и заново перевести её ИИ-переводом с текущими терминами и стилем?",
