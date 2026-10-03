@@ -2,6 +2,11 @@
 
 GitHub Actions configuration lives in `.github/workflows/ci.yml`. This document summarizes the expected gates; the workflow file remains authoritative for exact runner configuration.
 
+CI runs for every pull request and for every push to `main`. A new push to a
+pull request cancels its running checks; runs on `main` are never cancelled,
+because a stable release waits for CI on its exact commit. The workflow has
+read-only repository permissions.
+
 ## Current gates
 
 Frontend CI runs:
