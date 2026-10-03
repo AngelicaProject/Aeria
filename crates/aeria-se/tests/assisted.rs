@@ -218,3 +218,23 @@ fn the_reference_names_the_known_globals() {
     assert!(reference.contains("$gn4 is"), "{reference}");
     assert!(reference.contains("<if (left op right)>"), "{reference}");
 }
+
+#[test]
+fn a_message_about_another_player_may_agree_with_their_gender() {
+    let source = "<capitalize><if ($gs1 == $gs2)>you<else><if $gn7><noun-en ObjStr 2 $gn7 1 1><else>{$gs2}</if></if></capitalize> <if ($gs1 == $gs2)>have<else>has</if> left the party.";
+    assert!(
+        check_assisted_structure(
+            source,
+            "<capitalize><if ($gs1 == $gs2)>Вы покинули<else><if $gn7><noun-en ObjStr 2 $gn7 1 1><else>{$gs2}</if> <if $gn7>покидает<else><if $gn5>покинула<else>покинул</if></if></if></capitalize> группу."
+        )
+        .is_ok(),
+        "the gender of the player named by $gs2 may be tested"
+    );
+    let constructs = constructs(source).expect("constructs");
+    let legend = constructs
+        .iter()
+        .map(aeria_se::Construct::legend)
+        .find(|legend| legend.starts_with("<if $gn7>"))
+        .expect("the legend of the condition on $gn7");
+    assert!(legend.contains("ObjStr row"), "{legend}");
+}
