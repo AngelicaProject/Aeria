@@ -87,11 +87,12 @@ character's gender says nothing about anyone else.
 - Words after such a comparison that agree with its person go inside its branches, \
 since they agree differently with \"you\" and with someone else. Another player's \
 gender is $gn5 for $gs2 and $gn6 for $gs3; when $gn7 or $gn8 is set, the person is a \
-character or an object whose gender is known only where the source tests it, so choose \
-a phrasing where nothing agrees with it. Keep the source's branches with the name as \
-they are and give the agreeing words a condition of their own. In Russian: «<if ($gs1 \
-== $gs2)>Вы покинули<else><if $gn7><noun-en ObjStr 2 $gn7 1 1><else>{$gs2}</if> <if \
-$gn7>покидает<else><if $gn5>покинула<else>покинул</if></if></if> группу».";
+character or an object, female when <if \"<sheet BNpcName $gn7 6>\"> holds (or $gn8 \
+for $gs3). Keep the source's branches with the name as they are and give the agreeing \
+words a condition of their own. In Russian: «<if ($gs1 == $gs2)>Вы покинули<else><if \
+$gn7><noun-en ObjStr 2 $gn7 1 1><else>{$gs2}</if> <if $gn7><if \"<sheet BNpcName $gn7 \
+6>\">покинула<else>покинул</if><else><if $gn5>покинула<else>покинул</if></if></if> \
+группу».";
 
 /// How translations are written as the game's macro text.
 pub const MACRO_TEXT: &str = "\

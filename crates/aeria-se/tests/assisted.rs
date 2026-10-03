@@ -225,7 +225,7 @@ fn a_message_about_another_player_may_agree_with_their_gender() {
     assert!(
         check_assisted_structure(
             source,
-            "<capitalize><if ($gs1 == $gs2)>Вы покинули<else><if $gn7><noun-en ObjStr 2 $gn7 1 1><else>{$gs2}</if> <if $gn7>покидает<else><if $gn5>покинула<else>покинул</if></if></if></capitalize> группу."
+            r#"<capitalize><if ($gs1 == $gs2)>Вы покинули<else><if $gn7><noun-en ObjStr 2 $gn7 1 1><else>{$gs2}</if> <if $gn7><if "<sheet BNpcName $gn7 6>">покинула<else>покинул</if><else><if $gn5>покинула<else>покинул</if></if></if></capitalize> группу."#
         )
         .is_ok(),
         "the gender of the player named by $gs2 may be tested"
@@ -260,4 +260,27 @@ fn the_player_character_may_be_named_where_the_source_does_not() {
     assert!(
         authoring_reference().contains(r#"<split " " 1><string $gs1></split> is the first name"#)
     );
+}
+
+#[test]
+fn whether_a_character_of_a_message_is_female_may_be_tested() {
+    let source = "<if $gn7><noun-en ObjStr 2 $gn7 1 1><else>{$gs2}</if> left.";
+    assert!(
+        check_assisted_structure(
+            source,
+            r#"<if $gn7><noun-en ObjStr 2 $gn7 1 1><else>{$gs2}</if> <if "<sheet BNpcName $gn7 6>">ушла<else>ушёл</if>."#
+        )
+        .is_ok()
+    );
+    for other in [
+        "<sheet BNpcName $gn7 0>",
+        "<sheet BNpcName 12 6>",
+        "<sheet ENpcResident $gn7 6>",
+    ] {
+        assert!(
+            refused(source, &format!("{other} ушёл.")).contains("is not in the source"),
+            "{other}"
+        );
+    }
+    assert!(authoring_reference().contains(r#"<if "<sheet BNpcName $gn8 6>">"#));
 }

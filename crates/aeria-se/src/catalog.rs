@@ -1140,6 +1140,23 @@ pub const IDIOMS: &[IdiomSpec] = &[
     },
 ];
 
+/// What the game reads about the people of a message, by the globals the
+/// message sets, which a translation may test although its source does not:
+/// `<if $gn7><if "<sheet BNpcName $gn7 6>">her<else>his</if><else>…` in
+/// about 120 strings tells whether the character `$gs2` names is female.
+pub const PERSON_READS: &[IdiomSpec] = &[
+    IdiomSpec {
+        name: "other-character-female",
+        text: "<sheet BNpcName $gn7 6>",
+        summary: "1 when the character $gs2 names ($gn7 set) is female",
+    },
+    IdiomSpec {
+        name: "second-other-character-female",
+        text: "<sheet BNpcName $gn8 6>",
+        summary: "1 when the character $gs3 names ($gn8 set) is female",
+    },
+];
+
 /// The idiom `text` is written as, if any.
 #[must_use]
 pub fn idiom(text: &str) -> Option<&'static IdiomSpec> {

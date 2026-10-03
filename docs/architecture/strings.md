@@ -286,7 +286,9 @@ machine translation instructions.
   adds none the source lacks except the player insertions of
   `catalog::INSERTIONS` (`<string $gs1>`, the first and last name, `<sheet
   ClassJob $gn68 0>`, `<sheet Race $gn71 0>`), which read only globals the
-  game sets for every string;
+  game sets for every string, and the reads of `catalog::PERSON_READS`
+  (`<sheet BNpcName $gn7 6>` and `$gn8`: whether a character a message is
+  about is female, as about 120 log strings test it);
 - leaves each formatting macro (`i`, `b`, the colors) no more open at its
   end than the source does (it may close what the source forgot to close),
   and closes no more than the source does of what came before; otherwise
