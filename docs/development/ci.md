@@ -13,10 +13,14 @@ Frontend CI runs:
 
 ```text
 pnpm install --frozen-lockfile
-pnpm test
+pnpm --filter @aeria/desktop test:coverage
+node --test tools/release/version.test.mjs
 pnpm typecheck
 pnpm build
 ```
+
+`test:coverage` runs the same tests as `pnpm --filter @aeria/desktop test`
+and measures the coverage of `src/` with the Node.js test runner.
 
 Rust CI runs:
 
@@ -24,8 +28,12 @@ Rust CI runs:
 cargo fmt --check
 cargo build --workspace --locked
 cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
-cargo test --workspace --locked
+cargo llvm-cov --workspace --locked --lcov --output-path lcov.info
+cargo test --workspace --locked --doc
 ```
+
+`cargo llvm-cov` runs the workspace tests with coverage instrumentation. On
+stable Rust it does not run doctests, so they run separately.
 
 No Rust job requires a game installation: source tests run over synthetic
 SqPack fixtures.
@@ -51,6 +59,25 @@ The Windows desktop job then reruns the path-handling suites (`aeria-sqpack`,
 with `TMP` and `TEMP` pointing at a Cyrillic folder with a space, so every
 file those tests create lives under such a path. See
 [`testing.md`](./testing.md#paths).
+Coverage of the Windows code is measured on these suites.
+
+## Coverage
+
+Coverage is reported, not gated. Every CI run shows the coverage of the
+frontend, of Rust on Linux, and of Rust on Windows in its job summary, and
+keeps the `lcov.info` files and the Rust HTML reports as artifacts. The tools
+are the Node.js test runner and `cargo-llvm-cov`, pinned in the workflow; no
+external coverage service receives the reports.
+
+Locally, after `cargo install cargo-llvm-cov` and
+`rustup component add llvm-tools-preview`:
+
+```text
+cargo llvm-cov --workspace --html
+pnpm --filter @aeria/desktop test:coverage
+```
+
+Frontend coverage counts only the modules the tests load.
 
 When CI gains or removes a project-wide quality gate, update this document with the workflow change.
 
@@ -62,7 +89,7 @@ the rolling `nightly` pre-release after every successful CI run of a push to
 and toolchain, and signs installers with the updater key secrets.
 See [`releases.md`](./releases.md#release-workflow).
 
-`pnpm test` also runs `tools/release/version.test.mjs`, which covers the
+`pnpm test` and CI also run `tools/release/version.test.mjs`, which covers the
 nightly version rule and the updater feed format.
 
 ## Website
