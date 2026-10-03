@@ -92,7 +92,14 @@ for $gs3). Keep the source's branches with the name as they are and give the agr
 words a condition of their own. In Russian: «<if ($gs1 == $gs2)>Вы покинули<else><if \
 $gn7><noun-en ObjStr 2 $gn7 1 1><else>{$gs2}</if> <if $gn7><if \"<sheet BNpcName $gn7 \
 6>\">покинула<else>покинул</if><else><if $gn5>покинула<else>покинул</if></if></if> \
-группу».";
+группу».
+- The one $gs2 or $gs3 names may be a player, a character, or an object, so never call \
+them a person, a character, or a player (персонаж по имени): where the name must keep \
+its stored form, give it a place of its own, as after a colon: «Зритель: <if \
+$gn8><noun-en ObjStr 2 $gn8 1 1><else>{$gs3}</if>».
+- The player's branch of a comparison with another person is the player as \"you\" \
+(вас, вам), whoever acts: «{$gs2} танцует для вас». A reflexive word (себя) is right \
+only where the one acting and the one acted on are the same person.";
 
 /// How translations are written as the game's macro text.
 pub const MACRO_TEXT: &str = "\
