@@ -14,6 +14,10 @@ pub const BASE_URL: &str = "https://chatgpt.com/backend-api/codex";
 /// A response that sends nothing for this long, its headers included, is
 /// given up.
 const SILENCE_TIMEOUT: Duration = Duration::from_secs(180);
+/// A response not finished in this long is given up, however much the
+/// service still sends: a model can reason for as long as its stream stays
+/// open, and a run would wait on it without end.
+const RESPONSE_DEADLINE: Duration = Duration::from_mins(20);
 const MODELS_TIMEOUT: Duration = Duration::from_secs(20);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 /// How often an open connection is checked, so a connection that died
@@ -132,6 +136,7 @@ pub struct Codex {
     access: tokio::sync::Mutex<Option<AccessToken>>,
     base: String,
     silence: Duration,
+    deadline: Duration,
 }
 
 impl Codex {
@@ -166,6 +171,7 @@ impl Codex {
             access: tokio::sync::Mutex::new(None),
             base: base.trim_end_matches('/').to_owned(),
             silence: SILENCE_TIMEOUT,
+            deadline: RESPONSE_DEADLINE,
         })
     }
 
@@ -174,6 +180,14 @@ impl Codex {
     #[must_use]
     pub const fn with_silence(mut self, silence: Duration) -> Self {
         self.silence = silence;
+        self
+    }
+
+    /// The same client giving up a response not finished in `deadline`, for
+    /// tests.
+    #[must_use]
+    pub const fn with_deadline(mut self, deadline: Duration) -> Self {
+        self.deadline = deadline;
         self
     }
 
@@ -332,8 +346,15 @@ impl Codex {
     /// plan's limit is reached, [`ModelError::RateLimited`] when requests
     /// come too fast, [`ModelError::SignInRequired`], a network error, or
     /// [`ModelError::Timeout`] when the service sends nothing, not even the
-    /// response's headers, for three minutes.
+    /// response's headers, for three minutes, or does not finish the answer
+    /// in twenty.
     pub async fn respond(&self, request: &Request) -> Result<Reply, ModelError> {
+        tokio::time::timeout(self.deadline, self.answer(request))
+            .await
+            .map_err(|_| ModelError::Timeout)?
+    }
+
+    async fn answer(&self, request: &Request) -> Result<Reply, ModelError> {
         let token = self.token().await?;
         let mut reasoning = json!({ "summary": "auto" });
         if let Some(effort) = &request.effort {

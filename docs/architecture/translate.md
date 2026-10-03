@@ -199,8 +199,9 @@ in flight. A rate-limit answer halves that, to no fewer than two, and every
 finished batch adds one back. A rate limit, network error, or timeout returns
 the batch to the queue after the wait the service asked for, or 20 seconds
 times the failures in a row; the third in a row stops the run. A response
-that sends nothing for 180 seconds, its headers included, is given up, and a
-connection is given 30 seconds to open and is checked every 20 seconds, so a
+that sends nothing for 180 seconds, its headers included, is given up, and so
+is one not finished in 20 minutes: a reasoning model keeps its stream alive
+for as long as it thinks. A connection is given 30 seconds to open and is checked every 20 seconds, so a
 connection that died without closing fails its requests instead of holding
 the run. Any other refusal leaves the batch's strings for the next run.
 
@@ -217,7 +218,17 @@ quick choices: the name sheets, the quests, and every sheet with
 untranslated strings. It shows, every second while it is open: strings
 written of the
 run's strings, strings refused by the checks, tokens used, the share of
-prompt tokens served from the cache, the current pace, the last failure of
-the service while the run waits, and why the run stopped. The run goes on
+prompt tokens served from the cache, the current pace, the requests the
+service is answering with their file, strings, retry, and how long each has
+waited, a hint about the reasoning depth when an answer takes over five
+minutes, the last failure of the service while the run waits, and why the
+run stopped. Tokens count as each response answers, so a batch's retries
+show as they happen.
+
+Each run writes a journal to `logs/translation-<start>.log` in the data
+folder (`%APPDATA%\Aeria` on Windows), and the last 20 are kept: what the
+run set out to translate, each request with its file, strings, retry, time,
+and tokens, each failure and wait, and why the run stopped. The texts sent
+and received are not written. The run goes on
 when the dialog is hidden, and Stop drops the batches in flight at once,
 without waiting for the service to answer them.

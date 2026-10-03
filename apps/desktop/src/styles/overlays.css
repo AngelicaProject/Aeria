@@ -325,6 +325,8 @@ button.translate-name { padding: 0; border: 0; background: transparent; color: v
 @media (max-width: 720px) { .translate-layout { grid-template-columns: 1fr; } }
 .translate-progress { display: flex; flex-direction: column; gap: 8px; }
 .translate-progress .meter { width: 100%; }
+.translate-active { display: grid; gap: 2px; margin: 0; padding: 0; color: var(--fg-muted); font-size: var(--text-xs); list-style: none; }
+.translate-active li { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .export-optional { margin-left: 6px; color: var(--fg-subtle); font-weight: 400; }
 .export-checks { display: flex; flex-direction: column; gap: 2px; margin: 0; padding: 8px 10px; border: 1px solid var(--line); border-radius: var(--radius-sm); list-style: none; }
 .export-check { display: flex; align-items: center; gap: 8px; min-height: 28px; font-size: var(--text-sm); }

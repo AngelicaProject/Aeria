@@ -2,6 +2,7 @@
 //! subscription and one run at a time over files of the open project (see
 //! `docs/architecture/translate.md`).
 
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
 use aeria_model::auth::{DeviceLogin, VERIFICATION_URL};
@@ -10,6 +11,7 @@ use serde::Serialize;
 use tauri::Manager;
 
 use crate::error::CommandError;
+use crate::paths::AeriaPaths;
 use crate::state::DesktopState;
 
 type CommandResult<T> = Result<T, CommandError>;
@@ -245,12 +247,55 @@ pub(crate) fn start_run(app: &tauri::AppHandle, options: Options) -> CommandResu
         if current.as_ref().is_some_and(|run| run.status().running) {
             return Err(running());
         }
-        let run = Arc::new(Run::new());
+        let run = Arc::new(match journal(app) {
+            Some(file) => Run::with_log(file),
+            None => Run::new(),
+        });
         *current = Some(Arc::clone(&run));
         run
     };
     tauri::async_runtime::spawn(aeria_model::run::run(session, codex, options, run));
     Ok(())
+}
+
+/// Journals of runs kept in the data folder; older ones are deleted.
+const JOURNALS: usize = 20;
+
+/// A new journal for a run in `logs/` of the data folder, named by the time
+/// it starts, after deleting the oldest beyond [`JOURNALS`]. A run goes on
+/// without one when the folder cannot be written.
+fn journal(app: &tauri::AppHandle) -> Option<std::fs::File> {
+    let folder = app.aeria_data_dir().ok()?.join("logs");
+    std::fs::create_dir_all(&folder).ok()?;
+    prune_journals(&folder, JOURNALS - 1);
+    let millis = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |since| since.as_millis());
+    std::fs::File::create(folder.join(format!("translation-{millis}.log"))).ok()
+}
+
+/// Deletes the oldest run journals of `folder` so that at most `keep` stay.
+/// Their names hold the start time, so name order is age order.
+fn prune_journals(folder: &Path, keep: usize) {
+    let Ok(entries) = std::fs::read_dir(folder) else {
+        return;
+    };
+    let mut journals: Vec<PathBuf> = entries
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.extension().is_some_and(|extension| extension == "log")
+                && path
+                    .file_stem()
+                    .and_then(|stem| stem.to_str())
+                    .is_some_and(|stem| stem.starts_with("translation-"))
+        })
+        .collect();
+    journals.sort();
+    let excess = journals.len().saturating_sub(keep);
+    for old in &journals[..excess] {
+        let _ = std::fs::remove_file(old);
+    }
 }
 
 /// The error of a second run.
@@ -361,5 +406,36 @@ pub async fn translation_retry(
 pub fn translation_stop(app: tauri::AppHandle) {
     if let Some(run) = app.state::<Translation>().run() {
         run.cancel();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_oldest_journals_are_deleted() {
+        let folder = tempfile::tempdir().expect("folder");
+        for millis in [1_000, 3_000, 2_000] {
+            std::fs::write(folder.path().join(format!("translation-{millis}.log")), "")
+                .expect("journal");
+        }
+        std::fs::write(folder.path().join("other.log"), "").expect("other");
+        prune_journals(folder.path(), 2);
+        let mut left: Vec<String> = std::fs::read_dir(folder.path())
+            .expect("list")
+            .map(|entry| {
+                entry
+                    .expect("entry")
+                    .file_name()
+                    .into_string()
+                    .expect("name")
+            })
+            .collect();
+        left.sort();
+        assert_eq!(
+            left,
+            ["other.log", "translation-2000.log", "translation-3000.log"]
+        );
     }
 }

@@ -26,6 +26,16 @@ type TranslateDialogProps = {
 
 /** How often a running translation's progress is read. */
 const POLL_MS = 1000;
+/** Requests in flight listed by name; the rest are counted. */
+const LISTED_ACTIVE = 3;
+/** An answer slower than this gets a hint about the reasoning depth. */
+const SLOW_MS = 5 * 60 * 1000;
+
+/** Minutes and seconds, such as 4:07. */
+function formatElapsed(milliseconds: number): string {
+  const seconds = Math.max(0, Math.floor(milliseconds / 1000));
+  return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
+}
 /** Most sheets a search lists. */
 const SEARCH_LIMIT = 300;
 
@@ -298,6 +308,18 @@ export const TranslateDialog = memo(function TranslateDialog({ open, onOpenChang
                     {cachedShare !== null ? <span>{t("translate.cached", { percent: Math.round(cachedShare * 100) })}</span> : null}
                     {running ? <span>{t("translate.pace", { pace: status.pace })}</span> : null}
                   </p>
+                  {running && status.active.length > 0 ? (
+                    <ul className="translate-active">
+                      {status.active.slice(0, LISTED_ACTIVE).map((active) => (
+                        <li key={`${active.startedAt}:${active.path}:${active.retry}`}>
+                          {t("translate.activeRequest", { path: active.path, strings: formatNumber(active.strings), elapsed: formatElapsed(Date.now() - active.startedAt) })}
+                          {active.retry > 0 ? t("translate.activeRetry", { retry: active.retry }) : null}
+                        </li>
+                      ))}
+                      {status.active.length > LISTED_ACTIVE ? <li>{t("translate.activeMore", { count: status.active.length - LISTED_ACTIVE })}</li> : null}
+                    </ul>
+                  ) : null}
+                  {running && status.active.some((active) => Date.now() - active.startedAt > SLOW_MS) ? <p className="field-hint">{t("translate.slow")}</p> : null}
                   {status.message ? <p className="field-hint">{status.message}</p> : null}
                   {status.stop ? <p className="field-hint"><strong>{describeStop(status.stop, t, locale)}</strong></p> : null}
                   {status.rejections.length > 0 ? (
