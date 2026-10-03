@@ -3,7 +3,10 @@ name: Release
 # Stable releases are published from version tags; the rolling nightly
 # pre-release is rebuilt after every green CI run of a push to main. The
 # release model is described in docs/development/releases.md.
-on:
+#
+# workflow_run runs with the release secrets, so it builds only pushes to
+# main that passed CI, and the gate checks that the commit is main's head.
+on: # zizmor: ignore[dangerous-triggers]
   push:
     tags:
       - "v*"
@@ -12,9 +15,7 @@ on:
     types: [completed]
     branches: [main]
 
-permissions:
-  contents: write
-  actions: read
+permissions: {}
 
 jobs:
   # A nightly is built only for the current head of main. CI for an older
@@ -25,6 +26,8 @@ jobs:
       github.event_name == 'push' ||
       (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push')
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     outputs:
       build: ${{ steps.head.outputs.build }}
     steps:
@@ -55,6 +58,8 @@ jobs:
     if: needs.gate.outputs.build == 'true'
     # Built on the oldest supported runner so the binary runs on newer ones.
     runs-on: ubuntu-22.04
+    permissions:
+      contents: write
     env:
       GH_TOKEN: ${{ github.token }}
       COMMIT: ${{ github.event.workflow_run.head_sha || github.sha }}
@@ -63,14 +68,16 @@ jobs:
       url: ${{ steps.package.outputs.url }}
       sha256: ${{ steps.package.outputs.sha256 }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
+          persist-credentials: false
           ref: ${{ env.COMMIT }}
           fetch-depth: 0
-      - uses: actions/setup-node@v4
+      # setup-node v4 caches nothing without its cache input.
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0 # zizmor: ignore[cache-poisoning]
         with:
           node-version-file: .node-version
-      - uses: dtolnay/rust-toolchain@master
+      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master
         with:
           toolchain: 1.98.1
 
@@ -93,18 +100,25 @@ jobs:
 
       - name: Package aeria-check
         id: package
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          TAG: ${{ steps.version.outputs.tag }}
         run: |
-          name="aeria-check-${{ steps.version.outputs.version }}-x86_64-unknown-linux-gnu.tar.gz"
+          name="aeria-check-${VERSION}-x86_64-unknown-linux-gnu.tar.gz"
           mkdir -p dist
           tar --create --gzip --file "dist/$name" --directory target/release aeria-check
           sha256=$(sha256sum "dist/$name" | cut -d ' ' -f 1)
-          echo "name=$name" >> "$GITHUB_OUTPUT"
-          echo "sha256=$sha256" >> "$GITHUB_OUTPUT"
-          echo "url=https://github.com/$GITHUB_REPOSITORY/releases/download/${{ steps.version.outputs.tag }}/$name" >> "$GITHUB_OUTPUT"
+          {
+            echo "name=$name"
+            echo "sha256=$sha256"
+            echo "url=https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG/$name"
+          } >> "$GITHUB_OUTPUT"
           ./target/release/aeria-check --version
 
       - name: Publish the nightly aeria-check
         if: github.event_name == 'workflow_run'
+        env:
+          NAME: ${{ steps.package.outputs.name }}
         run: |
           if ! gh release view aeria-check-nightly > /dev/null 2>&1; then
             gh release create aeria-check-nightly \
@@ -113,11 +127,11 @@ jobs:
               --title "aeria-check for nightly builds" \
               --notes "aeria-check archives of nightly Aeria builds. Merge check workflows pin one of them by name and SHA-256, so they are kept."
           fi
-          gh release upload aeria-check-nightly "dist/${{ steps.package.outputs.name }}"
+          gh release upload aeria-check-nightly "dist/$NAME"
 
       - name: Keep the stable aeria-check for the release
         if: github.event_name == 'push'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: aeria-check
           path: dist/${{ steps.package.outputs.name }}
@@ -134,6 +148,9 @@ jobs:
       group: ${{ github.event_name == 'push' && format('release-{0}', github.ref_name) || 'release-nightly' }}
       cancel-in-progress: ${{ github.event_name == 'workflow_run' }}
     runs-on: windows-latest
+    permissions:
+      contents: write
+      actions: read
     env:
       GH_TOKEN: ${{ github.token }}
       COMMIT: ${{ github.event.workflow_run.head_sha || github.sha }}
@@ -141,18 +158,20 @@ jobs:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
+          persist-credentials: false
           ref: ${{ env.COMMIT }}
           fetch-depth: 0
-      - uses: actions/setup-node@v4
+      # setup-node v4 caches nothing without its cache input.
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0 # zizmor: ignore[cache-poisoning]
         with:
           node-version-file: .node-version
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
         with:
           version: 12.4.2
           run_install: false
-      - uses: dtolnay/rust-toolchain@master
+      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master
         with:
           toolchain: 1.98.1
 
@@ -165,7 +184,7 @@ jobs:
             exit 1
           fi
           # CI for the merge may still be running when the tag is pushed.
-          for attempt in $(seq 1 120); do
+          for _ in $(seq 1 120); do
             runs=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$COMMIT&branch=main&event=push" \
               --jq '[.workflow_runs[] | "\(.status):\(.conclusion)"] | join(" ")')
             case " $runs " in
@@ -209,8 +228,10 @@ jobs:
       # bundle type: a portable copy announces updates but never installs them.
       - name: Package the portable build
         id: portable
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
         run: |
-          name="Aeria_${{ steps.version.outputs.version }}_x64-portable"
+          name="Aeria_${VERSION}_x64-portable"
           mkdir -p "dist/$name"
           cp target/release/aeria.exe "dist/$name/"
           cp -r target/release/git "dist/$name/git"
@@ -226,15 +247,19 @@ jobs:
 
       - name: Fetch the stable aeria-check
         if: github.event_name == 'push'
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: aeria-check
           path: dist
 
       - name: Collect release assets
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          TAG: ${{ steps.version.outputs.tag }}
+          ZIP: ${{ steps.portable.outputs.zip }}
         run: |
-          version="${{ steps.version.outputs.version }}"
-          tag="${{ steps.version.outputs.tag }}"
+          version="$VERSION"
+          tag="$TAG"
           installer="Aeria_${version}_x64-setup.exe"
           cp "target/release/bundle/nsis/$installer" "target/release/bundle/nsis/$installer.sig" dist/
           node tools/release/version.mjs feed \
@@ -242,13 +267,16 @@ jobs:
             --url "https://github.com/$GITHUB_REPOSITORY/releases/download/$tag/$installer" \
             --signature "dist/$installer.sig" \
             --notes "https://github.com/$GITHUB_REPOSITORY/releases/tag/$tag" > dist/latest.json
-          (cd dist && sha256sum "$installer" "$(basename "${{ steps.portable.outputs.zip }}")" $(ls aeria-check-*.tar.gz 2>/dev/null) > SHA256SUMS.txt)
+          # A stable release also carries aeria-check; a nightly does not.
+          (cd dist && shopt -s nullglob && checks=(aeria-check-*.tar.gz) && sha256sum "$installer" "$(basename "$ZIP")" "${checks[@]}" > SHA256SUMS.txt)
           ls -la dist
 
       - name: Publish the stable release
         if: github.event_name == 'push'
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
         run: |
-          version="${{ steps.version.outputs.version }}"
+          version="$VERSION"
           gh release create "$GITHUB_REF_NAME" \
             --verify-tag --latest \
             --title "Aeria $version" \
@@ -258,8 +286,10 @@ jobs:
 
       - name: Publish the nightly pre-release
         if: github.event_name == 'workflow_run'
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
         run: |
-          version="${{ steps.version.outputs.version }}"
+          version="$VERSION"
           gh release delete nightly --cleanup-tag --yes || true
           gh release create nightly \
             --prerelease --latest=false \
