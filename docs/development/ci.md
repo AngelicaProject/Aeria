@@ -18,6 +18,7 @@ read-only repository permissions.
 | `frontend` | `windows-latest` | The renderer and release tooling tests pass, TypeScript type-checks, and the renderer builds. |
 | `rust` | `windows-latest` | The workspace is formatted, has no Clippy warnings, and passes all its tests on Windows under a Cyrillic path with the bundled MinGit; line coverage stays above the floor. |
 | `check-linux` | `ubuntu-22.04` | `aeria-check` passes its tests on the runner its release is built on. |
+| `supply-chain` | `ubuntu-latest` | Dependencies have no known vulnerability, no yanked crate, only allowed licenses, and come from crates.io; workflows pass `actionlint` and `zizmor`. |
 | `ci` | `ubuntu-latest` | Every job above passed. |
 
 The `main` ruleset requires only `ci`, so a job can be added, renamed, or
@@ -76,6 +77,39 @@ Locally, after `cargo install cargo-llvm-cov` and
 cargo llvm-cov --workspace --html
 pnpm --filter @aeria/desktop test:coverage
 ```
+
+## Supply chain
+
+```text
+cargo deny --locked check
+pnpm audit --prod
+actionlint
+zizmor --format github .github/workflows
+```
+
+`cargo deny` applies the policy in `deny.toml`, described in
+[`dependencies.md`](./dependencies.md#dependency-checks). A new RustSec
+advisory can fail a pull request that did not change dependencies; update the
+affected crate, or, when no fix exists and the advisory does not apply to
+Aeria, ignore its ID in `deny.toml` with the reason.
+
+`actionlint` checks the workflows and their shell scripts with `shellcheck`.
+`zizmor` checks them for security problems. A finding is fixed, not ignored;
+an `# zizmor: ignore[...]` comment is allowed only beside an explanation of
+why the finding does not apply, as on the `workflow_run` triggers of the
+release and the website.
+
+## Workflow rules
+
+- Every action is pinned by commit SHA with its version in a comment.
+  Dependabot updates the pins weekly.
+- Workflows have read-only permissions by default; a job that writes
+  declares exactly the permissions it needs.
+- Checkouts do not keep the token (`persist-credentials: false`).
+- Expressions such as `${{ steps.x.outputs.y }}` go into `run:` scripts
+  through `env`, never directly into the script text.
+- A tool downloaded by a workflow is pinned by version and verified by
+  checksum, or installed through a pinned action.
 
 When CI gains or removes a project-wide quality gate, update this document with the workflow change.
 

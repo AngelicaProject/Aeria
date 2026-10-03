@@ -8,3 +8,12 @@ updates:
     directory: "/"
     schedule:
       interval: weekly
+  # Actions are pinned by commit SHA; Dependabot moves the pins and their
+  # version comments together.
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
