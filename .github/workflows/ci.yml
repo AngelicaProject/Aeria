@@ -1,8 +1,20 @@
 name: CI
 
+# Branches are checked through their pull requests; main is checked after
+# every push, which the nightly release waits for.
 on:
   push:
+    branches: [main]
   pull_request:
+
+permissions:
+  contents: read
+
+# A new push to a pull request supersedes its running checks. Runs on main
+# are never cancelled: a stable release waits for CI on its exact commit.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   frontend:
@@ -17,9 +29,24 @@ jobs:
           version: 12.4.2
           run_install: false
       - run: pnpm install --frozen-lockfile
-      - run: pnpm test
+      - name: Test with coverage
+        run: |
+          set -o pipefail
+          pnpm --filter @aeria/desktop test:coverage | tee test-output.txt
+          {
+            echo "### Frontend coverage"
+            echo '```text'
+            sed -n '/start of coverage report/,/end of coverage report/p' test-output.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - run: node --test tools/release/version.test.mjs
       - run: pnpm typecheck
       - run: pnpm build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: coverage-frontend
+          path: apps/desktop/lcov.info
+          if-no-files-found: error
 
   rust:
     runs-on: ubuntu-latest
@@ -44,11 +71,36 @@ jobs:
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: 1.98.1
-          components: rustfmt, clippy
+          components: rustfmt, clippy, llvm-tools-preview
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov@0.9.1
       - run: cargo fmt --check
       - run: cargo build --workspace --locked
       - run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
-      - run: cargo test --workspace --locked
+      # Coverage instrumentation on stable does not run doctests.
+      - run: cargo llvm-cov --workspace --locked --lcov --output-path lcov.info
+      - run: cargo test --workspace --locked --doc
+      - name: Coverage report
+        run: |
+          cargo llvm-cov report --html
+          {
+            echo "### Rust coverage (Linux)"
+            echo '<details><summary>Per file</summary>'
+            echo
+            echo '```text'
+            cargo llvm-cov report --summary-only
+            echo '```'
+            echo '</details>'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: coverage-rust-linux
+          path: |
+            lcov.info
+            target/llvm-cov/html
+          if-no-files-found: error
 
   po-windows:
     runs-on: windows-latest
@@ -57,6 +109,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: 1.98.1
+      - uses: Swatinem/rust-cache@v2
       - run: cargo test -p aeria-po --locked
 
   desktop-windows:
@@ -66,6 +119,11 @@ jobs:
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: 1.98.1
+          components: llvm-tools-preview
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov@0.9.1
       - name: Stage pinned MinGit runtime
         run: pwsh -NoProfile -File tools/git/stage-mingit.ps1 -Target win-x64
       - run: cargo test -p aeria-projects --all-targets --locked
@@ -78,7 +136,8 @@ jobs:
       # Every file the path-handling suites create lives under a Cyrillic
       # folder with a space, as under a Russian Windows user profile. The
       # folder name stays short: SQLite on Windows does not accept paths
-      # longer than 260 characters.
+      # longer than 260 characters. These suites also measure the coverage
+      # of Windows code.
       - name: Test path handling under a Cyrillic temporary folder
         shell: pwsh
         run: |
@@ -87,6 +146,28 @@ jobs:
           $env:TMP = $temp
           $env:TEMP = $temp
           $env:AERIA_GIT_PATH = (Resolve-Path apps/desktop/src-tauri/binaries/mingit/cmd/git.exe).Path
-          cargo test --locked --all-targets -p aeria-sqpack -p aeria-source -p aeria-po -p aeria-search -p aeria-projects -p aeria-git
+          cargo llvm-cov --no-report --locked --all-targets -p aeria-sqpack -p aeria-source -p aeria-po -p aeria-search -p aeria-projects -p aeria-git
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cargo test --locked -p aeria-desktop --lib
+          cargo llvm-cov --no-report --locked -p aeria-desktop --lib
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Coverage report
+        shell: bash
+        run: |
+          cargo llvm-cov report --lcov --output-path lcov.info
+          cargo llvm-cov report --html
+          {
+            echo "### Rust coverage (Windows)"
+            echo '<details><summary>Per file</summary>'
+            echo
+            echo '```text'
+            cargo llvm-cov report --summary-only
+            echo '```'
+            echo '</details>'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: coverage-rust-windows
+          path: |
+            lcov.info
+            target/llvm-cov/html
+          if-no-files-found: error

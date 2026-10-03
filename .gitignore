@@ -1,5 +1,6 @@
 # Rust
 /target/
+/lcov.info
 
 # Node
 node_modules/
@@ -7,6 +8,7 @@ node_modules/
 
 # Frontend
 apps/desktop/dist/
+apps/desktop/lcov.info
 
 # Tauri
 apps/desktop/src-tauri/target/
