@@ -1,0 +1,47 @@
+# cargo-deny policy for the Cargo dependency graph, checked by the
+# supply-chain job in CI. docs/development/dependencies.md describes it.
+
+[graph]
+targets = ["x86_64-pc-windows-msvc", "x86_64-unknown-linux-gnu"]
+all-features = true
+
+# A vulnerability or a yanked crate anywhere in the graph fails CI. An
+# unmaintained crate fails only as a direct dependency: Aeria cannot replace
+# the ones its dependencies use.
+[advisories]
+version = 2
+unmaintained = "workspace"
+yanked = "deny"
+
+[licenses]
+version = 2
+confidence-threshold = 0.93
+# Workspace crates are Aeria itself (AGPL-3.0-only) and are never published.
+private = { ignore = true }
+# Licenses compatible with distributing Aeria under AGPL-3.0-only. A new
+# license is added here only after checking that compatibility.
+allow = [
+    "0BSD",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-3-Clause",
+    "BSL-1.0",
+    "CC0-1.0",
+    "ISC",
+    "MIT",
+    "MIT-0",
+    "MPL-2.0",
+    "Unicode-3.0",
+    "Unlicense",
+    "Zlib",
+]
+
+[bans]
+multiple-versions = "allow"
+wildcards = "deny"
+allow-wildcard-paths = true
+
+# Every crate comes from crates.io.
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"

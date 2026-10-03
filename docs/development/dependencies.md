@@ -4,6 +4,22 @@ Aeria prefers a small set of mature dependencies over internal reinvention of ge
 
 A dependency should have a concrete current use, a maintenance story, and compatible licensing. Remove unused dependencies rather than keeping speculative framework pieces.
 
+## Dependency checks
+
+CI enforces part of this policy with `cargo deny` (`deny.toml`) and
+`pnpm audit --prod`:
+
+- **Advisories**: a known vulnerability or a yanked crate anywhere in the
+  Cargo graph fails CI. An unmaintained crate fails only as a direct
+  dependency of a workspace crate.
+- **Licenses**: every crate's license must be in the `deny.toml` allow list,
+  the licenses compatible with distributing Aeria under AGPL-3.0-only. A new
+  license is added only after checking that compatibility. Workspace crates
+  are `publish = false` and are not checked.
+- **Sources**: every crate comes from crates.io; Git dependencies are
+  refused.
+- **npm**: the renderer's production dependencies have no known advisory.
+
 ## Runtime tools
 
 - Git: collaboration features invoke the Git command-line client (2.28 or

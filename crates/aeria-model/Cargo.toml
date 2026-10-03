@@ -4,6 +4,7 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
+publish.workspace = true
 repository.workspace = true
 description = "Machine translation of the project: the ChatGPT subscription sign-in, the Codex Responses client, and the run that translates the untranslated strings of po/."
 
