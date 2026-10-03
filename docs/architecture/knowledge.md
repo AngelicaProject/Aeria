@@ -50,7 +50,9 @@ out; the rest of the knowledge is used.
 - how a line reads as if written in the target language, and the known causes
   of dry, machine-written text;
 - how the player character is addressed without assuming a gender, with
-  conditions on `$gn4` in gendered languages;
+  conditions on `$gn4` in gendered languages, and how a comparison with the
+  player's name (`<if ($gs1 == $gs2)>`) splits a message between the player
+  character and someone else, whose words agree inside each branch;
 - how translations are written as macro text;
 - for Russian, notes on living language and `machine_phrasing`, a word-level
   check for officialese, bookish links, calques, and stacked explanations,

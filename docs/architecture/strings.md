@@ -235,7 +235,12 @@ translation (see [Structure policy](#structure-policy)).
 `catalog::GLOBALS` names the global parameters whose meaning game strings
 establish, each with the usage that shows it: `$gs1` is the player's name
 (`<if ($gs1 == $gs3)>your`), `$gn4` is 1 for a female player character (`A
-<if $gn4>woman<else>man</if> your size`), `$gn52`–`$gn54` are the Grand
+<if $gn4>woman<else>man</if> your size`). Messages about other people,
+such as the party and battle log, name them with `$gs2` and `$gs3` and
+compare each with `$gs1` to tell the player character apart; `$gn7` and
+`$gn8` are the `ObjStr` row of what they name when it is not a player
+(`<if $gn7><noun-en ObjStr 2 $gn7 1 1><else>{$gs2}</if>`), and `$gn5` and
+`$gn6` are 1 for a female player (`<if $gn5>her<else>his</if>`). `$gn52`–`$gn54` are the Grand
 Company ranks, `$gn68` is the class or job as a `ClassJob` row (`($gn68 ==
 17)` beside "class is changed to botanist"), `$gn71` is the race as a `Race`
 row, and `$gn72` is the level (compared with trait levels). Other globals

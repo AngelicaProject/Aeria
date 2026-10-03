@@ -991,6 +991,26 @@ pub const GLOBALS: &[GlobalSpec] = &[
         sheet: None,
         summary: "the name of the player character",
     },
+    // Messages about other people, such as the party and battle log, name
+    // them with $gs2 and $gs3 and compare each with $gs1: "<if ($gs1 == $gs2)>
+    // you<else><if $gn7><noun-en ObjStr 2 $gn7 1 1><else>{$gs2}</if></if>
+    // invites you to a party" (about 1,000 strings, $gs3 about 650).
+    GlobalSpec {
+        prefix: "gs",
+        index: 2,
+        name: "other-name",
+        sheet: None,
+        summary: "the name of the person or thing a message is about, such as who joins the party; \
+                  it is the player character when it equals $gs1",
+    },
+    GlobalSpec {
+        prefix: "gs",
+        index: 3,
+        name: "second-other-name",
+        sheet: None,
+        summary: "the name of a second person or thing a message is about; it is the player \
+                  character when it equals $gs1",
+    },
     // "A <if $gn4>woman<else>man</if> your size"
     GlobalSpec {
         prefix: "gn",
@@ -998,6 +1018,41 @@ pub const GLOBALS: &[GlobalSpec] = &[
         name: "player-female",
         sheet: None,
         summary: "1 when the player character is female, 0 when male",
+    },
+    // "<if $gn7><if \"<sheet BNpcName $gn7 6>\">her<else>his</if><else><if
+    // $gn5>her<else>his</if></if>": for a player named by $gs2 (116 strings);
+    // $gn6 does the same for $gs3.
+    GlobalSpec {
+        prefix: "gn",
+        index: 5,
+        name: "other-female",
+        sheet: None,
+        summary: "1 when the player named by $gs2 is female, 0 when male",
+    },
+    GlobalSpec {
+        prefix: "gn",
+        index: 6,
+        name: "second-other-female",
+        sheet: None,
+        summary: "1 when the player named by $gs3 is female, 0 when male",
+    },
+    // "<if $gn7><noun-en ObjStr 2 $gn7 1 1><else>{$gs2}</if>": set when $gs2
+    // is not a player (about 1,000 strings); $gn8 does the same for $gs3.
+    GlobalSpec {
+        prefix: "gn",
+        index: 7,
+        name: "other-object",
+        sheet: Some("ObjStr"),
+        summary: "the ObjStr row of what $gs2 names when it is not a player, such as a character \
+                  or an object; 0 for a player",
+    },
+    GlobalSpec {
+        prefix: "gn",
+        index: 8,
+        name: "second-other-object",
+        sheet: Some("ObjStr"),
+        summary: "the ObjStr row of what $gs3 names when it is not a player, such as a character \
+                  or an object; 0 for a player",
     },
     // "<if ($gn52 > 0)>Storm<else><if ($gn53 > 0)>Serpent<else>Flame"
     // and "<sheet GCRankLimsaMaleText $gn52 8>"
