@@ -466,17 +466,19 @@ The Search tool (left dock by default, floatable) is project search over
   Changes that would break their string show the reason and cannot be
   chosen; the others can be unchecked. Nothing is written before
   **Replace**.
-- **Translate again…** (all results, when every result is listed) and a
+- **Translate again…** (every translation found, listed or not) and a
   result's own button clear the translations after a confirmation and start
   a machine translation run of exactly those strings; the AI translation
   dialog opens on its progress.
-- Checkboxes choose strings, one by one or a sheet's loaded strings at once.
-  With strings chosen, **Translate again…** and **Exception** act on them
+- Checkboxes choose strings: one by one, every string of a sheet, or every
+  string found (the box beside the count). A sheet or a result with strings
+  not sent is chosen whole: its strings are read again without the limit of
+  a search (`project_search_entries`). With strings chosen, **Translate again…** and **Exception** act on them
   only; the exception takes the chosen term chip's term, or the term every
   chosen string has a finding for.
 - A string with a term finding has an exception button, and with a term's
-  chip chosen, **Exception … for all** adds the exception to every string
-  found when every result is listed (see
+  chip chosen, **Exception … for all** adds the exception to every
+  translation found (see
   [`po-project.md`](./po-project.md#term-exceptions)); both are bulk edits
   that Undo reverts.
 - After a bulk edit a notice gives what was written, what was skipped and

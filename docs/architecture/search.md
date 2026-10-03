@@ -113,7 +113,8 @@ can keep only the entries with an issue of one group.
 
 A search returns at most 2,000 entries with the byte ranges of their matches,
 every file with an entry found and its count, and counts the rest; a new search in the desktop cancels the one in
-progress. On the full game (about 7,300 files) a text search takes about half
+progress. `search_all` returns every entry found, for an action on a whole
+result; it is never cancelled, so it never returns part of one. On the full game (about 7,300 files) a text search takes about half
 a second, a regular expression about one, and checking every translation
 about two seconds. The glossary finds a string's terms with one automaton of
 all its terms in one pass, and a check finds the source's terms once for

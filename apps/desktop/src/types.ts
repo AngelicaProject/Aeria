@@ -828,6 +828,15 @@ export type SearchHitDto = {
   findings: IssueDto[];
 };
 
+/** A string a search found, with what a bulk action on it needs; a hit is one too. */
+export type SearchEntryDto = {
+  path: string;
+  context: string;
+  translation: string;
+  fuzzy: boolean;
+  findings: IssueDto[];
+};
+
 export type SearchResultDto = {
   hits: SearchHitDto[];
   /** Every string found; more than `hits` when the result was cut. */

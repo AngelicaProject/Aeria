@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { commonTerm, groupBySheet, reconcileChosen } from "../src/searchResults.ts";
+import { choose, chosenByPath, commonTerm, groupBySheet, reconcileChosen, unchooseFiles } from "../src/searchResults.ts";
 
 test("files of one sheet make one group", () => {
   const groups = groupBySheet([
@@ -38,4 +38,16 @@ test("chosen strings follow the result read again", () => {
   assert.equal(next.get("a.po|1").translation, "новый");
   const same = new Map([["a.po|1", hit("a.po", "1", "новый")]]);
   assert.equal(reconcileChosen(same, [hit("a.po", "1", "новый")], () => true), same, "nothing changed");
+});
+
+test("a whole sheet is chosen and unchosen by its files", () => {
+  const string = (path, context) => ({ path, context, translation: "перевод", fuzzy: false, findings: [] });
+  const sheet = [string("Item/10000.po", "1"), string("Item/12000.po", "2")];
+  let chosen = choose(new Map(), [string("Addon.po", "9")], true);
+  chosen = choose(chosen, sheet, true);
+  chosen = choose(chosen, sheet, true);
+  assert.deepEqual([...chosenByPath(chosen)], [["Addon.po", 1], ["Item/10000.po", 1], ["Item/12000.po", 1]], "a string is chosen once");
+  chosen = unchooseFiles(chosen, new Set(["Item/10000.po", "Item/12000.po"]));
+  assert.deepEqual([...chosen.keys()], ["Addon.po|9"]);
+  assert.equal(choose(chosen, [string("Addon.po", "9")], false).size, 0);
 });

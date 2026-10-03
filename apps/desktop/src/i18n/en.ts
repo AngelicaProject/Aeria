@@ -706,6 +706,7 @@ export const en = {
   "search.clearChosen": "Clear choice",
   "search.choose": "Choose the string",
   "search.chooseSheet": "Choose every string of {sheet}",
+  "search.chooseAll": "Choose every string found",
   "search.files": "files: {count}",
   "search.sheetCut": "The first {shown} of {count} are shown; narrow the search to see the rest.",
   "search.excepted": "Exception added to strings: {count}.",
@@ -714,7 +715,7 @@ export const en = {
   "search.exceptAllTitle": "The term «{term}» does not apply to any string found: the checks neither ask for its translation nor forbid its variants",
   "search.retranslateOne": "Translate again",
   "search.retranslateTitle": "Clear the translations found and translate them again with AI",
-  "search.retranslateIncomplete": "Narrow the search: translating again needs every result listed",
+  "search.nothingTranslated": "No translation found to change.",
   "search.retranslateConfirmTitle": "Translate again",
   "search.retranslateConfirm": {
     one: "Clear the translation of {count} string and translate it again with AI, with the current terms and style?",

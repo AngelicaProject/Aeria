@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { listen } from "@tauri-apps/api/event";
-import { normalizeCommandError, projectEditUndo, projectReplaceApply, projectReplacePreview, projectRetranslate, projectSearch, projectTermException } from "../ipc";
-import type { BulkEditDto, CommandError, EntryRefDto, ReplaceChangeDto, SearchCheck, SearchField, SearchFileDto, SearchHitDto, SearchQueryDto, SearchResultDto, SearchState, SourceBinding } from "../types";
+import { normalizeCommandError, projectEditUndo, projectReplaceApply, projectReplacePreview, projectRetranslate, projectSearch, projectSearchEntries, projectTermException } from "../ipc";
+import type { BulkEditDto, CommandError, EntryRefDto, ReplaceChangeDto, SearchCheck, SearchEntryDto, SearchField, SearchFileDto, SearchHitDto, SearchQueryDto, SearchResultDto, SearchState, SourceBinding } from "../types";
 import { describeIssue, errorText, exceptionTerm, issueLabel } from "../issueText";
-import { commonTerm, groupBySheet, hitKey, reconcileChosen, type SheetGroup } from "../searchResults";
+import { choose, chosenByPath, commonTerm, groupBySheet, hitKey, reconcileChosen, unchooseFiles, type Chosen, type SheetGroup } from "../searchResults";
 import type { MessageKey } from "../i18n/translate";
 import { useI18n } from "../ui/i18n";
 import { usePreferences } from "../ui/preferences";
@@ -75,7 +75,7 @@ export function highlight(text: string, ranges: readonly (readonly [number, numb
   return parts;
 }
 
-function entryRef(hit: SearchHitDto): EntryRefDto {
+function entryRef(hit: SearchEntryDto): EntryRefDto {
   return { path: hit.path, context: hit.context, expectedText: hit.translation, expectedFuzzy: hit.fuzzy };
 }
 
@@ -117,7 +117,7 @@ export function SearchPanel({ onRevealBinding, onWorkspaceChanged, onOpenTransla
   const [summaryOpen, setSummaryOpen] = useState(false);
   // Sheets whose strings were cut when loaded: more than one search returns.
   const [cut, setCut] = useState<ReadonlySet<string>>(new Set());
-  const [selected, setSelected] = useState<ReadonlyMap<string, SearchHitDto>>(new Map());
+  const [selected, setSelected] = useState<Chosen>(new Map());
   const searchRun = useRef(0);
   // The query of the shown result: a result of the same query, read again
   // after the files changed, keeps the open sheets and the chosen strings.
@@ -284,11 +284,12 @@ export function SearchPanel({ onRevealBinding, onWorkspaceChanged, onOpenTransla
     });
   };
 
-  const exceptTerm = (entries: EntryRefDto[], term: string) => void act("exception", async () => {
+  const exceptTermNow = async (entries: EntryRefDto[], term: string) => {
     const edit = await projectTermException(entries, term, true);
     describeEdit(edit, "search.excepted");
     refresh();
-  });
+  };
+  const exceptTerm = (entries: EntryRefDto[], term: string) => void act("exception", () => exceptTermNow(entries, term));
 
   const undo = () => void act("undo", async () => {
     const edit = await projectEditUndo();
@@ -375,14 +376,32 @@ export function SearchPanel({ onRevealBinding, onWorkspaceChanged, onOpenTransla
     setSelected((current) => reconcileChosen(current, shown, (path) => known.has(path) || !found.has(path)));
   }, [result, fileHits, hitsByPath]);
 
-  const setChosen = (hits: readonly SearchHitDto[], on: boolean) => setSelected((current) => {
-    const next = new Map(current);
-    for (const hit of hits) {
-      if (on) next.set(hitKey(hit), hit);
-      else next.delete(hitKey(hit));
+  const setChosen = (strings: readonly SearchEntryDto[], on: boolean) => setSelected((current) => choose(current, strings, on));
+
+  // Every string of the result, or of its files `paths`: those at hand when
+  // all are, otherwise read again without the limit of a search.
+  const everyString = async (paths: readonly string[] | null, atHand: readonly SearchEntryDto[] | null): Promise<SearchEntryDto[] | null> => {
+    if (atHand) return [...atHand];
+    const key = JSON.stringify(query);
+    const strings = await projectSearchEntries(paths === null ? query : { ...query, paths: [...paths] });
+    // A result of another query is shown by now: the strings are not its.
+    return shownQuery.current === key ? strings : null;
+  };
+
+  const chooseEvery = (paths: readonly string[] | null, atHand: readonly SearchEntryDto[] | null, on: boolean) => {
+    if (!on) {
+      setSelected((current) => (paths === null ? new Map() : unchooseFiles(current, new Set(paths))));
+      return;
     }
-    return next;
-  });
+    if (atHand) {
+      setChosen(atHand, true);
+      return;
+    }
+    void act("choose", async () => {
+      const strings = await everyString(paths, null);
+      if (strings) setChosen(strings, true);
+    });
+  };
 
   const translatedHits = useMemo(() => (result?.hits ?? []).filter((hit) => hit.translation !== ""), [result]);
   // The chosen group is a term's: every string found can take an exception for it.
@@ -393,9 +412,32 @@ export function SearchPanel({ onRevealBinding, onWorkspaceChanged, onOpenTransla
   }, [issueGroup, result]);
   const complete = result !== null && result.total === result.hits.length && !result.cancelled;
   const chosen = useMemo(() => [...selected.values()], [selected]);
+  const chosenCounts = useMemo(() => chosenByPath(selected), [selected]);
+  const chosenOf = (paths: readonly string[]) => paths.reduce((sum, path) => sum + (chosenCounts.get(path) ?? 0), 0);
+  const chosenInResult = result ? chosenOf(result.files.map((file) => file.path)) : 0;
   const chosenTranslated = chosen.filter((hit) => hit.translation !== "");
   const chosenTerm = groupTerm ?? commonTerm(chosen);
   const disabled = busy !== null;
+  // A cut result may have translations past the strings listed.
+  const mayHaveTranslated = translatedHits.length > 0 || (result !== null && !complete);
+
+  const translatedOfResult = async (): Promise<EntryRefDto[] | null> => {
+    const strings = await everyString(null, complete && result ? result.hits : null);
+    if (!strings) return null;
+    const translated = strings.filter((string) => string.translation !== "").map(entryRef);
+    if (translated.length === 0) setNotice({ text: t("search.nothingTranslated"), edit: null });
+    return translated.length > 0 ? translated : null;
+  };
+
+  const retranslateAll = () => void act("choose", async () => {
+    const translated = await translatedOfResult();
+    if (translated) setRetranslate(translated);
+  });
+
+  const exceptAll = (term: string) => void act("exception", async () => {
+    const translated = await translatedOfResult();
+    if (translated) await exceptTermNow(translated, term);
+  });
 
   return (
     <section className="tool-content search-tool" aria-label={t("tool.searchLabel")}>
@@ -485,6 +527,18 @@ export function SearchPanel({ onRevealBinding, onWorkspaceChanged, onOpenTransla
       ) : result ? (
         <>
           <div className="search-summary">
+            {result.total > 0 ? (
+              <input
+                type="checkbox"
+                className="search-check"
+                aria-label={t("search.chooseAll")}
+                title={t("search.chooseAll")}
+                disabled={disabled || result.cancelled}
+                checked={chosenInResult >= result.total}
+                ref={(element) => { if (element) element.indeterminate = chosenInResult > 0 && chosenInResult < result.total; }}
+                onChange={(event) => chooseEvery(null, complete ? result.hits : null, event.target.checked)}
+              />
+            ) : null}
             <span className="muted">
               {searching ? <span className="spinner" /> : null}
               {result.total === 0 ? t("search.none") : t("search.summary", { strings: result.total, files: result.files.length })}
@@ -520,13 +574,13 @@ export function SearchPanel({ onRevealBinding, onWorkspaceChanged, onOpenTransla
             </div>
           ) : null}
           <div className="search-summary">
-            {translatedHits.length > 0 ? (
-              <button className="button button-ghost" type="button" disabled={disabled || !complete} title={complete ? t("search.retranslateTitle") : t("search.retranslateIncomplete")} onClick={() => setRetranslate(translatedHits.map(entryRef))}>
+            {mayHaveTranslated ? (
+              <button className="button button-ghost" type="button" disabled={disabled || result.cancelled} title={t("search.retranslateTitle")} onClick={retranslateAll}>
                 <UiIcon icon="sparkles" size="sm" />{t("search.retranslateAll")}
               </button>
             ) : null}
-            {groupTerm !== null && translatedHits.length > 0 ? (
-              <button className="button button-ghost" type="button" disabled={disabled || !complete} title={complete ? t("search.exceptAllTitle", { term: groupTerm }) : t("search.retranslateIncomplete")} onClick={() => exceptTerm(translatedHits.map(entryRef), groupTerm)}>
+            {groupTerm !== null && mayHaveTranslated ? (
+              <button className="button button-ghost" type="button" disabled={disabled || result.cancelled} title={t("search.exceptAllTitle", { term: groupTerm })} onClick={() => exceptAll(groupTerm)}>
                 <UiIcon icon="bookX" size="sm" />{t("search.exceptAll", { term: groupTerm })}
               </button>
             ) : null}
@@ -540,8 +594,8 @@ export function SearchPanel({ onRevealBinding, onWorkspaceChanged, onOpenTransla
             {groups.map((group) => {
               const open = isOpen(group.key);
               const hits = open ? hitsOf(group) : null;
-              const loaded = Array.isArray(hits) ? hits : [];
-              const chosenHere = loaded.filter((hit) => selected.has(hitKey(hit))).length;
+              const paths = group.files.map((file) => file.path);
+              const chosenHere = chosenOf(paths);
               const folder = group.files.length > 1 ? group.files[0]?.path.split("/").slice(0, -1).join("/") : group.files[0]?.path;
               return (
                 <div className="search-group" key={group.key}>
@@ -550,10 +604,13 @@ export function SearchPanel({ onRevealBinding, onWorkspaceChanged, onOpenTransla
                       type="checkbox"
                       className="search-check"
                       aria-label={t("search.chooseSheet", { sheet: group.sheet })}
-                      disabled={loaded.length === 0}
-                      checked={loaded.length > 0 && chosenHere === loaded.length}
-                      ref={(element) => { if (element) element.indeterminate = chosenHere > 0 && chosenHere < loaded.length; }}
-                      onChange={(event) => setChosen(loaded, event.target.checked)}
+                      disabled={disabled}
+                      checked={group.count > 0 && chosenHere >= group.count}
+                      ref={(element) => { if (element) element.indeterminate = chosenHere > 0 && chosenHere < group.count; }}
+                      onChange={(event) => {
+                        const atHand = hitsOf(group);
+                        chooseEvery(paths, Array.isArray(atHand) && atHand.length >= group.count ? atHand : null, event.target.checked);
+                      }}
                     />
                     <button type="button" className="search-group-toggle" aria-expanded={open} onClick={() => toggleGroup(group)}>
                       <UiIcon icon={open ? "chevronDown" : "chevronRight"} size="xs" />
