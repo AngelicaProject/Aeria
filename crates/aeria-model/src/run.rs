@@ -15,6 +15,7 @@ use serde::Serialize;
 use tokio::task::JoinSet;
 
 use crate::ModelError;
+use crate::agree::agreement_problems;
 use crate::codex::{Codex, Reply, Request};
 use crate::fit;
 use crate::names::{Names, name_sheet_of};
@@ -598,6 +599,9 @@ fn problems(shared: &Shared, strings: &Strings, id: &str, answer: &Answer) -> Ve
         )
         .problems,
     );
+    // Asked of machine translation only: a person can keep one form where
+    // it agrees with both.
+    found.extend(agreement_problems(&entry.source, &answer.text));
     found
 }
 

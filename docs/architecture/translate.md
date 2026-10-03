@@ -146,8 +146,10 @@ In a long run of short, similar strings the model can slip and give a string
 the next one's translation; numbered IDs alone do not show it, and the
 translation passes every check. The repeated words do: an answer whose words,
 compared by letters and digits only and case ignored, do not occur in its own
-source (macro tags included, since the model may copy from them or skip a
-conditional opening such as `<if $n2>Lv. …</if>`), or that gives a bare
+source in their order (macro tags included, since the model may copy from
+them or skip a conditional opening such as `<if $n2>Lv. …</if>`; not
+necessarily together, since it leaves out the conditions between them, as
+in `you scan` of `<if ($gs1 == $gs2)>you<else>…</if> <if …>scan<else>scans</if>`), or that gives a bare
 translation, is refused as belonging to another string
 (`fit::matches_start`). Empty words are accepted only for a source that
 begins with a macro. Macro tags are read whole: a `>` inside parentheses or
@@ -171,7 +173,14 @@ tooltips show them whole.
 
 Every translation is checked like a save in the editor
 ([`po-project.md`](./po-project.md#checking)), after the answer's first
-words and an interface label's length. An answer that is not valid JSON,
+words and an interface label's length. One more check is machine
+translation's alone: when the source chooses a word by whether a person of a
+log message is the player (`<if ($gs1 == $gs2)>scan<else>scans</if>`), the
+translation needs a comparison with that person whose branches both have
+words, so that a word agreeing with the person is chosen with it, rather
+than one form after the name that agrees with only "you" or someone else
+(«Вы … осматривают»). Repeating a whole phrase in each branch always
+satisfies it; a person's save is not held to it. An answer that is not valid JSON,
 most often for a quote the model did not escape inside macro text, is read
 entry by entry (`"id": ["first words", "translation"]`, a bare quote read as
 part of its string); what is read this way is checked like any answer, so a
