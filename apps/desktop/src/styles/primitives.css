@@ -145,45 +145,47 @@ textarea.input,
 .checkbox input { margin: 0; }
 
 /* Every checkbox but a switch: a box drawn in the theme's colors, with a
-   check or, for a partly chosen group, a dash. */
+   check or, for a partly chosen group, a dash. The marks are vector masks
+   painted in --accent-fg, so they stay sharp and centered at any scale. */
 input[type="checkbox"]:not(.switch) {
   position: relative;
+  display: inline-grid;
   flex: none;
-  width: 14px;
-  height: 14px;
+  place-content: center;
+  width: 15px;
+  height: 15px;
   margin: 0;
-  border: 1px solid var(--line-strong);
-  border-radius: 3px;
+  border: 1px solid color-mix(in srgb, var(--fg) 32%, transparent);
+  border-radius: 4px;
   background: var(--field);
   appearance: none;
   cursor: pointer;
-  transition: background var(--duration), border-color var(--duration);
+  vertical-align: middle;
+  --checkbox-mark: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12' fill='none' stroke='%23000' stroke-width='1.9' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M2.5 6.3 4.9 8.6 9.5 3.6'/%3E%3C/svg%3E");
+  transition: background var(--duration), border-color var(--duration), box-shadow var(--duration);
+}
+input[type="checkbox"]:not(.switch)::after {
+  width: 12px;
+  height: 12px;
+  background: var(--accent-fg);
+  content: "";
+  -webkit-mask: var(--checkbox-mark) center / contain no-repeat;
+  mask: var(--checkbox-mark) center / contain no-repeat;
+  opacity: 0;
+  transform: scale(0.6);
+  transition: opacity var(--duration), transform var(--duration);
+}
+input[type="checkbox"]:not(.switch):indeterminate {
+  --checkbox-mark: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12' fill='none' stroke='%23000' stroke-width='1.9' stroke-linecap='round'%3E%3Cpath d='M3 6h6'/%3E%3C/svg%3E");
 }
 input[type="checkbox"]:not(.switch):hover:not(:disabled) { border-color: var(--accent); }
 input[type="checkbox"]:not(.switch):focus-visible { outline: 2px solid var(--line-focus); outline-offset: 1px; }
 input[type="checkbox"]:not(.switch):checked,
 input[type="checkbox"]:not(.switch):indeterminate { border-color: var(--accent); background: var(--accent); }
-input[type="checkbox"]:not(.switch):checked::after {
-  position: absolute;
-  top: 1px;
-  left: 4px;
-  width: 4px;
-  height: 8px;
-  border: solid var(--accent-fg);
-  border-width: 0 2px 2px 0;
-  content: "";
-  transform: rotate(45deg);
-}
-input[type="checkbox"]:not(.switch):indeterminate::after {
-  position: absolute;
-  top: 5px;
-  left: 2px;
-  width: 8px;
-  height: 2px;
-  border-radius: 1px;
-  background: var(--accent-fg);
-  content: "";
-}
+input[type="checkbox"]:not(.switch):checked::after,
+input[type="checkbox"]:not(.switch):indeterminate::after { opacity: 1; transform: none; }
+input[type="checkbox"]:not(.switch):checked:hover:not(:disabled),
+input[type="checkbox"]:not(.switch):indeterminate:hover:not(:disabled) { box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent); }
 input[type="checkbox"]:not(.switch):disabled { opacity: 0.45; cursor: default; }
 
 .switch {
