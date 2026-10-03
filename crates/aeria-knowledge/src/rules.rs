@@ -78,7 +78,20 @@ phrased so that nothing depends on the gender. Never keep only one of its branch
 - When the French or German line varies with the player character's gender and the \
 source does not, the target language most likely needs a condition there too.
 - Speakers keep their own gender: a condition on $gn4 is only for words about the \
-player character.";
+player character.
+- A comparison with the player's name, such as <if ($gs1 == $gs2)>, tells whether a \
+person a message is about is the player character: its first branch is about the \
+player character, usually as \"you\", and its other branch about someone else, named by \
+$gs2 or $gs3. A condition on $gn4 goes only inside the first branch: the player \
+character's gender says nothing about anyone else.
+- Words after such a comparison that agree with its person go inside its branches, \
+since they agree differently with \"you\" and with someone else. Another player's \
+gender is $gn5 for $gs2 and $gn6 for $gs3; when $gn7 or $gn8 is set, the person is a \
+character or an object whose gender is known only where the source tests it, so choose \
+a phrasing where nothing agrees with it. Keep the source's branches with the name as \
+they are and give the agreeing words a condition of their own. In Russian: «<if ($gs1 \
+== $gs2)>Вы покинули<else><if $gn7><noun-en ObjStr 2 $gn7 1 1><else>{$gs2}</if> <if \
+$gn7>покидает<else><if $gn5>покинула<else>покинул</if></if></if> группу».";
 
 /// How translations are written as the game's macro text.
 pub const MACRO_TEXT: &str = "\
