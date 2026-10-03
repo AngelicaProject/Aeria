@@ -121,7 +121,9 @@ The task is JSON built from the files as they are when the request is sent:
     first: up to 40 shared among the files, at least 5 each;
   - `strings`: each string's ID (unique in the request), source, and `#.`
     lines (the other client languages, speaker or kind, the row's other
-    cells, macro legends), `gendered`: the texts (`source`, `fr`, `de`)
+    cells, macro legends; the legends are made again from the current macro
+    catalog, so what the catalog learned since the file was made reaches the
+    model before a game update rewrites the comments), `gendered`: the texts (`source`, `fr`, `de`)
     whose line has a condition on the player character's gender, so the
     translation most likely needs one too, `maxLength` for an interface
     label (below), the previous source and translation of a fuzzy one, and
@@ -228,7 +230,9 @@ show as they happen.
 Each run writes a journal to `logs/translation-<start>.log` in the data
 folder (`%APPDATA%\Aeria` on Windows), and the last 20 are kept: what the
 run set out to translate, each request with its file, strings, retry, time,
-and tokens, each failure and wait, and why the run stopped. The texts sent
-and received are not written. The run goes on
+and tokens, how many strings of each answer fail the checks with their most
+frequent problems, each failure and wait, and why the run stopped. The texts
+sent and received are not written: a problem is named only up to its first
+quote or colon. The run goes on
 when the dialog is hidden, and Stop drops the batches in flight at once,
 without waiting for the service to answer them.

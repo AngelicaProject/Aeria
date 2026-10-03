@@ -365,6 +365,28 @@ struct Built {
     strings: Strings,
 }
 
+/// A string's context for the model: the comments of its entry, with what
+/// its macros do explained again from the catalog. The `macro:` comments say
+/// what the catalog knew when the file was made, so a macro the catalog has
+/// learned since reaches the model at once, before the next game update
+/// rewrites the comments.
+fn context_of(entry: &Entry) -> Vec<String> {
+    let Ok(constructs) = aeria_se::constructs(&entry.source) else {
+        return entry.extracted.clone();
+    };
+    entry
+        .extracted
+        .iter()
+        .filter(|line| !line.starts_with("macro: "))
+        .cloned()
+        .chain(
+            constructs
+                .iter()
+                .map(|construct| format!("macro: {}", construct.legend())),
+        )
+        .collect()
+}
+
 /// The speakers of a batch's strings whose names are translated, each once:
 /// their label, name, and translation.
 fn speakers_of(
@@ -450,7 +472,7 @@ fn file_task(
         .map(|(id, _, entry)| Item {
             id: id.clone(),
             source: entry.source.clone(),
-            context: entry.extracted.clone(),
+            context: context_of(entry),
             previous: entry
                 .fuzzy
                 .then(|| {
@@ -656,6 +678,51 @@ async fn ask(
     reply
 }
 
+/// Kinds of problems a journal line names; the rest are counted.
+const JOURNALED_PROBLEMS: usize = 4;
+
+/// Journals how many of `asked` strings fail the checks and their most
+/// frequent problems. A problem is named up to its first quote or colon, so
+/// the journal holds no translation's text.
+fn journal_failing(shared: &Shared, asked: usize, failing: &[(String, Answer, Vec<String>)]) {
+    if failing.is_empty() {
+        shared
+            .run
+            .log(format_args!("checks: all {asked} strings pass"));
+        return;
+    }
+    let mut kinds: BTreeMap<String, usize> = BTreeMap::new();
+    for (_, _, problems) in failing {
+        for problem in problems {
+            let kind = problem
+                .split(['"', ':', '«'])
+                .next()
+                .unwrap_or_default()
+                .trim();
+            let kind: String = kind.chars().take(100).collect();
+            *kinds.entry(kind).or_default() += 1;
+        }
+    }
+    let mut kinds: Vec<(String, usize)> = kinds.into_iter().collect();
+    kinds.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    let named: Vec<String> = kinds
+        .iter()
+        .take(JOURNALED_PROBLEMS)
+        .map(|(kind, count)| format!("{count}× {kind}"))
+        .collect();
+    let others = kinds.len().saturating_sub(JOURNALED_PROBLEMS);
+    shared.run.log(format_args!(
+        "checks: {} of {asked} strings fail: {}{}",
+        failing.len(),
+        named.join("; "),
+        if others > 0 {
+            format!("; and {others} other kinds")
+        } else {
+            String::new()
+        }
+    ));
+}
+
 /// Sends the translations that fail the checks back with their problems,
 /// up to [`RETRIES`] times; what still fails is rejected and stays as it was.
 async fn settle(
@@ -691,6 +758,7 @@ async fn settle(
     for (id, _, _) in &failing {
         answers.remove(id);
     }
+    journal_failing(shared, built.strings.len(), &failing);
     for retry in 1..=RETRIES {
         if failing.is_empty() {
             break;
@@ -724,6 +792,7 @@ async fn settle(
             }
         }
         failing = still;
+        journal_failing(shared, sent.len(), &failing);
     }
     Ok(failing
         .into_iter()
@@ -1183,6 +1252,23 @@ pub fn count(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn macros_are_explained_from_the_catalog_of_now() {
+        let entry = Entry {
+            extracted: vec![
+                "ja: <if $gn7>…<else>{$gs2}</if>".to_owned(),
+                "macro: <if $gn7>a<else>{$gs2}</if> — condition = global number 7".to_owned(),
+            ],
+            source: "<if $gn7>a<else>{$gs2}</if>".to_owned(),
+            ..Entry::default()
+        };
+        let context = context_of(&entry);
+        assert_eq!(context[0], entry.extracted[0], "other comments stay");
+        assert_eq!(context.len(), 2);
+        assert!(context[1].starts_with("macro: <if $gn7>"), "{}", context[1]);
+        assert!(context[1].contains("ObjStr row"), "{}", context[1]);
+    }
 
     #[test]
     fn paths_select_files_and_folders() {
