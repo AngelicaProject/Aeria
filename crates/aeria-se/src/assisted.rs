@@ -9,7 +9,10 @@
 //! - every piece of game data of the source stays: runtime values such as
 //!   `<num $n1>` or `<string $gs1>`, game data references such as `<sheet …>`,
 //!   icons, sounds, constructs Aeria does not understand, and raw bytes. They
-//!   may move and repeat, and the translation adds none the source lacks;
+//!   may move and repeat, and the translation adds none the source lacks
+//!   except the player insertions of `catalog::INSERTIONS`: the player
+//!   character's name, class or job, and race, which read only globals the
+//!   game sets for every string;
 //! - formatting (`<i>`, `<b>`, colors) may be added, dropped, and moved, as
 //!   the official localizations do; what it opens it closes as the source
 //!   does, so no color or style runs past the string;
@@ -188,6 +191,17 @@ Values a condition may test besides those the source uses:",
             reference,
             " ${}{} is {};",
             global.prefix, global.index, global.summary
+        );
+    }
+    reference.pop();
+    reference.push_str(
+        ". Game data a translation may add although the source lacks it, written exactly so:",
+    );
+    for insertion in player_insertions() {
+        let _ = write!(
+            reference,
+            " {} is {};",
+            insertion.parts[0], insertion.summary
         );
     }
     reference.pop();
@@ -433,6 +447,25 @@ fn parameter_text(kind: u8, index: u32) -> String {
     format!("${prefix}{index}")
 }
 
+/// The insertions about the player character a translation may add although
+/// its source lacks them: each reads only globals the game sets for every
+/// string, so it shows the right value anywhere.
+fn player_insertions() -> impl Iterator<Item = &'static catalog::InsertionSpec> {
+    catalog::INSERTIONS
+        .iter()
+        .filter(|spec| spec.group == "player" && spec.form == catalog::InsertionForm::Insert)
+}
+
+/// The insertion `shape` is, when it is a player insertion.
+fn player_insertion(shape: &Shape) -> bool {
+    player_insertions().any(|spec| {
+        let document = parse(spec.parts[0]);
+        let mut facts = Facts::default();
+        collect(&document, document.nodes(), &mut facts);
+        matches!(facts.data.as_slice(), [(only, _)] if only == shape)
+    })
+}
+
 fn is_known_global(kind: u8, index: u32) -> bool {
     PARAMETERS
         .iter()
@@ -495,9 +528,10 @@ pub fn check_assisted_structure(source: &str, target: &str) -> Result<(), Vec<St
                 .data
                 .iter()
                 .any(|(candidate, _)| candidate == shape)
+            && !player_insertion(shape)
         {
             errors.push(StructureError::new(format!(
-                "{spelling} is not in the source; a translation may not add game data, only reuse the source's"
+                "{spelling} is not in the source; a translation may not add game data, only reuse the source's and the player character's name, class or job, and race"
             )));
         }
     }

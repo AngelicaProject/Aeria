@@ -270,8 +270,9 @@ meaning) and the rule a translation follows for it:
 | Letter case | `upper`, `capitalize`, `title-case`, `lower`, `lower-first` | may add or drop it; the explanation says that game data inside one, such as a name the game stores in lower case, shows in that case only through it, so a case transform stays around game data, with `capitalize` in place of `title-case` in a language that capitalizes only the first word |
 
 A malformed source has no constructs and cannot be translated.
-`aeria_se::authoring_reference()` is a short reference of condition syntax
-and the known globals for the machine translation instructions.
+`aeria_se::authoring_reference()` is a short reference of condition syntax,
+the known globals, and the player insertions a translation may add, for the
+machine translation instructions.
 
 ### Structure policy
 
@@ -282,7 +283,10 @@ and the known globals for the machine translation instructions.
   arguments with translatable text masked: a changed item, sheet, or
   parameter is other data. Game data may move and repeat, anywhere in the
   string, including into or out of a condition's branches, and the target
-  adds none the source lacks;
+  adds none the source lacks except the player insertions of
+  `catalog::INSERTIONS` (`<string $gs1>`, the first and last name, `<sheet
+  ClassJob $gn68 0>`, `<sheet Race $gn71 0>`), which read only globals the
+  game sets for every string;
 - leaves each formatting macro (`i`, `b`, the colors) no more open at its
   end than the source does (it may close what the source forgot to close),
   and closes no more than the source does of what came before; otherwise

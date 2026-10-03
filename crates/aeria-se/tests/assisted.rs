@@ -238,3 +238,26 @@ fn a_message_about_another_player_may_agree_with_their_gender() {
         .expect("the legend of the condition on $gn7");
     assert!(legend.contains("ObjStr row"), "{legend}");
 }
+
+#[test]
+fn the_player_character_may_be_named_where_the_source_does_not() {
+    let source = "Well done!";
+    for target in [
+        "Отлично, <string $gs1>!",
+        r#"Отлично, <split " " 1><string $gs1></split>!"#,
+        r#"Отлично, <split " " 2><string $gs1></split>!"#,
+        "Отличная работа для <sheet ClassJob $gn68 0>!",
+        "Отлично для <sheet Race $gn71 0>!",
+    ] {
+        assert!(check_assisted_structure(source, target).is_ok(), "{target}");
+    }
+    assert!(refused(source, "Отлично, <string $gs2>!").contains("is not in the source"));
+    assert!(refused(source, "Отлично, <num $n1>!").contains("is not in the source"));
+    assert!(
+        refused(source, "Отлично, <sheet ClassJob 19 0>!").contains("is not in the source"),
+        "a constant row is not a player insertion"
+    );
+    assert!(
+        authoring_reference().contains(r#"<split " " 1><string $gs1></split> is the first name"#)
+    );
+}
