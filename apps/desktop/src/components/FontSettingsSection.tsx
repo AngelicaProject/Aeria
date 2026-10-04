@@ -18,6 +18,7 @@ type FontSettingsSectionProps = {
 type Zoom = "1" | "2" | "3" | "auto";
 
 const SAMPLES: Record<string, string> = {
+  AXIS: "Добро пожаловать в Томру! Съешь же ещё",
   Jupiter: "Настройки персонажа «Ёжик» № Щит",
   TrumpGothic: "ЗАДАНИЕ ВЫПОЛНЕНО Съешь же ещё",
   MiedingerMid: "ЖУРНАЛ ЗАДАНИЙ Щит Ёж",

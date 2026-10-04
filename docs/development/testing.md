@@ -64,7 +64,8 @@ it is not part of CI, which has no game installation.
 
 `aeria-export` compares its output with the committed fixtures
 `crates/aeria-export/tests/fixtures/harmonia-interop.hpk` and
-`harmonia-interop-fonts.hpk` (with a `FONTS` section), and the Harmonia
+`harmonia-interop-fonts.hpk` (with a `FONTS` section), and
+`harmonia-interop-replacements.hpk` (with `FONTS` and font replacements), and the Harmonia
 repository reads copies of the same files in its tests. Regenerate it with
 `AERIA_UPDATE_FIXTURES=1 cargo test -p aeria-export` only for an intended
 format change, and update Harmonia's copies in the same change.

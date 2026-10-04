@@ -5,7 +5,10 @@ use aeria_export::{
     PackSigner, SheetVariant, Team, compress_for_transport, feed_entry, fingerprint, source_guard,
     write_file_atomically, write_pack, write_pack_with_fonts,
 };
-use aeria_fonts::{FONTS_SECTION_KIND, FontSection, SectionGlyph, SectionSource, SectionTarget};
+use aeria_fonts::{
+    FONT_REPLACEMENTS_SECTION_KIND, FONTS_SECTION_KIND, FontSection, PackFonts, SectionGlyph,
+    SectionSource, SectionTarget,
+};
 use p256::ecdsa::signature::Verifier;
 use p256::ecdsa::{Signature, VerifyingKey};
 use sha2::{Digest, Sha256};
@@ -14,6 +17,7 @@ type Edit = Box<dyn Fn(&mut PackManifest, &mut Vec<PackSheet>)>;
 
 const FIXTURE: &str = "tests/fixtures/harmonia-interop.hpk";
 const FONTS_FIXTURE: &str = "tests/fixtures/harmonia-interop-fonts.hpk";
+const REPLACEMENTS_FIXTURE: &str = "tests/fixtures/harmonia-interop-replacements.hpk";
 
 fn manifest() -> PackManifest {
     PackManifest {
@@ -444,6 +448,27 @@ fn fonts() -> FontSection {
     }
 }
 
+/// Glyphs that replace the game's own: one `AXIS` size.
+fn replacements() -> FontSection {
+    let mut section = fonts();
+    section.targets = vec![SectionTarget {
+        font: "AXIS".to_owned(),
+        size: "14".to_owned(),
+        line_height: 19,
+        ascent: 15,
+        source: 0,
+        glyphs: section.targets[0].glyphs.clone(),
+    }];
+    section
+}
+
+fn added(section: FontSection) -> PackFonts {
+    PackFonts {
+        added: Some(section),
+        replaced: None,
+    }
+}
+
 #[test]
 fn fonts_are_an_optional_minor_1_section() {
     let manifest = manifest();
@@ -454,7 +479,8 @@ fn fonts_are_an_optional_minor_1_section() {
     );
     assert_eq!(u16_at(&plain.bytes, 10), 0);
 
-    let pack = write_pack_with_fonts(&manifest, sheets(), Some(&fonts()), None, None).unwrap();
+    let pack =
+        write_pack_with_fonts(&manifest, sheets(), Some(&added(fonts())), None, None).unwrap();
     assert_eq!(u16_at(&pack.bytes, 10), 1);
     assert_eq!(u32_at(&pack.bytes, 24), 8);
     assert_eq!(u32_at(&pack.bytes, 64 + 7 * 24), FONTS_SECTION_KIND);
@@ -467,16 +493,78 @@ fn fonts_are_an_optional_minor_1_section() {
     let mut invalid = fonts();
     invalid.targets[0].glyphs.reverse();
     assert!(matches!(
-        write_pack_with_fonts(&manifest, sheets(), Some(&invalid), None, None),
+        write_pack_with_fonts(&manifest, sheets(), Some(&added(invalid)), None, None),
         Err(ExportError::Fonts(_))
     ));
 }
 
 #[test]
+fn replacements_are_an_optional_minor_2_section() {
+    let manifest = manifest();
+    let plain = write_pack(&manifest, sheets(), None, None).unwrap();
+    let both = PackFonts {
+        added: Some(fonts()),
+        replaced: Some(replacements()),
+    };
+    let pack = write_pack_with_fonts(&manifest, sheets(), Some(&both), None, None).unwrap();
+    assert_eq!(u16_at(&pack.bytes, 10), 2);
+    assert_eq!(u32_at(&pack.bytes, 24), 9);
+    assert_eq!(u32_at(&pack.bytes, 64 + 7 * 24), FONTS_SECTION_KIND);
+    assert_eq!(
+        u32_at(&pack.bytes, 64 + 8 * 24),
+        FONT_REPLACEMENTS_SECTION_KIND
+    );
+    assert_eq!(
+        FontSection::decode(section(&pack.bytes, FONT_REPLACEMENTS_SECTION_KIND)).unwrap(),
+        replacements()
+    );
+    assert_eq!(
+        FontSection::decode(section(&pack.bytes, FONTS_SECTION_KIND)).unwrap(),
+        fonts()
+    );
+    assert_eq!(section(&pack.bytes, 7), section(&plain.bytes, 7));
+
+    let only = PackFonts {
+        added: None,
+        replaced: Some(replacements()),
+    };
+    let pack = write_pack_with_fonts(&manifest, sheets(), Some(&only), None, None).unwrap();
+    assert_eq!(u16_at(&pack.bytes, 10), 2);
+    assert_eq!(u32_at(&pack.bytes, 24), 8);
+    assert_eq!(
+        u32_at(&pack.bytes, 64 + 7 * 24),
+        FONT_REPLACEMENTS_SECTION_KIND
+    );
+}
+
+#[test]
 fn fonts_interop_fixture_is_stable() {
-    let pack = write_pack_with_fonts(&manifest(), sheets(), Some(&fonts()), Some(&signer()), None)
-        .unwrap();
+    let pack = write_pack_with_fonts(
+        &manifest(),
+        sheets(),
+        Some(&added(fonts())),
+        Some(&signer()),
+        None,
+    )
+    .unwrap();
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(FONTS_FIXTURE);
+    if std::env::var_os("AERIA_UPDATE_FIXTURES").is_some() {
+        std::fs::write(&path, &pack.bytes).unwrap();
+    }
+    let committed = std::fs::read(&path)
+        .expect("fixture exists; run with AERIA_UPDATE_FIXTURES=1 to create it");
+    assert_eq!(committed, pack.bytes);
+}
+
+#[test]
+fn replacements_interop_fixture_is_stable() {
+    let both = PackFonts {
+        added: Some(fonts()),
+        replaced: Some(replacements()),
+    };
+    let pack =
+        write_pack_with_fonts(&manifest(), sheets(), Some(&both), Some(&signer()), None).unwrap();
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(REPLACEMENTS_FIXTURE);
     if std::env::var_os("AERIA_UPDATE_FIXTURES").is_some() {
         std::fs::write(&path, &pack.bytes).unwrap();
     }

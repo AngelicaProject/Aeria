@@ -1291,7 +1291,7 @@ export const en = {
   "export.result.signed": "Signed with {fingerprint}",
   "export.result.unsigned": "Unsigned",
   "export.result.noWorkflow": "The feed workflow is not in the main branch on GitHub yet, so this release is not in the feed. See the GitHub section.",
-  "fonts.hint": "Jupiter, TrumpGothic, and MiedingerMid have no Cyrillic, so window titles show dashes. Aeria renders the missing glyphs from the fonts below into the pack, and Harmonia adds them to the game's own fonts through Penumbra. Saved in aeria-fonts.json and fonts/; commit them to record them in the project history.",
+  "fonts.hint": "Jupiter, TrumpGothic, and MiedingerMid have no Cyrillic, so window titles show dashes. Aeria renders the missing glyphs from the fonts below into the pack, and Harmonia adds them to the game's own fonts through Penumbra. The Cyrillic of AXIS, the font of dialogue, menus, and chat, is rendered anew on the pixel grid of its Latin, and Harmonia replaces the game's with it. Saved in aeria-fonts.json and fonts/; commit them to record them in the project history.",
   "fonts.error": "Font settings",
   "fonts.none": "The pack adds no glyphs to game fonts.",
   "fonts.useRecommended": "Use recommended fonts",

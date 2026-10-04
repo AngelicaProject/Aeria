@@ -7,9 +7,9 @@
 use std::path::{Path, PathBuf};
 
 use aeria_fonts::{
-    FONT_SETTINGS_FILE, FONTS_DIR, FontSettings, GAME_FONTS, character_set, describe_font,
-    game_font, import_project_file, install_recommended_files, load_source, preview_line,
-    project_path, render_size,
+    FONT_SETTINGS_FILE, FONTS_DIR, FontSettings, GAME_FONTS, character_set, characters_for,
+    describe_font, game_font, import_project_file, install_recommended_files, load_source,
+    preview_line, project_path, render_size,
 };
 use aeria_git::GitRepository;
 use serde::Serialize;
@@ -212,8 +212,15 @@ fn preview(
             let parameters = settings
                 .parameters(target, size.size)
                 .expect("validated source");
-            let glyphs = load_source(root, parameters.source)
-                .and_then(|source| render_size(game, size, &parameters, &source, &characters));
+            let glyphs = load_source(root, parameters.source).and_then(|source| {
+                render_size(
+                    game,
+                    size,
+                    &parameters,
+                    &source,
+                    &characters_for(game, &characters),
+                )
+            });
             let (line, generated_cap_advance, error) = match glyphs {
                 Ok(glyphs) => {
                     let capitals: Vec<f32> = glyphs
@@ -375,7 +382,7 @@ mod tests {
             assert_eq!(size.missing, vec!["Q".to_owned()]);
         }
         let error =
-            preview(temp.path(), &recommended_settings(), "AXIS", "Ё").expect_err("unknown");
+            preview(temp.path(), &recommended_settings(), "Meidinger", "Ё").expect_err("unknown");
         assert_eq!(error.code, "fontSettingsInvalid");
     }
 }

@@ -6,10 +6,12 @@ release. The export pipeline that produces this file is described in
 [`../architecture/export.md`](../architecture/export.md); the update feed that
 distributes it is [`feed-v1.md`](./feed-v1.md).
 
-`crates/aeria-export/tests/fixtures/harmonia-interop.hpk` (format minor 0) and
+`crates/aeria-export/tests/fixtures/harmonia-interop.hpk` (format minor 0),
 `harmonia-interop-fonts.hpk` (minor 1, with a [`FONTS`](#fonts-section)
-section) are signed packs the Aeria tests regenerate byte for byte and the
-Harmonia tests read. Any change to them is a format change.
+section), and `harmonia-interop-replacements.hpk` (minor 2, with `FONTS` and a
+[font-replacements](#font-replacements-section) section) are signed packs the
+Aeria tests regenerate byte for byte and the Harmonia tests read. Any change
+to them is a format change.
 
 A Harmonia pack (`.hpk`) is a compiled, read-only runtime artifact. It is not
 an editable collaboration format and is never read back by Aeria as project
@@ -45,7 +47,7 @@ signature all refer to it.
 | --- | --- | --- | --- |
 | 0 | `u8[8]` | magic | ASCII `AERIAHPK` |
 | 8 | `u16` | formatMajor | `1` |
-| 10 | `u16` | formatMinor | `0`, or `1` when the pack has a `FONTS` section |
+| 10 | `u16` | formatMinor | `0`; `1` when the pack has a `FONTS` section; `2` when it has a font-replacements section |
 | 12 | `u32` | headerSize | `64` |
 | 16 | `u64` | bodyLength | see above |
 | 24 | `u32` | sectionCount | number of section table entries |
@@ -81,11 +83,15 @@ by zero padding.
 | 6 | `CELLS` | yes |
 | 7 | `STRINGS` | yes |
 | `0x10000` | [`FONTS`](#fonts-section), minor 1 | no |
-| > `0x10000` | optional, added by a later minor version | no; ignored by readers that do not know them |
+| `0x10001` | [font replacements](#font-replacements-section), minor 2 | no |
+| > `0x10001` | optional, added by a later minor version | no; ignored by readers that do not know them |
 
-Each required kind appears exactly once and `FONTS` at most once. Any other
-unknown kind below `0x10000` is rejected. A reader that implements minor 0 only
-ignores `FONTS` and still applies the translations.
+Each required kind appears exactly once, and `FONTS` and font replacements at
+most once each. Any other unknown kind below `0x10000` is rejected. A reader
+that implements minor 0 only ignores `FONTS` and still applies the
+translations; one that implements minor 1 only ignores font replacements (any
+kind above `0x10000` is optional to it), so a pack with them still loads with
+its translations and added glyphs, and the game's own glyphs stay.
 
 ### `MANIFEST`
 
@@ -361,6 +367,28 @@ Harmonia applies the section at game start, only for the active pack:
 The exact packing and file rules are Harmonia's; they are described in its
 `docs/packs.md`.
 
+## Font-replacements section
+
+Minor 2 adds an optional section, kind `0x10001`, with glyphs that replace a
+game font's own: the Cyrillic of `AXIS`, the font of dialogue, menus, and chat,
+whose stems sit unevenly on the pixel grid. Its bytes follow every rule of
+the [`FONTS` section](#fonts-section): the same header (magic `HPKFONT1`),
+metadata, glyph records, and bitmaps; only the section kind differs.
+
+Harmonia applies it after `FONTS`, at game start and only for the active pack,
+in the same two font sets and with the same metrics check, except:
+
+1. a glyph whose codepoint the `.fdt` already has replaces that record. The
+   new record keeps the old record's Shift-JIS code; its texture index,
+   position, size, and offsets point to the new bitmap. The old bitmap stays
+   in the game's texture, unused;
+2. a glyph the `.fdt` lacks is added, as in `FONTS`;
+3. kerning pairs are unchanged; the game's `AXIS` has none for Cyrillic.
+
+The new bitmaps go into the same free atlas pages as `FONTS` glyphs. A target
+that is skipped (missing `.fdt`, changed metrics, no room) leaves the game's
+own glyphs in place.
+
 ## Source guard
 
 `sourceGuard` is computed from the bytes of the source string the translation
@@ -417,7 +445,8 @@ Before a pack is installed or loaded, the reader verifies:
 2. `packHash`;
 3. the signature and endorsement when present;
 4. the manifest schema;
-5. when present, every `FONTS` rule above;
+5. when present, every `FONTS` rule above, for `FONTS` and, by a reader
+   that implements minor 2, for font replacements;
 6. every ordering, uniqueness, range, and cross-reference rule above;
 7. every string range, its terminator, and that the string is
    [well-formed](#well-formed-strings).

@@ -1324,7 +1324,7 @@ export const ru: Catalog = {
   "export.result.signed": "Подписан ключом {fingerprint}",
   "export.result.unsigned": "Без подписи",
   "export.result.noWorkflow": "Workflow фида ещё не в основной ветке на GitHub, поэтому выпуска нет в фиде. См. раздел GitHub.",
-  "fonts.hint": "В Jupiter, TrumpGothic и MiedingerMid нет кириллицы, поэтому в заголовках окон видны прочерки. Aeria рисует недостающие глифы из шрифтов ниже и кладёт их в пак, а Harmonia дописывает их к родным шрифтам игры через Penumbra. Хранится в aeria-fonts.json и fonts/; закоммитьте изменения, чтобы занести их в историю проекта.",
+  "fonts.hint": "В Jupiter, TrumpGothic и MiedingerMid нет кириллицы, поэтому в заголовках окон видны прочерки. Aeria рисует недостающие глифы из шрифтов ниже и кладёт их в пак, а Harmonia дописывает их к родным шрифтам игры через Penumbra. Кириллицу AXIS, шрифта диалогов, меню и чата, Aeria рисует заново по пиксельной сетке его латиницы, и Harmonia заменяет ею родную. Хранится в aeria-fonts.json и fonts/; закоммитьте изменения, чтобы занести их в историю проекта.",
   "fonts.error": "Настройки шрифтов",
   "fonts.none": "Пак не добавляет глифы в шрифты игры.",
   "fonts.useRecommended": "Взять рекомендованные шрифты",

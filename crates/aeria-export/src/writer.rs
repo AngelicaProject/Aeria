@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 
-use aeria_fonts::{FONTS_SECTION_KIND, FontSection};
+use aeria_fonts::{FONT_REPLACEMENTS_SECTION_KIND, FONTS_SECTION_KIND, FontSection, PackFonts};
 use sha2::{Digest, Sha256};
 
 use crate::error::ExportError;
@@ -14,6 +14,8 @@ const FORMAT_MAJOR: u16 = 1;
 const FORMAT_MINOR: u16 = 0;
 /// Format minor that introduced the optional `FONTS` section.
 const FORMAT_MINOR_FONTS: u16 = 1;
+/// Format minor that introduced the optional font-replacements section.
+const FORMAT_MINOR_FONT_REPLACEMENTS: u16 = 2;
 const HEADER_SIZE: usize = 64;
 const SECTION_ENTRY_SIZE: usize = 24;
 const DIGEST_SIZE: usize = 32;
@@ -126,20 +128,29 @@ pub fn write_pack(
     write_pack_with_fonts(manifest, sheets, None, signer, endorsement)
 }
 
-/// [`write_pack`] with an optional `FONTS` section. A pack with fonts is
-/// written as format minor 1; one without is identical to [`write_pack`].
+/// [`write_pack`] with the optional font sections: `FONTS` for the added
+/// glyphs and the font-replacements section for replaced ones. A pack with
+/// replacements is written as format minor 2, one with added glyphs only as
+/// minor 1, and one without either is identical to [`write_pack`].
 ///
 /// # Errors
 /// As [`write_pack`], and [`ExportError::Fonts`] for an invalid section.
 pub fn write_pack_with_fonts(
     manifest: &PackManifest,
     sheets: Vec<PackSheet>,
-    fonts: Option<&FontSection>,
+    fonts: Option<&PackFonts>,
     signer: Option<&PackSigner>,
     endorsement: Option<&KeyEndorsement>,
 ) -> Result<BuiltPack, ExportError> {
     manifest.validate()?;
-    let fonts = fonts.map(FontSection::encode).transpose()?;
+    let added = fonts
+        .and_then(|fonts| fonts.added.as_ref())
+        .map(FontSection::encode)
+        .transpose()?;
+    let replaced = fonts
+        .and_then(|fonts| fonts.replaced.as_ref())
+        .map(FontSection::encode)
+        .transpose()?;
     if let Some(endorsement) = endorsement {
         let Some(signer) = signer else {
             return Err(ExportError::Manifest(
@@ -189,13 +200,15 @@ pub fn write_pack_with_fonts(
         (KIND_CELLS, sections.cells.as_slice()),
         (KIND_STRINGS, sections.strings.as_slice()),
     ];
-    let minor = match &fonts {
-        Some(fonts) => {
-            table.push((FONTS_SECTION_KIND, fonts.as_slice()));
-            FORMAT_MINOR_FONTS
-        }
-        None => FORMAT_MINOR,
-    };
+    let mut minor = FORMAT_MINOR;
+    if let Some(added) = &added {
+        table.push((FONTS_SECTION_KIND, added.as_slice()));
+        minor = FORMAT_MINOR_FONTS;
+    }
+    if let Some(replaced) = &replaced {
+        table.push((FONT_REPLACEMENTS_SECTION_KIND, replaced.as_slice()));
+        minor = FORMAT_MINOR_FONT_REPLACEMENTS;
+    }
     let bytes = assemble(&table, minor, signer, endorsement)?;
     let pack_hash = digest_of(&bytes);
     Ok(BuiltPack {

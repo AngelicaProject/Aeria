@@ -6,8 +6,12 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::FontError;
 
-/// Section kind in the pack section table.
+/// Section kind of `FONTS` in the pack section table.
 pub const FONTS_SECTION_KIND: u32 = 0x1_0000;
+/// Section kind of the font-replacements section, format minor 2: the same
+/// layout as `FONTS`, with glyphs that replace the game font's own.
+/// Harmonia versions that do not know it skip it.
+pub const FONT_REPLACEMENTS_SECTION_KIND: u32 = 0x1_0001;
 const MAGIC: &[u8; 8] = b"HPKFONT1";
 const HEADER_SIZE: usize = 32;
 const GLYPH_RECORD_SIZE: usize = 16;
