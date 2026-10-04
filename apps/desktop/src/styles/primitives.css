@@ -518,3 +518,6 @@ kbd {
 
 /* A long submenu, such as every class and job, scrolls. */
 .menu-content-scroll { max-height: min(420px, 70vh); overflow-y: auto; }
+
+/* Marks a sheet of names, whose translations machine translation spreads. */
+.name-sheet-mark { display: inline-flex; flex: none; align-items: center; color: var(--accent-text); }

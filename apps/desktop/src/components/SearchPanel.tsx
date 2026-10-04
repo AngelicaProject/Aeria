@@ -7,6 +7,7 @@ import { choose, chosenByPath, commonTerm, groupBySheet, hitKey, reconcileChosen
 import type { MessageKey } from "../i18n/translate";
 import { useI18n } from "../ui/i18n";
 import { usePreferences } from "../ui/preferences";
+import { NameSheetMark, useNameSheets } from "../ui/NameSheetMark";
 import { IconButton } from "../ui/primitives/IconButton";
 import { Select } from "../ui/primitives/Select";
 import { UiIcon } from "../ui/primitives/UiIcon";
@@ -98,6 +99,9 @@ export function SearchPanel({ onRevealBinding, onWorkspaceChanged, onOpenTransla
   const [fields, setFields] = useStickyState<SearchField[]>("search.fields", ["translation", "source"]);
   const [filtersOpen, setFiltersOpen] = useStickyState("search.filtersOpen", false);
   const [pathsText, setPathsText] = useStickyState("search.paths", "");
+  // Only the sheets of names, which machine translation spreads through the project.
+  const [nameSheetsOnly, setNameSheetsOnly] = useStickyState("search.nameSheets", false);
+  const nameSheets = useNameSheets();
   const [states, setStates] = useStickyState<SearchState[]>("search.states", []);
   const [check, setCheck] = useStickyState<SearchCheck>("search.check", "any");
   const [result, setResult] = useState<SearchResultDto | null>(null);
@@ -138,12 +142,12 @@ export function SearchPanel({ onRevealBinding, onWorkspaceChanged, onOpenTransla
     kind: regex ? "regex" : wholeWord ? "word" : "text",
     caseSensitive,
     fields,
-    paths: pathsText.split(/[,\s]+/).map((path) => path.trim()).filter(Boolean),
+    paths: nameSheetsOnly ? [...nameSheets] : pathsText.split(/[,\s]+/).map((path) => path.trim()).filter(Boolean),
     contexts: [],
     states,
     check,
     issue: check === "any" ? null : issueGroup,
-  }), [caseSensitive, check, fields, issueGroup, pathsText, regex, states, text, wholeWord]);
+  }), [caseSensitive, check, fields, issueGroup, nameSheets, nameSheetsOnly, pathsText, regex, states, text, wholeWord]);
   const active = query.text !== "" || query.check !== "any" || query.states.length > 0;
 
   const runSearch = useCallback(async (current: SearchQueryDto) => {
@@ -470,15 +474,20 @@ export function SearchPanel({ onRevealBinding, onWorkspaceChanged, onOpenTransla
             <button key={field} type="button" className={fields.includes(field) ? "chip-toggle on" : "chip-toggle"} aria-pressed={fields.includes(field)} onClick={() => setFields(toggle(fields, field))}>{t(fieldLabels[field])}</button>
           ))}
           <button type="button" className={filtersOpen ? "link-button search-filters-toggle open" : "link-button search-filters-toggle"} onClick={() => setFiltersOpen(!filtersOpen)}>
-            <UiIcon icon="listFilter" size="xs" />{t("search.filters")}{pathsText || states.length > 0 || check !== "any" ? " •" : ""}
+            <UiIcon icon="listFilter" size="xs" />{t("search.filters")}{pathsText || nameSheetsOnly || states.length > 0 || check !== "any" ? " •" : ""}
           </button>
         </div>
         {filtersOpen ? (
           <div className="search-filters">
             <label className="search-filter">
               <span>{t("search.paths")}</span>
-              <input className="input" value={pathsText} placeholder={t("search.pathsPlaceholder")} spellCheck={false} onChange={(event) => setPathsText(event.target.value)} />
+              <input className="input" value={nameSheetsOnly ? "" : pathsText} placeholder={nameSheetsOnly ? t("search.nameSheetsChosen") : t("search.pathsPlaceholder")} disabled={nameSheetsOnly} spellCheck={false} onChange={(event) => setPathsText(event.target.value)} />
             </label>
+            <div className="search-chips">
+              <button type="button" className={nameSheetsOnly ? "chip-toggle on" : "chip-toggle"} aria-pressed={nameSheetsOnly} title={t("nameSheet.mark")} onClick={() => setNameSheetsOnly(!nameSheetsOnly)}>
+                <UiIcon icon="bookMarked" size="xs" />{t("search.nameSheets")}
+              </button>
+            </div>
             <div className="search-chips" role="group" aria-label={t("search.states")}>
               {(Object.keys(stateLabels) as SearchState[]).map((state) => (
                 <button key={state} type="button" className={states.includes(state) ? "chip-toggle on" : "chip-toggle"} aria-pressed={states.includes(state)} onClick={() => setStates(toggle(states, state))}>{t(stateLabels[state])}</button>
@@ -615,6 +624,7 @@ export function SearchPanel({ onRevealBinding, onWorkspaceChanged, onOpenTransla
                     <button type="button" className="search-group-toggle" aria-expanded={open} onClick={() => toggleGroup(group)}>
                       <UiIcon icon={open ? "chevronDown" : "chevronRight"} size="xs" />
                       <span className="search-group-name" title={group.files.map((file) => file.path).join("\n")}>{group.sheet}</span>
+                      {nameSheets.has(group.sheet) ? <NameSheetMark /> : null}
                       {folder && folder.replace(/\.po$/, "") !== group.sheet ? <span className="muted search-group-path">{group.files.length > 1 ? t("search.files", { count: group.files.length }) : folder}</span> : null}
                       <span className="git-count">{group.count}</span>
                     </button>

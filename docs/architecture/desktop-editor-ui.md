@@ -416,7 +416,11 @@ names form collapsible folders for display only, while the canonical sheet name
 is passed unchanged to Rust. Its per-sheet translatable-cell count comes from the
 game's translation permission (see [`source.md`](./source.md)), not the
 sheet's physical row count, and each sheet
-with translations shows a coverage bar from `translation_progress`. Sheets with
+with translations shows a coverage bar from `translation_progress`. A sheet
+of names (`translation_name_sheets`, the `NAME_SHEETS` of machine
+translation) has a mark: its translations go with every request whose
+strings use its names, and the model writes them exactly, so a mistake there
+spreads through the project. Sheets with
 no permitted source strings are hidden by default. Hovering or focusing the
 Sheets dock reveals icon actions to show empty sheets, open the name filter,
 reveal the active sheet, and collapse folders. The filter takes space only while
@@ -436,8 +440,9 @@ The Search tool (left dock by default, floatable) is project search over
 - The query field has toggles for match case, whole word, and regular
   expression; a disclosure shows the replace field with *preserve case* and
   *replace all*. Chips choose the fields (translation, source, notes, ID);
-  **Filters** adds sheets and folders (`quest/, Addon`), entry states, and
-  the checks filter (any, with problems, with advice). The query is kept
+  **Filters** adds sheets and folders (`quest/, Addon`) or only the sheets
+  of names, entry states, and the checks filter (any, with problems, with
+  advice). Groups of a sheet of names have its mark. The query is kept
   while the window lives.
 - A search runs 300 ms after typing stops, or on Enter, and cancels the one
   in progress. The result is live: when the project's files change (a save,
@@ -599,7 +604,9 @@ example by Git.
 palette. The dialog chooses what to translate in a tree of the project's
 sheets with checkboxes (a folder's box chooses all its sheets), a search, and
 quick choices (names, quests, all untranslated, clear); every sheet and folder
-shows how many strings it still needs. It opens with the open sheet chosen.
+shows how many strings it still needs, and a sheet of names its mark. It
+says that every request also carries the glossary, the style, and
+translated strings of the same file. It opens with the open sheet chosen.
 It also chooses whether strings with a changed source are included, shows how
 many sheets and strings are chosen, and names the model; without a model it
 links to Settings. **Translate** starts a run, and the

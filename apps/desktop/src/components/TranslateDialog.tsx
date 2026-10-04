@@ -6,6 +6,7 @@ import type { MessageKey } from "../i18n/translate";
 import { buildSheetTree, findSheetMatches, type SheetTreeEntry, type SheetTreeFolder } from "../sheetExplorer";
 import { ErrorBanner } from "./ErrorBanner";
 import { TranslationRejections } from "./TranslationRejections";
+import { NameSheetMark } from "../ui/NameSheetMark";
 import { UiIcon } from "../ui/primitives/UiIcon";
 import { useI18n, type Translate } from "../ui/i18n";
 import { usePreferences } from "../ui/preferences";
@@ -223,6 +224,7 @@ export const TranslateDialog = memo(function TranslateDialog({ open, onOpenChang
             <span className="translate-twisty" />
             <Check checked={selected.has(name)} mixed={false} label={name} onChange={(on) => toggle([name], on)} />
             <span className="translate-name">{entry.name}</span>
+            {nameSheets.includes(name) ? <NameSheetMark /> : null}
             {remainingLabel(remainingOf(name))}
           </label>,
         );
@@ -273,6 +275,7 @@ export const TranslateDialog = memo(function TranslateDialog({ open, onOpenChang
                         <span className="translate-twisty" />
                         <Check checked={selected.has(match.sheet.name)} mixed={false} label={match.sheet.name} onChange={(on) => toggle([match.sheet.name], on)} />
                         <span className="translate-name">{match.basename}{match.breadcrumb ? <span className="muted"> · {match.breadcrumb}</span> : null}</span>
+                        {nameSheets.includes(match.sheet.name) ? <NameSheetMark /> : null}
                         {remainingLabel(remainingOf(match.sheet.name))}
                       </label>
                     ))
@@ -289,6 +292,7 @@ export const TranslateDialog = memo(function TranslateDialog({ open, onOpenChang
                 <span>{t("translate.fuzzy")}</span>
               </label>
               <p className="field-hint">{t("translate.namesFirst")}</p>
+              <p className="field-hint">{t("translate.alsoSees")}</p>
               {noModel ? (
                 <p className="export-warning">
                   <UiIcon icon="circleAlert" size="xs" />{t("translate.noModel")}{" "}
