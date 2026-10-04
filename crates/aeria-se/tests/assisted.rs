@@ -1,4 +1,7 @@
-use aeria_se::{ConstructRule, authoring_reference, check_assisted_structure, constructs};
+use aeria_se::{
+    ConstructRule, authoring_reference, check_assisted_structure, check_assisted_structure_with,
+    constructs,
+};
 
 fn refused(source: &str, target: &str) -> String {
     check_assisted_structure(source, target)
@@ -283,4 +286,36 @@ fn whether_a_character_of_a_message_is_female_may_be_tested() {
         );
     }
     assert!(authoring_reference().contains(r#"<if "<sheet BNpcName $gn8 6>">"#));
+}
+
+#[test]
+fn game_data_an_official_localization_uses_may_stand_in() {
+    let source = "<title-case><sheet ClassJob $n1 30></title-case> (Lv. <num $n2>)";
+    let target = "<capitalize><sheet ClassJob $n1 0></capitalize> (ур. <num $n2>)";
+    let localizations = [
+        "<sheet ClassJob $n1 30>   Lv.<num $n2>",
+        "<sheet ClassJob $n1 0> St. <num $n2>",
+        "<capitalize><sheet ClassJob $n1 0></capitalize> nv <num $n2>",
+    ];
+    assert!(
+        check_assisted_structure_with(source, target, &localizations).is_ok(),
+        "the localized class name, as German and French insert it"
+    );
+    assert!(
+        refused(source, target).contains("not in the source"),
+        "without the localizations it is other game data"
+    );
+    assert!(
+        check_assisted_structure_with(
+            source,
+            "<sheet ClassJob $n1 0> (ур. <num $n2>) <sheet Item $n1 0>",
+            &localizations
+        )
+        .is_err(),
+        "data no localization uses stays refused"
+    );
+    assert!(
+        check_assisted_structure_with(source, "<sheet ClassJob $n1 0>", &localizations).is_err(),
+        "the level every localization keeps must stay"
+    );
 }

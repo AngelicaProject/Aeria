@@ -253,7 +253,17 @@ pub fn check_translation(
     if text.contains('\n') && !source.contains('\n') {
         issues.push(Issue::LineBreak);
     }
-    if let Err(errors) = aeria_se::check_assisted_structure(source, text) {
+    // The same string in the other client languages: game data they use
+    // in place of the source's may stand in the translation.
+    let localizations: Vec<&str> = extracted
+        .iter()
+        .filter_map(|line| {
+            ["ja: ", "de: ", "fr: "]
+                .iter()
+                .find_map(|prefix| line.strip_prefix(prefix))
+        })
+        .collect();
+    if let Err(errors) = aeria_se::check_assisted_structure_with(source, text, &localizations) {
         issues.extend(
             errors
                 .into_iter()
@@ -370,6 +380,28 @@ pub fn check_file(file: &PoFile, knowledge: &Knowledge, target_language: &str) -
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn game_data_of_the_other_languages_of_the_string_may_stand_in() {
+        let source = "<title-case><sheet ClassJob $n1 30></title-case> (Lv. <num $n2>)";
+        let text = "<capitalize><sheet ClassJob $n1 0></capitalize> (ур. <num $n2>)";
+        let extracted = [
+            "ja: <sheet ClassJob $n1 30>   Lv.<num $n2>".to_owned(),
+            "de: <sheet ClassJob $n1 0> St. <num $n2>".to_owned(),
+            "fr: <capitalize><sheet ClassJob $n1 0></capitalize> nv <num $n2>".to_owned(),
+        ];
+        let knowledge = Knowledge::default();
+        assert!(
+            check_translation(&knowledge, "ru", source, text, &extracted, &[])
+                .problems
+                .is_empty()
+        );
+        assert!(
+            !check_translation(&knowledge, "ru", source, text, &[], &[])
+                .problems
+                .is_empty()
+        );
+    }
 
     #[test]
     fn slips_of_letters_are_problems_unless_the_source_has_them() {

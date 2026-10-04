@@ -106,7 +106,11 @@ Macro text:
 - A string's source is macro text, the game's written form; the macros each line uses \
 are explained with it. Write translations as macro text and localize them: word order, \
 conditions, and formatting follow the target language, not the source's shape.
-- Keep every macro marked as game data; it may move or repeat. Formatting (italics, \
+- Keep every macro marked as game data; it may move or repeat. Where the German or \
+French text of the same string uses other game data in its place, the translation may do \
+as it does: the English inserts the English class name, <sheet ClassJob $n1 30>, where \
+they insert the name in the player's language, <sheet ClassJob $n1 0>, which is the one to \
+use. Formatting (italics, \
 bold, colors) is the translation's own, as in the official localizations: add, drop, or \
 move it as the target language reads best, and close every tag you open, as the source \
 does. Conditions may be reworded, \

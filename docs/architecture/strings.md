@@ -281,12 +281,19 @@ machine translation instructions.
 - is well-formed macro text;
 - keeps every piece of game data of the source, compared by its code and
   arguments with translatable text masked: a changed item, sheet, or
-  parameter is other data. Game data may move and repeat, anywhere in the
+  parameter is other data. A piece an official localization of the same
+  string does without may be left out (`check_assisted_structure_with`
+  takes the `ja:`, `de:`, and `fr:` lines of the entry; a malformed one is
+  not evidence). Game data may move and repeat, anywhere in the
   string, including into or out of a condition's branches, and the target
   adds none the source lacks except the player insertions of
   `catalog::INSERTIONS` (`<string $gs1>`, the first and last name, `<sheet
   ClassJob $gn68 0>`, `<sheet Race $gn71 0>`), which read only globals the
-  game sets for every string, and the reads of `catalog::PERSON_READS`
+  game sets for every string, the game data an official localization of
+  the same string uses in place of the source's (the German and French
+  class-level template insert `<sheet ClassJob $n1 0>`, the localized name,
+  where the English inserts `<sheet ClassJob $n1 30>`, the English one), and
+  the reads of `catalog::PERSON_READS`
   (`<sheet BNpcName $gn7 6>` and `$gn8`: whether a character a message is
   about is female, as about 120 log strings test it);
 - leaves each formatting macro (`i`, `b`, the colors) no more open at its

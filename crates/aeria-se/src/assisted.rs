@@ -492,6 +492,26 @@ fn is_known_global(kind: u8, index: u32) -> bool {
 ///
 /// Returns every violated rule, written for the model.
 pub fn check_assisted_structure(source: &str, target: &str) -> Result<(), Vec<StructureError>> {
+    check_assisted_structure_with(source, target, &[])
+}
+
+/// Checks a translation as [`check_assisted_structure`] does, with the same
+/// string in the game's other client languages (`localizations`, macro
+/// text). Game data an official localization uses may stand in the
+/// translation, and game data of the source one of them does without may be
+/// left out: the English class-level template inserts the English class name
+/// (`<sheet ClassJob $n1 30>`), the German and French ones the localized
+/// name (`<sheet ClassJob $n1 0>`), and a translation may do as they do. A
+/// malformed localization is not evidence.
+///
+/// # Errors
+///
+/// Returns every violated rule, written for the model.
+pub fn check_assisted_structure_with(
+    source: &str,
+    target: &str,
+    localizations: &[&str],
+) -> Result<(), Vec<StructureError>> {
     let source_document = parse(source);
     let target_document = parse(target);
     if !target_document.is_well_formed() {
@@ -513,6 +533,19 @@ pub fn check_assisted_structure(source: &str, target: &str) -> Result<(), Vec<St
     collect(&source_document, source_document.nodes(), &mut source_facts);
     let mut target_facts = Facts::default();
     collect(&target_document, target_document.nodes(), &mut target_facts);
+    // The game data of each well-formed localization.
+    let localized: Vec<Vec<Shape>> = localizations
+        .iter()
+        .map(|text| parse(text))
+        .filter(MacroString::is_well_formed)
+        .map(|document| {
+            let mut facts = Facts::default();
+            collect(&document, document.nodes(), &mut facts);
+            facts.data.into_iter().map(|(shape, _)| shape).collect()
+        })
+        .collect();
+    let localized_uses = |shape: &Shape| localized.iter().any(|shapes| shapes.contains(shape));
+    let localized_lacks = |shape: &Shape| localized.iter().any(|shapes| !shapes.contains(shape));
 
     let mut errors = Vec::new();
     check_speaker_name(&source_document, &target_document, &mut errors);
@@ -525,6 +558,7 @@ pub fn check_assisted_structure(source: &str, target: &str) -> Result<(), Vec<St
                 .data
                 .iter()
                 .any(|(candidate, _)| candidate == shape)
+            && !localized_lacks(shape)
         {
             errors.push(StructureError::new(format!(
                 "{spelling} of the source is missing; every value the game fills in must stay, though it may move or repeat"
@@ -541,6 +575,7 @@ pub fn check_assisted_structure(source: &str, target: &str) -> Result<(), Vec<St
                 .iter()
                 .any(|(candidate, _)| candidate == shape)
             && !addable(shape)
+            && !localized_uses(shape)
         {
             errors.push(StructureError::new(format!(
                 "{spelling} is not in the source; a translation may not add game data, only reuse the source's and add those the instructions list"

@@ -21,7 +21,7 @@ mod syntax;
 
 pub use assisted::{
     Construct, ConstructRule, StructureError, authoring_reference, check_assisted_structure,
-    constructs, describe as describe_macro,
+    check_assisted_structure_with, constructs, describe as describe_macro,
 };
 pub use catalog::SemanticFamily;
 pub use semantic::{SemanticValidation, SemanticValidity};
