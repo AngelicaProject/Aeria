@@ -512,6 +512,18 @@ export type TranslationStop =
   | { reason: "signInRequired" }
   | { reason: "failed"; message: string };
 
+/** A request of a run the service is answering now. */
+export type TranslationActive = {
+  /** The request's first file, relative to `po/`. */
+  path: string;
+  files: number;
+  strings: number;
+  /** 0 for the translation; 1 and up for the retries of what failed the checks. */
+  retry: number;
+  /** Unix milliseconds. */
+  startedAt: number;
+};
+
 /** Where a machine translation run is. */
 export type TranslationStatus = {
   running: boolean;
@@ -526,10 +538,29 @@ export type TranslationStatus = {
   cachedTokens: number;
   outputTokens: number;
   pace: number;
+  /** Requests the service is answering now, oldest first; tokens count as each answers. */
+  active: TranslationActive[];
   stop: TranslationStop | null;
   message: string | null;
   /** Unix milliseconds. */
   startedAt: number;
+};
+
+/** A string where a glossary candidate is rendered one way. */
+export type TermExampleDto = { path: string; context: string; binding: SourceBinding | null; source: string; translation: string };
+
+/** One way the project renders a glossary candidate. */
+export type TermRenderingDto = { words: string[]; strings: number; examples: TermExampleDto[] };
+
+/** A name the project renders in several ways, the most used rendering first. */
+export type TermCandidateDto = {
+  phrase: string;
+  strings: number;
+  translated: number;
+  renderings: TermRenderingDto[];
+  /** Every rendering sounds like the name: spellings of one name rather than other words. */
+  spellings: boolean;
+  sheets: { sheet: string; count: number }[];
 };
 
 /** One term of `aeria-knowledge/terms.csv`; `settled` when a person decided it. */
@@ -825,6 +856,15 @@ export type SearchHitDto = {
   fuzzy: boolean;
   note: string | null;
   matches: SearchFieldMatchDto[];
+  findings: IssueDto[];
+};
+
+/** A string a search found, with what a bulk action on it needs; a hit is one too. */
+export type SearchEntryDto = {
+  path: string;
+  context: string;
+  translation: string;
+  fuzzy: boolean;
   findings: IssueDto[];
 };
 

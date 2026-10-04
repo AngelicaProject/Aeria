@@ -1,8 +1,8 @@
 //! The recommended source fonts, bundled with Aeria.
 //!
-//! All three are SIL Open Font License 1.1 fonts from `github.com/google/fonts`
-//! (`ofl/cormorantsc`, `ofl/oswald`, `ofl/unbounded`). They were chosen and tuned
-//! against the native Latin glyphs of each game font size.
+//! All four are SIL Open Font License 1.1 fonts from `github.com/google/fonts`
+//! (`ofl/cormorantsc`, `ofl/oswald`, `ofl/unbounded`, `ofl/opensans`). They were
+//! chosen and tuned against the native Latin glyphs of each game font size.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -44,6 +44,14 @@ const FILES: &[PresetFile] = &[
         bytes: include_bytes!("../presets/OFL-oswald.txt"),
     },
     PresetFile {
+        name: "OpenSans-Variable.ttf",
+        bytes: include_bytes!("../presets/OpenSans-Variable.ttf"),
+    },
+    PresetFile {
+        name: "OFL-opensans.txt",
+        bytes: include_bytes!("../presets/OFL-opensans.txt"),
+    },
+    PresetFile {
         name: "Unbounded-Variable.ttf",
         bytes: include_bytes!("../presets/Unbounded-Variable.ttf"),
     },
@@ -71,8 +79,40 @@ fn axes(values: &[(&str, f64)]) -> BTreeMap<String, f64> {
         .collect()
 }
 
-/// The recommended settings: Cormorant SC for `Jupiter`, Oswald for
-/// `TrumpGothic`, and Unbounded for `MiedingerMid`.
+/// `AXIS`: Open Sans. Width and weight per size keep the mean advance and
+/// the ink of the game's own Cyrillic, so lines wrap as before.
+fn axis_target() -> FontTarget {
+    FontTarget {
+        font: "AXIS".to_owned(),
+        source: "open-sans".to_owned(),
+        axes: axes(&[("wdth", 94.0), ("wght", 520.0)]),
+        scale: 1.0,
+        width_scale: 1.0,
+        baseline_shift: 0,
+        tracking: 0.0,
+        case_mapping: CaseMapping::None,
+        sizes: [
+            ("96", 86.0, 560.0),
+            ("12", 96.0, 560.0),
+            ("18", 95.0, 455.0),
+            ("36", 96.0, 440.0),
+        ]
+        .into_iter()
+        .map(|(size, width, weight)| {
+            (
+                size.to_owned(),
+                SizeOverride {
+                    axes: Some(axes(&[("wdth", width), ("wght", weight)])),
+                    ..SizeOverride::default()
+                },
+            )
+        })
+        .collect(),
+    }
+}
+
+/// The recommended settings: Open Sans for `AXIS`, Cormorant SC for
+/// `Jupiter`, Oswald for `TrumpGothic`, and Unbounded for `MiedingerMid`.
 #[must_use]
 pub fn recommended_settings() -> FontSettings {
     const CORMORANT: &str =
@@ -95,6 +135,13 @@ pub fn recommended_settings() -> FontSettings {
                 "OFL-cormorantsc.txt",
             ),
             source(
+                "open-sans",
+                "OpenSans-Variable.ttf",
+                "Open Sans",
+                "Copyright 2020 The Open Sans Project Authors (https://github.com/googlefonts/opensans)",
+                "OFL-opensans.txt",
+            ),
+            source(
                 "oswald",
                 "Oswald-Variable.ttf",
                 "Oswald",
@@ -110,6 +157,7 @@ pub fn recommended_settings() -> FontSettings {
             ),
         ],
         fonts: vec![
+            axis_target(),
             FontTarget {
                 font: "Jupiter".to_owned(),
                 source: "cormorant-sc-semibold".to_owned(),

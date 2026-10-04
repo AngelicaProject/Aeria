@@ -1,4 +1,4 @@
-import type { GlossaryEntry, TermInput } from "./types";
+import type { GlossaryEntry, TermCandidateDto, TermInput } from "./types";
 
 /**
  * One editable term row. `forbidden` is the `;`-separated text; `settled`
@@ -47,6 +47,35 @@ export function rowProblems(rows: readonly GlossaryRow[]): Map<number, RowProble
 }
 
 /** Rows whose term, translation, or note contains the query, ignoring case. */
+/** A term without case and a leading "the", as the glossary compares terms. */
+function termKey(term: string): string {
+  return term.trim().toLowerCase().replace(/^the\s+/, "");
+}
+
+/**
+ * The row a candidate becomes: the chosen rendering as the translation and
+ * the others as forbidden variants. A name matches with its case, so a
+ * common word spelled alike (`eye` beside `the Eye`) is not the term.
+ */
+export function rowFromCandidate(candidate: TermCandidateDto, chosen: number, key: number): GlossaryRow {
+  const renderings = candidate.renderings.map((rendering) => rendering.words.join(" "));
+  return {
+    key,
+    term: candidate.phrase,
+    translation: renderings[chosen] ?? "",
+    note: "",
+    forbidden: renderings.filter((_, index) => index !== chosen).join("; "),
+    settled: true,
+    matchCase: true,
+  };
+}
+
+/** The candidates still to decide: not terms of `rows`, not skipped. */
+export function openCandidates(candidates: readonly TermCandidateDto[], rows: readonly GlossaryRow[], skipped: ReadonlySet<string>): TermCandidateDto[] {
+  const terms = new Set(rows.map((row) => termKey(row.term)));
+  return candidates.filter((candidate) => !terms.has(termKey(candidate.phrase)) && !skipped.has(candidate.phrase));
+}
+
 export function filterRows(rows: readonly GlossaryRow[], query: string): GlossaryRow[] {
   const needle = query.trim().toLowerCase();
   if (!needle) return [...rows];

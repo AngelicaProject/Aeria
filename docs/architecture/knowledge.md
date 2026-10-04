@@ -35,7 +35,9 @@ marked `settled`. The knowledge is committed with the translations (see
 entries.
 
 The desktop edits the terms and the style in the project knowledge dialog
-(see [`desktop-editor-ui.md`](./desktop-editor-ui.md#project-knowledge-dialog)).
+(see [`desktop-editor-ui.md`](./desktop-editor-ui.md#project-knowledge-dialog)),
+which also lists glossary candidates: names the project translates in
+several ways (see [`search.md`](./search.md#glossary-candidates)).
 A term a person edits there is marked settled. A file that cannot be read,
 and rows the format excludes, are reported with their file and line and left
 out; the rest of the knowledge is used.
@@ -50,8 +52,14 @@ out; the rest of the knowledge is used.
 - how a line reads as if written in the target language, and the known causes
   of dry, machine-written text;
 - how the player character is addressed without assuming a gender, with
-  conditions on `$gn4` in gendered languages;
-- how translations are written as macro text;
+  conditions on `$gn4` in gendered languages, and how a comparison with the
+  player's name (`<if ($gs1 == $gs2)>`) splits a message between the player
+  character and someone else, whose words agree inside each branch;
+- how translations are written as macro text, and that a name the game fills
+  in never declines, so a line puts it where its stored form is right; that
+  `\<sigh>` and `\<click>` are sounds of the English localization, said in
+  the line itself as the Japanese does (Эх…, Бип!), and a gesture by the
+  line's own words (Хе-хе), never dropped, unless the style says otherwise;
 - for Russian, notes on living language and `machine_phrasing`, a word-level
   check for officialese, bookish links, calques, and stacked explanations,
   reported as advice.

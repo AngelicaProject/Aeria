@@ -22,15 +22,49 @@ pub struct GameFontSize {
     pub cap_advance_centi: u16,
     /// Advance of the space character in pixels.
     pub space_advance: u8,
+    /// How the native Latin glyphs sit on the pixel grid, for game fonts
+    /// whose own glyphs are replaced; `None` draws outlines unfitted.
+    pub grid: Option<PixelGrid>,
 }
 
-/// A game font that has no Cyrillic glyphs.
+/// The pixel grid of the native Latin glyphs of one size, measured like
+/// the other metrics. Replacement glyphs are fitted to it so that their stems
+/// look like the Latin ones in the same line.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PixelGrid {
+    /// Ink height of the Latin small `x` in pixels.
+    pub x_height: u8,
+    /// Width of a vertical stem (`n`, `l`, `H`) in hundredths of a pixel.
+    pub stem_centi: u16,
+    /// Where the left edge of a vertical stem falls inside its pixel, in
+    /// hundredths of a pixel from the pixel's left edge.
+    pub stem_phase_centi: u16,
+    /// Thickness of a horizontal bar (`H`, `e`) in hundredths of a pixel.
+    pub bar_centi: u16,
+    /// Half the difference of the mean left and right side bearings of the
+    /// small Latin letters, in hundredths of a pixel: the native glyphs keep
+    /// most of the space between letters on their left, and replacements are
+    /// shifted to do the same, so they sit evenly next to native punctuation.
+    pub bearing_split_centi: i16,
+}
+
+/// A game font Aeria renders glyphs for.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct GameFont {
     /// The name part of the `.fdt` name, e.g. `"Jupiter"`.
     pub name: &'static str,
+    /// The font has its own Cyrillic, and the rendered glyphs replace it
+    /// instead of filling gaps: only the configured characters of
+    /// [`REPLACED_CHARACTERS`] are rendered, into the pack's
+    /// font-replacements section.
+    pub replaces: bool,
     pub sizes: &'static [GameFontSize],
 }
+
+/// The characters a replacing game font gets from the source font: the
+/// Cyrillic block. Other configured characters (`№`, quotes) keep the
+/// game's glyphs.
+pub const REPLACED_CHARACTERS: std::ops::RangeInclusive<char> = '\u{0400}'..='\u{04FF}';
 
 const fn size(
     size: &'static str,
@@ -47,15 +81,50 @@ const fn size(
         cap_height,
         cap_advance_centi,
         space_advance,
+        grid: None,
+    }
+}
+
+const fn fitted(
+    base: GameFontSize,
+    x_height: u8,
+    stem_centi: u16,
+    stem_phase_centi: u16,
+    bar_centi: u16,
+    bearing_split_centi: i16,
+) -> GameFontSize {
+    GameFontSize {
+        grid: Some(PixelGrid {
+            x_height,
+            stem_centi,
+            stem_phase_centi,
+            bar_centi,
+            bearing_split_centi,
+        }),
+        ..base
     }
 }
 
 /// Every game font and size Aeria generates glyphs for. `Jupiter_45` and
 /// `Jupiter_90` hold digits only and `Meidinger` holds digits and signs, so
-/// they are not listed.
+/// they are not listed. `AXIS`, the font of dialogue, menus, and chat, has
+/// Cyrillic whose stems sit unevenly on the pixel grid; its replacements are
+/// fitted to the grid of its Latin (`AXIS_96` is the 9.6 px size).
 pub const GAME_FONTS: &[GameFont] = &[
     GameFont {
+        name: "AXIS",
+        replaces: true,
+        sizes: &[
+            fitted(size("96", 15, 11, 8, 688, 3), 6, 106, 87, 100, 82),
+            fitted(size("12", 17, 13, 9, 842, 3), 7, 140, 7, 120, 98),
+            fitted(size("14", 19, 15, 11, 969, 4), 8, 140, 40, 140, 111),
+            fitted(size("18", 24, 19, 14, 1273, 5), 11, 193, 80, 180, 111),
+            fitted(size("36", 48, 38, 28, 2527, 10), 21, 333, 67, 300, 284),
+        ],
+    },
+    GameFont {
         name: "Jupiter",
+        replaces: false,
         sizes: &[
             size("16", 26, 19, 13, 981, 5),
             size("20", 32, 25, 16, 1227, 6),
@@ -65,6 +134,7 @@ pub const GAME_FONTS: &[GameFont] = &[
     },
     GameFont {
         name: "MiedingerMid",
+        replaces: false,
         sizes: &[
             size("10", 14, 11, 7, 1058, 5),
             size("12", 16, 13, 9, 1258, 6),
@@ -75,6 +145,7 @@ pub const GAME_FONTS: &[GameFont] = &[
     },
     GameFont {
         name: "TrumpGothic",
+        replaces: false,
         sizes: &[
             size("184", 24, 19, 14, 600, 3),
             size("23", 30, 24, 18, 758, 4),

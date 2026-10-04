@@ -51,8 +51,10 @@ import type {
   EntryRefDto,
   ReplaceChangeDto,
   ReplacementDto,
+  SearchEntryDto,
   SearchQueryDto,
   SearchResultDto,
+  TermCandidateDto,
 } from "./types";
 
 export function normalizeCommandError(error: unknown): CommandError {
@@ -464,6 +466,11 @@ export function saveKnowledgeStyle(expected: string | null, text: string): Promi
 }
 
 
+/** Names the project renders in several ways that the glossary does not have. */
+export function projectTermCandidates(): Promise<TermCandidateDto[]> {
+  return call<TermCandidateDto[]>("project_term_candidates");
+}
+
 export function saveKnowledgeTerms(expected: string | null, entries: TermInput[]): Promise<ProjectKnowledgeDto> {
   return call<ProjectKnowledgeDto>("save_knowledge_terms", { expected, entries });
 }
@@ -532,6 +539,11 @@ export function fontsPreview(settings: FontSettings, font: string, text: string)
 /** Searches the project's files; a new search cancels the one in progress. */
 export function projectSearch(query: SearchQueryDto): Promise<SearchResultDto> {
   return call<SearchResultDto>("project_search", { query });
+}
+
+/** Every string the query finds, without the limit of a search, for choosing a whole result or sheet. */
+export function projectSearchEntries(query: SearchQueryDto): Promise<SearchEntryDto[]> {
+  return call<SearchEntryDto[]>("project_search_entries", { query });
 }
 
 export function projectSearchCancel(): Promise<void> {

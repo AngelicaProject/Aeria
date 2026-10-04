@@ -8,6 +8,7 @@
 
 mod bitmap_font;
 mod error;
+mod grid;
 mod import;
 mod preset;
 mod preview;
@@ -21,10 +22,15 @@ pub use error::FontError;
 pub use import::{FontDescription, describe_font, import_project_file};
 pub use preset::{DEFAULT_CHARACTERS, install_recommended_files, recommended_settings};
 pub use preview::{PreviewLine, preview_line};
-pub use render::{LoadedSource, character_set, generate, load_source, render_size};
-pub use section::{FONTS_SECTION_KIND, FontSection, SectionGlyph, SectionSource, SectionTarget};
+pub use render::{
+    LoadedSource, PackFonts, character_set, characters_for, generate, load_source, render_size,
+};
+pub use section::{
+    FONT_REPLACEMENTS_SECTION_KIND, FONTS_SECTION_KIND, FontSection, SectionGlyph, SectionSource,
+    SectionTarget,
+};
 pub use settings::{
     CaseMapping, FONT_SETTINGS_FILE, FONTS_DIR, FontSettings, FontSource, FontTarget, SizeOverride,
     SizeParameters, project_path,
 };
-pub use targets::{GAME_FONTS, GameFont, GameFontSize, game_font};
+pub use targets::{GAME_FONTS, GameFont, GameFontSize, PixelGrid, REPLACED_CHARACTERS, game_font};

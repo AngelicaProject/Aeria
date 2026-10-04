@@ -9,7 +9,11 @@
 //! - every piece of game data of the source stays: runtime values such as
 //!   `<num $n1>` or `<string $gs1>`, game data references such as `<sheet …>`,
 //!   icons, sounds, constructs Aeria does not understand, and raw bytes. They
-//!   may move and repeat, and the translation adds none the source lacks;
+//!   may move and repeat, and the translation adds none the source lacks
+//!   except the player insertions of `catalog::INSERTIONS` (the player
+//!   character's name, class or job, and race) and the reads of
+//!   `catalog::PERSON_READS` (whether a character of a message is female),
+//!   which read only by known globals;
 //! - formatting (`<i>`, `<b>`, colors) may be added, dropped, and moved, as
 //!   the official localizations do; what it opens it closes as the source
 //!   does, so no color or style runs past the string;
@@ -188,6 +192,24 @@ Values a condition may test besides those the source uses:",
             reference,
             " ${}{} is {};",
             global.prefix, global.index, global.summary
+        );
+    }
+    reference.pop();
+    reference.push_str(
+        ". Game data a translation may add although the source lacks it, written exactly so:",
+    );
+    for insertion in player_insertions() {
+        let _ = write!(
+            reference,
+            " {} is {};",
+            insertion.parts[0], insertion.summary
+        );
+    }
+    for read in catalog::PERSON_READS {
+        let _ = write!(
+            reference,
+            " {} is {}, tested as <if \"{}\">…<else>…</if>;",
+            read.text, read.summary, read.text
         );
     }
     reference.pop();
@@ -433,6 +455,29 @@ fn parameter_text(kind: u8, index: u32) -> String {
     format!("${prefix}{index}")
 }
 
+/// The insertions about the player character a translation may add although
+/// its source lacks them: each reads only globals the game sets for every
+/// string, so it shows the right value anywhere.
+fn player_insertions() -> impl Iterator<Item = &'static catalog::InsertionSpec> {
+    catalog::INSERTIONS
+        .iter()
+        .filter(|spec| spec.group == "player" && spec.form == catalog::InsertionForm::Insert)
+}
+
+/// Whether `shape` is game data a translation may add: a player insertion
+/// or a read about a person of the message.
+fn addable(shape: &Shape) -> bool {
+    player_insertions()
+        .map(|spec| spec.parts[0])
+        .chain(catalog::PERSON_READS.iter().map(|read| read.text))
+        .any(|text| {
+            let document = parse(text);
+            let mut facts = Facts::default();
+            collect(&document, document.nodes(), &mut facts);
+            matches!(facts.data.as_slice(), [(only, _)] if only == shape)
+        })
+}
+
 fn is_known_global(kind: u8, index: u32) -> bool {
     PARAMETERS
         .iter()
@@ -447,6 +492,26 @@ fn is_known_global(kind: u8, index: u32) -> bool {
 ///
 /// Returns every violated rule, written for the model.
 pub fn check_assisted_structure(source: &str, target: &str) -> Result<(), Vec<StructureError>> {
+    check_assisted_structure_with(source, target, &[])
+}
+
+/// Checks a translation as [`check_assisted_structure`] does, with the same
+/// string in the game's other client languages (`localizations`, macro
+/// text). Game data an official localization uses may stand in the
+/// translation, and game data of the source one of them does without may be
+/// left out: the English class-level template inserts the English class name
+/// (`<sheet ClassJob $n1 30>`), the German and French ones the localized
+/// name (`<sheet ClassJob $n1 0>`), and a translation may do as they do. A
+/// malformed localization is not evidence.
+///
+/// # Errors
+///
+/// Returns every violated rule, written for the model.
+pub fn check_assisted_structure_with(
+    source: &str,
+    target: &str,
+    localizations: &[&str],
+) -> Result<(), Vec<StructureError>> {
     let source_document = parse(source);
     let target_document = parse(target);
     if !target_document.is_well_formed() {
@@ -468,6 +533,19 @@ pub fn check_assisted_structure(source: &str, target: &str) -> Result<(), Vec<St
     collect(&source_document, source_document.nodes(), &mut source_facts);
     let mut target_facts = Facts::default();
     collect(&target_document, target_document.nodes(), &mut target_facts);
+    // The game data of each well-formed localization.
+    let localized: Vec<Vec<Shape>> = localizations
+        .iter()
+        .map(|text| parse(text))
+        .filter(MacroString::is_well_formed)
+        .map(|document| {
+            let mut facts = Facts::default();
+            collect(&document, document.nodes(), &mut facts);
+            facts.data.into_iter().map(|(shape, _)| shape).collect()
+        })
+        .collect();
+    let localized_uses = |shape: &Shape| localized.iter().any(|shapes| shapes.contains(shape));
+    let localized_lacks = |shape: &Shape| localized.iter().any(|shapes| !shapes.contains(shape));
 
     let mut errors = Vec::new();
     check_speaker_name(&source_document, &target_document, &mut errors);
@@ -480,6 +558,7 @@ pub fn check_assisted_structure(source: &str, target: &str) -> Result<(), Vec<St
                 .data
                 .iter()
                 .any(|(candidate, _)| candidate == shape)
+            && !localized_lacks(shape)
         {
             errors.push(StructureError::new(format!(
                 "{spelling} of the source is missing; every value the game fills in must stay, though it may move or repeat"
@@ -495,9 +574,11 @@ pub fn check_assisted_structure(source: &str, target: &str) -> Result<(), Vec<St
                 .data
                 .iter()
                 .any(|(candidate, _)| candidate == shape)
+            && !addable(shape)
+            && !localized_uses(shape)
         {
             errors.push(StructureError::new(format!(
-                "{spelling} is not in the source; a translation may not add game data, only reuse the source's"
+                "{spelling} is not in the source; a translation may not add game data, only reuse the source's and add those the instructions list"
             )));
         }
     }

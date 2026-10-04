@@ -10,12 +10,14 @@
 //! the batch ([`names`]), and translated strings of the same file as
 //! examples ([`prompt`]).
 
+pub mod agree;
 pub mod auth;
 pub mod codex;
 pub mod fit;
 pub mod names;
 pub mod prompt;
 pub mod run;
+pub mod sounds;
 
 use std::time::Duration;
 

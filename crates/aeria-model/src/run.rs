@@ -4,7 +4,8 @@
 //! started again.
 
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::io::Write as _;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -14,10 +15,12 @@ use serde::Serialize;
 use tokio::task::JoinSet;
 
 use crate::ModelError;
-use crate::codex::{Codex, Request, Usage};
+use crate::agree::agreement_problems;
+use crate::codex::{Codex, Reply, Request};
 use crate::fit;
 use crate::names::{Names, name_sheet_of};
 use crate::prompt::{self, Answer, FileTask, Item, Term};
+use crate::sounds::sound_problems;
 
 /// Strings of a scene file that are one request; a longer scene is split.
 const SCENE_BATCH: usize = 150;
@@ -99,6 +102,23 @@ pub enum Stop {
     },
 }
 
+/// A request the service is answering now.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Active {
+    #[serde(skip)]
+    id: u64,
+    /// The request's first file, relative to `po/`.
+    pub path: String,
+    pub files: usize,
+    pub strings: usize,
+    /// 0 for the translation; 1 and up for the retries of the translations
+    /// that failed the checks.
+    pub retry: usize,
+    /// Unix milliseconds.
+    pub started_at: u64,
+}
+
 /// Where a run is.
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -120,6 +140,9 @@ pub struct Status {
     pub output_tokens: u64,
     /// Requests in flight allowed now.
     pub pace: usize,
+    /// The requests the service is answering now, oldest first. Tokens
+    /// count as each answers, so a long request shows here until then.
+    pub active: Vec<Active>,
     pub stop: Option<Stop>,
     /// The last failure of the service, while the run waits and retries.
     pub message: Option<String>,
@@ -133,12 +156,46 @@ pub struct Run {
     status: Mutex<Status>,
     cancel: AtomicBool,
     cancelled: tokio::sync::Notify,
+    /// The journal; dropped when it cannot be written.
+    log: Mutex<Option<std::fs::File>>,
+    requests: AtomicU64,
 }
 
 impl Run {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// A run that writes its journal to `file`: what it set out to
+    /// translate, each request with its file, time, retries, and tokens,
+    /// each failure, and why it stopped. The texts sent and received are not
+    /// written.
+    #[must_use]
+    pub fn with_log(file: std::fs::File) -> Self {
+        Self {
+            log: Mutex::new(Some(file)),
+            ..Self::default()
+        }
+    }
+
+    /// Writes a line of the journal, with the seconds since the run started.
+    fn log(&self, line: std::fmt::Arguments<'_>) {
+        let started = self.status().started_at;
+        let mut log = self.log.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(file) = log.as_mut() {
+            let elapsed = now_millis().saturating_sub(started);
+            let written = writeln!(
+                file,
+                "{:>6}.{}s {line}",
+                elapsed / 1000,
+                elapsed % 1000 / 100
+            );
+            // A journal that cannot be written does not stop the run.
+            if written.is_err() {
+                *log = None;
+            }
+        }
     }
 
     #[must_use]
@@ -280,19 +337,13 @@ struct Shared {
     instructions: String,
     cache_key: String,
     options: Options,
+    run: Arc<Run>,
 }
 
 /// What one batch did.
 struct Done {
     written: usize,
     rejected: Vec<Rejected>,
-    usage: Usage,
-}
-
-fn add(total: &mut Usage, usage: Usage) {
-    total.input += usage.input;
-    total.cached += usage.cached;
-    total.output += usage.output;
 }
 
 fn now_millis() -> u64 {
@@ -314,6 +365,28 @@ type Pack = Vec<Batch>;
 struct Built {
     input: String,
     strings: Strings,
+}
+
+/// A string's context for the model: the comments of its entry, with what
+/// its macros do explained again from the catalog. The `macro:` comments say
+/// what the catalog knew when the file was made, so a macro the catalog has
+/// learned since reaches the model at once, before the next game update
+/// rewrites the comments.
+fn context_of(entry: &Entry) -> Vec<String> {
+    let Ok(constructs) = aeria_se::constructs(&entry.source) else {
+        return entry.extracted.clone();
+    };
+    entry
+        .extracted
+        .iter()
+        .filter(|line| !line.starts_with("macro: "))
+        .cloned()
+        .chain(
+            constructs
+                .iter()
+                .map(|construct| format!("macro: {}", construct.legend())),
+        )
+        .collect()
 }
 
 /// The speakers of a batch's strings whose names are translated, each once:
@@ -401,7 +474,7 @@ fn file_task(
         .map(|(id, _, entry)| Item {
             id: id.clone(),
             source: entry.source.clone(),
-            context: entry.extracted.clone(),
+            context: context_of(entry),
             previous: entry
                 .fuzzy
                 .then(|| {
@@ -527,7 +600,133 @@ fn problems(shared: &Shared, strings: &Strings, id: &str, answer: &Answer) -> Ve
         )
         .problems,
     );
+    // Asked of machine translation only: a person can keep one form where
+    // it agrees with both.
+    found.extend(agreement_problems(&entry.source, &answer.text));
+    found.extend(sound_problems(&entry.source, &answer.text));
     found
+}
+
+/// A request listed as in flight until it answers, fails, or is dropped
+/// with its task.
+struct Listed<'a> {
+    run: &'a Run,
+    id: u64,
+}
+
+impl Drop for Listed<'_> {
+    fn drop(&mut self) {
+        self.run
+            .update(|status| status.active.retain(|active| active.id != self.id));
+    }
+}
+
+/// Sends one request of a batch: the run lists it while the service
+/// answers, counts its tokens as soon as it has, and journals it.
+async fn ask(
+    shared: &Shared,
+    built: &Built,
+    retry: usize,
+    strings: usize,
+    input: String,
+) -> Result<Reply, ModelError> {
+    let mut paths: Vec<&str> = built
+        .strings
+        .iter()
+        .map(|(_, path, _)| path.as_str())
+        .collect();
+    paths.dedup();
+    let run = &*shared.run;
+    let id = run.requests.fetch_add(1, Ordering::Relaxed) + 1;
+    let active = Active {
+        id,
+        path: paths.first().copied().unwrap_or_default().to_owned(),
+        files: paths.len(),
+        strings,
+        retry,
+        started_at: now_millis(),
+    };
+    run.log(format_args!(
+        "request {id}: {} ({} files, {strings} strings){}",
+        active.path,
+        active.files,
+        if retry > 0 {
+            format!(", retry {retry} of {RETRIES}")
+        } else {
+            String::new()
+        }
+    ));
+    run.update(|status| status.active.push(active));
+    let listed = Listed { run, id };
+    let started = std::time::Instant::now();
+    let reply = shared.codex.respond(&request(shared, input)).await;
+    let seconds = started.elapsed().as_secs();
+    match &reply {
+        Ok(reply) => {
+            run.update(|status| {
+                status.input_tokens += reply.usage.input;
+                status.cached_tokens += reply.usage.cached;
+                status.output_tokens += reply.usage.output;
+            });
+            run.log(format_args!(
+                "request {id}: answered in {seconds} s, {} tokens in ({} cached), {} out{}",
+                reply.usage.input,
+                reply.usage.cached,
+                reply.usage.output,
+                if reply.incomplete { ", incomplete" } else { "" }
+            ));
+        }
+        Err(error) => run.log(format_args!(
+            "request {id}: failed after {seconds} s: {error}"
+        )),
+    }
+    drop(listed);
+    reply
+}
+
+/// Kinds of problems a journal line names; the rest are counted.
+const JOURNALED_PROBLEMS: usize = 4;
+
+/// Journals how many of `asked` strings fail the checks and their most
+/// frequent problems. A problem is named up to its first quote or colon, so
+/// the journal holds no translation's text.
+fn journal_failing(shared: &Shared, asked: usize, failing: &[(String, Answer, Vec<String>)]) {
+    if failing.is_empty() {
+        shared
+            .run
+            .log(format_args!("checks: all {asked} strings pass"));
+        return;
+    }
+    let mut kinds: BTreeMap<String, usize> = BTreeMap::new();
+    for (_, _, problems) in failing {
+        for problem in problems {
+            let kind = problem
+                .split(['"', ':', '«'])
+                .next()
+                .unwrap_or_default()
+                .trim();
+            let kind: String = kind.chars().take(100).collect();
+            *kinds.entry(kind).or_default() += 1;
+        }
+    }
+    let mut kinds: Vec<(String, usize)> = kinds.into_iter().collect();
+    kinds.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    let named: Vec<String> = kinds
+        .iter()
+        .take(JOURNALED_PROBLEMS)
+        .map(|(kind, count)| format!("{count}× {kind}"))
+        .collect();
+    let others = kinds.len().saturating_sub(JOURNALED_PROBLEMS);
+    shared.run.log(format_args!(
+        "checks: {} of {asked} strings fail: {}{}",
+        failing.len(),
+        named.join("; "),
+        if others > 0 {
+            format!("; and {others} other kinds")
+        } else {
+            String::new()
+        }
+    ));
 }
 
 /// Sends the translations that fail the checks back with their problems,
@@ -536,7 +735,6 @@ async fn settle(
     shared: &Shared,
     built: &Built,
     answers: &mut HashMap<String, Answer>,
-    usage: &mut Usage,
 ) -> Result<Vec<Rejected>, ModelError> {
     let mut failing: Vec<(String, Answer, Vec<String>)> = answers
         .iter()
@@ -566,7 +764,8 @@ async fn settle(
     for (id, _, _) in &failing {
         answers.remove(id);
     }
-    for _ in 0..RETRIES {
+    journal_failing(shared, built.strings.len(), &failing);
+    for retry in 1..=RETRIES {
         if failing.is_empty() {
             break;
         }
@@ -574,12 +773,15 @@ async fn settle(
             .iter()
             .map(|(id, answer, found)| (id.clone(), answer.text.clone(), found.clone()))
             .collect();
-        let retry = shared
-            .codex
-            .respond(&request(shared, prompt::retry_input(&built.input, &sent)))
-            .await?;
-        add(usage, retry.usage);
-        let fixed = prompt::parse_lenient(&retry.text);
+        let reply = ask(
+            shared,
+            built,
+            retry,
+            sent.len(),
+            prompt::retry_input(&built.input, &sent),
+        )
+        .await?;
+        let fixed = prompt::parse_lenient(&reply.text);
         let mut still = Vec::new();
         for (id, last, last_problems) in failing {
             let (answer, found) = match fixed.get(&id) {
@@ -596,6 +798,7 @@ async fn settle(
             }
         }
         failing = still;
+        journal_failing(shared, sent.len(), &failing);
     }
     Ok(failing
         .into_iter()
@@ -641,17 +844,11 @@ async fn translate(shared: Arc<Shared>, pack: Pack) -> Result<Done, ModelError> 
         return Ok(Done {
             written: 0,
             rejected: Vec::new(),
-            usage: Usage::default(),
         });
     };
-    let mut usage = Usage::default();
-    let reply = shared
-        .codex
-        .respond(&request(&shared, built.input.clone()))
-        .await?;
-    add(&mut usage, reply.usage);
+    let reply = ask(&shared, &built, 0, built.strings.len(), built.input.clone()).await?;
     let mut answers = prompt::parse_lenient(&reply.text);
-    let rejected = settle(&shared, &built, &mut answers, &mut usage).await?;
+    let rejected = settle(&shared, &built, &mut answers).await?;
     let mut by_file: BTreeMap<String, Vec<(String, String)>> = BTreeMap::new();
     for (id, path, entry) in &built.strings {
         if let Some(answer) = answers.get(id).filter(|answer| !answer.text.is_empty()) {
@@ -675,11 +872,7 @@ async fn translate(shared: Arc<Shared>, pack: Pack) -> Result<Done, ModelError> 
         .map_err(|error| ModelError::Invalid(error.to_string()))?
         .map_err(|error| ModelError::Invalid(error.to_string()))?
     };
-    Ok(Done {
-        written,
-        rejected,
-        usage,
-    })
+    Ok(Done { written, rejected })
 }
 
 /// Runs the translation of `options.paths` until every batch was sent, the
@@ -694,10 +887,28 @@ pub async fn run(session: Arc<Session>, codex: Arc<Codex>, options: Options, han
             ..Status::default()
         };
     });
+    handle.log(format_args!(
+        "run: model {}, reasoning {}, {} paths{}{}",
+        options.model,
+        options.effort.as_deref().unwrap_or("default"),
+        if options.paths.is_empty() {
+            "all".to_owned()
+        } else {
+            options.paths.len().to_string()
+        },
+        if options.contexts.is_empty() {
+            String::new()
+        } else {
+            format!(", {} chosen strings", options.contexts.len())
+        },
+        if options.fuzzy { ", fuzzy too" } else { "" }
+    ));
     let stop = drive(session, codex, options, &handle).await;
+    handle.log(format_args!("stopped: {stop:?}"));
     handle.update(|status| {
         status.running = false;
         status.pace = 0;
+        status.active.clear();
         status.stop = Some(stop);
     });
 }
@@ -707,6 +918,7 @@ async fn prepare(
     session: Arc<Session>,
     codex: Arc<Codex>,
     options: Options,
+    run: Arc<Run>,
 ) -> Result<(Arc<Shared>, Vec<Batch>), Stop> {
     let prepared = {
         let session = Arc::clone(&session);
@@ -746,6 +958,7 @@ async fn prepare(
         session,
         codex,
         options,
+        run,
     });
     Ok((shared, batches))
 }
@@ -784,9 +997,15 @@ fn failed(error: ModelError, failures: &mut u32, pace: &mut usize, handle: &Run)
                 status.pace = *pace;
                 status.message = Some(error.to_string());
             });
+            handle.log(format_args!(
+                "waiting {} s after failure {} in a row: {error}",
+                wait.as_secs(),
+                *failures
+            ));
             Next::Wait(wait)
         }
         error => {
+            handle.log(format_args!("batch left for the next run: {error}"));
             handle.update(|status| {
                 status.batches_done += 1;
                 status.message = Some(error.to_string());
@@ -935,9 +1154,6 @@ async fn drain(
                     status
                         .rejections
                         .extend(done.rejected.into_iter().take(room));
-                    status.input_tokens += done.usage.input;
-                    status.cached_tokens += done.usage.cached;
-                    status.output_tokens += done.usage.output;
                     status.pace = now;
                     status.message = None;
                 });
@@ -971,8 +1187,13 @@ async fn drain(
     }
 }
 
-async fn drive(session: Arc<Session>, codex: Arc<Codex>, options: Options, handle: &Run) -> Stop {
-    let (mut shared, batches) = match prepare(session, codex, options).await {
+async fn drive(
+    session: Arc<Session>,
+    codex: Arc<Codex>,
+    options: Options,
+    handle: &Arc<Run>,
+) -> Stop {
+    let (mut shared, batches) = match prepare(session, codex, options, Arc::clone(handle)).await {
         Ok(prepared) => prepared,
         Err(stop) => return stop,
     };
@@ -983,6 +1204,11 @@ async fn drive(session: Arc<Session>, codex: Arc<Codex>, options: Options, handl
         files.dedup();
         status.files = files.len();
     });
+    let planned = handle.status();
+    handle.log(format_args!(
+        "planned: {} strings of {} files in {} batches",
+        planned.strings, planned.files, planned.batches
+    ));
     // The first request goes alone and stores the instructions in the
     // service's cache; the others start when it has answered.
     let mut pace = Pace {
@@ -1032,6 +1258,23 @@ pub fn count(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn macros_are_explained_from_the_catalog_of_now() {
+        let entry = Entry {
+            extracted: vec![
+                "ja: <if $gn7>…<else>{$gs2}</if>".to_owned(),
+                "macro: <if $gn7>a<else>{$gs2}</if> — condition = global number 7".to_owned(),
+            ],
+            source: "<if $gn7>a<else>{$gs2}</if>".to_owned(),
+            ..Entry::default()
+        };
+        let context = context_of(&entry);
+        assert_eq!(context[0], entry.extracted[0], "other comments stay");
+        assert_eq!(context.len(), 2);
+        assert!(context[1].starts_with("macro: <if $gn7>"), "{}", context[1]);
+        assert!(context[1].contains("ObjStr row"), "{}", context[1]);
+    }
 
     #[test]
     fn paths_select_files_and_folders() {

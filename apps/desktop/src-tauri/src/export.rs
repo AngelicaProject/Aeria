@@ -13,7 +13,7 @@ use aeria_export::{
     PackSettings, PackVersion, ReleaseDate, SeStringEncoder, Team, collect_project,
     compress_for_transport, feed_entry, pack_game, write_file_atomically, write_pack_with_fonts,
 };
-use aeria_fonts::{FontSection, FontSettings};
+use aeria_fonts::{FontSettings, PackFonts};
 use aeria_git::{GitExecutable, GitRepository, HostCredential};
 use aeria_publish::{
     GITHUB_HOST, GitHubClient, GitHubRepository, KeyError, KeyringSigningKeyStore, PublishError,
@@ -517,7 +517,7 @@ fn project_signer(
 
 struct BuiltRelease {
     manifest: PackManifest,
-    fonts: Option<FontSection>,
+    fonts: Option<PackFonts>,
     pack: BuiltPack,
     report: ExportReport,
     signed_by: Option<String>,
@@ -601,6 +601,15 @@ fn build(
     })
 }
 
+/// The font sections of a release: added glyphs and replacements.
+fn font_sections(built: &BuiltRelease) -> impl Iterator<Item = &aeria_fonts::FontSection> {
+    built
+        .fonts
+        .iter()
+        .flat_map(|fonts| [fonts.added.as_ref(), fonts.replaced.as_ref()])
+        .flatten()
+}
+
 fn report_dto(built: &BuiltRelease) -> ExportReportDto {
     let report = &built.report;
     ExportReportDto {
@@ -610,14 +619,12 @@ fn report_dto(built: &BuiltRelease) -> ExportReportDto {
         sheets: built.pack.counts.sheets,
         strings: built.pack.counts.strings,
         pack_hash: built.pack.pack_hash_text(),
-        font_targets: built
-            .fonts
-            .as_ref()
-            .map_or(0, |fonts| fonts.targets.len() as u64),
-        font_glyphs: built
-            .fonts
-            .as_ref()
-            .map_or(0, |fonts| fonts.glyph_count() as u64),
+        font_targets: font_sections(built)
+            .map(|section| section.targets.len() as u64)
+            .sum(),
+        font_glyphs: font_sections(built)
+            .map(|section| section.glyph_count() as u64)
+            .sum(),
         signed_by: built.signed_by.clone(),
     }
 }

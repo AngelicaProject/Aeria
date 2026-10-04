@@ -78,7 +78,27 @@ phrased so that nothing depends on the gender. Never keep only one of its branch
 - When the French or German line varies with the player character's gender and the \
 source does not, the target language most likely needs a condition there too.
 - Speakers keep their own gender: a condition on $gn4 is only for words about the \
-player character.";
+player character.
+- Messages about other people, such as the party and battle log, name them by $gs2 \
+and $gs3, and compare each with the player's name: <if ($gs1 == $gs2)> holds when the \
+one $gs2 names is the player character. That one may be another player, a character, \
+or an object, so never call them a person, a character, or a player (персонаж по \
+имени). Write each clause about such a person whole inside the comparison: the first \
+branch about the player as \"you\" (вы, вас, вам), the other about the one named, each \
+with its own words that agree with it, such as the verb, and the source's branches \
+with the name kept as they are. A condition on $gn4 goes only in a first branch; \
+another player's gender is $gn5 for $gs2 and $gn6 for $gs3, and a character's is <if \
+\"<sheet BNpcName $gn7 6>\"> (or $gn8). A reflexive (себя) is right only where one \
+person acts on themselves. A name keeps its stored form, so it is the subject or, \
+where another case is needed and the project's style says no otherwise, stands after a \
+colon at the end. In Russian, \"X consoles Y\": «<capitalize><if ($gs1 == $gs2)>Вы \
+утешаете<else><if $gn7><noun-en ObjStr 2 $gn7 1 1><else>{$gs2}</if> \
+утешает</if></capitalize><if ($gs1 == $gs3)> вас<else>: <if $gn8><noun-en ObjStr 2 \
+$gn8 1 1><else>{$gs3}</if></if>.» (Вы утешаете: Иван. Иван утешает вас. Иван утешает: \
+Пётр.), and with a past verb, \"X left the party\": «<if ($gs1 == $gs2)>Вы \
+покинули<else><if $gn7><noun-en ObjStr 2 $gn7 1 1><else>{$gs2}</if> <if $gn7><if \
+\"<sheet BNpcName $gn7 6>\">покинула<else>покинул</if><else><if \
+$gn5>покинула<else>покинул</if></if></if> группу».";
 
 /// How translations are written as the game's macro text.
 pub const MACRO_TEXT: &str = "\
@@ -86,13 +106,32 @@ Macro text:
 - A string's source is macro text, the game's written form; the macros each line uses \
 are explained with it. Write translations as macro text and localize them: word order, \
 conditions, and formatting follow the target language, not the source's shape.
-- Keep every macro marked as game data; it may move or repeat. Formatting (italics, \
+- Keep every macro marked as game data; it may move or repeat. Where the German or \
+French text of the same string uses other game data in its place, the translation may do \
+as it does: the English inserts the English class name, <sheet ClassJob $n1 30>, where \
+they insert the name in the player's language, <sheet ClassJob $n1 0>, which is the one to \
+use. Formatting (italics, \
 bold, colors) is the translation's own, as in the official localizations: add, drop, or \
 move it as the target language reads best, and close every tag you open, as the source \
 does. Conditions may be reworded, \
 restructured, added, or dropped: add one where the target language must agree with the \
 player character's gender or another known value. Write \\< \\{ \\\\ for literal \
-characters.";
+characters.
+- A name the game fills in (<sheet …>, <noun-…>, a player's name) shows as stored, in its \
+base form: it never changes for case. In a language with cases, phrase the line so the \
+name stands where that form is right; in Russian, the nominative: «<noun-en ObjStr 2 \
+$gn7 1 1> покидает группу», «Получено: <sheet Item $n1 0>», never «Вы приглашаете \
+<noun-en ObjStr 2 $gn7 1 1>».
+- \\< is a literal <, not the start of a macro: a word in angle brackets, such as \\<sigh> \
+or \\<click>, is a sound or a stage direction of the English localization, which the \
+Japanese says in the line itself (ふぅ…, ガガ…). Unless the project's style \
+says otherwise, render it as the Japanese does: a sound the speaker makes becomes an \
+interjection or a sound word of the line, without brackets (\\<sigh> Эх…, \\<cough> \
+Кхе-кхе, \\<beep> Бип!, \\<click> Щёлк-щёлк), and a gesture no one could say aloud \
+(\\<wink>, \\<nod>) is conveyed by the line's own words: an interjection, a particle, or \
+a few words in the speaker's voice (\\<wink> Хе-хе; \\<nod> Ага). Do not drop it, even \
+where the line already shows the feeling: find the sound that fits. Never keep the \
+source's word.";
 
 /// Language notes on living text for one target language, if Aeria has
 /// them.

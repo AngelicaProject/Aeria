@@ -416,7 +416,11 @@ names form collapsible folders for display only, while the canonical sheet name
 is passed unchanged to Rust. Its per-sheet translatable-cell count comes from the
 game's translation permission (see [`source.md`](./source.md)), not the
 sheet's physical row count, and each sheet
-with translations shows a coverage bar from `translation_progress`. Sheets with
+with translations shows a coverage bar from `translation_progress`. A sheet
+of names (`translation_name_sheets`, the `NAME_SHEETS` of machine
+translation) has a mark: its translations go with every request whose
+strings use its names, and the model writes them exactly, so a mistake there
+spreads through the project. Sheets with
 no permitted source strings are hidden by default. Hovering or focusing the
 Sheets dock reveals icon actions to show empty sheets, open the name filter,
 reveal the active sheet, and collapse folders. The filter takes space only while
@@ -436,8 +440,9 @@ The Search tool (left dock by default, floatable) is project search over
 - The query field has toggles for match case, whole word, and regular
   expression; a disclosure shows the replace field with *preserve case* and
   *replace all*. Chips choose the fields (translation, source, notes, ID);
-  **Filters** adds sheets and folders (`quest/, Addon`), entry states, and
-  the checks filter (any, with problems, with advice). The query is kept
+  **Filters** adds sheets and folders (`quest/, Addon`) or only the sheets
+  of names, entry states, and the checks filter (any, with problems, with
+  advice). Groups of a sheet of names have its mark. The query is kept
   while the window lives.
 - A search runs 300 ms after typing stops, or on Enter, and cancels the one
   in progress. The result is live: when the project's files change (a save,
@@ -466,17 +471,19 @@ The Search tool (left dock by default, floatable) is project search over
   Changes that would break their string show the reason and cannot be
   chosen; the others can be unchecked. Nothing is written before
   **Replace**.
-- **Translate again…** (all results, when every result is listed) and a
+- **Translate again…** (every translation found, listed or not) and a
   result's own button clear the translations after a confirmation and start
   a machine translation run of exactly those strings; the AI translation
   dialog opens on its progress.
-- Checkboxes choose strings, one by one or a sheet's loaded strings at once.
-  With strings chosen, **Translate again…** and **Exception** act on them
+- Checkboxes choose strings: one by one, every string of a sheet, or every
+  string found (the box beside the count). A sheet or a result with strings
+  not sent is chosen whole: its strings are read again without the limit of
+  a search (`project_search_entries`). With strings chosen, **Translate again…** and **Exception** act on them
   only; the exception takes the chosen term chip's term, or the term every
   chosen string has a finding for.
 - A string with a term finding has an exception button, and with a term's
-  chip chosen, **Exception … for all** adds the exception to every string
-  found when every result is listed (see
+  chip chosen, **Exception … for all** adds the exception to every
+  translation found (see
   [`po-project.md`](./po-project.md#term-exceptions)); both are bulk edits
   that Undo reverts.
 - After a bulk edit a notice gives what was written, what was skipped and
@@ -585,7 +592,15 @@ button per row; at most 300 filtered rows are shown at once. Editing or adding
 a row marks it settled; the checkbox changes that. Rows with an empty term or
 translation, or a term repeated case-insensitively, are marked and block
 saving. Rows the file excludes are listed with their line numbers; saving
-removes them only after confirmation. The Style tab is a Markdown text area
+removes them only after confirmation. The Candidates tab finds the names
+the project translates in several ways (`project_term_candidates`, see
+[`search.md`](./search.md#glossary-candidates)): each with its translated
+strings, its sheets, its renderings with their counts as choices, and
+examples of each. **Add to the glossary** adds a term row with the chosen
+rendering as its translation, the others as forbidden variants, and match
+case on, and shows it in the Terms tab to review and save; **Skip** hides
+the candidate on this computer until the skipped ones are shown again. The
+Style tab is a Markdown text area
 for `style.md` and shows its size against the 8 MiB limit. Each tab
 has **Revert** and **Save**; closing with unsaved changes asks first. A save
 fails, without writing, when the file changed since it was loaded, for
@@ -597,7 +612,9 @@ example by Git.
 palette. The dialog chooses what to translate in a tree of the project's
 sheets with checkboxes (a folder's box chooses all its sheets), a search, and
 quick choices (names, quests, all untranslated, clear); every sheet and folder
-shows how many strings it still needs. It opens with the open sheet chosen.
+shows how many strings it still needs, and a sheet of names its mark. It
+says that every request also carries the glossary, the style, and
+translated strings of the same file. It opens with the open sheet chosen.
 It also chooses whether strings with a changed source are included, shows how
 many sheets and strings are chosen, and names the model; without a model it
 links to Settings. **Translate** starts a run, and the

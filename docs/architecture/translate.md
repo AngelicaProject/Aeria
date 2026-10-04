@@ -121,7 +121,9 @@ The task is JSON built from the files as they are when the request is sent:
     first: up to 40 shared among the files, at least 5 each;
   - `strings`: each string's ID (unique in the request), source, and `#.`
     lines (the other client languages, speaker or kind, the row's other
-    cells, macro legends), `gendered`: the texts (`source`, `fr`, `de`)
+    cells, macro legends; the legends are made again from the current macro
+    catalog, so what the catalog learned since the file was made reaches the
+    model before a game update rewrites the comments), `gendered`: the texts (`source`, `fr`, `de`)
     whose line has a condition on the player character's gender, so the
     translation most likely needs one too, `maxLength` for an interface
     label (below), the previous source and translation of a fuzzy one, and
@@ -144,8 +146,10 @@ In a long run of short, similar strings the model can slip and give a string
 the next one's translation; numbered IDs alone do not show it, and the
 translation passes every check. The repeated words do: an answer whose words,
 compared by letters and digits only and case ignored, do not occur in its own
-source (macro tags included, since the model may copy from them or skip a
-conditional opening such as `<if $n2>Lv. …</if>`), or that gives a bare
+source in their order (macro tags included, since the model may copy from
+them or skip a conditional opening such as `<if $n2>Lv. …</if>`; not
+necessarily together, since it leaves out the conditions between them, as
+in `you scan` of `<if ($gs1 == $gs2)>you<else>…</if> <if …>scan<else>scans</if>`), or that gives a bare
 translation, is refused as belonging to another string
 (`fit::matches_start`). Empty words are accepted only for a source that
 begins with a macro. Macro tags are read whole: a `>` inside parentheses or
@@ -169,7 +173,17 @@ tooltips show them whole.
 
 Every translation is checked like a save in the editor
 ([`po-project.md`](./po-project.md#checking)), after the answer's first
-words and an interface label's length. An answer that is not valid JSON,
+words and an interface label's length. One more check is machine
+translation's alone: when the source chooses a word by whether a person of a
+log message is the player (`<if ($gs1 == $gs2)>scan<else>scans</if>`), the
+translation needs a comparison with that person whose branches both have
+words, so that a word agreeing with the person is chosen with it, rather
+than one form after the name that agrees with only "you" or someone else
+(«Вы … осматривают»). Repeating a whole phrase in each branch always
+satisfies it; a person's save is not held to it. Likewise a machine
+translation may not keep a sound of the English localization as it is, such
+as `\<sigh>` or `\<click>` (in macro text `\<` is a literal `<`): it renders
+it in its language. An answer that is not valid JSON,
 most often for a quote the model did not escape inside macro text, is read
 entry by entry (`"id": ["first words", "translation"]`, a bare quote read as
 part of its string); what is read this way is checked like any answer, so a
@@ -199,8 +213,9 @@ in flight. A rate-limit answer halves that, to no fewer than two, and every
 finished batch adds one back. A rate limit, network error, or timeout returns
 the batch to the queue after the wait the service asked for, or 20 seconds
 times the failures in a row; the third in a row stops the run. A response
-that sends nothing for 180 seconds, its headers included, is given up, and a
-connection is given 30 seconds to open and is checked every 20 seconds, so a
+that sends nothing for 180 seconds, its headers included, is given up, and so
+is one not finished in 20 minutes: a reasoning model keeps its stream alive
+for as long as it thinks. A connection is given 30 seconds to open and is checked every 20 seconds, so a
 connection that died without closing fails its requests instead of holding
 the run. Any other refusal leaves the batch's strings for the next run.
 
@@ -217,7 +232,19 @@ quick choices: the name sheets, the quests, and every sheet with
 untranslated strings. It shows, every second while it is open: strings
 written of the
 run's strings, strings refused by the checks, tokens used, the share of
-prompt tokens served from the cache, the current pace, the last failure of
-the service while the run waits, and why the run stopped. The run goes on
+prompt tokens served from the cache, the current pace, the requests the
+service is answering with their file, strings, retry, and how long each has
+waited, a hint about the reasoning depth when an answer takes over five
+minutes, the last failure of the service while the run waits, and why the
+run stopped. Tokens count as each response answers, so a batch's retries
+show as they happen.
+
+Each run writes a journal to `logs/translation-<start>.log` in the data
+folder (`%APPDATA%\Aeria` on Windows), and the last 20 are kept: what the
+run set out to translate, each request with its file, strings, retry, time,
+and tokens, how many strings of each answer fail the checks with their most
+frequent problems, each failure and wait, and why the run stopped. The texts
+sent and received are not written: a problem is named only up to its first
+quote or colon. The run goes on
 when the dialog is hidden, and Stop drops the batches in flight at once,
 without waiting for the service to answer them.

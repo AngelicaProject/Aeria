@@ -1,4 +1,7 @@
-use aeria_se::{ConstructRule, authoring_reference, check_assisted_structure, constructs};
+use aeria_se::{
+    ConstructRule, authoring_reference, check_assisted_structure, check_assisted_structure_with,
+    constructs,
+};
 
 fn refused(source: &str, target: &str) -> String {
     check_assisted_structure(source, target)
@@ -217,4 +220,102 @@ fn the_reference_names_the_known_globals() {
     let reference = authoring_reference();
     assert!(reference.contains("$gn4 is"), "{reference}");
     assert!(reference.contains("<if (left op right)>"), "{reference}");
+}
+
+#[test]
+fn a_message_about_another_player_may_agree_with_their_gender() {
+    let source = "<capitalize><if ($gs1 == $gs2)>you<else><if $gn7><noun-en ObjStr 2 $gn7 1 1><else>{$gs2}</if></if></capitalize> <if ($gs1 == $gs2)>have<else>has</if> left the party.";
+    assert!(
+        check_assisted_structure(
+            source,
+            r#"<capitalize><if ($gs1 == $gs2)>Вы покинули<else><if $gn7><noun-en ObjStr 2 $gn7 1 1><else>{$gs2}</if> <if $gn7><if "<sheet BNpcName $gn7 6>">покинула<else>покинул</if><else><if $gn5>покинула<else>покинул</if></if></if></capitalize> группу."#
+        )
+        .is_ok(),
+        "the gender of the player named by $gs2 may be tested"
+    );
+    let constructs = constructs(source).expect("constructs");
+    let legend = constructs
+        .iter()
+        .map(aeria_se::Construct::legend)
+        .find(|legend| legend.starts_with("<if $gn7>"))
+        .expect("the legend of the condition on $gn7");
+    assert!(legend.contains("ObjStr row"), "{legend}");
+}
+
+#[test]
+fn the_player_character_may_be_named_where_the_source_does_not() {
+    let source = "Well done!";
+    for target in [
+        "Отлично, <string $gs1>!",
+        r#"Отлично, <split " " 1><string $gs1></split>!"#,
+        r#"Отлично, <split " " 2><string $gs1></split>!"#,
+        "Отличная работа для <sheet ClassJob $gn68 0>!",
+        "Отлично для <sheet Race $gn71 0>!",
+    ] {
+        assert!(check_assisted_structure(source, target).is_ok(), "{target}");
+    }
+    assert!(refused(source, "Отлично, <string $gs2>!").contains("is not in the source"));
+    assert!(refused(source, "Отлично, <num $n1>!").contains("is not in the source"));
+    assert!(
+        refused(source, "Отлично, <sheet ClassJob 19 0>!").contains("is not in the source"),
+        "a constant row is not a player insertion"
+    );
+    assert!(
+        authoring_reference().contains(r#"<split " " 1><string $gs1></split> is the first name"#)
+    );
+}
+
+#[test]
+fn whether_a_character_of_a_message_is_female_may_be_tested() {
+    let source = "<if $gn7><noun-en ObjStr 2 $gn7 1 1><else>{$gs2}</if> left.";
+    assert!(
+        check_assisted_structure(
+            source,
+            r#"<if $gn7><noun-en ObjStr 2 $gn7 1 1><else>{$gs2}</if> <if "<sheet BNpcName $gn7 6>">ушла<else>ушёл</if>."#
+        )
+        .is_ok()
+    );
+    for other in [
+        "<sheet BNpcName $gn7 0>",
+        "<sheet BNpcName 12 6>",
+        "<sheet ENpcResident $gn7 6>",
+    ] {
+        assert!(
+            refused(source, &format!("{other} ушёл.")).contains("is not in the source"),
+            "{other}"
+        );
+    }
+    assert!(authoring_reference().contains(r#"<if "<sheet BNpcName $gn8 6>">"#));
+}
+
+#[test]
+fn game_data_an_official_localization_uses_may_stand_in() {
+    let source = "<title-case><sheet ClassJob $n1 30></title-case> (Lv. <num $n2>)";
+    let target = "<capitalize><sheet ClassJob $n1 0></capitalize> (ур. <num $n2>)";
+    let localizations = [
+        "<sheet ClassJob $n1 30>   Lv.<num $n2>",
+        "<sheet ClassJob $n1 0> St. <num $n2>",
+        "<capitalize><sheet ClassJob $n1 0></capitalize> nv <num $n2>",
+    ];
+    assert!(
+        check_assisted_structure_with(source, target, &localizations).is_ok(),
+        "the localized class name, as German and French insert it"
+    );
+    assert!(
+        refused(source, target).contains("not in the source"),
+        "without the localizations it is other game data"
+    );
+    assert!(
+        check_assisted_structure_with(
+            source,
+            "<sheet ClassJob $n1 0> (ур. <num $n2>) <sheet Item $n1 0>",
+            &localizations
+        )
+        .is_err(),
+        "data no localization uses stays refused"
+    );
+    assert!(
+        check_assisted_structure_with(source, "<sheet ClassJob $n1 0>", &localizations).is_err(),
+        "the level every localization keeps must stay"
+    );
 }

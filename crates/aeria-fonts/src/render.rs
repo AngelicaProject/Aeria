@@ -4,19 +4,21 @@
 //! capitals (`capHeight × scale`), then placed on the native baseline
 //! (`ascent + baselineShift`). Outlines and advances are scaled horizontally by
 //! `widthScale`. The bitmap of a glyph starts at the pen position, as game
-//! `.fdt` glyphs do, and is trimmed to its ink rows.
+//! `.fdt` glyphs do, and is trimmed to its ink rows. A size with a native
+//! pixel grid (the replaced `AXIS`) is fitted to it first; see `grid`.
 
 use std::path::Path;
 
 use sha2::{Digest, Sha256};
-use swash::scale::{Render, ScaleContext, Source};
-use swash::zeno::{Format, Transform};
+use swash::scale::{Render, ScaleContext, Scaler, Source};
+use swash::zeno::{Command, Format, Mask, PathData, Placement, Transform, Vector};
 use swash::{FontRef, Setting, tag_from_bytes};
 
 use crate::error::FontError;
+use crate::grid::{self, Zones};
 use crate::section::{FontSection, SectionGlyph, SectionSource, SectionTarget};
 use crate::settings::{CaseMapping, FontSettings, FontSource, SizeParameters, project_path};
-use crate::targets::{GameFont, GameFontSize, game_font};
+use crate::targets::{GameFont, GameFontSize, PixelGrid, REPLACED_CHARACTERS, game_font};
 
 /// A source font file read from the project.
 #[derive(Clone, Debug)]
@@ -110,6 +112,15 @@ pub fn render_size(
     render
         .format(Format::Alpha)
         .transform(Some(Transform::scale(width_scale, 1.0)));
+    let fitting = fitting(
+        &mut scaler,
+        &charmap,
+        &metrics,
+        size,
+        (scale, width_scale),
+        characters,
+    )
+    .map_err(|reason| source_error(parameters.source, reason))?;
 
     let baseline = i32::from(size.ascent) + parameters.baseline_shift;
     #[allow(clippy::cast_possible_truncation)]
@@ -134,17 +145,24 @@ pub fn render_size(
                 parameters.source.family
             )));
         }
-        let image = render
-            .render(&mut scaler, glyph_id)
-            .ok_or_else(|| at("the glyph could not be rendered"))?;
         let advance = metrics.advance_width(glyph_id) * width_scale + tracking;
+        let (placement, data, advance) = if let Some(fitting) = &fitting {
+            fitted(&mut scaler, glyph_id, width_scale, fitting, advance)
+                .ok_or_else(|| at("the glyph has no outline"))?
+        } else {
+            let image = render
+                .render(&mut scaler, glyph_id)
+                .ok_or_else(|| at("the glyph could not be rendered"))?;
+            (image.placement, image.data, advance)
+        };
         glyphs.push(
             place(
-                &image.placement,
-                &image.data,
+                &placement,
+                &data,
                 advance,
                 baseline,
                 line_height,
+                font.replaces,
             )
             .map(|placed| SectionGlyph {
                 character,
@@ -154,6 +172,131 @@ pub fn render_size(
         );
     }
     Ok(glyphs)
+}
+
+/// How the glyphs of a size with a native pixel grid are fitted to it.
+struct Fitting {
+    grid: PixelGrid,
+    zones: Zones,
+    /// How far the glyphs move right; see [`bearing_shift`].
+    shift: f32,
+}
+
+/// The fitting of a size with a native pixel grid, `None` for a size
+/// without one.
+fn fitting(
+    scaler: &mut Scaler<'_>,
+    charmap: &swash::Charmap<'_>,
+    metrics: &swash::GlyphMetrics<'_>,
+    size: &GameFontSize,
+    (scale, width_scale): (f32, f32),
+    characters: &[char],
+) -> Result<Option<Fitting>, &'static str> {
+    let Some(grid) = size.grid else {
+        return Ok(None);
+    };
+    let zones =
+        zones(scaler, charmap, size, scale).ok_or("the font has no small x to fit to the grid")?;
+    let shift = bearing_shift(scaler, charmap, metrics, characters, width_scale, &grid);
+    Ok(Some(Fitting { grid, zones, shift }))
+}
+
+/// The zones of the source at this size and where the native grid puts
+/// them: the x-height of the small `x` (or `х`) and the cap height, scaled
+/// like the glyphs. `None` when the font has neither `x`.
+fn zones(
+    scaler: &mut Scaler<'_>,
+    charmap: &swash::Charmap<'_>,
+    size: &GameFontSize,
+    scale: f32,
+) -> Option<Zones> {
+    let grid = size.grid?;
+    let x_height = ['x', 'х']
+        .into_iter()
+        .map(|c| charmap.map(c))
+        .find(|glyph| *glyph != 0)
+        .and_then(|glyph| scaler.scale_outline(glyph))
+        .map(|outline| outline.bounds().max.y)?;
+    let cap_height = f32::from(size.cap_height) * scale;
+    Some(Zones {
+        x_height: (x_height, (f32::from(grid.x_height) * scale).round()),
+        cap_height: (cap_height, cap_height.round()),
+    })
+}
+
+/// How far to move the glyphs right so that the space between letters is
+/// split between their sides as in the native Latin: the native split less
+/// the mean split of the small letters of `characters` (all of them when
+/// none is small).
+fn bearing_shift(
+    scaler: &mut Scaler<'_>,
+    charmap: &swash::Charmap<'_>,
+    metrics: &swash::GlyphMetrics<'_>,
+    characters: &[char],
+    width_scale: f32,
+    grid: &PixelGrid,
+) -> f32 {
+    let small: Vec<char> = characters
+        .iter()
+        .copied()
+        .filter(|c| c.is_lowercase())
+        .collect();
+    let measured = if small.is_empty() { characters } else { &small };
+    let splits: Vec<f32> = measured
+        .iter()
+        .map(|c| charmap.map(*c))
+        .filter(|glyph| *glyph != 0)
+        .filter_map(|glyph| {
+            let bounds = scaler.scale_outline(glyph)?.bounds();
+            let left = bounds.min.x * width_scale;
+            let right = (metrics.advance_width(glyph) - bounds.max.x) * width_scale;
+            Some((left - right) / 2.0)
+        })
+        .collect();
+    if splits.is_empty() {
+        return 0.0;
+    }
+    #[allow(clippy::cast_precision_loss)]
+    let mean = splits.iter().sum::<f32>() / splits.len() as f32;
+    f32::from(grid.bearing_split_centi) / 100.0 - mean
+}
+
+/// Renders a glyph fitted to the native grid: outline scaled by
+/// `width_scale` and moved right by the bearing shift, fitted, and filled.
+/// The advance follows the right side.
+fn fitted(
+    scaler: &mut Scaler<'_>,
+    glyph_id: u16,
+    width_scale: f32,
+    fitting: &Fitting,
+    advance: f32,
+) -> Option<(Placement, Vec<u8>, f32)> {
+    let shift = fitting.shift;
+    let outline = scaler.scale_outline(glyph_id)?;
+    let mut commands: Vec<Command> = outline
+        .path()
+        .commands()
+        .map(|command| {
+            grid::map_points(command, |point| {
+                Vector::new(point.x * width_scale + shift, point.y)
+            })
+        })
+        .collect();
+    let moved = grid::fit(&mut commands, &fitting.grid, &fitting.zones, advance);
+    // The mask is drawn with y down.
+    let commands: Vec<Command> = commands
+        .into_iter()
+        .map(|command| grid::map_points(command, |point| Vector::new(point.x, -point.y)))
+        .collect();
+    let (data, placement) = Mask::new(&commands[..]).format(Format::Alpha).render();
+    Some((
+        Placement {
+            top: -placement.top,
+            ..placement
+        },
+        data,
+        advance + moved,
+    ))
 }
 
 /// Normalized variation coordinates of the configured axis values.
@@ -194,13 +337,18 @@ fn variation_coords(
         .collect())
 }
 
-/// Turns a rendered coverage image into a pen-relative, row-trimmed glyph.
+/// Turns a rendered coverage image into a pen-relative glyph, trimmed to
+/// its ink rows, or with `whole_line` spanning the line as the game's own
+/// glyphs do. The game slants italic text by moving the top edge of each
+/// glyph's box by a fixed distance, so a replacement whose box were shorter
+/// than the game's would lean more steeply than the letters around it.
 fn place(
     placement: &swash::zeno::Placement,
     data: &[u8],
     advance: f32,
     baseline: i32,
     line_height: i32,
+    whole_line: bool,
 ) -> Result<SectionGlyph, String> {
     let (width, height) = (
         usize::try_from(placement.width).map_err(|_| "too wide")?,
@@ -220,8 +368,11 @@ fn place(
         })
         .filter(|(line, pixels)| (0..line_height).contains(line) && pixels.iter().any(|p| *p != 0))
         .collect();
-    let first = rows.first().map_or(0, |(line, _)| *line);
-    let last = rows.last().map_or(-1, |(line, _)| *line);
+    let (first, last) = match (rows.first(), rows.last()) {
+        (Some(_), Some(_)) if whole_line => (0, line_height - 1),
+        (Some((first, _)), Some((last, _))) => (*first, *last),
+        _ => (0, -1),
+    };
     let columns = rows
         .iter()
         .filter_map(|(_, pixels)| pixels.iter().rposition(|p| *p != 0))
@@ -283,18 +434,43 @@ pub fn character_set(settings: &FontSettings) -> Vec<char> {
     characters
 }
 
-/// Renders every configured game font size into a `FONTS` section. Targets
-/// are ordered by font and size bytes; sources by first use.
+/// The characters rendered for `font`: all of `characters`, or for a
+/// replacing font those of [`REPLACED_CHARACTERS`].
+#[must_use]
+pub fn characters_for(font: &GameFont, characters: &[char]) -> Vec<char> {
+    characters
+        .iter()
+        .copied()
+        .filter(|c| !font.replaces || REPLACED_CHARACTERS.contains(c))
+        .collect()
+}
+
+/// The glyphs of a pack: those added to game fonts that lack them (the
+/// `FONTS` section) and those that replace a game font's own (the
+/// font-replacements section). A section without targets is `None`.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct PackFonts {
+    pub added: Option<FontSection>,
+    pub replaced: Option<FontSection>,
+}
+
+/// Renders every configured game font size. Targets of a replacing game
+/// font go into [`PackFonts::replaced`], the others into
+/// [`PackFonts::added`]; in each, targets are ordered by font and size bytes
+/// and sources by first use.
 ///
 /// # Errors
 /// Returns the first settings, file, or rendering error.
 ///
 /// # Panics
 /// Never for validated settings.
-pub fn generate(project_root: &Path, settings: &FontSettings) -> Result<FontSection, FontError> {
+pub fn generate(project_root: &Path, settings: &FontSettings) -> Result<PackFonts, FontError> {
     settings.validate()?;
     let characters = character_set(settings);
-    let mut section = FontSection::default();
+    let mut added = FontSection::default();
+    let mut replaced = FontSection::default();
+    // Source ids in the order of each section's sources.
+    let (mut added_ids, mut replaced_ids) = (Vec::<String>::new(), Vec::<String>::new());
     let mut loaded: Vec<(String, LoadedSource)> = Vec::new();
     let mut targets: Vec<(&'static GameFont, &'static GameFontSize, SizeParameters<'_>)> =
         Vec::new();
@@ -312,26 +488,42 @@ pub fn generate(project_root: &Path, settings: &FontSettings) -> Result<FontSect
     });
 
     for (font, size, parameters) in targets {
-        let index = if let Some(index) = loaded
+        let file = if let Some(file) = loaded
             .iter()
             .position(|(id, _)| *id == parameters.source.id)
         {
+            file
+        } else {
+            let source = load_source(project_root, parameters.source)?;
+            loaded.push((parameters.source.id.clone(), source));
+            loaded.len() - 1
+        };
+        let source = &loaded[file].1;
+        let (section, ids) = if font.replaces {
+            (&mut replaced, &mut replaced_ids)
+        } else {
+            (&mut added, &mut added_ids)
+        };
+        let index = if let Some(index) = ids.iter().position(|id| *id == parameters.source.id) {
             index
         } else {
-            {
-                let source = load_source(project_root, parameters.source)?;
-                section.sources.push(SectionSource {
-                    family: parameters.source.family.clone(),
-                    copyright: parameters.source.copyright.clone(),
-                    license: parameters.source.license.clone(),
-                    license_text: source.license_text.clone(),
-                    sha256: source.sha256,
-                });
-                loaded.push((parameters.source.id.clone(), source));
-                loaded.len() - 1
-            }
+            ids.push(parameters.source.id.clone());
+            section.sources.push(SectionSource {
+                family: parameters.source.family.clone(),
+                copyright: parameters.source.copyright.clone(),
+                license: parameters.source.license.clone(),
+                license_text: source.license_text.clone(),
+                sha256: source.sha256,
+            });
+            section.sources.len() - 1
         };
-        let glyphs = render_size(font, size, &parameters, &loaded[index].1, &characters)?;
+        let glyphs = render_size(
+            font,
+            size,
+            &parameters,
+            source,
+            &characters_for(font, &characters),
+        )?;
         section.targets.push(SectionTarget {
             font: font.name.to_owned(),
             size: size.size.to_owned(),
@@ -341,6 +533,15 @@ pub fn generate(project_root: &Path, settings: &FontSettings) -> Result<FontSect
             glyphs,
         });
     }
-    section.validate()?;
-    Ok(section)
+    let finish = |section: FontSection| -> Result<Option<FontSection>, FontError> {
+        if section.targets.is_empty() {
+            return Ok(None);
+        }
+        section.validate()?;
+        Ok(Some(section))
+    };
+    Ok(PackFonts {
+        added: finish(added)?,
+        replaced: finish(replaced)?,
+    })
 }

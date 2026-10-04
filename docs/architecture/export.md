@@ -54,8 +54,9 @@ project's PO files.
    sheet header form its layout; each entry's column becomes its string
    ordinal.
 6. **Fonts.** When `aeria-fonts.json` exists, `aeria-fonts` renders the
-   configured characters for every size of every listed game font (below) and
-   the result becomes the pack's `FONTS` section.
+   configured characters for every size of every listed game font (below).
+   Glyphs for fonts that lack them become the pack's `FONTS` section; glyphs
+   that replace `AXIS` Cyrillic become its font-replacements section.
 7. **Write.** `write_pack` validates the input again, writes the canonical
    sections, computes `packHash`, and optionally appends the signature block
    (`PackSigner`, deterministic ECDSA P-256; a `KeyEndorsement` for key
@@ -71,10 +72,20 @@ native metrics of each size, and Harmonia adds them to the game's current
 fonts. A game update that changes the native fonts therefore keeps working,
 and a size whose metrics changed is skipped by Harmonia rather than misdrawn.
 
+`AXIS`, the font of dialogue, menus, and chat, has Cyrillic of its own, but
+its stems sit at random fractions of a pixel, unlike its Latin, so Russian
+lines look uneven. Aeria renders that Cyrillic again, fitted to the pixel grid
+of the native Latin (see [`font-settings-v1.md`](../formats/font-settings-v1.md)),
+and Harmonia replaces the game's records with it. The replacement travels in
+its own optional pack section, which Harmonia versions without replacement
+support skip: they keep showing the game's Cyrillic and everything else of
+the pack.
+
 `aeria-fonts` owns the settings ([`font-settings-v1.md`](../formats/font-settings-v1.md)),
 the table of supported game font sizes with their measured metrics, the
 bundled recommended fonts, and rasterization with `swash` (outlines, variable
-font axes, no hinting). For a size it:
+font axes, no hinting; `AXIS` sizes are fitted to the native grid instead, in
+`grid.rs`). For a size it:
 
 1. applies the axis values and computes the pixel size at which the source
    capital `H` is as tall as the native capitals, times `scale`;
