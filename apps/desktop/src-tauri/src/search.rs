@@ -496,6 +496,8 @@ pub struct TermCandidateDto {
     pub translated: usize,
     /// The most used rendering first.
     pub renderings: Vec<TermRenderingDto>,
+    /// Every rendering sounds like the name: spellings of one name.
+    pub spellings: bool,
     pub sheets: Vec<SheetCountDto>,
 }
 
@@ -540,6 +542,7 @@ pub async fn project_term_candidates(
                             .collect(),
                     })
                     .collect(),
+                spellings: candidate.spellings,
                 sheets: candidate
                     .sheets
                     .into_iter()

@@ -84,9 +84,16 @@ a term.
    rendering (Лимсы Ломинсы). The rendering with most strings is the main
    one; another with at least 4 strings and a twentieth, sharing at most
    three twentieths of its strings with the main one, is its rival.
-4. A candidate with rivals is reported, those whose rivals have most strings
-   first, with each rendering's words as translations most often write
-   them, its strings, and up to three examples.
+4. A candidate with rivals is reported, with each rendering's words as
+   translations most often write them, its strings, and up to three
+   examples. A rendering's word that sounds like the name comes first: its
+   first consonants are the same, and three of its first four, or all of
+   the shorter, follow each other in both (`Kojin`, «Кодзин», «Кудзин»:
+   `kdzn`). When every rendering has such a word, the candidate is
+   *spellings* of one name, almost always a real disagreement; otherwise its
+   renderings are other words, translations of the name or words around it,
+   for the person to check. Spellings come first, then by the strings of the
+   rivals.
 
 The result is a heuristic: a rendering can still be a word that goes with a
 name rather than translate it, so the person reviews each candidate.

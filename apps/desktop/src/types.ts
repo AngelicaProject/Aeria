@@ -558,6 +558,8 @@ export type TermCandidateDto = {
   strings: number;
   translated: number;
   renderings: TermRenderingDto[];
+  /** Every rendering sounds like the name: spellings of one name rather than other words. */
+  spellings: boolean;
   sheets: { sheet: string; count: number }[];
 };
 

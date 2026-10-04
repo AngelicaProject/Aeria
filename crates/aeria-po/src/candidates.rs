@@ -136,6 +136,10 @@ pub struct Candidate {
     pub translated: usize,
     /// The most used rendering first, then its rivals by strings.
     pub renderings: Vec<Rendering>,
+    /// Every rendering sounds like the name: they are spellings of one
+    /// name (Кодзин, Кудзин), not translations of it with other words
+    /// (Чащоба, Двенадцатилесье), which a person reviews more closely.
+    pub spellings: bool,
     /// The sheets with most of its strings, with their counts.
     pub sheets: Vec<(String, usize)>,
 }
@@ -290,6 +294,62 @@ fn words_of(text: &str) -> Vec<(String, String)> {
     words.sort();
     words.dedup_by(|a, b| a.0 == b.0);
     words
+}
+
+/// The consonants of a word as they sound, for telling a Russian spelling
+/// of a name from a translation of it: `Kojin` and «Кодзин» are both `kdzn`.
+fn sound_of(word: &str) -> String {
+    let mut sound = String::new();
+    for c in word.to_lowercase().chars() {
+        let mapped = match c {
+            'b' | 'б' => "b",
+            'v' | 'w' | 'в' => "v",
+            'g' | 'г' => "g",
+            'd' | 'д' => "d",
+            'j' => "dz",
+            'z' | 'з' | 'ж' => "z",
+            'c' | 'k' | 'q' | 'к' => "k",
+            'l' | 'л' => "l",
+            'm' | 'м' => "m",
+            'n' | 'н' => "n",
+            'p' | 'п' => "p",
+            'r' | 'р' => "r",
+            's' | 'с' | 'ц' | 'ч' | 'ш' | 'щ' => "s",
+            't' | 'т' => "t",
+            'f' | 'ф' => "f",
+            'x' => "ks",
+            _ => "",
+        };
+        for letter in mapped.chars() {
+            if !sound.ends_with(letter) {
+                sound.push(letter);
+            }
+        }
+    }
+    sound
+}
+
+/// Whether a Russian word sounds like a name: their first consonants are
+/// the same, and of their first four consonants three, or all of the
+/// shorter, follow each other in both (Sharlayan, Шаллаян).
+fn sounds_like(name: &str, word: &str) -> bool {
+    let name: Vec<char> = sound_of(name).chars().take(4).collect();
+    let word: Vec<char> = sound_of(word).chars().take(4).collect();
+    if name.len() < 2 || word.len() < 2 || name[0] != word[0] {
+        return false;
+    }
+    // The longest common subsequence of the two.
+    let mut table = vec![vec![0_usize; word.len() + 1]; name.len() + 1];
+    for (i, a) in name.iter().enumerate() {
+        for (j, b) in word.iter().enumerate() {
+            table[i + 1][j + 1] = if a == b {
+                table[i][j] + 1
+            } else {
+                table[i][j + 1].max(table[i + 1][j])
+            };
+        }
+    }
+    table[name.len()][word.len()] >= 3.min(name.len()).min(word.len())
 }
 
 /// Whether two bases are forms of one word: they differ only at the end.
@@ -610,6 +670,17 @@ pub fn term_candidates(root: &Path, knowledge: &Knowledge) -> Result<Vec<Candida
                 .map_or_else(|| base.to_owned(), |(written, _)| (*written).to_owned())
         };
         let shown: Vec<&Group> = std::iter::once(top).chain(rivals).collect();
+        // A rendering is named by its word that sounds like the name, if
+        // any: «Бутик» rather than the words of a description around it.
+        let name_word = phrase
+            .split(' ')
+            .next()
+            .unwrap_or(phrase)
+            .replace(['\'', '’'], "");
+        let alike = |base: &str| sounds_like(&name_word, base);
+        let spellings = shown
+            .iter()
+            .all(|group| group.bases.iter().any(|base| alike(base)));
         let mut where_from: Vec<(String, usize)> = sheets
             .get(phrase)
             .map(|by| {
@@ -629,8 +700,10 @@ pub fn term_candidates(root: &Path, knowledge: &Knowledge) -> Result<Vec<Candida
                 chosen.sort_unstable();
                 chosen.truncate(EXAMPLES);
                 example_strings.push(chosen);
+                let mut bases: Vec<&String> = group.bases.iter().collect();
+                bases.sort_by_key(|base| !alike(base));
                 Rendering {
-                    words: group.bases.iter().map(|base| spelled(base)).collect(),
+                    words: bases.into_iter().map(|base| spelled(base)).collect(),
                     strings: group.strings.len(),
                     examples: Vec::new(),
                 }
@@ -644,12 +717,19 @@ pub fn term_candidates(root: &Path, knowledge: &Knowledge) -> Result<Vec<Candida
                     .unwrap_or(usize::MAX),
                 translated: strings_with.len(),
                 renderings,
+                spellings,
                 sheets: where_from,
             },
             example_strings,
         ));
     }
-    found.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.phrase.cmp(&b.1.phrase)));
+    // Spellings of a name first: they are almost always real.
+    found.sort_by(|a, b| {
+        b.1.spellings
+            .cmp(&a.1.spellings)
+            .then_with(|| b.0.cmp(&a.0))
+            .then_with(|| a.1.phrase.cmp(&b.1.phrase))
+    });
 
     // Examples are read again from their files: the pass above keeps no
     // texts.
@@ -740,5 +820,16 @@ mod tests {
         assert!(same_word(&base_of("Эорзея"), &base_of("Эорзее")));
         assert!(!same_word(&base_of("Шарлаян"), &base_of("Шаллаян")));
         assert!(!same_word(&base_of("Кодзин"), &base_of("Кудзин")));
+    }
+
+    #[test]
+    fn spellings_of_a_name_sound_like_it_and_translations_do_not() {
+        for word in ["кодзин", "кудзин", "койджин"] {
+            assert!(sounds_like("Kojin", word), "{word}");
+        }
+        assert!(sounds_like("Boutique", "бутик"));
+        assert!(sounds_like("Sharlayan", "шаллаян"));
+        assert!(!sounds_like("Boutique", "чудаковатых"));
+        assert!(!sounds_like("Twelveswood", "чащоба"));
     }
 }

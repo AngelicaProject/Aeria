@@ -47,6 +47,7 @@ const kojin = {
     { words: ["кодзин"], strings: 84, examples: [] },
     { words: ["койджинов"], strings: 43, examples: [] },
   ],
+  spellings: true,
   sheets: [{ sheet: "quest", count: 171 }],
 };
 

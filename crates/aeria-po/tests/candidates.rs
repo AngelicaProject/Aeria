@@ -111,6 +111,7 @@ fn names_translated_in_several_ways_are_candidates() {
     );
     let kojin = &found[0];
     assert_eq!(kojin.translated, 16);
+    assert!(kojin.spellings, "кодзины and кудзины both sound like Kojin");
     let mut renderings: Vec<(String, usize)> = kojin
         .renderings
         .iter()

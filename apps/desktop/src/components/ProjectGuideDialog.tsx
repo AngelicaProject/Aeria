@@ -264,6 +264,9 @@ export const ProjectGuideDialog = memo(function ProjectGuideDialog({ open, initi
                     <article key={candidate.phrase} className="guide-candidate">
                       <header className="guide-candidate-head">
                         <strong>{candidate.phrase}</strong>
+                        <span className={candidate.spellings ? "chip" : "chip chip-warn"} title={t(candidate.spellings ? "guide.candidates.spellingsHint" : "guide.candidates.translationsHint")}>
+                          {t(candidate.spellings ? "guide.candidates.spellings" : "guide.candidates.translations")}
+                        </span>
                         <span className="muted">{t("guide.candidates.strings", { count: candidate.translated })} · {candidate.sheets.map((sheet) => sheet.sheet).join(", ")}</span>
                       </header>
                       <div className="search-chips" role="radiogroup" aria-label={t("guide.candidates.renderings")}>
