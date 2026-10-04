@@ -180,7 +180,10 @@ translation needs a comparison with that person whose branches both have
 words, so that a word agreeing with the person is chosen with it, rather
 than one form after the name that agrees with only "you" or someone else
 («Вы … осматривают»). Repeating a whole phrase in each branch always
-satisfies it; a person's save is not held to it. An answer that is not valid JSON,
+satisfies it; a person's save is not held to it. Likewise a machine
+translation may not keep a sound of the English localization as it is, such
+as `\<sigh>` or `\<click>` (in macro text `\<` is a literal `<`): it renders
+it in its language or leaves it out. An answer that is not valid JSON,
 most often for a quote the model did not escape inside macro text, is read
 entry by entry (`"id": ["first words", "translation"]`, a bare quote read as
 part of its string); what is read this way is checked like any answer, so a

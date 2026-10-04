@@ -117,7 +117,14 @@ characters.
 base form: it never changes for case. In a language with cases, phrase the line so the \
 name stands where that form is right; in Russian, the nominative: «<noun-en ObjStr 2 \
 $gn7 1 1> покидает группу», «Получено: <sheet Item $n1 0>», never «Вы приглашаете \
-<noun-en ObjStr 2 $gn7 1 1>».";
+<noun-en ObjStr 2 $gn7 1 1>».
+- \\< is a literal <, not the start of a macro: a word in angle brackets, such as \\<sigh> \
+or \\<click>, is a sound or a stage direction of the English localization, which the \
+Japanese says in the line itself (ふぅ…, ガガ…) or not at all. Unless the project's style \
+says otherwise, render it as the Japanese does: a sound the speaker makes becomes an \
+interjection or a sound word of the line, without brackets (\\<sigh> Эх…, \\<cough> \
+Кхе-кхе, \\<beep> Бип!, \\<click> Щёлк-щёлк), and one the line already conveys, or that \
+no one could say aloud (\\<wink>), may be left out. Never keep the source's word.";
 
 /// Language notes on living text for one target language, if Aeria has
 /// them.

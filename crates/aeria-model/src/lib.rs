@@ -17,6 +17,7 @@ pub mod fit;
 pub mod names;
 pub mod prompt;
 pub mod run;
+pub mod sounds;
 
 use std::time::Duration;
 

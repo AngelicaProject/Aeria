@@ -20,6 +20,7 @@ use crate::codex::{Codex, Reply, Request};
 use crate::fit;
 use crate::names::{Names, name_sheet_of};
 use crate::prompt::{self, Answer, FileTask, Item, Term};
+use crate::sounds::sound_problems;
 
 /// Strings of a scene file that are one request; a longer scene is split.
 const SCENE_BATCH: usize = 150;
@@ -602,6 +603,7 @@ fn problems(shared: &Shared, strings: &Strings, id: &str, answer: &Answer) -> Ve
     // Asked of machine translation only: a person can keep one form where
     // it agrees with both.
     found.extend(agreement_problems(&entry.source, &answer.text));
+    found.extend(sound_problems(&entry.source, &answer.text));
     found
 }
 

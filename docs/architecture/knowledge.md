@@ -56,7 +56,10 @@ out; the rest of the knowledge is used.
   player's name (`<if ($gs1 == $gs2)>`) splits a message between the player
   character and someone else, whose words agree inside each branch;
 - how translations are written as macro text, and that a name the game fills
-  in never declines, so a line puts it where its stored form is right;
+  in never declines, so a line puts it where its stored form is right; that
+  `\<sigh>` and `\<click>` are sounds of the English localization, said in
+  the line itself as the Japanese does (Эх…, Бип!) unless the style says
+  otherwise;
 - for Russian, notes on living language and `machine_phrasing`, a word-level
   check for officialese, bookish links, calques, and stacked explanations,
   reported as advice.
