@@ -1,8 +1,9 @@
 //! Sounds and stage directions in angle brackets. In macro text `\<` is a
 //! literal `<`, so `\<sigh>` and `\<click>` are words of the English
 //! localization, not macros: a translation renders them in its language, as
-//! a sound of the line (Эх…) or in brackets, as the project's style says. A
-//! model that takes them for macros keeps the English word.
+//! a sound or a few words of the line (Эх…, Хе-хе) or in brackets, as the
+//! project's style says. A model that takes them for macros keeps the
+//! English word.
 
 /// Placeholders of chat and help texts, which the game fills in and which
 /// stay as they are: `<t>` is the target, `<me>` the player.
@@ -53,8 +54,8 @@ pub fn sound_problems(source: &str, translation: &str) -> Vec<String> {
             format!(
                 "\\<{word}> is a sound or stage direction of the English localization, \
                  not a macro: render it in the target language as the instructions say, as a \
-                 sound word of the line (\\<sigh> Эх…), or leave it out, but never keep the \
-                 English word"
+                 sound word or a few words of the line (\\<sigh> Эх…, \\<wink> Хе-хе), never \
+                 keeping the English word"
             )
         })
         .collect();

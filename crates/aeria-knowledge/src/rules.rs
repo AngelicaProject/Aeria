@@ -120,11 +120,14 @@ $gn7 1 1> покидает группу», «Получено: <sheet Item $n1 0
 <noun-en ObjStr 2 $gn7 1 1>».
 - \\< is a literal <, not the start of a macro: a word in angle brackets, such as \\<sigh> \
 or \\<click>, is a sound or a stage direction of the English localization, which the \
-Japanese says in the line itself (ふぅ…, ガガ…) or not at all. Unless the project's style \
+Japanese says in the line itself (ふぅ…, ガガ…). Unless the project's style \
 says otherwise, render it as the Japanese does: a sound the speaker makes becomes an \
 interjection or a sound word of the line, without brackets (\\<sigh> Эх…, \\<cough> \
-Кхе-кхе, \\<beep> Бип!, \\<click> Щёлк-щёлк), and one the line already conveys, or that \
-no one could say aloud (\\<wink>), may be left out. Never keep the source's word.";
+Кхе-кхе, \\<beep> Бип!, \\<click> Щёлк-щёлк), and a gesture no one could say aloud \
+(\\<wink>, \\<nod>) is conveyed by the line's own words: an interjection, a particle, or \
+a few words in the speaker's voice (\\<wink> Хе-хе; \\<nod> Ага). Do not drop it, even \
+where the line already shows the feeling: find the sound that fits. Never keep the \
+source's word.";
 
 /// Language notes on living text for one target language, if Aeria has
 /// them.
