@@ -55,6 +55,42 @@ rebuilt. A cancelled or failed build leaves no index.
   against a query, ignoring case. Translations change with every edit, so
   they are searched in the project's files rather than indexed.
 
+## Glossary candidates
+
+`aeria_po::term_candidates` finds where a project disagrees with itself: names
+of its English sources that its translations render in several ways and
+its glossary does not have, such as `Kojin` as «Кодзин», «Кудзин», and
+«Койдзин». It reads every file of `po/`, several at a time, and takes about
+seven seconds on a project of the whole game. A person decides what becomes
+a term.
+
+1. A *candidate* is a capitalized phrase of the plain text of the sources:
+   up to four words, hyphenated names whole (`Radz-at-Han`), joined by `of`,
+   `the`, `de`, or `del` (`Students of Baldesion`). The first word of a
+   sentence and leading function words (`The`, `You`) are not part of it.
+   It is in at least 12 strings, at least 6 of them outside interface
+   sheets (whose labels are capitalized anyway), not in more than four in
+   five of them inside a longer candidate, and not a term of the glossary
+   (compared without case and a leading `the`).
+2. A *rendering* is a Russian word of the translations of the candidate's
+   translated strings that is in at least 4 and a twentieth of them, at
+   least 30 times more frequent there than in all translations, and with
+   at least three tenths of all its strings among them: the candidate's
+   translation, not a word around it. Words are compared without their
+   endings, and bases that differ only at the end are forms of one word
+   (Кодзина, Кодзину); other spellings differ in the middle (Шарлаян,
+   Шаллаян).
+3. Words that share at least three fifths of their strings are one
+   rendering (Лимсы Ломинсы). The rendering with most strings is the main
+   one; another with at least 4 strings and a twentieth, sharing at most
+   three twentieths of its strings with the main one, is its rival.
+4. A candidate with rivals is reported, those whose rivals have most strings
+   first, with each rendering's words as translations most often write
+   them, its strings, and up to three examples.
+
+The result is a heuristic: a rendering can still be a word that goes with a
+name rather than translate it, so the person reviews each candidate.
+
 ## Terminology candidates
 
 `SourceIndex::term_candidates` finds names that recur in the game's text,

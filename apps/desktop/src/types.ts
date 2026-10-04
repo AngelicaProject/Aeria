@@ -546,6 +546,21 @@ export type TranslationStatus = {
   startedAt: number;
 };
 
+/** A string where a glossary candidate is rendered one way. */
+export type TermExampleDto = { path: string; context: string; binding: SourceBinding | null; source: string; translation: string };
+
+/** One way the project renders a glossary candidate. */
+export type TermRenderingDto = { words: string[]; strings: number; examples: TermExampleDto[] };
+
+/** A name the project renders in several ways, the most used rendering first. */
+export type TermCandidateDto = {
+  phrase: string;
+  strings: number;
+  translated: number;
+  renderings: TermRenderingDto[];
+  sheets: { sheet: string; count: number }[];
+};
+
 /** One term of `aeria-knowledge/terms.csv`; `settled` when a person decided it. */
 export type GlossaryEntry = { term: string; translation: string; note?: string; forbidden?: string[]; settled?: boolean; matchCase?: boolean };
 

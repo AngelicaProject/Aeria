@@ -35,7 +35,9 @@ marked `settled`. The knowledge is committed with the translations (see
 entries.
 
 The desktop edits the terms and the style in the project knowledge dialog
-(see [`desktop-editor-ui.md`](./desktop-editor-ui.md#project-knowledge-dialog)).
+(see [`desktop-editor-ui.md`](./desktop-editor-ui.md#project-knowledge-dialog)),
+which also lists glossary candidates: names the project translates in
+several ways (see [`search.md`](./search.md#glossary-candidates)).
 A term a person edits there is marked settled. A file that cannot be read,
 and rows the format excludes, are reported with their file and line and left
 out; the rest of the knowledge is used.

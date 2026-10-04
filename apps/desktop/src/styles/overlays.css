@@ -324,6 +324,14 @@ button.translate-name { padding: 0; border: 0; background: transparent; color: v
 .translate-summary { margin: 0; font-weight: 600; }
 @media (max-width: 720px) { .translate-layout { grid-template-columns: 1fr; } }
 .translate-progress { display: flex; flex-direction: column; gap: 8px; }
+.guide-candidates { display: grid; gap: 8px; min-height: 0; overflow-y: auto; }
+.guide-candidate { display: grid; gap: 6px; padding: 8px 10px; border: 1px solid var(--line); border-radius: var(--radius-sm); }
+.guide-candidate-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; }
+.guide-candidate-examples { font-size: var(--text-xs); }
+.guide-candidate-examples ul { display: grid; gap: 4px; margin: 4px 0 0; padding: 0; list-style: none; }
+.guide-candidate-examples li { display: grid; gap: 1px; }
+.guide-candidate-source { color: var(--fg-muted); }
+.guide-candidate-actions { display: flex; gap: 6px; }
 .translate-progress .meter { width: 100%; }
 .translate-active { display: grid; gap: 2px; margin: 0; padding: 0; color: var(--fg-muted); font-size: var(--text-xs); list-style: none; }
 .translate-active li { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

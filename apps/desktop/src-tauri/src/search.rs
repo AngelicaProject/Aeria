@@ -460,6 +460,97 @@ pub fn project_search_cancel(app: tauri::AppHandle) {
     app.state::<SearchState>().cancel();
 }
 
+/// A string where a glossary candidate is rendered one way.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TermExampleDto {
+    pub path: String,
+    pub context: String,
+    pub binding: Option<SourceBindingDto>,
+    pub source: String,
+    pub translation: String,
+}
+
+/// One way the project renders a glossary candidate.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TermRenderingDto {
+    pub words: Vec<String>,
+    pub strings: usize,
+    pub examples: Vec<TermExampleDto>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SheetCountDto {
+    pub sheet: String,
+    pub count: usize,
+}
+
+/// A name the project renders in several ways.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TermCandidateDto {
+    pub phrase: String,
+    pub strings: usize,
+    pub translated: usize,
+    /// The most used rendering first.
+    pub renderings: Vec<TermRenderingDto>,
+    pub sheets: Vec<SheetCountDto>,
+}
+
+#[tauri::command(rename_all = "camelCase")]
+/// The names of the open project's sources that its translations render in
+/// several ways and that the glossary does not have (see
+/// `aeria_po::term_candidates`), those affecting most strings first.
+///
+/// # Errors
+///
+/// Returns `noProjectOpen`, or `translationRead` when a file cannot be read.
+pub async fn project_term_candidates(
+    app: tauri::AppHandle,
+) -> CommandResult<Vec<TermCandidateDto>> {
+    run_blocking(move || {
+        let session = app.state::<DesktopState>().session()?;
+        let knowledge = session.knowledge();
+        let found = aeria_po::term_candidates(session.root(), &knowledge)
+            .map_err(|error| search_error(&error))?;
+        Ok(found
+            .into_iter()
+            .map(|candidate| TermCandidateDto {
+                phrase: candidate.phrase,
+                strings: candidate.strings,
+                translated: candidate.translated,
+                renderings: candidate
+                    .renderings
+                    .into_iter()
+                    .map(|rendering| TermRenderingDto {
+                        words: rendering.words,
+                        strings: rendering.strings,
+                        examples: rendering
+                            .examples
+                            .into_iter()
+                            .map(|example| TermExampleDto {
+                                binding: binding(&session, &example.context),
+                                path: example.path,
+                                context: example.context,
+                                source: example.source,
+                                translation: example.translation,
+                            })
+                            .collect(),
+                    })
+                    .collect(),
+                sheets: candidate
+                    .sheets
+                    .into_iter()
+                    .map(|(sheet, count)| SheetCountDto { sheet, count })
+                    .collect(),
+            })
+            .collect())
+    })
+    .await
+}
+
 #[tauri::command(rename_all = "camelCase")]
 /// Every string the query finds, without the limit of `project_search`, for
 /// choosing a whole result or sheet. It is not cancelled by a new search, so

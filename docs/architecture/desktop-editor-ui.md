@@ -592,7 +592,15 @@ button per row; at most 300 filtered rows are shown at once. Editing or adding
 a row marks it settled; the checkbox changes that. Rows with an empty term or
 translation, or a term repeated case-insensitively, are marked and block
 saving. Rows the file excludes are listed with their line numbers; saving
-removes them only after confirmation. The Style tab is a Markdown text area
+removes them only after confirmation. The Candidates tab finds the names
+the project translates in several ways (`project_term_candidates`, see
+[`search.md`](./search.md#glossary-candidates)): each with its translated
+strings, its sheets, its renderings with their counts as choices, and
+examples of each. **Add to the glossary** adds a term row with the chosen
+rendering as its translation, the others as forbidden variants, and match
+case on, and shows it in the Terms tab to review and save; **Skip** hides
+the candidate on this computer until the skipped ones are shown again. The
+Style tab is a Markdown text area
 for `style.md` and shows its size against the 8 MiB limit. Each tab
 has **Revert** and **Save**; closing with unsaved changes asks first. A save
 fails, without writing, when the file changed since it was loaded, for

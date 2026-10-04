@@ -54,6 +54,7 @@ import type {
   SearchEntryDto,
   SearchQueryDto,
   SearchResultDto,
+  TermCandidateDto,
 } from "./types";
 
 export function normalizeCommandError(error: unknown): CommandError {
@@ -464,6 +465,11 @@ export function saveKnowledgeStyle(expected: string | null, text: string): Promi
   return call<ProjectKnowledgeDto>("save_knowledge_style", { expected, text });
 }
 
+
+/** Names the project renders in several ways that the glossary does not have. */
+export function projectTermCandidates(): Promise<TermCandidateDto[]> {
+  return call<TermCandidateDto[]>("project_term_candidates");
+}
 
 export function saveKnowledgeTerms(expected: string | null, entries: TermInput[]): Promise<ProjectKnowledgeDto> {
   return call<ProjectKnowledgeDto>("save_knowledge_terms", { expected, entries });

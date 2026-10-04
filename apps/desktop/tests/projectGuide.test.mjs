@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { filterRows, inputsFromRows, rowProblems, rowsChanged, rowsFromEntries } from "../src/projectGuide.ts";
+import { filterRows, inputsFromRows, openCandidates, rowFromCandidate, rowProblems, rowsChanged, rowsFromEntries } from "../src/projectGuide.ts";
 
 const entries = [
   { term: "Aether", translation: "Эфир", forbidden: ["Этер", "Эйтер"] },
@@ -36,4 +36,28 @@ test("filters match any field ignoring case", () => {
   assert.deepEqual(filterRows(rows, "MATER").map((row) => row.term), ["Crystal"]);
   assert.deepEqual(filterRows(rows, "эйтер").map((row) => row.term), ["Aether"]);
   assert.equal(filterRows(rows, "  ").length, 2);
+});
+
+const kojin = {
+  phrase: "Kojin",
+  strings: 291,
+  translated: 285,
+  renderings: [
+    { words: ["кудзин"], strings: 86, examples: [] },
+    { words: ["кодзин"], strings: 84, examples: [] },
+    { words: ["койджинов"], strings: 43, examples: [] },
+  ],
+  sheets: [{ sheet: "quest", count: 171 }],
+};
+
+test("a candidate becomes a term with the chosen rendering and the others forbidden", () => {
+  const row = rowFromCandidate(kojin, 1, 7);
+  assert.deepEqual(row, { key: 7, term: "Kojin", translation: "кодзин", note: "", forbidden: "кудзин; койджинов", settled: true, matchCase: true });
+});
+
+test("candidates already in the glossary or skipped are not offered", () => {
+  const grace = { ...kojin, phrase: "Grace" };
+  const twelveswood = { ...kojin, phrase: "Twelveswood" };
+  const rows = rowsFromEntries([{ term: "the Kojin", translation: "кодзин" }]);
+  assert.deepEqual(openCandidates([kojin, grace, twelveswood], rows, new Set(["Grace"])).map((candidate) => candidate.phrase), ["Twelveswood"]);
 });

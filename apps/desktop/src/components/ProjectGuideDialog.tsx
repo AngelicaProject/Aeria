@@ -1,8 +1,8 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Dialog } from "radix-ui";
-import { normalizeCommandError, projectKnowledge, saveKnowledgeStyle, saveKnowledgeTerms } from "../ipc";
-import { filterRows, inputsFromRows, rowProblems, rowsChanged, rowsFromEntries, type GlossaryRow, type RowProblem } from "../projectGuide";
-import type { CommandError, ProjectKnowledgeDto } from "../types";
+import { normalizeCommandError, projectKnowledge, projectTermCandidates, saveKnowledgeStyle, saveKnowledgeTerms } from "../ipc";
+import { filterRows, inputsFromRows, openCandidates, rowFromCandidate, rowProblems, rowsChanged, rowsFromEntries, type GlossaryRow, type RowProblem } from "../projectGuide";
+import type { CommandError, ProjectKnowledgeDto, TermCandidateDto } from "../types";
 import type { MessageKey } from "../i18n/translate";
 import { useI18n } from "../ui/i18n";
 import { Segmented } from "../ui/primitives/Segmented";
@@ -10,7 +10,27 @@ import { UiIcon } from "../ui/primitives/UiIcon";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { ErrorBanner } from "./ErrorBanner";
 
-export type ProjectGuideTab = "terms" | "style";
+export type ProjectGuideTab = "terms" | "candidates" | "style";
+
+/** Where the candidates a person skipped are kept on this computer. */
+const SKIPPED_KEY = "aeria.guide.skippedCandidates";
+
+function readSkipped(): Set<string> {
+  try {
+    const stored: unknown = JSON.parse(window.localStorage.getItem(SKIPPED_KEY) ?? "[]");
+    return new Set(Array.isArray(stored) ? stored.filter((item): item is string => typeof item === "string") : []);
+  } catch {
+    return new Set();
+  }
+}
+
+function writeSkipped(skipped: ReadonlySet<string>) {
+  try {
+    window.localStorage.setItem(SKIPPED_KEY, JSON.stringify([...skipped]));
+  } catch {
+    // Skipping is a convenience of this computer; the list still works.
+  }
+}
 
 type ProjectGuideDialogProps = {
   open: boolean;
@@ -44,6 +64,10 @@ export const ProjectGuideDialog = memo(function ProjectGuideDialog({ open, initi
   const [error, setError] = useState<CommandError | null>(null);
   const [confirm, setConfirm] = useState<{ message: string; confirmLabel?: string; run: () => void } | null>(null);
   const nextKey = useRef(0);
+  const [candidates, setCandidates] = useState<TermCandidateDto[] | null>(null);
+  const [finding, setFinding] = useState(false);
+  const [chosen, setChosen] = useState<ReadonlyMap<string, number>>(new Map());
+  const [skipped, setSkipped] = useState<ReadonlySet<string>>(readSkipped);
 
   const show = useCallback((knowledge: ProjectKnowledgeDto) => {
     setSaved(knowledge);
@@ -119,6 +143,31 @@ export const ProjectGuideDialog = memo(function ProjectGuideDialog({ open, initi
     setRows((current) => [...current, { key, term: "", translation: "", note: "", forbidden: "", settled: true, matchCase: false }]);
   };
 
+  const findCandidates = () => {
+    setFinding(true);
+    setError(null);
+    void projectTermCandidates()
+      .then((found) => { setCandidates(found); setChosen(new Map()); })
+      .catch((reason: unknown) => setError(normalizeCommandError(reason)))
+      .finally(() => setFinding(false));
+  };
+
+  const skip = (phrase: string | null) => {
+    const next = new Set(phrase === null ? [] : [...skipped, phrase]);
+    setSkipped(next);
+    writeSkipped(next);
+  };
+
+  // The candidate becomes a term row to review and save with the others.
+  const addCandidate = (candidate: TermCandidateDto) => {
+    const key = nextKey.current++;
+    setRows((current) => [...current, rowFromCandidate(candidate, chosen.get(candidate.phrase) ?? 0, key)]);
+    setQuery(candidate.phrase);
+    setTab("terms");
+  };
+
+  const remaining = useMemo(() => openCandidates(candidates ?? [], rows, skipped), [candidates, rows, skipped]);
+
   const close = (next: boolean) => {
     if (next || !(termsDirty || styleDirty)) { onOpenChange(next); return; }
     setConfirm({ message: t("guide.discard"), run: () => onOpenChange(false) });
@@ -137,6 +186,7 @@ export const ProjectGuideDialog = memo(function ProjectGuideDialog({ open, initi
               onChange={setTab}
               options={[
                 { value: "terms", label: termsDirty ? `${t("guide.tab.terms")} •` : t("guide.tab.terms") },
+                { value: "candidates", label: t("guide.tab.candidates") },
                 { value: "style", label: styleDirty ? `${t("guide.tab.style")} •` : t("guide.tab.style") },
               ]}
             />
@@ -193,6 +243,56 @@ export const ProjectGuideDialog = memo(function ProjectGuideDialog({ open, initi
                 {problems.size > 0 ? <span className="guide-problems">{t("guide.glossary.problems", { count: problems.size })}</span> : null}
                 <button className="button button-ghost" type="button" disabled={busy || !termsDirty} onClick={() => show(saved)}>{t("guide.revert")}</button>
                 <button className="button button-primary" type="button" disabled={busy || !termsDirty || problems.size > 0} onClick={saveTerms}>{t("guide.save")}</button>
+              </div>
+            </section>
+          ) : tab === "candidates" ? (
+            <section className="guide-body">
+              <p className="field-hint">{t("guide.candidates.hint")}</p>
+              <div className="guide-toolbar">
+                <button className="button button-secondary" type="button" disabled={finding} onClick={findCandidates}>
+                  {finding ? <span className="spinner" /> : <UiIcon icon="search" size="sm" />}{candidates === null ? t("guide.candidates.find") : t("guide.candidates.findAgain")}
+                </button>
+                {candidates !== null ? <span className="muted">{t("guide.candidates.count", { count: remaining.length })}</span> : null}
+                {skipped.size > 0 ? <button className="link-button" type="button" onClick={() => skip(null)}>{t("guide.candidates.restore", { count: skipped.size })}</button> : null}
+              </div>
+              {finding ? <p className="muted">{t("guide.candidates.finding")}</p> : null}
+              {candidates !== null && !finding && remaining.length === 0 ? <p className="field-hint">{t("guide.candidates.none")}</p> : null}
+              <div className="guide-candidates">
+                {remaining.slice(0, ROWS_SHOWN).map((candidate) => {
+                  const picked = chosen.get(candidate.phrase) ?? 0;
+                  return (
+                    <article key={candidate.phrase} className="guide-candidate">
+                      <header className="guide-candidate-head">
+                        <strong>{candidate.phrase}</strong>
+                        <span className="muted">{t("guide.candidates.strings", { count: candidate.translated })} · {candidate.sheets.map((sheet) => sheet.sheet).join(", ")}</span>
+                      </header>
+                      <div className="search-chips" role="radiogroup" aria-label={t("guide.candidates.renderings")}>
+                        {candidate.renderings.map((rendering, index) => (
+                          <button key={index} type="button" role="radio" aria-checked={index === picked} className={index === picked ? "chip-toggle on" : "chip-toggle"} title={t("guide.candidates.choose")} onClick={() => setChosen((current) => new Map(current).set(candidate.phrase, index))}>
+                            {rendering.words.join(" ")}<span className="search-issue-count">{rendering.strings}</span>
+                          </button>
+                        ))}
+                      </div>
+                      <details className="guide-candidate-examples">
+                        <summary>{t("guide.candidates.examples")}</summary>
+                        {candidate.renderings.map((rendering, index) => (
+                          <ul key={index}>
+                            {rendering.examples.map((example) => (
+                              <li key={`${example.path}|${example.context}`}>
+                                <span className="guide-candidate-source">{example.source}</span>
+                                <span>{example.translation}</span>
+                              </li>
+                            ))}
+                          </ul>
+                        ))}
+                      </details>
+                      <div className="guide-candidate-actions">
+                        <button className="button button-secondary" type="button" onClick={() => addCandidate(candidate)}><UiIcon icon="plus" size="sm" />{t("guide.candidates.add")}</button>
+                        <button className="button button-ghost" type="button" onClick={() => skip(candidate.phrase)}>{t("guide.candidates.skip")}</button>
+                      </div>
+                    </article>
+                  );
+                })}
               </div>
             </section>
           ) : (
