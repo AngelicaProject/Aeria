@@ -61,9 +61,11 @@ fn recommended_fonts_cover_every_target_deterministically() {
             .iter()
             .find(|glyph| glyph.character == 'Н')
             .expect("Н");
+        let (top, bottom) = ink_rows(capital);
+        assert_eq!(bottom + 1, size.ascent, "{}_{}", target.font, target.size);
         assert_eq!(
-            capital.offset_y + capital.height,
-            size.ascent,
+            bottom + 1 - top,
+            size.cap_height,
             "{}_{}",
             target.font,
             target.size
@@ -101,6 +103,15 @@ fn recommended_fonts_cover_every_target_deterministically() {
     assert_eq!(line.height, 26);
     assert!(line.missing.is_empty());
     assert!(line.pixels.iter().any(|p| *p > 0));
+}
+
+/// The first and last line rows of a glyph with ink the game's 4-bit pages
+/// keep.
+fn ink_rows(glyph: &SectionGlyph) -> (u8, u8) {
+    let rows: Vec<u8> = (glyph.offset_y..glyph.offset_y + glyph.height)
+        .filter(|line| row(glyph, *line).iter().any(|value| *value > 0))
+        .collect();
+    (rows[0], rows[rows.len() - 1])
 }
 
 /// Coverage of one row of a glyph, as the game's 4-bit pages keep it.
@@ -176,9 +187,24 @@ fn replacements_sit_on_the_native_grid() {
         "{first_pixels:?}"
     );
     // The small letters end on the native x-height and baseline.
-    let small = glyph('н');
-    assert_eq!(small.offset_y, target.ascent - grid.x_height);
-    assert_eq!(small.offset_y + small.height, target.ascent);
+    // Replacements span the line like the game's own glyphs, so the game's
+    // italic slant is the same for them.
+    for target in &replaced.targets {
+        assert!(
+            target
+                .glyphs
+                .iter()
+                .all(|glyph| glyph.offset_y == 0 && glyph.height == target.line_height),
+            "{}_{}",
+            target.font,
+            target.size
+        );
+    }
+    let (top, bottom) = ink_rows(glyph('н'));
+    assert_eq!(
+        (top, bottom + 1),
+        (target.ascent - grid.x_height, target.ascent)
+    );
 }
 
 #[test]

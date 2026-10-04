@@ -156,12 +156,19 @@ pub fn render_size(
             (image.placement, image.data, advance)
         };
         glyphs.push(
-            place(&placement, &data, advance, baseline, line_height)
-                .map(|placed| SectionGlyph {
-                    character,
-                    ..placed
-                })
-                .map_err(|reason| at(&reason))?,
+            place(
+                &placement,
+                &data,
+                advance,
+                baseline,
+                line_height,
+                font.replaces,
+            )
+            .map(|placed| SectionGlyph {
+                character,
+                ..placed
+            })
+            .map_err(|reason| at(&reason))?,
         );
     }
     Ok(glyphs)
@@ -330,13 +337,18 @@ fn variation_coords(
         .collect())
 }
 
-/// Turns a rendered coverage image into a pen-relative, row-trimmed glyph.
+/// Turns a rendered coverage image into a pen-relative glyph, trimmed to
+/// its ink rows, or with `whole_line` spanning the line as the game's own
+/// glyphs do. The game slants italic text by moving the top edge of each
+/// glyph's box by a fixed distance, so a replacement whose box were shorter
+/// than the game's would lean more steeply than the letters around it.
 fn place(
     placement: &swash::zeno::Placement,
     data: &[u8],
     advance: f32,
     baseline: i32,
     line_height: i32,
+    whole_line: bool,
 ) -> Result<SectionGlyph, String> {
     let (width, height) = (
         usize::try_from(placement.width).map_err(|_| "too wide")?,
@@ -356,8 +368,11 @@ fn place(
         })
         .filter(|(line, pixels)| (0..line_height).contains(line) && pixels.iter().any(|p| *p != 0))
         .collect();
-    let first = rows.first().map_or(0, |(line, _)| *line);
-    let last = rows.last().map_or(-1, |(line, _)| *line);
+    let (first, last) = match (rows.first(), rows.last()) {
+        (Some(_), Some(_)) if whole_line => (0, line_height - 1),
+        (Some((first, _)), Some((last, _))) => (*first, *last),
+        _ => (0, -1),
+    };
     let columns = rows
         .iter()
         .filter_map(|(_, pixels)| pixels.iter().rposition(|p| *p != 0))

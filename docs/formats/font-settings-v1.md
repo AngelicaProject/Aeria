@@ -87,7 +87,10 @@ size, measured with the other metrics: vertical stems get the native stem width
 and start at the same fraction of a pixel, horizontal bars get the native
 thickness on whole pixels, the baseline, x-height, and cap height land on the
 native rows, and the glyphs are shifted so the space between letters is split
-between their sides as in the native Latin. With `scale` other than 1 the zones
+between their sides as in the native Latin. Each glyph spans the whole line
+(`offsetY` 0, `height` = line height), as the game's own do: the game slants
+italic text by moving the top edge of each glyph's box by a fixed distance, so
+a glyph trimmed to its ink would lean more steeply than its neighbours. With `scale` other than 1 the zones
 follow the scaled heights. `widthScale`, `tracking`, and `baselineShift` apply
 as for the other fonts.
 

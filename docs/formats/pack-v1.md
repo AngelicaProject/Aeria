@@ -385,7 +385,10 @@ in the same two font sets and with the same metrics check, except:
 2. a glyph the `.fdt` lacks is added, as in `FONTS`;
 3. kerning pairs are unchanged; the game's `AXIS` has none for Cyrillic.
 
-The new bitmaps go into the same free atlas pages as `FONTS` glyphs. A target
+Aeria writes replacement glyphs spanning the whole line (`offsetY` 0,
+`height` = `lineHeight`), like the game's own, because the game slants italic
+text by moving the top edge of each glyph's box a fixed distance. The new
+bitmaps go into the same free atlas pages as `FONTS` glyphs. A target
 that is skipped (missing `.fdt`, changed metrics, no room) leaves the game's
 own glyphs in place.
 
