@@ -79,27 +79,26 @@ phrased so that nothing depends on the gender. Never keep only one of its branch
 source does not, the target language most likely needs a condition there too.
 - Speakers keep their own gender: a condition on $gn4 is only for words about the \
 player character.
-- A comparison with the player's name, such as <if ($gs1 == $gs2)>, tells whether a \
-person a message is about is the player character: its first branch is about the \
-player character, usually as \"you\", and its other branch about someone else, named by \
-$gs2 or $gs3. A condition on $gn4 goes only inside the first branch: the player \
-character's gender says nothing about anyone else.
-- Words after such a comparison that agree with its person go inside its branches, \
-since they agree differently with \"you\" and with someone else. Another player's \
-gender is $gn5 for $gs2 and $gn6 for $gs3; when $gn7 or $gn8 is set, the person is a \
-character or an object, female when <if \"<sheet BNpcName $gn7 6>\"> holds (or $gn8 \
-for $gs3). Keep the source's branches with the name as they are and give the agreeing \
-words a condition of their own. In Russian: «<if ($gs1 == $gs2)>Вы покинули<else><if \
-$gn7><noun-en ObjStr 2 $gn7 1 1><else>{$gs2}</if> <if $gn7><if \"<sheet BNpcName $gn7 \
-6>\">покинула<else>покинул</if><else><if $gn5>покинула<else>покинул</if></if></if> \
-группу».
-- The one $gs2 or $gs3 names may be a player, a character, or an object, so never call \
-them a person, a character, or a player (персонаж по имени): where the name must keep \
-its stored form, give it a place of its own, as after a colon: «Зритель: <if \
-$gn8><noun-en ObjStr 2 $gn8 1 1><else>{$gs3}</if>».
-- The player's branch of a comparison with another person is the player as \"you\" \
-(вас, вам), whoever acts: «{$gs2} танцует для вас». A reflexive word (себя) is right \
-only where the one acting and the one acted on are the same person.";
+- Messages about other people, such as the party and battle log, name them by $gs2 \
+and $gs3, and compare each with the player's name: <if ($gs1 == $gs2)> holds when the \
+one $gs2 names is the player character. That one may be another player, a character, \
+or an object, so never call them a person, a character, or a player (персонаж по \
+имени). Write each clause about such a person whole inside the comparison: the first \
+branch about the player as \"you\" (вы, вас, вам), the other about the one named, each \
+with its own words that agree with it, such as the verb, and the source's branches \
+with the name kept as they are. A condition on $gn4 goes only in a first branch; \
+another player's gender is $gn5 for $gs2 and $gn6 for $gs3, and a character's is <if \
+\"<sheet BNpcName $gn7 6>\"> (or $gn8). A reflexive (себя) is right only where one \
+person acts on themselves. A name keeps its stored form, so it is the subject or, \
+where another case is needed and the project's style says no otherwise, stands after a \
+colon at the end. In Russian, \"X consoles Y\": «<capitalize><if ($gs1 == $gs2)>Вы \
+утешаете<else><if $gn7><noun-en ObjStr 2 $gn7 1 1><else>{$gs2}</if> \
+утешает</if></capitalize><if ($gs1 == $gs3)> вас<else>: <if $gn8><noun-en ObjStr 2 \
+$gn8 1 1><else>{$gs3}</if></if>.» (Вы утешаете: Иван. Иван утешает вас. Иван утешает: \
+Пётр.), and with a past verb, \"X left the party\": «<if ($gs1 == $gs2)>Вы \
+покинули<else><if $gn7><noun-en ObjStr 2 $gn7 1 1><else>{$gs2}</if> <if $gn7><if \
+\"<sheet BNpcName $gn7 6>\">покинула<else>покинул</if><else><if \
+$gn5>покинула<else>покинул</if></if></if> группу».";
 
 /// How translations are written as the game's macro text.
 pub const MACRO_TEXT: &str = "\

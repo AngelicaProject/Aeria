@@ -190,6 +190,20 @@ mod tests {
         }
     }
 
+    /// The example of the player character rules passes every check of an
+    /// answer on the game's string it shows.
+    #[test]
+    fn the_example_of_the_rules_passes() {
+        let source = "<capitalize><if ($gs1 == $gs2)>you<else><if $gn7><noun-en ObjStr 2 $gn7 1 1><else>{$gs2}</if></if></capitalize> <if ($gs1 == $gs2)>console<else>consoles</if> <if ($gs1 == $gs3)><if $gn8><noun-en ObjStr 2 $gn8 1 1><else>you</if><else><if $gn8><noun-en ObjStr 2 $gn8 1 1><else>{$gs3}</if></if>.";
+        let example = "<capitalize><if ($gs1 == $gs2)>Вы утешаете<else><if $gn7><noun-en ObjStr 2 $gn7 1 1><else>{$gs2}</if> утешает</if></capitalize><if ($gs1 == $gs3)> вас<else>: <if $gn8><noun-en ObjStr 2 $gn8 1 1><else>{$gs3}</if></if>.";
+        assert!(
+            aeria_knowledge::rules::PLAYER_CHARACTER.contains(example),
+            "the rules show this example"
+        );
+        assert_eq!(aeria_se::check_assisted_structure(source, example), Ok(()));
+        assert!(agreement_problems(source, example).is_empty());
+    }
+
     #[test]
     fn a_source_without_a_word_choice_asks_for_nothing() {
         let source = "<if ($gs1 == $gs2)>you<else>{$gs2}</if> left.";
