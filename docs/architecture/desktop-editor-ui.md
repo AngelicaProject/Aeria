@@ -109,8 +109,8 @@ session. A floated tool asks the main window, which owns the editor, to
 open a string, read changed files again, show the machine translation dialog,
 or open a commit, through events sent to the `main` window
 (`workbenchEvents.ts`); the main window comes to the front for a string or the
-dialog. The right dock opens on Git; the bottom panel (Tasks, Git changes,
-Diagnostics) is hidden by default and shows truthful unavailable states.
+dialog. The right dock opens on Git; the bottom panel holds the
+[string guide](#string-guide) and is shown by default.
 
 Center documents use preview tabs for single-click sheet browsing. A
 double-click pins a preview, and starting a local draft pins it automatically.
@@ -146,7 +146,8 @@ The list receives row pages but renders a flattened occurrence view: one
 `subrowId`, and `columnIndex`. A logical row remains the grouping context: the
 `rowId:subrowId` coordinate appears on its first lane and continuation lanes
 show a connector. Each lane shows the string's state (untranslated,
-translated, or with a changed source), `col N` field identity, and
+translated, reviewed by a person, or with a changed source; a reviewed
+string's dot has a ring), `col N` field identity, and
 single-line source and target previews in which macro spans are tinted. Until
 EXDSchema exists, fields are labelled by column. Blocked source cells remain
 context only and are never used as permission heuristics.
@@ -162,7 +163,8 @@ Pages that contain no visible rows are simply skipped, and there is no manual
 **Load more**. Reloading the open sheet after a Git operation keeps the current
 rows and selection on screen and swaps in the new rows once complete. Overlays
 saved while a sheet streams are applied to pages read before the save. A text
-filter, a state filter (untranslated, translated, source changed),
+filter, a state filter (untranslated, translated, reviewed, source changed; translated
+means not reviewed),
 and a string kind toggle pair (text only or formatting only; pressing the
 active one again shows both) narrow the list; while the sheet is still
 loading they cover the rows loaded so far and grow as the rest arrives. Formatting-only strings (no letters outside macros, such as
@@ -387,6 +389,19 @@ error lists its problems. Saving a fuzzy string's translation accepts it and
 removes the mark. A row is dirty when any contained cell has a dirty target or
 note.
 
+A person marks a translation reviewed (see
+[`po-project.md`](./po-project.md#reviews)) with the button beside Save:
+**Save & mark reviewed** saves the draft and marks it at once, and without
+edits the same button reads **Mark reviewed** and only marks the saved
+translation; a reviewed string without edits does not show it. A reviewed
+string shows **Reviewed** in the editor bar, which removes the mark. Nothing else marks a
+string: a plain save keeps a mark the string has and adds none. A string whose mark is of another text (the
+translation changed by a merge or by hand) shows *Changed after review*. The footer's buttons are one group: when it does not fit
+beside the hint, the whole group moves to a second row, right-aligned, and
+the hint keeps one line, cut with an ellipsis and whole in its tooltip. In
+a translation pane narrower than 600 px the review button shows only its
+icon and Save hides its shortcut.
+
 When the selected string has uncommitted Git changes, the target pane shows a
 word-level diff between the last checkpoint and the current draft, or notes that
 the string is new since then. The diff is presentation only and can be hidden.
@@ -396,9 +411,11 @@ no dirty draft remains, then selects the next occurrence in the filtered list
 and, unless disabled in settings, focuses its target. When there is nothing to
 save it only moves on.
 
-**Accept & next** (Ctrl+Shift+Enter, also in the Translation menu and the
-command palette) is for quick review: it saves the target as it is, which also
-accepts a fuzzy string, and moves on like Save & next. A translated string
+**Accept & next** (*Still correct & next*; Ctrl+Shift+Enter, also in the
+Translation menu and the command palette) is for a string whose source
+changed: it saves the target as it is, which accepts the fuzzy string, and
+moves on like Save & next. The button shows only on a fuzzy string, where it
+does what no other button does; the shortcut works on every string. A translated string
 without edits only moves on; an empty target does nothing. When the selected
 string has left the filtered list, for example a fuzzy filter after accepting
 it, the next and previous strings are found from its place in sheet order.
@@ -408,6 +425,63 @@ confirmation when changing rows, changing sheets, closing the project, or
 performing a mutation that would refresh away another dirty cell draft. The UI
 distinguishes an absent translation overlay from an overlay whose target is
 explicitly empty.
+
+## String guide
+
+The string guide sits in the bottom panel under the document (Ctrl+J shows
+or hides it) and can move to the right dock. It is for the person
+translating the string in the editor: it shows what a machine translation
+request tells the model about that string, which macros the string has and
+what a translation may do with each, and what the checks find in the
+translation as it is typed, before it is saved. The guide and the request
+read a string the same way, so the guide follows every change to what a
+request says about one string (see
+[`translate.md`](./translate.md#the-request) and principle 11 of
+[`principles.md`](../product/principles.md)). The editor publishes its
+string and the translation being typed (`ui/editorFocus.ts`), so typing does
+not re-render the workbench.
+
+- A line above the columns says what the string is, when the request would:
+  who says it (the translated name, or the speaker label in title case; the
+  label in the tooltip), a quest's journal entry or objective, the length an
+  interface label may have with the translation's length against it, and
+  that the line varies with the player character's gender in the source or
+  in the French or German text, with **Insert a choice**, the gender choice
+  of the insertion menu. A label longer than its length is advice, amber, as
+  is a gendered line whose translation has no condition on `$gn4`.
+- **Names and terms** lists the glossary terms of the source, each with its
+  translation, forbidden variants, note, and whether a term exception keeps
+  it out, and the game's names in the source with the project's
+  translations, with a link to the glossary. Under each name is what it
+  names, from every name sheet with it (*character, enemy*), the row's name
+  when it is another form of it (*place, a form of «The Walk»*), and the
+  string its translation comes from, which a click opens in the editor: a
+  name is found by its letters alone, so an ordinary word such as *Walk* in
+  *A Walk in the Park* can be found as one, and the origin shows it. Each is marked once there is a
+  translation: used, not used yet (amber), or a forbidden variant used
+  (red). A name counts as used as the glossary counts a term's translation:
+  each of its words as written or inflected. A term's **Not this term**
+  (on hover) adds a term exception to the string, and **Restore** on an
+  excepted term removes it (see
+  [`po-project.md`](./po-project.md#term-exceptions)).
+- **Macros** lists the parts of the source the editor draws as chips or
+  formatting markers, once each with a count, grouped by what a translation
+  may do with them: keep (game data), conditions, letter case, formatting,
+  and layout; each group's rule is in its tooltip. A part with game data the
+  translation lacks is outlined in red, and one it has is checked.
+- **Translation** lists the problems (red) and advice (amber) of the checks
+  in the translation as typed, worded as in the search results, or says
+  that they found nothing. An exception that names no term of the source
+  has **Remove**. A string without names, terms, or macros says it is
+  translated as ordinary text.
+
+Clicking a name's or term's translation, or a macro part, adds it to the
+translation at its cursor, as clicking a source chip does. The guide keeps
+the previous string's content, dimmed, until the new string's arrives, and
+reads the string again after saves, project knowledge edits, and Git
+operations. The translation is checked at once for a new string and after a
+250 ms pause while typing. In a dock narrower than 560 px the columns stack
+and scroll together.
 
 ## Sheets explorer
 
@@ -547,7 +621,7 @@ and has no refresh button.
   50 changes in several sheets, sheets start collapsed. The sheet whose
   changes are at the top stays pinned above them. A row names its column
   only when the sheet's changes span several columns, and says when a
-  string's fuzzy mark or note changed. Filters and open
+  string's fuzzy mark, note, or review changed. Filters and open
   sheets are kept per list (the uncommitted changes, or each commit) while
   the window lives. Commit tabs use the same list.
 - **History** fills the rest of the dock: commits with a lane graph, branch
@@ -565,19 +639,15 @@ machine translation (`project://files-changed`).
 
 ## String history
 
-The translation editor's side pane has four tabs: Note, Languages, History,
-and Checks. The open tab is a local preference (`sidePaneTab`), so it stays
+The translation editor's side pane has three tabs: Note, Languages, and
+History; what the checks find is in the [string guide](#string-guide). The open tab is a local preference (`sidePaneTab`), so it stays
 when another string is selected and after a restart. Languages shows the selected source text in the game's other client
 languages, stacked in the source pane's chip or code view, so a translator
 can compare how each language uses tags such as conditions; a tag clicked
 there is added to the translation as from the source pane. A language
 without the string says so. History shows every committed change to the
 selected string with its author, and its uncommitted change; "Use this text"
-puts a historical text into the editor as an unsaved draft. Checks shows what
-the checks find in the saved translation, problems in red and advice in
-amber; a term finding has **Exception**, which adds a term exception to the
-string, and the string's exceptions are listed with a button that removes
-each (see [`po-project.md`](./po-project.md#term-exceptions)).
+puts a historical text into the editor as an unsaved draft.
 
 ## Project knowledge dialog
 
@@ -688,5 +758,3 @@ written, and the commit. The status bar shows how many strings of the project
 have a changed source and filters the list to them. See
 [`po-project.md`](./po-project.md#game-updates).
 
-The workbench retains truthful bottom-panel tabs, and status/layout
-infrastructure even when those backends are unavailable.

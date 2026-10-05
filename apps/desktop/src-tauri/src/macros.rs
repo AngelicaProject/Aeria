@@ -8,8 +8,8 @@ use std::sync::Arc;
 
 use aeria_se::catalog::{Form, Place, Role};
 use aeria_se::{
-    ExprKind, ExprSyntax, MacroString, MacroSyntax, SemanticFamily, SyntaxKind, SyntaxNode,
-    Written, parse,
+    ConstructRule, ExprKind, ExprSyntax, MacroString, MacroSyntax, SemanticFamily, SyntaxKind,
+    SyntaxNode, Written, construct_rule, parse,
 };
 use aeria_source::GameSource;
 use serde::Serialize;
@@ -62,6 +62,10 @@ pub struct MacroTagDto {
     pub color: Option<String>,
     /// What an opening `<if>` or `<switch>` tests, part by part.
     pub condition: Option<ConditionDto>,
+    /// What a translation may do with the macro (`keep`, `formatting`,
+    /// `condition`, `free`, or `letterCase`), as the structure policy reads
+    /// it; raw bytes are kept.
+    pub rule: &'static str,
 }
 
 /// A condition of an `<if>` or the value of a `<switch>`: `left` alone is
@@ -396,6 +400,16 @@ const fn family_name(family: SemanticFamily) -> &'static str {
     }
 }
 
+const fn rule_name(rule: ConstructRule) -> &'static str {
+    match rule {
+        ConstructRule::Keep => "keep",
+        ConstructRule::Formatting => "formatting",
+        ConstructRule::Condition => "condition",
+        ConstructRule::Free => "free",
+        ConstructRule::LetterCase => "letterCase",
+    }
+}
+
 const fn role_name(role: Role) -> &'static str {
     match role {
         Role::Condition => "condition",
@@ -451,6 +465,7 @@ fn collect_tags(
                 args: Vec::new(),
                 color: None,
                 condition: None,
+                rule: rule_name(ConstructRule::Keep),
             }),
             SyntaxKind::Macro(syntax) => {
                 macro_tags(document, syntax, offsets, tags);
@@ -512,6 +527,7 @@ fn macro_tags(
             }
         })
         .collect();
+    let rule = rule_name(construct_rule(syntax));
     let count = syntax.tags.len();
     for (index, span) in syntax.tags.iter().enumerate() {
         let part = match (syntax.written, syntax.spec.map(|spec| spec.form)) {
@@ -546,6 +562,7 @@ fn macro_tags(
             },
             color: None,
             condition: None,
+            rule,
         });
     }
 }

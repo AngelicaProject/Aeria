@@ -11,6 +11,8 @@ use aeria_knowledge::rules::{
 };
 use serde_json::{Value, json};
 
+use crate::names::Name;
+
 /// The instructions of every request of a run: the rules of a translation,
 /// the project's style, and the answer's form.
 #[must_use]
@@ -41,8 +43,13 @@ pub fn instructions(source_language: &str, target_language: &str, style: Option<
         );
     }
     text.push_str(
-        "The request is JSON: `names` are the game's names that occur in the batch with the \
-         project's translations, which you use exactly; `terms` are the project's terms, \
+        "The request is JSON: `names` are the game's names found in the batch, each with the \
+         project's translation and `from`: what it names and the sheet of the game it comes \
+         from. A name is found by its letters alone, so a word that only looks like one is \
+         listed too: `Walk` in \"A Walk in the Park\" is not the place \"The Walk\". Where a \
+         word of a string is that name, you use its translation exactly; where the word \
+         means something else, you translate it by its meaning. `terms` are the project's \
+         terms, \
          which you use exactly and whose `never` variants you never use; `files` are the \
          files of the batch, each on its own: `about` says what the file is: its sheet, a \
          quest's title, and whether its strings are in play order, so that a batch continues \
@@ -119,11 +126,17 @@ pub struct FileTask {
 
 /// The task of one request.
 #[must_use]
-pub fn input(files: &[FileTask], names: &[(String, String)], terms: &[Term]) -> String {
+pub fn input(files: &[FileTask], names: &[Name], terms: &[Term]) -> String {
     let value = json!({
         "names": names
             .iter()
-            .map(|(source, translation)| json!({ "name": source, "translation": translation }))
+            .map(|name| {
+                let mut value = json!({ "name": name.source, "translation": name.translation });
+                if let Some(origin) = name.origin() {
+                    value["from"] = Value::from(origin);
+                }
+                value
+            })
             .collect::<Vec<_>>(),
         "terms": terms
             .iter()
@@ -182,24 +195,10 @@ fn file_value(task: &FileTask) -> Value {
 }
 
 /// The texts of a string whose line varies with the player character's
-/// gender: `source`, and the languages of its context (`fr: …`) with a
-/// condition on `$gn4`. The rule alone is easy to miss in a long request;
-/// the mark sits on the string that needs it.
+/// gender (see [`crate::hints::gendered`]). The rule alone is easy to miss
+/// in a long request; the mark sits on the string that needs it.
 fn gendered(item: &Item) -> Vec<&str> {
-    let mut texts = Vec::new();
-    if item.source.contains("$gn4") {
-        texts.push("source");
-    }
-    for line in &item.context {
-        if let Some((language, text)) = line.split_once(": ")
-            && language.len() == 2
-            && language.bytes().all(|byte| byte.is_ascii_lowercase())
-            && text.contains("$gn4")
-        {
-            texts.push(language);
-        }
-    }
-    texts
+    crate::hints::gendered(&item.source, &item.context)
 }
 
 /// A request that sends back the translations that failed the checks, with
@@ -456,12 +455,24 @@ mod tests {
                     term_exceptions: vec!["Maelstrom".to_owned()],
                 }],
             }],
-            &[("Minfilia".to_owned(), "Минфилия".to_owned())],
+            &[
+                Name::new("Minfilia", "Минфилия"),
+                Name {
+                    context: "PlaceName:1861:0:2".to_owned(),
+                    full: Some("The Walk".to_owned()),
+                    ..Name::new("Walk", "переход")
+                },
+            ],
             &[],
         );
         let value: Value = serde_json::from_str(&input).expect("json");
         assert_eq!(value["files"][0]["strings"][0]["context"][0], "de: Ok");
         assert_eq!(value["names"][0]["translation"], "Минфилия");
+        assert!(value["names"][0].get("from").is_none());
+        assert_eq!(
+            value["names"][1]["from"],
+            "the name of a place (sheet PlaceName), a form of \"The Walk\""
+        );
         assert_eq!(value["files"][0]["speakers"][0]["speaker"], "MINFILIA");
         assert_eq!(value["files"][0]["about"], "Addon");
         assert!(value["files"][0]["strings"][0].get("gendered").is_none());

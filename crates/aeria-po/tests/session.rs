@@ -149,3 +149,121 @@ fn a_session_reads_writes_and_checks_strings() {
         Some("Привет.")
     );
 }
+
+#[test]
+#[allow(clippy::too_many_lines)] // one scenario
+fn a_reviewed_translation_is_left_to_people() {
+    let directory = tempfile::tempdir().expect("directory");
+    let root = directory.path().join("project");
+    let source = game(
+        &directory.path().join("game"),
+        "2026.01.01.0000.0000",
+        "Hello.",
+    );
+    aeria_po::session::create(&root, Arc::clone(&source), "ru", 2).expect("create");
+    // A project of the first format takes the second with its first review.
+    let settings = std::fs::read_to_string(root.join("aeria.json")).expect("settings");
+    std::fs::write(
+        root.join("aeria.json"),
+        settings.replace(aeria_po::FORMAT, "aeria-po/1"),
+    )
+    .expect("old format");
+    let session = Session::open(&root, Arc::clone(&source)).expect("open");
+    assert_eq!(session.settings().format, "aeria-po/1");
+
+    session
+        .set_translation("Addon", 1, 0, 0, "ОК")
+        .expect("save");
+    assert_eq!(
+        session.settings().format,
+        "aeria-po/1",
+        "a save marks nothing"
+    );
+    let marked = session
+        .set_reviewed("Addon", 1, 0, 0, true)
+        .expect("review")
+        .expect("translation");
+    assert!(marked.reviewed && !marked.review_stale);
+    assert_eq!(session.settings().format, aeria_po::FORMAT);
+    let written = std::fs::read_to_string(root.join("aeria.json")).expect("settings");
+    assert!(written.contains(aeria_po::FORMAT), "{written}");
+
+    // A person's edit keeps the review; machine translation leaves it.
+    let edited = session
+        .set_translation("Addon", 1, 0, 0, "Ок")
+        .expect("edit")
+        .expect("translation");
+    assert!(edited.reviewed);
+    let filled = session
+        .fill(
+            "Addon/0.po",
+            &[("Addon:1:0:0".to_owned(), "Хорошо".to_owned())],
+            true,
+        )
+        .expect("fill");
+    assert!(filled.is_empty());
+
+    // Translating again skips it, with the reason.
+    let clear = |context: &str, text: &str| aeria_po::EntryEdit {
+        path: "Addon/0.po".to_owned(),
+        context: context.to_owned(),
+        expected_text: text.to_owned(),
+        expected_fuzzy: false,
+        kind: aeria_po::EditKind::Clear,
+    };
+    let applied = session
+        .apply_edits(&[clear("Addon:1:0:0", "Ок")])
+        .expect("apply");
+    assert!(applied.done.is_empty());
+    assert_eq!(applied.skipped[0].reason, aeria_po::SkipReason::Reviewed);
+
+    // A review removed gives the string back to machine translation.
+    let unmarked = session
+        .set_reviewed("Addon", 1, 0, 0, false)
+        .expect("unreview")
+        .expect("translation");
+    assert!(!unmarked.reviewed);
+    assert_eq!(
+        session
+            .apply_edits(&[clear("Addon:1:0:0", "Ок")])
+            .expect("apply")
+            .done
+            .len(),
+        1
+    );
+
+    // Saving and marking at once; a mark of another text holds no longer.
+    let both = session
+        .set_translation_reviewed("Addon", 2, 0, 0, "Отмена")
+        .expect("save and review")
+        .expect("translation");
+    assert!(both.reviewed);
+    let path = root.join("po/Addon/0.po");
+    let text = std::fs::read_to_string(&path).expect("file");
+    std::fs::write(
+        &path,
+        text.replace("msgstr \"Отмена\"", "msgstr \"Отменить\""),
+    )
+    .expect("hand edit");
+    let stale = session
+        .translation("Addon", 2, 0, 0)
+        .expect("read")
+        .expect("translation");
+    assert!(!stale.reviewed && stale.review_stale);
+    let filled = session
+        .fill(
+            "Addon/0.po",
+            &[("Addon:2:0:0".to_owned(), "Отказ".to_owned())],
+            false,
+        )
+        .expect("fill");
+    assert!(filled.is_empty(), "a translated string is not filled");
+    session
+        .set_translation("Addon", 2, 0, 0, "")
+        .expect("clear");
+    let cleared = session.translation("Addon", 2, 0, 0).expect("read");
+    assert!(
+        cleared.is_none(),
+        "an empty translation keeps no mark: {cleared:?}"
+    );
+}

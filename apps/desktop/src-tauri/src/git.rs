@@ -232,6 +232,8 @@ pub struct EntryVersionDto {
     pub target_macro: String,
     pub fuzzy: bool,
     pub translator_note: Option<String>,
+    /// A person reviewed the translation as it is.
+    pub reviewed: bool,
 }
 
 impl From<&EntryState> for EntryVersionDto {
@@ -240,6 +242,7 @@ impl From<&EntryState> for EntryVersionDto {
             target_macro: state.translation.clone(),
             fuzzy: state.fuzzy,
             translator_note: state.note.clone(),
+            reviewed: state.reviewed,
         }
     }
 }
@@ -491,7 +494,8 @@ fn branch_block(
         return Some(BranchBlockDto::NoProject);
     };
     let value: serde_json::Value = serde_json::from_slice(&settings).ok()?;
-    if value.get("format").and_then(serde_json::Value::as_str) != Some(aeria_po::FORMAT) {
+    let format = value.get("format").and_then(serde_json::Value::as_str);
+    if !format.is_some_and(|format| aeria_po::READ_FORMATS.contains(&format)) {
         return Some(BranchBlockDto::OlderFormat);
     }
     (value.get("gameVersion").and_then(serde_json::Value::as_str) != Some(game_version))

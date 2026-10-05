@@ -22,12 +22,13 @@ export function bindingLabel(binding: SourceBinding | null, t: Translate): strin
   return t("common.cellLocation", { sheet: binding.sheetName, row: String(binding.rowId), subrow: String(binding.subrowId), column: String(binding.columnIndex) });
 }
 
-/** What changed about a string besides its kind: its note or its fuzzy mark. */
+/** What changed about a string besides its kind: its note, its fuzzy mark, or its review. */
 export function changeLabel(change: Pick<EntryChangeDto, "kind" | "before" | "after">, t: Translate): string {
   const parts: string[] = [];
   if (change.kind !== "marked") parts.push(t(kindLabel[change.kind]));
   if (change.before.fuzzy !== change.after.fuzzy) parts.push(t(change.after.fuzzy ? "git.change.fuzzy" : "git.change.notFuzzy"));
   if (change.before.translatorNote !== change.after.translatorNote) parts.push(t("git.change.note"));
+  if (Boolean(change.before.reviewed) !== Boolean(change.after.reviewed)) parts.push(t(change.after.reviewed ? "git.change.reviewed" : "git.change.unreviewed"));
   return parts.join(", ") || t("git.change.changed");
 }
 
@@ -43,7 +44,9 @@ export function versionText(version: EntryVersionDto): string {
 /** Whether a change needs its own "what changed" note: a changed translation
  * says it with its letter; marks and notes need words. */
 function changeNote(change: EntryChangeDto, t: Translate): string | null {
-  const marked = change.before.fuzzy !== change.after.fuzzy || change.before.translatorNote !== change.after.translatorNote;
+  const marked = change.before.fuzzy !== change.after.fuzzy
+    || change.before.translatorNote !== change.after.translatorNote
+    || Boolean(change.before.reviewed) !== Boolean(change.after.reviewed);
   return change.kind === "marked" || marked ? changeLabel(change, t) : null;
 }
 

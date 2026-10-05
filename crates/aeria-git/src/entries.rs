@@ -24,12 +24,15 @@ pub fn is_po_path(path: &str) -> bool {
 }
 
 /// What a person can change about a string: its translation, whether it is
-/// fuzzy, and its note.
+/// fuzzy, its note, and whether they reviewed it.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct EntryState {
     pub translation: String,
     pub fuzzy: bool,
     pub note: Option<String>,
+    /// A person reviewed the translation as it is (see
+    /// [`Entry::is_reviewed`]); a mark of another text counts as none.
+    pub reviewed: bool,
 }
 
 impl EntryState {
@@ -38,6 +41,7 @@ impl EntryState {
             translation: entry.translation.clone(),
             fuzzy: entry.fuzzy,
             note: (!entry.notes.is_empty()).then(|| entry.notes.join("\n")),
+            reviewed: entry.is_reviewed(),
         }
     }
 }
@@ -51,7 +55,7 @@ pub enum EntryChangeKind {
     Changed,
     /// Its translation was removed.
     Cleared,
-    /// Only its note or its fuzzy mark changed.
+    /// Only its note, its fuzzy mark, or its review changed.
     Marked,
 }
 
@@ -643,6 +647,7 @@ pub fn merge_file(
             entry.fuzzy = other.fuzzy;
             entry.previous.clone_from(&other.previous);
             entry.notes.clone_from(&other.notes);
+            entry.reviewed.clone_from(&other.reviewed);
         }
     }
     Some((merged.write(), conflicts))
@@ -722,5 +727,52 @@ mod tests {
             )
             .is_none()
         );
+    }
+
+    #[test]
+    fn a_review_never_passes_to_a_text_nobody_reviewed() {
+        let reviewed = |translation: &str| {
+            format!(
+                "#, aeria-reviewed: {}\nmsgctxt \"A:1:0:0\"\nmsgid \"x\"\nmsgstr \"{translation}\"\n",
+                aeria_po::fingerprint(translation)
+            )
+        };
+        let base = file(&[("A:1:0:0", "первый")]);
+        // One branch reviews the first text; the other has the model write
+        // a second one. Git joins the two lines without a conflict.
+        let ours = reviewed("первый");
+        let theirs = file(&[("A:1:0:0", "второй")]);
+        let joined = format!(
+            "#, aeria-reviewed: {}\nmsgctxt \"A:1:0:0\"\nmsgid \"x\"\nmsgstr \"второй\"\n",
+            aeria_po::fingerprint("первый")
+        );
+        let entry = PoFile::parse(&joined).0.entries[0].clone();
+        assert!(!entry.is_reviewed() && entry.review_is_stale());
+        // Aeria's own join sees both sides changed the string.
+        let (_, conflicts) = merge_file(
+            "po/A.po",
+            Some(base.as_bytes()),
+            ours.as_bytes(),
+            theirs.as_bytes(),
+            &BTreeMap::new(),
+        )
+        .expect("mergeable");
+        assert_eq!(conflicts.len(), 1);
+        assert!(conflicts[0].ours.reviewed && !conflicts[0].theirs.reviewed);
+        // A review on one side alone is taken with its text.
+        let (merged, conflicts) = merge_file(
+            "po/A.po",
+            Some(base.as_bytes()),
+            base.as_bytes(),
+            ours.as_bytes(),
+            &BTreeMap::new(),
+        )
+        .expect("mergeable");
+        assert!(conflicts.is_empty());
+        assert!(PoFile::parse(&merged).0.entries[0].is_reviewed());
+        // A diff reports a review as a mark.
+        let changes = diff_file("po/A.po", Some(base.as_bytes()), Some(ours.as_bytes()));
+        assert_eq!(changes[0].kind, EntryChangeKind::Marked);
+        assert!(changes[0].after.reviewed);
     }
 }

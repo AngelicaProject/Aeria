@@ -323,6 +323,8 @@ kbd {
 }
 .review-dot-none { box-shadow: 0 0 0 1.5px var(--review-none) inset; }
 .review-dot-translated { background: var(--review-done); }
+/* Reviewed by a person: the translated dot with a ring around it. */
+.review-dot-reviewed { background: var(--review-done); box-shadow: 0 0 0 1.5px var(--panel), 0 0 0 3px var(--review-done); }
 .review-dot-fuzzy { background: var(--review-needs); box-shadow: 0 0 0 3px color-mix(in srgb, var(--review-needs) 22%, transparent); }
 
 .meter {

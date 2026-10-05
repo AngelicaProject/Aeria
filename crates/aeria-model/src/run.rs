@@ -249,7 +249,10 @@ pub struct Batch {
 }
 
 fn needs_work(entry: &Entry, fuzzy: bool) -> bool {
-    if entry.fuzzy {
+    if entry.is_reviewed() {
+        // A person reviewed it: only a person changes it.
+        false
+    } else if entry.fuzzy {
         fuzzy
     } else {
         entry.translation.is_empty()
@@ -457,7 +460,9 @@ fn file_task(
             (distance, entry)
         })
         .collect();
-    examples.sort_by_key(|(distance, _)| *distance);
+    // Translations a person reviewed come first: the model continues their
+    // wording rather than its own.
+    examples.sort_by_key(|(distance, entry)| (!entry.is_reviewed(), *distance));
     let examples: Vec<(String, String)> = examples
         .into_iter()
         .take(examples_wanted)

@@ -13,10 +13,15 @@ use crate::po::{Entry, Header, PoFile};
 /// | `before` | result |
 /// | --- | --- |
 /// | same `msgid` | translation, notes, and marks kept |
-/// | other `msgid` | translation and notes kept; fuzzy, with the source the translation was written for as `#\| msgid`; term exceptions dropped |
+/// | other `msgid` | translation, notes, and review mark kept; fuzzy, with the source the translation was written for as `#\| msgid`; term exceptions dropped |
+///
+/// A reviewed translation stays reviewed when its source changes: it is a
+/// person's, so machine translation leaves it, and the fuzzy mark asks the
+/// person to look at it again.
 fn carry(before: &Entry, entry: &mut Entry) {
     entry.translation.clone_from(&before.translation);
     entry.notes.clone_from(&before.notes);
+    entry.reviewed.clone_from(&before.reviewed);
     if before.source == entry.source {
         entry.fuzzy = before.fuzzy;
         entry.previous.clone_from(&before.previous);
@@ -251,5 +256,18 @@ mod tests {
         );
         assert!(changed.entries[0].fuzzy);
         assert!(changed.entries[0].term_exceptions.is_empty());
+    }
+
+    #[test]
+    fn a_review_stays_with_its_translation() {
+        let mut reviewed = entry("S:1:0:0", "Walk", "Прогулка");
+        reviewed.set_reviewed(true);
+        let previous = file(vec![reviewed]);
+        let changed = merge(Some(&previous), file(vec![entry("S:1:0:0", "A Walk", "")]));
+        assert!(changed.entries[0].fuzzy);
+        assert!(
+            changed.entries[0].is_reviewed(),
+            "a person's translation stays theirs while they look at it again"
+        );
     }
 }

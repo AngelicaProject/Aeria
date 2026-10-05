@@ -7,6 +7,7 @@ export { stringState } from "../stringState";
 export function stateLabel(state: StringState | null): MessageKey {
   switch (state) {
     case "translated": return "review.translated";
+    case "reviewed": return "review.reviewed";
     case "fuzzy": return "review.fuzzy";
     case null: return "review.untranslated";
   }

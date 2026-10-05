@@ -293,6 +293,8 @@ pub enum SkipReasonDto {
     Missing,
     Invalid,
     Broken,
+    /// A person reviewed the translation; only a person changes it.
+    Reviewed,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -385,6 +387,7 @@ fn bulk_dto(session: &Session, applied: &EditsApplied, state: &SearchState) -> B
                 let (reason, problems) = match &skipped.reason {
                     SkipReason::Changed => (SkipReasonDto::Changed, Vec::new()),
                     SkipReason::Missing => (SkipReasonDto::Missing, Vec::new()),
+                    SkipReason::Reviewed => (SkipReasonDto::Reviewed, Vec::new()),
                     SkipReason::Invalid(problems) => (SkipReasonDto::Invalid, issues_dto(problems)),
                     SkipReason::Broken(message) => {
                         (SkipReasonDto::Broken, vec![other_issue(message)])

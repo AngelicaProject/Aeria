@@ -39,7 +39,8 @@ import type {
   SourceBinding,
   TranslationRowCursorDto,
   TranslationRowPageDto,
-  TranslationFindingsDto,
+  StringHintsDto,
+  DraftCheckDto,
   TranslationOverlayDto,
   OtherLanguageTextDto,
   SheetDialogueDto,
@@ -245,14 +246,22 @@ export function sheetDialogue(sheetName: string): Promise<SheetDialogueDto | nul
  * Refused with `translationInvalid` when the checks find a problem. Returns
  * what the string's entry holds afterwards.
  */
+/** Saves a translation; with `review` the person also marks it reviewed. */
 export function setTranslationTarget(
   sourceBinding: SourceBinding,
   targetMacro: string,
+  review = false,
 ): Promise<TranslationOverlayDto | null> {
   return call<TranslationOverlayDto | null>("set_translation_target", {
     sourceBinding,
     targetMacro,
+    review,
   });
+}
+
+/** Marks a translation as reviewed by a person, or removes the mark: machine translation leaves a reviewed one. */
+export function setTranslationReview(sourceBinding: SourceBinding, reviewed: boolean): Promise<TranslationOverlayDto | null> {
+  return call<TranslationOverlayDto | null>("set_translation_review", { sourceBinding, reviewed });
 }
 
 export function setTranslationNote(
@@ -262,9 +271,14 @@ export function setTranslationNote(
   return call<TranslationOverlayDto | null>("set_translation_note", { sourceBinding, note });
 }
 
-/** What the checks find in the saved translation of one string, and its term exceptions. */
-export function translationFindings(sourceBinding: SourceBinding): Promise<TranslationFindingsDto> {
-  return call<TranslationFindingsDto>("translation_findings", { sourceBinding });
+/** The string guide: names, terms, speaker, length, and gender of one string, as a machine translation request reads them. */
+export function stringHints(sourceBinding: SourceBinding): Promise<StringHintsDto> {
+  return call<StringHintsDto>("string_hints", { sourceBinding });
+}
+
+/** What the checks find in a translation before it is saved. */
+export function checkDraft(sourceBinding: SourceBinding, text: string): Promise<DraftCheckDto> {
+  return call<DraftCheckDto>("check_draft", { sourceBinding, text });
 }
 
 /** Adds or removes a term exception of one string: the glossary term does not apply to it. */

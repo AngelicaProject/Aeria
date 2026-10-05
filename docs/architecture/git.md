@@ -223,6 +223,11 @@ joins them entry by entry (`aeria-git::merge_file`):
   sides take either. Two sides that changed the string differently are a
   conflict, resolved only by an explicit choice of the local or incoming
   version supplied to a repeated Pull; Aeria never chooses on its own.
+- A string's state is its translation, fuzzy mark, note, and whether it is
+  reviewed (see [`po-project.md`](./po-project.md#reviews)): a review on one
+  branch and another text on the other are a conflict of the string. Git's
+  own merge, which joins them without one, leaves a review mark whose
+  fingerprint no longer matches, so the string is not reviewed.
 
 Joined files are written in the canonical format and committed as the merge
 commit. Conflicting strings are reported with their base, local, and incoming

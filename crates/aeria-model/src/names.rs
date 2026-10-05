@@ -4,6 +4,7 @@
 //! translated names that occur in a text.
 
 use std::collections::BTreeMap;
+use std::fmt::Write as _;
 use std::path::Path;
 
 use aeria_po::{Identity, PO_DIR, PoFile};
@@ -62,34 +63,165 @@ fn is_name(text: &str) -> bool {
         && text.chars().any(char::is_uppercase)
 }
 
+/// A translated name of the game, with the string its translation comes
+/// from.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Name {
+    pub source: String,
+    pub translation: String,
+    /// The `msgctxt` of the string the translation comes from; empty when
+    /// unknown.
+    pub context: String,
+    /// The row's name when this string is another form of it, such as
+    /// `The Walk` for `Walk`, the form a sentence uses without its article.
+    pub full: Option<String>,
+    /// Every name sheet with this name and translation, in the order of
+    /// [`NAME_SHEETS`]: `Potion` is an item and an action.
+    pub sheets: Vec<String>,
+}
+
+/// What the strings of a name sheet name, for the model.
+const KINDS: [(&str, &str); 22] = [
+    ("PlaceName", "a place"),
+    ("Town", "a town"),
+    ("Race", "a race"),
+    ("Tribe", "a clan"),
+    ("GuardianDeity", "a deity"),
+    ("ClassJob", "a class or job"),
+    ("Status", "a status effect"),
+    ("Action", "an action"),
+    ("Trait", "a trait"),
+    ("Item", "an item"),
+    ("EventItem", "a key item"),
+    ("Mount", "a mount"),
+    ("Companion", "a minion"),
+    ("Ornament", "a fashion accessory"),
+    ("Title", "a title"),
+    ("ENpcResident", "a character"),
+    ("BNpcName", "an enemy"),
+    ("EObjName", "an object"),
+    ("Fate", "a FATE"),
+    ("InstanceContent", "a duty"),
+    ("ContentFinderCondition", "a duty"),
+    ("Quest", "a quest"),
+];
+
+impl Name {
+    /// A name without a known origin.
+    #[must_use]
+    pub fn new(source: impl Into<String>, translation: impl Into<String>) -> Self {
+        Self {
+            source: source.into(),
+            translation: translation.into(),
+            context: String::new(),
+            full: None,
+            sheets: Vec::new(),
+        }
+    }
+
+    /// The sheet the name comes from; empty when unknown.
+    #[must_use]
+    pub fn sheet(&self) -> &str {
+        self.context.split(':').next().unwrap_or_default()
+    }
+
+    /// What the name names, for the model: `the name of a place (sheet
+    /// PlaceName), a form of "The Walk"`, or `the name of an item and an
+    /// action (sheets Item, Action)`. `None` when the origin is unknown.
+    #[must_use]
+    pub fn origin(&self) -> Option<String> {
+        let sheets: Vec<&str> = if self.sheets.is_empty() {
+            vec![self.sheet()]
+        } else {
+            self.sheets.iter().map(String::as_str).collect()
+        };
+        let mut kinds: Vec<&str> = Vec::new();
+        for sheet in &sheets {
+            let kind = KINDS
+                .iter()
+                .find(|(name, _)| name == sheet)
+                .map(|(_, kind)| *kind)?;
+            if !kinds.contains(&kind) {
+                kinds.push(kind);
+            }
+        }
+        let kinds = match kinds.split_last() {
+            Some((last, [])) => (*last).to_owned(),
+            Some((last, rest)) => format!("{} and {last}", rest.join(", ")),
+            None => return None,
+        };
+        let noun = if sheets.len() == 1 { "sheet" } else { "sheets" };
+        let mut origin = format!("the name of {kinds} ({noun} {})", sheets.join(", "));
+        if let Some(full) = &self.full {
+            let _ = write!(origin, ", a form of \"{full}\"");
+        }
+        Some(origin)
+    }
+}
+
 /// Translated names of the project.
 pub struct Names {
-    known: Vec<(String, String)>,
+    known: Vec<Name>,
     matcher: Option<AhoCorasick>,
     /// Names by their letters and digits in upper case, the form of a
     /// speaker label such as `ALPHINAUD`.
     labels: BTreeMap<String, usize>,
 }
 
-/// Each name once, with the translation it has most often; between equally
-/// frequent translations, the one seen first. The same name in many rows of
-/// the name sheets (a character in every place they stand) can be translated
-/// several ways, and the most frequent is the project's usual one.
-fn most_frequent(pairs: Vec<(String, String)>) -> Vec<(String, String)> {
-    let mut counts: BTreeMap<String, Vec<(String, usize)>> = BTreeMap::new();
-    for (source, translation) in pairs {
-        let variants = counts.entry(source).or_default();
-        match variants.iter_mut().find(|(seen, _)| *seen == translation) {
-            Some((_, count)) => *count += 1,
-            None => variants.push((translation, 1)),
+/// How well a string tells what its name names, best first: by the order
+/// of [`NAME_SHEETS`], then a row's own name before another form of it.
+/// `Minfilia` is a character (`ENpcResident`) before she is an enemy one
+/// fights beside (`BNpcName`).
+fn rank(name: &Name) -> (usize, bool) {
+    let sheet = NAME_SHEETS
+        .iter()
+        .position(|sheet| *sheet == name.sheet())
+        .unwrap_or(NAME_SHEETS.len());
+    (sheet, name.full.is_some())
+}
+
+/// Each name once, with the translation it has most often and, of the
+/// strings with it, the one that best tells what the name names (see
+/// [`rank`]); between equally frequent translations, the one seen first.
+/// The same name in many rows of the name sheets (a character in every
+/// place they stand) can be translated several ways, and the most frequent
+/// is the project's usual one.
+fn most_frequent(names: Vec<Name>) -> Vec<Name> {
+    let mut counts: BTreeMap<String, Vec<(Name, usize)>> = BTreeMap::new();
+    for name in names {
+        let variants = counts.entry(name.source.clone()).or_default();
+        match variants
+            .iter_mut()
+            .find(|(seen, _)| seen.translation == name.translation)
+        {
+            Some((seen, count)) => {
+                *count += 1;
+                let mut sheets = std::mem::take(&mut seen.sheets);
+                for sheet in &name.sheets {
+                    if !sheets.contains(sheet) {
+                        sheets.push(sheet.clone());
+                    }
+                }
+                if rank(&name) < rank(seen) {
+                    *seen = name;
+                }
+                sheets.sort_by_key(|sheet| {
+                    NAME_SHEETS
+                        .iter()
+                        .position(|known| known == sheet)
+                        .unwrap_or(NAME_SHEETS.len())
+                });
+                seen.sheets = sheets;
+            }
+            None => variants.push((name, 1)),
         }
     }
     counts
-        .into_iter()
-        .filter_map(|(source, variants)| {
+        .into_values()
+        .filter_map(|variants| {
             // `max_by_key` keeps the last of equals; reversed, the first seen.
-            let (translation, _) = variants.into_iter().rev().max_by_key(|(_, count)| *count)?;
-            Some((source, translation))
+            let (name, _) = variants.into_iter().rev().max_by_key(|(_, count)| *count)?;
+            Some(name)
         })
         .collect()
 }
@@ -108,7 +240,7 @@ impl Names {
     /// translation (see [`most_frequent`]).
     #[must_use]
     pub fn load(root: &Path) -> Self {
-        let mut found: Vec<(String, String)> = Vec::new();
+        let mut found: Vec<Name> = Vec::new();
         let paths = aeria_po::list(root).unwrap_or_default();
         for path in paths {
             if name_sheet_of(&path).is_none() {
@@ -121,30 +253,61 @@ impl Names {
                 if entry.translation.is_empty() || entry.fuzzy || !is_name(&entry.source) {
                     continue;
                 }
-                if Identity::parse(&entry.context)
-                    .is_ok_and(|identity| NAME_SHEETS.contains(&identity.sheet.as_str()))
-                {
-                    found.push((entry.source, entry.translation));
+                let Ok(identity) = Identity::parse(&entry.context) else {
+                    continue;
+                };
+                if !NAME_SHEETS.contains(&identity.sheet.as_str()) {
+                    continue;
                 }
+                // Another form of the row's name, such as one without its
+                // article, names the row by its first column.
+                let full = (identity.column != 0)
+                    .then(|| {
+                        entry
+                            .extracted
+                            .iter()
+                            .find_map(|line| line.strip_prefix("column 0: "))
+                            .filter(|full| *full != entry.source)
+                            .map(str::to_owned)
+                    })
+                    .flatten();
+                found.push(Name {
+                    source: entry.source,
+                    translation: entry.translation,
+                    sheets: vec![identity.sheet],
+                    context: entry.context,
+                    full,
+                });
             }
         }
-        Self::new(most_frequent(found))
+        Self::from_names(most_frequent(found))
     }
 
-    /// Names from pairs of source and translation.
+    /// Names from pairs of source and translation, without their origin.
     #[must_use]
     pub fn new(names: Vec<(String, String)>) -> Self {
+        Self::from_names(
+            names
+                .into_iter()
+                .map(|(source, translation)| Name::new(source, translation))
+                .collect(),
+        )
+    }
+
+    /// Names with their origins.
+    #[must_use]
+    pub fn from_names(names: Vec<Name>) -> Self {
         let matcher = (!names.is_empty())
             .then(|| {
                 AhoCorasickBuilder::new()
                     .match_kind(MatchKind::LeftmostLongest)
-                    .build(names.iter().map(|(source, _)| source.as_str()))
+                    .build(names.iter().map(|name| name.source.as_str()))
                     .ok()
             })
             .flatten();
         let mut labels = BTreeMap::new();
-        for (index, (source, _)) in names.iter().enumerate() {
-            labels.entry(label(source)).or_insert(index);
+        for (index, name) in names.iter().enumerate() {
+            labels.entry(label(&name.source)).or_insert(index);
         }
         Self {
             known: names,
@@ -158,9 +321,10 @@ impl Names {
     /// letters, as for a label of a minor character.
     #[must_use]
     pub fn speaker(&self, speaker: &str) -> Option<(String, String)> {
-        self.labels
-            .get(&label(speaker))
-            .map(|index| self.known[*index].clone())
+        self.labels.get(&label(speaker)).map(|index| {
+            let name = &self.known[*index];
+            (name.source.clone(), name.translation.clone())
+        })
     }
 
     #[must_use]
@@ -173,14 +337,16 @@ impl Names {
         self.known.is_empty()
     }
 
-    /// The translated names that occur in `texts` as whole words, each once,
-    /// at most `limit` of them.
+    /// The translated names that occur in `texts` as whole words with the
+    /// same case, each once, at most `limit` of them. A name is found by its
+    /// letters alone, so an ordinary word can be found as a name, as `Walk`
+    /// (a form of the place `The Walk`) in `A Walk in the Park`.
     #[must_use]
     pub fn in_texts<'a>(
         &self,
         texts: impl IntoIterator<Item = &'a str>,
         limit: usize,
-    ) -> Vec<(String, String)> {
+    ) -> Vec<Name> {
         let Some(matcher) = &self.matcher else {
             return Vec::new();
         };
@@ -229,8 +395,8 @@ mod tests {
         assert_eq!(
             found,
             vec![
-                ("Minfilia".to_owned(), "Минфилия".to_owned()),
-                ("Limsa Lominsa".to_owned(), "Лимса Ломинса".to_owned()),
+                Name::new("Minfilia", "Минфилия"),
+                Name::new("Limsa Lominsa", "Лимса Ломинса"),
             ]
         );
         assert_eq!(
@@ -240,7 +406,7 @@ mod tests {
         assert_eq!(names.speaker("FORTEMPSGUARD00054"), None);
         let pairs = |list: &[(&str, &str)]| {
             list.iter()
-                .map(|(source, translation)| ((*source).to_owned(), (*translation).to_owned()))
+                .map(|(source, translation)| Name::new(*source, *translation))
                 .collect::<Vec<_>>()
         };
         assert_eq!(
@@ -253,6 +419,23 @@ mod tests {
             ])),
             pairs(&[("Krile", "Крил"), ("Y'shtola", "Я'штола")])
         );
+        let from_string = |source: &str, translation: &str, context: &str| Name {
+            context: context.to_owned(),
+            sheets: vec![context.split(':').next().unwrap_or_default().to_owned()],
+            ..Name::new(source, translation)
+        };
+        assert_eq!(
+            most_frequent(vec![
+                from_string("Krile", "Крил", "BNpcName:9:0:0"),
+                from_string("Krile", "Крил", "ENpcResident:1:0:0"),
+                from_string("Krile", "Крил", "ENpcResident:2:0:0"),
+            ]),
+            vec![Name {
+                sheets: vec!["ENpcResident".to_owned(), "BNpcName".to_owned()],
+                ..from_string("Krile", "Крил", "ENpcResident:1:0:0")
+            }],
+            "a character before an enemy, then the first string, with every sheet"
+        );
         assert_eq!(name_sheet_of("PlaceName.po"), Some(0));
         assert_eq!(name_sheet_of("Item/31000.po"), Some(9));
         assert_eq!(name_sheet_of("Quest~.po"), Some(NAME_SHEETS.len() - 1));
@@ -263,5 +446,37 @@ mod tests {
         assert!(!is_name(
             "Restores 1,000 HP. Can only be used out of combat."
         ));
+    }
+
+    #[test]
+    fn a_name_says_what_it_names() {
+        let walk = Name {
+            context: "PlaceName:1861:0:2".to_owned(),
+            full: Some("The Walk".to_owned()),
+            ..Name::new("Walk", "переход")
+        };
+        assert_eq!(walk.sheet(), "PlaceName");
+        assert_eq!(
+            walk.origin().as_deref(),
+            Some("the name of a place (sheet PlaceName), a form of \"The Walk\"")
+        );
+        let alphinaud = Name {
+            context: "ENpcResident:1005:0:0".to_owned(),
+            ..Name::new("Alphinaud", "Альфино")
+        };
+        assert_eq!(
+            alphinaud.origin().as_deref(),
+            Some("the name of a character (sheet ENpcResident)")
+        );
+        let potion = Name {
+            context: "Item:4551:0:0".to_owned(),
+            sheets: vec!["Action".to_owned(), "Item".to_owned()],
+            ..Name::new("Potion", "Зелье")
+        };
+        assert_eq!(
+            potion.origin().as_deref(),
+            Some("the name of an action and an item (sheets Action, Item)")
+        );
+        assert_eq!(Name::new("Fire", "Огонь").origin(), None);
     }
 }

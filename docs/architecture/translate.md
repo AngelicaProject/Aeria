@@ -55,7 +55,8 @@ A run takes chosen sheets and folders of sheets (such as `quest/001/`), or
 the whole project, and translates every string whose `msgstr` is empty and
 that is not fuzzy. On request it also translates fuzzy strings, giving the
 model the previous source and translation, and clears the mark of each one it
-writes. Before starting, the dialog shows how many strings the chosen sheets
+writes. A translation a person reviewed is never translated, fuzzy or not
+(see [`po-project.md`](./po-project.md#reviews)). Before starting, the dialog shows how many strings the chosen sheets
 still need, from the project's progress.
 
 A run can also take a list of strings by `msgctxt` (`Options::contexts`);
@@ -108,7 +109,14 @@ The task is JSON built from the files as they are when the request is sent:
   with their translations from the name sheets of `po/` (`Action`,
   `BNpcName`, `ENpcResident`, `Item`, `PlaceName`, `Quest`, `Status`, and
   others; short, capitalized strings without macros; a name translated
-  several ways gives its most frequent translation), at most 80;
+  several ways gives its most frequent translation), at most 80. Each has
+  `from`: what it names and every name sheet with it (`the name of a
+  character and an enemy (sheets ENpcResident, BNpcName)`), and, for
+  another form of a row's name such as one without its article, that name
+  (`a form of "The Walk"`). A name is found by its letters alone, so an
+  ordinary word can be found as one, as `Walk` in `A Walk in the Park`; the
+  instructions say to use a name's translation only where the word is that
+  name, and to translate it by its meaning otherwise;
 - `terms`: terms of `terms.csv` that occur in the sources, with their notes
   and forbidden variants, at most 60; a term goes only when it applies to a
   string of the request, not counting the strings with an exception for it;
@@ -117,7 +125,8 @@ The task is JSON built from the files as they are when the request is sent:
     whether its strings are in play order;
   - `speakers`: the speaker labels of the file's strings (`ALPHINAUD`) whose
     letters match a translated name, with the name and its translation;
-  - `examples`: translated strings of the same file, nearest to the batch
+  - `examples`: translated strings of the same file, the ones a person
+    reviewed first, then nearest to the batch
     first: up to 40 shared among the files, at least 5 each;
   - `strings`: each string's ID (unique in the request), source, and `#.`
     lines (the other client languages, speaker or kind, the row's other
@@ -130,6 +139,16 @@ The task is JSON built from the files as they are when the request is sent:
     `termExceptions`: the terms of `terms` that do not apply to it (see
     [`po-project.md`](./po-project.md#term-exceptions)), which the
     instructions say to translate by their meaning.
+
+The editor's string guide shows a person the same names, terms, speaker,
+length, and gender marks of one string; `aeria_model::hints` reads them for
+both (see
+[`desktop-editor-ui.md`](./desktop-editor-ui.md#string-guide)). This is a
+contract ([principle 11](../product/principles.md)): what a request adds
+about one string is read through `aeria_model::hints` or the functions it
+shares with the request, and shown in the guide in the same change. What
+belongs to a whole batch, such as `examples`, or to every request, such as
+the instructions, is not part of it.
 
 All requests of a run share one `prompt_cache_key`. A probe of this provider
 measured that requests with the same key and prefix got 99 % of the prompt

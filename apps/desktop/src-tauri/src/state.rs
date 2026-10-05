@@ -20,6 +20,8 @@ pub struct DesktopState {
     /// Uncommitted string changes already read, so the Git views can ask
     /// often without reading every changed file again.
     pending: Mutex<PendingCache>,
+    /// The project's translated names for the string guide.
+    names: Mutex<crate::hints::NamesCache>,
 }
 
 /// Work that an application update waits for instead of interrupting.
@@ -57,6 +59,7 @@ impl DesktopState {
             activities: Mutex::new(Vec::new()),
             next_activity_id: AtomicU64::new(1),
             pending: Mutex::new(PendingCache::new()),
+            names: Mutex::new(crate::hints::NamesCache::new()),
         }
     }
 
@@ -143,6 +146,16 @@ impl DesktopState {
         self.pending.lock().unwrap_or_else(|poisoned| {
             let mut guard = poisoned.into_inner();
             *guard = PendingCache::default();
+            guard
+        })
+    }
+
+    /// The cache of the project's translated names. A poisoned lock is
+    /// recovered with an empty cache, which reads them again.
+    pub(crate) fn names_cache(&self) -> MutexGuard<'_, crate::hints::NamesCache> {
+        self.names.lock().unwrap_or_else(|poisoned| {
+            let mut guard = poisoned.into_inner();
+            *guard = crate::hints::NamesCache::new();
             guard
         })
     }

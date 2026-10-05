@@ -766,12 +766,74 @@ pub async fn set_translation_target(
     app: tauri::AppHandle,
     source_binding: SourceBindingDto,
     target_macro: String,
+    review: Option<bool>,
 ) -> CommandResult<Option<TranslationOverlayDto>> {
     run_blocking(move || {
         let state = app.state::<DesktopState>();
-        set_translation_target_with_state(&state, &source_binding, &target_macro)
+        if review == Some(true) {
+            set_translation_reviewed_with_state(&state, &source_binding, &target_macro)
+        } else {
+            set_translation_target_with_state(&state, &source_binding, &target_macro)
+        }
     })
     .await
+}
+
+/// Saves a translation and marks it reviewed by the person who wrote it.
+pub(crate) fn set_translation_reviewed_with_state(
+    state: &DesktopState,
+    binding: &SourceBindingDto,
+    target_macro: &str,
+) -> CommandResult<Option<TranslationOverlayDto>> {
+    Ok(state
+        .session()?
+        .set_translation_reviewed(
+            &binding.sheet_name,
+            binding.row_id,
+            binding.subrow_id,
+            binding.column_index,
+            target_macro,
+        )?
+        .map(Into::into))
+}
+
+#[tauri::command(rename_all = "camelCase")]
+#[allow(clippy::needless_pass_by_value)]
+/// Marks the translation of one string as reviewed by a person, which also
+/// accepts a string whose source changed, or removes the mark. Returns what
+/// its entry holds afterwards.
+///
+/// # Errors
+///
+/// Returns a typed command error when no project is open or the string or
+/// its file cannot be written.
+pub async fn set_translation_review(
+    app: tauri::AppHandle,
+    source_binding: SourceBindingDto,
+    reviewed: bool,
+) -> CommandResult<Option<TranslationOverlayDto>> {
+    run_blocking(move || {
+        let state = app.state::<DesktopState>();
+        set_translation_review_with_state(&state, &source_binding, reviewed)
+    })
+    .await
+}
+
+pub(crate) fn set_translation_review_with_state(
+    state: &DesktopState,
+    binding: &SourceBindingDto,
+    reviewed: bool,
+) -> CommandResult<Option<TranslationOverlayDto>> {
+    Ok(state
+        .session()?
+        .set_reviewed(
+            &binding.sheet_name,
+            binding.row_id,
+            binding.subrow_id,
+            binding.column_index,
+            reviewed,
+        )?
+        .map(Into::into))
 }
 
 pub(crate) fn set_translation_target_with_state(
@@ -860,44 +922,6 @@ pub async fn set_translation_term_exception(
                 add,
             )?
             .map(Into::into))
-    })
-    .await
-}
-
-/// What the checks find in a string's saved translation, and its term
-/// exceptions.
-#[derive(Clone, Debug, serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct TranslationFindingsDto {
-    pub issues: Vec<crate::dto::IssueDto>,
-    pub term_exceptions: Vec<String>,
-}
-
-#[tauri::command(rename_all = "camelCase")]
-#[allow(clippy::needless_pass_by_value)]
-/// What the checks find in the saved translation of one string, problems
-/// then advice, with its term exceptions.
-///
-/// # Errors
-///
-/// Returns a typed command error when no project is open or the string or
-/// its file cannot be read.
-pub async fn translation_findings(
-    app: tauri::AppHandle,
-    source_binding: SourceBindingDto,
-) -> CommandResult<TranslationFindingsDto> {
-    run_blocking(move || {
-        let state = app.state::<DesktopState>();
-        let (issues, term_exceptions) = state.session()?.findings(
-            &source_binding.sheet_name,
-            source_binding.row_id,
-            source_binding.subrow_id,
-            source_binding.column_index,
-        )?;
-        Ok(TranslationFindingsDto {
-            issues: issues.iter().map(crate::dto::IssueDto::from).collect(),
-            term_exceptions,
-        })
     })
     .await
 }
