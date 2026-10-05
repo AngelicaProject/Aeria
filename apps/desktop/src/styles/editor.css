@@ -70,10 +70,10 @@
   transition: border-color var(--duration-fast), box-shadow var(--duration-fast);
 }
 .editor-target { container-type: inline-size; background: var(--field); }
-/* A narrow translation pane keeps its buttons on one row: Save & mark
-   reviewed shows its icon (its name is in the tooltip), Save its shortcut
-   only in the tooltip. */
-@container (max-width: 420px) {
+/* A narrow translation pane keeps its buttons on one row: the review button
+   shows its icon (its name is in the tooltip), Save its shortcut only in
+   the tooltip. */
+@container (max-width: 600px) {
   .editor-target .editor-pane-foot .button-label,
   .editor-target .editor-pane-foot .button-kbd { display: none; }
 }
@@ -89,7 +89,8 @@
 .eyebrow { color: var(--fg-subtle); font-size: var(--text-2xs); font-weight: 700; letter-spacing: 0.07em; text-transform: uppercase; }
 .edited-label { color: var(--warn); font-size: var(--text-2xs); font-weight: 600; }
 .saving-label { display: inline-flex; align-items: center; gap: 6px; color: var(--fg-subtle); font-size: var(--text-2xs); }
-/* Buttons that do not fit a narrow pane go to a second row, right-aligned. */
+/* The buttons are one group; when it does not fit beside the hint, the
+   whole group goes to a second row, right-aligned. */
 .editor-pane-foot {
   display: flex;
   flex: none;
@@ -101,8 +102,11 @@
   border-top: 1px solid var(--line);
 }
 .editor-warning { color: var(--warn); }
-.editor-hint { display: flex; flex: 1 1 140px; flex-wrap: wrap; align-items: center; gap: 3px; min-width: 0; padding-left: 6px; color: var(--fg-faint); font-size: var(--text-2xs); }
-.editor-hint:empty { flex: 1 1 0; padding: 0; }
+.editor-hint { display: flex; flex: 1; flex-wrap: wrap; align-items: center; gap: 3px; min-width: 0; padding-left: 6px; color: var(--fg-faint); font-size: var(--text-2xs); }
+.editor-actions { display: flex; flex: none; align-items: center; gap: 6px; margin-left: auto; }
+/* The translation's hint gives way to the buttons: one line, cut with an
+   ellipsis, the whole text in its tooltip. */
+.editor-target .editor-hint { display: block; flex: 1 1 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 .editor-surface { flex: 1; min-height: 72px; }
 

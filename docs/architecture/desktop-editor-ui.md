@@ -398,10 +398,11 @@ string shows **Reviewed** in the editor bar, which removes the mark. Nothing els
 string: a plain save keeps a mark the string has and adds none, and while a
 string without a mark has unsaved edits, the footer says that AI
 translation may overwrite it. A string whose mark is of another text (the
-translation changed by a merge or by hand) shows *Changed after review*. In
-a translation pane narrower than 420 px, Save & mark reviewed shows only its
-icon and Save hides its shortcut, so the footer keeps one row; buttons that
-still do not fit wrap to a second row.
+translation changed by a merge or by hand) shows *Changed after review*. The footer's buttons are one group: when it does not fit
+beside the hint, the whole group moves to a second row, right-aligned, and
+the hint keeps one line, cut with an ellipsis and whole in its tooltip. In
+a translation pane narrower than 600 px the review button shows only its
+icon and Save hides its shortcut.
 
 When the selected string has uncommitted Git changes, the target pane shows a
 word-level diff between the last checkpoint and the current draft, or notes that

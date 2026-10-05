@@ -424,8 +424,10 @@ const TranslationEditorImpl = forwardRef<TranslationEditorHandle, TranslationEdi
           </InsertMacroContextMenu>
           <div className="editor-pane-foot">
             <span className="editor-hint">
-              {targetIsBlank ? t("editor.enterTranslation") : speakerNote ? <span className="editor-warning">{speakerNote}</span> : targetDirty && !translation?.reviewed ? <span className="editor-warning">{t("editor.unreviewedEdit")}</span> : targetDirty ? t("common.unsaved") : null}
+              {targetIsBlank ? t("editor.enterTranslation") : speakerNote ? <span className="editor-warning" title={speakerNote}>{speakerNote}</span> : targetDirty && !translation?.reviewed ? <span className="editor-warning" title={t("editor.unreviewedEdit")}>{t("editor.unreviewedEdit")}</span> : targetDirty ? t("common.unsaved") : null}
             </span>
+            {/* The buttons move as one group: they never split across rows. */}
+            <div className="editor-actions">
             {translation?.fuzzy ? (
               <button className="button button-ghost" type="button" disabled={cellBusy || targetIsBlank} title={t("editor.approveNextTitle")} onClick={approve}>
                 <UiIcon icon="check" size="xs" />{t("editor.approveNext")}
@@ -443,6 +445,7 @@ const TranslationEditorImpl = forwardRef<TranslationEditorHandle, TranslationEdi
             <button className="button button-primary" type="button" disabled={!targetCanSave} title={t(targetIsBlank ? "editor.saveBlankTitle" : "editor.saveTitle")} onClick={() => saveTarget(false)}>
               {t(mutation === "target" ? "common.saving" : "common.save")}<kbd className="button-kbd">Ctrl S</kbd>
             </button>
+            </div>
           </div>
         </div>
 
