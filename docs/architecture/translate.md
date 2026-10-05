@@ -131,6 +131,11 @@ The task is JSON built from the files as they are when the request is sent:
     [`po-project.md`](./po-project.md#term-exceptions)), which the
     instructions say to translate by their meaning.
 
+The editor's string guide shows a person the same names, terms, speaker,
+length, and gender marks of one string; `aeria_model::hints` reads them for
+both (see
+[`desktop-editor-ui.md`](./desktop-editor-ui.md#string-guide)).
+
 All requests of a run share one `prompt_cache_key`. A probe of this provider
 measured that requests with the same key and prefix got 99 % of the prompt
 from the cache once one request had stored it, eight parallel requests on a

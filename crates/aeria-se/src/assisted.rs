@@ -114,6 +114,11 @@ impl Construct {
 }
 
 /// How a translation may treat a macro.
+#[must_use]
+pub fn construct_rule(syntax: &MacroSyntax) -> ConstructRule {
+    rule(syntax)
+}
+
 fn rule(syntax: &MacroSyntax) -> ConstructRule {
     let Some(spec) = syntax.spec else {
         return ConstructRule::Keep;
@@ -432,6 +437,64 @@ fn collect<'a>(document: &'a MacroString, nodes: &'a [SyntaxNode], facts: &mut F
     }
 }
 
+/// The game data of each well-formed localization.
+fn localized_data(localizations: &[&str]) -> Vec<Vec<Shape>> {
+    localizations
+        .iter()
+        .map(|text| parse(text))
+        .filter(MacroString::is_well_formed)
+        .map(|document| {
+            let mut facts = Facts::default();
+            collect(&document, document.nodes(), &mut facts);
+            facts.data.into_iter().map(|(shape, _)| shape).collect()
+        })
+        .collect()
+}
+
+/// The game data of the source a target lacks, each piece once by its first
+/// spelling, but for what an official localization does without.
+fn missing_data<'a>(
+    source: &Facts<'a>,
+    target: &Facts<'_>,
+    localized: &[Vec<Shape>],
+) -> Vec<&'a str> {
+    let localized_lacks = |shape: &Shape| localized.iter().any(|shapes| !shapes.contains(shape));
+    source
+        .data
+        .iter()
+        .enumerate()
+        .filter(|(index, (shape, _))| {
+            !source.data[..*index]
+                .iter()
+                .any(|(earlier, _)| earlier == shape)
+                && !target.data.iter().any(|(candidate, _)| candidate == shape)
+                && !localized_lacks(shape)
+        })
+        .map(|(_, (_, spelling))| *spelling)
+        .collect()
+}
+
+/// The game data of `source` that `target` lacks, as the structure policy
+/// of [`check_assisted_structure_with`] reads it: each piece once, by its
+/// spelling in the source. Empty when either text is malformed, since the
+/// pieces cannot be compared then.
+#[must_use]
+pub fn missing_game_data(source: &str, target: &str, localizations: &[&str]) -> Vec<String> {
+    let source_document = parse(source);
+    let target_document = parse(target);
+    if !source_document.is_well_formed() || !target_document.is_well_formed() {
+        return Vec::new();
+    }
+    let mut source_facts = Facts::default();
+    collect(&source_document, source_document.nodes(), &mut source_facts);
+    let mut target_facts = Facts::default();
+    collect(&target_document, target_document.nodes(), &mut target_facts);
+    missing_data(&source_facts, &target_facts, &localized_data(localizations))
+        .into_iter()
+        .map(str::to_owned)
+        .collect()
+}
+
 /// The parameters an expression tests, outside macros nested in its strings.
 fn parameters(expr: &ExprSyntax, found: &mut Vec<(u8, u32)>) {
     match &expr.kind {
@@ -533,37 +596,15 @@ pub fn check_assisted_structure_with(
     collect(&source_document, source_document.nodes(), &mut source_facts);
     let mut target_facts = Facts::default();
     collect(&target_document, target_document.nodes(), &mut target_facts);
-    // The game data of each well-formed localization.
-    let localized: Vec<Vec<Shape>> = localizations
-        .iter()
-        .map(|text| parse(text))
-        .filter(MacroString::is_well_formed)
-        .map(|document| {
-            let mut facts = Facts::default();
-            collect(&document, document.nodes(), &mut facts);
-            facts.data.into_iter().map(|(shape, _)| shape).collect()
-        })
-        .collect();
+    let localized = localized_data(localizations);
     let localized_uses = |shape: &Shape| localized.iter().any(|shapes| shapes.contains(shape));
-    let localized_lacks = |shape: &Shape| localized.iter().any(|shapes| !shapes.contains(shape));
 
     let mut errors = Vec::new();
     check_speaker_name(&source_document, &target_document, &mut errors);
-    for (index, (shape, spelling)) in source_facts.data.iter().enumerate() {
-        let first = !source_facts.data[..index]
-            .iter()
-            .any(|(earlier, _)| earlier == shape);
-        if first
-            && !target_facts
-                .data
-                .iter()
-                .any(|(candidate, _)| candidate == shape)
-            && !localized_lacks(shape)
-        {
-            errors.push(StructureError::new(format!(
-                "{spelling} of the source is missing; every value the game fills in must stay, though it may move or repeat"
-            )));
-        }
+    for spelling in missing_data(&source_facts, &target_facts, &localized) {
+        errors.push(StructureError::new(format!(
+            "{spelling} of the source is missing; every value the game fills in must stay, though it may move or repeat"
+        )));
     }
     for (index, (shape, spelling)) in target_facts.data.iter().enumerate() {
         let first = !target_facts.data[..index]

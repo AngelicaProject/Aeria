@@ -15,7 +15,7 @@ use aeria_source::{GameSource, GameVersion, SheetLookup, SourceError, SourceShee
 use crate::check::check_translation;
 use crate::generate::{identity_keys, identity_of, is_entry};
 use crate::identity::{SheetPaths, splits};
-use crate::po::PoFile;
+use crate::po::{Entry, PoFile};
 use crate::project::{
     GAME_VERSION_FIELD, PO_DIR, ProjectError, Settings, list, read_settings, write_settings,
 };
@@ -760,6 +760,60 @@ impl Session {
         })
     }
 
+    /// The entry of a string as its file has it now, with the file's path
+    /// relative to `po/`; `None` when the file has no entry for it yet.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the string is not an entry, or its file cannot
+    /// be read or is broken.
+    pub fn entry(
+        &self,
+        sheet_name: &str,
+        row: u32,
+        subrow: u16,
+        column: u32,
+    ) -> Result<(String, Option<Entry>), EditError> {
+        let (path, identity, _) = self.locate(sheet_name, row, subrow, column)?;
+        let full = self.root.join(PO_DIR).join(&path);
+        let text = std::fs::read_to_string(&full).map_err(|source| ProjectError::Io {
+            path: full.clone(),
+            source,
+        })?;
+        let (file, problems) = PoFile::parse(&text);
+        if let Some(problem) = problems.first() {
+            return Err(EditError::Broken {
+                path,
+                line: problem.line,
+                message: problem.message.clone(),
+            });
+        }
+        let entry = file
+            .entries
+            .into_iter()
+            .find(|entry| entry.context == identity);
+        Ok((path, entry))
+    }
+
+    /// What the checks find in `text` as the translation of `entry`,
+    /// problems then advice, with the project's knowledge and target
+    /// language. An empty text has no findings.
+    #[must_use]
+    pub fn check_text(&self, entry: &Entry, text: &str) -> Vec<crate::check::Issue> {
+        if text.is_empty() {
+            return Vec::new();
+        }
+        check_translation(
+            &self.knowledge(),
+            &self.settings().target_language,
+            &entry.source,
+            text,
+            &entry.extracted,
+            &entry.term_exceptions,
+        )
+        .issues
+    }
+
     /// What the checks find in the saved translation of a string, problems
     /// then advice, and its term exceptions. An untranslated string has no
     /// findings.
@@ -775,37 +829,11 @@ impl Session {
         subrow: u16,
         column: u32,
     ) -> Result<(Vec<crate::check::Issue>, Vec<String>), EditError> {
-        let (path, identity, _) = self.locate(sheet_name, row, subrow, column)?;
-        let full = self.root.join(PO_DIR).join(&path);
-        let text = std::fs::read_to_string(&full).map_err(|source| ProjectError::Io {
-            path: full.clone(),
-            source,
-        })?;
-        let (file, problems) = PoFile::parse(&text);
-        if let Some(problem) = problems.first() {
-            return Err(EditError::Broken {
-                path,
-                line: problem.line,
-                message: problem.message.clone(),
-            });
-        }
-        let Some(entry) = file.entries.iter().find(|entry| entry.context == identity) else {
+        let Some(entry) = self.entry(sheet_name, row, subrow, column)?.1 else {
             return Ok((Vec::new(), Vec::new()));
         };
-        let issues = if entry.translation.is_empty() {
-            Vec::new()
-        } else {
-            check_translation(
-                &self.knowledge(),
-                &self.settings().target_language,
-                &entry.source,
-                &entry.translation,
-                &entry.extracted,
-                &entry.term_exceptions,
-            )
-            .issues
-        };
-        Ok((issues, entry.term_exceptions.clone()))
+        let issues = self.check_text(&entry, &entry.translation);
+        Ok((issues, entry.term_exceptions))
     }
 
     /// Sets or clears the translator's note of a string.

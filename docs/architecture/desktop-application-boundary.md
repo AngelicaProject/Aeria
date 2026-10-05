@@ -218,10 +218,28 @@ arguments; on an opening color tag, the color it sets; and on an opening
 `<if>` or `<switch>`, what it tests part by part: operands as numbers,
 parameters with the meaning of a known global, or time values, with a
 number compared with a row global such as the class named by its row), with
-UTF-16 offsets. `<ui-color>` colors and row names are read from the open
-project's `GameSource` (`GameSource::ui_color` and `GameSource::cell_text`);
-without a project they are unknown. It changes
+UTF-16 offsets. Each tag also has the `rule` the structure policy gives its
+macro (`aeria_se::construct_rule`: `keep`, `formatting`, `condition`,
+`free`, or `letterCase`; raw bytes are kept). `<ui-color>` colors and row
+names are read from the open project's `GameSource` (`GameSource::ui_color`
+and `GameSource::cell_text`); without a project they are unknown. It changes
 nothing and needs no project.
+
+`string_hints(sourceBinding)` returns what a machine translation request
+tells the model about one string, from `aeria_model::hints` over the
+string's entry (`Session::entry`): the game's names in its source with the
+project's translations, the glossary terms of its source (with their notes,
+forbidden variants, and whether a term exception keeps one out), its speaker
+label with the name it stands for, the kind of a quest's text, the length of
+an interface label, and the texts whose line varies with the player
+character's gender. The project's translated names are read once and again
+only when a file of a name sheet changed (`hints::NamesCache`).
+`check_draft(sourceBinding, text)` checks a translation before it is saved:
+the issues of `Session::check_text`, the same checks a save runs, the
+source's game data the text lacks (`aeria_se::missing_game_data`), the names
+of the hints whose translation it uses
+(`aeria_knowledge::uses_translation`), and the characters it shows. Neither
+command writes anything.
 
 `game_glyph_font()` returns, as raw bytes, a TrueType font of the private use
 glyphs of the open project's game font (`GameSource::private_glyphs`, drawn

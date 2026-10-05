@@ -182,24 +182,10 @@ fn file_value(task: &FileTask) -> Value {
 }
 
 /// The texts of a string whose line varies with the player character's
-/// gender: `source`, and the languages of its context (`fr: …`) with a
-/// condition on `$gn4`. The rule alone is easy to miss in a long request;
-/// the mark sits on the string that needs it.
+/// gender (see [`crate::hints::gendered`]). The rule alone is easy to miss
+/// in a long request; the mark sits on the string that needs it.
 fn gendered(item: &Item) -> Vec<&str> {
-    let mut texts = Vec::new();
-    if item.source.contains("$gn4") {
-        texts.push("source");
-    }
-    for line in &item.context {
-        if let Some((language, text)) = line.split_once(": ")
-            && language.len() == 2
-            && language.bytes().all(|byte| byte.is_ascii_lowercase())
-            && text.contains("$gn4")
-        {
-            texts.push(language);
-        }
-    }
-    texts
+    crate::hints::gendered(&item.source, &item.context)
 }
 
 /// A request that sends back the translations that failed the checks, with

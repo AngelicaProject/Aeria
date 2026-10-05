@@ -1,6 +1,6 @@
 use aeria_se::{
-    ConstructRule, authoring_reference, check_assisted_structure, check_assisted_structure_with,
-    constructs,
+    ConstructRule, SyntaxKind, authoring_reference, check_assisted_structure,
+    check_assisted_structure_with, construct_rule, constructs, missing_game_data, parse,
 };
 
 fn refused(source: &str, target: &str) -> String {
@@ -317,5 +317,51 @@ fn game_data_an_official_localization_uses_may_stand_in() {
     assert!(
         check_assisted_structure_with(source, "<sheet ClassJob $n1 0>", &localizations).is_err(),
         "the level every localization keeps must stay"
+    );
+}
+
+#[test]
+fn missing_game_data_names_each_piece_the_target_lacks_once() {
+    let source = "<sheet Item $n1 0> ×<num $n2>, <sheet Item $n1 0> again for <string $gs1>.";
+    assert_eq!(
+        missing_game_data(source, "<num $n2> шт.", &[]),
+        vec!["<sheet Item $n1 0>".to_owned(), "<string $gs1>".to_owned()],
+        "each piece once, by its spelling in the source"
+    );
+    assert!(
+        missing_game_data(source, "<string $gs1>: <num $n2> × <sheet Item $n1 0>", &[]).is_empty(),
+        "moved pieces are not missing"
+    );
+    assert!(
+        missing_game_data(source, "<if>", &[]).is_empty(),
+        "a malformed target cannot be compared"
+    );
+    let class = "<sheet ClassJob $n1 30> (Lv. <num $n2>)";
+    assert!(
+        missing_game_data(class, "(ур. <num $n2>)", &["(St. <num $n2>)"]).is_empty(),
+        "data an official localization does without may be left out"
+    );
+}
+
+#[test]
+fn construct_rule_reads_a_macro_as_the_policy_does() {
+    let document = parse("<i>A</i> <num $n1><br><if $gn4>a<else>b</if>");
+    let direct: Vec<ConstructRule> = document
+        .nodes()
+        .iter()
+        .filter_map(|node| match &node.kind {
+            SyntaxKind::Macro(syntax) => Some(construct_rule(syntax)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        direct,
+        vec![
+            ConstructRule::Formatting,
+            ConstructRule::Formatting,
+            ConstructRule::Keep,
+            ConstructRule::Free,
+            ConstructRule::Condition
+        ]
     );
 }

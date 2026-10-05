@@ -8,12 +8,14 @@
 //! ([`codex`]). The run ([`run`]) builds each request from the project:
 //! its style and terms, the translations of the game's names that occur in
 //! the batch ([`names`]), and translated strings of the same file as
-//! examples ([`prompt`]).
+//! examples ([`prompt`]). The editor shows a person what a request tells
+//! the model about one string ([`hints`]).
 
 pub mod agree;
 pub mod auth;
 pub mod codex;
 pub mod fit;
+pub mod hints;
 pub mod names;
 pub mod prompt;
 pub mod run;

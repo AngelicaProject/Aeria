@@ -7,6 +7,7 @@ mod fonts;
 mod games;
 mod git;
 mod guide;
+mod hints;
 mod macros;
 mod paths;
 mod project_changes;
@@ -147,6 +148,8 @@ pub fn run() {
             set_translation_note,
             set_translation_term_exception,
             translation_findings,
+            hints::string_hints,
+            hints::check_draft,
             translation_progress,
             set_project_target_language,
             macros::macro_view,

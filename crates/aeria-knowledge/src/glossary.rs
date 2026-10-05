@@ -461,6 +461,14 @@ fn inflects(word: &str, stem: &str) -> bool {
             })
 }
 
+/// Whether a translation, as macro text, uses `translation` as the glossary
+/// reads a term's translation: each of its words as written or inflected
+/// (`Минфилии` uses `Минфилия`).
+#[must_use]
+pub fn uses_translation(target: &str, translation: &str) -> bool {
+    !translation.trim().is_empty() && contains_inflected(&text_of(target), translation)
+}
+
 /// Whether every word of `translation` appears in `target`, allowing for
 /// inflected endings: some word of the target is the word's stem with an
 /// ending, so `эфирита` uses `эфирит` and `эфироита` does not.
@@ -736,6 +744,17 @@ pub fn unused_message(entry: &GlossaryEntry) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_translation_is_used_as_written_or_inflected() {
+        assert!(uses_translation("Спросите <i>Минфилию</i>.", "Минфилия"));
+        assert!(uses_translation(
+            "у Потомков Седьмой Зари",
+            "Потомки Седьмой Зари"
+        ));
+        assert!(!uses_translation("Спросите Крил.", "Минфилия"));
+        assert!(!uses_translation("Спросите Минфилию.", " "));
+    }
 
     fn entry(term: &str, translation: &str) -> GlossaryEntry {
         GlossaryEntry {
