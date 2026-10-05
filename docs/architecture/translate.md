@@ -108,7 +108,14 @@ The task is JSON built from the files as they are when the request is sent:
   with their translations from the name sheets of `po/` (`Action`,
   `BNpcName`, `ENpcResident`, `Item`, `PlaceName`, `Quest`, `Status`, and
   others; short, capitalized strings without macros; a name translated
-  several ways gives its most frequent translation), at most 80;
+  several ways gives its most frequent translation), at most 80. Each has
+  `from`: what it names and every name sheet with it (`the name of a
+  character and an enemy (sheets ENpcResident, BNpcName)`), and, for
+  another form of a row's name such as one without its article, that name
+  (`a form of "The Walk"`). A name is found by its letters alone, so an
+  ordinary word can be found as one, as `Walk` in `A Walk in the Park`; the
+  instructions say to use a name's translation only where the word is that
+  name, and to translate it by its meaning otherwise;
 - `terms`: terms of `terms.csv` that occur in the sources, with their notes
   and forbidden variants, at most 60; a term goes only when it applies to a
   string of the request, not counting the strings with an exception for it;

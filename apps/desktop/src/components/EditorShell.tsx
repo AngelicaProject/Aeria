@@ -1091,7 +1091,7 @@ export function EditorShell({
     if (panelId === "sheets") {
       return <SheetSidebar sheets={project.sheets} selectedSheetName={selectedSheetName} disabled={closing} active={active} hideEmpty={hideEmptySheets} onHideEmptyChange={setHideEmptySheets} filterOpen={sheetFilterOpen} onFilterOpenChange={setSheetFilterOpen} onOpenFilter={focusSheetFilter} quickFindSignal={quickFindSignal} revealSignal={revealSheetSignal} collapseSignal={collapseSheetsSignal} onSelect={handleSheetSelect} progress={progressBySheet} />;
     }
-    if (panelId === "hints") return <StringGuide revision={workspaceRevision + projectRevision} onOpenTerms={openTerms} />;
+    if (panelId === "hints") return <StringGuide revision={workspaceRevision + projectRevision} onOpenTerms={openTerms} onReveal={stableRevealBinding} />;
     const tool: WorkbenchTool = panelId === "search" ? "search" : "git";
     return <WorkbenchToolDock activeTool={tool} selectedBinding={selectedBinding} onOpenCommit={stableOpenCommit} selectedCommitId={activeCommitId} onOpenRepositorySettings={openRepositorySettings} projectRevision={projectRevision} selectedKey={selectedKey} workspaceRevision={workspaceRevision} onWorkspaceChanged={stableWorkspaceChanged} pending={pendingState} onRevealBinding={stableRevealBinding} onOpenTranslate={openTranslate} searchSeed={searchSeed} />;
   };

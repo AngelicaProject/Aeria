@@ -84,6 +84,23 @@ pub struct HintNameDto {
     pub translation: String,
 }
 
+/// A game name of a string's source with the string its translation comes
+/// from.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HintGameNameDto {
+    pub name: String,
+    pub translation: String,
+    /// Every name sheet with this name and translation, such as `Action`
+    /// and `Item` for `Potion`.
+    pub sheets: Vec<String>,
+    /// The row's name when this is another form of it, such as `The Walk`
+    /// for `Walk`.
+    pub full: Option<String>,
+    /// The string the translation comes from, to open it in the editor.
+    pub binding: Option<SourceBindingDto>,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HintTermDto {
@@ -121,7 +138,7 @@ pub struct HintSpeakerDto {
 #[derive(Debug, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StringHintsDto {
-    pub names: Vec<HintNameDto>,
+    pub names: Vec<HintGameNameDto>,
     pub terms: Vec<HintTermDto>,
     pub speaker: Option<HintSpeakerDto>,
     /// The kind of a quest's text: `journal`, `objective`, or `other`.
@@ -174,7 +191,24 @@ fn string_hints_with(
         names: found
             .names
             .into_iter()
-            .map(|(name, translation)| HintNameDto { name, translation })
+            .map(|name| HintGameNameDto {
+                binding: session.coordinate_of(&name.context).map(
+                    |(sheet_name, row_id, subrow_id, column_index)| SourceBindingDto {
+                        sheet_name,
+                        row_id,
+                        subrow_id,
+                        column_index,
+                    },
+                ),
+                sheets: if name.sheets.is_empty() {
+                    vec![name.sheet().to_owned()]
+                } else {
+                    name.sheets
+                },
+                name: name.source,
+                translation: name.translation,
+                full: name.full,
+            })
             .collect(),
         terms: found.terms.into_iter().map(HintTermDto::from).collect(),
         speaker: found.speaker.map(|(label, name)| HintSpeakerDto {
@@ -218,8 +252,8 @@ fn check_draft_with(
         names
             .in_texts([entry.source.as_str()], usize::MAX)
             .into_iter()
-            .filter(|(_, translation)| aeria_knowledge::uses_translation(text, translation))
-            .map(|(name, _)| name)
+            .filter(|name| aeria_knowledge::uses_translation(text, &name.translation))
+            .map(|name| name.source)
             .collect()
     };
     Ok(DraftCheckDto {

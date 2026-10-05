@@ -228,7 +228,9 @@ nothing and needs no project.
 `string_hints(sourceBinding)` returns what a machine translation request
 tells the model about one string, from `aeria_model::hints` over the
 string's entry (`Session::entry`): the game's names in its source with the
-project's translations, the glossary terms of its source (with their notes,
+project's translations, each with every name sheet that has it, the row's
+name for another form of it, and the coordinate of the string its
+translation comes from (`Session::coordinate_of`), the glossary terms of its source (with their notes,
 forbidden variants, and whether a term exception keeps one out), its speaker
 label with the name it stands for, the kind of a quest's text, the length of
 an interface label, and the texts whose line varies with the player

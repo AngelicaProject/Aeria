@@ -431,7 +431,12 @@ not re-render the workbench.
 - **Names and terms** lists the glossary terms of the source, each with its
   translation, forbidden variants, note, and whether a term exception keeps
   it out, and the game's names in the source with the project's
-  translations, with a link to the glossary. Each is marked once there is a
+  translations, with a link to the glossary. Under each name is what it
+  names, from every name sheet with it (*character, enemy*), the row's name
+  when it is another form of it (*place, a form of «The Walk»*), and the
+  string its translation comes from, which a click opens in the editor: a
+  name is found by its letters alone, so an ordinary word such as *Walk* in
+  *A Walk in the Park* can be found as one, and the origin shows it. Each is marked once there is a
   translation: used, not used yet (amber), or a forbidden variant used
   (red). A name counts as used as the glossary counts a term's translation:
   each of its words as written or inflected.

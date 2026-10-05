@@ -8,7 +8,7 @@ use aeria_knowledge::Glossary;
 use aeria_po::Entry;
 
 use crate::fit;
-use crate::names::Names;
+use crate::names::{Name, Names};
 
 /// Most names of one string listed; a request of many strings has more.
 const NAMES: usize = 40;
@@ -28,7 +28,7 @@ pub struct HintTerm {
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct StringHints {
     /// The game's names in the source with the project's translations.
-    pub names: Vec<(String, String)>,
+    pub names: Vec<Name>,
     pub terms: Vec<HintTerm>,
     /// The speaker label of a line (`ALPHINAUD`), with the name and
     /// translation it stands for when the project translates that name.
@@ -144,10 +144,7 @@ mod tests {
                 &["aether"],
             ),
         );
-        assert_eq!(
-            found.names,
-            vec![("Minfilia".to_owned(), "Минфилия".to_owned())]
-        );
+        assert_eq!(found.names, vec![Name::new("Minfilia", "Минфилия")]);
         assert_eq!(
             found
                 .terms

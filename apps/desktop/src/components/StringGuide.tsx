@@ -6,7 +6,7 @@ import { describeIssue, errorText } from "../issueText";
 import type { MessageKey } from "../i18n/translate";
 import { useMacroIdioms } from "../macroIdioms";
 import { guideMacros, macroState, ruleOrder, type GuideMacro } from "../stringGuide";
-import type { CommandError, DraftCheckDto, HintTermDto, MacroInsertionDto, MacroRule, StringHintsDto } from "../types";
+import type { CommandError, DraftCheckDto, HintGameNameDto, HintTermDto, MacroInsertionDto, MacroRule, SourceBinding, StringHintsDto } from "../types";
 import { useEditorFocus } from "../ui/editorFocus";
 import { loadIcon } from "../ui/gameGlyphs";
 import { useI18n } from "../ui/i18n";
@@ -22,6 +22,8 @@ type StringGuideProps = {
   revision: number;
   /** Opens the project's terms. */
   onOpenTerms: () => void;
+  /** Opens a string in the editor, such as the one a name's translation comes from. */
+  onReveal: (binding: SourceBinding) => void;
 };
 
 type Loaded<T> = { key: string; value: T };
@@ -35,7 +37,7 @@ type Loaded<T> = { key: string; value: T };
  * do with each, and what the checks find in the translation as it is typed.
  * Picking a name, a term, or a macro adds it to the translation.
  */
-export const StringGuide = memo(function StringGuide({ revision, onOpenTerms }: StringGuideProps) {
+export const StringGuide = memo(function StringGuide({ revision, onOpenTerms, onReveal }: StringGuideProps) {
   const { t } = useI18n();
   const focus = useEditorFocus();
   const binding = focus?.binding ?? null;
@@ -116,7 +118,7 @@ export const StringGuide = memo(function StringGuide({ revision, onOpenTerms }: 
           count={shown.names.length + shown.terms.length}
           action={<button className="string-guide-link" type="button" onClick={onOpenTerms}>{t("hints.openTerms")}</button>}
         >
-          <Words hints={shown} draft={draft} verdict={verdict} onPick={focus.busy ? undefined : pick} />
+          <Words hints={shown} draft={draft} verdict={verdict} onPick={focus.busy ? undefined : pick} onReveal={onReveal} />
         </GuideColumn>
       ) : null}
       {hasMacros ? (
@@ -230,7 +232,53 @@ function termState(term: HintTermDto, verdict: DraftCheckDto | null): { state: "
   return { state: "ok" };
 }
 
-function Words({ hints, draft, verdict, onPick }: { hints: StringHintsDto; draft: string; verdict: DraftCheckDto | null; onPick: ((pick: ChipPick) => void) | undefined }) {
+/** What the strings of a name sheet name, by sheet. */
+const NAME_KINDS: Readonly<Record<string, MessageKey>> = {
+  PlaceName: "hints.from.place",
+  Town: "hints.from.town",
+  Race: "hints.from.race",
+  Tribe: "hints.from.clan",
+  GuardianDeity: "hints.from.deity",
+  ClassJob: "hints.from.classJob",
+  Status: "hints.from.status",
+  Action: "hints.from.action",
+  Trait: "hints.from.trait",
+  Item: "hints.from.item",
+  EventItem: "hints.from.keyItem",
+  Mount: "hints.from.mount",
+  Companion: "hints.from.minion",
+  Ornament: "hints.from.accessory",
+  Title: "hints.from.title",
+  ENpcResident: "hints.from.character",
+  BNpcName: "hints.from.enemy",
+  EObjName: "hints.from.object",
+  Fate: "hints.from.fate",
+  InstanceContent: "hints.from.duty",
+  ContentFinderCondition: "hints.from.duty",
+  Quest: "hints.from.quest",
+};
+
+function NameOrigin({ name, onReveal }: { name: HintGameNameDto; onReveal: (binding: SourceBinding) => void }) {
+  const { t } = useI18n();
+  const kinds: string[] = [];
+  for (const sheet of name.sheets) {
+    const key = NAME_KINDS[sheet];
+    const kind = key ? t(key) : sheet;
+    if (!kinds.includes(kind)) kinds.push(kind);
+  }
+  const kind = kinds.join(", ");
+  const text = name.full ? t("hints.from.form", { kind, full: name.full }) : kind;
+  const binding = name.binding;
+  if (!binding) return <div className="string-guide-origin">{text}</div>;
+  const where = `${binding.sheetName} ${binding.rowId}:${binding.subrowId}`;
+  return (
+    <button className="string-guide-origin is-link" type="button" title={t("hints.from.open", { where })} onClick={() => onReveal(binding)}>
+      {text}<span className="mono"> · {where}</span>
+    </button>
+  );
+}
+
+function Words({ hints, draft, verdict, onPick, onReveal }: { hints: StringHintsDto; draft: string; verdict: DraftCheckDto | null; onPick: ((pick: ChipPick) => void) | undefined; onReveal: (binding: SourceBinding) => void }) {
   const { t } = useI18n();
   const drafted = draft.trim().length > 0;
   const insert = (text: string) => onPick?.({ insert: text });
@@ -268,6 +316,7 @@ function Words({ hints, draft, verdict, onPick }: { hints: StringHintsDto; draft
                 <button className="string-guide-insert" type="button" disabled={!onPick} title={t("hints.insertTitle", { text: name.translation })} onClick={() => insert(name.translation)}>{name.translation}</button>
                 <span className="string-guide-tag">{t("hints.name")}</span>
               </div>
+              <NameOrigin name={name} onReveal={onReveal} />
             </div>
           </li>
         );

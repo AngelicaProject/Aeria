@@ -845,11 +845,13 @@ export type TranslationFindingsDto = { issues: IssueDto[]; termExceptions: strin
 
 /** A game name with the project's translation. */
 export type HintNameDto = { name: string; translation: string };
+/** A game name of the source with the string its translation comes from: every name sheet with it, the row's name when this is another form of it, and its coordinate. */
+export type HintGameNameDto = HintNameDto & { sheets: string[]; full: string | null; binding: SourceBinding | null };
 /** A glossary term of the source; `excepted` when a person decided it does not apply to the string. */
 export type HintTermDto = { term: string; translation: string; note: string | null; never: string[]; excepted: boolean };
 /** What a machine translation request tells the model about one string. */
 export type StringHintsDto = {
-  names: HintNameDto[];
+  names: HintGameNameDto[];
   terms: HintTermDto[];
   /** The speaker label of a line, with the name it stands for when the project translates it. */
   speaker: { label: string; name: HintNameDto | null } | null;
