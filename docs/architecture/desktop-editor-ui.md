@@ -389,13 +389,12 @@ error lists its problems. Saving a fuzzy string's translation accepts it and
 removes the mark. A row is dirty when any contained cell has a dirty target or
 note.
 
-A translated string has a review toggle in the editor bar: **Mark reviewed**
-marks the saved translation as reviewed by the person (see
-[`po-project.md`](./po-project.md#reviews)), and **Reviewed** removes the
-mark. While the target has unsaved edits the toggle can only remove a mark.
-**Save & mark reviewed**, beside Save, saves the draft and marks it at once;
-without edits the same button reads **Mark reviewed** and only marks the
-saved translation, and a reviewed string without edits does not show it. Nothing else marks a
+A person marks a translation reviewed (see
+[`po-project.md`](./po-project.md#reviews)) with the button beside Save:
+**Save & mark reviewed** saves the draft and marks it at once, and without
+edits the same button reads **Mark reviewed** and only marks the saved
+translation; a reviewed string without edits does not show it. A reviewed
+string shows **Reviewed** in the editor bar, which removes the mark. Nothing else marks a
 string: a plain save keeps a mark the string has and adds none, and while a
 string without a mark has unsaved edits, the footer says that AI
 translation may overwrite it. A string whose mark is of another text (the

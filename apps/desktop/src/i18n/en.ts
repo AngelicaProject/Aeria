@@ -1034,7 +1034,6 @@ export const en = {
   "editor.reviewTitle": "Mark the saved translation as reviewed by you: AI translation never changes a reviewed string, and Translate again skips it",
   "editor.reviewed": "Reviewed",
   "editor.reviewedTitle": "You or another person reviewed this translation, so AI translation leaves it. Click to remove the mark and give the string back to AI translation",
-  "editor.reviewDirtyTitle": "Save the translation first, or use Save & mark reviewed",
   "editor.reviewStale": "Changed after review",
   "editor.reviewStaleTitle": "The translation was reviewed, then changed outside the editor (by a merge or by hand), so the review no longer holds and AI translation may change it. Review it again to protect it",
   "editor.saveReviewed": "Save & mark reviewed",

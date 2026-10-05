@@ -355,17 +355,11 @@ const TranslationEditorImpl = forwardRef<TranslationEditorHandle, TranslationEdi
           {rowDirty ? <span className="pill pill-warn">{t("common.unsaved")}</span> : null}
           {translation?.fuzzy ? <span className="pill pill-warn" title={t("editor.fuzzyHint")}>{t("review.fuzzy")}</span> : null}
           {translation?.reviewStale ? <span className="pill pill-warn" title={t("editor.reviewStaleTitle")}>{t("editor.reviewStale")}</span> : null}
-          {translation?.targetMacro ? (
-            <button
-              className={translation.reviewed ? "review-toggle is-reviewed" : "review-toggle"}
-              type="button"
-              aria-pressed={Boolean(translation.reviewed)}
-              disabled={cellBusy || (targetDirty && !translation.reviewed)}
-              title={t(translation.reviewed ? "editor.reviewedTitle" : targetDirty ? "editor.reviewDirtyTitle" : "editor.reviewTitle")}
-              onClick={() => onReview(selectedCell, !translation.reviewed)}
-            >
-              <ReviewDot decorative state={translation.reviewed ? "reviewed" : "translated"} />
-              {t(translation.reviewed ? "editor.reviewed" : "editor.review")}
+          {translation?.reviewed ? (
+            // Shows the mark, and removes it; marking is the footer's.
+            <button className="review-toggle is-reviewed" type="button" aria-pressed disabled={cellBusy} title={t("editor.reviewedTitle")} onClick={() => onReview(selectedCell, false)}>
+              <ReviewDot decorative state="reviewed" />
+              {t("editor.reviewed")}
             </button>
           ) : null}
           <IconButton icon="undo" label={t("editor.revert")} disabled={!rowDirty || mutations.length > 0} onClick={revert} />
