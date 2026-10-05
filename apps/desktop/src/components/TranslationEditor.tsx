@@ -424,7 +424,7 @@ const TranslationEditorImpl = forwardRef<TranslationEditorHandle, TranslationEdi
           </InsertMacroContextMenu>
           <div className="editor-pane-foot">
             <span className="editor-hint">
-              {targetIsBlank ? t("editor.enterTranslation") : speakerNote ? <span className="editor-warning" title={speakerNote}>{speakerNote}</span> : targetDirty && !translation?.reviewed ? <span className="editor-warning" title={t("editor.unreviewedEdit")}>{t("editor.unreviewedEdit")}</span> : targetDirty ? t("common.unsaved") : null}
+              {targetIsBlank ? t("editor.enterTranslation") : speakerNote ? <span className="editor-warning" title={speakerNote}>{speakerNote}</span> : targetDirty ? t("common.unsaved") : null}
             </span>
             {/* The buttons move as one group: they never split across rows. */}
             <div className="editor-actions">

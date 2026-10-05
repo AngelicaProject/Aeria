@@ -1038,7 +1038,6 @@ export const en = {
   "editor.reviewStaleTitle": "The translation was reviewed, then changed outside the editor (by a merge or by hand), so the review no longer holds and AI translation may change it. Review it again to protect it",
   "editor.saveReviewed": "Save & mark reviewed",
   "editor.saveReviewedTitle": "Save the translation and mark it reviewed by you, so AI translation never changes it",
-  "editor.unreviewedEdit": "Not reviewed: AI may overwrite it",
   "menu.approveAndNext": "Translation still correct, go to next",
   "shortcut.approveAndNext": "Keep the translation of a changed source and go to the next string",
   "editor.saveNextTitle": "Save and go to the next string (Ctrl+Enter)",
