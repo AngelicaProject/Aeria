@@ -146,7 +146,8 @@ The list receives row pages but renders a flattened occurrence view: one
 `subrowId`, and `columnIndex`. A logical row remains the grouping context: the
 `rowId:subrowId` coordinate appears on its first lane and continuation lanes
 show a connector. Each lane shows the string's state (untranslated,
-translated, or with a changed source), `col N` field identity, and
+translated, reviewed by a person, or with a changed source; a reviewed
+string's dot has a ring), `col N` field identity, and
 single-line source and target previews in which macro spans are tinted. Until
 EXDSchema exists, fields are labelled by column. Blocked source cells remain
 context only and are never used as permission heuristics.
@@ -162,7 +163,8 @@ Pages that contain no visible rows are simply skipped, and there is no manual
 **Load more**. Reloading the open sheet after a Git operation keeps the current
 rows and selection on screen and swaps in the new rows once complete. Overlays
 saved while a sheet streams are applied to pages read before the save. A text
-filter, a state filter (untranslated, translated, source changed),
+filter, a state filter (untranslated, translated, reviewed, source changed; translated
+means not reviewed),
 and a string kind toggle pair (text only or formatting only; pressing the
 active one again shows both) narrow the list; while the sheet is still
 loading they cover the rows loaded so far and grow as the rest arrives. Formatting-only strings (no letters outside macros, such as
@@ -387,6 +389,20 @@ error lists its problems. Saving a fuzzy string's translation accepts it and
 removes the mark. A row is dirty when any contained cell has a dirty target or
 note.
 
+A translated string has a review toggle in the editor bar: **Mark reviewed**
+marks the saved translation as reviewed by the person (see
+[`po-project.md`](./po-project.md#reviews)), and **Reviewed** removes the
+mark. While the target has unsaved edits the toggle can only remove a mark.
+**Save & mark reviewed**, beside Save, saves the draft and marks it at once,
+or only marks a saved translation without edits. Nothing else marks a
+string: a plain save keeps a mark the string has and adds none, and while a
+string without a mark has unsaved edits, the footer says that AI
+translation may overwrite it. A string whose mark is of another text (the
+translation changed by a merge or by hand) shows *Changed after review*. In
+a translation pane narrower than 420 px, Save & mark reviewed shows only its
+icon and Save hides its shortcut, so the footer keeps one row; buttons that
+still do not fit wrap to a second row.
+
 When the selected string has uncommitted Git changes, the target pane shows a
 word-level diff between the last checkpoint and the current draft, or notes that
 the string is new since then. The diff is presentation only and can be hidden.
@@ -606,7 +622,7 @@ and has no refresh button.
   50 changes in several sheets, sheets start collapsed. The sheet whose
   changes are at the top stays pinned above them. A row names its column
   only when the sheet's changes span several columns, and says when a
-  string's fuzzy mark or note changed. Filters and open
+  string's fuzzy mark, note, or review changed. Filters and open
   sheets are kept per list (the uncommitted changes, or each commit) while
   the window lives. Commit tabs use the same list.
 - **History** fills the rest of the dock: commits with a lane graph, branch

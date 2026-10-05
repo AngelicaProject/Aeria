@@ -11,6 +11,7 @@ import {
   normalizeCommandError,
   pageTranslationRows,
   setTranslationNote,
+  setTranslationReview,
   setTranslationTarget,
   translationProgress,
 } from "../ipc";
@@ -692,12 +693,12 @@ export function EditorShell({
     }
   }, [showError]);
 
-  const handleSaveTarget = useCallback(async (cell: TranslationCellDto, draft: CellDraft, otherDirty: boolean, discardOtherDrafts: () => void, advance: boolean) => {
+  const handleSaveTarget = useCallback(async (cell: TranslationCellDto, draft: CellDraft, otherDirty: boolean, discardOtherDrafts: () => void, advance: boolean, review: boolean) => {
     if (!selectedRow || !(await confirmMutationDiscard(otherDirty, t("workbench.discard.saveTarget")))) return;
     if (otherDirty) discardOtherDrafts();
     const key = bindingKey(cell.sourceBinding);
     const saved = await runMutation("target", key, t("workbench.error.saveTarget"), async () => {
-      const overlay = await setTranslationTarget(cell.sourceBinding, draft.target);
+      const overlay = await setTranslationTarget(cell.sourceBinding, draft.target, review);
       if (advance) {
         pendingAdvance.current = key;
         focusTargetRequest.current = preferences.focusTargetOnNext;
@@ -727,6 +728,12 @@ export function EditorShell({
       focusTargetRequest.current = false;
     }
   }, [applyOverlay, confirmMutationDiscard, preferences.focusTargetOnNext, runMutation, selectedRow, t]);
+
+  const handleReview = useCallback(async (cell: TranslationCellDto, reviewed: boolean) => {
+    await runMutation("target", bindingKey(cell.sourceBinding), t("workbench.error.review"), async () => {
+      applyOverlay(cell.sourceBinding, await setTranslationReview(cell.sourceBinding, reviewed));
+    });
+  }, [applyOverlay, runMutation, t]);
 
   const handleSaveNote = useCallback(async (cell: TranslationCellDto, draft: CellDraft, otherDirty: boolean, discardOtherDrafts: () => void) => {
     if (!selectedRow || !(await confirmMutationDiscard(otherDirty, t("workbench.discard.saveNote")))) return;
@@ -909,6 +916,7 @@ export function EditorShell({
   const stableDirtyChange = useStableCallback(handleDirtyChange);
   const saveTarget = useStableCallback((...args: Parameters<typeof handleSaveTarget>) => void handleSaveTarget(...args));
   const approve = useStableCallback((...args: Parameters<typeof handleApprove>) => void handleApprove(...args));
+  const review = useStableCallback((...args: Parameters<typeof handleReview>) => void handleReview(...args));
   const saveNote = useStableCallback((...args: Parameters<typeof handleSaveNote>) => void handleSaveNote(...args));
   const restoreTarget = useStableCallback((target: string) => void handleRestoreTarget(target));
   const openRepositorySettings = useCallback(() => openSettings("repository"), [openSettings]);
@@ -1344,6 +1352,7 @@ export function EditorShell({
                   onSelectCell={handleFieldSelect}
                   onSaveTarget={saveTarget}
                   onApprove={approve}
+                  onReview={review}
                   onSaveNote={saveNote}
                   onNavigate={stableNavigateFromEditor}
                   takeFocusRequest={takeFocusRequest}

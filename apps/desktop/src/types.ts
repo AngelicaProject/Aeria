@@ -9,7 +9,8 @@ export type CommandError = {
  * What a string's entry says about it: `translated`, `fuzzy` (translated,
  * but its source changed since), or `null` for untranslated.
  */
-export type StringState = "translated" | "fuzzy";
+/** A translated string, one a person reviewed, or one whose source changed. */
+export type StringState = "translated" | "reviewed" | "fuzzy";
 
 export type SourceBinding = {
   sheetName: string;
@@ -236,7 +237,10 @@ export type TranslationOverlayDto = {
   /** The source the translation was written for, while it is fuzzy. */
   previousSource: string | null;
   /** Terms a person decided do not apply to the string. */
-  termExceptions?: string[];
+  termExceptions?: string[];  /** A person reviewed the translation as it is; machine translation leaves it. */
+  reviewed?: boolean;
+  /** The string has a review mark of another text: the translation changed after the review. */
+  reviewStale?: boolean;
 };
 
 export type TranslationRowCursorDto = {
@@ -359,6 +363,8 @@ export type EntryVersionDto = {
   targetMacro: string;
   fuzzy: boolean;
   translatorNote: string | null;
+  /** A person reviewed the translation as it is. */
+  reviewed?: boolean;
 };
 
 export type EntryChangeKind = "translated" | "changed" | "cleared" | "marked";
@@ -937,7 +943,7 @@ export type BulkEditDto = {
     path: string;
     context: string;
     binding: SourceBinding | null;
-    reason: "changed" | "missing" | "invalid" | "broken";
+    reason: "changed" | "missing" | "invalid" | "broken" | "reviewed";
     problems: IssueDto[];
   }[];
   undoAvailable: boolean;

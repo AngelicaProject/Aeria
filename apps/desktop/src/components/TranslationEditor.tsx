@@ -28,7 +28,10 @@ export type CellMutation = {
   bindingKey: string;
 };
 
-export type SaveTargetHandler = (cell: TranslationCellDto, draft: CellDraft, otherDirty: boolean, discardOtherDrafts: () => void, advance: boolean) => void;
+export type SaveTargetHandler = (cell: TranslationCellDto, draft: CellDraft, otherDirty: boolean, discardOtherDrafts: () => void, advance: boolean, review: boolean) => void;
+
+/** Marks the saved translation of a string as reviewed by a person, or removes the mark. */
+export type ReviewHandler = (cell: TranslationCellDto, reviewed: boolean) => void;
 
 /** The committed state of the selected string when it has uncommitted changes. */
 export type CheckpointBaseline = {
@@ -85,6 +88,7 @@ type TranslationEditorProps = {
   onSelectCell: (binding: SourceBinding) => void;
   onSaveTarget: SaveTargetHandler;
   onApprove: ApproveHandler;
+  onReview: ReviewHandler;
   onSaveNote: (cell: TranslationCellDto, draft: CellDraft, otherDirty: boolean, discardOtherDrafts: () => void) => void;
   onNavigate: (direction: 1 | -1) => void;
   /** Returns true once when the target should take focus after navigation. */
@@ -155,6 +159,7 @@ const TranslationEditorImpl = forwardRef<TranslationEditorHandle, TranslationEdi
   onSelectCell,
   onSaveTarget,
   onApprove,
+  onReview,
   onSaveNote,
   onNavigate,
   takeFocusRequest,
@@ -232,7 +237,7 @@ const TranslationEditorImpl = forwardRef<TranslationEditorHandle, TranslationEdi
     })));
   }, []);
 
-  const saveTarget = useCallback((advance: boolean) => {
+  const saveTarget = useCallback((advance: boolean, review = false) => {
     const currentRow = rowRef.current;
     if (!currentRow || !selectedCell || cellBusy) return;
     if (!targetCanSave) {
@@ -241,8 +246,15 @@ const TranslationEditorImpl = forwardRef<TranslationEditorHandle, TranslationEdi
     }
     const currentDraft = draftForCell(selectedCell, draftsRef.current);
     const otherDirty = hasOtherDirtyDraft(currentRow, selectedCell, draftsRef.current, "target");
-    onSaveTarget(selectedCell, currentDraft, otherDirty, () => discardDrafts(bindingKey(selectedCell.sourceBinding), "target"), advance);
+    onSaveTarget(selectedCell, currentDraft, otherDirty, () => discardDrafts(bindingKey(selectedCell.sourceBinding), "target"), advance, review);
   }, [cellBusy, discardDrafts, onNavigate, onSaveTarget, selectedCell, targetCanSave]);
+
+  // Saving and marking: an unchanged translation is only marked.
+  const saveReviewed = useCallback(() => {
+    if (!selectedCell || cellBusy) return;
+    if (targetCanSave) saveTarget(false, true);
+    else if (selectedCell.translation?.targetMacro && !selectedCell.translation.reviewed) onReview(selectedCell, true);
+  }, [cellBusy, onReview, saveTarget, selectedCell, targetCanSave]);
 
   const approve = useCallback(() => {
     const currentRow = rowRef.current;
@@ -342,6 +354,20 @@ const TranslationEditorImpl = forwardRef<TranslationEditorHandle, TranslationEdi
         <div className="editor-bar-end">
           {rowDirty ? <span className="pill pill-warn">{t("common.unsaved")}</span> : null}
           {translation?.fuzzy ? <span className="pill pill-warn" title={t("editor.fuzzyHint")}>{t("review.fuzzy")}</span> : null}
+          {translation?.reviewStale ? <span className="pill pill-warn" title={t("editor.reviewStaleTitle")}>{t("editor.reviewStale")}</span> : null}
+          {translation?.targetMacro ? (
+            <button
+              className={translation.reviewed ? "review-toggle is-reviewed" : "review-toggle"}
+              type="button"
+              aria-pressed={Boolean(translation.reviewed)}
+              disabled={cellBusy || (targetDirty && !translation.reviewed)}
+              title={t(translation.reviewed ? "editor.reviewedTitle" : targetDirty ? "editor.reviewDirtyTitle" : "editor.reviewTitle")}
+              onClick={() => onReview(selectedCell, !translation.reviewed)}
+            >
+              <ReviewDot decorative state={translation.reviewed ? "reviewed" : "translated"} />
+              {t(translation.reviewed ? "editor.reviewed" : "editor.review")}
+            </button>
+          ) : null}
           <IconButton icon="undo" label={t("editor.revert")} disabled={!rowDirty || mutations.length > 0} onClick={revert} />
         </div>
       </header>
@@ -404,7 +430,7 @@ const TranslationEditorImpl = forwardRef<TranslationEditorHandle, TranslationEdi
           </InsertMacroContextMenu>
           <div className="editor-pane-foot">
             <span className="editor-hint">
-              {targetIsBlank ? t("editor.enterTranslation") : speakerNote ? <span className="editor-warning">{speakerNote}</span> : targetDirty ? t("common.unsaved") : null}
+              {targetIsBlank ? t("editor.enterTranslation") : speakerNote ? <span className="editor-warning">{speakerNote}</span> : targetDirty && !translation?.reviewed ? <span className="editor-warning">{t("editor.unreviewedEdit")}</span> : targetDirty ? t("common.unsaved") : null}
             </span>
             {translation?.fuzzy ? (
               <button className="button button-ghost" type="button" disabled={cellBusy || targetIsBlank} title={t("editor.approveNextTitle")} onClick={approve}>
@@ -413,6 +439,9 @@ const TranslationEditorImpl = forwardRef<TranslationEditorHandle, TranslationEdi
             ) : null}
             <button className="button button-secondary" type="button" disabled={cellBusy} title={t(targetCanSave ? "editor.saveNextTitle" : "editor.nextTitle")} onClick={() => saveTarget(true)}>
               {t(targetCanSave ? "editor.saveNext" : "editor.next")}<UiIcon icon="arrowDown" size="xs" />
+            </button>
+            <button className="button button-secondary" type="button" disabled={cellBusy || targetIsBlank || (!targetCanSave && Boolean(translation?.reviewed))} aria-label={t("editor.saveReviewed")} title={t("editor.saveReviewedTitle")} onClick={saveReviewed}>
+              <UiIcon icon="circleCheck" size="xs" /><span className="button-label">{t("editor.saveReviewed")}</span>
             </button>
             <button className="button button-primary" type="button" disabled={!targetCanSave} title={t(targetIsBlank ? "editor.saveBlankTitle" : "editor.saveTitle")} onClick={() => saveTarget(false)}>
               {t(mutation === "target" ? "common.saving" : "common.save")}<kbd className="button-kbd">Ctrl S</kbd>

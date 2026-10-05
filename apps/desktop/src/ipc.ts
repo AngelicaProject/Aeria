@@ -246,14 +246,22 @@ export function sheetDialogue(sheetName: string): Promise<SheetDialogueDto | nul
  * Refused with `translationInvalid` when the checks find a problem. Returns
  * what the string's entry holds afterwards.
  */
+/** Saves a translation; with `review` the person also marks it reviewed. */
 export function setTranslationTarget(
   sourceBinding: SourceBinding,
   targetMacro: string,
+  review = false,
 ): Promise<TranslationOverlayDto | null> {
   return call<TranslationOverlayDto | null>("set_translation_target", {
     sourceBinding,
     targetMacro,
+    review,
   });
+}
+
+/** Marks a translation as reviewed by a person, or removes the mark: machine translation leaves a reviewed one. */
+export function setTranslationReview(sourceBinding: SourceBinding, reviewed: boolean): Promise<TranslationOverlayDto | null> {
+  return call<TranslationOverlayDto | null>("set_translation_review", { sourceBinding, reviewed });
 }
 
 export function setTranslationNote(

@@ -54,6 +54,7 @@ const skipLabels: Record<BulkEditDto["skipped"][number]["reason"], MessageKey> =
   missing: "search.skipped.missing",
   invalid: "search.skipped.invalid",
   broken: "search.skipped.broken",
+  reviewed: "search.skipped.reviewed",
 };
 
 /** Splits `text` into plain and highlighted parts by UTF-16 `ranges`, shortened around the first match. */

@@ -69,7 +69,14 @@
   background: var(--panel-sunken);
   transition: border-color var(--duration-fast), box-shadow var(--duration-fast);
 }
-.editor-target { background: var(--field); }
+.editor-target { container-type: inline-size; background: var(--field); }
+/* A narrow translation pane keeps its buttons on one row: Save & mark
+   reviewed shows its icon (its name is in the tooltip), Save its shortcut
+   only in the tooltip. */
+@container (max-width: 420px) {
+  .editor-target .editor-pane-foot .button-label,
+  .editor-target .editor-pane-foot .button-kbd { display: none; }
+}
 .editor-target:focus-within { border-color: var(--line-focus); }
 .editor-pane-head {
   display: flex;
@@ -82,16 +89,20 @@
 .eyebrow { color: var(--fg-subtle); font-size: var(--text-2xs); font-weight: 700; letter-spacing: 0.07em; text-transform: uppercase; }
 .edited-label { color: var(--warn); font-size: var(--text-2xs); font-weight: 600; }
 .saving-label { display: inline-flex; align-items: center; gap: 6px; color: var(--fg-subtle); font-size: var(--text-2xs); }
+/* Buttons that do not fit a narrow pane go to a second row, right-aligned. */
 .editor-pane-foot {
   display: flex;
   flex: none;
+  flex-wrap: wrap;
   align-items: center;
+  justify-content: flex-end;
   gap: 6px;
   padding: 6px;
   border-top: 1px solid var(--line);
 }
 .editor-warning { color: var(--warn); }
-.editor-hint { display: flex; flex: 1; flex-wrap: wrap; align-items: center; gap: 3px; min-width: 0; padding-left: 6px; color: var(--fg-faint); font-size: var(--text-2xs); }
+.editor-hint { display: flex; flex: 1 1 140px; flex-wrap: wrap; align-items: center; gap: 3px; min-width: 0; padding-left: 6px; color: var(--fg-faint); font-size: var(--text-2xs); }
+.editor-hint:empty { flex: 1 1 0; padding: 0; }
 
 .editor-surface { flex: 1; min-height: 72px; }
 
@@ -269,6 +280,23 @@
 }
 .macro-hover-title { color: var(--macro); font-family: var(--font-mono); font-weight: 600; }
 .macro-hover.is-error .macro-hover-title { color: var(--bad); }
+
+/* The review mark of the string in the editor bar: a quiet toggle until set. */
+.review-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 24px;
+  padding: 0 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--fg-muted);
+  font-size: var(--text-xs);
+}
+.review-toggle:hover:not(:disabled) { border-color: var(--line-strong); color: var(--fg); }
+.review-toggle.is-reviewed { border-color: color-mix(in srgb, var(--review-done) 55%, transparent); background: color-mix(in srgb, var(--review-done) 12%, transparent); color: var(--fg); }
+.review-toggle:disabled { opacity: 0.55; }
 
 /* The target editor's context menu trigger adds no box of its own. */
 .editor-context { display: contents; }

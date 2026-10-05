@@ -76,6 +76,7 @@ const statusOptions: ReadonlyArray<{ value: OccurrenceStatusFilter; label: Messa
   { value: "all", label: "list.all" },
   { value: "untranslated", label: "review.untranslated" },
   { value: "translated", label: "review.translated" },
+  { value: "reviewed", label: "review.reviewed" },
   { value: "fuzzy", label: "review.fuzzy" },
 ];
 

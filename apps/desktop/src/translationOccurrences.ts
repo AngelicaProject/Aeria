@@ -62,7 +62,7 @@ export function occurrenceKey(occurrence: Pick<TranslationOccurrenceView, "bindi
   return bindingKey(occurrence.binding);
 }
 
-export type OccurrenceStatusFilter = "all" | "untranslated" | "translated" | "fuzzy";
+export type OccurrenceStatusFilter = "all" | "untranslated" | "translated" | "reviewed" | "fuzzy";
 
 /** Prose strings, or formatting-only strings (punctuation, digits, number formatting). */
 export type OccurrenceKindFilter = "all" | "text" | "formatting";
