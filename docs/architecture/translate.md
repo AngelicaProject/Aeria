@@ -141,7 +141,12 @@ The task is JSON built from the files as they are when the request is sent:
 The editor's string guide shows a person the same names, terms, speaker,
 length, and gender marks of one string; `aeria_model::hints` reads them for
 both (see
-[`desktop-editor-ui.md`](./desktop-editor-ui.md#string-guide)).
+[`desktop-editor-ui.md`](./desktop-editor-ui.md#string-guide)). This is a
+contract ([principle 11](../product/principles.md)): what a request adds
+about one string is read through `aeria_model::hints` or the functions it
+shares with the request, and shown in the guide in the same change. What
+belongs to a whole batch, such as `examples`, or to every request, such as
+the instructions, is not part of it.
 
 All requests of a run share one `prompt_cache_key`. A probe of this provider
 measured that requests with the same key and prefix got 99 % of the prompt

@@ -418,7 +418,11 @@ or hides it) and can move to the right dock. It is for the person
 translating the string in the editor: it shows what a machine translation
 request tells the model about that string, which macros the string has and
 what a translation may do with each, and what the checks find in the
-translation as it is typed, before it is saved. The editor publishes its
+translation as it is typed, before it is saved. The guide and the request
+read a string the same way, so the guide follows every change to what a
+request says about one string (see
+[`translate.md`](./translate.md#the-request) and principle 11 of
+[`principles.md`](../product/principles.md)). The editor publishes its
 string and the translation being typed (`ui/editorFocus.ts`), so typing does
 not re-render the workbench.
 

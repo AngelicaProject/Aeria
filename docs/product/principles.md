@@ -10,3 +10,4 @@
 8. **Failures are visible.** Unknown constructs, changed sources, and translations the checks refuse become explicit work instead of silent corruption.
 9. **Formats are contracts.** Project and export formats are versioned and migrated without data loss.
 10. **Documentation stays current.** Architecture and development documentation evolve with the code so future work begins from current truth.
+11. **A person sees what the model is told.** What a machine translation request says about a string (its names and terms, where each comes from, its speaker, its length, its macros and what a translation may do with them) the editor's string guide shows the person translating that string, read by the same code. A person can always tell where a machine translation took a name, a term, or a form from, and judge the string on the same grounds.

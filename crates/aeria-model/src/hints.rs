@@ -2,7 +2,10 @@
 //! translates it: the game's names and the project's terms in its source,
 //! who says it, how long an interface label may be, and whether its line
 //! varies with the player character's gender. A request and the editor read
-//! these the same way, so the person sees what the model is told.
+//! these the same way, so the person sees what the model is told: what a
+//! request comes to say about one string is read here, or through functions
+//! this module shares with the request, and the string guide shows it
+//! (principle 11 of `docs/product/principles.md`).
 
 use aeria_knowledge::Glossary;
 use aeria_po::Entry;
