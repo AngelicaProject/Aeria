@@ -393,8 +393,9 @@ A translated string has a review toggle in the editor bar: **Mark reviewed**
 marks the saved translation as reviewed by the person (see
 [`po-project.md`](./po-project.md#reviews)), and **Reviewed** removes the
 mark. While the target has unsaved edits the toggle can only remove a mark.
-**Save & mark reviewed**, beside Save, saves the draft and marks it at once,
-or only marks a saved translation without edits. Nothing else marks a
+**Save & mark reviewed**, beside Save, saves the draft and marks it at once;
+without edits the same button reads **Mark reviewed** and only marks the
+saved translation, and a reviewed string without edits does not show it. Nothing else marks a
 string: a plain save keeps a mark the string has and adds none, and while a
 string without a mark has unsaved edits, the footer says that AI
 translation may overwrite it. A string whose mark is of another text (the

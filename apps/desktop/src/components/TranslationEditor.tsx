@@ -440,9 +440,12 @@ const TranslationEditorImpl = forwardRef<TranslationEditorHandle, TranslationEdi
             <button className="button button-secondary" type="button" disabled={cellBusy} title={t(targetCanSave ? "editor.saveNextTitle" : "editor.nextTitle")} onClick={() => saveTarget(true)}>
               {t(targetCanSave ? "editor.saveNext" : "editor.next")}<UiIcon icon="arrowDown" size="xs" />
             </button>
-            <button className="button button-secondary" type="button" disabled={cellBusy || targetIsBlank || (!targetCanSave && Boolean(translation?.reviewed))} aria-label={t("editor.saveReviewed")} title={t("editor.saveReviewedTitle")} onClick={saveReviewed}>
-              <UiIcon icon="circleCheck" size="xs" /><span className="button-label">{t("editor.saveReviewed")}</span>
-            </button>
+            {targetCanSave || (translation?.targetMacro && !translation.reviewed) ? (
+              // With edits it saves and marks; without, it only marks the saved translation.
+              <button className="button button-secondary" type="button" disabled={cellBusy || targetIsBlank} aria-label={t(targetCanSave ? "editor.saveReviewed" : "editor.review")} title={t(targetCanSave ? "editor.saveReviewedTitle" : "editor.reviewTitle")} onClick={saveReviewed}>
+                <UiIcon icon="circleCheck" size="xs" /><span className="button-label">{t(targetCanSave ? "editor.saveReviewed" : "editor.review")}</span>
+              </button>
+            ) : null}
             <button className="button button-primary" type="button" disabled={!targetCanSave} title={t(targetIsBlank ? "editor.saveBlankTitle" : "editor.saveTitle")} onClick={() => saveTarget(false)}>
               {t(mutation === "target" ? "common.saving" : "common.save")}<kbd className="button-kbd">Ctrl S</kbd>
             </button>
