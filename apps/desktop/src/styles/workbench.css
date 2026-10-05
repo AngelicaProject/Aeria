@@ -67,8 +67,7 @@
 
 .dock-left { flex: none; width: var(--left-dock-width); }
 .dock-right { flex: none; width: var(--right-dock-width); }
-.dock-bottom,
-.bottom-panel { flex: none; height: var(--bottom-panel-height); }
+.dock-bottom { flex: none; height: var(--bottom-panel-height); }
 .workbench-body > .panel { margin-bottom: var(--gutter); }
 
 .panel-header {
@@ -101,7 +100,6 @@
 .panel-tab:hover { color: var(--fg); }
 .panel-tab.active { color: var(--fg); }
 .panel-tab.active::after { position: absolute; right: 8px; bottom: -1px; left: 8px; height: 2px; border-radius: 2px; background: var(--accent); content: ""; }
-.bottom-panel-body { display: grid; place-items: center; padding: 12px; }
 
 .workbench-center {
   display: flex;

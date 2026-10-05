@@ -38,21 +38,19 @@ export const dockPanelDefinitions: readonly DockPanelDefinition[] = [
   { id: "sheets", allowedRegions: ["left", "right", "bottom"], singleton: true },
   { id: "search", allowedRegions: ["left", "right", "bottom"], singleton: true, floatable: true },
   { id: "git", allowedRegions: ["right", "bottom"], singleton: true, floatable: true },
-  { id: "tasks", allowedRegions: ["bottom", "right"], singleton: true, floatable: true },
-  { id: "gitChanges", allowedRegions: ["bottom", "right"], singleton: true, floatable: true },
-  { id: "diagnostics", allowedRegions: ["bottom", "right"], singleton: true, floatable: true },
+  { id: "hints", allowedRegions: ["bottom", "right"], singleton: true },
 ];
 
 export const initialDockLayout: DockLayoutState = {
   groups: [
     { id: "left-main", region: "left", panelIds: ["sheets", "search"], activePanelId: "sheets" },
     { id: "right-main", region: "right", panelIds: ["git"], activePanelId: "git" },
-    { id: "bottom-main", region: "bottom", panelIds: ["tasks", "gitChanges", "diagnostics"], activePanelId: "tasks" },
+    { id: "bottom-main", region: "bottom", panelIds: ["hints"], activePanelId: "hints" },
   ],
   placements: dockPanelDefinitions.map((definition) => ({
     panelId: definition.id,
-    region: definition.id === "sheets" || definition.id === "search" ? "left" : definition.id === "tasks" || definition.id === "gitChanges" || definition.id === "diagnostics" ? "bottom" : "right",
-    groupId: definition.id === "sheets" || definition.id === "search" ? "left-main" : definition.id === "tasks" || definition.id === "gitChanges" || definition.id === "diagnostics" ? "bottom-main" : "right-main",
+    region: definition.id === "sheets" || definition.id === "search" ? "left" : definition.id === "hints" ? "bottom" : "right",
+    groupId: definition.id === "sheets" || definition.id === "search" ? "left-main" : definition.id === "hints" ? "bottom-main" : "right-main",
     visible: true,
   })),
 };

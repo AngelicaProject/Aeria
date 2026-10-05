@@ -142,10 +142,12 @@ type Chips = {
   breaks: ReadonlyMap<number, -1 | 1>;
 };
 
-const lookup = {
+/** What chips read from the tags learned so far. */
+export const chipLookup = {
   colorOf: (tag: string) => tagColors.get(tag) ?? null,
   conditionOf: (tag: string) => tagConditions.get(tag) ?? null,
 };
+const lookup = chipLookup;
 
 function build(doc: string, context: ChipContext): Chips {
   const errors = context.text === doc ? context.errors : [];

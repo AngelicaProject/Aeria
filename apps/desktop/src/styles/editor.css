@@ -272,3 +272,145 @@
 
 /* The target editor's context menu trigger adds no box of its own. */
 .editor-context { display: contents; }
+
+/* The string guide: columns side by side under the document, stacked in a
+   narrow dock. Each column scrolls on its own, so the panel never grows. */
+.string-guide {
+  container-type: inline-size;
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+}
+/* What the string is, in one line above the columns. */
+.string-guide-facts {
+  display: flex;
+  flex: none;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px 14px;
+  padding: 4px 10px;
+  border-bottom: 1px solid var(--line);
+  font-size: var(--text-xs);
+}
+.string-guide-fact { display: inline-flex; align-items: center; gap: 5px; min-width: 0; padding: 1px 4px; border-radius: var(--radius-sm); }
+.string-guide-fact.is-todo { background: var(--warn-soft); }
+.string-guide-fact .string-guide-icon,
+.string-guide-fact .string-guide-mark { margin-top: 0; }
+.string-guide-columns { display: flex; flex: 1; min-width: 0; min-height: 0; transition: opacity var(--duration-fast); }
+.string-guide.is-stale .string-guide-columns { opacity: 0.6; }
+.string-guide-empty { display: flex; align-items: center; gap: 8px; padding: 12px; color: var(--fg-muted); font-size: var(--text-xs); }
+.string-guide-empty.error { color: var(--bad); }
+.string-guide-column { display: flex; flex: 1 1 0; flex-direction: column; min-width: 0; min-height: 0; }
+.string-guide-column.is-words,
+.string-guide-column.is-macros { flex-grow: 1.4; }
+.string-guide-column.is-check { min-width: 170px; }
+.string-guide-column + .string-guide-column { border-left: 1px solid var(--line); }
+.string-guide-head {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 10px;
+  color: var(--fg-subtle);
+}
+.string-guide-title { color: var(--fg-muted); font-size: var(--text-2xs); font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; white-space: nowrap; }
+.string-guide-head .count { color: var(--fg-faint); font-family: var(--font-mono); font-size: var(--text-2xs); }
+.string-guide-body { flex: 1; min-height: 0; padding: 0 10px 10px; overflow: auto; }
+.string-guide-link {
+  padding: 0 4px;
+  border: 0;
+  border-radius: var(--radius-xs);
+  background: transparent;
+  color: var(--accent-text);
+  font-size: var(--text-2xs);
+  white-space: nowrap;
+}
+.string-guide-link:hover { background: var(--hover); }
+.string-guide-list { display: grid; gap: 2px; margin: 0; padding: 0; list-style: none; }
+.string-guide-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  min-width: 0;
+  padding: 3px 4px;
+  border-radius: var(--radius-sm);
+  font-size: var(--text-xs);
+  line-height: 1.45;
+}
+.string-guide-row:hover { background: var(--hover); }
+.string-guide-row.is-bad { background: var(--bad-soft); }
+.string-guide-icon,
+.string-guide-mark { flex: none; width: 14px; margin-top: 2px; color: var(--fg-faint); }
+.string-guide-mark.is-ok { color: var(--ok); }
+.string-guide-mark.is-bad { color: var(--bad); }
+.string-guide-mark.is-todo { color: var(--warn); }
+.string-guide-label { flex: none; color: var(--fg-muted); }
+.string-guide-value { min-width: 0; color: var(--fg); overflow-wrap: anywhere; }
+.string-guide-row .string-guide-link { margin-left: auto; }
+.string-guide-entry { display: grid; flex: 1; gap: 1px; min-width: 0; }
+.string-guide-pair { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 6px; min-width: 0; }
+.string-guide-source { color: var(--fg-muted); overflow-wrap: anywhere; }
+.string-guide-arrow { flex: none; align-self: center; color: var(--fg-faint); }
+.string-guide-insert {
+  padding: 0 3px;
+  border: 0;
+  border-radius: var(--radius-xs);
+  background: transparent;
+  color: var(--fg);
+  font: inherit;
+  font-weight: 600;
+  text-align: left;
+  overflow-wrap: anywhere;
+  cursor: copy;
+}
+.string-guide-insert:hover:not(:disabled) { background: var(--accent-soft); color: var(--accent-text); }
+.string-guide-insert:disabled { cursor: default; }
+.string-guide-tag { color: var(--fg-faint); font-size: var(--text-2xs); }
+.string-guide-row.is-excepted .string-guide-insert { color: var(--fg-subtle); font-weight: 400; text-decoration: line-through; }
+.string-guide-never { color: var(--bad); font-size: var(--text-2xs); }
+.string-guide-note { margin: 0; color: var(--fg-subtle); font-size: var(--text-2xs); line-height: 1.45; }
+.string-guide-group { display: flex; align-items: baseline; gap: 8px; padding: 4px; }
+.string-guide-group + .string-guide-group { border-top: 1px dashed var(--line); }
+.string-guide-rule { flex: none; width: 88px; font-size: var(--text-2xs); font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; cursor: help; }
+.string-guide-rule.is-keep { color: var(--macro); }
+.string-guide-rule.is-condition { color: var(--warn); }
+.string-guide-rule.is-letterCase,
+.string-guide-rule.is-formatting,
+.string-guide-rule.is-free { color: var(--fg-muted); }
+.string-guide-chips { display: flex; flex: 1; flex-wrap: wrap; gap: 4px 2px; min-width: 0; font-size: var(--text-sm); }
+.string-guide-chip-wrap { display: inline-flex; align-items: center; gap: 2px; border-radius: 5px; }
+.string-guide-chip-wrap.is-missing { box-shadow: 0 0 0 1px var(--bad); background: var(--bad-soft); }
+.string-guide-chip.cm-chip { border: 0; cursor: copy; }
+.string-guide-chip.cm-chip:hover:not(:disabled) { filter: brightness(1.25); box-shadow: 0 0 0 1px currentColor; }
+.string-guide-chip.cm-chip:disabled { cursor: default; }
+.string-guide-chip.cm-chip-break,
+.string-guide-chip.cm-chip-space { padding: 0 4px; background: var(--macro-soft); }
+.string-guide-swatch { display: inline-block; width: 3px; height: 0.95em; margin-right: 4px; border-radius: 2px; background: var(--fg-faint); vertical-align: -0.1em; }
+.string-guide-times { color: var(--fg-faint); font-family: var(--font-mono); font-size: var(--text-2xs); }
+.string-guide-missing { margin-right: 3px; color: var(--bad); }
+.string-guide-present { color: var(--ok); }
+.string-guide-ok { display: flex; align-items: center; gap: 6px; margin: 0; padding: 3px 4px; color: var(--ok); font-size: var(--text-xs); }
+.string-guide-issue {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 3px 4px;
+  color: var(--bad);
+  font-size: var(--text-xs);
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+.string-guide-issue svg { flex: none; margin-top: 2px; }
+.string-guide-issue.is-advice { color: var(--warn); }
+
+/* A narrow dock stacks the columns and scrolls as one. */
+@container (max-width: 560px) {
+  .string-guide-columns { flex-direction: column; overflow: auto; }
+  .string-guide-column,
+  .string-guide-column.is-words,
+  .string-guide-column.is-macros { flex: none; min-width: 0; }
+  .string-guide-column + .string-guide-column { border-top: 1px solid var(--line); border-left: 0; }
+  .string-guide-body { overflow: visible; }
+}

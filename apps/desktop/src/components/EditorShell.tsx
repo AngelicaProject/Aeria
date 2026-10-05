@@ -33,7 +33,7 @@ import { ConfirmDialog } from "./ConfirmDialog";
 import { ActivityRail } from "./ActivityRail";
 import { IconButton } from "../ui/primitives/IconButton";
 import { formatSheetCount } from "../sheetExplorer";
-import { BottomPanel } from "./BottomPanel";
+import { StringGuide } from "./StringGuide";
 import { DocumentTabs, type DocumentTab } from "./DocumentTabs";
 import { DockPanel } from "./DockPanel";
 import { ResizeHandle } from "./ResizeHandle";
@@ -129,7 +129,8 @@ type EditorShellProps = {
   onProjectChanged: (project: ProjectSummaryDto) => void;
 };
 
-const bottomPanelIds = new Set(["tasks", "gitChanges", "diagnostics"]);
+/** Panels that belong under the document or beside it, never in the left dock. */
+const bottomPanelIds = new Set(["hints"]);
 
 function cursorForRow(row: TranslationRowDto): TranslationRowCursorDto {
   return { sheetName: row.sheetName, rowId: row.rowId, subrowId: row.subrowId };
@@ -159,6 +160,7 @@ function scannedPast(loader: SheetLoader, target: RowTarget): boolean {
 
 function panelTitle(panelId: string | null): MessageKey {
   if (panelId === "sheets") return "workbench.panel.sheets";
+  if (panelId === "hints") return "hints.title";
   if (panelId === "search" || panelId === "git") return toolTitle(panelId);
   return "workbench.panel.generic";
 }
@@ -254,6 +256,7 @@ export function EditorShell({
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [guide, setGuide] = useState<{ open: boolean; tab: ProjectGuideTab }>({ open: false, tab: "terms" });
   const openGuide = useCallback((tab: ProjectGuideTab) => setGuide({ open: true, tab }), []);
+  const openTerms = useCallback(() => openGuide("terms"), [openGuide]);
   const setGuideOpen = useCallback((open: boolean) => {
     setGuide((current) => ({ ...current, open }));
     if (!open) setProjectRevision((current) => current + 1);
@@ -985,13 +988,12 @@ export function EditorShell({
       const placement = dockLayoutState.placements.find((candidate) => candidate.panelId === panel);
       const originRegion = placement?.region === "left" || placement?.region === "right" || placement?.region === "bottom" ? placement.region : null;
       const label = `aeria-tool-${panel}`;
-      const wide = bottomPanelIds.has(panel);
       const existing = await WebviewWindow.getByLabel(label);
       const detached = existing ?? new WebviewWindow(label, {
         title: `${t(detachedPanelTitle(panel))} · Aeria`,
         url: `/?detached=${panel}`,
-        width: wide ? 720 : 400,
-        height: wide ? 320 : 640,
+        width: 400,
+        height: 640,
         minWidth: 320,
         minHeight: 220,
         decorations: false,
@@ -1089,6 +1091,7 @@ export function EditorShell({
     if (panelId === "sheets") {
       return <SheetSidebar sheets={project.sheets} selectedSheetName={selectedSheetName} disabled={closing} active={active} hideEmpty={hideEmptySheets} onHideEmptyChange={setHideEmptySheets} filterOpen={sheetFilterOpen} onFilterOpenChange={setSheetFilterOpen} onOpenFilter={focusSheetFilter} quickFindSignal={quickFindSignal} revealSignal={revealSheetSignal} collapseSignal={collapseSheetsSignal} onSelect={handleSheetSelect} progress={progressBySheet} />;
     }
+    if (panelId === "hints") return <StringGuide revision={workspaceRevision + projectRevision} onOpenTerms={openTerms} />;
     const tool: WorkbenchTool = panelId === "search" ? "search" : "git";
     return <WorkbenchToolDock activeTool={tool} selectedBinding={selectedBinding} onOpenCommit={stableOpenCommit} selectedCommitId={activeCommitId} onOpenRepositorySettings={openRepositorySettings} projectRevision={projectRevision} selectedKey={selectedKey} workspaceRevision={workspaceRevision} onWorkspaceChanged={stableWorkspaceChanged} pending={pendingState} onRevealBinding={stableRevealBinding} onOpenTranslate={openTranslate} searchSeed={searchSeed} />;
   };
@@ -1236,8 +1239,6 @@ export function EditorShell({
     { id: "file-close-project", category: category.file, title: t("menu.closeProject"), icon: "folder", run: () => void handleClose() },
   ];
 
-  const bottomIsTool = bottomPanelId !== null && !bottomPanelIds.has(bottomPanelId);
-
   return (
     <main className="workbench">
       <WindowChrome
@@ -1354,28 +1355,18 @@ export function EditorShell({
           </section>
           {bottomOpen && bottomPanelId && detachedPanel !== bottomPanelId ? <>
             <ResizeHandle axis="y" label={t("workbench.resizeBottom")} {...resizeProps("bottomPanel", "--bottom-panel-height", -1)} />
-            {bottomIsTool ? (
-              <DockPanel
-                panelId={bottomPanelId}
-                title={t(panelTitle(bottomPanelId))}
-                headerActions={bottomPanelId === "sheets" ? sheetHeaderActions : undefined}
-                moveTargets={panelMoveTargets(bottomPanelId, "bottom")}
-                onMove={(target) => handlePanelMove(bottomPanelId, target)}
-                onHide={() => setRegionVisible("bottomPanel", false)}
-                onDropPanel={(dropped) => handlePanelMove(dropped, "bottom")}
-                className="dock-bottom"
-              >
-                {renderPanelContent(bottomPanelId, true)}
-              </DockPanel>
-            ) : (
-              <BottomPanel
-                activeTab={bottomPanelId === "gitChanges" ? "gitChanges" : bottomPanelId === "diagnostics" ? "diagnostics" : "tasks"}
-                onTabChange={(tab) => setDockLayoutState((current) => reduceDockLayout(current, { type: "activate", panelId: tab }))}
-                onCollapse={() => setRegionVisible("bottomPanel", false)}
-                onDetach={() => void detachPanel(bottomPanelId === "gitChanges" ? "gitChanges" : bottomPanelId === "diagnostics" ? "diagnostics" : "tasks")}
-                onDropPanel={(dropped) => handlePanelMove(dropped, "bottom")}
-              />
-            )}
+            <DockPanel
+              panelId={bottomPanelId}
+              title={t(panelTitle(bottomPanelId))}
+              headerActions={bottomPanelId === "sheets" ? sheetHeaderActions : undefined}
+              moveTargets={panelMoveTargets(bottomPanelId, "bottom")}
+              onMove={(target) => handlePanelMove(bottomPanelId, target)}
+              onHide={() => setRegionVisible("bottomPanel", false)}
+              onDropPanel={(dropped) => handlePanelMove(dropped, "bottom")}
+              className="dock-bottom"
+            >
+              {renderPanelContent(bottomPanelId, true)}
+            </DockPanel>
           </> : null}
         </div>
 

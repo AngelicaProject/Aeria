@@ -775,7 +775,12 @@ export type MacroTagDto = {
   color: string | null;
   /** What an opening `<if>` or `<switch>` tests, part by part. */
   condition: MacroConditionDto | null;
+  /** What a translation may do with the macro, as the structure policy reads it. */
+  rule: MacroRule;
 };
+
+/** Game data stays; formatting, conditions, and layout may change; a letter case transform stays around game data. */
+export type MacroRule = "keep" | "formatting" | "condition" | "free" | "letterCase";
 
 /** A number (named by its row when compared with a row global such as a class), a parameter, a time value, or other text. */
 export type MacroOperandDto =
@@ -837,6 +842,34 @@ export type IssueDto = {
 
 /** What the checks find in a string's saved translation, and its term exceptions. */
 export type TranslationFindingsDto = { issues: IssueDto[]; termExceptions: string[] };
+
+/** A game name with the project's translation. */
+export type HintNameDto = { name: string; translation: string };
+/** A glossary term of the source; `excepted` when a person decided it does not apply to the string. */
+export type HintTermDto = { term: string; translation: string; note: string | null; never: string[]; excepted: boolean };
+/** What a machine translation request tells the model about one string. */
+export type StringHintsDto = {
+  names: HintNameDto[];
+  terms: HintTermDto[];
+  /** The speaker label of a line, with the name it stands for when the project translates it. */
+  speaker: { label: string; name: HintNameDto | null } | null;
+  /** The kind of a quest's text: `journal`, `objective`, or `other`. */
+  kind: string | null;
+  /** The most characters an interface label's translation may show. */
+  maxLength: number | null;
+  /** `source` and the client languages whose line varies with the player character's gender. */
+  gendered: string[];
+};
+/** What the checks find in a translation before it is saved. */
+export type DraftCheckDto = {
+  issues: IssueDto[];
+  /** The source's game data the text lacks, by its spelling in the source. */
+  missing: string[];
+  /** Names of the guide whose translation the text uses. */
+  namesUsed: string[];
+  /** Characters shown, macros not counted. */
+  length: number;
+};
 
 export type SearchFileDto = { path: string; sheet: string; count: number };
 export type IssueCountDto = { issue: IssueDto; count: number };

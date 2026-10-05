@@ -40,6 +40,8 @@ import type {
   TranslationRowCursorDto,
   TranslationRowPageDto,
   TranslationFindingsDto,
+  StringHintsDto,
+  DraftCheckDto,
   TranslationOverlayDto,
   OtherLanguageTextDto,
   SheetDialogueDto,
@@ -265,6 +267,16 @@ export function setTranslationNote(
 /** What the checks find in the saved translation of one string, and its term exceptions. */
 export function translationFindings(sourceBinding: SourceBinding): Promise<TranslationFindingsDto> {
   return call<TranslationFindingsDto>("translation_findings", { sourceBinding });
+}
+
+/** The string guide: names, terms, speaker, length, and gender of one string, as a machine translation request reads them. */
+export function stringHints(sourceBinding: SourceBinding): Promise<StringHintsDto> {
+  return call<StringHintsDto>("string_hints", { sourceBinding });
+}
+
+/** What the checks find in a translation before it is saved. */
+export function checkDraft(sourceBinding: SourceBinding, text: string): Promise<DraftCheckDto> {
+  return call<DraftCheckDto>("check_draft", { sourceBinding, text });
 }
 
 /** Adds or removes a term exception of one string: the glossary term does not apply to it. */

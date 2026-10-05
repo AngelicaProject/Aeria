@@ -109,8 +109,8 @@ session. A floated tool asks the main window, which owns the editor, to
 open a string, read changed files again, show the machine translation dialog,
 or open a commit, through events sent to the `main` window
 (`workbenchEvents.ts`); the main window comes to the front for a string or the
-dialog. The right dock opens on Git; the bottom panel (Tasks, Git changes,
-Diagnostics) is hidden by default and shows truthful unavailable states.
+dialog. The right dock opens on Git; the bottom panel holds the
+[string guide](#string-guide) and is shown by default.
 
 Center documents use preview tabs for single-click sheet browsing. A
 double-click pins a preview, and starting a local draft pins it automatically.
@@ -409,6 +409,50 @@ performing a mutation that would refresh away another dirty cell draft. The UI
 distinguishes an absent translation overlay from an overlay whose target is
 explicitly empty.
 
+## String guide
+
+The string guide sits in the bottom panel under the document (Ctrl+J shows
+or hides it) and can move to the right dock. It is for the person
+translating the string in the editor: it shows what a machine translation
+request tells the model about that string, which macros the string has and
+what a translation may do with each, and what the checks find in the
+translation as it is typed, before it is saved. The editor publishes its
+string and the translation being typed (`ui/editorFocus.ts`), so typing does
+not re-render the workbench.
+
+- A line above the columns says what the string is, when the request would:
+  who says it (the translated name, or the speaker label in title case; the
+  label in the tooltip), a quest's journal entry or objective, the length an
+  interface label may have with the translation's length against it, and
+  that the line varies with the player character's gender in the source or
+  in the French or German text, with **Insert a choice**, the gender choice
+  of the insertion menu. A label longer than its length is advice, amber, as
+  is a gendered line whose translation has no condition on `$gn4`.
+- **Names and terms** lists the glossary terms of the source, each with its
+  translation, forbidden variants, note, and whether a term exception keeps
+  it out, and the game's names in the source with the project's
+  translations, with a link to the glossary. Each is marked once there is a
+  translation: used, not used yet (amber), or a forbidden variant used
+  (red). A name counts as used as the glossary counts a term's translation:
+  each of its words as written or inflected.
+- **Macros** lists the parts of the source the editor draws as chips or
+  formatting markers, once each with a count, grouped by what a translation
+  may do with them: keep (game data), conditions, letter case, formatting,
+  and layout; each group's rule is in its tooltip. A part with game data the
+  translation lacks is outlined in red, and one it has is checked.
+- **Translation** lists the problems (red) and advice (amber) of the checks
+  in the translation as typed, worded as in the Checks tab, or says that
+  they found nothing. A string without names, terms, or macros says it is
+  translated as ordinary text.
+
+Clicking a name's or term's translation, or a macro part, adds it to the
+translation at its cursor, as clicking a source chip does. The guide keeps
+the previous string's content, dimmed, until the new string's arrives, and
+reads the string again after saves, project knowledge edits, and Git
+operations. The translation is checked at once for a new string and after a
+250 ms pause while typing. In a dock narrower than 560 px the columns stack
+and scroll together.
+
 ## Sheets explorer
 
 The Sheets tool presents the already-loaded `ProjectSheetDto[]`: slash-separated
@@ -688,5 +732,3 @@ written, and the commit. The status bar shows how many strings of the project
 have a changed source and filters the list to them. See
 [`po-project.md`](./po-project.md#game-updates).
 
-The workbench retains truthful bottom-panel tabs, and status/layout
-infrastructure even when those backends are unavailable.

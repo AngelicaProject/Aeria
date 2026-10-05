@@ -17,6 +17,7 @@ import { useI18n } from "../ui/i18n";
 import { usePreferences } from "../ui/preferences";
 import type { PaneMode, SidePaneTab } from "../ui/preferencesModel";
 import type { MessageKey } from "../i18n/translate";
+import { clearEditorFocus, setEditorFocus, type EditorFocus } from "../ui/editorFocus";
 
 export type CellDraft = {
   target: string;
@@ -277,6 +278,25 @@ const TranslationEditorImpl = forwardRef<TranslationEditorHandle, TranslationEdi
 
 
   useImperativeHandle(ref, () => ({ saveTarget, approve, revert, copySource }), [approve, copySource, revert, saveTarget]);
+
+  // The string guide reads the selected string and its translation as typed.
+  const publishedFocus = useRef<EditorFocus | null>(null);
+  const focusBinding = selectedCell?.sourceBinding ?? null;
+  const focusSource = selectedCell?.sourceMacro ?? null;
+  const focusDraft = draft?.target ?? null;
+  useEffect(() => {
+    const next = focusBinding === null || focusSource === null || focusDraft === null ? null : {
+      binding: focusBinding,
+      source: focusSource,
+      draft: focusDraft,
+      busy: cellBusy,
+      apply: (pick: Parameters<EditorFocus["apply"]>[0]) => { if (!cellBusy) targetApi.current?.apply(pick); },
+    };
+    if (next === null) clearEditorFocus(publishedFocus.current);
+    else setEditorFocus(next);
+    publishedFocus.current = next;
+  }, [cellBusy, focusBinding, focusDraft, focusSource]);
+  useEffect(() => () => clearEditorFocus(publishedFocus.current), []);
 
   useEffect(() => {
     if (selectedKey !== null && takeFocusRequest()) focusMacroEditor(targetHostRef.current);

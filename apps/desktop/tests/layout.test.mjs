@@ -37,7 +37,7 @@ test("layout reducer keeps right dock and bottom panel state independent", () =>
   const hidden = reduceWorkbenchLayout(shown, { type: "setRegionVisibility", regionId: "bottomPanel", visible: false });
 
   assert.equal(resized.regions.rightDock.size, 560);
-  assert.equal(bottom.regions.bottomPanel.size, 100);
+  assert.equal(bottom.regions.bottomPanel.size, 110);
   assert.equal(hidden.regions.rightDock.visible, true);
   assert.equal(hidden.regions.bottomPanel.visible, false);
 });
