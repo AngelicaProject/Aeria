@@ -317,6 +317,14 @@ pub struct TranslationOverlayDto {
     /// Terms a person decided do not apply to the string.
     #[serde(default)]
     pub term_exceptions: Vec<String>,
+    /// A person reviewed the translation as it is; machine translation
+    /// leaves it.
+    #[serde(default)]
+    pub reviewed: bool,
+    /// The string has a review mark of another text: the translation
+    /// changed after the review.
+    #[serde(default)]
+    pub review_stale: bool,
 }
 
 impl From<Translation> for TranslationOverlayDto {
@@ -327,6 +335,8 @@ impl From<Translation> for TranslationOverlayDto {
             translator_note: translation.note,
             previous_source: translation.previous,
             term_exceptions: translation.term_exceptions,
+            reviewed: translation.reviewed,
+            review_stale: translation.review_stale,
         }
     }
 }
@@ -356,6 +366,8 @@ mod tests {
                             note: Some("check later".to_owned()),
                             previous: None,
                             term_exceptions: Vec::new(),
+                            reviewed: false,
+                            review_stale: false,
                         }),
                     },
                     CellView {

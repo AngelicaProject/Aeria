@@ -18,6 +18,10 @@ pub struct Entry {
     /// `#, aeria-term-exception: <term>` flags: terms of the glossary a
     /// person decided do not apply to this string.
     pub term_exceptions: Vec<String>,
+    /// `#, aeria-reviewed: <fingerprint>`: a person reviewed the
+    /// translation whose [`fingerprint`] this is. The mark holds only while
+    /// the translation is still that text (see [`Entry::is_reviewed`]).
+    pub reviewed: Option<String>,
     /// `msgctxt`: the entry's identity.
     pub context: String,
     /// `msgid`: the source text.
@@ -104,6 +108,48 @@ pub fn unquote(literal: &str) -> Option<String> {
 /// The flag of a term exception: `#, aeria-term-exception: the Maelstrom`.
 pub const TERM_EXCEPTION_FLAG: &str = "aeria-term-exception";
 
+/// The flag of a reviewed translation: `#, aeria-reviewed: 3f9a1c0b7d2e`.
+pub const REVIEWED_FLAG: &str = "aeria-reviewed";
+
+/// The fingerprint of a translation in its review mark: the first twelve
+/// hexadecimal digits of the SHA-256 of its text.
+#[must_use]
+pub fn fingerprint(translation: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let digest = Sha256::digest(translation.as_bytes());
+    digest[..6]
+        .iter()
+        .fold(String::with_capacity(12), |mut text, byte| {
+            let _ = write!(text, "{byte:02x}");
+            text
+        })
+}
+
+impl Entry {
+    /// A person reviewed the translation as it is: the mark's fingerprint is
+    /// the translation's. A mark merged or edited onto another text holds
+    /// no longer, so a review never passes for a text nobody reviewed.
+    #[must_use]
+    pub fn is_reviewed(&self) -> bool {
+        !self.translation.is_empty()
+            && self.reviewed.as_deref() == Some(fingerprint(&self.translation).as_str())
+    }
+
+    /// The entry has a review mark of another text: the translation changed
+    /// after the review, by a merge or by hand.
+    #[must_use]
+    pub fn review_is_stale(&self) -> bool {
+        self.reviewed.is_some() && !self.is_reviewed()
+    }
+
+    /// Marks the translation as reviewed by a person, or removes the mark.
+    /// An untranslated entry has nothing to review and keeps no mark.
+    pub fn set_reviewed(&mut self, reviewed: bool) {
+        self.reviewed =
+            (reviewed && !self.translation.is_empty()).then(|| fingerprint(&self.translation));
+    }
+}
+
 /// Whether a term can be written in a term exception flag: flags are
 /// separated by commas and end with the line.
 #[must_use]
@@ -179,6 +225,9 @@ fn write_entry(text: &mut String, entry: &Entry, prefix: &str) {
             .iter()
             .map(|term| format!("{TERM_EXCEPTION_FLAG}: {term}")),
     );
+    if let Some(reviewed) = &entry.reviewed {
+        flags.push(format!("{REVIEWED_FLAG}: {reviewed}"));
+    }
     if !flags.is_empty() {
         let _ = writeln!(text, "#, {}", flags.join(", "));
     }
@@ -345,6 +394,13 @@ impl Parser {
                         .any(|known| known == term)
                 {
                     target.entry.term_exceptions.push(term.to_owned());
+                } else if let Some(mark) = flag
+                    .strip_prefix(REVIEWED_FLAG)
+                    .and_then(|rest| rest.strip_prefix(':'))
+                    .map(str::trim)
+                    .filter(|mark| !mark.is_empty())
+                {
+                    target.entry.reviewed = Some(mark.to_owned());
                 }
             }
         } else if let Some(rest) = line.strip_prefix("#|") {
@@ -464,6 +520,7 @@ mod tests {
                     fuzzy: true,
                     previous: Some("Old \"name\"".to_owned()),
                     term_exceptions: vec!["the Maelstrom".to_owned(), "Scions".to_owned()],
+                    reviewed: Some(fingerprint("Имя \\<")),
                     context: "quest/000/A:TEXT_A_SEQ_00:1".to_owned(),
                     source: "Name <if $gn4>a<else>b</if>".to_owned(),
                     translation: "Имя \\<".to_owned(),
@@ -500,9 +557,44 @@ mod tests {
         assert_eq!(without_lines(read.clone()), sample());
         assert_eq!(read.write(), text);
         assert_eq!(read.field("Language"), Some("ru"));
-        assert!(text.contains(
-            "#, fuzzy, aeria-term-exception: the Maelstrom, aeria-term-exception: Scions\n"
-        ));
+        assert!(text.contains(&format!(
+            "#, fuzzy, aeria-term-exception: the Maelstrom, aeria-term-exception: Scions, aeria-reviewed: {}\n",
+            fingerprint("Имя \\<")
+        )));
+    }
+
+    #[test]
+    fn a_review_holds_only_for_the_text_reviewed() {
+        assert_eq!(fingerprint("Прогулка в парке").len(), 12);
+        assert_eq!(
+            fingerprint("Прогулка в парке"),
+            fingerprint("Прогулка в парке")
+        );
+        assert_ne!(
+            fingerprint("Прогулка в парке"),
+            fingerprint("Прогулка по парку")
+        );
+        let mut entry = Entry {
+            translation: "Прогулка в парке".to_owned(),
+            ..Entry::default()
+        };
+        assert!(!entry.is_reviewed() && !entry.review_is_stale());
+        entry.set_reviewed(true);
+        assert!(entry.is_reviewed());
+        // A merge or a hand edit brings another text under the same mark.
+        "Прогулка по парку".clone_into(&mut entry.translation);
+        assert!(!entry.is_reviewed());
+        assert!(entry.review_is_stale());
+        entry.set_reviewed(false);
+        assert_eq!(entry.reviewed, None);
+        entry.translation.clear();
+        entry.set_reviewed(true);
+        assert_eq!(entry.reviewed, None, "nothing to review");
+        let text =
+            "#, aeria-reviewed:  abc , fuzzy\nmsgctxt \"S:1:0:0\"\nmsgid \"x\"\nmsgstr \"y\"\n";
+        let read = PoFile::parse(text).0.entries[0].clone();
+        assert_eq!(read.reviewed.as_deref(), Some("abc"));
+        assert!(read.fuzzy && read.review_is_stale());
     }
 
     #[test]

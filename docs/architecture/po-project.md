@@ -37,7 +37,7 @@ files and Git. `aeria.json`:
 
 ```json
 {
-  "format": "aeria-po/1",
+  "format": "aeria-po/2",
   "sourceLanguage": "en",
   "targetLanguage": "ru",
   "gameVersion": "2026.09.15.0000.0000"
@@ -46,6 +46,14 @@ files and Git. `aeria.json`:
 
 `gameVersion` is the game version the files of `po/` are for; a project that
 does not record it takes the `X-Game-Version` of its first file.
+
+`format` is `aeria-po/2`, or `aeria-po/1` for a project without review
+marks (see [Reviews](#reviews)); Aeria reads both. A version of Aeria that
+reads only `aeria-po/1` would drop review marks from every file it writes,
+so a project takes `aeria-po/2` when Aeria writes its first review mark, and
+such a version then refuses to open it. New projects start as
+`aeria-po/2`. `aeria.json` is committed with the translations, so
+collaborators receive the new format with the first marks.
 
 The repository holds the game's text in the source language and the other
 client languages (Japanese, English, German, French, as the client ships
@@ -102,17 +110,19 @@ msgstr "Ателина из Гильдии лучников хочет убед�
 | `# ` lines | translator notes | people |
 | `#, fuzzy` and `#\| msgid` | a game update changed the source; `#\| msgid` is the source the translation was written for | Aeria, in a game update |
 | `#, aeria-term-exception: <term>` | a term of the glossary does not apply to this string; see [Term exceptions](#term-exceptions) | people, through Aeria |
+| `#, aeria-reviewed: <fingerprint>` | a person reviewed the translation whose fingerprint this is; see [Reviews](#reviews) | people, through Aeria |
 | `msgctxt` | the entry's identity; see [Identity](#identity) | Aeria |
 | `msgid` | the source text as macro text ([`strings.md`](./strings.md#macro-text)) | Aeria |
 | `msgstr` | the translation as macro text; empty while there is none | people and machine translation |
 
 `fuzzy` states a fact of the game, not an opinion of a translator: the
-source changed after the translation was written. A term exception is the one
-decision of a person that Aeria reads: both are flags of the same `#,` line,
-`fuzzy` first, then one `aeria-term-exception` flag per term in the order
-they were added (`#, fuzzy, aeria-term-exception: the Maelstrom`). Aeria
-keeps no other flag; a file written by another tool loses its other flags
-when Aeria writes it.
+source changed after the translation was written. Term exceptions and the
+review mark are the decisions of a person that Aeria reads: all are flags of
+the same `#,` line, `fuzzy` first, then one `aeria-term-exception` flag per
+term in the order they were added, then the review mark
+(`#, fuzzy, aeria-term-exception: the Maelstrom, aeria-reviewed: 3f9a1c0b7d2e`).
+Aeria keeps no other flag; a file written by another tool loses its other
+flags when Aeria writes it.
 
 ### Term exceptions
 
@@ -139,6 +149,39 @@ every collaborator with the same game version produces the same bytes for
 them and Git never sees them conflict. Files are written in one canonical
 form, one line per field, so a save changes only the lines of the string it
 changed.
+
+### Reviews
+
+A person marks a translation they reviewed, in the editor (see
+[`desktop-editor-ui.md`](./desktop-editor-ui.md#translation-editor)); no
+save, bulk replacement, or machine translation marks one. Machine
+translation never changes a reviewed translation: a run leaves it, also when
+its source changed, and translating found strings again skips it (see
+[`translate.md`](./translate.md#what-is-translated) and
+[`search.md`](./search.md#translating-again)). A person removes the mark to
+give the string back to machine translation.
+
+The mark holds the translation's fingerprint: the first twelve hexadecimal
+digits of the SHA-256 of its `msgstr` (`aeria_po::fingerprint`). It holds
+only while the translation is still that text (`Entry::is_reviewed`). Git
+merges files line by line, and the flag and `msgstr` are different lines: a
+branch that marks a translation reviewed and another that changes it merge
+without a conflict into a mark over a text nobody reviewed. With the
+fingerprint that mark no longer holds, so a review never passes to a text
+nobody reviewed, whatever merged it; the editor says the translation changed
+after its review, and machine translation may change it again. A hand edit
+of the file does the same.
+
+- A person's edit of a reviewed translation in Aeria, in the editor or by a
+  bulk replacement, keeps it reviewed: the mark takes the new text's
+  fingerprint.
+- A review confirms the translation for its source as it is, so marking a
+  fuzzy translation reviewed also clears `fuzzy`.
+- A game update that changes the source keeps the mark with the
+  translation, which becomes fuzzy: it stays the person's while they look
+  at it again.
+- Clearing a translation removes its mark, and machine translation writing
+  over a mark of another text removes that mark.
 
 ### Identity
 
@@ -268,7 +311,7 @@ reverted. The desktop offers it when it opens a project for an older version.
    | Previous entry | New entry with the same `msgctxt` | Result |
    | --- | --- | --- |
    | same `msgid` | exists | translation, notes, and marks are kept |
-   | other `msgid` | exists | translation and notes are kept; `#, fuzzy` and `#\| msgid` with the previous source; term exceptions are dropped |
+   | other `msgid` | exists | translation, notes, and review mark are kept; `#, fuzzy` and `#\| msgid` with the previous source; term exceptions are dropped |
    | any | none | the entry becomes obsolete (`#~`) at the end of its file, with its translation and notes |
    | none | exists | a new entry with an empty `msgstr` |
 

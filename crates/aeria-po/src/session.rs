@@ -45,6 +45,12 @@ pub struct Translation {
     pub previous: Option<String>,
     /// Terms a person decided do not apply to the string.
     pub term_exceptions: Vec<String>,
+    /// A person reviewed the translation as it is (see
+    /// [`crate::po::Entry::is_reviewed`]); machine translation leaves it.
+    pub reviewed: bool,
+    /// The string has a review mark of another text: the translation
+    /// changed after the review.
+    pub review_stale: bool,
 }
 
 impl Translation {
@@ -53,13 +59,16 @@ impl Translation {
         (!entry.translation.is_empty()
             || entry.fuzzy
             || note.is_some()
-            || !entry.term_exceptions.is_empty())
+            || !entry.term_exceptions.is_empty()
+            || entry.reviewed.is_some())
         .then(|| Self {
             text: entry.translation.clone(),
             fuzzy: entry.fuzzy,
             note,
             previous: entry.previous.clone().filter(|_| entry.fuzzy),
             term_exceptions: entry.term_exceptions.clone(),
+            reviewed: entry.is_reviewed(),
+            review_stale: entry.review_is_stale(),
         })
     }
 }
@@ -73,6 +82,8 @@ pub struct EntryState {
     /// The source the translation was written for, while it is fuzzy.
     pub previous: Option<String>,
     pub term_exceptions: Vec<String>,
+    /// The review mark, as its flag holds it.
+    pub reviewed: Option<String>,
 }
 
 impl EntryState {
@@ -82,6 +93,7 @@ impl EntryState {
             fuzzy: entry.fuzzy,
             previous: entry.previous.clone(),
             term_exceptions: entry.term_exceptions.clone(),
+            reviewed: entry.reviewed.clone(),
         }
     }
 }
@@ -93,7 +105,8 @@ pub enum EditKind {
     /// replacement never passes for a review.
     Replace(String),
     /// The translation is cleared, so machine translation takes the string
-    /// again; the fuzzy mark and previous source go with it.
+    /// again; the fuzzy mark and previous source go with it. A reviewed
+    /// translation is not cleared: a person removes the review first.
     Clear,
     /// The entry goes back to an earlier state, as the file had it.
     Restore(EntryState),
@@ -148,6 +161,8 @@ pub enum SkipReason {
     Invalid(Vec<crate::check::Issue>),
     /// The file breaks the PO format.
     Broken(String),
+    /// A person reviewed the translation, and only a person changes it.
+    Reviewed,
 }
 
 /// An edit that was not written.
@@ -677,6 +692,9 @@ impl Session {
         let before = entry.clone();
         change(entry)?;
         let translation = Translation::of(entry);
+        if entry.reviewed.is_some() {
+            self.take_review_format()?;
+        }
         if *entry != before {
             write_atomically(&full, &file.write())?;
             self.touch();
@@ -693,7 +711,9 @@ impl Session {
     /// Sets the translation of a string; an empty text leaves it
     /// untranslated. A translation with a problem (see
     /// [`crate::check::check_translation`]) is refused and nothing is
-    /// written. Saving a translation clears `fuzzy`.
+    /// written. Saving a translation clears `fuzzy`. A translation that was
+    /// reviewed stays so, since a person wrote it; saving does not mark one
+    /// that was not (see [`Session::set_translation_reviewed`]).
     ///
     /// # Errors
     ///
@@ -707,6 +727,35 @@ impl Session {
         subrow: u16,
         column: u32,
         text: &str,
+    ) -> Result<Option<Translation>, EditError> {
+        self.save_translation(sheet_name, row, subrow, column, text, false)
+    }
+
+    /// Sets the translation of a string as [`Session::set_translation`]
+    /// does, and marks it reviewed by the person who wrote it.
+    ///
+    /// # Errors
+    ///
+    /// As [`Session::set_translation`].
+    pub fn set_translation_reviewed(
+        &self,
+        sheet_name: &str,
+        row: u32,
+        subrow: u16,
+        column: u32,
+        text: &str,
+    ) -> Result<Option<Translation>, EditError> {
+        self.save_translation(sheet_name, row, subrow, column, text, true)
+    }
+
+    fn save_translation(
+        &self,
+        sheet_name: &str,
+        row: u32,
+        subrow: u16,
+        column: u32,
+        text: &str,
+        review: bool,
     ) -> Result<Option<Translation>, EditError> {
         let knowledge = self.knowledge();
         let target = self.settings().target_language;
@@ -730,11 +779,62 @@ impl Session {
                     ));
                 }
             }
+            let reviewed = entry.is_reviewed();
             text.clone_into(&mut entry.translation);
             entry.fuzzy = false;
             entry.previous = None;
+            if review || reviewed {
+                entry.set_reviewed(true);
+            }
+            if entry.translation.is_empty() {
+                entry.reviewed = None;
+            }
             Ok(())
         })
+    }
+
+    /// Marks the translation of a string as reviewed by a person, or
+    /// removes the mark. A review confirms the translation for the source
+    /// as it is, so it also clears `fuzzy`. An untranslated string has
+    /// nothing to review and is left as it is.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the string is not an entry, or its file is
+    /// broken, does not match the game, or cannot be written.
+    pub fn set_reviewed(
+        &self,
+        sheet_name: &str,
+        row: u32,
+        subrow: u16,
+        column: u32,
+        reviewed: bool,
+    ) -> Result<Option<Translation>, EditError> {
+        self.edit(sheet_name, row, subrow, column, |entry| {
+            if entry.translation.is_empty() {
+                return Ok(());
+            }
+            if reviewed {
+                entry.fuzzy = false;
+                entry.previous = None;
+            }
+            entry.set_reviewed(reviewed);
+            Ok(())
+        })
+    }
+
+    /// Writes the format that holds review marks to `aeria.json` before
+    /// the first one is written (see [`crate::project::FORMAT`]).
+    fn take_review_format(&self) -> Result<(), ProjectError> {
+        let mut settings = lock(&self.settings);
+        if settings.format == crate::project::FORMAT {
+            return Ok(());
+        }
+        let mut changed = settings.clone();
+        crate::project::FORMAT.clone_into(&mut changed.format);
+        write_settings(&self.root, &changed)?;
+        *settings = changed;
+        Ok(())
     }
 
     /// Adds or removes a term exception of a string: the glossary term does
@@ -863,8 +963,8 @@ impl Session {
 
     /// Writes translations of entries of one file, by `msgctxt`, in one
     /// write. Only an entry that is still untranslated (or still fuzzy, with
-    /// `replace_fuzzy`) takes its translation, so work saved meanwhile is
-    /// kept; the caller checked the translations. Returns the `msgctxt` of
+    /// `replace_fuzzy`) and not reviewed takes its translation, so work
+    /// saved meanwhile is kept; the caller checked the translations. Returns the `msgctxt` of
     /// every entry written.
     ///
     /// # Errors
@@ -901,7 +1001,11 @@ impl Session {
             let Some(text) = wanted.get(entry.context.as_str()) else {
                 continue;
             };
-            let open = if entry.fuzzy {
+            // A reviewed translation is a person's; a stale mark is of a
+            // text that is gone, and goes with it.
+            let open = if entry.is_reviewed() {
+                false
+            } else if entry.fuzzy {
                 replace_fuzzy
             } else {
                 entry.translation.is_empty()
@@ -910,6 +1014,7 @@ impl Session {
                 (*text).clone_into(&mut entry.translation);
                 entry.fuzzy = false;
                 entry.previous = None;
+                entry.reviewed = None;
                 written.push(entry.context.clone());
             }
         }
@@ -1000,6 +1105,9 @@ impl Session {
                 }
             }
             if written > 0 {
+                if file.entries.iter().any(|entry| entry.reviewed.is_some()) {
+                    self.take_review_format()?;
+                }
                 write_atomically(&full, &file.write())?;
                 self.touch();
             }
@@ -1052,6 +1160,7 @@ fn apply_edit(
         return Err(SkipReason::Changed);
     }
     let before = EntryState::of(entry);
+    let reviewed = entry.is_reviewed();
     match &edit.kind {
         EditKind::Replace(new) => {
             if !new.is_empty() {
@@ -1074,17 +1183,26 @@ fn apply_edit(
                 }
             }
             new.clone_into(&mut entry.translation);
+            // A person's replacement keeps a review: they wrote the text.
+            if reviewed || new.is_empty() {
+                entry.set_reviewed(reviewed);
+            }
         }
         EditKind::Clear => {
+            if reviewed {
+                return Err(SkipReason::Reviewed);
+            }
             entry.translation.clear();
             entry.fuzzy = false;
             entry.previous = None;
+            entry.reviewed = None;
         }
         EditKind::Restore(state) => {
             state.text.clone_into(&mut entry.translation);
             entry.fuzzy = state.fuzzy;
             entry.previous.clone_from(&state.previous);
             entry.term_exceptions.clone_from(&state.term_exceptions);
+            entry.reviewed.clone_from(&state.reviewed);
         }
         EditKind::TermException { term, add } => set_term_exception(entry, term, *add),
     }

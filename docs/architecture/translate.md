@@ -55,7 +55,8 @@ A run takes chosen sheets and folders of sheets (such as `quest/001/`), or
 the whole project, and translates every string whose `msgstr` is empty and
 that is not fuzzy. On request it also translates fuzzy strings, giving the
 model the previous source and translation, and clears the mark of each one it
-writes. Before starting, the dialog shows how many strings the chosen sheets
+writes. A translation a person reviewed is never translated, fuzzy or not
+(see [`po-project.md`](./po-project.md#reviews)). Before starting, the dialog shows how many strings the chosen sheets
 still need, from the project's progress.
 
 A run can also take a list of strings by `msgctxt` (`Options::contexts`);
@@ -124,7 +125,8 @@ The task is JSON built from the files as they are when the request is sent:
     whether its strings are in play order;
   - `speakers`: the speaker labels of the file's strings (`ALPHINAUD`) whose
     letters match a translated name, with the name and its translation;
-  - `examples`: translated strings of the same file, nearest to the batch
+  - `examples`: translated strings of the same file, the ones a person
+    reviewed first, then nearest to the batch
     first: up to 40 shared among the files, at least 5 each;
   - `strings`: each string's ID (unique in the request), source, and `#.`
     lines (the other client languages, speaker or kind, the row's other

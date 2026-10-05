@@ -202,8 +202,11 @@ A found translation can be machine-translated again with the current terms
 and style: its translation is cleared (with its fuzzy mark and previous
 source) as one bulk edit that Undo reverts, and a machine translation run of
 exactly those strings starts (see
-[`translate.md`](./translate.md#what-is-translated)). A run that stops leaves
-the rest untranslated, so any later run takes them.
+[`translate.md`](./translate.md#what-is-translated)). A translation a person
+reviewed is not cleared: it is skipped and reported as such (see
+[`po-project.md`](./po-project.md#reviews)), and a person removes its review
+in the editor to translate it again. A run that stops leaves the rest
+untranslated, so any later run takes them.
 
 ## Desktop use
 
