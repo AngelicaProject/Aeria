@@ -368,6 +368,11 @@
 .string-guide-insert:hover:not(:disabled) { background: var(--accent-soft); color: var(--accent-text); }
 .string-guide-insert:disabled { cursor: default; }
 .string-guide-tag { color: var(--fg-faint); font-size: var(--text-2xs); }
+/* The exception toggle of a term shows on hover, like other row actions. */
+.string-guide-except { margin-left: auto; opacity: 0; transition: opacity var(--duration-fast); }
+.string-guide-row:hover .string-guide-except,
+.string-guide-except:focus-visible,
+.string-guide-row.is-excepted .string-guide-except { opacity: 1; }
 .string-guide-row.is-excepted .string-guide-insert { color: var(--fg-subtle); font-weight: 400; text-decoration: line-through; }
 .string-guide-never { color: var(--bad); font-size: var(--text-2xs); }
 /* Where a name's translation comes from: what it names, and the string. */

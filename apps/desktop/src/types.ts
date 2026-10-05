@@ -841,7 +841,6 @@ export type IssueDto = {
 };
 
 /** What the checks find in a string's saved translation, and its term exceptions. */
-export type TranslationFindingsDto = { issues: IssueDto[]; termExceptions: string[] };
 
 /** A game name with the project's translation. */
 export type HintNameDto = { name: string; translation: string };

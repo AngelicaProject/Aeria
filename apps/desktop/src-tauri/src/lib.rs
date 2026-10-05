@@ -32,8 +32,7 @@ pub use commands::{
     initialize_project_from_game, list_recent_projects, open_project_from_game,
     open_recent_project, page_translation_rows, set_project_target_language, set_translation_note,
     set_translation_target, set_translation_term_exception, sheet_dialogue,
-    source_in_other_languages, translation_findings, translation_progress,
-    update_project_from_game,
+    source_in_other_languages, translation_progress, update_project_from_game,
 };
 pub use dto::{
     GameOpenResultDto, OtherLanguageTextDto, ProjectOpenResultDto, ProjectSheetDto,
@@ -147,7 +146,6 @@ pub fn run() {
             set_translation_target,
             set_translation_note,
             set_translation_term_exception,
-            translation_findings,
             hints::string_hints,
             hints::check_draft,
             translation_progress,

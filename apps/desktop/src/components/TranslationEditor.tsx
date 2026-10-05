@@ -11,7 +11,6 @@ import { useMacroView } from "../ui/useMacroView";
 import { speakerMarkers } from "../macroTokens";
 import { ReviewDot, stateLabel, stringState } from "./ReviewDot";
 import { OtherLanguages } from "./OtherLanguages";
-import { StringFindings } from "./StringFindings";
 import { StringHistory } from "./StringHistory";
 import { useI18n } from "../ui/i18n";
 import { usePreferences } from "../ui/preferences";
@@ -407,9 +406,11 @@ const TranslationEditorImpl = forwardRef<TranslationEditorHandle, TranslationEdi
             <span className="editor-hint">
               {targetIsBlank ? t("editor.enterTranslation") : speakerNote ? <span className="editor-warning">{speakerNote}</span> : targetDirty ? t("common.unsaved") : null}
             </span>
-            <button className="button button-ghost" type="button" disabled={cellBusy || targetIsBlank} title={t("editor.approveNextTitle")} onClick={approve}>
-              <UiIcon icon="check" size="xs" />{t("editor.approveNext")}
-            </button>
+            {translation?.fuzzy ? (
+              <button className="button button-ghost" type="button" disabled={cellBusy || targetIsBlank} title={t("editor.approveNextTitle")} onClick={approve}>
+                <UiIcon icon="check" size="xs" />{t("editor.approveNext")}
+              </button>
+            ) : null}
             <button className="button button-secondary" type="button" disabled={cellBusy} title={t(targetCanSave ? "editor.saveNextTitle" : "editor.nextTitle")} onClick={() => saveTarget(true)}>
               {t(targetCanSave ? "editor.saveNext" : "editor.next")}<UiIcon icon="arrowDown" size="xs" />
             </button>
@@ -429,7 +430,6 @@ const TranslationEditorImpl = forwardRef<TranslationEditorHandle, TranslationEdi
                 { value: "note", label: <>{t("editor.note")}{noteDirty ? <span className="dirty-mark" aria-label={t("common.edited")} /> : null}</> },
                 { value: "languages", label: t("editor.languages") },
                 { value: "history", label: t("editor.history") },
-                { value: "checks", label: t("editor.checks") },
               ]}
             />
           </div>
@@ -440,10 +440,6 @@ const TranslationEditorImpl = forwardRef<TranslationEditorHandle, TranslationEdi
                 presentation={sourceMode === "code" ? "code" : "chips"}
                 onPick={cellBusy ? undefined : (pick) => targetApi.current?.apply(pick)}
               />
-            </div>
-          ) : sideTab === "checks" ? (
-            <div className="editor-checks">
-              <StringFindings binding={selectedCell.sourceBinding} revision={historyRevision} />
             </div>
           ) : sideTab === "history" ? (
             <div className="editor-history">

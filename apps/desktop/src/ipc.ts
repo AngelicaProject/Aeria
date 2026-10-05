@@ -39,7 +39,6 @@ import type {
   SourceBinding,
   TranslationRowCursorDto,
   TranslationRowPageDto,
-  TranslationFindingsDto,
   StringHintsDto,
   DraftCheckDto,
   TranslationOverlayDto,
@@ -262,11 +261,6 @@ export function setTranslationNote(
   note: string | null,
 ): Promise<TranslationOverlayDto | null> {
   return call<TranslationOverlayDto | null>("set_translation_note", { sourceBinding, note });
-}
-
-/** What the checks find in the saved translation of one string, and its term exceptions. */
-export function translationFindings(sourceBinding: SourceBinding): Promise<TranslationFindingsDto> {
-  return call<TranslationFindingsDto>("translation_findings", { sourceBinding });
 }
 
 /** The string guide: names, terms, speaker, length, and gender of one string, as a machine translation request reads them. */

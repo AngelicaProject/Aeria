@@ -1,7 +1,7 @@
-import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { bindingKey } from "../binding";
 import { speakerName } from "../dialogueScene";
-import { checkDraft, macroInsertions, normalizeCommandError, stringHints } from "../ipc";
+import { checkDraft, macroInsertions, normalizeCommandError, setTranslationTermException, stringHints } from "../ipc";
 import { describeIssue, errorText } from "../issueText";
 import type { MessageKey } from "../i18n/translate";
 import { useMacroIdioms } from "../macroIdioms";
@@ -48,6 +48,23 @@ export const StringGuide = memo(function StringGuide({ revision, onOpenTerms, on
 
   const [hints, setHints] = useState<Loaded<StringHintsDto> | null>(null);
   const [error, setError] = useState<CommandError | null>(null);
+  /** Bumps when the guide itself changed the string, such as a term exception. */
+  const [own, setOwn] = useState(0);
+  const [excepting, setExcepting] = useState(false);
+  const setException = useCallback(async (term: string, add: boolean) => {
+    const current = bindingRef.current;
+    if (!current) return;
+    setExcepting(true);
+    try {
+      await setTranslationTermException(current, term, add);
+      setOwn((value) => value + 1);
+    } catch (caught) {
+      setError(normalizeCommandError(caught));
+    } finally {
+      setExcepting(false);
+    }
+  }, []);
+  const onException = excepting ? undefined : (term: string, add: boolean) => void setException(term, add);
   useEffect(() => {
     const current = bindingRef.current;
     if (key === null || current === null) return;
@@ -56,7 +73,7 @@ export const StringGuide = memo(function StringGuide({ revision, onOpenTerms, on
       .then((value) => { if (!cancelled) { setHints({ key, value }); setError(null); } })
       .catch((caught: unknown) => { if (!cancelled) setError(normalizeCommandError(caught)); });
     return () => { cancelled = true; };
-  }, [key, revision]);
+  }, [key, revision, own]);
 
   const [check, setCheck] = useState<Loaded<DraftCheckDto> | null>(null);
   const checkedKey = useRef<string | null>(null);
@@ -78,7 +95,7 @@ export const StringGuide = memo(function StringGuide({ revision, onOpenTerms, on
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [key, draft, revision]);
+  }, [key, draft, revision, own]);
 
   const sourceView = useMacroView(focus?.source ?? null);
   const idioms = useMacroIdioms();
@@ -118,7 +135,7 @@ export const StringGuide = memo(function StringGuide({ revision, onOpenTerms, on
           count={shown.names.length + shown.terms.length}
           action={<button className="string-guide-link" type="button" onClick={onOpenTerms}>{t("hints.openTerms")}</button>}
         >
-          <Words hints={shown} draft={draft} verdict={verdict} onPick={focus.busy ? undefined : pick} onReveal={onReveal} />
+          <Words hints={shown} draft={draft} verdict={verdict} onPick={focus.busy ? undefined : pick} onReveal={onReveal} onException={onException} />
         </GuideColumn>
       ) : null}
       {hasMacros ? (
@@ -132,7 +149,7 @@ export const StringGuide = memo(function StringGuide({ revision, onOpenTerms, on
         </GuideColumn>
       ) : null}
       <GuideColumn className="is-check" icon="check" title={t("hints.check")} count={findings > 0 ? findings : undefined}>
-        <DraftIssues drafted={drafted} verdict={verdict} maxLength={shown.maxLength} />
+        <DraftIssues drafted={drafted} verdict={verdict} maxLength={shown.maxLength} onException={onException} />
       </GuideColumn>
       </div>
     </div>
@@ -278,7 +295,10 @@ function NameOrigin({ name, onReveal }: { name: HintGameNameDto; onReveal: (bind
   );
 }
 
-function Words({ hints, draft, verdict, onPick, onReveal }: { hints: StringHintsDto; draft: string; verdict: DraftCheckDto | null; onPick: ((pick: ChipPick) => void) | undefined; onReveal: (binding: SourceBinding) => void }) {
+/** Adds or removes a term exception of the string; absent while one is being written. */
+type ExceptionHandler = ((term: string, add: boolean) => void) | undefined;
+
+function Words({ hints, draft, verdict, onPick, onReveal, onException }: { hints: StringHintsDto; draft: string; verdict: DraftCheckDto | null; onPick: ((pick: ChipPick) => void) | undefined; onReveal: (binding: SourceBinding) => void; onException: ExceptionHandler }) {
   const { t } = useI18n();
   const drafted = draft.trim().length > 0;
   const insert = (text: string) => onPick?.({ insert: text });
@@ -296,6 +316,15 @@ function Words({ hints, draft, verdict, onPick, onReveal }: { hints: StringHints
                 <UiIcon icon="arrowRight" size="xs" className="string-guide-arrow" />
                 <button className="string-guide-insert" type="button" disabled={!onPick} title={t("hints.insertTitle", { text: term.translation })} onClick={() => insert(term.translation)}>{term.translation}</button>
                 <span className="string-guide-tag">{term.excepted ? t("hints.term.excepted") : t("hints.term")}</span>
+                <button
+                  className="string-guide-link string-guide-except"
+                  type="button"
+                  disabled={!onException}
+                  title={term.excepted ? t("findings.removeException", { term: term.term }) : t("findings.exceptTitle", { term: term.term })}
+                  onClick={() => onException?.(term.term, !term.excepted)}
+                >
+                  {t(term.excepted ? "hints.term.restore" : "hints.term.except")}
+                </button>
               </div>
               {term.never.length > 0 ? <div className="string-guide-never">{t("hints.term.never", { variants: term.never.join(", ") })}</div> : null}
               {term.note ? <div className="string-guide-note">{term.note}</div> : null}
@@ -395,7 +424,7 @@ function tooLong(verdict: DraftCheckDto | null, maxLength: number | null): boole
   return verdict !== null && maxLength !== null && verdict.length > maxLength;
 }
 
-function DraftIssues({ drafted, verdict, maxLength }: { drafted: boolean; verdict: DraftCheckDto | null; maxLength: number | null }) {
+function DraftIssues({ drafted, verdict, maxLength, onException }: { drafted: boolean; verdict: DraftCheckDto | null; maxLength: number | null; onException: ExceptionHandler }) {
   const { t } = useI18n();
   if (!drafted) return <p className="string-guide-note">{t("hints.check.empty")}</p>;
   if (!verdict) return <p className="string-guide-note"><span className="spinner spinner-xs" /> {t("common.loading")}</p>;
@@ -413,6 +442,11 @@ function DraftIssues({ drafted, verdict, maxLength }: { drafted: boolean; verdic
         <li className={issue.advice ? "string-guide-issue is-advice" : "string-guide-issue"} key={`${issue.group}:${index}`}>
           <UiIcon icon={issue.advice ? "triangleAlert" : "circleAlert"} size="xs" />
           <span>{describeIssue(issue, t)}</span>
+          {issue.kind === "staleTermException" && issue.term ? (
+            <button className="string-guide-link" type="button" disabled={!onException} title={t("findings.removeException", { term: issue.term })} onClick={() => onException?.(issue.term!, false)}>
+              {t("hints.term.removeStale")}
+            </button>
+          ) : null}
         </li>
       ))}
     </ul>

@@ -59,19 +59,6 @@
 .search-issue-count { margin-left: 4px; color: var(--fg-subtle); font-variant-numeric: tabular-nums; }
 .search-loading { display: flex; align-items: center; gap: 6px; padding: 4px 26px; font-size: var(--text-xs); }
 
-/* Checks of the selected string in the editor's side pane. */
-.editor-checks { overflow: auto; padding: 8px; }
-.string-findings { display: grid; gap: 10px; }
-.string-findings-empty { padding: 10px; font-size: var(--text-xs); }
-.string-findings-empty.error { color: var(--bad); }
-.string-findings-list { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
-.string-finding { display: flex; flex-wrap: wrap; gap: 4px 6px; align-items: baseline; color: var(--bad); font-size: var(--text-xs); }
-.string-finding.advice { color: var(--warn); }
-.string-finding > span { flex: 1 1 12em; color: var(--fg); }
-.string-findings-exceptions { display: grid; gap: 4px; }
-.string-exception { display: inline-flex; align-items: center; gap: 2px; }
-.string-exceptions { display: flex; flex-wrap: wrap; gap: 4px; }
-
 /* Strings the checks refused in a machine translation run. */
 .translate-rejections { display: grid; gap: 6px; font-size: var(--text-xs); }
 .translate-rejections > summary { cursor: pointer; font-weight: 600; }

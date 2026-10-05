@@ -396,9 +396,11 @@ no dirty draft remains, then selects the next occurrence in the filtered list
 and, unless disabled in settings, focuses its target. When there is nothing to
 save it only moves on.
 
-**Accept & next** (Ctrl+Shift+Enter, also in the Translation menu and the
-command palette) is for quick review: it saves the target as it is, which also
-accepts a fuzzy string, and moves on like Save & next. A translated string
+**Accept & next** (*Still correct & next*; Ctrl+Shift+Enter, also in the
+Translation menu and the command palette) is for a string whose source
+changed: it saves the target as it is, which accepts the fuzzy string, and
+moves on like Save & next. The button shows only on a fuzzy string, where it
+does what no other button does; the shortcut works on every string. A translated string
 without edits only moves on; an empty target does nothing. When the selected
 string has left the filtered list, for example a fuzzy filter after accepting
 it, the next and previous strings are found from its place in sheet order.
@@ -439,15 +441,19 @@ not re-render the workbench.
   *A Walk in the Park* can be found as one, and the origin shows it. Each is marked once there is a
   translation: used, not used yet (amber), or a forbidden variant used
   (red). A name counts as used as the glossary counts a term's translation:
-  each of its words as written or inflected.
+  each of its words as written or inflected. A term's **Not this term**
+  (on hover) adds a term exception to the string, and **Restore** on an
+  excepted term removes it (see
+  [`po-project.md`](./po-project.md#term-exceptions)).
 - **Macros** lists the parts of the source the editor draws as chips or
   formatting markers, once each with a count, grouped by what a translation
   may do with them: keep (game data), conditions, letter case, formatting,
   and layout; each group's rule is in its tooltip. A part with game data the
   translation lacks is outlined in red, and one it has is checked.
 - **Translation** lists the problems (red) and advice (amber) of the checks
-  in the translation as typed, worded as in the Checks tab, or says that
-  they found nothing. A string without names, terms, or macros says it is
+  in the translation as typed, worded as in the search results, or says
+  that they found nothing. An exception that names no term of the source
+  has **Remove**. A string without names, terms, or macros says it is
   translated as ordinary text.
 
 Clicking a name's or term's translation, or a macro part, adds it to the
@@ -614,19 +620,15 @@ machine translation (`project://files-changed`).
 
 ## String history
 
-The translation editor's side pane has four tabs: Note, Languages, History,
-and Checks. The open tab is a local preference (`sidePaneTab`), so it stays
+The translation editor's side pane has three tabs: Note, Languages, and
+History; what the checks find is in the [string guide](#string-guide). The open tab is a local preference (`sidePaneTab`), so it stays
 when another string is selected and after a restart. Languages shows the selected source text in the game's other client
 languages, stacked in the source pane's chip or code view, so a translator
 can compare how each language uses tags such as conditions; a tag clicked
 there is added to the translation as from the source pane. A language
 without the string says so. History shows every committed change to the
 selected string with its author, and its uncommitted change; "Use this text"
-puts a historical text into the editor as an unsaved draft. Checks shows what
-the checks find in the saved translation, problems in red and advice in
-amber; a term finding has **Exception**, which adds a term exception to the
-string, and the string's exceptions are listed with a button that removes
-each (see [`po-project.md`](./po-project.md#term-exceptions)).
+puts a historical text into the editor as an unsaved draft.
 
 ## Project knowledge dialog
 

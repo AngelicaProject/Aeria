@@ -864,44 +864,6 @@ pub async fn set_translation_term_exception(
     .await
 }
 
-/// What the checks find in a string's saved translation, and its term
-/// exceptions.
-#[derive(Clone, Debug, serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct TranslationFindingsDto {
-    pub issues: Vec<crate::dto::IssueDto>,
-    pub term_exceptions: Vec<String>,
-}
-
-#[tauri::command(rename_all = "camelCase")]
-#[allow(clippy::needless_pass_by_value)]
-/// What the checks find in the saved translation of one string, problems
-/// then advice, with its term exceptions.
-///
-/// # Errors
-///
-/// Returns a typed command error when no project is open or the string or
-/// its file cannot be read.
-pub async fn translation_findings(
-    app: tauri::AppHandle,
-    source_binding: SourceBindingDto,
-) -> CommandResult<TranslationFindingsDto> {
-    run_blocking(move || {
-        let state = app.state::<DesktopState>();
-        let (issues, term_exceptions) = state.session()?.findings(
-            &source_binding.sheet_name,
-            source_binding.row_id,
-            source_binding.subrow_id,
-            source_binding.column_index,
-        )?;
-        Ok(TranslationFindingsDto {
-            issues: issues.iter().map(crate::dto::IssueDto::from).collect(),
-            term_exceptions,
-        })
-    })
-    .await
-}
-
 /// The error of a term that cannot be written as a term exception.
 pub(crate) fn term_exception_invalid(term: &str) -> CommandError {
     CommandError::new(
