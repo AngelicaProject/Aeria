@@ -184,8 +184,23 @@ pub fn make(
 ///
 /// Returns an error when a folder cannot be listed.
 pub fn list(root: &Path) -> Result<Vec<String>, ProjectError> {
-    let base = root.join(PO_DIR);
     let mut found = Vec::new();
+    walk(root, |path, _| found.push(path))?;
+    found.sort();
+    Ok(found)
+}
+
+/// Calls `found` with every `.po` file under `po/`, by path relative to it
+/// with `/`, and its directory entry, in no particular order.
+///
+/// # Errors
+///
+/// Returns an error when a folder cannot be listed.
+pub(crate) fn walk(
+    root: &Path,
+    mut found: impl FnMut(String, &std::fs::DirEntry),
+) -> Result<(), ProjectError> {
+    let base = root.join(PO_DIR);
     let mut folders = vec![base.clone()];
     while let Some(folder) = folders.pop() {
         let entries = match std::fs::read_dir(&folder) {
@@ -194,18 +209,25 @@ pub fn list(root: &Path) -> Result<Vec<String>, ProjectError> {
             Err(error) => return Err(io(&folder)(error)),
         };
         for entry in entries {
-            let path = entry.map_err(io(&folder))?.path();
-            if path.is_dir() {
+            let entry = entry.map_err(io(&folder))?;
+            let path = entry.path();
+            // The listing gives the type without another read of the disk,
+            // which costs a project of the whole game a third of a second;
+            // only a link is followed to see what it is.
+            let is_dir = match entry.file_type() {
+                Ok(kind) if !kind.is_symlink() => kind.is_dir(),
+                _ => path.is_dir(),
+            };
+            if is_dir {
                 folders.push(path);
             } else if path.extension().is_some_and(|extension| extension == "po")
                 && let Ok(relative) = path.strip_prefix(&base)
             {
-                found.push(relative.to_string_lossy().replace('\\', "/"));
+                found(relative.to_string_lossy().replace('\\', "/"), &entry);
             }
         }
     }
-    found.sort();
-    Ok(found)
+    Ok(())
 }
 
 /// Reads files of `po/` by their paths relative to it. Each file's problems

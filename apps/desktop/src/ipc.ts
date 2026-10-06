@@ -560,6 +560,11 @@ export function projectSearchEntries(query: SearchQueryDto): Promise<SearchEntry
   return call<SearchEntryDto[]>("project_search_entries", { query });
 }
 
+/** Reads the project's files that changed since a search last read them, so the next search does not wait. */
+export function projectSearchPrepare(): Promise<void> {
+  return call<void>("project_search_prepare");
+}
+
 export function projectSearchCancel(): Promise<void> {
   return call<void>("project_search_cancel");
 }

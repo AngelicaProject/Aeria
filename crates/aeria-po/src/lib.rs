@@ -29,9 +29,9 @@ pub use project::{
     write, write_settings,
 };
 pub use search::{
-    Change, CheckFilter, Field, FieldMatch, Fields, FileHits, Found, Hit, IssueCount, MAX_HITS,
-    MatchKind, Matcher, Pattern, Query, Replacement, SearchError, State, path_selected,
-    preview_replace, replace_in_text, search, search_all, text_ranges,
+    Change, CheckFilter, Corpus, Field, FieldMatch, Fields, FileHits, Found, Hit, IssueCount,
+    MAX_HITS, MatchKind, Matcher, Pattern, Query, Replacement, SearchError, State, path_selected,
+    replace_in_text, text_ranges,
 };
 pub use session::{
     CellView, EditDone, EditError, EditKind, EditSkipped, EditsApplied, EntryEdit, EntryState,

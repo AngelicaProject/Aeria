@@ -305,6 +305,8 @@ pub struct Session {
     /// they had: [`Session::changed_sheets`] watches them.
     viewed: Mutex<HashMap<String, Stamp>>,
     knowledge: Mutex<Option<(Vec<Stamp>, Arc<Knowledge>)>>,
+    /// The text of the files that searches read.
+    corpus: crate::search::Corpus,
     /// Writes one at a time, so two edits of one file never race.
     writing: Mutex<()>,
     /// Counts the changes of the files: every write of the session, and
@@ -372,6 +374,7 @@ impl Session {
             files: Mutex::new(HashMap::new()),
             viewed: Mutex::new(HashMap::new()),
             knowledge: Mutex::new(None),
+            corpus: crate::search::Corpus::default(),
             writing: Mutex::new(()),
             revision: std::sync::atomic::AtomicU64::new(0),
         }
@@ -441,6 +444,13 @@ impl Session {
     #[must_use]
     pub fn sheet_base(&self, sheet: &str) -> String {
         self.paths.base(sheet).to_owned()
+    }
+
+    /// The text of the project's files that searches read, kept while the
+    /// project is open.
+    #[must_use]
+    pub fn corpus(&self) -> &crate::search::Corpus {
+        &self.corpus
     }
 
     /// The project knowledge, read again when a file of it changed.

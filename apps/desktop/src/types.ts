@@ -912,7 +912,6 @@ export type SearchResultDto = {
   hits: SearchHitDto[];
   /** Every string found; more than `hits` when the result was cut. */
   total: number;
-  matches: number;
   /** Every file with a string found, with counts. */
   files: SearchFileDto[];
   /** With a check filter, the issues of every string found by group. */

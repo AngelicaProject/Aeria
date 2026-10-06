@@ -68,7 +68,7 @@ pub use guide::{
 pub use search::{
     SearchState, project_edit_undo, project_replace_apply, project_replace_preview,
     project_retranslate, project_search, project_search_cancel, project_search_entries,
-    project_term_candidates, project_term_exception,
+    project_search_prepare, project_term_candidates, project_term_exception,
 };
 pub use state::{Activity, DesktopState};
 pub use translate::{
@@ -215,6 +215,7 @@ pub fn run() {
             project_search,
             project_search_cancel,
             project_search_entries,
+            project_search_prepare,
             project_term_candidates,
             project_replace_preview,
             project_replace_apply,
