@@ -427,8 +427,8 @@ mod tests {
 pub struct IssueDto {
     /// `lineBreak`, `structure`, `forbiddenTerm`, `mark`, `mixedAlphabets`,
     /// `bothGenders`, `termNotUsed`, `genderNotVaried`,
-    /// `genderInOtherLanguages`, `machinePhrasing`, `staleTermException`, or
-    /// `other`.
+    /// `genderInOtherLanguages`, `machinePhrasing`, `staleTermException`,
+    /// `labelTooLong`, `nameTooLong`, or `other`.
     pub kind: String,
     /// What may be wrong rather than a problem: it does not keep the
     /// translation from being saved or exported.
@@ -444,6 +444,10 @@ pub struct IssueDto {
     /// mark as `U+0301`.
     pub text: Option<String>,
     pub phrases: Vec<String>,
+    /// The length of a translation longer than its budget, and the budget:
+    /// characters for a label, bytes for a name.
+    pub length: Option<usize>,
+    pub max: Option<usize>,
 }
 
 impl From<&aeria_po::Issue> for IssueDto {
@@ -511,6 +515,18 @@ impl From<&aeria_po::Issue> for IssueDto {
             aeria_po::Issue::StaleTermException(term) => Self {
                 kind: "staleTermException".to_owned(),
                 term: Some(term.clone()),
+                ..base
+            },
+            aeria_po::Issue::LabelTooLong { length, max } => Self {
+                kind: "labelTooLong".to_owned(),
+                length: Some(*length),
+                max: Some(*max),
+                ..base
+            },
+            aeria_po::Issue::NameTooLong { length, max } => Self {
+                kind: "nameTooLong".to_owned(),
+                length: Some(*length),
+                max: Some(*max),
                 ..base
             },
         }

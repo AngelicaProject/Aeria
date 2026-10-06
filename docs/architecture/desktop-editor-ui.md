@@ -444,11 +444,13 @@ not re-render the workbench.
 - A line above the columns says what the string is, when the request would:
   who says it (the translated name, or the speaker label in title case; the
   label in the tooltip), a quest's journal entry or objective, the length an
-  interface label may have with the translation's length against it, and
-  that the line varies with the player character's gender in the source or
-  in the French or German text, with **Insert a choice**, the gender choice
-  of the insertion menu. A label longer than its length is advice, amber, as
-  is a gendered line whose translation has no condition on `$gn4`.
+  interface label may have in characters or a name in the world in bytes
+  ([`translate.md`](./translate.md#names-in-the-world)) with the
+  translation's length against it, and that the line varies with the player
+  character's gender in the source or in the French or German text, with
+  **Insert a choice**, the gender choice of the insertion menu. A label or
+  name longer than its length is advice, amber, as is a gendered line whose
+  translation has no condition on `$gn4`.
 - **Names and terms** lists the glossary terms of the source, each with its
   translation, forbidden variants, note, and whether a term exception keeps
   it out, and the game's names in the source with the project's

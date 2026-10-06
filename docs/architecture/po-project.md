@@ -285,9 +285,13 @@ message, so an interface can word it in its own language (see
 Advice does not make a translation wrong: a term whose translation does not
 seem to be used, a condition on the player character's gender that may be
 missing, machine phrasing, a term exception that names no term of the
-source. Advice is for the person who reviews a translation: saving,
-export, `aeria-check`, and machine translation ignore it, and it is never
-sent to a model. A file has a problem when a line breaks the PO
+source, an interface label or a name of a world object longer than its
+budget (see [`translate.md`](./translate.md#interface-labels) and
+[names in the world](./translate.md#names-in-the-world)). Advice is for the
+person who reviews a translation: saving, export, `aeria-check`, and the
+checks of machine translation ignore it, and it is never sent to a model;
+machine translation holds its own answers to the length budget. A file has
+a problem when a line breaks the PO
 format or is a Git conflict marker, or a `msgctxt` is not an identity or
 appears twice.
 

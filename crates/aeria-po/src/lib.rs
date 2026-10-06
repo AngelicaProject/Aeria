@@ -8,6 +8,7 @@ pub mod candidates;
 pub mod check;
 pub mod generate;
 pub mod identity;
+pub mod length;
 pub mod merge;
 pub mod po;
 pub mod project;

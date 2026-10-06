@@ -833,7 +833,7 @@ export type SearchQueryDto = {
 
 /** One finding of the checks, as data; `message` is the English text for unknown kinds. */
 export type IssueDto = {
-  kind: "lineBreak" | "structure" | "forbiddenTerm" | "mark" | "mixedAlphabets" | "bothGenders" | "termNotUsed" | "genderNotVaried" | "genderInOtherLanguages" | "machinePhrasing" | "staleTermException" | "other";
+  kind: "lineBreak" | "structure" | "forbiddenTerm" | "mark" | "mixedAlphabets" | "bothGenders" | "termNotUsed" | "genderNotVaried" | "genderInOtherLanguages" | "machinePhrasing" | "staleTermException" | "labelTooLong" | "nameTooLong" | "other";
   /** What may be wrong rather than a problem: it does not keep the translation from being saved or exported. */
   advice: boolean;
   /** Groups issues in the summary and filters by them. */
@@ -844,6 +844,9 @@ export type IssueDto = {
   variant: string | null;
   text: string | null;
   phrases: string[];
+  /** The length of a translation longer than its budget, and the budget: characters for a label, bytes for a name. */
+  length: number | null;
+  max: number | null;
 };
 
 /** What the checks find in a string's saved translation, and its term exceptions. */
@@ -862,8 +865,8 @@ export type StringHintsDto = {
   speaker: { label: string; name: HintNameDto | null } | null;
   /** The kind of a quest's text: `journal`, `objective`, or `other`. */
   kind: string | null;
-  /** The most characters an interface label's translation may show. */
-  maxLength: number | null;
+  /** The longest an interface label's translation may show, or a world object's name may be. */
+  maxLength: LengthBudgetDto | null;
   /** `source` and the client languages whose line varies with the player character's gender. */
   gendered: string[];
 };
@@ -874,9 +877,11 @@ export type DraftCheckDto = {
   missing: string[];
   /** Names of the guide whose translation the text uses. */
   namesUsed: string[];
-  /** Characters shown, macros not counted. */
+  /** In the unit of the string's length budget: bytes of a world object's name, otherwise characters shown, macros not counted. */
   length: number;
 };
+/** How long a translation may be: characters shown for an interface label, bytes for a world object's name. */
+export type LengthBudgetDto = { max: number; unit: "characters" | "bytes" };
 
 export type SearchFileDto = { path: string; sheet: string; count: number };
 export type IssueCountDto = { issue: IssueDto; count: number };

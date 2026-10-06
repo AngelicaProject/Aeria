@@ -13,6 +13,8 @@ const full: Partial<Record<IssueDto["kind"], MessageKey>> = {
   genderInOtherLanguages: "issue.genderInOtherLanguages",
   machinePhrasing: "issue.machinePhrasing",
   staleTermException: "issue.staleTermException",
+  labelTooLong: "issue.labelTooLong",
+  nameTooLong: "issue.nameTooLong",
 };
 
 const short: Partial<Record<IssueDto["kind"], MessageKey>> = {
@@ -27,6 +29,8 @@ const short: Partial<Record<IssueDto["kind"], MessageKey>> = {
   genderInOtherLanguages: "issue.short.genderInOtherLanguages",
   machinePhrasing: "issue.short.machinePhrasing",
   staleTermException: "issue.short.staleTermException",
+  labelTooLong: "issue.short.labelTooLong",
+  nameTooLong: "issue.short.nameTooLong",
 };
 
 function params(issue: IssueDto): Record<string, string> {
@@ -36,6 +40,8 @@ function params(issue: IssueDto): Record<string, string> {
     variant: issue.variant ?? "",
     text: issue.text ?? "",
     phrases: issue.phrases.join(", "),
+    length: String(issue.length ?? ""),
+    max: String(issue.max ?? ""),
     // The structure policy writes its reasons for the model, in English.
     message: issue.message,
   };

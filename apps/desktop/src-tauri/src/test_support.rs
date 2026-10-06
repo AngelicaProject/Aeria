@@ -39,6 +39,10 @@ pub(crate) fn test_game() -> TestGame {
                 .row(1, &[(0, "ADDON_OK"), (1, "Confirm")])
                 .row(2, &[(0, "ADDON_CANCEL"), (1, "Cancel")]),
         )
+        .with_text(
+            "ENpcResident",
+            &TextSheet::new(1, &[0]).row(1_019_070, &[(0, "East Aldenard Trading Company aide")]),
+        )
         .write(folder.path())
         .expect("write game");
     TestGame { folder }

@@ -820,15 +820,8 @@ impl Corpus {
                 if entry.translation.is_empty() {
                     continue;
                 }
-                let found = check_translation(
-                    knowledge,
-                    target_language,
-                    &entry.source,
-                    &entry.translation,
-                    &entry.extracted,
-                    &entry.term_exceptions,
-                )
-                .issues;
+                let found =
+                    check_translation(knowledge, target_language, entry, &entry.translation).issues;
                 if !found.is_empty() {
                     issues.push((u32::try_from(index).map_err(|_| too_large(path))?, found));
                 }
@@ -1189,18 +1182,11 @@ impl Corpus {
                 let problems = if after.is_empty() {
                     Vec::new()
                 } else {
-                    check_translation(
-                        knowledge,
-                        target_language,
-                        &entry.source,
-                        &after,
-                        &entry.extracted,
-                        &entry.term_exceptions,
-                    )
-                    .issues
-                    .into_iter()
-                    .filter(Issue::is_problem)
-                    .collect()
+                    check_translation(knowledge, target_language, &entry, &after)
+                        .issues
+                        .into_iter()
+                        .filter(Issue::is_problem)
+                        .collect()
                 };
                 changes.push(Change {
                     path: file.path.clone(),

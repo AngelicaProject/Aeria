@@ -135,7 +135,8 @@ The task is JSON built from the files as they are when the request is sent:
     model before a game update rewrites the comments), `gendered`: the texts (`source`, `fr`, `de`)
     whose line has a condition on the player character's gender, so the
     translation most likely needs one too, `maxLength` for an interface
-    label (below), the previous source and translation of a fuzzy one, and
+    label and `maxBytes` for a name in the world (below), the previous
+    source and translation of a fuzzy one, and
     `termExceptions`: the terms of `terms` that do not apply to it (see
     [`po-project.md`](./po-project.md#term-exceptions)), which the
     instructions say to translate by their meaning.
@@ -183,17 +184,37 @@ string (at most 40 characters shown, no line break) of an interface sheet
 `ItemUICategory`, `MainCommand`, `MainCommandCategory`) gets `maxLength`: the
 characters shown by the longest of its English source and the German and
 French lines of its context, macros not counted, `<nbsp>` as one, `<shy>` as
-none (`fit::length_budget`). The request asks for a translation within that
-length, with the language's usual abbreviations when needed, and a longer one
-is refused. Names of items, characters, and places get no length: their
-tooltips show them whole.
+none (`aeria_po::length`; the sheet comes from the `msgctxt`). The request
+asks for a translation within that length, with the language's usual
+abbreviations when needed, and a longer one is refused. For a person a longer
+label is advice of the checks (see
+[`po-project.md`](./po-project.md#checking)). Names of items and places get no
+length: their tooltips show them whole.
+
+## Names in the world
+
+The game copies the name of a character or object of the world into a
+64-byte field ending with NUL (`GameObject_SetName`), and shows it from
+there over the object and as a target. A name of 64 bytes or more keeps 63,
+and then loses its last character that is not ASCII even when it fits, so a
+Cyrillic name is cut to 62 bytes or less. The names are column 0 of the
+sheets the game names objects by through `ObjStr`: `Aetheryte`, `BNpcName`,
+`Companion`, `ENpcResident`, `EObjName`, `GatheringPointName`, and
+`Treasure` (`Mount` is in the `ObjStr` table, but no object kind reaches
+it). Such a string gets `maxBytes`, 63: the bytes of its encoded
+`SeString`, which for text without macros are its UTF-8 bytes (a Cyrillic
+letter takes two). The request asks for a name within it, and a longer one
+is refused; for a person it is advice of the checks, as for a label. `Item`
+names are copied too, for housing furniture, but the editor and requests do
+not hold them to it: most items are never placed, and their other views show
+the name whole.
 
 ## Checking and writing
 
 Every translation is checked like a save in the editor
 ([`po-project.md`](./po-project.md#checking)), after the answer's first
-words and an interface label's length. One more check is machine
-translation's alone: when the source chooses a word by whether a person of a
+words and the length of an interface label or a name in the world. One more
+check is machine translation's alone: when the source chooses a word by whether a person of a
 log message is the player (`<if ($gs1 == $gs2)>scan<else>scans</if>`), the
 translation needs a comparison with that person whose branches both have
 words, so that a word agreeing with the person is chosen with it, rather

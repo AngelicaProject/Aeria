@@ -771,14 +771,7 @@ impl Session {
         let target = self.settings().target_language;
         self.edit(sheet_name, row, subrow, column, |entry| {
             if !text.is_empty() {
-                let verdict = check_translation(
-                    &knowledge,
-                    &target,
-                    &entry.source,
-                    text,
-                    &entry.extracted,
-                    &entry.term_exceptions,
-                );
+                let verdict = check_translation(&knowledge, &target, entry, text);
                 if !verdict.problems.is_empty() {
                     return Err(EditError::Invalid(
                         verdict
@@ -916,10 +909,8 @@ impl Session {
         check_translation(
             &self.knowledge(),
             &self.settings().target_language,
-            &entry.source,
+            entry,
             text,
-            &entry.extracted,
-            &entry.term_exceptions,
         )
         .issues
     }
@@ -1174,14 +1165,7 @@ fn apply_edit(
     match &edit.kind {
         EditKind::Replace(new) => {
             if !new.is_empty() {
-                let verdict = check_translation(
-                    knowledge,
-                    target,
-                    &entry.source,
-                    new,
-                    &entry.extracted,
-                    &entry.term_exceptions,
-                );
+                let verdict = check_translation(knowledge, target, entry, new);
                 if !verdict.problems.is_empty() {
                     return Err(SkipReason::Invalid(
                         verdict
