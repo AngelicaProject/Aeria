@@ -426,7 +426,7 @@ mod tests {
 #[serde(rename_all = "camelCase")]
 pub struct IssueDto {
     /// `lineBreak`, `structure`, `forbiddenTerm`, `mark`, `mixedAlphabets`,
-    /// `bothGenders`, `termNotUsed`, `genderNotVaried`,
+    /// `bothGenders`, `repeatedWord`, `termNotUsed`, `genderNotVaried`,
     /// `genderInOtherLanguages`, `machinePhrasing`, `staleTermException`,
     /// `labelTooLong`, `nameTooLong`, or `other`.
     pub kind: String,
@@ -440,8 +440,8 @@ pub struct IssueDto {
     pub term: Option<String>,
     pub translation: Option<String>,
     pub variant: Option<String>,
-    /// The word with mixed alphabets, the form with both genders, or the
-    /// mark as `U+0301`.
+    /// The word with mixed alphabets, the form with both genders, the word
+    /// written twice, or the mark as `U+0301`.
     pub text: Option<String>,
     pub phrases: Vec<String>,
     /// The length of a translation longer than its budget, and the budget:
@@ -491,6 +491,11 @@ impl From<&aeria_po::Issue> for IssueDto {
             aeria_po::Issue::BothGenders(form) => Self {
                 kind: "bothGenders".to_owned(),
                 text: Some(form.clone()),
+                ..base
+            },
+            aeria_po::Issue::RepeatedWord(word) => Self {
+                kind: "repeatedWord".to_owned(),
+                text: Some(word.clone()),
                 ..base
             },
             aeria_po::Issue::TermNotUsed { term, translation } => Self {

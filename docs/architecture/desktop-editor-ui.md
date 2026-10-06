@@ -474,7 +474,13 @@ not re-render the workbench.
 - **Translation** lists the problems (red) and advice (amber) of the checks
   in the translation as typed, worded as in the search results, or says
   that they found nothing. An exception that names no term of the source
-  has **Remove**. A string without names, terms, or macros says it is
+  has **Remove**; every other issue has **Fix**, which starts a correction
+  run of this string for that issue (see
+  [`translate.md`](./translate.md#correcting-translations)), and a string
+  whose source changed has **Adapt** in the column's head, which starts one
+  that adapts it. Both correct the saved translation, so they wait while the
+  translation as typed differs from it, and a reviewed translation has
+  neither; the AI translation dialog shows the run's progress. A string without names, terms, or macros says it is
   translated as ordinary text.
 
 Clicking a name's or term's translation, or a macro part, adds it to the
@@ -520,6 +526,9 @@ there are any, the notice of a bulk edit and the strings chosen.
   the replace field under it, with *preserve case* and **Replace all…**.
   An invalid regular expression is reported under the field, and the last
   result stays, dimmed, until the expression is whole again.
+  Sheets and folders typed in the scope that are not in the project are
+  named under the field, so a sheet typed wrong does not read as a search
+  that found nothing.
 - **Scope.** A line of chips under the query says what the search covers,
   each with its current value: the fields (translation and source by
   default; notes and string ID can be added), the sheets (all, the sheets
@@ -530,7 +539,9 @@ there are any, the notice of a bulk edit and the strings chosen.
   kept while the window lives.
 - **Before a search** the tool offers untranslated strings, changed
   sources, problems, and advice as one-click starts; it shows no
-  explanatory text.
+  explanatory text. A search starts with a query, a state or checks filter,
+  or sheets typed: sheets alone find every string of them, so a quest's
+  strings can be fixed or translated again as a whole.
 - A search runs 120 ms after typing stops, or on Enter, and cancels the one
   in progress; the result shown stays until the next one arrives, and a
   line under the result's counts runs while a search takes long enough to
@@ -541,8 +552,9 @@ there are any, the notice of a bulk edit and the strings chosen.
 - **The line of the result** gives the strings and sheets found (or that
   nothing was; when the filters narrow the search, a link clears them),
   **Collapse all** or **Expand all**, and an actions menu for the whole
-  result: choose every string found, **Translate all found again…**, and,
-  with a term's issue chosen, **Exception … for all**.
+  result: choose every string found, **Fix all found with AI…**,
+  **Translate all found again…**, and, with a term's issue chosen,
+  **Exception … for all**.
 - **Issue.** With a checks filter, one more chip in the scope keeps only
   the strings with one group of issues (`pugilist → кулачный боец` for a
   term not used, *Macros*, *Extra line break*). A project has hundreds of
@@ -586,10 +598,11 @@ there are any, the notice of a bulk edit and the strings chosen.
   A sheet or a result with strings not sent is chosen whole: its strings
   are read again without the limit of a search (`project_search_entries`).
   The chosen strings get a bar at the bottom with their count,
-  **Translate again…**, and **Exception**, which takes the chosen issue's
+  **Fix…**, **Translate again…**, and **Exception**, which takes the chosen issue's
   term, or the term every chosen string has a finding for.
 - **Actions on one string** show on hover: replace in it (with the replace
-  field open), an exception for its term, and translate it again.
+  field open), an exception for its term, fix it with AI, and translate it
+  again.
 - Replacing: a string's replace button replaces in that string at once; a
   sheet's button and **Replace all…** open the replace preview dialog,
   which lists every change before and after with the changed words marked.
@@ -600,6 +613,15 @@ there are any, the notice of a bulk edit and the strings chosen.
   strings, or one string) clears the translations after a confirmation and
   starts a machine translation run of exactly those strings; the AI
   translation dialog opens on its progress.
+- Fixing (the same strings as translating again) opens a dialog with the
+  count of strings, **Adapt to the changed source** with the count of
+  fuzzy strings among them (shown and chosen when there are any),
+  **Proofreading** (chosen when the search has no checks filter), **The issues of the checks** (with the chosen issue's name when
+  the search keeps one; chosen when the search has a checks filter), and
+  **What to change**, a request kept while the window lives; **Fix** needs
+  one of them and starts a correction run of those strings
+  (see [`translate.md`](./translate.md#correcting-translations)), whose
+  progress the AI translation dialog shows.
 - An exception for a term (see
   [`po-project.md`](./po-project.md#term-exceptions)) and a replacement are
   bulk edits that Undo reverts. After a bulk edit a notice gives what was
@@ -713,7 +735,12 @@ examples of each. **Add to the glossary** adds a term row with the chosen
 rendering as its translation, the others as forbidden variants, and match
 case on, and shows it in the Terms tab to review and save; **Skip** hides
 the candidate on this computer until the skipped ones are shown again. The
-Style tab is a Markdown text area
+Openers tab counts the phrases the translations open sentences with
+(`project_phrasing`, see [`search.md`](./search.md#openers)): each with its
+strings, the share of them without the source words behind it, those words
+with their shares, and examples of the strings without them. **Write in the
+style** adds a line about the opener to the Style tab for the person to
+finish. The Style tab is a Markdown text area
 for `style.md` and shows its size against the 8 MiB limit. Each tab
 has **Revert** and **Save**; closing with unsaved changes asks first. A save
 fails, without writing, when the file changed since it was loaded, for
@@ -731,12 +758,16 @@ translated strings of the same file. It opens with the open sheet chosen.
 It also chooses whether strings with a changed source are included, shows how
 many sheets and strings are chosen, and names the model; without a model it
 links to Settings. **Translate** starts a run, and the
-dialog shows its progress every second: strings written of the run's strings,
-strings refused by the checks, tokens and the share served from the cache,
+dialog shows its progress every second: strings written of the run's strings
+(fixed, for a correction, with the list of fixed translations before and
+after, the changed words marked, and the model's reason for each; each opens
+in the editor), strings a correction left as they were, strings refused by
+the checks, tokens and the share served from the cache,
 the pace, and why the run stopped. Each refused string lists its problems in
 the interface language and the model's translation, which was not written;
-it opens in the editor, a term problem has **Exception**, and **Translate
-the refused again** starts a run of the listed strings. The dialog can be hidden
+it opens in the editor, a term problem has **Exception**, and, after a
+translation, **Translate the refused again** starts a run of the listed
+strings (a correction's refused strings keep their translation). The dialog can be hidden
 while the run goes; **Stop** stops it, and a stopped run offers
 **Continue**. See [`translate.md`](./translate.md).
 

@@ -369,7 +369,8 @@ fn same_word(a: &str, b: &str) -> bool {
     common + 1 >= short_len && long.chars().count() - short_len <= 3
 }
 
-fn plain_text(macro_text: &str) -> String {
+/// The text a player reads of macro text: its text ranges, a line each.
+pub(crate) fn plain_text(macro_text: &str) -> String {
     let mut text = String::new();
     for range in text_ranges(macro_text) {
         text.push_str(&macro_text[range]);
@@ -409,13 +410,22 @@ fn read_facts(root: &Path, path: &str) -> Result<Vec<Facts>, SearchError> {
 
 /// Every entry's facts, files read several at a time, in path order.
 fn read_all(root: &Path) -> Result<Vec<(String, Vec<Facts>)>, SearchError> {
+    read_each(root, read_facts)
+}
+
+/// What `read` makes of each file of `po/`, files read several at a time,
+/// in path order.
+pub(crate) fn read_each<T: Send>(
+    root: &Path,
+    read: impl Fn(&Path, &str) -> Result<T, SearchError> + Sync,
+) -> Result<Vec<(String, T)>, SearchError> {
     let mut paths = list(root).map_err(|error| SearchError::Read {
         path: String::new(),
         message: error.to_string(),
     })?;
     paths.sort();
     let next = AtomicUsize::new(0);
-    let results: Mutex<Vec<(usize, Vec<Facts>)>> = Mutex::new(Vec::new());
+    let results: Mutex<Vec<(usize, T)>> = Mutex::new(Vec::new());
     let failure: Mutex<Option<SearchError>> = Mutex::new(None);
     let workers = std::thread::available_parallelism().map_or(4, std::num::NonZero::get);
     std::thread::scope(|scope| {
@@ -424,7 +434,7 @@ fn read_all(root: &Path) -> Result<Vec<(String, Vec<Facts>)>, SearchError> {
                 loop {
                     let index = next.fetch_add(1, Ordering::Relaxed);
                     let Some(path) = paths.get(index) else { return };
-                    match read_facts(root, path) {
+                    match read(root, path) {
                         Ok(facts) => results
                             .lock()
                             .unwrap_or_else(std::sync::PoisonError::into_inner)

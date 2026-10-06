@@ -5,6 +5,7 @@ import type { CommandError, ProjectSheetDto, SheetProgressDto, SourceBinding, Tr
 import type { MessageKey } from "../i18n/translate";
 import { buildSheetTree, findSheetMatches, type SheetTreeEntry, type SheetTreeFolder } from "../sheetExplorer";
 import { ErrorBanner } from "./ErrorBanner";
+import { TranslationCorrections } from "./TranslationCorrections";
 import { TranslationRejections } from "./TranslationRejections";
 import { NameSheetMark } from "../ui/NameSheetMark";
 import { UiIcon } from "../ui/primitives/UiIcon";
@@ -303,10 +304,11 @@ export const TranslateDialog = memo(function TranslateDialog({ open, onOpenChang
               {status && (running || status.stop) ? (
                 <div className="translate-progress" aria-live="polite">
                   <div className="meter" aria-hidden="true">
-                    <span className="meter-translated" style={{ width: `${status.strings > 0 ? Math.min(1, (status.written + status.rejected) / status.strings) * 100 : 0}%` }} />
+                    <span className="meter-translated" style={{ width: `${status.strings > 0 ? Math.min(1, (status.written + status.unchanged + status.rejected) / status.strings) * 100 : 0}%` }} />
                   </div>
                   <p className="export-facts">
-                    <span>{t("translate.progress", { written: formatNumber(status.written), strings: formatNumber(status.strings) })}</span>
+                    <span>{t(status.fixing ? "translate.progressFix" : "translate.progress", { written: formatNumber(status.written), strings: formatNumber(status.strings) })}</span>
+                    {status.unchanged > 0 ? <span>{t("translate.unchanged", { count: status.unchanged })}</span> : null}
                     {status.rejected > 0 ? <span>{t("translate.rejected", { count: status.rejected })}</span> : null}
                     <span>{t("translate.tokens", { input: formatNumber(status.inputTokens), output: formatNumber(status.outputTokens) })}</span>
                     {cachedShare !== null ? <span>{t("translate.cached", { percent: Math.round(cachedShare * 100) })}</span> : null}
@@ -326,8 +328,11 @@ export const TranslateDialog = memo(function TranslateDialog({ open, onOpenChang
                   {running && status.active.some((active) => Date.now() - active.startedAt > SLOW_MS) ? <p className="field-hint">{t("translate.slow")}</p> : null}
                   {status.message ? <p className="field-hint">{status.message}</p> : null}
                   {status.stop ? <p className="field-hint"><strong>{describeStop(status.stop, t, locale)}</strong></p> : null}
+                  {status.corrections.length > 0 ? (
+                    <TranslationCorrections corrections={status.corrections} total={status.written} onReveal={onRevealBinding ? (binding) => { onOpenChange(false); onRevealBinding(binding); } : undefined} />
+                  ) : null}
                   {status.rejections.length > 0 ? (
-                    <TranslationRejections rejections={status.rejections} total={status.rejected} running={running} onReveal={onRevealBinding ? (binding) => { onOpenChange(false); onRevealBinding(binding); } : undefined} onRetry={(contexts) => void retry(contexts)} />
+                    <TranslationRejections rejections={status.rejections} total={status.rejected} running={running} onReveal={onRevealBinding ? (binding) => { onOpenChange(false); onRevealBinding(binding); } : undefined} onRetry={status.fixing ? undefined : (contexts) => void retry(contexts)} />
                   ) : null}
                 </div>
               ) : null}

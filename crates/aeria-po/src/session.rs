@@ -104,6 +104,13 @@ pub enum EditKind {
     /// A new translation, checked as a saved one; the fuzzy mark stays, so a
     /// replacement never passes for a review.
     Replace(String),
+    /// A machine translation's correction: written as a replacement, but a
+    /// reviewed translation is not changed: only a person changes it.
+    Correct(String),
+    /// A machine translation's adaptation of a fuzzy translation to its
+    /// changed source: written as a correction, with the fuzzy mark and the
+    /// previous source cleared, since it is now a translation of the source.
+    Adapt(String),
     /// The translation is cleared, so machine translation takes the string
     /// again; the fuzzy mark and previous source go with it. A reviewed
     /// translation is not cleared: a person removes the review first.
@@ -1162,8 +1169,11 @@ fn apply_edit(
     }
     let before = EntryState::of(entry);
     let reviewed = entry.is_reviewed();
+    if reviewed && matches!(edit.kind, EditKind::Correct(_) | EditKind::Adapt(_)) {
+        return Err(SkipReason::Reviewed);
+    }
     match &edit.kind {
-        EditKind::Replace(new) => {
+        EditKind::Replace(new) | EditKind::Correct(new) | EditKind::Adapt(new) => {
             if !new.is_empty() {
                 let verdict = check_translation(knowledge, target, entry, new);
                 if !verdict.problems.is_empty() {
@@ -1180,6 +1190,10 @@ fn apply_edit(
             // A person's replacement keeps a review: they wrote the text.
             if reviewed || new.is_empty() {
                 entry.set_reviewed(reviewed);
+            }
+            if matches!(edit.kind, EditKind::Adapt(_)) {
+                entry.fuzzy = false;
+                entry.previous = None;
             }
         }
         EditKind::Clear => {

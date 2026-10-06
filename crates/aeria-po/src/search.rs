@@ -173,6 +173,9 @@ pub struct Found {
     pub issues: Vec<IssueCount>,
     /// The search was cancelled; the counts cover the files read until then.
     pub cancelled: bool,
+    /// The query's paths that choose no file of `po/`, such as a sheet
+    /// name typed wrong.
+    pub unknown_paths: Vec<String>,
 }
 
 /// Errors of a search.
@@ -710,6 +713,8 @@ pub struct Corpus {
     /// Held while files are read, so a search that starts during a read
     /// waits for it instead of reading the same files again.
     reading: Mutex<()>,
+    /// The files of `po/` as the last search listed them.
+    listed: Mutex<Vec<String>>,
 }
 
 impl Corpus {
@@ -740,6 +745,7 @@ impl Corpus {
             }
         })?;
         listed.sort_by(|a, b| a.0.cmp(&b.0));
+        *lock(&self.listed) = listed.iter().map(|(path, _)| path.clone()).collect();
         let chosen: Vec<(String, Stamp, Option<Arc<FileText>>)> = {
             let mut cached = lock(&self.files);
             cached.retain(|path, _| {
@@ -961,6 +967,19 @@ impl Corpus {
                 }
             }
         }
+        let listed = lock(&self.listed);
+        found.unknown_paths = search
+            .query
+            .paths
+            .iter()
+            .filter(|chosen| {
+                !listed
+                    .iter()
+                    .any(|path| path_selected(path, std::slice::from_ref(*chosen)))
+            })
+            .cloned()
+            .collect();
+        drop(listed);
         found.issues = issues.into_values().collect();
         found
             .issues

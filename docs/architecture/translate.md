@@ -4,7 +4,9 @@ Status: **implemented** in `aeria-model` and the desktop (Settings → Machine
 translation, Translation → Machine translation).
 
 Machine translation fills the untranslated strings of `po/` with a language
-model. It is a tool a person runs: a program splits the work, sends requests
+model, and corrects translations a person chooses (see
+[Correcting translations](#correcting-translations)). It is a tool a person
+runs: a program splits the work, sends requests
 in parallel, checks every answer, writes what passes, and continues from where
 it stopped. The model gets one small, finished task per request.
 
@@ -116,7 +118,10 @@ The task is JSON built from the files as they are when the request is sent:
   (`a form of "The Walk"`). A name is found by its letters alone, so an
   ordinary word can be found as one, as `Walk` in `A Walk in the Park`; the
   instructions say to use a name's translation only where the word is that
-  name, and to translate it by its meaning otherwise;
+  name, and to translate it by its meaning otherwise. The translation is the
+  name as it stands alone: written in a sentence it declines like any word
+  where the language declines names (Поговорите с Ко Рабнтой); only a name
+  the game fills in through a macro keeps its stored form;
 - `terms`: terms of `terms.csv` that occur in the sources, with their notes
   and forbidden variants, at most 60; a term goes only when it applies to a
   string of the request, not counting the strings with an exception for it;
@@ -246,6 +251,83 @@ shows the new translations of the sheets it shows as they are written.
 A run does not commit. The person reviews the changes and commits them like
 any other edit.
 
+## Correcting translations
+
+A run can correct translations instead of translating (`Options::fix`): it
+takes the chosen strings (`Options::contexts`) that have a translation and
+are not reviewed, and sends each translation with what is wrong with it, so
+the model changes what is wrong and keeps what is right. A person asks for
+any of:
+
+- **proofreading** (`Fix::proofread`): every translation is read as the
+  localization's editor reads it, against its source, the other client
+  languages of its context, and the strings around it in the scene; it is
+  fixed where it loses or adds meaning, misses the form of address the
+  style asks for in this line (read from the line of this string in the
+  language the style follows, not from its neighbours), the agreement with
+  the player character's gender, a name or a term, or reads as a
+  translation (constructions copied from the source, officialese, filler).
+  The source's meaning comes before smoothness, and what reads well stays
+  unchanged. The name of a thing of the game (an action, a status, a menu)
+  keeps the form the translation gives it unless the request's names or
+  terms give another: many such names, such as those of the interface, are
+  not among the request's names, and the game shows them under the name the
+  project gave them. Research on refining translations with a model found that one
+  general request of this kind improves fluency and style more reliably
+  than asking for each kind of error or having the model find errors
+  first, and that it can move a translation's meaning, which the reasons
+  below and the review in Git are for;
+- **the issues of the checks**: what the checks find in the translation,
+  problems and advice, every kind or only the kinds chosen (`Fix::groups`,
+  by `Issue::group`, as project search groups them). A problem always goes,
+  since a corrected translation must pass the checks; a term exception
+  that names no term of the source does not, since a person removes it;
+- **adapting** (`Fix::adapt`): a fuzzy translation, whose source changed
+  since it was written, is adapted to the new source. The request gives the
+  previous source and the translation of it, and the model changes what the
+  change of the source changes, keeping every other word, or answers the
+  translation unchanged when it still fits. What passes is written with the
+  fuzzy mark and the previous source cleared (`EditKind::Adapt`), even when
+  it is unchanged, since it is now a translation of the source. A string
+  that is not fuzzy is not adapted;
+- **a request** in the translator's words, the same for every translation
+  of the run, such as a form of address the style changed.
+
+With proofreading or a request every chosen translation is taken; with
+adapting, every fuzzy one; with the issues alone, a string without any is
+not. This is the one place advice reaches a
+model, and only the advice a person chose.
+
+The request is built as for translating, with the same names, terms,
+speakers, examples, and hints of each string, and two more fields:
+`translation`, the current translation, and `fix`, the messages of its
+issues. The instructions are those of translating with what a correction
+may change in place of "translate every string", and the request after the
+style; they are the same for every request of the run, so the prompt cache
+holds them. The answer has the same form, first words included, and a third
+string: why the translation changed, in a few words of the target language
+(`обращение по французской строке`, `калька`), empty when it did not. A
+reason is not checked and never written to the project.
+
+A correction may not make a translation worse. It is refused when it has a
+problem of the checks, an issue of a kind the translation did not have
+(advice such as a length or machine phrasing, and what machine translation
+alone is held to), or, when it changed the translation, advice it was asked
+to fix. An answer that leaves the translation as it was says that the
+advice does not apply to the string: it is counted as unchanged and not
+written. Refused corrections go back with their problems like refused
+translations, and what still fails is listed and not written.
+
+A correction is written as a bulk edit of the session
+(`EditKind::Correct`): only while the entry still has the translation the
+request was built from, and never over a review, so work saved meanwhile and
+a review made meanwhile are kept. The fuzzy mark stays. The run's status
+lists the first 1,000 corrections it wrote, each before and after with its
+reason, so a person reads them as an editor's notes before reading the
+diff. Like any run, a
+correction does not commit, and its changes are reviewed and reverted
+through Git.
+
 ## Pace and limits
 
 The run sets its own pace. After the first answer it keeps up to 16 requests
@@ -271,7 +353,8 @@ with a search and each sheet's and folder's untranslated strings, and with
 quick choices: the name sheets, the quests, and every sheet with
 untranslated strings. It shows, every second while it is open: strings
 written of the
-run's strings, strings refused by the checks, tokens used, the share of
+run's strings, strings a correction left as they were, strings refused by
+the checks, tokens used, the share of
 prompt tokens served from the cache, the current pace, the requests the
 service is answering with their file, strings, retry, and how long each has
 waited, a hint about the reasoning depth when an answer takes over five

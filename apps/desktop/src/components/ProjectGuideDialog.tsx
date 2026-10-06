@@ -1,8 +1,8 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Dialog } from "radix-ui";
-import { normalizeCommandError, projectKnowledge, projectTermCandidates, saveKnowledgeStyle, saveKnowledgeTerms } from "../ipc";
+import { normalizeCommandError, projectKnowledge, projectPhrasing, projectTermCandidates, saveKnowledgeStyle, saveKnowledgeTerms } from "../ipc";
 import { filterRows, inputsFromRows, openCandidates, rowFromCandidate, rowProblems, rowsChanged, rowsFromEntries, type GlossaryRow, type RowProblem } from "../projectGuide";
-import type { CommandError, ProjectKnowledgeDto, TermCandidateDto } from "../types";
+import type { CommandError, OpenerDto, PhrasingDto, ProjectKnowledgeDto, TermCandidateDto } from "../types";
 import type { MessageKey } from "../i18n/translate";
 import { useI18n } from "../ui/i18n";
 import { Segmented } from "../ui/primitives/Segmented";
@@ -10,7 +10,7 @@ import { UiIcon } from "../ui/primitives/UiIcon";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { ErrorBanner } from "./ErrorBanner";
 
-export type ProjectGuideTab = "terms" | "candidates" | "style";
+export type ProjectGuideTab = "terms" | "candidates" | "phrasing" | "style";
 
 /** Where the candidates a person skipped are kept on this computer. */
 const SKIPPED_KEY = "aeria.guide.skippedCandidates";
@@ -68,6 +68,8 @@ export const ProjectGuideDialog = memo(function ProjectGuideDialog({ open, initi
   const [finding, setFinding] = useState(false);
   const [chosen, setChosen] = useState<ReadonlyMap<string, number>>(new Map());
   const [skipped, setSkipped] = useState<ReadonlySet<string>>(readSkipped);
+  const [phrasing, setPhrasing] = useState<PhrasingDto | null>(null);
+  const [counting, setCounting] = useState(false);
 
   const show = useCallback((knowledge: ProjectKnowledgeDto) => {
     setSaved(knowledge);
@@ -152,6 +154,22 @@ export const ProjectGuideDialog = memo(function ProjectGuideDialog({ open, initi
       .finally(() => setFinding(false));
   };
 
+  const findPhrasing = () => {
+    setCounting(true);
+    setError(null);
+    void projectPhrasing()
+      .then(setPhrasing)
+      .catch((reason: unknown) => setError(normalizeCommandError(reason)))
+      .finally(() => setCounting(false));
+  };
+
+  // A line of the style about the opener, for the person to finish.
+  const toStyle = (opener: OpenerDto) => {
+    const phrase = opener.phrase.charAt(0).toLocaleUpperCase() + opener.phrase.slice(1);
+    setStyle((current) => `${current.replace(/\s*$/, "")}${current.trim() ? "\n" : ""}- «${phrase},» в начале фразы: `);
+    setTab("style");
+  };
+
   const skip = (phrase: string | null) => {
     const next = new Set(phrase === null ? [] : [...skipped, phrase]);
     setSkipped(next);
@@ -187,6 +205,7 @@ export const ProjectGuideDialog = memo(function ProjectGuideDialog({ open, initi
               options={[
                 { value: "terms", label: termsDirty ? `${t("guide.tab.terms")} •` : t("guide.tab.terms") },
                 { value: "candidates", label: t("guide.tab.candidates") },
+                { value: "phrasing", label: t("guide.tab.phrasing") },
                 { value: "style", label: styleDirty ? `${t("guide.tab.style")} •` : t("guide.tab.style") },
               ]}
             />
@@ -296,6 +315,52 @@ export const ProjectGuideDialog = memo(function ProjectGuideDialog({ open, initi
                     </article>
                   );
                 })}
+              </div>
+            </section>
+          ) : tab === "phrasing" ? (
+            <section className="guide-body">
+              <div className="guide-toolbar">
+                <button className="button button-secondary" type="button" disabled={counting} onClick={findPhrasing}>
+                  {counting ? <span className="spinner" /> : <UiIcon icon="search" size="sm" />}{phrasing === null ? t("guide.phrasing.find") : t("guide.phrasing.findAgain")}
+                </button>
+                {phrasing !== null ? <span className="muted">{t("guide.phrasing.count", { count: phrasing.openers.length, strings: phrasing.translated })}</span> : null}
+              </div>
+              {phrasing !== null && !counting && phrasing.openers.length === 0 ? <p className="field-hint">{t("guide.phrasing.none")}</p> : null}
+              <div className="guide-candidates">
+                {(phrasing?.openers ?? []).map((opener) => (
+                  <article key={opener.phrase} className="guide-candidate">
+                    <header className="guide-candidate-head">
+                      <strong>«{opener.phrase.charAt(0).toLocaleUpperCase() + opener.phrase.slice(1)},»</strong>
+                      <span className="muted">{t("guide.phrasing.strings", { count: opener.strings })}</span>
+                      <span className={opener.unsupported * 3 > opener.strings ? "chip chip-warn" : "chip"} title={t("guide.phrasing.unsupportedHint")}>
+                        {t("guide.phrasing.unsupported", { percent: Math.round((opener.unsupported / opener.strings) * 100) })}
+                      </span>
+                    </header>
+                    {opener.cues.length > 0 ? (
+                      <div className="search-chips" aria-label={t("guide.phrasing.cues")}>
+                        {opener.cues.map((cue) => (
+                          <span key={cue.word} className="chip" title={t("guide.phrasing.cueHint")}>{cue.word}<span className="search-issue-count">{Math.round((cue.strings / opener.strings) * 100)}%</span></span>
+                        ))}
+                      </div>
+                    ) : null}
+                    {opener.examples.length > 0 ? (
+                      <details className="guide-candidate-examples">
+                        <summary>{t("guide.phrasing.examples")}</summary>
+                        <ul>
+                          {opener.examples.map((example) => (
+                            <li key={`${example.path}|${example.context}`}>
+                              <span className="guide-candidate-source">{example.source}</span>
+                              <span>{example.translation}</span>
+                            </li>
+                          ))}
+                        </ul>
+                      </details>
+                    ) : null}
+                    <div className="guide-candidate-actions">
+                      <button className="button button-secondary" type="button" onClick={() => toStyle(opener)}><UiIcon icon="plus" size="sm" />{t("guide.phrasing.toStyle")}</button>
+                    </div>
+                  </article>
+                ))}
               </div>
             </section>
           ) : (

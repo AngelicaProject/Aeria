@@ -18,6 +18,95 @@ use crate::names::Name;
 /// the project's style, and the answer's form.
 #[must_use]
 pub fn instructions(source_language: &str, target_language: &str, style: Option<&str>) -> String {
+    let mut text = rules(source_language, target_language, style);
+    text.push_str(
+        "Answer with one JSON object and nothing else: each key is the `id` of a string and \
+         each value an array of two strings: the first words of that string's source, up to \
+         three, copied as they are (macros may be left out), then its translation as macro \
+         text. The first words show which string a translation belongs to; give every \
+         string its own translation. Translate every string.",
+    );
+    text
+}
+
+/// The instructions of every request of a run that corrects translations:
+/// the rules and the style as for translating, what a correction may
+/// change, a proofreading of every translation when asked, a translator's
+/// request for every translation of the run, and the answer's form.
+#[must_use]
+pub fn fix_instructions(
+    source_language: &str,
+    target_language: &str,
+    style: Option<&str>,
+    proofread: bool,
+    adapt: bool,
+    request: Option<&str>,
+) -> String {
+    let mut text = rules(source_language, target_language, style);
+    text.push_str(
+        "This run corrects translations rather than translating: each string has \
+         `translation`, its current translation, and may have `fix`: what the project's \
+         checks find wrong with it. Change a translation only as far as its `fix`, the \
+         proofreading below when this run asks for it, and the translator's request below \
+         need, and keep every other word, its macros, and its wording as they are. Advice \
+         of the checks can be wrong for a string: when an item of `fix` does not apply, or \
+         nothing needs to change, answer the translation unchanged.\n\n",
+    );
+    if proofread {
+        text.push_str(PROOFREADING);
+    }
+    if adapt {
+        text.push_str(ADAPTING);
+    }
+    if let Some(request) = request.map(str::trim).filter(|request| !request.is_empty()) {
+        let _ = write!(
+            text,
+            "The translator asks of every translation of this run:\n\n{request}\n\n"
+        );
+    }
+    let _ = write!(
+        text,
+        "Answer with one JSON object and nothing else: each key is the `id` of a string and \
+         each value an array of three strings: the first words of that string's source, up \
+         to three, copied as they are (macros may be left out); then its corrected \
+         translation as macro text; then why it changed, in a few words of \
+         {target_language} without quotes (обращение по французской строке, канцелярит, \
+         калька, потерян смысл источника), or an empty string when it did not. The first \
+         words show which string a translation belongs to; give every string its own \
+         translation. Answer every string."
+    );
+    text
+}
+
+/// What a correction run asks of a translation whose source changed.
+const ADAPTING: &str = "A string with `previous` changed its source since it was translated: \
+     `previous.source` is the source its `translation` was written for, and `source` the \
+     source now. Adapt the translation to the new source: change what the change of the \
+     source changes, such as a number, a name, a word, or a sentence added or removed, and \
+     keep every other word of the translation as it is. When the change of the source does \
+     not touch what the translation says, answer it unchanged: it still fits.\n\n";
+
+/// What proofreading asks of every translation of a correction run.
+const PROOFREADING: &str = "Proofread every translation of this run as the editor of the \
+     localization, reading it against its source, the other client languages of its \
+     context, and the strings around it in the scene. Fix what is wrong: a meaning the \
+     source does not have, or one of its details lost; the form of address the project's \
+     style asks for in this line, which when the style follows another client language is \
+     read from that language's line of this string, not from the lines around it, since \
+     characters address each other differently; agreement with the player character's \
+     gender; a name or term; and phrasing a native speaker would not write: word order or \
+     constructions copied from the source language, officialese, filler, explanations the \
+     source does not give. The source's meaning comes first: never trade a detail of it \
+     for smoothness, never add what it does not say, and keep the register and the voice \
+     of the speaker. Keep what is right as it is: a translation that already reads well \
+     answers unchanged, and a sound change is the smallest one that fixes it. A name of a \
+     thing of the game (an action, a status, an item, a place, a duty, a menu, a tab, a \
+     button) keeps the form the translation gives it unless `names` or `terms` give \
+     another: the game shows it under that name, and a player looks for it there.\n\n";
+
+/// What the instructions of a translation and of a correction share: the
+/// rules of a translation, the project's style, and what a request holds.
+fn rules(source_language: &str, target_language: &str, style: Option<&str>) -> String {
     let mut text = format!(
         "You translate the text of FINAL FANTASY XIV from {source_language} into \
          {target_language} for a fan localization. Each request is a batch of strings of one \
@@ -48,7 +137,10 @@ pub fn instructions(source_language: &str, target_language: &str, style: Option<
          project's translation and `from`: what it names and the sheet of the game it comes \
          from. A name is found by its letters alone, so a word that only looks like one is \
          listed too: `Walk` in \"A Walk in the Park\" is not the place \"The Walk\". Where a \
-         word of a string is that name, you use its translation exactly; where the word \
+         word of a string is that name, you use its translation, in the form the sentence \
+         needs: the translation is the name as it stands alone, and in a language that \
+         declines names it declines like any written word (Поговорите с Ко Рабнтой); only a \
+         name the game fills in through a macro keeps its stored form. Where the word \
          means something else, you translate it by its meaning. `terms` are the project's \
          terms, \
          which you use exactly and whose `never` variants you never use; `files` are the \
@@ -76,12 +168,7 @@ pub fn instructions(source_language: &str, target_language: &str, style: Option<
          world: the game cuts a name longer than that many bytes of UTF-8, where a Latin \
          letter, digit, or space takes one and a Cyrillic letter or « » two; keep the name \
          within it, shortening a description or using the usual abbreviations of the \
-         language when needed.\n\n\
-         Answer with one JSON object and nothing else: each key is the `id` of a string and \
-         each value an array of two strings: the first words of that string's source, up to \
-         three, copied as they are (macros may be left out), then its translation as macro \
-         text. The first words show which string a translation belongs to; give every \
-         string its own translation. Translate every string.",
+         language when needed.\n\n",
     );
     text
 }
@@ -99,6 +186,10 @@ pub struct Item {
     pub max_length: Option<Budget>,
     /// Terms a person decided do not apply to the string.
     pub term_exceptions: Vec<String>,
+    /// The translation a correction starts from.
+    pub translation: Option<String>,
+    /// What the checks find wrong with `translation`, as the model is told.
+    pub fix: Vec<String>,
 }
 
 /// One answer: the words it repeats from the start of its source, and the
@@ -107,6 +198,8 @@ pub struct Item {
 pub struct Answer {
     pub start: Option<String>,
     pub text: String,
+    /// Why a correction changed the translation, as the model says.
+    pub reason: Option<String>,
 }
 
 /// A term of the project for a batch.
@@ -199,6 +292,12 @@ fn file_value(task: &FileTask) -> Value {
                 if !item.term_exceptions.is_empty() {
                     value["termExceptions"] = Value::from(item.term_exceptions.clone());
                 }
+                if let Some(translation) = &item.translation {
+                    value["translation"] = Value::from(translation.as_str());
+                }
+                if !item.fix.is_empty() {
+                    value["fix"] = Value::from(item.fix.clone());
+                }
                 value
             })
             .collect::<Vec<_>>(),
@@ -253,11 +352,22 @@ pub fn parse(text: &str) -> Result<HashMap<String, Answer>, String> {
                 Value::String(text) => Answer {
                     start: None,
                     text: text.clone(),
+                    reason: None,
                 },
                 Value::Array(parts) => match parts.as_slice() {
                     [Value::String(start), Value::String(text)] => Answer {
                         start: Some(start.clone()),
                         text: text.clone(),
+                        reason: None,
+                    },
+                    [
+                        Value::String(start),
+                        Value::String(text),
+                        Value::String(reason),
+                    ] => Answer {
+                        start: Some(start.clone()),
+                        text: text.clone(),
+                        reason: Some(reason.trim().to_owned()).filter(|reason| !reason.is_empty()),
                     },
                     _ => return None,
                 },
@@ -271,12 +381,14 @@ pub fn parse(text: &str) -> Result<HashMap<String, Answer>, String> {
 /// Reads an answer as [`parse`] does, and when it is not valid JSON, takes
 /// what can still be read: each entry `"id": ["first words", "translation"]`
 /// on its own, where a quote the model did not escape inside a string is read
-/// as part of it. A string read this way is checked like any other, so a
-/// wrong reading is refused, never written. Entries that cannot be read are
-/// left out, and the caller asks for them again.
+/// as part of it. With `reasons`, an entry ends with the reason a
+/// correction gives, which has no quotes and no macros, after the last
+/// `", "`. A string read this way is checked like any other, so a wrong
+/// reading is refused, never written. Entries that cannot be read are left
+/// out, and the caller asks for them again.
 #[must_use]
-pub fn parse_lenient(text: &str) -> HashMap<String, Answer> {
-    parse(text).unwrap_or_else(|_| salvage(text))
+pub fn parse_lenient(text: &str, reasons: bool) -> HashMap<String, Answer> {
+    parse(text).unwrap_or_else(|_| salvage(text, reasons))
 }
 
 /// Where each entry `"id": [` of an answer starts: its id and the byte
@@ -351,7 +463,7 @@ fn followed_by(rest: &str, then: char) -> bool {
 }
 
 /// The entries of an answer that is not valid JSON (see [`parse_lenient`]).
-fn salvage(text: &str) -> HashMap<String, Answer> {
+fn salvage(text: &str, reasons: bool) -> HashMap<String, Answer> {
     let starts = entry_starts(text);
     let mut answers = HashMap::new();
     for (position, (id, from)) in starts.iter().enumerate() {
@@ -385,15 +497,24 @@ fn salvage(text: &str) -> HashMap<String, Answer> {
         else {
             continue;
         };
-        if let (Some(start), Some(translation)) = (
-            unescape_loosely(&body[..first_end]),
-            unescape_loosely(&second[..second_end]),
-        ) {
+        let mut rest = &second[..second_end];
+        let mut reason = None;
+        if reasons
+            && let Some(split) = rest.rfind("\", \"")
+            && !rest[split + 4..].contains(['"', '<'])
+        {
+            reason = Some(rest[split + 4..].trim().to_owned()).filter(|reason| !reason.is_empty());
+            rest = &rest[..split];
+        }
+        if let (Some(start), Some(translation)) =
+            (unescape_loosely(&body[..first_end]), unescape_loosely(rest))
+        {
             answers.insert(
                 id.clone(),
                 Answer {
                     start: Some(start),
                     text: translation,
+                    reason,
                 },
             );
         }
@@ -409,15 +530,15 @@ mod tests {
     fn an_answer_with_an_unescaped_quote_keeps_its_readable_entries() {
         let text = r#"{"1": ["Talk to", "Поговорите с <sheet Item "x" 1>."], "2": ["Hello", "Привет"], "3": ["Broken", "Сло\qмано"], "4": ["Bye", "Пока, "друг"!"]}"#;
         assert!(parse(text).is_err());
-        let answers = parse_lenient(text);
+        let answers = parse_lenient(text, false);
         assert_eq!(answers["1"].text, r#"Поговорите с <sheet Item "x" 1>."#);
         assert_eq!(answers["1"].start.as_deref(), Some("Talk to"));
         assert_eq!(answers["2"].text, "Привет");
         assert!(!answers.contains_key("3"), "an invalid escape is left out");
         assert_eq!(answers["4"].text, r#"Пока, "друг"!"#);
         // Valid JSON is read as before.
-        assert_eq!(parse_lenient(r#"{"1": ["a", "б"]}"#)["1"].text, "б");
-        assert!(parse_lenient("no json").is_empty());
+        assert_eq!(parse_lenient(r#"{"1": ["a", "б"]}"#, false)["1"].text, "б");
+        assert!(parse_lenient("no json", false).is_empty());
     }
 
     #[test]
@@ -431,13 +552,30 @@ mod tests {
             parsed["1"],
             Answer {
                 start: Some("OK".to_owned()),
-                text: "ОК".to_owned()
+                text: "ОК".to_owned(),
+                reason: None,
             }
         );
         assert_eq!(parsed["2"].start, None);
         assert_eq!(parsed["2"].text, "Отмена");
         assert!(parse("no object").is_err());
         assert!(parse("[1, 2]").is_err());
+    }
+
+    #[test]
+    fn a_correction_gives_its_reason() {
+        let valid = r#"{"1": ["OK", "Ладно", "канцелярит"], "2": ["No", "Нет", ""]}"#;
+        let parsed = parse_lenient(valid, true);
+        assert_eq!(parsed["1"].text, "Ладно");
+        assert_eq!(parsed["1"].reason.as_deref(), Some("канцелярит"));
+        assert_eq!(parsed["2"].reason, None);
+        // An answer that is not JSON keeps its reasons apart from the text.
+        let broken = r#"{"1": ["Talk to", "Поговорите с <sheet Item "x" 1>.", "калька"], "2": ["Hi", "Привет, "друг""]}"#;
+        let salvaged = parse_lenient(broken, true);
+        assert_eq!(salvaged["1"].text, r#"Поговорите с <sheet Item "x" 1>."#);
+        assert_eq!(salvaged["1"].reason.as_deref(), Some("калька"));
+        assert_eq!(salvaged["2"].text, r#"Привет, "друг""#);
+        assert_eq!(salvaged["2"].reason, None);
     }
 
     #[test]
@@ -464,6 +602,8 @@ mod tests {
                     previous: None,
                     max_length: None,
                     term_exceptions: vec!["Maelstrom".to_owned()],
+                    translation: None,
+                    fix: Vec::new(),
                 }],
             }],
             &[
@@ -495,6 +635,30 @@ mod tests {
     }
 
     #[test]
+    fn a_correction_carries_the_rules_and_the_request() {
+        let text = fix_instructions(
+            "en",
+            "ru",
+            Some("К герою на «вы»."),
+            true,
+            true,
+            Some(" На «ты». "),
+        );
+        assert!(text.contains("FINAL FANTASY XIV is written in Japanese"));
+        assert!(text.contains("К герою на «вы»."));
+        assert!(text.contains("`fix`"));
+        assert!(text.contains("of this run:\n\nНа «ты».\n\n"));
+        assert!(text.contains("Proofread every translation"));
+        assert!(text.contains("Adapt the translation to the new source"));
+        let plain = fix_instructions("en", "ru", None, false, false, None);
+        assert!(!plain.contains("Proofread every") && !plain.contains("Adapt the translation"));
+        assert!(!text.contains("Translate every string."));
+        assert!(
+            !fix_instructions("en", "ru", None, false, false, Some("  ")).contains("of this run")
+        );
+    }
+
+    #[test]
     fn strings_that_vary_with_the_player_gender_are_marked() {
         let item = |source: &str, context: &[&str]| Item {
             id: "1".to_owned(),
@@ -503,6 +667,8 @@ mod tests {
             previous: None,
             max_length: None,
             term_exceptions: Vec::new(),
+            translation: None,
+            fix: Vec::new(),
         };
         let input = input(
             &[FileTask {
@@ -542,6 +708,8 @@ mod tests {
             previous: None,
             max_length,
             term_exceptions: Vec::new(),
+            translation: None,
+            fix: Vec::new(),
         };
         let input = input(
             &[FileTask {

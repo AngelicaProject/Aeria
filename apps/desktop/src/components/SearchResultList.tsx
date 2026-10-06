@@ -65,6 +65,7 @@ type SearchResultListProps = {
   onReplaceGroup: (group: SheetGroup) => void;
   onExcept: (hit: SearchHitDto, term: string) => void;
   onRetranslate: (hit: SearchHitDto) => void;
+  onFix: (hit: SearchHitDto) => void;
   /** Leaves the list for the search field. */
   onExit: () => void;
   /** Strings were chosen with Ctrl or Shift: the person knows the keys. */
@@ -341,6 +342,7 @@ export const SearchResultList = forwardRef<SearchResultListHandle, SearchResultL
                   />
                   {replacing && translationRanges.length > 0 ? <IconButton icon="replace" size="xs" tabIndex={-1} label={t("search.replaceOne")} disabled={disabled} onClick={() => props.onReplaceOne(hit)} /> : null}
                   {term !== null ? <IconButton icon="bookX" size="xs" tabIndex={-1} label={t("search.exceptOne", { term })} disabled={disabled} onClick={() => props.onExcept(hit, term)} /> : null}
+                  {hit.translation ? <IconButton icon="wand" size="xs" tabIndex={-1} label={t("search.fixOne")} disabled={disabled} onClick={() => props.onFix(hit)} /> : null}
                   {hit.translation ? <IconButton icon="sparkles" size="xs" tabIndex={-1} label={t("search.retranslateOne")} disabled={disabled} onClick={() => props.onRetranslate(hit)} /> : null}
                 </span>
               </div>

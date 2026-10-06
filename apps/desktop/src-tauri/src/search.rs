@@ -243,6 +243,8 @@ pub struct SearchResultDto {
     /// With a check filter, the issues of every string found by group.
     pub issues: Vec<IssueCountDto>,
     pub cancelled: bool,
+    /// The sheets and folders of the query that are not in the project.
+    pub unknown_paths: Vec<String>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -446,6 +448,7 @@ pub async fn project_search(
                 })
                 .collect(),
             cancelled: found.cancelled,
+            unknown_paths: found.unknown_paths,
             hits: found
                 .hits
                 .into_iter()
@@ -572,6 +575,81 @@ pub async fn project_term_candidates(
                     .collect(),
             })
             .collect())
+    })
+    .await
+}
+
+/// A word of the sources that comes with an opener.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PhrasingCueDto {
+    pub word: String,
+    pub strings: usize,
+}
+
+/// A phrase the translations open sentences with.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OpenerDto {
+    pub phrase: String,
+    pub strings: usize,
+    pub cues: Vec<PhrasingCueDto>,
+    /// Strings whose source has none of the cues.
+    pub unsupported: usize,
+    pub examples: Vec<TermExampleDto>,
+}
+
+/// The openers of the project's translations.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PhrasingDto {
+    pub translated: usize,
+    pub openers: Vec<OpenerDto>,
+}
+
+#[tauri::command(rename_all = "camelCase")]
+/// The phrases the open project's translations open sentences with, with
+/// the words of the sources that come with them (see
+/// `aeria_po::phrasing`), those of most strings first.
+///
+/// # Errors
+///
+/// Returns `noProjectOpen`, or `translationRead` when a file cannot be read.
+pub async fn project_phrasing(app: tauri::AppHandle) -> CommandResult<PhrasingDto> {
+    run_blocking(move || {
+        let session = app.state::<DesktopState>().session()?;
+        let found = aeria_po::phrasing(session.root()).map_err(|error| search_error(&error))?;
+        Ok(PhrasingDto {
+            translated: found.translated,
+            openers: found
+                .openers
+                .into_iter()
+                .map(|opener| OpenerDto {
+                    phrase: opener.phrase,
+                    strings: opener.strings,
+                    cues: opener
+                        .cues
+                        .into_iter()
+                        .map(|cue| PhrasingCueDto {
+                            word: cue.word,
+                            strings: cue.strings,
+                        })
+                        .collect(),
+                    unsupported: opener.unsupported,
+                    examples: opener
+                        .examples
+                        .into_iter()
+                        .map(|example| TermExampleDto {
+                            binding: binding(&session, &example.context),
+                            path: example.path,
+                            context: example.context,
+                            source: example.source,
+                            translation: example.translation,
+                        })
+                        .collect(),
+                })
+                .collect(),
+        })
     })
     .await
 }
@@ -811,6 +889,7 @@ pub async fn project_retranslate(
                 contexts,
                 model,
                 effort: effort.filter(|effort| !effort.is_empty()),
+                fix: None,
             },
         )?;
     }

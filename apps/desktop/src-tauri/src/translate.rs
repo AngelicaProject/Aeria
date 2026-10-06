@@ -6,8 +6,8 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
 use aeria_model::auth::{DeviceLogin, VERIFICATION_URL};
-use aeria_model::{Codex, KeyringStore, ModelError, ModelInfo, Options, Run, Status};
-use serde::Serialize;
+use aeria_model::{Codex, Fix, KeyringStore, ModelError, ModelInfo, Options, Run, Status};
+use serde::{Deserialize, Serialize};
 use tauri::Manager;
 
 use crate::error::CommandError;
@@ -218,6 +218,7 @@ pub async fn translation_start(
             contexts: Vec::new(),
             model,
             effort: effort.filter(|effort| !effort.is_empty()),
+            fix: None,
         },
     )
 }
@@ -319,13 +320,24 @@ pub struct RejectionDto {
     pub problems: Vec<crate::dto::IssueDto>,
 }
 
-/// The progress of a run, with its rejected strings.
+/// A translation a correction changed, with where it is in the game.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CorrectionDto {
+    #[serde(flatten)]
+    pub corrected: aeria_model::Corrected,
+    pub binding: Option<crate::dto::SourceBindingDto>,
+}
+
+/// The progress of a run, with its rejected strings and the corrections it
+/// wrote.
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StatusDto {
     #[serde(flatten)]
     pub status: Status,
     pub rejections: Vec<RejectionDto>,
+    pub corrections: Vec<CorrectionDto>,
 }
 
 fn rejection_dto(
@@ -370,7 +382,21 @@ pub fn translation_status(app: tauri::AppHandle) -> Option<StatusDto> {
         .iter()
         .map(|rejected| rejection_dto(session.as_deref(), rejected))
         .collect();
-    Some(StatusDto { status, rejections })
+    let corrections = status
+        .corrections
+        .iter()
+        .map(|corrected| CorrectionDto {
+            binding: session
+                .as_deref()
+                .and_then(|session| crate::search::binding(session, &corrected.context)),
+            corrected: corrected.clone(),
+        })
+        .collect();
+    Some(StatusDto {
+        status,
+        rejections,
+        corrections,
+    })
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -395,8 +421,111 @@ pub async fn translation_retry(
             contexts,
             model,
             effort: effort.filter(|effort| !effort.is_empty()),
+            fix: None,
         },
     )
+}
+
+/// What a correction asks of each translation.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FixDto {
+    /// Fix what the checks find, only of `groups` when it is not empty.
+    pub issues: bool,
+    #[serde(default)]
+    pub groups: Vec<String>,
+    /// Proofread each translation.
+    #[serde(default)]
+    pub proofread: bool,
+    /// Adapt a fuzzy translation to its changed source and clear the mark.
+    #[serde(default)]
+    pub adapt: bool,
+    /// What the translator asks of each translation.
+    pub request: Option<String>,
+}
+
+/// Starts a correction run of the strings `contexts` of the files `paths`.
+fn start_fix(
+    app: &tauri::AppHandle,
+    paths: Vec<String>,
+    contexts: Vec<String>,
+    fix: FixDto,
+    model: String,
+    effort: Option<String>,
+) -> CommandResult<()> {
+    let request = fix
+        .request
+        .map(|request| request.trim().to_owned())
+        .filter(|request| !request.is_empty());
+    if !fix.issues && !fix.proofread && !fix.adapt && request.is_none() {
+        return Err(CommandError::new(
+            "fixEmpty",
+            "choose the issues to fix, proofreading, adapting, or write a request",
+        ));
+    }
+    start_run(
+        app,
+        Options {
+            paths,
+            fuzzy: false,
+            contexts,
+            model,
+            effort: effort.filter(|effort| !effort.is_empty()),
+            fix: Some(Fix {
+                issues: fix.issues,
+                groups: fix.groups,
+                proofread: fix.proofread,
+                adapt: fix.adapt,
+                request,
+            }),
+        },
+    )
+}
+
+#[tauri::command(rename_all = "camelCase")]
+/// Corrects the translations of the given strings, by `msgctxt` in the
+/// files `paths` (relative to `po/`), as `fix` asks. A reviewed translation
+/// is left as it is.
+///
+/// # Errors
+///
+/// Returns `translationRunning` while a run goes, `fixEmpty` when there is
+/// nothing to ask, or `noProjectOpen`.
+pub async fn translation_fix(
+    app: tauri::AppHandle,
+    paths: Vec<String>,
+    contexts: Vec<String>,
+    fix: FixDto,
+    model: String,
+    effort: Option<String>,
+) -> CommandResult<()> {
+    app.state::<DesktopState>().session()?;
+    start_fix(&app, paths, contexts, fix, model, effort)
+}
+
+#[tauri::command(rename_all = "camelCase")]
+/// Corrects the translation of one string, by where it is in the game, as
+/// `fix` asks.
+///
+/// # Errors
+///
+/// As [`translation_fix`], and `translationPersistence` when the string is
+/// not an entry of the project.
+pub async fn translation_fix_string(
+    app: tauri::AppHandle,
+    source_binding: crate::dto::SourceBindingDto,
+    fix: FixDto,
+    model: String,
+    effort: Option<String>,
+) -> CommandResult<()> {
+    let session = app.state::<DesktopState>().session()?;
+    let (path, context, _) = session.locate(
+        &source_binding.sheet_name,
+        source_binding.row_id,
+        source_binding.subrow_id,
+        source_binding.column_index,
+    )?;
+    start_fix(&app, vec![path], vec![context], fix, model, effort)
 }
 
 #[tauri::command(rename_all = "camelCase")]

@@ -24,7 +24,7 @@ pub mod sounds;
 use std::time::Duration;
 
 pub use codex::{Codex, KeyringStore, ModelInfo, Reply, Request, TokenStore, Usage};
-pub use run::{Options, Rejected, Run, Status, Stop, plan};
+pub use run::{Corrected, Fix, Options, Rejected, Run, Status, Stop, plan};
 
 /// Errors of the sign-in and of requests to the model.
 #[derive(Clone, Debug, thiserror::Error)]

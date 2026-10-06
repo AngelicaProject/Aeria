@@ -98,6 +98,34 @@ a term.
 The result is a heuristic: a rendering can still be a word that goes with a
 name rather than translate it, so the person reviews each candidate.
 
+## Openers
+
+`aeria_po::phrasing` counts the phrases the translations open sentences with,
+such as «Похоже,» or «Ну что,», over the translated strings that are not
+fuzzy. Whether a line reads as a translation cannot be judged from one short
+string, which is why the checks hold only a few words to it (see
+[`knowledge.md`](./knowledge.md)); a habit of the translations shows over the
+whole project. Machine translation tends to render one word of the source
+the same way every time, and to add a phrase the source has no word for.
+
+1. An *opener* is one to three words at the start of a sentence of a
+   translation's plain text, after a speaker's label, followed by a comma,
+   a dash, or an ellipsis. One that opens sentences of at least 50 strings
+   is counted, at most 80 of them, most strings first. A name is left out:
+   a word the translations write with a capital in most of its uses inside
+   a sentence (Альфино, …).
+2. A *cue* of an opener is a word of the sources' plain text in at least
+   3 % of its strings and at least six times as frequent there as in all
+   translated strings, ranked by its share times the logarithm of that
+   ratio; at most four are kept. Cues are found from the project, never
+   listed, so they work for any pair of languages: «Похоже,» comes with
+   `seems`, `seem`, and `appears`.
+3. An opener's strings whose source has none of its cues are counted, with
+   three of them as examples: there the phrase was added.
+
+The count reads every file, about seven seconds for the whole game. What
+the style says about an opener is a person's decision.
+
 ## Terminology candidates
 
 `SourceIndex::term_candidates` finds names that recur in the game's text,
@@ -142,7 +170,8 @@ project, and lists the entries found in file order (files sorted by path):
   is saved with (see [`po-project.md`](./po-project.md#checking)): only
   translations with a problem, which are not exported, or only translations
   with advice, such as a term of the source whose translation does not seem
-  to be used. A search may have no pattern and only filters.
+  to be used. A search may have no pattern and only filters. The result names
+  the files and folders of the filter that choose no file of `po/`.
 
 Findings of the checks are data (`aeria_po::Issue`: the kind with its
 term, variant, or word), so an interface words them in its own language; each
@@ -231,6 +260,16 @@ reviewed is not cleared: it is skipped and reported as such (see
 [`po-project.md`](./po-project.md#reviews)), and a person removes its review
 in the editor to translate it again. A run that stops leaves the rest
 untranslated, so any later run takes them.
+
+### Fixing
+
+Found translations can be corrected by machine translation instead of
+translated again: every translation found, the chosen strings, or one
+string, with a proofreading, the issues of the checks (only the chosen
+group's, when a group is chosen), and a request in the translator's words (see
+[`translate.md`](./translate.md#correcting-translations)). Nothing is
+cleared: a translation stays as it is until its correction passes the
+checks, and a reviewed one stays as it is.
 
 ## Desktop use
 

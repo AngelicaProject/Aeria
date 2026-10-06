@@ -10,6 +10,7 @@ pub mod generate;
 pub mod identity;
 pub mod length;
 pub mod merge;
+pub mod phrasing;
 pub mod po;
 pub mod project;
 pub mod search;
@@ -20,6 +21,7 @@ pub use check::{Finding, Issue, Verdict, check_file, check_translation};
 pub use generate::{GenerateError, Languages, identity_keys, identity_of, is_entry, sheet_files};
 pub use identity::{Identity, ROWS_PER_FILE, RowName, SheetPaths, is_scene, splits};
 pub use merge::{merge, merge_files};
+pub use phrasing::{Cue, Opener, Phrasing, phrasing};
 pub use po::{
     Entry, Header, PoFile, Problem, REVIEWED_FLAG, TERM_EXCEPTION_FLAG, can_be_exception,
     fingerprint, quote, unquote,
