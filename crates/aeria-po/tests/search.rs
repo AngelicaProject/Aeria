@@ -286,6 +286,42 @@ fn clearing_leaves_strings_untranslated_for_machine_translation() {
 }
 
 #[test]
+fn a_correction_leaves_a_reviewed_translation() {
+    let (_directory, session) = project();
+    session
+        .set_reviewed("Addon", 2, 0, 0, true)
+        .expect("reviewed");
+    let correct = |context: &str, expected: &str| EntryEdit {
+        path: "Addon.po".to_owned(),
+        context: context.to_owned(),
+        expected_text: expected.to_owned(),
+        expected_fuzzy: false,
+        kind: EditKind::Correct("Исправлено".to_owned()),
+    };
+    let applied = session
+        .apply_edits(&[
+            correct("Addon:1:0:0", "Повар пришёл"),
+            correct("Addon:2:0:0", "Спроси повара"),
+        ])
+        .expect("correct");
+    assert_eq!(applied.done.len(), 1);
+    assert_eq!(applied.done[0].context, "Addon:1:0:0");
+    assert!(matches!(
+        applied.skipped.as_slice(),
+        [skipped] if skipped.reason == aeria_po::SkipReason::Reviewed
+    ));
+    let text = |row| {
+        session
+            .translation("Addon", row, 0, 0)
+            .expect("read")
+            .expect("translated")
+            .text
+    };
+    assert_eq!(text(1), "Исправлено");
+    assert_eq!(text(2), "Спроси повара");
+}
+
+#[test]
 fn a_term_exception_lifts_the_term_and_undo_takes_it_back() {
     let (_directory, session) = project();
     let terms = "term,translation,forbidden\ncook,кулинар,повар\n";
@@ -424,4 +460,18 @@ fn a_search_sees_every_change_of_the_files_and_the_knowledge() {
     // A file removed is no longer found.
     std::fs::remove_file(&file).expect("remove");
     assert_eq!(find(&session, &query("кулинар", MatchKind::Text)).total, 1);
+}
+
+#[test]
+fn a_sheet_typed_wrong_is_reported() {
+    let (_directory, session) = project();
+    let found = find(
+        &session,
+        &Query {
+            paths: vec!["Addon".to_owned(), "Adon".to_owned(), "Item/".to_owned()],
+            ..Query::default()
+        },
+    );
+    assert_eq!(found.unknown_paths, ["Adon"]);
+    assert!(found.total > 0);
 }

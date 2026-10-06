@@ -194,7 +194,13 @@
 .replace-change.invalid .git-diff { opacity: 0.6; }
 .replace-change-problems { display: flex; gap: 4px; margin: 0; color: var(--bad); font-size: var(--text-2xs); }
 
+/* What a correction with AI asks of each translation. */
+.fix-dialog { width: min(520px, calc(100vw - 48px)); }
+.fix-form { display: grid; gap: 12px; margin-top: 12px; }
+.fix-request { min-height: 72px; resize: vertical; font-family: var(--font-ui); }
+
 /* Strings the checks refused in a machine translation run. */
+.translate-correction-reason { margin: 0; color: var(--fg-muted); font-size: var(--text-2xs); }
 .translate-rejections { display: grid; gap: 6px; font-size: var(--text-xs); }
 .translate-rejections > summary { cursor: pointer; font-weight: 600; }
 .translate-rejections ul { display: grid; gap: 8px; max-height: 260px; margin: 0; padding: 0; overflow: auto; list-style: none; }

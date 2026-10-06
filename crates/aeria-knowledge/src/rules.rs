@@ -78,7 +78,12 @@ phrased so that nothing depends on the gender. Never keep only one of its branch
 - When the French or German line varies with the player character's gender and the \
 source does not, the target language most likely needs a condition there too.
 - Speakers keep their own gender: a condition on $gn4 is only for words about the \
-player character.
+player character. Before writing one, find in the scene whom the line speaks to or \
+about: who answers it, who is named, who just spoke or acted, and what the other \
+languages' forms show (a feminine French participle for the one addressed). \
+\"You\" in a quarrel between two characters, or in a reply to another character, is \
+that character, whose gender is fixed: their words agree with it without a condition, \
+as «Ты украл её у нас» said to a man or «Я рад, что ты цела» said to a girl.
 - Messages about other people, such as the party and battle log, name them by $gs2 \
 and $gs3, and compare each with the player's name: <if ($gs1 == $gs2)> holds when the \
 one $gs2 names is the player character. That one may be another player, a character, \
@@ -157,6 +162,10 @@ sentence, «а», «да», «вот и», or word order.";
 /// Phrasing that makes a line read machine-written, as short descriptions;
 /// empty when the text has none or the target has no list. Plain word
 /// matching on the text without tags, cheap enough to run on every line.
+/// Only words that are almost never right in a game's text are listed:
+/// what a line's punctuation or links should be depends on its source and
+/// its kind (a title with a colon, a list of `label: value`), which one
+/// line alone does not show.
 #[must_use]
 pub fn machine_phrasing(target: &str, text: &str) -> Vec<&'static str> {
     if !target.eq_ignore_ascii_case("ru") {
@@ -179,50 +188,20 @@ pub fn machine_phrasing(target: &str, text: &str) -> Vec<&'static str> {
         "данного",
         "данной",
     ];
-    let officialese_stems = [
-        "осуществ",
-        "обеспеч",
-        "соблюда",
-        "предостав",
-        "состоял",
-        "состоится",
-    ];
-    if words.iter().any(|word| {
-        officialese.contains(word) || officialese_stems.iter().any(|stem| word.starts_with(stem))
-    }) || ["в связи с", "в целях", "в рамках", "таким образом"]
+    if words
         .iter()
-        .any(|phrase| plain.contains(phrase))
+        .any(|word| officialese.contains(word) || word.starts_with("осуществ"))
+        || ["в связи с", "в целях", "в рамках"]
+            .iter()
+            .any(|phrase| plain.contains(phrase))
     {
         found.push("канцелярит");
-    }
-    if [
-        "однако",
-        "тем не менее",
-        "кроме того",
-        "в конце концов",
-        "следовательно",
-    ]
-    .iter()
-    .any(|phrase| plain.contains(phrase))
-    {
-        found.push("книжная связка");
     }
     if ["если это не ", "поверь моему слову", "звучит как"]
         .iter()
         .any(|phrase| plain.starts_with(phrase) || plain.contains(&format!(". {phrase}")))
     {
         found.push("калька");
-    }
-    if plain.matches(": ").count() + plain.matches(" — ").count() >= 2 {
-        found.push("двоеточия и тире-пояснения");
-    }
-    if words
-        .iter()
-        .filter(|word| word.starts_with("котор"))
-        .count()
-        >= 2
-    {
-        found.push("два «который»");
     }
     found
 }
@@ -246,7 +225,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn machine_phrasing_finds_russian_officialese_calques_and_explanations() {
+    fn machine_phrasing_finds_russian_officialese_and_calques() {
         assert_eq!(
             machine_phrasing("ru", "Твоя регистрация является завершённой."),
             ["канцелярит"]
@@ -255,11 +234,14 @@ mod tests {
             machine_phrasing("ru", "Если это не звёздная журналистка!"),
             ["калька"]
         );
-        assert_eq!(
-            machine_phrasing("ru", "Напомню: тут опасно — будь начеку."),
-            ["двоеточия и тире-пояснения"]
-        );
-        assert!(machine_phrasing("ru", "Ну что, <i>небось</i> не терпится?").is_empty());
+        for text in [
+            "Ну что, <i>небось</i> не терпится?",
+            "Копай — не хочу: Ла Носке II",
+            "Сила: 130<br>Сила: 220",
+            "Однако событие состоялось, и мы обеспечили всё, что нужно.",
+        ] {
+            assert!(machine_phrasing("ru", text).is_empty(), "{text}");
+        }
         assert!(machine_phrasing("fr", "является").is_empty());
     }
 }

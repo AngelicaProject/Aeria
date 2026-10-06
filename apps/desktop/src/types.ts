@@ -531,6 +531,23 @@ export type TranslationActive = {
 };
 
 /** Where a machine translation run is. */
+/**
+ * What a correction with AI asks of each translation: the issues of the
+ * checks (only of `groups` when not empty), a proofreading, the adaptation of
+ * a fuzzy translation to its changed source, and a translator's request.
+ */
+export type FixRequest = { issues: boolean; groups: string[]; proofread: boolean; adapt: boolean; request: string | null };
+
+/** A translation a correction run changed. */
+export type TranslationCorrected = {
+  path: string;
+  context: string;
+  binding: SourceBinding | null;
+  before: string;
+  after: string;
+  reason: string | null;
+};
+
 export type TranslationStatus = {
   running: boolean;
   files: number;
@@ -538,8 +555,14 @@ export type TranslationStatus = {
   batchesDone: number;
   strings: number;
   written: number;
+  /** Translations a correction answered unchanged. */
+  unchanged: number;
   rejected: number;
   rejections: TranslationRejected[];
+  /** The first translations a correction wrote, with why each changed. */
+  corrections: TranslationCorrected[];
+  /** The run corrects translations rather than translating. */
+  fixing: boolean;
   inputTokens: number;
   cachedTokens: number;
   outputTokens: number;
@@ -556,6 +579,12 @@ export type TranslationStatus = {
 export type TermExampleDto = { path: string; context: string; binding: SourceBinding | null; source: string; translation: string };
 
 /** One way the project renders a glossary candidate. */
+/** A phrase the translations open sentences with, with the source words that come with it. */
+export type OpenerDto = { phrase: string; strings: number; cues: { word: string; strings: number }[]; unsupported: number; examples: TermExampleDto[] };
+
+/** The openers of the project's translations. */
+export type PhrasingDto = { translated: number; openers: OpenerDto[] };
+
 export type TermRenderingDto = { words: string[]; strings: number; examples: TermExampleDto[] };
 
 /** A name the project renders in several ways, the most used rendering first. */
@@ -833,7 +862,7 @@ export type SearchQueryDto = {
 
 /** One finding of the checks, as data; `message` is the English text for unknown kinds. */
 export type IssueDto = {
-  kind: "lineBreak" | "structure" | "forbiddenTerm" | "mark" | "mixedAlphabets" | "bothGenders" | "termNotUsed" | "genderNotVaried" | "genderInOtherLanguages" | "machinePhrasing" | "staleTermException" | "labelTooLong" | "nameTooLong" | "other";
+  kind: "lineBreak" | "structure" | "forbiddenTerm" | "mark" | "mixedAlphabets" | "bothGenders" | "repeatedWord" | "termNotUsed" | "genderNotVaried" | "genderInOtherLanguages" | "machinePhrasing" | "staleTermException" | "labelTooLong" | "nameTooLong" | "other";
   /** What may be wrong rather than a problem: it does not keep the translation from being saved or exported. */
   advice: boolean;
   /** Groups issues in the summary and filters by them. */
@@ -922,6 +951,8 @@ export type SearchResultDto = {
   /** With a check filter, the issues of every string found by group. */
   issues: IssueCountDto[];
   cancelled: boolean;
+  /** The sheets and folders of the query that are not in the project. */
+  unknownPaths: string[];
 };
 
 export type ReplacementDto = { text: string; preserveCase: boolean };

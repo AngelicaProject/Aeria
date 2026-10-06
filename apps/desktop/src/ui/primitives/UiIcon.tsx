@@ -66,6 +66,7 @@ import {
   Undo2,
   User,
   Users,
+  WandSparkles,
   X,
   type LucideIcon,
   ALargeSmall,
@@ -159,6 +160,7 @@ const ICONS = {
   undo: Undo2,
   user: User,
   users: Users,
+  wand: WandSparkles,
   wholeWord: WholeWord,
   x: X,
 } satisfies Record<string, LucideIcon>;

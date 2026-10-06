@@ -295,18 +295,24 @@ const TranslationEditorImpl = forwardRef<TranslationEditorHandle, TranslationEdi
   const focusBinding = selectedCell?.sourceBinding ?? null;
   const focusSource = selectedCell?.sourceMacro ?? null;
   const focusDraft = draft?.target ?? null;
+  const focusSaved = selectedCell?.translation?.targetMacro ?? "";
+  const focusFuzzy = selectedCell?.translation?.fuzzy ?? false;
+  const focusReviewed = selectedCell?.translation?.reviewed ?? false;
   useEffect(() => {
     const next = focusBinding === null || focusSource === null || focusDraft === null ? null : {
       binding: focusBinding,
       source: focusSource,
       draft: focusDraft,
+      saved: focusSaved,
+      fuzzy: focusFuzzy,
+      reviewed: focusReviewed,
       busy: cellBusy,
       apply: (pick: Parameters<EditorFocus["apply"]>[0]) => { if (!cellBusy) targetApi.current?.apply(pick); },
     };
     if (next === null) clearEditorFocus(publishedFocus.current);
     else setEditorFocus(next);
     publishedFocus.current = next;
-  }, [cellBusy, focusBinding, focusDraft, focusSource]);
+  }, [cellBusy, focusBinding, focusDraft, focusFuzzy, focusReviewed, focusSaved, focusSource]);
   useEffect(() => () => clearEditorFocus(publishedFocus.current), []);
 
   useEffect(() => {

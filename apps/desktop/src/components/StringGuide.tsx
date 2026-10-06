@@ -1,15 +1,16 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { bindingKey } from "../binding";
 import { speakerName } from "../dialogueScene";
-import { checkDraft, macroInsertions, normalizeCommandError, setTranslationTermException, stringHints } from "../ipc";
+import { checkDraft, macroInsertions, normalizeCommandError, setTranslationTermException, stringHints, translationFixString } from "../ipc";
 import { describeIssue, errorText } from "../issueText";
 import type { MessageKey } from "../i18n/translate";
 import { useMacroIdioms } from "../macroIdioms";
 import { guideMacros, macroState, ruleOrder, type GuideMacro } from "../stringGuide";
-import type { CommandError, DraftCheckDto, HintGameNameDto, HintTermDto, MacroInsertionDto, MacroRule, SourceBinding, StringHintsDto } from "../types";
+import type { CommandError, DraftCheckDto, FixRequest, HintGameNameDto, HintTermDto, IssueDto, MacroInsertionDto, MacroRule, SourceBinding, StringHintsDto } from "../types";
 import { useEditorFocus } from "../ui/editorFocus";
 import { loadIcon } from "../ui/gameGlyphs";
 import { useI18n } from "../ui/i18n";
+import { usePreferences } from "../ui/preferences";
 import { useMacroView } from "../ui/useMacroView";
 import { UiIcon, type UiIconName } from "../ui/primitives/UiIcon";
 import { chipLookup, learnTags, type ChipPick } from "./macroChipsExtension";
@@ -24,7 +25,12 @@ type StringGuideProps = {
   onOpenTerms: () => void;
   /** Opens a string in the editor, such as the one a name's translation comes from. */
   onReveal: (binding: SourceBinding) => void;
+  /** Shows the machine translation dialog, which follows a running run. */
+  onOpenTranslate: () => void;
 };
+
+/** Fixes the saved translation with AI as asked; `undefined` while it cannot. */
+type FixHandler = ((fix: FixRequest) => void) | undefined;
 
 type Loaded<T> = { key: string; value: T };
 
@@ -37,8 +43,10 @@ type Loaded<T> = { key: string; value: T };
  * do with each, and what the checks find in the translation as it is typed.
  * Picking a name, a term, or a macro adds it to the translation.
  */
-export const StringGuide = memo(function StringGuide({ revision, onOpenTerms, onReveal }: StringGuideProps) {
+export const StringGuide = memo(function StringGuide({ revision, onOpenTerms, onReveal, onOpenTranslate }: StringGuideProps) {
   const { t } = useI18n();
+  const { preferences } = usePreferences();
+  const [fixing, setFixing] = useState(false);
   const focus = useEditorFocus();
   const binding = focus?.binding ?? null;
   const key = binding ? bindingKey(binding) : null;
@@ -65,6 +73,23 @@ export const StringGuide = memo(function StringGuide({ revision, onOpenTerms, on
     }
   }, []);
   const onException = excepting ? undefined : (term: string, add: boolean) => void setException(term, add);
+  const startFix = useCallback(async (fix: FixRequest) => {
+    const current = bindingRef.current;
+    if (!current) return;
+    if (!preferences.translationModel) {
+      setError({ code: "modelNotChosen", message: t("search.chooseModel") });
+      return;
+    }
+    setFixing(true);
+    try {
+      await translationFixString(current, fix, preferences.translationModel, preferences.translationEffort || null);
+      onOpenTranslate();
+    } catch (caught) {
+      setError(normalizeCommandError(caught));
+    } finally {
+      setFixing(false);
+    }
+  }, [onOpenTranslate, preferences.translationEffort, preferences.translationModel, t]);
   useEffect(() => {
     const current = bindingRef.current;
     if (key === null || current === null) return;
@@ -122,6 +147,9 @@ export const StringGuide = memo(function StringGuide({ revision, onOpenTerms, on
   const hasWords = shown.names.length > 0 || shown.terms.length > 0;
   const hasMacros = (macros?.length ?? 0) > 0;
   const findings = verdict ? verdict.issues.length : 0;
+  // Machine translation corrects the saved translation, so the draft must be it.
+  const fixable = !fixing && !focus.busy && !focus.reviewed && focus.saved.trim() !== "" && draft === focus.saved;
+  const onFix: FixHandler = fixable ? (fix) => void startFix(fix) : undefined;
 
   return (
     <div className={stale ? "string-guide is-stale" : "string-guide"} aria-busy={stale}>
@@ -148,8 +176,19 @@ export const StringGuide = memo(function StringGuide({ revision, onOpenTerms, on
           <p className="string-guide-note">{t("hints.plainHint")}</p>
         </GuideColumn>
       ) : null}
-      <GuideColumn className="is-check" icon="check" title={t("hints.check")} count={findings > 0 ? findings : undefined}>
-        <DraftIssues drafted={drafted} verdict={verdict} onException={onException} />
+      <GuideColumn
+        className="is-check"
+        icon="check"
+        title={t("hints.check")}
+        count={findings > 0 ? findings : undefined}
+        action={focus.fuzzy ? (
+          <button className="string-guide-link" type="button" disabled={!onFix} title={t("hints.fix.adaptTitle")} onClick={() => onFix?.({ issues: false, groups: [], proofread: false, adapt: true, request: null })}>
+            {t("hints.fix.adapt")}
+          </button>
+        ) : null}
+      >
+        {error ? <p className="string-guide-note">{errorText(error, t)}</p> : null}
+        <DraftIssues drafted={drafted} verdict={verdict} onException={onException} onFix={onFix} />
       </GuideColumn>
       </div>
     </div>
@@ -423,7 +462,12 @@ function Macros({ macros, missing, onPick }: { macros: readonly GuideMacro[]; mi
   );
 }
 
-function DraftIssues({ drafted, verdict, onException }: { drafted: boolean; verdict: DraftCheckDto | null; onException: ExceptionHandler }) {
+/** Whether machine translation can fix an issue: a term exception that names no term is a person's to remove. */
+function canFix(issue: IssueDto): boolean {
+  return issue.kind !== "staleTermException";
+}
+
+function DraftIssues({ drafted, verdict, onException, onFix }: { drafted: boolean; verdict: DraftCheckDto | null; onException: ExceptionHandler; onFix: FixHandler }) {
   const { t } = useI18n();
   if (!drafted) return <p className="string-guide-note">{t("hints.check.empty")}</p>;
   if (!verdict) return <p className="string-guide-note"><span className="spinner spinner-xs" /> {t("common.loading")}</p>;
@@ -437,6 +481,11 @@ function DraftIssues({ drafted, verdict, onException }: { drafted: boolean; verd
           {issue.kind === "staleTermException" && issue.term ? (
             <button className="string-guide-link" type="button" disabled={!onException} title={t("findings.removeException", { term: issue.term })} onClick={() => onException?.(issue.term!, false)}>
               {t("hints.term.removeStale")}
+            </button>
+          ) : null}
+          {canFix(issue) ? (
+            <button className="string-guide-link" type="button" disabled={!onFix} title={t("hints.fix.issueTitle")} onClick={() => onFix?.({ issues: true, groups: [issue.group], proofread: false, adapt: false, request: null })}>
+              {t("hints.fix.issue")}
             </button>
           ) : null}
         </li>

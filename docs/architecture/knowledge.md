@@ -37,7 +37,9 @@ entries.
 The desktop edits the terms and the style in the project knowledge dialog
 (see [`desktop-editor-ui.md`](./desktop-editor-ui.md#project-knowledge-dialog)),
 which also lists glossary candidates: names the project translates in
-several ways (see [`search.md`](./search.md#glossary-candidates)).
+several ways (see [`search.md`](./search.md#glossary-candidates)), and the
+phrases its translations open sentences with (see
+[`search.md`](./search.md#openers)).
 A term a person edits there is marked settled. A file that cannot be read,
 and rows the format excludes, are reported with their file and line and left
 out; the rest of the knowledge is used.
@@ -52,7 +54,9 @@ out; the rest of the knowledge is used.
 - how a line reads as if written in the target language, and the known causes
   of dry, machine-written text;
 - how the player character is addressed without assuming a gender, with
-  conditions on `$gn4` in gendered languages, and how a comparison with the
+  conditions on `$gn4` in gendered languages only for words about the player
+  character (whom a line speaks to is read from the scene: a "you" said to
+  another character agrees with that character's own gender), and how a comparison with the
   player's name (`<if ($gs1 == $gs2)>`) splits a message between the player
   character and someone else, whose words agree inside each branch;
 - how translations are written as macro text, and that a name the game fills
@@ -61,7 +65,9 @@ out; the rest of the knowledge is used.
   the line itself as the Japanese does (Эх…, Бип!), and a gesture by the
   line's own words (Хе-хе), never dropped, unless the style says otherwise;
 - for Russian, notes on living language and `machine_phrasing`, a word-level
-  check for officialese, bookish links, calques, and stacked explanations,
+  check for officialese and calques: only words that are almost never right
+  in a game's text, since what a line's punctuation and links should be
+  depends on its source and its kind, which one line does not show. It is
   reported as advice.
 
 `style.md` takes precedence over the style defaults of these rules.

@@ -12,6 +12,12 @@ export type EditorFocus = {
   binding: SourceBinding;
   source: string;
   draft: string;
+  /** The translation as its file has it, what machine translation corrects. */
+  saved: string;
+  /** The source changed since the saved translation was written. */
+  fuzzy: boolean;
+  /** A person reviewed the saved translation: machine translation leaves it. */
+  reviewed: boolean;
   /** A save of the string is running; picks are refused meanwhile. */
   busy: boolean;
   /** Adds text to the translation at its cursor, as picking a source chip does. */

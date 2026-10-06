@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { DropdownMenu } from "radix-ui";
-import { normalizeCommandError, projectEditUndo, projectReplaceApply, projectReplacePreview, projectRetranslate, projectSearch, projectSearchEntries, projectSearchPrepare, projectTermException } from "../ipc";
+import { normalizeCommandError, projectEditUndo, projectReplaceApply, projectReplacePreview, projectRetranslate, projectSearch, projectSearchEntries, projectSearchPrepare, projectTermException, translationFix } from "../ipc";
 import type { BulkEditDto, CommandError, EntryRefDto, ReplaceChangeDto, SearchCheck, SearchEntryDto, SearchField, SearchFileDto, SearchHitDto, SearchQueryDto, SearchResultDto, SearchState, SourceBinding } from "../types";
-import { describeIssue, errorText, exceptionTerm } from "../issueText";
+import { describeIssue, errorText, exceptionTerm, issueLabel } from "../issueText";
 import { choose, chosenByPath, commonTerm, groupBySheet, reconcileChosen, resultRows, sheetOpen, unchooseFiles, type Chosen, type GroupHits, type SheetGroup } from "../searchResults";
 import type { MessageKey } from "../i18n/translate";
 import { useI18n } from "../ui/i18n";
@@ -12,6 +12,7 @@ import { useNameSheets } from "../ui/NameSheetMark";
 import { IconButton } from "../ui/primitives/IconButton";
 import { UiIcon } from "../ui/primitives/UiIcon";
 import { ConfirmDialog } from "./ConfirmDialog";
+import { FixDialog } from "./FixDialog";
 import { ReplacePreviewDialog } from "./ReplacePreviewDialog";
 import { useStickyState } from "./GitShared";
 import { SearchResultList, chooseKey, type SearchResultListHandle } from "./SearchResultList";
@@ -88,6 +89,7 @@ export function SearchPanel({ onRevealBinding, onWorkspaceChanged, onOpenTransla
   const [undoAvailable, setUndoAvailable] = useState(false);
   const [preview, setPreview] = useState<ReplaceChangeDto[] | null>(null);
   const [retranslate, setRetranslate] = useState<EntryRefDto[] | null>(null);
+  const [fixing, setFixing] = useState<EntryRefDto[] | null>(null);
   // Sheets open unless closed, when their strings are at hand; every sheet
   // is closed after "Collapse all". `toggled` holds the sheets the person
   // opened or closed against that.
@@ -142,7 +144,8 @@ export function SearchPanel({ onRevealBinding, onWorkspaceChanged, onOpenTransla
     check,
     issue: check === "any" ? null : issueGroup,
   }), [caseSensitive, check, fields, issueGroup, nameSheets, nameSheetsOnly, pathsText, regex, states, text, wholeWord]);
-  const active = query.text !== "" || query.check !== "any" || query.states.length > 0;
+  // A scope of sheets alone finds every string of them, as a state or check filter alone does.
+  const active = query.text !== "" || query.check !== "any" || query.states.length > 0 || query.paths.length > 0;
 
   const runSearch = useCallback(async (current: SearchQueryDto) => {
     const run = ++searchRun.current;
@@ -285,6 +288,20 @@ export function SearchPanel({ onRevealBinding, onWorkspaceChanged, onOpenTransla
       onWorkspaceChanged?.();
       onOpenTranslate?.();
       if (active) void runSearch(query);
+    });
+  };
+
+  const startFix = (entries: EntryRefDto[], issues: boolean, proofread: boolean, adapt: boolean, request: string) => {
+    setFixing(null);
+    void act("fix", async () => {
+      if (!preferences.translationModel) {
+        setError({ code: "modelNotChosen", message: t("search.chooseModel") });
+        return;
+      }
+      const paths = [...new Set(entries.map((entry) => entry.path))];
+      await translationFix(paths, entries.map((entry) => entry.context), { issues, groups: query.issue ? [query.issue] : [], proofread, adapt, request: request || null }, preferences.translationModel, preferences.translationEffort || null);
+      setNotice({ text: t("search.fixing", { count: entries.length }), edit: null });
+      onOpenTranslate?.();
     });
   };
 
@@ -447,6 +464,11 @@ export function SearchPanel({ onRevealBinding, onWorkspaceChanged, onOpenTransla
     if (translated) setRetranslate(translated);
   });
 
+  const fixAll = () => void act("choose", async () => {
+    const translated = await translatedOfResult();
+    if (translated) setFixing(translated);
+  });
+
   const exceptAll = (term: string) => void act("exception", async () => {
     const translated = await translatedOfResult();
     if (translated) await exceptTermNow(translated, term);
@@ -460,6 +482,7 @@ export function SearchPanel({ onRevealBinding, onWorkspaceChanged, onOpenTransla
     if (result && query.issue === null && shownQuery.current === JSON.stringify(query)) setAllIssues({ key: queryWithoutIssue, issues: result.issues });
   }, [result]);
   const issueList = allIssues?.key === queryWithoutIssue ? allIssues.issues : result?.issues ?? [];
+  const chosenIssue = !query.issue ? null : issueList.find((count) => count.issue.group === query.issue)?.issue ?? null;
 
   const scope: Scope = { fields, pathsText, nameSheetsOnly, states, check };
   const changeScope = (change: Partial<Scope>) => {
@@ -516,6 +539,7 @@ export function SearchPanel({ onRevealBinding, onWorkspaceChanged, onOpenTransla
           <IconButton icon="replace" size="xs" label={t("search.toggleReplace")} pressed={replaceOpen} onClick={() => setReplaceOpen(!replaceOpen)} />
         </div>
         {patternError ? <p className="search-box-error" role="alert">{errorText(patternError, t)}</p> : null}
+        {result && result.unknownPaths.length > 0 ? <p className="search-box-error" role="alert">{t("search.unknownSheets", { sheets: result.unknownPaths.join(", ") })}</p> : null}
         {replaceOpen ? (
           <div className="search-box">
             <UiIcon icon="replace" size="sm" />
@@ -576,6 +600,11 @@ export function SearchPanel({ onRevealBinding, onWorkspaceChanged, onOpenTransla
                         <span className="menu-item-label">{t("search.retranslateAll")}</span>
                       </DropdownMenu.Item>
                     ) : null}
+                    {mayHaveTranslated ? (
+                      <DropdownMenu.Item className="menu-item" disabled={result.cancelled} title={t("search.fixTitle")} onSelect={fixAll}>
+                        <span className="menu-item-label">{t("search.fixAll")}</span>
+                      </DropdownMenu.Item>
+                    ) : null}
                     {groupTerm !== null && mayHaveTranslated ? (
                       <DropdownMenu.Item className="menu-item" disabled={result.cancelled} title={t("search.exceptAllTitle", { term: groupTerm })} onSelect={() => exceptAll(groupTerm)}>
                         <span className="menu-item-label">{t("search.exceptAll", { term: groupTerm })}</span>
@@ -613,6 +642,7 @@ export function SearchPanel({ onRevealBinding, onWorkspaceChanged, onOpenTransla
               onReplaceGroup={(group) => openPreview({ paths: group.files.map((file) => file.path) })}
               onExcept={(hit, term) => exceptTerm([entryRef(hit)], term)}
               onRetranslate={(hit) => setRetranslate([entryRef(hit)])}
+              onFix={(hit) => setFixing([entryRef(hit)])}
               onExit={() => inputRef.current?.focus()}
               onKeysUsed={learnKeys}
             />
@@ -647,6 +677,9 @@ export function SearchPanel({ onRevealBinding, onWorkspaceChanged, onOpenTransla
         <div className="search-footer" role="toolbar" aria-label={t("search.chosen", { count: chosen.length })}>
           <IconButton icon="x" size="xs" label={t("search.clearChosen")} onClick={() => setSelected(new Map())} />
           <span className="search-footer-count">{t("search.chosen", { count: chosen.length })}</span>
+          <button className="button button-ghost" type="button" disabled={disabled || chosenTranslated.length === 0} title={t("search.fixTitle")} onClick={() => setFixing(chosenTranslated.map(entryRef))}>
+            <UiIcon icon="wand" size="sm" />{t("search.fixChosen")}
+          </button>
           <button className="button button-ghost" type="button" disabled={disabled || chosenTranslated.length === 0} onClick={() => setRetranslate(chosenTranslated.map(entryRef))}>
             <UiIcon icon="sparkles" size="sm" />{t("search.retranslateChosen")}
           </button>
@@ -662,6 +695,14 @@ export function SearchPanel({ onRevealBinding, onWorkspaceChanged, onOpenTransla
         </div>
       ) : null}
 
+      <FixDialog
+        count={fixing?.length ?? null}
+        fuzzy={fixing?.filter((entry) => entry.expectedFuzzy).length ?? 0}
+        issue={chosenIssue ? issueLabel(chosenIssue, t) : null}
+        issuesFirst={check !== "any"}
+        onCancel={() => setFixing(null)}
+        onFix={(issues, proofread, adapt, request) => { if (fixing) startFix(fixing, issues, proofread, adapt, request); }}
+      />
       <ReplacePreviewDialog changes={preview} onCancel={() => setPreview(null)} onApply={applyChanges} onRevealBinding={onRevealBinding} />
       <ConfirmDialog
         open={retranslate !== null}

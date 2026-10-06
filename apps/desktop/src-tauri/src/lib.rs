@@ -66,16 +66,17 @@ pub use guide::{
     ProjectKnowledgeDto, TermInput, project_knowledge, save_knowledge_style, save_knowledge_terms,
 };
 pub use search::{
-    SearchState, project_edit_undo, project_replace_apply, project_replace_preview,
-    project_retranslate, project_search, project_search_cancel, project_search_entries,
-    project_search_prepare, project_term_candidates, project_term_exception,
+    SearchState, project_edit_undo, project_phrasing, project_replace_apply,
+    project_replace_preview, project_retranslate, project_search, project_search_cancel,
+    project_search_entries, project_search_prepare, project_term_candidates,
+    project_term_exception,
 };
 pub use state::{Activity, DesktopState};
 pub use translate::{
     ModelAccountDto, ModelSignInDto, Translation, model_account, model_list,
     model_open_sign_in_page, model_sign_in_poll, model_sign_in_start, model_sign_out,
-    translation_name_sheets, translation_retry, translation_start, translation_status,
-    translation_stop,
+    translation_fix, translation_fix_string, translation_name_sheets, translation_retry,
+    translation_start, translation_status, translation_stop,
 };
 pub use updates::{
     AvailableUpdateDto, UpdateChannel, UpdateDownloadDto, UpdateStatusDto, Updates, update_check,
@@ -211,12 +212,15 @@ pub fn run() {
             translation_start,
             translation_status,
             translation_retry,
+            translation_fix,
+            translation_fix_string,
             translation_stop,
             project_search,
             project_search_cancel,
             project_search_entries,
             project_search_prepare,
             project_term_candidates,
+            project_phrasing,
             project_replace_preview,
             project_replace_apply,
             project_edit_undo,

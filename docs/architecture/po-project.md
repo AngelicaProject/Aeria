@@ -283,14 +283,19 @@ message, so an interface can word it in its own language (see
 [`search.md`](./search.md#project-search)).
 
 Advice does not make a translation wrong: a term whose translation does not
-seem to be used, a condition on the player character's gender that may be
+seem to be used, a word written twice in a row with only spaces between in
+either reading of the conditions (each condition's first branch, or each
+one's last; not a word the source repeats, nor a name written twice with
+capitals, as a Lalafell's: Гун Гун), a condition on the player character's gender that may be
 missing, machine phrasing, a term exception that names no term of the
 source, an interface label or a name of a world object longer than its
 budget (see [`translate.md`](./translate.md#interface-labels) and
 [names in the world](./translate.md#names-in-the-world)). Advice is for the
 person who reviews a translation: saving, export, `aeria-check`, and the
-checks of machine translation ignore it, and it is never sent to a model;
-machine translation holds its own answers to the length budget. A file has
+checks of machine translation ignore it, and it is sent to a model only
+when a person asks machine translation to correct a translation with it (see
+[`translate.md`](./translate.md#correcting-translations)); machine
+translation holds its own answers to the length budget. A file has
 a problem when a line breaks the PO
 format or is a Git conflict marker, or a `msgctxt` is not an identity or
 appears twice.

@@ -11,7 +11,9 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use aeria_knowledge::Knowledge;
 use aeria_po::length::{Unit, length_budget};
-use aeria_po::{Entry, PO_DIR, PoFile, Session, check_translation, is_scene};
+use aeria_po::{
+    EditKind, Entry, EntryEdit, Issue, PO_DIR, PoFile, Session, check_translation, is_scene,
+};
 use serde::Serialize;
 use tokio::task::JoinSet;
 
@@ -39,6 +41,8 @@ const NAMES: usize = 80;
 const TERMS: usize = 60;
 /// Rejected strings a status lists; the count is kept for all.
 const LISTED_REJECTIONS: usize = 200;
+/// Corrections a status lists; the count of all is `written`.
+const LISTED_CORRECTIONS: usize = 1000;
 /// Times the translations that fail the checks go back to the model, with
 /// what is wrong, before they are rejected.
 const RETRIES: usize = 2;
@@ -61,6 +65,73 @@ pub struct Options {
     pub contexts: Vec<String>,
     pub model: String,
     pub effort: Option<String>,
+    /// Correct translations instead of translating untranslated strings.
+    pub fix: Option<Fix>,
+}
+
+/// What a run that corrects translations asks: it takes the translated
+/// strings that are not reviewed, and sends each translation with what is
+/// wrong with it.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct Fix {
+    /// Send the issues the checks find in a translation.
+    pub issues: bool,
+    /// Only the issues of these groups ([`Issue::group`]); empty for every
+    /// issue. A problem always goes: a correction must pass the checks.
+    pub groups: Vec<String>,
+    /// Proofread every translation: its meaning against the source, the
+    /// form of address, and phrasing a native speaker would not write.
+    pub proofread: bool,
+    /// Adapt the translation of a fuzzy string to its changed source; what
+    /// passes is written with the fuzzy mark cleared.
+    pub adapt: bool,
+    /// What a translator asks of every translation of the run.
+    pub request: Option<String>,
+}
+
+/// The issues of a translation a correction is asked to fix: what the
+/// checks find, of the chosen groups, and every problem. A term exception
+/// that names no term of the source is a person's to remove, not a
+/// translation's to change.
+#[must_use]
+pub fn fix_issues(fix: &Fix, knowledge: &Knowledge, target: &str, entry: &Entry) -> Vec<Issue> {
+    if entry.translation.is_empty() {
+        return Vec::new();
+    }
+    check_translation(knowledge, target, entry, &entry.translation)
+        .issues
+        .into_iter()
+        .filter(|issue| {
+            issue.is_problem()
+                || (fix.issues
+                    && !matches!(issue, Issue::StaleTermException(_))
+                    && (fix.groups.is_empty() || fix.groups.contains(&issue.group())))
+        })
+        .collect()
+}
+
+/// Whether a correction takes a string: a translation that is not
+/// reviewed, with an issue to fix, or every one when proofreading or with a
+/// translator's request.
+fn needs_fix(fix: &Fix, knowledge: &Knowledge, target: &str, entry: &Entry) -> bool {
+    !entry.is_reviewed()
+        && !entry.translation.is_empty()
+        && (fix.proofread
+            || fix.request.is_some()
+            || (fix.adapt && entry.fuzzy)
+            || !fix_issues(fix, knowledge, target, entry).is_empty())
+}
+
+/// A translation a correction changed, with why, as the model says.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Corrected {
+    /// The file, relative to `po/`.
+    pub path: String,
+    pub context: String,
+    pub before: String,
+    pub after: String,
+    pub reason: Option<String>,
 }
 
 /// A string whose translation still failed the checks after the retries; it
@@ -75,8 +146,8 @@ pub struct Rejected {
     pub translation: String,
     /// Every problem in English, as the model was told.
     pub problems: Vec<String>,
-    /// The problems the translation checks found, as data; the rest of
-    /// `problems` (another string's answer, a label too long) has none.
+    /// The issues the translation checks found among `problems`, as data;
+    /// the rest (another string's answer, a label too long) has none.
     #[serde(skip)]
     pub issues: Vec<aeria_po::Issue>,
 }
@@ -131,11 +202,18 @@ pub struct Status {
     /// Strings the run set out to translate.
     pub strings: usize,
     pub written: usize,
+    /// Translations a correction answered unchanged.
+    pub unchanged: usize,
     pub rejected: usize,
+    /// The run corrects translations rather than translating.
+    pub fixing: bool,
     /// The first rejected strings; an interface sends them with what it
     /// knows of them.
     #[serde(skip_serializing)]
     pub rejections: Vec<Rejected>,
+    /// The first translations a correction wrote, with why each changed.
+    #[serde(skip_serializing)]
+    pub corrections: Vec<Corrected>,
     pub input_tokens: u64,
     pub cached_tokens: u64,
     pub output_tokens: u64,
@@ -288,6 +366,16 @@ pub fn plan(
     fuzzy: bool,
     contexts: &[String],
 ) -> Result<Vec<Batch>, String> {
+    plan_of(root, paths, contexts, &|entry| needs_work(entry, fuzzy))
+}
+
+/// The batches of the strings of the chosen files that `wanted` takes.
+fn plan_of(
+    root: &std::path::Path,
+    paths: &[String],
+    contexts: &[String],
+    wanted: &dyn Fn(&Entry) -> bool,
+) -> Result<Vec<Batch>, String> {
     let only: std::collections::HashSet<&str> = contexts.iter().map(String::as_str).collect();
     let files = aeria_po::list(root).map_err(|error| error.to_string())?;
     let mut batches = Vec::new();
@@ -300,8 +388,7 @@ pub fn plan(
             .iter()
             .enumerate()
             .filter(|(_, entry)| {
-                needs_work(entry, fuzzy)
-                    && (only.is_empty() || only.contains(entry.context.as_str()))
+                wanted(entry) && (only.is_empty() || only.contains(entry.context.as_str()))
             })
             .map(|(index, _)| index)
             .collect();
@@ -344,10 +431,22 @@ struct Shared {
     run: Arc<Run>,
 }
 
+impl Shared {
+    /// Whether the run takes a string, as its file is now.
+    fn wants(&self, entry: &Entry) -> bool {
+        match &self.options.fix {
+            Some(fix) => needs_fix(fix, &self.knowledge, &self.target, entry),
+            None => needs_work(entry, self.options.fuzzy),
+        }
+    }
+}
+
 /// What one batch did.
 struct Done {
     written: usize,
+    unchanged: usize,
     rejected: Vec<Rejected>,
+    corrected: Vec<Corrected>,
 }
 
 fn now_millis() -> u64 {
@@ -434,7 +533,7 @@ fn file_task(
         batch.contexts.iter().map(String::as_str).collect();
     let start = strings.len();
     for entry in &file.entries {
-        if wanted.contains(entry.context.as_str()) && needs_work(entry, shared.options.fuzzy) {
+        if wanted.contains(entry.context.as_str()) && shared.wants(entry) {
             let id = (strings.len() + 1).to_string();
             strings.push((id, batch.path.clone(), entry.clone()));
         }
@@ -492,6 +591,17 @@ fn file_task(
                 .flatten(),
             max_length: length_budget(entry),
             term_exceptions: entry.term_exceptions.clone(),
+            translation: shared
+                .options
+                .fix
+                .is_some()
+                .then(|| entry.translation.clone()),
+            fix: shared.options.fix.as_ref().map_or_else(Vec::new, |fix| {
+                fix_issues(fix, &shared.knowledge, &shared.target, entry)
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect()
+            }),
         })
         .collect();
     let task = FileTask {
@@ -585,6 +695,9 @@ fn problems(shared: &Shared, strings: &Strings, id: &str, answer: &Answer) -> Ve
         }
         Some(_) => {}
     }
+    if let Some(fix) = &shared.options.fix {
+        return correction_problems(shared, fix, entry, &answer.text);
+    }
     let mut found = Vec::new();
     if let Some(budget) = length_budget(entry) {
         let length = budget.length_of(&answer.text);
@@ -608,6 +721,44 @@ fn problems(shared: &Shared, strings: &Strings, id: &str, answer: &Answer) -> Ve
     // it agrees with both.
     found.extend(agreement_problems(&entry.source, &answer.text));
     found.extend(sound_problems(&entry.source, &answer.text));
+    found
+}
+
+/// The problems of a correction of `entry`'s translation, which may not
+/// make it worse: a problem of the checks, an issue of a kind the
+/// translation did not have (a length too long, machine phrasing, or what
+/// machine translation alone is held to), and, unless the answer left the
+/// translation as it was, the advice it was asked to fix. An unchanged
+/// answer says that advice does not apply.
+fn correction_problems(shared: &Shared, fix: &Fix, entry: &Entry, text: &str) -> Vec<String> {
+    let (knowledge, target) = (&*shared.knowledge, shared.target.as_str());
+    let before = check_translation(knowledge, target, entry, &entry.translation);
+    let after = check_translation(knowledge, target, entry, text);
+    let asked: HashSet<String> = fix_issues(fix, knowledge, target, entry)
+        .iter()
+        .map(Issue::group)
+        .collect();
+    let changed = text != entry.translation;
+    let mut found = after.problems;
+    for issue in after.issues.iter().filter(|issue| !issue.is_problem()) {
+        let group = issue.group();
+        let new = !before.issues.iter().any(|old| old.group() == group);
+        if new || (changed && asked.contains(&group)) {
+            found.push(issue.to_string());
+        }
+    }
+    let had_agreement = agreement_problems(&entry.source, &entry.translation);
+    let had_sounds = sound_problems(&entry.source, &entry.translation);
+    found.extend(
+        agreement_problems(&entry.source, text)
+            .into_iter()
+            .filter(|problem| !had_agreement.contains(problem)),
+    );
+    found.extend(
+        sound_problems(&entry.source, text)
+            .into_iter()
+            .filter(|problem| !had_sounds.contains(problem)),
+    );
     found
 }
 
@@ -760,6 +911,7 @@ async fn settle(
                     Answer {
                         start: None,
                         text: String::new(),
+                        reason: None,
                     },
                     vec![MISSING.to_owned()],
                 )
@@ -785,7 +937,7 @@ async fn settle(
             prompt::retry_input(&built.input, &sent),
         )
         .await?;
-        let fixed = prompt::parse_lenient(&reply.text);
+        let fixed = prompt::parse_lenient(&reply.text, shared.options.fix.is_some());
         let mut still = Vec::new();
         for (id, last, last_problems) in failing {
             let (answer, found) = match fixed.get(&id) {
@@ -814,7 +966,7 @@ async fn settle(
             let issues = check_translation(&shared.knowledge, &shared.target, entry, &answer.text)
                 .issues
                 .into_iter()
-                .filter(aeria_po::Issue::is_problem)
+                .filter(|issue| found.contains(&issue.to_string()))
                 .collect();
             Some(Rejected {
                 path: path.clone(),
@@ -840,12 +992,17 @@ async fn translate(shared: Arc<Shared>, pack: Pack) -> Result<Done, ModelError> 
     let Some(built) = built else {
         return Ok(Done {
             written: 0,
+            unchanged: 0,
             rejected: Vec::new(),
+            corrected: Vec::new(),
         });
     };
     let reply = ask(&shared, &built, 0, built.strings.len(), built.input.clone()).await?;
-    let mut answers = prompt::parse_lenient(&reply.text);
+    let mut answers = prompt::parse_lenient(&reply.text, shared.options.fix.is_some());
     let rejected = settle(&shared, &built, &mut answers).await?;
+    if shared.options.fix.is_some() {
+        return correct(&shared, &built, &answers, rejected).await;
+    }
     let mut by_file: BTreeMap<String, Vec<(String, String)>> = BTreeMap::new();
     for (id, path, entry) in &built.strings {
         if let Some(answer) = answers.get(id).filter(|answer| !answer.text.is_empty()) {
@@ -869,7 +1026,87 @@ async fn translate(shared: Arc<Shared>, pack: Pack) -> Result<Done, ModelError> 
         .map_err(|error| ModelError::Invalid(error.to_string()))?
         .map_err(|error| ModelError::Invalid(error.to_string()))?
     };
-    Ok(Done { written, rejected })
+    Ok(Done {
+        written,
+        unchanged: 0,
+        rejected,
+        corrected: Vec::new(),
+    })
+}
+
+/// Writes the corrections of a pack that passed the checks, each only while
+/// its translation is still the one the request was built from and not
+/// reviewed, so work saved meanwhile is kept. An answer that left the
+/// translation as it was is counted, not written.
+async fn correct(
+    shared: &Shared,
+    built: &Built,
+    answers: &HashMap<String, Answer>,
+    rejected: Vec<Rejected>,
+) -> Result<Done, ModelError> {
+    let mut unchanged = 0;
+    let mut edits = Vec::new();
+    for (id, path, entry) in &built.strings {
+        let Some(answer) = answers.get(id).filter(|answer| !answer.text.is_empty()) else {
+            continue;
+        };
+        // An adapted translation answered unchanged still fits the new source:
+        // it is written to clear the fuzzy mark.
+        let adapt = shared.options.fix.as_ref().is_some_and(|fix| fix.adapt) && entry.fuzzy;
+        if answer.text == entry.translation && !adapt {
+            unchanged += 1;
+            continue;
+        }
+        edits.push(EntryEdit {
+            path: path.clone(),
+            context: entry.context.clone(),
+            expected_text: entry.translation.clone(),
+            expected_fuzzy: entry.fuzzy,
+            kind: if adapt {
+                EditKind::Adapt(answer.text.clone())
+            } else {
+                EditKind::Correct(answer.text.clone())
+            },
+        });
+    }
+    let applied = {
+        let session = Arc::clone(&shared.session);
+        tokio::task::spawn_blocking(move || session.apply_edits(&edits))
+            .await
+            .map_err(|error| ModelError::Invalid(error.to_string()))?
+            .map_err(|error| ModelError::Invalid(error.to_string()))?
+    };
+    if !applied.skipped.is_empty() {
+        shared.run.log(format_args!(
+            "{} corrections not written: their strings changed or were reviewed meanwhile",
+            applied.skipped.len()
+        ));
+    }
+    let reasons: HashMap<&str, Option<String>> = built
+        .strings
+        .iter()
+        .filter_map(|(id, _, entry)| {
+            let answer = answers.get(id)?;
+            Some((entry.context.as_str(), answer.reason.clone()))
+        })
+        .collect();
+    let corrected = applied
+        .done
+        .iter()
+        .map(|done| Corrected {
+            path: done.path.clone(),
+            context: done.context.clone(),
+            before: done.before.text.clone(),
+            after: done.after.text.clone(),
+            reason: reasons.get(done.context.as_str()).cloned().flatten(),
+        })
+        .collect();
+    Ok(Done {
+        written: applied.done.len(),
+        unchanged,
+        rejected,
+        corrected,
+    })
 }
 
 /// Runs the translation of `options.paths` until every batch was sent, the
@@ -879,6 +1116,7 @@ pub async fn run(session: Arc<Session>, codex: Arc<Codex>, options: Options, han
     handle.update(|status| {
         *status = Status {
             running: true,
+            fixing: options.fix.is_some(),
             pace: 1,
             started_at: now_millis(),
             ..Status::default()
@@ -900,6 +1138,23 @@ pub async fn run(session: Arc<Session>, codex: Arc<Codex>, options: Options, han
         },
         if options.fuzzy { ", fuzzy too" } else { "" }
     ));
+    if let Some(fix) = &options.fix {
+        handle.log(format_args!(
+            "correcting: {}{}{}{}",
+            match (fix.issues, fix.groups.len()) {
+                (false, _) => "problems only".to_owned(),
+                (true, 0) => "every issue".to_owned(),
+                (true, groups) => format!("{groups} kinds of issues"),
+            },
+            if fix.proofread { ", proofreading" } else { "" },
+            if fix.adapt { ", adapting fuzzy" } else { "" },
+            if fix.request.is_some() {
+                ", with a request"
+            } else {
+                ""
+            }
+        ));
+    }
     let stop = drive(session, codex, options, &handle).await;
     handle.log(format_args!("stopped: {stop:?}"));
     handle.update(|status| {
@@ -921,12 +1176,24 @@ async fn prepare(
         let session = Arc::clone(&session);
         let options = options.clone();
         tokio::task::spawn_blocking(move || {
-            let batches = plan(
-                session.root(),
-                &options.paths,
-                options.fuzzy,
-                &options.contexts,
-            )?;
+            let batches = match &options.fix {
+                Some(fix) => {
+                    let knowledge = session.knowledge();
+                    let target = session.settings().target_language;
+                    plan_of(
+                        session.root(),
+                        &options.paths,
+                        &options.contexts,
+                        &|entry| needs_fix(fix, &knowledge, &target, entry),
+                    )?
+                }
+                None => plan(
+                    session.root(),
+                    &options.paths,
+                    options.fuzzy,
+                    &options.contexts,
+                )?,
+            };
             Ok::<_, String>((batches, Arc::new(Names::load(session.root()))))
         })
         .await
@@ -942,12 +1209,23 @@ async fn prepare(
     };
     let settings = session.settings();
     let knowledge = session.knowledge();
-    let shared = Arc::new(Shared {
-        instructions: prompt::instructions(
+    let instructions = match &options.fix {
+        Some(fix) => prompt::fix_instructions(
+            &settings.source_language,
+            &settings.target_language,
+            knowledge.style.as_deref(),
+            fix.proofread,
+            fix.adapt,
+            fix.request.as_deref(),
+        ),
+        None => prompt::instructions(
             &settings.source_language,
             &settings.target_language,
             knowledge.style.as_deref(),
         ),
+    };
+    let shared = Arc::new(Shared {
+        instructions,
         target: settings.target_language,
         knowledge,
         names,
@@ -1146,11 +1424,16 @@ async fn drain(
                 handle.update(|status| {
                     status.batches_done += 1;
                     status.written += done.written;
+                    status.unchanged += done.unchanged;
                     status.rejected += done.rejected.len();
                     let room = LISTED_REJECTIONS.saturating_sub(status.rejections.len());
                     status
                         .rejections
                         .extend(done.rejected.into_iter().take(room));
+                    let room = LISTED_CORRECTIONS.saturating_sub(status.corrections.len());
+                    status
+                        .corrections
+                        .extend(done.corrected.into_iter().take(room));
                     status.pace = now;
                     status.message = None;
                 });

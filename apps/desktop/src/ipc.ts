@@ -56,6 +56,8 @@ import type {
   SearchQueryDto,
   SearchResultDto,
   TermCandidateDto,
+  PhrasingDto,
+  FixRequest,
 } from "./types";
 
 export function normalizeCommandError(error: unknown): CommandError {
@@ -461,6 +463,16 @@ export function translationRetry(contexts: string[], model: string, effort: stri
   return call<void>("translation_retry", { contexts, model, effort });
 }
 
+/** Corrects the translations of the given strings with AI as `fix` asks; reviewed translations stay as they are. */
+export function translationFix(paths: string[], contexts: string[], fix: FixRequest, model: string, effort: string | null): Promise<void> {
+  return call<void>("translation_fix", { paths, contexts, fix, model, effort });
+}
+
+/** Corrects the translation of one string with AI as `fix` asks. */
+export function translationFixString(sourceBinding: SourceBinding, fix: FixRequest, model: string, effort: string | null): Promise<void> {
+  return call<void>("translation_fix_string", { sourceBinding, fix, model, effort });
+}
+
 /** The progress of the last machine translation run; null before one started. */
 export function translationStatus(): Promise<TranslationStatus | null> {
   return call<TranslationStatus | null>("translation_status");
@@ -481,6 +493,11 @@ export function saveKnowledgeStyle(expected: string | null, text: string): Promi
 
 
 /** Names the project renders in several ways that the glossary does not have. */
+/** The phrases the project's translations open sentences with, and the source words behind them. */
+export function projectPhrasing(): Promise<PhrasingDto> {
+  return call<PhrasingDto>("project_phrasing");
+}
+
 export function projectTermCandidates(): Promise<TermCandidateDto[]> {
   return call<TermCandidateDto[]>("project_term_candidates");
 }

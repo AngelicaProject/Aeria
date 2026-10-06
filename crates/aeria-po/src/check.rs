@@ -55,6 +55,9 @@ pub enum Issue {
     MixedAlphabets(String),
     /// A Russian form that writes both genders at once, such as `(а)`.
     BothGenders(String),
+    /// Advice: a word written twice in a row, in a reading of the
+    /// translation's conditions (see [`aeria_se::MacroString::readings`]).
+    RepeatedWord(String),
     /// Advice: the translation of a term of the source does not seem used.
     TermNotUsed { term: String, translation: String },
     /// Advice: the source varies with the player character's gender and the
@@ -88,6 +91,7 @@ impl Issue {
             Self::Mark(_) => "mark".to_owned(),
             Self::MixedAlphabets(_) => "mixedAlphabets".to_owned(),
             Self::BothGenders(_) => "bothGenders".to_owned(),
+            Self::RepeatedWord(_) => "repeatedWord".to_owned(),
             Self::TermNotUsed { term, .. } => format!("termNotUsed:{}", term.to_lowercase()),
             Self::GenderNotVaried => "genderNotVaried".to_owned(),
             Self::GenderInOtherLanguages => "genderInOtherLanguages".to_owned(),
@@ -105,6 +109,7 @@ impl Issue {
         !matches!(
             self,
             Self::TermNotUsed { .. }
+                | Self::RepeatedWord(_)
                 | Self::GenderNotVaried
                 | Self::GenderInOtherLanguages
                 | Self::MachinePhrasing(_)
@@ -139,6 +144,10 @@ impl std::fmt::Display for Issue {
             Self::BothGenders(form) => write!(
                 f,
                 "{form} writes both genders at once; use a condition on $gn4 with the feminine form first, or a phrasing that shows no gender"
+            ),
+            Self::RepeatedWord(word) => write!(
+                f,
+                "«{word}» is written twice in a row; remove one, or check the branches of a condition"
             ),
             Self::TermNotUsed { term, translation } => write!(
                 f,
@@ -253,6 +262,58 @@ fn letter_slips(target_language: &str, source: &str, text: &str) -> Vec<Issue> {
     slips
 }
 
+/// A word the translation writes twice in a row, with only spaces between,
+/// in either reading of its conditions; `None` when there is none or the
+/// source repeats a word itself, as a stutter or a call does. A word
+/// repeated with a capital letter both times is a name, such as a
+/// Lalafell's (Гун Гун), and a line break or a value filled in at runtime
+/// parts the words around it.
+fn repeated_word(source: &str, text: &str) -> Option<String> {
+    let repeated = |text: &str| {
+        aeria_se::parse(text)
+            .readings()
+            .into_iter()
+            .find_map(|reading| {
+                let mut previous: Option<(String, bool)> = None;
+                let mut gap_is_space = false;
+                let mut word = String::new();
+                let mut found = None;
+                for character in reading.chars().chain(std::iter::once('.')) {
+                    if character.is_alphabetic() || character == '-' || character == '\'' {
+                        word.push(character);
+                        continue;
+                    }
+                    if !word.is_empty() && word.chars().any(char::is_alphabetic) {
+                        let capital = word.chars().next().is_some_and(char::is_uppercase);
+                        let lower = word.to_lowercase();
+                        if gap_is_space
+                            && previous.as_ref().is_some_and(|(seen, was_capital)| {
+                                *seen == lower && !(capital && *was_capital)
+                            })
+                        {
+                            found = Some(word.clone());
+                            break;
+                        }
+                        previous = Some((lower, capital));
+                        gap_is_space = true;
+                    }
+                    word.clear();
+                    if character == '\n' {
+                        gap_is_space = false;
+                        previous = None;
+                    } else if !character.is_whitespace() {
+                        gap_is_space = false;
+                        if !character.is_alphanumeric() {
+                            previous = None;
+                        }
+                    }
+                }
+                found
+            })
+    };
+    repeated(source).is_none().then(|| repeated(text)).flatten()
+}
+
 /// Russian forms that write both genders at once, such as `готов(а)`.
 const BOTH_GENDERS: [&str; 6] = ["(а)", "(ла)", "(ая)", "(на)", "(ен)", "(ой)"];
 
@@ -310,6 +371,7 @@ pub fn check_translation(
     {
         issues.push(Issue::BothGenders((*form).to_owned()));
     }
+    issues.extend(repeated_word(source, text).map(Issue::RepeatedWord));
     issues.extend(terms.unused.iter().map(|entry| Issue::TermNotUsed {
         term: entry.term.clone(),
         translation: entry.translation.clone(),
@@ -494,6 +556,41 @@ mod tests {
         assert_eq!(verdict.problems.len(), 1, "{verdict:?}");
         let verdict = check(&knowledge, "ru", "Hello.", "При\nвет.", &[]);
         assert_eq!(verdict.problems.len(), 1, "{verdict:?}");
+    }
+
+    #[test]
+    fn a_word_written_twice_in_a_row_is_advice() {
+        let knowledge = Knowledge::default();
+        let repeated = |source: &str, text: &str| {
+            check(&knowledge, "ru", source, text, &[])
+                .issues
+                .into_iter()
+                .find_map(|issue| match issue {
+                    Issue::RepeatedWord(word) => Some(word),
+                    _ => None,
+                })
+        };
+        let source = "Or should I call you the hero of the Scions?";
+        assert_eq!(
+            repeated(
+                source,
+                "Или назвать тебя героем <if $gn4>героиней<else>героем</if> Потомков?"
+            )
+            .as_deref(),
+            Some("героем")
+        );
+        assert_eq!(repeated(source, "Я в в городе.").as_deref(), Some("в"));
+        for text in [
+            "Да, да, конечно.",
+            "Ну-ну, посмотрим.",
+            "Ты <if $gn4>сказала<else>сказал</if>, сказал<if $gn4>а</if> же.",
+            "Нет... нет!",
+            "Мой сын Гун Гун очень меня радует.",
+            "3. Активное<br>Активное овоо можно захватить.",
+        ] {
+            assert_eq!(repeated(source, text), None, "{text}");
+        }
+        assert_eq!(repeated("No no no!", "Нет нет нет!"), None);
     }
 
     #[test]

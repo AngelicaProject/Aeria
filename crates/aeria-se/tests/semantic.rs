@@ -40,6 +40,22 @@ fn plain_text_is_what_players_read() {
 }
 
 #[test]
+fn each_reading_takes_one_branch_of_every_condition() {
+    assert_eq!(
+        parse("Ты назвал<if $gn4>а</if> <if $gn4>героиней<else>героем</if><br><i>Хе</i>-хе")
+            .readings(),
+        [
+            "Ты назвала героиней\nХе-хе".to_owned(),
+            "Ты назвал героем\nХе-хе".to_owned()
+        ]
+    );
+    assert_eq!(
+        parse("<split \" \" 1><string $gs1></split>, привет").readings()[0],
+        ", привет"
+    );
+}
+
+#[test]
 fn formatting_only_text_has_no_letters_in_what_players_read() {
     for text in [
         "",

@@ -11,8 +11,8 @@ type TranslationRejectionsProps = {
   total: number;
   running: boolean;
   onReveal?: ((binding: SourceBinding) => void) | undefined;
-  /** Translates the listed strings again. */
-  onRetry: (contexts: string[]) => void;
+  /** Translates the listed strings again; a correction's refused strings keep their translation, so it has none. */
+  onRetry?: ((contexts: string[]) => void) | undefined;
 };
 
 /**
@@ -74,9 +74,11 @@ export function TranslationRejections({ rejections, total, running, onReveal, on
         ))}
       </ul>
       {total > rejections.length ? <p className="field-hint">{t("translate.rejectionsCut", { shown: rejections.length, count: total })}</p> : null}
-      <button className="button button-secondary" type="button" disabled={running || rejections.length === 0} onClick={() => onRetry(rejections.map((rejected) => rejected.context))}>
-        <UiIcon icon="sparkles" size="sm" />{t("translate.retryRejected", { count: rejections.length })}
-      </button>
+      {onRetry ? (
+        <button className="button button-secondary" type="button" disabled={running || rejections.length === 0} onClick={() => onRetry(rejections.map((rejected) => rejected.context))}>
+          <UiIcon icon="sparkles" size="sm" />{t("translate.retryRejected", { count: rejections.length })}
+        </button>
+      ) : null}
     </details>
   );
 }

@@ -69,6 +69,27 @@ impl MacroString {
         text.trim().to_owned()
     }
 
+    /// The texts players read when every condition and selection takes its
+    /// first branch, and when every one takes its last: for conditions on
+    /// the player character's gender, the line as each gender reads it.
+    /// Pieces that a macro separates, such as the text around a line break
+    /// or a value filled in at runtime, are on lines of their own.
+    #[must_use]
+    pub fn readings(&self) -> [String; 2] {
+        [false, true].map(|last| {
+            let mut pieces = Vec::new();
+            collect_reading(self.nodes(), last, &mut pieces, &mut false);
+            let mut text = String::new();
+            for (piece, separated) in pieces {
+                if separated && !text.is_empty() {
+                    text.push('\n');
+                }
+                text.push_str(&piece);
+            }
+            text.trim().to_owned()
+        })
+    }
+
     /// Whether the text is formatting only: it is well formed and its
     /// user-facing text contains no letter. Punctuation, digits, spacing,
     /// numbers, and icons usually differ between game languages by
@@ -108,6 +129,63 @@ fn contains_opaque(nodes: &[SyntaxNode]) -> bool {
         SyntaxKind::Text(_) => false,
         SyntaxKind::Raw(_) | SyntaxKind::Error => true,
     })
+}
+
+/// The text of one reading (see [`MacroString::readings`]): of a condition
+/// or selection only its first or `last` branch, of other macros all their
+/// text. Text inside a condition or formatting continues the word around
+/// it (`назвал<if $gn4>а</if>`); other macros, such as a line break or a
+/// value filled in at runtime, separate words.
+fn collect_reading(
+    nodes: &[SyntaxNode],
+    last: bool,
+    pieces: &mut Vec<(String, bool)>,
+    separated: &mut bool,
+) {
+    for node in nodes {
+        match &node.kind {
+            SyntaxKind::Text(text) => {
+                pieces.push((text.clone(), *separated));
+                *separated = false;
+            }
+            SyntaxKind::Macro(syntax) => {
+                let Some(spec) = syntax.spec else {
+                    *separated = true;
+                    continue;
+                };
+                let inline = matches!(
+                    spec.family,
+                    SemanticFamily::ConditionalSelection
+                        | SemanticFamily::FormattingPresentation
+                        | SemanticFamily::TranslatableText
+                );
+                *separated |= !inline;
+                let texts: Vec<&[SyntaxNode]> = syntax
+                    .args
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(index, arg)| match &arg.kind {
+                        ExprKind::Str(nodes) if spec.is_translatable_arg(index) => {
+                            Some(nodes.as_slice())
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                let chosen: Vec<&[SyntaxNode]> =
+                    if spec.family == SemanticFamily::ConditionalSelection {
+                        let branch = if last { texts.last() } else { texts.first() };
+                        branch.into_iter().copied().collect()
+                    } else {
+                        texts
+                    };
+                for nodes in chosen {
+                    collect_reading(nodes, last, pieces, separated);
+                }
+                *separated |= !inline;
+            }
+            SyntaxKind::Raw(_) | SyntaxKind::Error => *separated = true,
+        }
+    }
 }
 
 fn collect_text(nodes: &[SyntaxNode], pieces: &mut Vec<(String, bool)>, separated: &mut bool) {
