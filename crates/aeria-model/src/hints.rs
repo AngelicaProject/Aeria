@@ -1,16 +1,16 @@
 //! What a request tells the model about one string, for the person who
 //! translates it: the game's names and the project's terms in its source,
-//! who says it, how long an interface label may be, and whether its line
-//! varies with the player character's gender. A request and the editor read
-//! these the same way, so the person sees what the model is told: what a
-//! request comes to say about one string is read here, or through functions
-//! this module shares with the request, and the string guide shows it
-//! (principle 11 of `docs/product/principles.md`).
+//! who says it, how long an interface label or a world object's name may
+//! be, and whether its line varies with the player character's gender. A
+//! request and the editor read these the same way, so the person sees what
+//! the model is told: what a request comes to say about one string is read
+//! here, or through functions this module shares with the request, and the
+//! string guide shows it (principle 11 of `docs/product/principles.md`).
 
 use aeria_knowledge::Glossary;
 use aeria_po::Entry;
+use aeria_po::length::{Budget, length_budget};
 
-use crate::fit;
 use crate::names::{Name, Names};
 
 /// Most names of one string listed; a request of many strings has more.
@@ -38,16 +38,17 @@ pub struct StringHints {
     pub speaker: Option<(String, Option<(String, String)>)>,
     /// The kind of a quest's text (`journal`, `objective`).
     pub kind: Option<String>,
-    /// The most characters an interface label's translation may show.
-    pub max_length: Option<usize>,
+    /// The longest an interface label's translation may show, or a world
+    /// object's name may be.
+    pub max_length: Option<Budget>,
     /// The texts whose line varies with the player character's gender:
     /// `source` and the languages of the context (`fr`, `de`).
     pub gendered: Vec<String>,
 }
 
-/// The hints of the string `entry` of the file `path`, relative to `po/`.
+/// The hints of the string `entry`.
 #[must_use]
-pub fn hints(names: &Names, glossary: &Glossary, path: &str, entry: &Entry) -> StringHints {
+pub fn hints(names: &Names, glossary: &Glossary, entry: &Entry) -> StringHints {
     let line = |prefix: &str| {
         entry
             .extracted
@@ -74,7 +75,7 @@ pub fn hints(names: &Names, glossary: &Glossary, path: &str, entry: &Entry) -> S
             (label, name)
         }),
         kind: line("kind: "),
-        max_length: fit::length_budget(path, &entry.source, &entry.extracted),
+        max_length: length_budget(entry),
         gendered: gendered(&entry.source, &entry.extracted)
             .into_iter()
             .map(str::to_owned)
@@ -136,7 +137,6 @@ mod tests {
         let found = hints(
             &names,
             &glossary,
-            "quest/000/X.po",
             &entry(
                 "The Scions ask Minfilia about the aether, <if $gn4>lass<else>lad</if>.",
                 &[
@@ -172,14 +172,22 @@ mod tests {
         let found = hints(
             &Names::new(Vec::new()),
             &Glossary::default(),
-            "Addon.po",
-            &entry(
-                "Direct Hit",
-                &["de: Direkter Treffer", "fr: Coup direct"],
-                &[],
-            ),
+            &Entry {
+                context: "Addon:1:0:0".to_owned(),
+                ..entry(
+                    "Direct Hit",
+                    &["de: Direkter Treffer", "fr: Coup direct"],
+                    &[],
+                )
+            },
         );
-        assert_eq!(found.max_length, Some("Direkter Treffer".len()));
+        assert_eq!(
+            found.max_length,
+            Some(Budget {
+                max: "Direkter Treffer".len(),
+                unit: aeria_po::length::Unit::Characters,
+            })
+        );
         assert_eq!(found.speaker, None);
     }
 }

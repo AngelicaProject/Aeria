@@ -6,9 +6,9 @@ use std::path::PathBuf;
 use std::sync::{Arc, Weak};
 use std::time::SystemTime;
 
-use aeria_model::fit;
 use aeria_model::hints::{HintTerm, hints};
 use aeria_model::names::{Names, name_sheet_of};
+use aeria_po::length::{self, Budget, Unit, length_budget};
 use aeria_po::{Entry, PO_DIR, Session};
 use serde::Serialize;
 use tauri::Manager;
@@ -135,6 +135,27 @@ pub struct HintSpeakerDto {
     pub name: Option<HintNameDto>,
 }
 
+#[derive(Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LengthBudgetDto {
+    pub max: usize,
+    /// `characters` shown, macros not counted, for an interface label;
+    /// `bytes` of the encoded string for a world object's name.
+    pub unit: &'static str,
+}
+
+impl From<Budget> for LengthBudgetDto {
+    fn from(budget: Budget) -> Self {
+        Self {
+            max: budget.max,
+            unit: match budget.unit {
+                Unit::Characters => "characters",
+                Unit::Bytes => "bytes",
+            },
+        }
+    }
+}
+
 #[derive(Debug, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StringHintsDto {
@@ -143,8 +164,9 @@ pub struct StringHintsDto {
     pub speaker: Option<HintSpeakerDto>,
     /// The kind of a quest's text: `journal`, `objective`, or `other`.
     pub kind: Option<String>,
-    /// The most characters an interface label's translation may show.
-    pub max_length: Option<usize>,
+    /// The longest an interface label's translation may show, or a world
+    /// object's name may be.
+    pub max_length: Option<LengthBudgetDto>,
     /// `source` and the client languages (`fr`, `de`) whose line varies
     /// with the player character's gender.
     pub gendered: Vec<String>,
@@ -160,8 +182,9 @@ pub struct DraftCheckDto {
     pub missing: Vec<String>,
     /// The names of the guide whose translation the text uses.
     pub names_used: Vec<String>,
-    /// The characters the text shows, macros not counted, as the length of
-    /// an interface label is counted.
+    /// The length of the text in the unit of the string's length budget:
+    /// the bytes of a world object's name, otherwise the characters it
+    /// shows, macros not counted.
     pub length: usize,
 }
 
@@ -182,11 +205,11 @@ fn string_hints_with(
     binding: &SourceBindingDto,
 ) -> CommandResult<StringHintsDto> {
     let session = state.session()?;
-    let (path, Some(entry)) = entry_of(&session, binding)? else {
+    let (_, Some(entry)) = entry_of(&session, binding)? else {
         return Ok(StringHintsDto::default());
     };
     let names = state.names_cache().names(&session);
-    let found = hints(&names, &session.knowledge().terms, &path, &entry);
+    let found = hints(&names, &session.knowledge().terms, &entry);
     Ok(StringHintsDto {
         names: found
             .names
@@ -216,7 +239,7 @@ fn string_hints_with(
             name: name.map(|(name, translation)| HintNameDto { name, translation }),
         }),
         kind: found.kind,
-        max_length: found.max_length,
+        max_length: found.max_length.map(LengthBudgetDto::from),
         gendered: found.gendered,
     })
 }
@@ -233,7 +256,7 @@ fn check_draft_with(
             issues: Vec::new(),
             missing: Vec::new(),
             names_used: Vec::new(),
-            length: fit::visible_length(text),
+            length: length::visible_length(text),
         });
     };
     let localizations: Vec<&str> = entry
@@ -268,7 +291,10 @@ fn check_draft_with(
             aeria_se::missing_game_data(&entry.source, text, &localizations)
         },
         names_used,
-        length: fit::visible_length(text),
+        length: length::length_in(
+            length_budget(&entry).map_or(Unit::Characters, |budget| budget.unit),
+            text,
+        ),
     })
 }
 
@@ -377,9 +403,38 @@ mod tests {
         assert!(
             label
                 .max_length
-                .is_some_and(|length| length >= "Confirm".len()),
+                .as_ref()
+                .is_some_and(|length| length.unit == "characters" && length.max >= "Confirm".len()),
             "the longest of the label and its German and French lines: {:?}",
             label.max_length
+        );
+
+        let aide = binding("ENpcResident", 1_019_070, 0);
+        let name = string_hints_with(&state, &aide).expect("name");
+        assert_eq!(
+            name.max_length,
+            Some(LengthBudgetDto {
+                max: 63,
+                unit: "bytes"
+            })
+        );
+        let draft = check_draft_with(
+            &state,
+            &aide,
+            "служащий торговой компании «Восточный Альденард»",
+        )
+        .expect("check");
+        assert_eq!(
+            draft.length, 92,
+            "a world object's name is counted in bytes"
+        );
+        assert_eq!(
+            draft
+                .issues
+                .iter()
+                .map(|issue| (issue.kind.as_str(), issue.advice, issue.length, issue.max))
+                .collect::<Vec<_>>(),
+            vec![("nameTooLong", true, Some(92), Some(63))]
         );
     }
 }

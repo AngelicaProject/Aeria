@@ -9,6 +9,7 @@ use std::fmt::Write as _;
 use aeria_knowledge::rules::{
     MACRO_TEXT, ORIGINAL_TEXT, PLAYER_CHARACTER, TRANSLATION_STYLE, living_language,
 };
+use aeria_po::length::{Budget, Unit};
 use serde_json::{Value, json};
 
 use crate::names::Name;
@@ -70,7 +71,12 @@ pub fn instructions(source_language: &str, target_language: &str, style: Option<
          with `maxLength` is an interface label: \
          its translation shows at most that many characters (macros not counted), as the \
          official localizations fit the game's layout; shorten it, with the usual \
-         abbreviations of the language when needed (Шанс прям. удара).\n\n\
+         abbreviations of the language when needed (Шанс прям. удара). A string with \
+         `maxBytes` is the name of a character or object the game shows over it in the \
+         world: the game cuts a name longer than that many bytes of UTF-8, where a Latin \
+         letter, digit, or space takes one and a Cyrillic letter or « » two; keep the name \
+         within it, shortening a description or using the usual abbreviations of the \
+         language when needed.\n\n\
          Answer with one JSON object and nothing else: each key is the `id` of a string and \
          each value an array of two strings: the first words of that string's source, up to \
          three, copied as they are (macros may be left out), then its translation as macro \
@@ -88,8 +94,9 @@ pub struct Item {
     pub context: Vec<String>,
     /// The old source and translation of a fuzzy string.
     pub previous: Option<(String, String)>,
-    /// The most characters an interface label's translation may show.
-    pub max_length: Option<usize>,
+    /// The longest an interface label's translation may show, or a world
+    /// object's name may be.
+    pub max_length: Option<Budget>,
     /// Terms a person decided do not apply to the string.
     pub term_exceptions: Vec<String>,
 }
@@ -182,8 +189,12 @@ fn file_value(task: &FileTask) -> Value {
                 if let Some((source, translation)) = &item.previous {
                     value["previous"] = json!({ "source": source, "translation": translation });
                 }
-                if let Some(max) = item.max_length {
-                    value["maxLength"] = Value::from(max);
+                if let Some(budget) = item.max_length {
+                    let key = match budget.unit {
+                        Unit::Characters => "maxLength",
+                        Unit::Bytes => "maxBytes",
+                    };
+                    value[key] = Value::from(budget.max);
                 }
                 if !item.term_exceptions.is_empty() {
                     value["termExceptions"] = Value::from(item.term_exceptions.clone());
@@ -520,5 +531,41 @@ mod tests {
         assert_eq!(strings[0]["gendered"], json!(["fr"]));
         assert_eq!(strings[1]["gendered"], json!(["source"]));
         assert!(strings[2].get("gendered").is_none());
+    }
+
+    #[test]
+    fn a_length_goes_in_its_unit() {
+        let item = |max_length| Item {
+            id: "1".to_owned(),
+            source: "aide".to_owned(),
+            context: Vec::new(),
+            previous: None,
+            max_length,
+            term_exceptions: Vec::new(),
+        };
+        let input = input(
+            &[FileTask {
+                items: vec![
+                    item(Some(Budget {
+                        max: 8,
+                        unit: Unit::Characters,
+                    })),
+                    item(Some(Budget {
+                        max: 63,
+                        unit: Unit::Bytes,
+                    })),
+                ],
+                ..FileTask::default()
+            }],
+            &[],
+            &[],
+        );
+        let value: Value = serde_json::from_str(&input).expect("json");
+        let strings = &value["files"][0]["strings"];
+        assert_eq!(strings[0]["maxLength"], 8);
+        assert!(strings[0].get("maxBytes").is_none());
+        assert_eq!(strings[1]["maxBytes"], 63);
+        assert!(strings[1].get("maxLength").is_none());
+        assert!(instructions("en", "ru", None).contains("`maxBytes`"));
     }
 }

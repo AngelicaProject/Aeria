@@ -10,6 +10,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use aeria_knowledge::Knowledge;
+use aeria_po::length::{Unit, length_budget};
 use aeria_po::{Entry, PO_DIR, PoFile, Session, check_translation, is_scene};
 use serde::Serialize;
 use tokio::task::JoinSet;
@@ -489,7 +490,7 @@ fn file_task(
                         .map(|source| (source, entry.translation.clone()))
                 })
                 .flatten(),
-            max_length: fit::length_budget(&batch.path, &entry.source, &entry.extracted),
+            max_length: length_budget(entry),
             term_exceptions: entry.term_exceptions.clone(),
         })
         .collect();
@@ -567,7 +568,7 @@ fn request(shared: &Shared, input: String) -> Request {
 /// belongs to another string, that an interface label is too long, and what
 /// the translation checks find.
 fn problems(shared: &Shared, strings: &Strings, id: &str, answer: &Answer) -> Vec<String> {
-    let Some((_, path, entry)) = strings.iter().find(|(candidate, _, _)| candidate == id) else {
+    let Some((_, _, entry)) = strings.iter().find(|(candidate, _, _)| candidate == id) else {
         return vec!["not a string of the batch".to_owned()];
     };
     match &answer.start {
@@ -585,26 +586,24 @@ fn problems(shared: &Shared, strings: &Strings, id: &str, answer: &Answer) -> Ve
         Some(_) => {}
     }
     let mut found = Vec::new();
-    if let Some(budget) = fit::length_budget(path, &entry.source, &entry.extracted) {
-        let length = fit::visible_length(&answer.text);
-        if length > budget {
-            found.push(format!(
-                "the translation shows {length} characters and the interface fits {budget}: \
-                 shorten it, with the usual abbreviations when needed"
-            ));
+    if let Some(budget) = length_budget(entry) {
+        let length = budget.length_of(&answer.text);
+        let max = budget.max;
+        if length > max {
+            found.push(match budget.unit {
+                Unit::Characters => format!(
+                    "the translation shows {length} characters and the interface fits {max}: \
+                     shorten it, with the usual abbreviations when needed"
+                ),
+                Unit::Bytes => format!(
+                    "the name is {length} bytes and the game shows at most {max} over the \
+                     character or object: shorten it, with the usual abbreviations when needed"
+                ),
+            });
         }
     }
-    found.extend(
-        check_translation(
-            &shared.knowledge,
-            &shared.target,
-            &entry.source,
-            &answer.text,
-            &entry.extracted,
-            &entry.term_exceptions,
-        )
-        .problems,
-    );
+    found
+        .extend(check_translation(&shared.knowledge, &shared.target, entry, &answer.text).problems);
     // Asked of machine translation only: a person can keep one form where
     // it agrees with both.
     found.extend(agreement_problems(&entry.source, &answer.text));
@@ -812,18 +811,11 @@ async fn settle(
                 .strings
                 .iter()
                 .find(|(candidate, _, _)| *candidate == id)?;
-            let issues = check_translation(
-                &shared.knowledge,
-                &shared.target,
-                &entry.source,
-                &answer.text,
-                &entry.extracted,
-                &entry.term_exceptions,
-            )
-            .issues
-            .into_iter()
-            .filter(aeria_po::Issue::is_problem)
-            .collect();
+            let issues = check_translation(&shared.knowledge, &shared.target, entry, &answer.text)
+                .issues
+                .into_iter()
+                .filter(aeria_po::Issue::is_problem)
+                .collect();
             Some(Rejected {
                 path: path.clone(),
                 context: entry.context.clone(),

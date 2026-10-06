@@ -1141,6 +1141,12 @@ mod tests {
                     fuzzy: 0,
                 },
                 SheetProgressDto {
+                    sheet_name: "ENpcResident".to_owned(),
+                    strings: 1,
+                    translated: 0,
+                    fuzzy: 0,
+                },
+                SheetProgressDto {
                     sheet_name: "Synthetic".to_owned(),
                     strings: 2,
                     translated: 1,

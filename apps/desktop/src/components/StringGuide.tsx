@@ -121,7 +121,7 @@ export const StringGuide = memo(function StringGuide({ revision, onOpenTerms, on
   const hasFacts = shown.speaker !== null || shown.maxLength !== null || shown.gendered.length > 0 || (shown.kind !== null && shown.kind !== "other");
   const hasWords = shown.names.length > 0 || shown.terms.length > 0;
   const hasMacros = (macros?.length ?? 0) > 0;
-  const findings = verdict ? verdict.issues.length + (tooLong(verdict, shown.maxLength) ? 1 : 0) : 0;
+  const findings = verdict ? verdict.issues.length : 0;
 
   return (
     <div className={stale ? "string-guide is-stale" : "string-guide"} aria-busy={stale}>
@@ -149,7 +149,7 @@ export const StringGuide = memo(function StringGuide({ revision, onOpenTerms, on
         </GuideColumn>
       ) : null}
       <GuideColumn className="is-check" icon="check" title={t("hints.check")} count={findings > 0 ? findings : undefined}>
-        <DraftIssues drafted={drafted} verdict={verdict} maxLength={shown.maxLength} onException={onException} />
+        <DraftIssues drafted={drafted} verdict={verdict} onException={onException} />
       </GuideColumn>
       </div>
     </div>
@@ -201,7 +201,9 @@ function StringFacts({ hints, draft, verdict, onPick }: { hints: StringHintsDto;
   const drafted = draft.trim().length > 0;
   const kind = hints.kind ? KINDS[hints.kind] : undefined;
   const length = verdict?.length ?? null;
-  const over = hints.maxLength !== null && length !== null && length > hints.maxLength;
+  const budget = hints.maxLength;
+  const over = budget !== null && length !== null && length > budget.max;
+  const bytes = budget?.unit === "bytes";
   const varies = draft.includes("$gn4");
   return (
     <div className="string-guide-facts" role="group" aria-label={t("hints.string")}>
@@ -220,11 +222,13 @@ function StringFacts({ hints, draft, verdict, onPick }: { hints: StringHintsDto;
           <span className="string-guide-value">{t(kind)}</span>
         </span>
       ) : null}
-      {hints.maxLength !== null ? (
-        <span className={over ? "string-guide-fact is-todo" : "string-guide-fact"} title={t("hints.lengthTitle")}>
+      {budget !== null ? (
+        <span className={over ? "string-guide-fact is-todo" : "string-guide-fact"} title={bytes ? t("hints.nameLengthTitle", { max: String(budget.max) }) : t("hints.lengthTitle")}>
           <StateMark state={!drafted || length === null ? null : over ? "todo" : "ok"} />
-          <span className="string-guide-label">{t("hints.length")}</span>
-          <span className="string-guide-value mono">{drafted && length !== null ? t("hints.lengthOf", { length: String(length), max: String(hints.maxLength) }) : t("hints.lengthMax", { max: String(hints.maxLength) })}</span>
+          <span className="string-guide-label">{t(bytes ? "hints.nameLength" : "hints.length")}</span>
+          <span className="string-guide-value mono">{drafted && length !== null
+            ? t(bytes ? "hints.bytesOf" : "hints.lengthOf", { length: String(length), max: String(budget.max) })
+            : t(bytes ? "hints.bytesMax" : "hints.lengthMax", { max: String(budget.max) })}</span>
         </span>
       ) : null}
       {gendered ? (
@@ -419,25 +423,13 @@ function Macros({ macros, missing, onPick }: { macros: readonly GuideMacro[]; mi
   );
 }
 
-/** An interface label longer than the official localizations': advice, since only machine translation is held to it. */
-function tooLong(verdict: DraftCheckDto | null, maxLength: number | null): boolean {
-  return verdict !== null && maxLength !== null && verdict.length > maxLength;
-}
-
-function DraftIssues({ drafted, verdict, maxLength, onException }: { drafted: boolean; verdict: DraftCheckDto | null; maxLength: number | null; onException: ExceptionHandler }) {
+function DraftIssues({ drafted, verdict, onException }: { drafted: boolean; verdict: DraftCheckDto | null; onException: ExceptionHandler }) {
   const { t } = useI18n();
   if (!drafted) return <p className="string-guide-note">{t("hints.check.empty")}</p>;
   if (!verdict) return <p className="string-guide-note"><span className="spinner spinner-xs" /> {t("common.loading")}</p>;
-  const long = tooLong(verdict, maxLength);
-  if (verdict.issues.length === 0 && !long) return <p className="string-guide-ok"><UiIcon icon="circleCheck" size="xs" />{t("hints.check.ok")}</p>;
+  if (verdict.issues.length === 0) return <p className="string-guide-ok"><UiIcon icon="circleCheck" size="xs" />{t("hints.check.ok")}</p>;
   return (
     <ul className="string-guide-list">
-      {long ? (
-        <li className="string-guide-issue is-advice">
-          <UiIcon icon="triangleAlert" size="xs" />
-          <span>{t("hints.check.tooLong", { length: String(verdict.length), max: String(maxLength) })}</span>
-        </li>
-      ) : null}
       {verdict.issues.map((issue, index) => (
         <li className={issue.advice ? "string-guide-issue is-advice" : "string-guide-issue"} key={`${issue.group}:${index}`}>
           <UiIcon icon={issue.advice ? "triangleAlert" : "circleAlert"} size="xs" />

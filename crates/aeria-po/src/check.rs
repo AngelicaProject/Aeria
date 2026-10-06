@@ -8,7 +8,8 @@ use aeria_knowledge::Knowledge;
 use aeria_knowledge::rules::machine_phrasing;
 
 use crate::identity::Identity;
-use crate::po::PoFile;
+use crate::length::{Unit, length_budget};
+use crate::po::{Entry, PoFile};
 
 /// What the checks of a translation found.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -67,6 +68,12 @@ pub enum Issue {
     /// Advice: a term exception names no term of the source: the term left
     /// the glossary, or the source changed.
     StaleTermException(String),
+    /// Advice: an interface label shows more characters than the longest
+    /// official localization of it (see [`crate::length`]).
+    LabelTooLong { length: usize, max: usize },
+    /// Advice: the name of a world object has more bytes than the game
+    /// shows; the game cuts it (see [`crate::length`]).
+    NameTooLong { length: usize, max: usize },
 }
 
 impl Issue {
@@ -86,6 +93,8 @@ impl Issue {
             Self::GenderInOtherLanguages => "genderInOtherLanguages".to_owned(),
             Self::MachinePhrasing(_) => "machinePhrasing".to_owned(),
             Self::StaleTermException(_) => "staleTermException".to_owned(),
+            Self::LabelTooLong { .. } => "labelTooLong".to_owned(),
+            Self::NameTooLong { .. } => "nameTooLong".to_owned(),
         }
     }
 
@@ -100,6 +109,8 @@ impl Issue {
                 | Self::GenderInOtherLanguages
                 | Self::MachinePhrasing(_)
                 | Self::StaleTermException(_)
+                | Self::LabelTooLong { .. }
+                | Self::NameTooLong { .. }
         )
     }
 }
@@ -145,6 +156,14 @@ impl std::fmt::Display for Issue {
             Self::StaleTermException(term) => write!(
                 f,
                 "the string has an exception for the term {term:?}, which its source does not have; remove the exception"
+            ),
+            Self::LabelTooLong { length, max } => write!(
+                f,
+                "the translation shows {length} characters and the interface fits {max}"
+            ),
+            Self::NameTooLong { length, max } => write!(
+                f,
+                "the name is {length} bytes and the game shows at most {max} over the character or object"
             ),
         }
     }
@@ -237,18 +256,19 @@ fn letter_slips(target_language: &str, source: &str, text: &str) -> Vec<Issue> {
 /// Russian forms that write both genders at once, such as `готов(а)`.
 const BOTH_GENDERS: [&str; 6] = ["(а)", "(ла)", "(ая)", "(на)", "(ен)", "(ой)"];
 
-/// Checks one translation against its source and the project knowledge.
-/// `extracted` are the entry's `#.` lines, with the other client languages;
-/// `exceptions` the terms a person decided do not apply to the string.
+/// Checks `text` as the translation of `entry` against its source, its `#.`
+/// lines (with the other client languages), the terms a person decided do
+/// not apply to it, its length budget, and the project knowledge.
 #[must_use]
 pub fn check_translation(
     knowledge: &Knowledge,
     target_language: &str,
-    source: &str,
+    entry: &Entry,
     text: &str,
-    extracted: &[String],
-    exceptions: &[String],
 ) -> Verdict {
+    let source = entry.source.as_str();
+    let extracted = entry.extracted.as_slice();
+    let exceptions = entry.term_exceptions.as_slice();
     let mut issues = Vec::new();
     if text.contains('\n') && !source.contains('\n') {
         issues.push(Issue::LineBreak);
@@ -311,6 +331,16 @@ pub fn check_translation(
     {
         issues.push(Issue::GenderInOtherLanguages);
     }
+    if let Some(budget) = length_budget(entry) {
+        let length = budget.length_of(text);
+        let max = budget.max;
+        if length > max {
+            issues.push(match budget.unit {
+                Unit::Characters => Issue::LabelTooLong { length, max },
+                Unit::Bytes => Issue::NameTooLong { length, max },
+            });
+        }
+    }
     let phrasing = machine_phrasing(target_language, text);
     if !phrasing.is_empty() {
         issues.push(Issue::MachinePhrasing(
@@ -355,14 +385,7 @@ pub fn check_file(file: &PoFile, knowledge: &Knowledge, target_language: &str) -
         if entry.translation.is_empty() {
             continue;
         }
-        let verdict = check_translation(
-            knowledge,
-            target_language,
-            &entry.source,
-            &entry.translation,
-            &entry.extracted,
-            &entry.term_exceptions,
-        );
+        let verdict = check_translation(knowledge, target_language, entry, &entry.translation);
         findings.extend(verdict.problems.into_iter().map(|message| Finding {
             line: entry.line,
             message,
@@ -381,6 +404,21 @@ pub fn check_file(file: &PoFile, knowledge: &Knowledge, target_language: &str) -
 mod tests {
     use super::*;
 
+    fn check(
+        knowledge: &Knowledge,
+        target_language: &str,
+        source: &str,
+        text: &str,
+        extracted: &[String],
+    ) -> Verdict {
+        let entry = Entry {
+            source: source.to_owned(),
+            extracted: extracted.to_vec(),
+            ..Entry::default()
+        };
+        check_translation(knowledge, target_language, &entry, text)
+    }
+
     #[test]
     fn game_data_of_the_other_languages_of_the_string_may_stand_in() {
         let source = "<title-case><sheet ClassJob $n1 30></title-case> (Lv. <num $n2>)";
@@ -392,12 +430,12 @@ mod tests {
         ];
         let knowledge = Knowledge::default();
         assert!(
-            check_translation(&knowledge, "ru", source, text, &extracted, &[])
+            check(&knowledge, "ru", source, text, &extracted)
                 .problems
                 .is_empty()
         );
         assert!(
-            !check_translation(&knowledge, "ru", source, text, &[], &[])
+            !check(&knowledge, "ru", source, text, &[])
                 .problems
                 .is_empty()
         );
@@ -406,9 +444,8 @@ mod tests {
     #[test]
     fn slips_of_letters_are_problems_unless_the_source_has_them() {
         let knowledge = Knowledge::default();
-        let problems = |source: &str, text: &str| {
-            check_translation(&knowledge, "ru", source, text, &[], &[]).problems
-        };
+        let problems =
+            |source: &str, text: &str| check(&knowledge, "ru", source, text, &[]).problems;
         for (source, text) in [
             ("Elezen boy", "юный эле\u{301}зен"),
             ("deep palace sarcosuchus", "сарcosух Дворца мёртвых"),
@@ -439,7 +476,7 @@ mod tests {
             );
         }
         assert!(
-            check_translation(&knowledge, "de", "Hello", "Hall\u{f6}", &[], &[])
+            check(&knowledge, "de", "Hello", "Hall\u{f6}", &[])
                 .problems
                 .is_empty()
         );
@@ -449,15 +486,58 @@ mod tests {
     fn broken_macros_and_both_genders_are_problems() {
         let knowledge = Knowledge::default();
         assert!(
-            check_translation(&knowledge, "ru", "Hello.", "Привет.", &[], &[])
+            check(&knowledge, "ru", "Hello.", "Привет.", &[])
                 .problems
                 .is_empty()
         );
-        let verdict =
-            check_translation(&knowledge, "ru", "You are ready.", "Ты готов(а).", &[], &[]);
+        let verdict = check(&knowledge, "ru", "You are ready.", "Ты готов(а).", &[]);
         assert_eq!(verdict.problems.len(), 1, "{verdict:?}");
-        let verdict = check_translation(&knowledge, "ru", "Hello.", "При\nвет.", &[], &[]);
+        let verdict = check(&knowledge, "ru", "Hello.", "При\nвет.", &[]);
         assert_eq!(verdict.problems.len(), 1, "{verdict:?}");
+    }
+
+    #[test]
+    fn a_translation_longer_than_its_budget_is_advice() {
+        let knowledge = Knowledge::default();
+        let entry = |context: &str, source: &str, extracted: &[&str]| Entry {
+            context: context.to_owned(),
+            source: source.to_owned(),
+            extracted: extracted.iter().map(|line| (*line).to_owned()).collect(),
+            ..Entry::default()
+        };
+        let aide = entry(
+            "ENpcResident:1019070:0:0",
+            "East Aldenard Trading Company aide",
+            &[],
+        );
+        let verdict = check_translation(
+            &knowledge,
+            "ru",
+            &aide,
+            "служащий торговой компании «Восточный Альденард»",
+        );
+        assert!(verdict.problems.is_empty(), "{verdict:?}");
+        assert_eq!(
+            verdict.issues,
+            vec![Issue::NameTooLong {
+                length: 92,
+                max: 63
+            }]
+        );
+        assert!(
+            check_translation(&knowledge, "ru", &aide, "служащий ТК «Восточный Альденард»")
+                .issues
+                .is_empty()
+        );
+        let loot = entry("Addon:1:0:0", "Loot", &["de: Beutegut", "fr: Butin"]);
+        assert_eq!(
+            check_translation(&knowledge, "ru", &loot, "Военные трофеи").issues,
+            vec![Issue::LabelTooLong { length: 14, max: 8 }]
+        );
+        assert_eq!(
+            Issue::LabelTooLong { length: 14, max: 8 }.group(),
+            "labelTooLong"
+        );
     }
 
     #[test]
