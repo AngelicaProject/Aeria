@@ -238,7 +238,6 @@ pub struct SearchResultDto {
     pub hits: Vec<SearchHitDto>,
     /// Every string found; more than `hits` when the result was cut.
     pub total: usize,
-    pub matches: usize,
     /// Every file with a string found, with counts, in file order.
     pub files: Vec<FileHitsDto>,
     /// With a check filter, the issues of every string found by group.
@@ -423,11 +422,12 @@ pub async fn project_search(
         let session = app.state::<DesktopState>().session()?;
         let knowledge = session.knowledge();
         let target = session.settings().target_language;
-        let found = aeria_po::search(session.root(), &query.query(), &knowledge, &target, &cancel)
+        let found = session
+            .corpus()
+            .search(session.root(), &query.query(), &knowledge, &target, &cancel)
             .map_err(|error| search_error(&error))?;
         Ok(SearchResultDto {
             total: found.total,
-            matches: found.matches,
             files: found
                 .files
                 .into_iter()
@@ -452,6 +452,25 @@ pub async fn project_search(
                 .map(|hit| hit_dto(&session, hit))
                 .collect(),
         })
+    })
+    .await
+}
+
+#[tauri::command(rename_all = "camelCase")]
+/// Reads the open project's files that changed since a search last read
+/// them, so the next search does not wait: the Search tool asks for it when
+/// it opens.
+///
+/// # Errors
+///
+/// Returns `noProjectOpen`, or `translationRead` when a file cannot be read.
+pub async fn project_search_prepare(app: tauri::AppHandle) -> CommandResult<()> {
+    run_blocking(move || {
+        let session = app.state::<DesktopState>().session()?;
+        session
+            .corpus()
+            .refresh(session.root())
+            .map_err(|error| search_error(&error))
     })
     .await
 }
@@ -573,7 +592,9 @@ pub async fn project_search_entries(
         let session = app.state::<DesktopState>().session()?;
         let knowledge = session.knowledge();
         let target = session.settings().target_language;
-        let hits = aeria_po::search_all(session.root(), &query.query(), &knowledge, &target)
+        let hits = session
+            .corpus()
+            .search_all(session.root(), &query.query(), &knowledge, &target)
             .map_err(|error| search_error(&error))?;
         Ok(hits
             .into_iter()
@@ -607,18 +628,20 @@ pub async fn project_replace_preview(
         let session = app.state::<DesktopState>().session()?;
         let knowledge = session.knowledge();
         let target = session.settings().target_language;
-        let changes = aeria_po::preview_replace(
-            session.root(),
-            &query.query(),
-            &Replacement {
-                text: replacement.text,
-                preserve_case: replacement.preserve_case,
-            },
-            &knowledge,
-            &target,
-            &cancel,
-        )
-        .map_err(|error| search_error(&error))?;
+        let changes = session
+            .corpus()
+            .preview_replace(
+                session.root(),
+                &query.query(),
+                &Replacement {
+                    text: replacement.text,
+                    preserve_case: replacement.preserve_case,
+                },
+                &knowledge,
+                &target,
+                &cancel,
+            )
+            .map_err(|error| search_error(&error))?;
         Ok(changes
             .into_iter()
             .map(|change| ReplaceChangeDto {

@@ -1,49 +1,188 @@
 /* Project search tool and replace preview. */
 
-.search-tool { gap: 8px; padding: 8px 8px 0; overflow: hidden; }
-.search-form { display: grid; gap: 6px; }
-.search-row { display: flex; align-items: center; gap: 2px; }
-.search-expand { flex: none; width: 22px; }
-.search-query { position: relative; display: flex; flex: 1; align-items: center; min-width: 0; }
-.search-query .input { flex: 1; min-width: 0; padding-right: 76px; }
-.search-toggles { position: absolute; right: 3px; display: flex; gap: 1px; }
-.search-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; padding-left: 24px; }
+.search-tool { overflow: hidden; }
+.search-head { display: grid; flex: none; gap: 6px; min-width: 0; padding: 8px 8px 6px; grid-template-columns: minmax(0, 1fr); }
+
+/* The query and replace fields: a field with its toggles inside. */
+.search-box {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  height: var(--control-height);
+  padding: 0 3px 0 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--field);
+  color: var(--fg-subtle);
+  box-shadow: var(--shadow-control);
+}
+.search-box:focus-within { border-color: var(--line-focus); }
+.search-box.invalid { border-color: var(--bad); }
+.search-box input { flex: 1; min-width: 0; height: 100%; padding: 0 2px; border: 0; background: transparent; color: var(--fg); font: inherit; font-size: var(--text-sm); }
+.search-box input::placeholder { color: var(--fg-faint); }
+.search-box input:focus-visible { outline: none; }
+.search-box-toggles { display: flex; flex: none; gap: 1px; }
+.search-box-divider { flex: none; width: 1px; height: 14px; margin: 0 2px; background: var(--line-strong); }
+.search-box-error { margin: -2px 0 0; color: var(--bad); font-size: var(--text-2xs); }
+
+/* The scope: chips that say what the search looks in and keeps. */
+.search-scope { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+.scope-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  max-width: 100%;
+  height: 22px;
+  padding: 0 6px 0 8px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--fg-muted);
+  font: inherit;
+  font-size: var(--text-xs);
+  cursor: pointer;
+}
+.scope-chip:hover { background: var(--hover); color: var(--fg); }
+.scope-chip[data-state="open"] { background: var(--pressed); color: var(--fg); }
+.scope-chip.active { border-color: color-mix(in srgb, var(--accent) 55%, transparent); background: var(--accent-soft); color: var(--accent-text); }
+.scope-chip.warn { border-color: color-mix(in srgb, var(--warn) 55%, transparent); color: var(--warn); }
+.scope-chip > svg { flex: none; opacity: 0.7; }
+.scope-chip-value { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.scope-clear { margin-left: 2px; font-size: var(--text-xs); }
+.scope-sheets { display: grid; gap: 10px; width: 280px; padding: 10px; }
+.scope-sheets .checkbox { gap: 6px; font-size: var(--text-xs); }
+
+/* Before a search: what it does and where to start. */
+.search-start { padding: 10px 8px; }
+.search-quick { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+.search-quick-label { margin-right: 2px; color: var(--fg-subtle); font-size: var(--text-xs); }
+.search-nothing { padding: 8px 10px; font-size: var(--text-xs); }
+
+.search-result { display: flex; flex: 1; flex-direction: column; min-height: 0; }
+.search-result.stale { opacity: 0.45; pointer-events: none; }
+
+/* The line over the result: counts, state, and actions on all of it. */
+.search-summary {
+  position: relative;
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 4px;
+  min-height: 28px;
+  padding: 0 6px 0 10px;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  font-size: var(--text-xs);
+}
+.search-count { overflow: hidden; color: var(--fg-muted); font-variant-numeric: tabular-nums; text-overflow: ellipsis; white-space: nowrap; }
+.search-status { overflow: hidden; color: var(--fg-subtle); text-overflow: ellipsis; white-space: nowrap; }
+.search-summary-spacer { flex: 1; }
+.search-actions-label { padding-left: 8px; }
+/* A search in progress: a line along the bottom, shown only when it takes long enough to notice. */
+.search-progress {
+  position: absolute;
+  right: 0;
+  bottom: -1px;
+  left: 0;
+  height: 2px;
+  overflow: hidden;
+  opacity: 0;
+  animation: search-progress-show 0s linear 160ms forwards;
+}
+.search-progress::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 30%;
+  background: var(--accent);
+  animation: search-progress-run 1.1s var(--ease-out) infinite;
+}
+@keyframes search-progress-show { to { opacity: 1; } }
+@keyframes search-progress-run { from { left: -30%; } to { left: 100%; } }
+@media (prefers-reduced-motion: reduce) {
+  .search-progress::after { left: 0; width: 100%; opacity: 0.5; animation: none; }
+}
+
+/* The issue to keep: a filterable list, since a project has hundreds of term issues. */
+.issue-picker { display: grid; gap: 4px; width: min(340px, calc(100vw - 16px)); max-height: min(440px, var(--radix-popover-content-available-height, 70vh)); padding: 6px; overflow: hidden; grid-template-rows: auto minmax(0, 1fr); }
+.issue-picker-search { display: flex; align-items: center; gap: 6px; padding-left: 8px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--field); color: var(--fg-subtle); }
+.issue-picker-search:focus-within { border-color: var(--line-focus); }
+.issue-picker-search .input { height: 28px; padding: 0 6px 0 0; border: 0; background: transparent; }
+.issue-picker-search .input:focus-visible { box-shadow: none; }
+.issue-picker-list { min-height: 0; overflow-y: auto; }
+.issue-picker-section { padding: 8px 8px 3px; color: var(--fg-subtle); font-size: var(--text-2xs); font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; }
+.issue-item { display: flex; align-items: center; gap: 6px; width: 100%; padding: 4px 8px 4px 4px; border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--fg); font: inherit; font-size: var(--text-xs); text-align: left; cursor: pointer; }
+.issue-item:hover, .issue-item:focus-visible { background: var(--selected); outline: none; }
+.issue-item-check { display: inline-grid; flex: none; place-items: center; width: 16px; color: var(--accent-text); }
+.issue-item-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.issue-item-count { flex: none; color: var(--fg-subtle); font-family: var(--font-mono); font-size: var(--text-2xs); }
+.issue-picker-empty { padding: 8px; color: var(--fg-subtle); font-size: var(--text-xs); }
 .chip-toggle { padding: 1px 8px; border: 1px solid var(--line); border-radius: 999px; background: transparent; color: var(--fg-muted); font: inherit; font-size: var(--text-2xs); cursor: pointer; }
 .chip-toggle:hover { color: var(--fg); }
 .chip-toggle.on { border-color: var(--accent); background: var(--accent-soft); color: var(--accent-text); }
 .chip-toggle.advice:not(.on) { color: var(--warn); }
-.search-filters-toggle { display: inline-flex; align-items: center; gap: 4px; margin-left: auto; font-size: var(--text-2xs); }
-.search-filters { display: grid; gap: 6px; padding-left: 24px; }
-.search-filters .search-chips { padding-left: 0; }
-.search-filter { display: grid; gap: 2px; color: var(--fg-muted); font-size: var(--text-2xs); }
-.search-empty p { max-width: 260px; }
-.search-summary { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: var(--text-xs); }
-.search-summary > .muted { display: inline-flex; align-items: center; gap: 6px; margin-right: auto; }
-.search-results { flex: 1; min-height: 0; margin: 0 -8px; overflow-y: auto; }
-.search-group-head { display: flex; align-items: center; padding-right: 6px; }
-.search-group-toggle { display: flex; flex: 1; align-items: center; gap: 4px; min-width: 0; padding: 3px 8px; border: 0; background: transparent; color: var(--fg); font: inherit; font-size: var(--text-xs); text-align: left; cursor: pointer; }
-.search-group-toggle:hover { background: var(--hover); }
-.search-group-name { overflow: hidden; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
-.search-group-path { overflow: hidden; font-size: var(--text-2xs); text-overflow: ellipsis; white-space: nowrap; }
-.search-group-toggle .git-count { margin-left: auto; }
-.search-hits { margin: 0; padding: 0; list-style: none; }
-.search-hit { position: relative; display: flex; align-items: flex-start; }
-.search-hit.chosen { background: var(--accent-soft); }
-.search-tool .search-hit input.search-check { margin: 7px 0 0 24px; }
-.search-tool .search-group-head input.search-check { margin: 0 0 0 8px; }
-.search-selection { flex-wrap: wrap; gap: 6px; font-size: var(--text-xs); }
-.search-hit-main { display: grid; flex: 1; gap: 1px; min-width: 0; padding: 3px 8px 3px 4px; border: 0; background: transparent; color: var(--fg); font: inherit; font-size: var(--text-xs); text-align: left; cursor: pointer; }
-.search-hit-main:hover:not(:disabled) { background: var(--selected); }
-.search-hit-main:disabled { cursor: default; }
-.search-hit-coordinate { display: flex; align-items: center; gap: 6px; color: var(--fg-subtle); font-size: var(--text-2xs); }
-.search-hit-text, .search-hit-source { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.search-hit-source { color: var(--fg-muted); }
-.search-hit-findings { overflow: hidden; color: var(--bad); font-size: var(--text-2xs); text-overflow: ellipsis; white-space: nowrap; }
+.search-issue-count { margin-left: 4px; color: var(--fg-subtle); font-variant-numeric: tabular-nums; }
+
+/* The result: one virtualized list of sheets and their strings. */
+.search-list { position: relative; flex: 1; min-height: 0; overflow-y: auto; outline: none; }
+.search-list-inner { position: relative; width: 100%; }
+.search-list:focus-visible { box-shadow: inset 0 0 0 1px var(--line-focus); }
+
+.search-sheet { display: flex; align-items: center; gap: 2px; height: 26px; padding: 0 6px 0 8px; background-color: var(--panel); }
+.search-sheet.sticky { box-shadow: 0 1px 0 var(--line); }
+.search-sheet-toggle { display: flex; flex: 1; align-items: center; gap: 4px; min-width: 0; height: 100%; padding: 0 4px; border: 0; background: transparent; color: var(--fg); font: inherit; font-size: var(--text-xs); text-align: left; cursor: pointer; }
+.search-sheet-toggle > svg { flex: none; color: var(--fg-subtle); }
+.search-sheet-name { overflow: hidden; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.search-sheet-path { overflow: hidden; color: var(--fg-subtle); font-size: var(--text-2xs); text-overflow: ellipsis; white-space: nowrap; }
+.search-sheet-count { margin-left: auto; padding-left: 6px; color: var(--fg-faint); font-family: var(--font-mono); font-size: var(--text-2xs); }
+/* A sheet's line covers the strings that scroll under it, so its tints are laid over an opaque panel. */
+.search-sheet:hover { background-image: linear-gradient(var(--hover), var(--hover)); }
+.search-sheet.active, .search-hit.active { box-shadow: inset 2px 0 0 var(--accent); }
+.search-hit.active { background: var(--hover); }
+.search-sheet.active { background-image: linear-gradient(var(--hover), var(--hover)); }
+.search-list:focus .search-hit.active { background: var(--selected); }
+.search-list:focus .search-sheet.active { background-image: linear-gradient(var(--selected), var(--selected)); }
+
+.search-hit { position: relative; display: flex; align-items: flex-start; padding: 0 6px 0 8px; border-bottom: 1px solid color-mix(in srgb, var(--line) 50%, transparent); }
+.search-hit:hover { background: var(--hover); }
+/* Chosen strings: tinted with a bar, like a selection in a file list; Ctrl, Shift, and Space choose. */
+.search-hit.chosen { background: var(--accent-soft); box-shadow: inset 3px 0 0 var(--accent); }
+.search-hit.chosen.active { background: var(--selected-strong); }
+.search-sheet.chosen { background-image: linear-gradient(var(--accent-soft), var(--accent-soft)); }
+.search-sheet.chosen .search-sheet-count, .search-sheet.partly .search-sheet-count { color: var(--accent-text); }
+.search-hit-main { display: grid; flex: 1; gap: 1px; min-width: 0; padding: 5px 4px 5px 18px; user-select: none; border: 0; background: transparent; color: var(--fg); font: inherit; font-size: var(--text-sm); text-align: left; cursor: pointer; }
+.search-hit-line { display: flex; align-items: baseline; gap: 6px; min-width: 0; }
+.search-hit-text { flex: 1; min-width: 0; overflow: hidden; font-family: var(--font-content); text-overflow: ellipsis; white-space: nowrap; }
+.search-hit-untranslated { color: var(--fg-subtle); }
+.search-hit-line .chip { flex: none; }
+.search-hit-coordinate { flex: none; color: var(--fg-faint); font-family: var(--font-mono); font-size: var(--text-2xs); }
+.search-hit-source, .search-hit-other { overflow: hidden; color: var(--fg-muted); font-family: var(--font-content); font-size: var(--text-xs); text-overflow: ellipsis; white-space: nowrap; }
+.search-hit-label { margin-right: 6px; color: var(--fg-subtle); font-family: var(--font-ui); font-size: var(--text-2xs); text-transform: uppercase; letter-spacing: 0.04em; }
+.search-hit-findings { display: flex; align-items: center; gap: 4px; min-width: 0; color: var(--bad); font-size: var(--text-xs); }
 .search-hit-findings.advice { color: var(--warn); }
-.search-hit mark { border-radius: 2px; background: var(--accent-soft); color: var(--accent-text); }
-.search-hit-actions { position: absolute; top: 2px; right: 4px; display: flex; gap: 1px; opacity: 0; }
+.search-hit-findings > svg { flex: none; }
+.search-hit-finding { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.search-hit mark { border-radius: 2px; background: color-mix(in srgb, var(--accent) 28%, transparent); color: var(--fg); }
+.search-hit-actions { position: absolute; top: 3px; right: 6px; display: flex; gap: 1px; padding-left: 12px; border-radius: var(--radius-xs); background: linear-gradient(to right, transparent, var(--panel) 12px); opacity: 0; }
 .search-hit:hover .search-hit-actions, .search-hit-actions:focus-within { opacity: 1; }
-.search-skipped { max-height: 140px; margin: 0; padding: 0 0 0 24px; overflow-y: auto; font-size: var(--text-2xs); list-style: none; }
+.search-sheet .search-row-action { flex: none; opacity: 0; }
+.search-sheet:hover .search-row-action, .search-sheet.active .search-row-action { opacity: 1; }
+.search-note { display: flex; align-items: center; gap: 6px; min-height: 26px; padding: 2px 8px 2px 44px; font-size: var(--text-xs); }
+.search-note.active { box-shadow: inset 2px 0 0 var(--accent); background: var(--hover); }
+
+/* What a bulk edit did, and the strings chosen. */
+.search-error { flex: none; margin: 0 8px 6px; }
+.search-message { flex: none; padding: 6px 8px 0; border-top: 1px solid var(--line); }
+.search-message .git-feedback { align-items: center; margin: 0 0 6px; padding: 6px 6px 6px 10px; }
+.search-message-text { flex: 1; min-width: 0; }
+.search-skipped { max-height: 140px; margin: 0 0 6px; padding: 0 0 0 24px; overflow-y: auto; font-size: var(--text-2xs); list-style: none; }
+.search-footer { display: flex; flex: none; flex-wrap: wrap; align-items: center; gap: 4px; padding: 6px; border-top: 1px solid var(--line); background: var(--panel-raised); font-size: var(--text-xs); }
+.search-footer-count { margin-right: auto; color: var(--fg); font-weight: 600; }
+/* The keys of choosing, named until the person first uses them. */
+.search-footer-keys { display: flex; flex-basis: 100%; flex-wrap: wrap; gap: 2px 12px; padding: 0 0 0 26px; color: var(--fg-subtle); font-size: var(--text-2xs); }
+.search-footer-keys kbd { padding: 0 4px; border: 1px solid var(--line-strong); border-radius: var(--radius-xs); background: var(--field); color: var(--fg-muted); font-family: var(--font-ui); font-size: var(--text-2xs); }
 
 .replace-preview { display: flex; flex-direction: column; width: min(820px, calc(100vw - 48px)); max-height: min(720px, calc(100vh - 48px)); }
 .replace-preview-all { margin-top: 10px; }
@@ -54,10 +193,6 @@
 .replace-change-where { display: inline-flex; align-items: center; gap: 6px; justify-self: start; font-size: var(--text-2xs); }
 .replace-change.invalid .git-diff { opacity: 0.6; }
 .replace-change-problems { display: flex; gap: 4px; margin: 0; color: var(--bad); font-size: var(--text-2xs); }
-.search-issues { display: flex; flex-wrap: wrap; gap: 4px; max-height: 120px; overflow-y: auto; }
-.search-issues .chip-toggle { display: inline-flex; align-items: center; gap: 4px; }
-.search-issue-count { margin-left: 4px; color: var(--fg-subtle); font-variant-numeric: tabular-nums; }
-.search-loading { display: flex; align-items: center; gap: 6px; padding: 4px 26px; font-size: var(--text-xs); }
 
 /* Strings the checks refused in a machine translation run. */
 .translate-rejections { display: grid; gap: 6px; font-size: var(--text-xs); }

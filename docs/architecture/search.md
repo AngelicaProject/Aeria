@@ -125,16 +125,13 @@ the translator.
 
 ## Project search
 
-`aeria_po::search` searches the project's files, the only state of a
-project, so it always sees the current translations; there is no index of
-`po/`. A search reads every chosen file, several at a time, and lists its
-entries in file order (files sorted by path):
+`aeria_po::Corpus` searches the project's files, the only state of a
+project, and lists the entries found in file order (files sorted by path):
 
 - **Pattern**: text, whole words (`\b` around the text), or a regular
   expression of the `regex` crate, case-insensitive unless asked otherwise.
-  A pattern without regular-expression syntax and without a character the
-  PO format escapes (`"`, `\`, a line break, a tab) first tests the raw
-  file and skips files without a match before parsing them.
+  Text and whole words are first looked for in a field's whole text: a
+  field without a match is not searched by its text ranges.
 - **Fields**: the translation, the source, the translator's notes, and the
   `msgctxt`. In translations and sources only the text a translator writes
   matches: text nodes and translatable macro arguments, such as the branches
@@ -157,11 +154,38 @@ can keep only the entries with an issue of one group.
 A search returns at most 2,000 entries with the byte ranges of their matches,
 every file with an entry found and its count, and counts the rest; a new search in the desktop cancels the one in
 progress. `search_all` returns every entry found, for an action on a whole
-result; it is never cancelled, so it never returns part of one. On the full game (about 7,300 files) a text search takes about half
-a second, a regular expression about one, and checking every translation
-about two seconds. The glossary finds a string's terms with one automaton of
+result; it is never cancelled, so it never returns part of one. The glossary finds a string's terms with one automaton of
 all its terms in one pass, and a check finds the source's terms once for
 every term check.
+
+### The corpus
+
+A search reads the project's files from memory, not from disk: the
+`Corpus` of the open session (`Session::corpus`) keeps the text of every
+file it has read, each file's entries in one buffer (`msgctxt`, source,
+translation, and notes, with the text ranges of the sources and
+translations that have macros, parsed once). Before every search the files
+of `po/` are listed with their size and modification time, which the
+listing itself gives; a file whose size or time changed is read again, a
+file gone is dropped, and a file not yet read is read. A search therefore
+always sees the files as they are, changes made by Git or by hand
+included, and `po/` has no index on disk. The corpus is machine-local state
+of the session and is dropped with it.
+
+The issues of the checks are not kept with the text: a search with a checks
+filter reads each file once more for what the checks need, checks every
+translation of it, and keeps the issues with the file's text, for the
+knowledge they were found with. A file is checked again when it changes or
+the knowledge does.
+
+On a project of the whole game (about 7,300 files, 860,000 entries) the
+corpus holds about 270 MB, and about 320 MB with the issues of the checks.
+Reading it takes about half a second; the desktop starts the read when the
+Search tool opens (`project_search_prepare`), and a search that starts
+during a read waits for it. Then listing the files takes about 15 ms, and a
+search of text, words, or a regular expression, or by state or checks,
+about 25–75 ms; the first search with a checks filter takes about two
+seconds to check every translation.
 
 ### Replacing
 

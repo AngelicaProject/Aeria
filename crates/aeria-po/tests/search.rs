@@ -9,7 +9,7 @@ use std::sync::atomic::AtomicBool;
 use aeria_knowledge::Knowledge;
 use aeria_po::{
     CheckFilter, EditKind, EntryEdit, Field, Fields, Issue, MatchKind, Pattern, Query, Replacement,
-    SkipReason, State, preview_replace, search, search_all,
+    SkipReason, State,
 };
 use aeria_source::{GameSource, SourceLanguage};
 use aeria_sqpack::testing::{FakeGame, TextSheet};
@@ -58,14 +58,16 @@ fn query(text: &str, kind: MatchKind) -> Query {
 }
 
 fn find(session: &aeria_po::Session, query: &Query) -> aeria_po::Found {
-    search(
-        session.root(),
-        query,
-        &Knowledge::default(),
-        "ru",
-        &AtomicBool::new(false),
-    )
-    .expect("search")
+    session
+        .corpus()
+        .search(
+            session.root(),
+            query,
+            &Arc::new(Knowledge::default()),
+            "ru",
+            &AtomicBool::new(false),
+        )
+        .expect("search")
 }
 
 #[test]
@@ -123,17 +125,19 @@ fn problems_are_found_by_the_checks_a_translation_is_saved_with() {
     std::fs::create_dir_all(session.root().join("aeria-knowledge")).expect("dir");
     std::fs::write(session.root().join("aeria-knowledge/terms.csv"), terms).expect("terms");
     let knowledge = session.knowledge();
-    let problems = search(
-        session.root(),
-        &Query {
-            check: CheckFilter::Problems,
-            ..Query::default()
-        },
-        &knowledge,
-        "ru",
-        &AtomicBool::new(false),
-    )
-    .expect("search");
+    let problems = session
+        .corpus()
+        .search(
+            session.root(),
+            &Query {
+                check: CheckFilter::Problems,
+                ..Query::default()
+            },
+            &knowledge,
+            "ru",
+            &AtomicBool::new(false),
+        )
+        .expect("search");
     // «Повар» and its inflected form «повара»; «Поварской» is another word.
     assert_eq!(problems.total, 2);
     assert_eq!(
@@ -147,33 +151,37 @@ fn problems_are_found_by_the_checks_a_translation_is_saved_with() {
     assert_eq!(problems.issues.len(), 1);
     assert_eq!(problems.issues[0].group, "forbiddenTerm:cook");
     assert_eq!(problems.issues[0].count, 2);
-    let unused = search(
-        session.root(),
-        &Query {
-            check: CheckFilter::Advice,
-            ..Query::default()
-        },
-        &knowledge,
-        "ru",
-        &AtomicBool::new(false),
-    )
-    .expect("search");
+    let unused = session
+        .corpus()
+        .search(
+            session.root(),
+            &Query {
+                check: CheckFilter::Advice,
+                ..Query::default()
+            },
+            &knowledge,
+            "ru",
+            &AtomicBool::new(false),
+        )
+        .expect("search");
     assert_eq!(unused.total, 3);
     assert_eq!(unused.issues[0].group, "termNotUsed:cook");
     assert_eq!(unused.issues[0].count, 3);
     // One group of the summary narrows the search to it.
-    let narrowed = search(
-        session.root(),
-        &Query {
-            check: CheckFilter::Advice,
-            issue: Some("termNotUsed:nothing".to_owned()),
-            ..Query::default()
-        },
-        &knowledge,
-        "ru",
-        &AtomicBool::new(false),
-    )
-    .expect("search");
+    let narrowed = session
+        .corpus()
+        .search(
+            session.root(),
+            &Query {
+                check: CheckFilter::Advice,
+                issue: Some("termNotUsed:nothing".to_owned()),
+                ..Query::default()
+            },
+            &knowledge,
+            "ru",
+            &AtomicBool::new(false),
+        )
+        .expect("search");
     assert_eq!(narrowed.total, 0);
 }
 
@@ -184,15 +192,17 @@ fn a_replacement_is_previewed_applied_to_unchanged_entries_and_undone() {
         text: "кулинар".to_owned(),
         preserve_case: true,
     };
-    let changes = preview_replace(
-        session.root(),
-        &query("повар", MatchKind::Word),
-        &replacement,
-        &Knowledge::default(),
-        "ru",
-        &AtomicBool::new(false),
-    )
-    .expect("preview");
+    let changes = session
+        .corpus()
+        .preview_replace(
+            session.root(),
+            &query("повар", MatchKind::Word),
+            &replacement,
+            &Arc::new(Knowledge::default()),
+            "ru",
+            &AtomicBool::new(false),
+        )
+        .expect("preview");
     assert_eq!(changes.len(), 1);
     assert_eq!(changes[0].after, "Кулинар пришёл");
     assert!(changes[0].problems.is_empty());
@@ -355,7 +365,10 @@ fn search_all_returns_every_entry_past_the_hit_limit() {
     assert_eq!(found.total, rows as usize);
     assert_eq!(found.hits.len(), aeria_po::MAX_HITS);
 
-    let all = search_all(session.root(), &cook, &Knowledge::default(), "ru").expect("search");
+    let all = session
+        .corpus()
+        .search_all(session.root(), &cook, &Arc::new(Knowledge::default()), "ru")
+        .expect("search");
     assert_eq!(all.len(), rows as usize);
     assert_eq!(
         all[..found.hits.len()],
@@ -364,4 +377,51 @@ fn search_all_returns_every_entry_past_the_hit_limit() {
     );
     let contexts: std::collections::HashSet<_> = all.iter().map(|hit| &hit.context).collect();
     assert_eq!(contexts.len(), all.len(), "every entry once");
+}
+
+#[test]
+fn a_search_sees_every_change_of_the_files_and_the_knowledge() {
+    let (_directory, session) = project();
+    let problems = |session: &aeria_po::Session| {
+        session
+            .corpus()
+            .search(
+                session.root(),
+                &Query {
+                    check: CheckFilter::Problems,
+                    ..Query::default()
+                },
+                &session.knowledge(),
+                "ru",
+                &AtomicBool::new(false),
+            )
+            .expect("search")
+            .total
+    };
+    assert_eq!(find(&session, &query("кулинар", MatchKind::Text)).total, 0);
+    assert_eq!(problems(&session), 0);
+
+    // A save of the session.
+    session
+        .set_translation("Addon", 3, 0, 0, "Кулинария")
+        .expect("save");
+    assert_eq!(find(&session, &query("кулинар", MatchKind::Text)).total, 1);
+
+    // A change made by hand, which the session does not know of.
+    let file = session.root().join("po/Item.po");
+    let text = std::fs::read_to_string(&file).expect("read");
+    std::fs::write(&file, text.replace("Поварской нож", "Кулинарный нож!")).expect("write");
+    let found = find(&session, &query("кулинар", MatchKind::Text));
+    assert_eq!(found.total, 2);
+    assert_eq!(found.hits[1].translation, "Кулинарный нож!");
+
+    // A new term: the checks are made again with it.
+    let terms = "term,translation,forbidden\ncook,кулинар,повар\n";
+    std::fs::create_dir_all(session.root().join("aeria-knowledge")).expect("dir");
+    std::fs::write(session.root().join("aeria-knowledge/terms.csv"), terms).expect("terms");
+    assert_eq!(problems(&session), 2, "«Повар пришёл» and «Спроси повара»");
+
+    // A file removed is no longer found.
+    std::fs::remove_file(&file).expect("remove");
+    assert_eq!(find(&session, &query("кулинар", MatchKind::Text)).total, 1);
 }

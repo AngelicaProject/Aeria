@@ -260,12 +260,13 @@ a note); the renderer patches that cell instead of reloading the sheet. A
 translation the checks refuse fails with `translationInvalid`, whose message
 lists the problems.
 
-Project search commands (`project_search`, `project_search_cancel`,
-`project_replace_preview`, `project_replace_apply`, `project_edit_undo`, and
-`project_retranslate`) delegate to `aeria-po` search and
-`Session::apply_edits` for the open project; see
-[`search.md`](./search.md#project-search). A new search or preview cancels
-the one in progress. `SearchState` keeps the inverse of the last bulk edit
+Project search commands (`project_search`, `project_search_prepare`,
+`project_search_cancel`, `project_search_entries`, `project_replace_preview`,
+`project_replace_apply`, `project_edit_undo`, and `project_retranslate`)
+delegate to the open session's search corpus and `Session::apply_edits`;
+see [`search.md`](./search.md#project-search). `project_search_prepare`
+reads the files changed since the last search, so the next one does not
+wait. A new search or preview cancels the one in progress. `SearchState` keeps the inverse of the last bulk edit
 for `project_edit_undo`. `project_retranslate` clears the strings and starts
 a machine translation run of exactly them; it refuses while a run goes.
 
