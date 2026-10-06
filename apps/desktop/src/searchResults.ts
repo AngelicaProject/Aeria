@@ -1,5 +1,5 @@
 import { exceptionTerm } from "./issueText.ts";
-import type { SearchEntryDto, SearchFileDto } from "./types";
+import type { SearchEntryDto, SearchFileDto, SearchHitDto } from "./types";
 
 /** A string of a search result, by file and `msgctxt`. */
 export function hitKey(hit: Pick<SearchEntryDto, "path" | "context">): string {
@@ -85,4 +85,68 @@ export function reconcileChosen(
     }
   }
   return changed ? next : chosen;
+}
+
+/** What is at hand of a sheet's strings. */
+export type GroupHits = {
+  hits: readonly SearchHitDto[];
+  /** Every string of the sheet the search found is in `hits`. */
+  complete: boolean;
+  /** Its strings are being read. */
+  loading: boolean;
+  /** More strings than one search returns: `hits` are the first of them. */
+  cut: boolean;
+};
+
+/** A line of the result list. */
+export type ResultRow =
+  | { kind: "sheet"; key: string; group: SheetGroup; open: boolean }
+  | { kind: "hit"; key: string; group: SheetGroup; hit: SearchHitDto }
+  /** The sheet has strings not at hand, which can be read. */
+  | { kind: "more"; key: string; group: SheetGroup; shown: number }
+  | { kind: "loading"; key: string; group: SheetGroup }
+  /** The sheet has more strings than one search returns. */
+  | { kind: "cut"; key: string; group: SheetGroup; shown: number };
+
+/**
+ * The lines of the result list: each sheet, and under an open one its
+ * strings at hand and what is known of the rest.
+ */
+export function resultRows(
+  groups: readonly SheetGroup[],
+  isOpen: (group: SheetGroup) => boolean,
+  hitsOf: (group: SheetGroup) => GroupHits,
+): ResultRow[] {
+  const rows: ResultRow[] = [];
+  for (const group of groups) {
+    const open = isOpen(group);
+    rows.push({ kind: "sheet", key: `sheet|${group.key}`, group, open });
+    if (!open) continue;
+    const { hits, complete, loading, cut } = hitsOf(group);
+    for (const hit of hits) rows.push({ kind: "hit", key: hitKey(hit), group, hit });
+    if (loading) rows.push({ kind: "loading", key: `loading|${group.key}`, group });
+    else if (cut) rows.push({ kind: "cut", key: `cut|${group.key}`, group, shown: hits.length });
+    else if (!complete) rows.push({ kind: "more", key: `more|${group.key}`, group, shown: hits.length });
+  }
+  return rows;
+}
+
+/** The row to move to from `index` by `step` (1 down, -1 up), stopping at the ends; rows of messages are skipped. */
+export function nextRow(rows: readonly ResultRow[], index: number, step: 1 | -1): number {
+  for (let at = index + step; at >= 0 && at < rows.length; at += step) {
+    const kind = rows[at]?.kind;
+    if (kind === "sheet" || kind === "hit" || kind === "more") return at;
+  }
+  return index;
+}
+
+/**
+ * Whether a sheet of the result is open: by default when the search sent
+ * strings of it (none after "Collapse all"), unless the person toggled it.
+ * Strings read later do not change the default, or a sheet opened to read
+ * them would close again once they arrive.
+ */
+export function sheetOpen(group: SheetGroup, sent: (path: string) => number, collapsed: boolean, toggled: ReadonlySet<string>): boolean {
+  const byDefault = !collapsed && group.files.some((file) => sent(file.path) > 0);
+  return byDefault !== toggled.has(group.key);
 }

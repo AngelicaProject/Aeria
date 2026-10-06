@@ -509,60 +509,101 @@ catalogs. Project search is the separate Search tool (see
 ## Search tool
 
 The Search tool (left dock by default, floatable) is project search over
-`po/` (see [`search.md`](./search.md#project-search)).
+`po/` (see [`search.md`](./search.md#project-search)). Its parts, top to
+bottom: the query, the scope, the line of the result, the result, and, when
+there are any, the notice of a bulk edit and the strings chosen.
 
-- The query field has toggles for match case, whole word, and regular
-  expression; a disclosure shows the replace field with *preserve case* and
-  *replace all*. Chips choose the fields (translation, source, notes, ID);
-  **Filters** adds sheets and folders (`quest/, Addon`) or only the sheets
-  of names, entry states, and the checks filter (any, with problems, with
-  advice). Groups of a sheet of names have its mark. The query is kept
-  while the window lives.
-- A search runs 300 ms after typing stops, or on Enter, and cancels the one
-  in progress. The result is live: when the project's files change (a save,
-  a bulk edit, machine translation, a Git operation;
-  `project://changed`), the same query runs again, and the open sheets, the
-  sheets read so far, and the chosen strings that are still found stay. Results are grouped by sheet, the files of a sheet
-  (`Item/10000.po`, `Item/12000.po`) together, with each sheet's count;
-  sheets are open when the search found at most 200 strings and closed
-  otherwise, and opening a sheet whose strings were not all sent reads them
-  then. **Collapse all** and **Expand all** (when every string was sent) act
-  on every sheet. Each string lists its coordinate, a fuzzy chip, the
-  translation with its matches highlighted around the first one, the source
-  when it matched, and the first finding of the checks filter, red for a
-  problem and amber for advice (all of them on hover). Clicking a string opens it in the editor.
-- With a checks filter, chips sum up the issues of every string found by
-  group (`pugilist → кулачный боец` for a term not used, *Macros*, *Extra
-  line break*) with counts, most first; a chip keeps only the strings with
-  that issue, and *All issues* clears it. Advice chips are amber.
+- **Query.** One field with a clear button and toggles for match case,
+  whole word, and regular expression, and a **Replace** toggle that shows
+  the replace field under it, with *preserve case* and **Replace all…**.
+  An invalid regular expression is reported under the field, and the last
+  result stays, dimmed, until the expression is whole again.
+- **Scope.** A line of chips under the query says what the search covers,
+  each with its current value: the fields (translation and source by
+  default; notes and string ID can be added), the sheets (all, the sheets
+  and folders typed, such as `quest/, Addon`, or only the sheets of names),
+  the string states, and the checks (none, problems, or advice; what each means is
+  its tooltip). A chip that narrows the search is marked, and **Clear
+  filters** puts every filter but the fields back. The query and scope are
+  kept while the window lives.
+- **Before a search** the tool offers untranslated strings, changed
+  sources, problems, and advice as one-click starts; it shows no
+  explanatory text.
+- A search runs 120 ms after typing stops, or on Enter, and cancels the one
+  in progress; the result shown stays until the next one arrives, and a
+  line under the result's counts runs while a search takes long enough to
+  notice. The result is live: when the project's files change (a save, a
+  bulk edit, machine translation, a Git operation; `project://changed`),
+  the same query runs again, and the open sheets, the sheets read so far,
+  and the chosen strings that are still found stay.
+- **The line of the result** gives the strings and sheets found (or that
+  nothing was; when the filters narrow the search, a link clears them),
+  **Collapse all** or **Expand all**, and an actions menu for the whole
+  result: choose every string found, **Translate all found again…**, and,
+  with a term's issue chosen, **Exception … for all**.
+- **Issue.** With a checks filter, one more chip in the scope keeps only
+  the strings with one group of issues (`pugilist → кулачный боец` for a
+  term not used, *Macros*, *Extra line break*). A project has hundreds of
+  groups, one per term, so the chip opens a list rather than laying them
+  out: a filter field (Enter takes the first match), *Any issue*, then the
+  other kinds and the terms in sections, each with its strings, most
+  first. The list is of the result without an issue chosen, so choosing
+  one does not narrow it.
+- **The result** is one virtualized list grouped by sheet, the files of a
+  sheet (`Item/10000.po`, `Item/12000.po`) together, with each sheet's
+  count, and its files listed on hover when there are several. While an
+  open sheet's strings scroll past the top, its line stays there; a sheet
+  whose own line is at the top, or a closed one, does not stick. A sheet is open when strings of it were sent; a sheet with none
+  sent is closed and is read when opened, and one with only some sent ends
+  with **Show all N**. Each string shows its translation (or that it is
+  untranslated) with the matches highlighted from near the first one, a
+  chip when its source changed, its row and subrow (and column when it is
+  not the first), its source always, the notes or ID when they matched,
+  and the first finding of the checks filter, red for a problem and amber
+  for advice (all of them on hover). Clicking a string opens it in the
+  editor.
+- **Keyboard.** Down in the query moves into the result. Up and Down move
+  between sheets and strings, Enter opens a string or opens and closes a
+  sheet, Space chooses a string, Shift with Up or Down chooses the strings
+  moved over, Left goes to a string's sheet or closes it, Right opens it,
+  and Escape (or Up from the first line) goes back to the query; Escape in
+  the query clears it.
 - Problems and advice are worded in the interface language from their data
   (`issueText.ts`), here and wherever a refused translation is reported, such
   as the editor's save error; reasons of the macro structure policy, written
   for the model, stay in English after a localized label.
-- Replacing: a result's replace button replaces in that string at once; a
+- **Choosing** works as in a file list, without checkboxes: a click opens
+  a string, Ctrl-click (Cmd on macOS) chooses or unchooses it, Shift-click
+  chooses every string from the last one clicked, and Ctrl-click on a
+  sheet chooses all its strings or none. Chosen strings are tinted with a
+  bar at the left; a sheet with strings chosen shows how many of its count.
+  The keys are learned on the way: a string's and a sheet's hover actions
+  include **Choose**, whose tooltip names Ctrl-click, and the bar of chosen
+  strings names Ctrl-click and Shift-click until the person first chooses
+  with either (remembered in local storage).
+  A sheet or a result with strings not sent is chosen whole: its strings
+  are read again without the limit of a search (`project_search_entries`).
+  The chosen strings get a bar at the bottom with their count,
+  **Translate again…**, and **Exception**, which takes the chosen issue's
+  term, or the term every chosen string has a finding for.
+- **Actions on one string** show on hover: replace in it (with the replace
+  field open), an exception for its term, and translate it again.
+- Replacing: a string's replace button replaces in that string at once; a
   sheet's button and **Replace all…** open the replace preview dialog,
   which lists every change before and after with the changed words marked.
   Changes that would break their string show the reason and cannot be
   chosen; the others can be unchecked. Nothing is written before
   **Replace**.
-- **Translate again…** (every translation found, listed or not) and a
-  result's own button clear the translations after a confirmation and start
-  a machine translation run of exactly those strings; the AI translation
-  dialog opens on its progress.
-- Checkboxes choose strings: one by one, every string of a sheet, or every
-  string found (the box beside the count). A sheet or a result with strings
-  not sent is chosen whole: its strings are read again without the limit of
-  a search (`project_search_entries`). With strings chosen, **Translate again…** and **Exception** act on them
-  only; the exception takes the chosen term chip's term, or the term every
-  chosen string has a finding for.
-- A string with a term finding has an exception button, and with a term's
-  chip chosen, **Exception … for all** adds the exception to every
-  translation found (see
-  [`po-project.md`](./po-project.md#term-exceptions)); both are bulk edits
-  that Undo reverts.
-- After a bulk edit a notice gives what was written, what was skipped and
-  why (each skipped string opens in the editor), and **Undo** for the last
-  bulk edit. The editor reads changed sheets again.
+- Translating again (every translation found, listed or not, the chosen
+  strings, or one string) clears the translations after a confirmation and
+  starts a machine translation run of exactly those strings; the AI
+  translation dialog opens on its progress.
+- An exception for a term (see
+  [`po-project.md`](./po-project.md#term-exceptions)) and a replacement are
+  bulk edits that Undo reverts. After a bulk edit a notice gives what was
+  written, what was skipped and why (each skipped string opens in the
+  editor), and **Undo** for the last bulk edit. The editor reads changed
+  sheets again.
 
 ## Git dock
 
