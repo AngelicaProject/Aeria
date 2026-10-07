@@ -11,6 +11,8 @@ body,
 }
 
 html { background: transparent; }
+/* Catches right-clicks for the whole window without a box of its own. */
+.text-menu-scope { display: contents; }
 
 body {
   overflow: hidden;

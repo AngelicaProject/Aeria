@@ -2,7 +2,7 @@
 
 Status: **implemented** in `aeria-po` (the format, identity, files, game
 updates, checks, and the session the desktop edits through), the desktop,
-`aeria-git`, `aeria-export`, and `aeria-check`.
+`aeria-git`, `aeria-export`, and `aeria-guard`.
 
 ## Why
 
@@ -128,15 +128,16 @@ flags when Aeria writes it.
 
 A glossary term can mean something else in a string: `maelstrom` is the
 Grand Company in one string and a whirlpool in another. A person marks such a
-string with an exception for the term. In that string the checks neither ask
-for the term's translation nor forbid its variants, and machine translation
+string with an exception for the term. In that string the checks do not ask
+for the term's translation, and machine translation
 is told the term does not apply (see
 [`translate.md`](./translate.md#the-request)). Only a person adds or removes
 an exception, from the editor or from search; machine translation never
 does, so which terms apply to a string never depends on AI judgment.
 
-The flag holds the term as the glossary writes it and is compared ignoring
-case. A term with a comma cannot be an exception, since flags are separated
+The flag holds the term's headword as the glossary writes it and is
+compared ignoring case; a flag naming another form of the term counts for
+the term. A term with a comma cannot be an exception, since flags are separated
 by commas. An exception stays when the translation changes, since it is about
 the meaning of the source; it is dropped when a game update changes the
 source (see [Game updates](#game-updates)). An exception that names no term
@@ -261,16 +262,14 @@ without entries (about a minute for the whole game).
 ## Checking
 
 The checks are Aeria's own; they run when a translation is saved, on every
-answer of [machine translation](./translate.md), and in CI (`aeria-check`,
-see [`git.md`](./git.md#merge-check-ci)). A translation has a **problem**
+answer of [machine translation](./translate.md), and in CI (`aeria-guard`,
+see [`git.md`](./git.md#aeria-guard)). A translation has a **problem**
 when it:
 
 - breaks the assisted structure policy of [`strings.md`](./strings.md): the
   source's macros, as game data, must stay;
 - has a line break its source does not have (the game breaks lines with
   `<br>`);
-- uses a forbidden variant of a term of its source (see
-  [`knowledge.md`](./knowledge.md));
 - for Russian, writes both genders at once (`готов(а)`);
 - for a language written in Cyrillic, has a slip of letters the source does
   not have: a stress or other combining mark (`эле́зен`), a word that mixes
@@ -291,7 +290,7 @@ missing, machine phrasing, a term exception that names no term of the
 source, an interface label or a name of a world object longer than its
 budget (see [`translate.md`](./translate.md#interface-labels) and
 [names in the world](./translate.md#names-in-the-world)). Advice is for the
-person who reviews a translation: saving, export, `aeria-check`, and the
+person who reviews a translation: saving, export, `aeria-guard`, and the
 checks of machine translation ignore it, and it is sent to a model only
 when a person asks machine translation to correct a translation with it (see
 [`translate.md`](./translate.md#correcting-translations)); machine

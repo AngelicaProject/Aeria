@@ -146,6 +146,8 @@ impl From<GitError> for CommandError {
             GitError::MergeConflict { .. } => "gitMergeConflict",
             GitError::IncomingRejected { .. } => "gitIncomingRejected",
             GitError::TranslationConflicts { .. } => "gitTranslationConflicts",
+            GitError::CommitPublished => "gitCommitPublished",
+            GitError::BranchProtected { .. } => "gitBranchProtected",
             GitError::Io { .. } => "gitIo",
         };
         Self::new(code, error.to_string())

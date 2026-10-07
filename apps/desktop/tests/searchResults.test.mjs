@@ -18,9 +18,9 @@ test("files of one sheet make one group", () => {
 });
 
 test("chosen strings take an exception for a term they all have", () => {
-  const issue = (kind, term) => ({ kind, term, advice: kind === "termNotUsed", group: "", message: "", translation: null, variant: null, text: null, phrases: [] });
+  const issue = (kind, term) => ({ kind, term, advice: kind === "termNotUsed", group: "", message: "", translation: null, text: null, phrases: [] });
   const hit = (...findings) => ({ path: "a.po", context: "a", findings });
-  assert.equal(commonTerm([hit(issue("forbiddenTerm", "primal")), hit(issue("termNotUsed", "Scions"), issue("termNotUsed", "primal"))]), "primal");
+  assert.equal(commonTerm([hit(issue("termNotUsed", "primal")), hit(issue("termNotUsed", "Scions"), issue("termNotUsed", "primal"))]), "primal");
   assert.equal(commonTerm([hit(issue("termNotUsed", "Scions")), hit(issue("termNotUsed", "primal"))]), null);
   assert.equal(commonTerm([hit(issue("termNotUsed", "Sage, elder"))]), null, "a term with a comma cannot be a flag");
   assert.equal(commonTerm([]), null);

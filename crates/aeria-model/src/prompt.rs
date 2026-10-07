@@ -142,9 +142,8 @@ fn rules(source_language: &str, target_language: &str, style: Option<&str>) -> S
          declines names it declines like any written word (Поговорите с Ко Рабнтой); only a \
          name the game fills in through a macro keeps its stored form. Where the word \
          means something else, you translate it by its meaning. `terms` are the project's \
-         terms, \
-         which you use exactly and whose `never` variants you never use; `files` are the \
-         files of the batch, each on its own: `about` says what the file is: its sheet, a \
+         terms, each with its other forms in the source (`forms`), which you use exactly; \
+         `files` are the files of the batch, each on its own: `about` says what the file is: its sheet, a \
          quest's title, and whether its strings are in play order, so that a batch continues \
          the strings before it; `speakers` are the characters who speak in the file by their \
          labels (the `speaker` of a string's context) with their names and the project's \
@@ -159,7 +158,7 @@ fn rules(source_language: &str, target_language: &str, style: Option<&str>) -> S
          source changed: `previous.source` is the old source and `previous.translation` its \
          translation; keep what still fits. A string with `termExceptions` names terms of \
          `terms` that do not apply to it, as a person decided: there the word means something \
-         else, so you translate it by its meaning and may use the `never` variants. A string \
+         else, so you translate it by its meaning. A string \
          with `maxLength` is an interface label: \
          its translation shows at most that many characters (macros not counted), as the \
          official localizations fit the game's layout; shorten it, with the usual \
@@ -207,8 +206,9 @@ pub struct Answer {
 pub struct Term {
     pub term: String,
     pub translation: String,
+    /// Other forms of the term in the source.
+    pub forms: Vec<String>,
     pub note: Option<String>,
-    pub never: Vec<String>,
 }
 
 /// One file of a request: what it is, who speaks, translated strings as
@@ -242,11 +242,11 @@ pub fn input(files: &[FileTask], names: &[Name], terms: &[Term]) -> String {
             .iter()
             .map(|term| {
                 let mut value = json!({ "term": term.term, "translation": term.translation });
+                if !term.forms.is_empty() {
+                    value["forms"] = Value::from(term.forms.clone());
+                }
                 if let Some(note) = &term.note {
                     value["note"] = Value::from(note.as_str());
-                }
-                if !term.never.is_empty() {
-                    value["never"] = Value::from(term.never.clone());
                 }
                 value
             })

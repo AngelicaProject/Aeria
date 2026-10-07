@@ -57,19 +57,17 @@ Each release carries:
 | `Aeria_<version>_x64-setup.exe.sig` | Updater signature of the installer |
 | `Aeria_<version>_x64-portable.zip` | Portable build: `aeria.exe` and `git/` |
 | `latest.json` | Updater feed of this release |
-| `aeria-check-<version>-x86_64-unknown-linux-gnu.tar.gz` | The `aeria-check` binary for the [merge check CI](../architecture/git.md#merge-check-ci) of translation repositories (stable releases) |
-| `SHA256SUMS.txt` | SHA-256 of the installer, the portable archive, and the `aeria-check` archive |
+| `SHA256SUMS.txt` | SHA-256 of the installer and the portable archive |
 
 The [website](./website.md) links the installer and portable archive of the
 stable and nightly releases directly, matching them by these names, and is
 redeployed after every release.
 
-The `aeria-check` archive is built on `ubuntu-22.04` before the desktop build,
-which embeds its URL and SHA-256 for the merge check workflow it offers. Such
-a workflow pins the archive, so a published archive never changes. Nightly
-archives therefore do not go into the rolling `nightly` release, which each
-build replaces: they are added under their unique names to the
-`aeria-check-nightly` pre-release, which is never deleted.
+The desktop build embeds the commit it is made from (`AERIA_COMMIT`): the
+[Aeria Guard](../architecture/git.md#aeria-guard) workflow it writes names
+the Aeria Guard action by that commit, and the action builds `aeria-guard`
+from it, so no release carries a separate binary for translation
+repositories.
 
 Executables are not Authenticode-signed; Windows SmartScreen may warn on first
 run, and that is accepted. The installer uses Tauri's per-user NSIS mode

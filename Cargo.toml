@@ -12,7 +12,7 @@ members = [
   "crates/aeria-export",
   "crates/aeria-fonts",
   "crates/aeria-publish",
-  "crates/aeria-check",
+  "crates/aeria-guard",
   "crates/aeria-po",
   "crates/aeria-model",
   "apps/desktop/src-tauri",

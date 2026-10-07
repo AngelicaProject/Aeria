@@ -112,10 +112,37 @@ or open a commit, through events sent to the `main` window
 dialog. The right dock opens on Git; the bottom panel holds the
 [string guide](#string-guide) and is shown by default.
 
-Center documents use preview tabs for single-click sheet browsing. A
-double-click pins a preview, and starting a local draft pins it automatically.
-Tabs can be activated, closed, reordered, and closed with Ctrl+W; each tab's
-dirty indicator is presentation state only.
+Center documents use preview tabs for single-click sheet browsing: a sheet
+or commit opened with a single click shows in an italic preview tab that the
+next one replaces. A double click on the sheet or the tab, starting a draft,
+**Keep open**, or opening the sheet with a middle click or **Open in new
+tab** gives it a tab of its own, so several sheets stay open side by side.
+**Pin** keeps a tab first, among the other pinned tabs; it shows a pin in
+place of its close button, which unpins it, and is closed only by **Close**
+in its menu: not by a middle click, Ctrl+W, or **Close others**, **Close to
+the right**, and **Close all**. Tabs can be activated, reordered (a pinned
+tab stays before the others), and closed with Ctrl+W or from their
+[right-click menu](#right-click-menus); each tab's dirty indicator is
+presentation state only and marks the open sheet's tab.
+
+One sheet is open at a time, and it is always the sheet of an open tab:
+
+- A sheet opens again on the string it was left on, wherever it is opened
+  from (its tab, the Sheets explorer, closing the tab in front of it). When
+  that string is gone the sheet opens at its top without a warning, and when
+  the strings filter hides it the filter stays and the string is still
+  selected. A string opened on purpose, from search, Git, or Go to row, is
+  selected instead and clears a filter that hides it.
+- A commit tab covers the open sheet without closing it: going to a commit
+  and back keeps the sheet, its string, its scroll, and an unsaved draft,
+  and asks nothing. While a commit tab is in front, the editor's shortcuts
+  (save, approve, next and previous string) do nothing.
+- Choosing the open sheet in the Sheets explorer brings its tab to the front
+  as it is, without reading it again.
+- Closing the open sheet's tab, after asking about an unsaved draft, opens
+  the tab that takes its place (the next one, else the one before), or
+  leaves no sheet open and shows the empty editor when no sheet tab is left
+  in front.
 
 ## Command palette
 
@@ -452,7 +479,7 @@ not re-render the workbench.
   name longer than its length is advice, amber, as is a gendered line whose
   translation has no condition on `$gn4`.
 - **Names and terms** lists the glossary terms of the source, each with its
-  translation, forbidden variants, note, and whether a term exception keeps
+  translation, note, and whether a term exception keeps
   it out, and the game's names in the source with the project's
   translations, with a link to the glossary. Under each name is what it
   names, from every name sheet with it (*character, enemy*), the row's name
@@ -460,8 +487,7 @@ not re-render the workbench.
   string its translation comes from, which a click opens in the editor: a
   name is found by its letters alone, so an ordinary word such as *Walk* in
   *A Walk in the Park* can be found as one, and the origin shows it. Each is marked once there is a
-  translation: used, not used yet (amber), or a forbidden variant used
-  (red). A name counts as used as the glossary counts a term's translation:
+  translation: used or not used yet (amber). A name counts as used as the glossary counts a term's translation:
   each of its words as written or inflected. A term's **Not this term**
   (on hover) adds a term exception to the string, and **Restore** on an
   excepted term removes it (see
@@ -643,13 +669,20 @@ and has no refresh button.
   pull), and Push (with the commits to push). Pull is disabled with
   uncommitted translations; Push is disabled while the upstream has commits
   the branch lacks.
-- With a github.com `origin`, the dock offers the merge check workflow (see
-  [`git.md`](./git.md#merge-check-ci)) in a card that lists its three
-  stages, with "Add workflow" or, when the file differs, "Update workflow".
-  The card can be dismissed for the session. After adding, the dock says to
-  commit and push it and links to the branch settings on GitHub, where the
-  check is made required and branches can be required to be up to date. Development builds and projects in a repository
-  subfolder show why the workflow cannot be added.
+- With a github.com `origin`, a **Repository protection** card (see
+  [`git.md`](./git.md#aeria-guard)) shows, while anything is missing, how
+  many of three protections are in place, and opens to list them: the
+  Aeria Guard workflow (**Add** or **Update**; a project in a subfolder
+  cannot have it), the rules of the main branch, and the rules of pack
+  releases, each with what is missing. For the rules, **Save rules…** saves
+  the ruleset to import and **Open rules on GitHub** opens the
+  repository's rulesets. The card checks GitHub again on request and can be
+  hidden for the session.
+- On a pushed branch other than the one the remote guards, the toolbar
+  adds **Pull request**, which opens GitHub's page for a pull request from
+  it. A push the remote refuses because its rules want pull requests says
+  so and how to go on: create a branch here, push it, and open a pull
+  request.
 - The branch switcher is a popover below the branch name, not a list over
   it: a filter field, local branches (the current one first and checked,
   then by name; each with its upstream and why it is blocked), remote
@@ -664,41 +697,62 @@ and has no refresh button.
   identity form edits `user.name` and `user.email`, and states and results
   speak of commits, branches, upstream, push, pull, merge, and pull
   requests. Russian keeps the English command names where translators know
-  them (Commit, Merge, push, pull, upstream) and the common loanwords
-  («коммит», «смержить»).
+  them (Commit, Merge, push, pull, upstream), the common loanwords
+  («коммит», «смержить»), and the Russian terms of common Git tools for the
+  index («индексировать», «индексированные изменения»).
 - The branch switcher disables branches that hold the project in a state the
   open session cannot load (no project, an earlier project format, or another
   game version) and says why.
-- **Changes** (collapsible; the dock remembers whether it is open while the
-  window lives) starts with the composer, which commits everything below and
-  edits the translator name and optional email. Below it are how many strings
-  changed and the first 500 of those changes grouped by sheet (a project
-  without a first commit has one for every translated string; the rest are
-  counted, and a checkpoint commits them all) with a marker (A translated, M changed, D removed,
-  • marked; clicking one opens the string with its checkpoint diff) and
-  project file changes
-  grouped by area, as described in
-  [`git.md`](./git.md#project-file-changes).
-- The translation changes are a virtualized list of at most 480 px. With 12
-  or more changes it offers a search (sheet name or text, or an exact `row`
-  or `row:subrow`), a filter by kind with counts, and collapse or expand all
-  sheets; a search or kind filter opens every matching sheet. With more than
-  50 changes in several sheets, sheets start collapsed. The sheet whose
-  changes are at the top stays pinned above them. A row names its column
-  only when the sheet's changes span several columns, and says when a
-  string's fuzzy mark, note, or review changed. Filters and open
-  sheets are kept per list (the uncommitted changes, or each commit) while
-  the window lives. Commit tabs use the same list.
-- **History** fills the rest of the dock: commits with a lane graph, branch
-  and tag labels, and time, loading older commits while scrolling. Clicking
-  one opens a commit tab.
+- Below the branch, two tabs, **Changes** (with how many files changed)
+  and **History**; the dock remembers the tab while the window lives.
+- **Changes** starts with the composer: the message (Ctrl+Enter commits),
+  an **Amend last commit** checkbox, the translator name and optional
+  email, and **Commit**; the placeholder and the button's tooltip say
+  whether the commit takes the staged changes or every translation and
+  project file change. With the checkbox the button reads **Commit
+  (Amend)** and also commits a new message alone; the checkbox is disabled
+  while the last commit is on the remote. **Undo Last Commit** is in the
+  menu of the last commit in History and its commit tab, while the remote
+  does not have it. Below it are the changed files of
+  [`git.md`](./git.md#changed-files): Staged Changes, then Translations
+  (with the strings they change in all), Project files, and Not committed,
+  each collapsible. A file shows its name, its folder, the path it was
+  renamed from, its string count for a PO file, and its status letter (A
+  added, M modified, D deleted, R renamed, C copied, T type changed, U
+  untracked, ! conflicted). On hover a file offers **Discard Changes** (or
+  **Delete File** when untracked) and **Stage Changes**, a staged file
+  **Unstage Changes**, and a group the same for all its files; the
+  right-click menu adds **File History**, which shows the file's commits in
+  History, and **Copy Path**. Discarding asks first. A PO file opens to its
+  string changes on its side, read when opened, with a marker (A
+  translated, M changed, D removed, • marked; clicking one opens the
+  string), naming the column only when they span several and saying when a
+  string's fuzzy mark, note, or review changed. A project file opens to its
+  readable change and starts open. From 12 files on, a filter narrows them
+  by path; a group shows 200 files and an open file 300 strings before
+  **Show more**. Open groups and files are kept per list (the uncommitted
+  changes, or each commit) while the window lives. Commit tabs use the same
+  list.
+- **History** lists commits with a lane graph, branch and tag labels, an
+  arrow on commits not pushed yet (its tooltip names the remote: «Not on
+  origin yet»), and time, loading older commits while
+  scrolling, under a search and, when
+  filtered by a file, a chip naming it with a button to show every file.
+  Clicking a commit opens a commit tab; its right-click menu has **Copy
+  Commit ID**, **Copy Message**, **Open on origin** (named after the remote
+  the branch syncs with, when it has commit pages), **Create Branch…**,
+  **Undo Last Commit** (the last commit, while only local), and **Revert
+  Commit**.
 
-A commit tab shows the message, author, time, full id, labels, translation
-changes (which open in the editor), and project file changes.
+A commit tab shows the message, author, time, full id, labels, the commit
+actions of the History menu as buttons (**Open on origin** only when the
+remote has commit pages), and the files the commit changed, as above.
+Reverting asks first, and creating a branch asks for its name.
 
 Dialogs that write project files (export, fonts, project knowledge)
-refresh the dock when they close. A pull or branch switch that changed the
-working tree reloads the current sheet and
+refresh the dock when they close. A pull, branch switch, discard, revert,
+or new branch at a commit that changed the working tree reloads the current
+sheet and
 progress, and so does a change of a shown sheet's file by Git, by hand, or by
 machine translation (`project://files-changed`).
 
@@ -721,19 +775,42 @@ The project knowledge dialog opens from the Translation menu (**Terms**,
 [project knowledge](./knowledge.md#project-knowledge):
 `aeria-knowledge/terms.csv` and `style.md`.
 
-The Terms tab is a table of term, translation, note, forbidden variants
-(separated by `;`), and **Settled**, with a filter, **Add term**, and a remove
-button per row; at most 300 filtered rows are shown at once. Editing or adding
-a row marks it settled; the checkbox changes that. Rows with an empty term or
-translation, or a term repeated case-insensitively, are marked and block
-saving. Rows the file excludes are listed with their line numbers; saving
+The Terms tab has three panes: folders, the list of terms, and the chosen
+term's fields.
+
+- The folder tree shows **All terms** and every folder with its parents and
+  the count of terms inside, collapsible. Choosing a folder lists its terms
+  and its subfolders' terms, and a term added then goes into it. **New
+  folder** makes a folder inside the chosen one, named at once; a folder is
+  renamed by its pencil or a double click, and removing it moves its terms
+  and subfolders to its parent, after a confirmation when it holds any.
+  Terms dragged from the list follow the pointer as a card (with their
+  count when several), the folder under it is highlighted, and a collapsed
+  one opens after a moment; released on a folder they move into it, on
+  **All terms** to the top, and elsewhere or with Escape they stay. A folder exists in the
+  file only while it has terms, so a new one stays empty only until the
+  dialog closes.
+- The list is virtualized and filtered by a search of headwords, forms,
+  translations, and notes. Each term shows its headword, its other forms,
+  its translation, its folder while the list spans folders, and a mark when
+  it needs fixing. Arrow keys, Home, and End move the choice; Ctrl-click
+  adds or removes a term and Shift-click takes a range, so a drag that
+  starts on a chosen term moves every chosen one.
+- The chosen term's fields are its headword, other forms, translation,
+  note, folder, and **Match case**, with its problem and **Remove term**.
+  Other forms are chips: Enter or `;` adds what is typed, a chip's ×
+  removes it, and a double click or Backspace in the empty field takes a
+  chip back to edit. **Add term** adds an empty term and chooses it.
+
+A term with an empty headword or translation, or a headword or form repeated
+case-insensitively, is marked and blocks saving; the count of such terms
+next to **Save** chooses them one by one. Rows the file excludes are listed with their line numbers; saving
 removes them only after confirmation. The Candidates tab finds the names
 the project translates in several ways (`project_term_candidates`, see
 [`search.md`](./search.md#glossary-candidates)): each with its translated
 strings, its sheets, its renderings with their counts as choices, and
 examples of each. **Add to the glossary** adds a term row with the chosen
-rendering as its translation, the others as forbidden variants, and match
-case on, and shows it in the Terms tab to review and save; **Skip** hides
+rendering as its translation, in the chosen folder, and match case on, and shows it in the Terms tab to review and save; **Skip** hides
 the candidate on this computer until the skipped ones are shown again. The
 Openers tab counts the phrases the translations open sentences with
 (`project_phrasing`, see [`search.md`](./search.md#openers)): each with its
@@ -788,6 +865,49 @@ confirmation. The behavior behind the dialog is in [`export.md`](./export.md).
 
 Shortcuts are listed in `src/shortcuts.ts` and shown under Settings → Keyboard
 shortcuts. Handlers live with the features that own them.
+
+Shortcuts are matched by the key's place on the keyboard (`shortcutKey`, from
+`KeyboardEvent.code`), not by the character it types, so Ctrl+P is the same
+key with a Russian or any other layout. The web view's own browser commands
+never run: Ctrl or Cmd with a letter or digit other than the text editing
+ones (A, C, V, X, Y, Z), the function keys, and Alt with Left, Right, or Home
+are cancelled (`isBrowserCommand`), so nothing prints, reloads, opens a find
+bar, or goes back. Development builds keep F12 and Ctrl+Shift+I, J, and C for
+the developer tools. Aeria's shortcut handlers listen on the document, and the
+guard on the window, so a shortcut acts before the guard cancels the rest.
+
+## Right-click menus
+
+The web view's own right-click menu (Back, Reload, Print, Inspect) never
+appears. A right-click opens a menu only where there is something to do with
+what was clicked, and does nothing anywhere else:
+
+- **Text fields and selected text.** A text field has **Cut**, **Copy**,
+  **Paste**, and **Select all**; a password field never copies out. Text
+  selected outside a field has **Copy** when the right-click is on it. The
+  edits go through the browser's editing commands, so they reach the field's
+  change handling and its undo history like typing. The translation editor
+  keeps its own menu (see [Translation editor](#translation-editor)).
+- **Sheet tabs.** **Close**, **Close others**, **Close to the right**,
+  **Close all**, **Keep open** for a preview tab, **Pin** or **Unpin**,
+  **Reveal in sheets** for
+  the active sheet, and **Copy sheet name**; a commit tab copies its ID.
+  Closing the active sheet asks first when it has an unsaved edit.
+- **Sheets explorer.** A sheet has **Open** (in the preview), **Open in new
+  tab**, and **Copy sheet name**.
+- **Strings list.** A string has **Copy source** and **Copy translation**.
+- **Search results.** A string has **Open**, choosing it, the actions of its
+  row (replace, an exception for its term, fix, translate again), and copying
+  its translation or source; a sheet has expanding or collapsing it, choosing
+  it, **Replace in this sheet**, and **Copy sheet name**.
+- **Git.** Files and commits have the menus described under
+  [Git dock](#git-dock).
+- **Terms.** A term has **Move to folder**, with every folder, and
+  **Remove**; on one of several chosen terms both act on all of them. A
+  folder has **New folder inside**, **Rename**, and **Remove**, and **All
+  terms** has **New folder**.
+- **Recent projects.** The actions of the row's menu button, and **Copy
+  folder path**.
 
 ## Appearance
 

@@ -252,10 +252,12 @@ impl GitRepository {
                     message: format!("{merge_key} is not configured"),
                 })?;
             let refspec = format!("HEAD:{merge_ref}");
-            self.run(&["push", "--quiet", &remote, &refspec])?;
+            self.run(&["push", "--quiet", &remote, &refspec])
+                .map_err(|error| protected(error, &remote, &branch))?;
         } else {
             let refspec = format!("HEAD:refs/heads/{branch}");
-            self.run(&["push", "--quiet", "--set-upstream", &remote, &refspec])?;
+            self.run(&["push", "--quiet", "--set-upstream", &remote, &refspec])
+                .map_err(|error| protected(error, &remote, &branch))?;
         }
         Ok(true)
     }
@@ -301,7 +303,7 @@ impl GitRepository {
         }
     }
 
-    fn conflicted_files(&self) -> Result<Vec<String>, GitError> {
+    pub(crate) fn conflicted_files(&self) -> Result<Vec<String>, GitError> {
         let text = self.run_text(&["diff", "--name-only", "--diff-filter=U", "-z"])?;
         let files: BTreeSet<String> = text
             .split('\0')
@@ -309,5 +311,59 @@ impl GitRepository {
             .map(|path| strip_prefix(path, self.prefix()))
             .collect();
         Ok(files.into_iter().collect())
+    }
+}
+
+/// A push the remote refused by its branch rules, recognized by what GitHub
+/// (`GH006`, `GH013`) and other hosts write for a protected branch.
+fn protected(error: GitError, remote: &str, branch: &str) -> GitError {
+    match &error {
+        GitError::CommandFailed { stderr, .. } if is_protection_refusal(stderr) => {
+            GitError::BranchProtected {
+                remote: remote.to_owned(),
+                branch: branch.to_owned(),
+            }
+        }
+        _ => error,
+    }
+}
+
+fn is_protection_refusal(stderr: &str) -> bool {
+    let text = stderr.to_ascii_lowercase();
+    text.contains("gh006")
+        || text.contains("gh013")
+        || text.contains("protected branch")
+        || text.contains("repository rule violations")
+        || text.contains("changes must be made through a pull request")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn refusals_by_branch_rules_are_recognized() {
+        let refused = |stderr: &str| GitError::CommandFailed {
+            command: "push".to_owned(),
+            status: Some(1),
+            stderr: stderr.to_owned(),
+        };
+        for stderr in [
+            "remote: error: GH013: Repository rule violations found for refs/heads/main.\nremote: - Changes must be made through a pull request.",
+            "remote: error: GH006: Protected branch update failed for refs/heads/main.",
+        ] {
+            assert!(matches!(
+                protected(refused(stderr), "origin", "main"),
+                GitError::BranchProtected { .. }
+            ));
+        }
+        assert!(matches!(
+            protected(
+                refused("! [rejected] main -> main (fetch first)"),
+                "origin",
+                "main"
+            ),
+            GitError::CommandFailed { .. }
+        ));
     }
 }

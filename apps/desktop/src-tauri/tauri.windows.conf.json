@@ -10,6 +10,7 @@
         "center": true,
         "decorations": false,
         "resizable": false,
+        "dragDropEnabled": false,
         "transparent": true,
         "theme": "Dark",
         "windowEffects": {

@@ -1,3 +1,4 @@
+import { shortcutKey } from "../shortcuts";
 import { forwardRef, memo, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
 import { bindingKey, domKey, rowKey } from "../binding";
 import type { EntryChangeKind, SourceBinding, TranslationCellDto, TranslationRowDto } from "../types";
@@ -491,7 +492,7 @@ const TranslationEditorImpl = forwardRef<TranslationEditorHandle, TranslationEdi
             className="note-input"
             value={draft.note}
             onChange={(event) => updateDraft(selectedCell, "note", event.target.value)}
-            onKeyDown={(event) => { if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s") { event.preventDefault(); saveNote(); } }}
+            onKeyDown={(event) => { if ((event.ctrlKey || event.metaKey) && shortcutKey(event) === "s") { event.preventDefault(); saveNote(); } }}
             placeholder={t("editor.notePlaceholder")}
             disabled={cellBusy}
           />

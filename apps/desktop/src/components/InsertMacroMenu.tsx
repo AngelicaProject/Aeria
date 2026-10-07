@@ -118,10 +118,11 @@ export function InsertMacroContextMenu({ editor, disabled, children }: { editor:
       <ContextMenu.Trigger asChild disabled={disabled ?? false}>{children}</ContextMenu.Trigger>
       <ContextMenu.Portal>
         <ContextMenu.Content className="menu-content">
-          {([["cut", () => void copy(true)], ["copy", () => void copy(false)], ["paste", () => void paste()]] as const).map(([action, run]) => (
+          {([["cut", "scissors", "Ctrl+X", () => void copy(true)], ["copy", "copy", "Ctrl+C", () => void copy(false)], ["paste", "clipboard", "Ctrl+V", () => void paste()]] as const).map(([action, icon, shortcut, run]) => (
             <ContextMenu.Item className="menu-item" key={action} onSelect={run}>
-              <span className="menu-item-check" />
-              <span className="menu-item-label">{t(`insert.${action}` as MessageKey)}</span>
+              <span className="menu-item-check"><UiIcon icon={icon} size="xs" /></span>
+              <span className="menu-item-label">{t(`edit.${action}`)}</span>
+              <kbd className="menu-item-shortcut">{shortcut}</kbd>
             </ContextMenu.Item>
           ))}
           <ContextMenu.Separator className="menu-separator" />

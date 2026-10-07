@@ -230,8 +230,8 @@ tells the model about one string, from `aeria_model::hints` over the
 string's entry (`Session::entry`): the game's names in its source with the
 project's translations, each with every name sheet that has it, the row's
 name for another form of it, and the coordinate of the string its
-translation comes from (`Session::coordinate_of`), the glossary terms of its source (with their notes,
-forbidden variants, and whether a term exception keeps one out), its speaker
+translation comes from (`Session::coordinate_of`), the glossary terms of its source (with their notes
+and whether a term exception keeps one out), its speaker
 label with the name it stands for, the kind of a quest's text, the length of
 an interface label, and the texts whose line varies with the player
 character's gender. The project's translated names are read once and again
@@ -273,8 +273,10 @@ a machine translation run of exactly them; it refuses while a run goes.
 Git collaboration commands (`git_overview`, `git_initialize`,
 `git_set_identity`, `git_set_remote`, `git_remove_remote`,
 `git_remote_branches`, `git_set_upstream`, `git_pending_changes`,
-`git_pending_sheet_changes`,
-`git_project_changes`, `git_checkpoint`, `git_log`, `git_commit_changes`,
+`git_pending_sheet_changes`, `git_pending_file_changes`,
+`git_changed_files`, `git_commit`, `git_stage`, `git_unstage`,
+`git_discard`, `git_undo_last_commit`, `git_revert`, `git_create_branch_at`,
+`git_open_commit`, `git_log`, `git_commit_changes`,
 `git_string_history`, `git_branches`, `git_create_branch`,
 `git_switch_branch`, `git_state_stamp`, `git_delete_branch`,
 `git_delete_remote_branch`, and `git_clone_repository`) delegate to `aeria-git` for the active project's

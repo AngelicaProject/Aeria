@@ -93,9 +93,7 @@ fn names_translated_in_several_ways_are_candidates() {
     let (_directory, session) = project();
     let knowledge = Knowledge::from_texts(&KnowledgeTexts {
         style: None,
-        terms: Some(
-            "term,translation,note,forbidden,settled\nthe Maelstrom,Мальстрём,,,yes\n".to_owned(),
-        ),
+        terms: Some("term,translation,case\nthe Maelstrom,Мальстрём,yes\n".to_owned()),
     });
 
     let found = term_candidates(session.root(), &knowledge).expect("candidates");

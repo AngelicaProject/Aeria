@@ -27,14 +27,8 @@ with CRLF or LF line endings. Aeria writes LF.
 | File | Format | Holds |
 | --- | --- | --- |
 | `style.md` | Markdown, free text | How the translation reads: how formal it is, how the player and other characters are addressed, how names are rendered, the tone of each kind of text |
-| `terms.csv` | [Glossary Format v1](./glossary-v1.md) | Terms that are not strings of the game, such as lore words, and variants never to use |
+| `terms.csv` | [Glossary Format v1](./glossary-v1.md) | Terms that are not strings of the game, such as lore words, with their other forms, filed in folders |
 
 `style.md` is written by a person and used as a whole. A file that cannot be
 read is reported and left out. Rows of `terms.csv` that its format excludes
 are reported with their line; the rest are used.
-
-## Settled terms
-
-A term a person decided is **settled** by its `settled` column (see
-[Glossary Format v1](./glossary-v1.md)). The desktop's knowledge editor marks
-a term settled when a person edits it.

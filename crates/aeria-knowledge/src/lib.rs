@@ -13,7 +13,7 @@ pub mod rules;
 
 pub use glossary::{
     Glossary, GlossaryDiagnostic, GlossaryEntry, GlossaryError, TermReview, contains_term,
-    parse_glossary, text_of, uses_translation, write_glossary,
+    folder_path, parse_glossary, text_of, uses_translation, write_glossary,
 };
 pub use knowledge::{
     KNOWLEDGE_DIR, Knowledge, KnowledgeFile, KnowledgeTexts, MAX_KNOWLEDGE_BYTES, create_empty,

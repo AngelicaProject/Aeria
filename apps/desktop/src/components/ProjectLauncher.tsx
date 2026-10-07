@@ -45,6 +45,7 @@ import {
 } from "../launcherErrorState";
 import { IconButton } from "../ui/primitives/IconButton";
 import { Segmented } from "../ui/primitives/Segmented";
+import { RightClickMenu, copyText, type MenuEntry } from "../ui/primitives/RightClickMenu";
 import { UiIcon, type UiIconName } from "../ui/primitives/UiIcon";
 import { useI18n, type Translate } from "../ui/i18n";
 import type { MessageKey } from "../i18n/translate";
@@ -153,37 +154,47 @@ function RecentProjectRow({ project, disabled, opening, now, onOpen, onUpdate, o
   const { t, locale } = useI18n();
   const name = displayPathName(project.repositoryRoot);
   const ready = project.availability === "ready";
+  // The same actions as the row's menu button, and the folder's path.
+  const entries = (): MenuEntry[] => [
+    { id: "open", icon: "arrowRight", label: t("common.open"), disabled: !ready, run: onOpen },
+    { id: "update", icon: "refreshCw", label: t("launcher.updateFromGame"), disabled: !ready, run: onUpdate },
+    { id: "copyPath", icon: "copy", label: t("launcher.copyPath"), run: () => copyText(displayPath(project.repositoryRoot)) },
+    { id: "separator", separator: true },
+    { id: "remove", icon: "x", label: t("launcher.removeRecent"), danger: true, run: onRemove },
+  ];
   return (
-    <li className={ready ? "recent-row" : "recent-row unavailable"}>
-      <button className="recent-open" type="button" disabled={disabled || !ready} onClick={onOpen} title={ready ? t("launcher.openNamed", { name }) : t(availabilityLabel(project.availability))}>
-        <span className="recent-avatar" style={{ "--avatar-hue": avatarHue(name) } as CSSProperties} aria-hidden="true">{initials(name)}</span>
-        <span className="recent-text">
-          <strong>{name}</strong>
-          <span className="recent-path mono">{displayPath(project.repositoryRoot)}</span>
-        </span>
-        <span className="recent-meta">
-          {ready ? <>
-            <span className="chip">{languageShort(project.sourceLanguage)}</span>
-            {project.gameVersion ? <span className="recent-version mono" title={t("launcher.gameVersion")}>{project.gameVersion}</span> : null}
-          </> : <span className="chip chip-warn"><UiIcon icon="triangleAlert" size="xs" />{t(availabilityLabel(project.availability))}</span>}
-          <span className="recent-time">{opening ? t("launcher.opening") : formatRelativeTime(project.lastOpenedAtUnixMs, now, locale, t("time.justNow"))}</span>
-        </span>
-        {ready ? <span className="recent-go" aria-hidden="true"><UiIcon icon="arrowRight" size="sm" /></span> : null}
-      </button>
-      <DropdownMenu.Root>
-        <DropdownMenu.Trigger asChild disabled={disabled}>
-          <button className="icon-button icon-button-ghost recent-more" type="button" aria-label={t("launcher.actionsFor", { name })}><UiIcon icon="ellipsis" size="md" /></button>
-        </DropdownMenu.Trigger>
-        <DropdownMenu.Portal>
-          <DropdownMenu.Content className="menu-content" align="end" sideOffset={4}>
-            <DropdownMenu.Item className="menu-item" disabled={!ready} onSelect={onOpen}><span className="menu-item-label">{t("common.open")}</span></DropdownMenu.Item>
-            <DropdownMenu.Item className="menu-item" disabled={!ready} onSelect={onUpdate}><span className="menu-item-label">{t("launcher.updateFromGame")}</span></DropdownMenu.Item>
-            <DropdownMenu.Separator className="menu-separator" />
-            <DropdownMenu.Item className="menu-item danger" onSelect={onRemove}><span className="menu-item-label">{t("launcher.removeRecent")}</span></DropdownMenu.Item>
-          </DropdownMenu.Content>
-        </DropdownMenu.Portal>
-      </DropdownMenu.Root>
-    </li>
+    <RightClickMenu entries={entries} disabled={disabled}>
+      <li className={ready ? "recent-row" : "recent-row unavailable"}>
+        <button className="recent-open" type="button" disabled={disabled || !ready} onClick={onOpen} title={ready ? t("launcher.openNamed", { name }) : t(availabilityLabel(project.availability))}>
+          <span className="recent-avatar" style={{ "--avatar-hue": avatarHue(name) } as CSSProperties} aria-hidden="true">{initials(name)}</span>
+          <span className="recent-text">
+            <strong>{name}</strong>
+            <span className="recent-path mono">{displayPath(project.repositoryRoot)}</span>
+          </span>
+          <span className="recent-meta">
+            {ready ? <>
+              <span className="chip">{languageShort(project.sourceLanguage)}</span>
+              {project.gameVersion ? <span className="recent-version mono" title={t("launcher.gameVersion")}>{project.gameVersion}</span> : null}
+            </> : <span className="chip chip-warn"><UiIcon icon="triangleAlert" size="xs" />{t(availabilityLabel(project.availability))}</span>}
+            <span className="recent-time">{opening ? t("launcher.opening") : formatRelativeTime(project.lastOpenedAtUnixMs, now, locale, t("time.justNow"))}</span>
+          </span>
+          {ready ? <span className="recent-go" aria-hidden="true"><UiIcon icon="arrowRight" size="sm" /></span> : null}
+        </button>
+        <DropdownMenu.Root>
+          <DropdownMenu.Trigger asChild disabled={disabled}>
+            <button className="icon-button icon-button-ghost recent-more" type="button" aria-label={t("launcher.actionsFor", { name })}><UiIcon icon="ellipsis" size="md" /></button>
+          </DropdownMenu.Trigger>
+          <DropdownMenu.Portal>
+            <DropdownMenu.Content className="menu-content" align="end" sideOffset={4}>
+              <DropdownMenu.Item className="menu-item" disabled={!ready} onSelect={onOpen}><span className="menu-item-label">{t("common.open")}</span></DropdownMenu.Item>
+              <DropdownMenu.Item className="menu-item" disabled={!ready} onSelect={onUpdate}><span className="menu-item-label">{t("launcher.updateFromGame")}</span></DropdownMenu.Item>
+              <DropdownMenu.Separator className="menu-separator" />
+              <DropdownMenu.Item className="menu-item danger" onSelect={onRemove}><span className="menu-item-label">{t("launcher.removeRecent")}</span></DropdownMenu.Item>
+            </DropdownMenu.Content>
+          </DropdownMenu.Portal>
+        </DropdownMenu.Root>
+      </li>
+    </RightClickMenu>
   );
 }
 

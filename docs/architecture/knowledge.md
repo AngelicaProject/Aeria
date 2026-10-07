@@ -26,11 +26,12 @@ The knowledge is the `aeria-knowledge` directory at the project root:
   [`knowledge-v1.md`](../formats/knowledge-v1.md#files)), for the
   translators to change rather than to write from nothing;
 - `terms.csv`: terms that are not strings of the game, such as lore words,
-  with their translation, a note, and variants never to use.
+  with their translation, their other forms in the source (`linkshells`
+  beside `linkshell`, `the Scions` beside `Scions of the Seventh Dawn`), a
+  note, and the folder people file them in.
 
 The format is [Project Knowledge Format v1](../formats/knowledge-v1.md);
-`aeria-knowledge` owns reading and checking it. A term a person decided is
-marked `settled`. The knowledge is committed with the translations (see
+`aeria-knowledge` owns reading and checking it. The knowledge is committed with the translations (see
 [`git.md`](./git.md#checkpoint)), and a new project gets both files without
 entries.
 
@@ -40,7 +41,7 @@ which also lists glossary candidates: names the project translates in
 several ways (see [`search.md`](./search.md#glossary-candidates)), and the
 phrases its translations open sentences with (see
 [`search.md`](./search.md#openers)).
-A term a person edits there is marked settled. A file that cannot be read,
+A file that cannot be read,
 and rows the format excludes, are reported with their file and line and left
 out; the rest of the knowledge is used.
 

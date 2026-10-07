@@ -7,6 +7,7 @@ import { useI18n } from "../ui/i18n";
 import { NameSheetMark } from "../ui/NameSheetMark";
 import { IconButton } from "../ui/primitives/IconButton";
 import { UiIcon } from "../ui/primitives/UiIcon";
+import { RightClickMenu, copyText, type MenuEntry } from "../ui/primitives/RightClickMenu";
 
 /** Characters of a long text shown from its first match on. */
 const SNIPPET = 160;
@@ -253,42 +254,51 @@ export const SearchResultList = forwardRef<SearchResultListHandle, SearchResultL
             const chosenHere = chosenOf(paths);
             const whole = group.count > 0 && chosenHere >= group.count;
             const folder = group.files.length > 1 ? null : group.files[0]?.path.replace(/\.po$/, "");
+            const sheetMenu = (): MenuEntry[] => [
+              { id: "toggle", icon: row.open ? "chevronDown" : "chevronRight", label: t(row.open ? "search.menu.collapse" : "search.menu.expand"), run: () => props.onToggleGroup(group) },
+              { id: "choose", icon: whole ? "circleCheck" : "circle", label: t(whole ? "search.unchooseSheet" : "search.chooseSheet"), disabled, run: () => props.onChooseGroup(group, !whole) },
+              ...(replacing ? [{ id: "replace", icon: "replaceAll" as const, label: t("search.replaceInSheet"), disabled, run: () => props.onReplaceGroup(group) }] : []),
+              { id: "separator", separator: true },
+              { id: "copyName", icon: "copy", label: t("tabs.menu.copyName"), run: () => copyText(group.sheet) },
+            ];
             return (
-              <div key={row.key} {...common} role="option" aria-selected={whole} aria-expanded={row.open} className={`search-sheet${active ? " active" : ""}${sticky ? " sticky" : ""}${whole ? " chosen" : chosenHere > 0 ? " partly" : ""}`}>
-                <button
-                  type="button"
-                  tabIndex={-1}
-                  className="search-sheet-toggle"
-                  title={paths.length > 1 ? paths.join("\n") : undefined}
-                  onClick={(event) => {
-                    activeKey.current = row.key;
-                    renderActive();
-                    if ((event.ctrlKey || event.metaKey) && !disabled) {
-                      props.onChooseGroup(group, !whole);
-                      props.onKeysUsed();
-                    } else props.onToggleGroup(group);
-                  }}
-                >
-                  <UiIcon icon={row.open ? "chevronDown" : "chevronRight"} size="xs" />
-                  <span className="search-sheet-name">{group.sheet}</span>
-                  {nameSheets.has(group.sheet) ? <NameSheetMark /> : null}
-                  {group.files.length > 1 ? (
-                    <span className="search-sheet-path">{t("search.files", { count: group.files.length })}</span>
-                  ) : folder && folder !== group.sheet ? <span className="search-sheet-path">{folder}</span> : null}
-                  <span className="search-sheet-count">{chosenHere > 0 ? `${chosenHere} / ${group.count}` : group.count}</span>
-                </button>
-                {replacing ? <IconButton icon="replaceAll" size="xs" tabIndex={-1} className="search-row-action" label={t("search.replaceInSheet")} disabled={disabled} onClick={() => props.onReplaceGroup(group)} /> : null}
-                <IconButton
-                  icon={whole ? "circleCheck" : "circle"}
-                  size="xs"
-                  tabIndex={-1}
-                  className="search-row-action"
-                  label={whole ? t("search.unchooseSheet") : t("search.chooseSheet")}
-                  shortcut={t("search.modClick", { key: chooseKey })}
-                  disabled={disabled}
-                  onClick={() => props.onChooseGroup(group, !whole)}
-                />
-              </div>
+              <RightClickMenu key={row.key} entries={sheetMenu}>
+                <div {...common} role="option" aria-selected={whole} aria-expanded={row.open} className={`search-sheet${active ? " active" : ""}${sticky ? " sticky" : ""}${whole ? " chosen" : chosenHere > 0 ? " partly" : ""}`}>
+                  <button
+                    type="button"
+                    tabIndex={-1}
+                    className="search-sheet-toggle"
+                    title={paths.length > 1 ? paths.join("\n") : undefined}
+                    onClick={(event) => {
+                      activeKey.current = row.key;
+                      renderActive();
+                      if ((event.ctrlKey || event.metaKey) && !disabled) {
+                        props.onChooseGroup(group, !whole);
+                        props.onKeysUsed();
+                      } else props.onToggleGroup(group);
+                    }}
+                  >
+                    <UiIcon icon={row.open ? "chevronDown" : "chevronRight"} size="xs" />
+                    <span className="search-sheet-name">{group.sheet}</span>
+                    {nameSheets.has(group.sheet) ? <NameSheetMark /> : null}
+                    {group.files.length > 1 ? (
+                      <span className="search-sheet-path">{t("search.files", { count: group.files.length })}</span>
+                    ) : folder && folder !== group.sheet ? <span className="search-sheet-path">{folder}</span> : null}
+                    <span className="search-sheet-count">{chosenHere > 0 ? `${chosenHere} / ${group.count}` : group.count}</span>
+                  </button>
+                  {replacing ? <IconButton icon="replaceAll" size="xs" tabIndex={-1} className="search-row-action" label={t("search.replaceInSheet")} disabled={disabled} onClick={() => props.onReplaceGroup(group)} /> : null}
+                  <IconButton
+                    icon={whole ? "circleCheck" : "circle"}
+                    size="xs"
+                    tabIndex={-1}
+                    className="search-row-action"
+                    label={whole ? t("search.unchooseSheet") : t("search.chooseSheet")}
+                    shortcut={t("search.modClick", { key: chooseKey })}
+                    disabled={disabled}
+                    onClick={() => props.onChooseGroup(group, !whole)}
+                  />
+                </div>
+              </RightClickMenu>
             );
           }
           if (row.kind === "hit") {
@@ -300,52 +310,68 @@ export const SearchResultList = forwardRef<SearchResultListHandle, SearchResultL
             const advice = hit.findings[0]?.advice ?? false;
             const term = hit.findings.map(exceptionTerm).find((found) => found !== null) ?? null;
             const isChosen = chosen.has(row.key);
+            const hitMenu = (): MenuEntry[] => [
+              { id: "open", icon: "arrowRight", label: t("common.open"), run: () => props.onReveal(hit) },
+              { id: "choose", icon: isChosen ? "circleCheck" : "circle", label: t(isChosen ? "search.unchoose" : "search.choose"), run: () => { anchorKey.current = row.key; props.onChoose([hit], !isChosen); } },
+              { id: "separator-actions", separator: true },
+              ...(replacing && translationRanges.length > 0 ? [{ id: "replace", icon: "replace" as const, label: t("search.replaceOne"), disabled, run: () => props.onReplaceOne(hit) }] : []),
+              ...(term !== null ? [{ id: "except", icon: "bookX" as const, label: t("search.exceptOne", { term }), disabled, run: () => props.onExcept(hit, term) }] : []),
+              ...(hit.translation ? [
+                { id: "fix", icon: "wand" as const, label: t("search.fixOne"), disabled, run: () => props.onFix(hit) },
+                { id: "retranslate", icon: "sparkles" as const, label: t("search.retranslateOne"), disabled, run: () => props.onRetranslate(hit) },
+                { id: "separator-copy", separator: true } as const,
+              ] : []),
+              { id: "copyTranslation", icon: "copy", label: t("edit.copyTranslation"), disabled: !hit.translation, run: () => copyText(hit.translation) },
+              { id: "copySource", icon: "copy", label: t("edit.copySource"), run: () => copyText(hit.source) },
+            ];
             return (
-              <div key={row.key} {...common} role="option" aria-selected={isChosen} className={`search-hit${isChosen ? " chosen" : ""}${active ? " active" : ""}`}>
-                <button
-                  type="button"
-                  tabIndex={-1}
-                  className="search-hit-main"
-                  title={hit.context}
-                  // Shift would select the text of the list instead of strings.
-                  onMouseDown={(event) => { if (event.shiftKey) event.preventDefault(); }}
-                  onClick={(event) => clickHit(event, item.index, row)}
-                >
-                  <span className="search-hit-line">
-                    <span className="search-hit-text">{hit.translation ? highlight(hit.translation, translationRanges) : <em className="search-hit-untranslated">{t("search.untranslated")}</em>}</span>
-                    {hit.fuzzy ? <span className="chip chip-warn">{t("search.fuzzy")}</span> : null}
-                    <span className="search-hit-coordinate">{coordinateOf(hit)}</span>
-                  </span>
-                  <span className="search-hit-source">{highlight(hit.source, sourceRanges)}</span>
-                  {other ? (
-                    <span className="search-hit-other">
-                      <span className="search-hit-label">{t(other.field === "note" ? "search.field.note" : "search.field.context")}</span>
-                      {highlight(other.field === "note" ? hit.note ?? "" : hit.context, other.ranges)}
-                    </span>
-                  ) : null}
-                  {findings.length > 0 ? (
-                    <span className={advice ? "search-hit-findings advice" : "search-hit-findings"} title={findings.join("\n")}>
-                      <UiIcon icon={advice ? "info" : "circleAlert"} size="xs" />
-                      <span className="search-hit-finding">{findings[0]}</span>
-                      {findings.length > 1 ? <span className="search-issue-count">{t("search.moreFindings", { count: findings.length - 1 })}</span> : null}
-                    </span>
-                  ) : null}
-                </button>
-                <span className="search-hit-actions">
-                  <IconButton
-                    icon={isChosen ? "circleCheck" : "circle"}
-                    size="xs"
+              <RightClickMenu key={row.key} entries={hitMenu}>
+                <div {...common} role="option" aria-selected={isChosen} className={`search-hit${isChosen ? " chosen" : ""}${active ? " active" : ""}`}>
+                  <button
+                    type="button"
                     tabIndex={-1}
-                    label={isChosen ? t("search.unchoose") : t("search.choose")}
-                    shortcut={t("search.modClick", { key: chooseKey })}
-                    onClick={() => { anchorKey.current = row.key; props.onChoose([hit], !isChosen); }}
-                  />
-                  {replacing && translationRanges.length > 0 ? <IconButton icon="replace" size="xs" tabIndex={-1} label={t("search.replaceOne")} disabled={disabled} onClick={() => props.onReplaceOne(hit)} /> : null}
-                  {term !== null ? <IconButton icon="bookX" size="xs" tabIndex={-1} label={t("search.exceptOne", { term })} disabled={disabled} onClick={() => props.onExcept(hit, term)} /> : null}
-                  {hit.translation ? <IconButton icon="wand" size="xs" tabIndex={-1} label={t("search.fixOne")} disabled={disabled} onClick={() => props.onFix(hit)} /> : null}
-                  {hit.translation ? <IconButton icon="sparkles" size="xs" tabIndex={-1} label={t("search.retranslateOne")} disabled={disabled} onClick={() => props.onRetranslate(hit)} /> : null}
-                </span>
-              </div>
+                    className="search-hit-main"
+                    title={hit.context}
+                    // Shift would select the text of the list instead of strings.
+                    onMouseDown={(event) => { if (event.shiftKey) event.preventDefault(); }}
+                    onClick={(event) => clickHit(event, item.index, row)}
+                  >
+                    <span className="search-hit-line">
+                      <span className="search-hit-text">{hit.translation ? highlight(hit.translation, translationRanges) : <em className="search-hit-untranslated">{t("search.untranslated")}</em>}</span>
+                      {hit.fuzzy ? <span className="chip chip-warn">{t("search.fuzzy")}</span> : null}
+                      <span className="search-hit-coordinate">{coordinateOf(hit)}</span>
+                    </span>
+                    <span className="search-hit-source">{highlight(hit.source, sourceRanges)}</span>
+                    {other ? (
+                      <span className="search-hit-other">
+                        <span className="search-hit-label">{t(other.field === "note" ? "search.field.note" : "search.field.context")}</span>
+                        {highlight(other.field === "note" ? hit.note ?? "" : hit.context, other.ranges)}
+                      </span>
+                    ) : null}
+                    {findings.length > 0 ? (
+                      <span className={advice ? "search-hit-findings advice" : "search-hit-findings"} title={findings.join("\n")}>
+                        <UiIcon icon={advice ? "info" : "circleAlert"} size="xs" />
+                        <span className="search-hit-finding">{findings[0]}</span>
+                        {findings.length > 1 ? <span className="search-issue-count">{t("search.moreFindings", { count: findings.length - 1 })}</span> : null}
+                      </span>
+                    ) : null}
+                  </button>
+                  <span className="search-hit-actions">
+                    <IconButton
+                      icon={isChosen ? "circleCheck" : "circle"}
+                      size="xs"
+                      tabIndex={-1}
+                      label={isChosen ? t("search.unchoose") : t("search.choose")}
+                      shortcut={t("search.modClick", { key: chooseKey })}
+                      onClick={() => { anchorKey.current = row.key; props.onChoose([hit], !isChosen); }}
+                    />
+                    {replacing && translationRanges.length > 0 ? <IconButton icon="replace" size="xs" tabIndex={-1} label={t("search.replaceOne")} disabled={disabled} onClick={() => props.onReplaceOne(hit)} /> : null}
+                    {term !== null ? <IconButton icon="bookX" size="xs" tabIndex={-1} label={t("search.exceptOne", { term })} disabled={disabled} onClick={() => props.onExcept(hit, term)} /> : null}
+                    {hit.translation ? <IconButton icon="wand" size="xs" tabIndex={-1} label={t("search.fixOne")} disabled={disabled} onClick={() => props.onFix(hit)} /> : null}
+                    {hit.translation ? <IconButton icon="sparkles" size="xs" tabIndex={-1} label={t("search.retranslateOne")} disabled={disabled} onClick={() => props.onRetranslate(hit)} /> : null}
+                  </span>
+                </div>
+              </RightClickMenu>
             );
           }
           if (row.kind === "more") {

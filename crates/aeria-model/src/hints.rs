@@ -22,7 +22,6 @@ pub struct HintTerm {
     pub term: String,
     pub translation: String,
     pub note: Option<String>,
-    pub never: Vec<String>,
     /// A person decided the term does not apply to this string.
     pub excepted: bool,
 }
@@ -66,7 +65,6 @@ pub fn hints(names: &Names, glossary: &Glossary, entry: &Entry) -> StringHints {
                 term: term.term.clone(),
                 translation: term.translation.clone(),
                 note: term.note.clone(),
-                never: term.forbidden.clone(),
                 excepted: !applying.iter().any(|entry| entry.term == term.term),
             })
             .collect(),

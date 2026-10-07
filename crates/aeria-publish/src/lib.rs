@@ -9,6 +9,7 @@
 
 mod github;
 mod keys;
+mod protection;
 mod workflow;
 
 pub use github::{
@@ -18,6 +19,9 @@ pub use github::{
 pub use keys::{
     KEYRING_SERVICE, KeyError, KeyringSigningKeyStore, MemorySigningKeyStore, SigningKeyStore,
     SigningSecret,
+};
+pub use protection::{
+    BranchRule, GUARD_CHECK, Protection, RuleState, TagRule, branch_ruleset, tag_ruleset,
 };
 pub use workflow::{
     FEED_WORKFLOW, FEED_WORKFLOW_PATH, WorkflowState, feed_workflow_state, install_feed_workflow,

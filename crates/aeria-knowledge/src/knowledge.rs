@@ -200,7 +200,7 @@ mod tests {
         let knowledge = Knowledge::from_texts(&KnowledgeTexts {
             style: None,
             terms: Some(
-                "term,translation,forbidden,settled\nAether,Эфир,Этер,yes\nMoogle,Моогл,,\n,broken,,\n"
+                "term,translation,forms\nAether,Эфир,aethers\nMoogle,Моогл,,\n,broken,,\n"
                     .to_owned(),
             ),
         });

@@ -8,6 +8,7 @@ import { ThemeProvider } from "./ui/theme/theme";
 import { PreferencesProvider } from "./ui/preferences";
 import { I18nProvider, useI18n } from "./ui/i18n";
 import { TitleTooltips } from "./ui/primitives/TitleTooltips";
+import { TextContextMenu } from "./ui/TextContextMenu";
 import { DetachedToolWindow, isDetachedPanel } from "./components/DetachedToolWindow";
 import { SourceUpdateDialog } from "./components/SourceUpdateDialog";
 import { UpdateNotice } from "./components/UpdateNotice";
@@ -106,7 +107,9 @@ export function App() {
       <PreferencesProvider>
         <I18nProvider>
           <Tooltip.Provider delayDuration={500} skipDelayDuration={200}>
-            {isDetachedPanel(detachedPanel) ? <DetachedToolWindow panel={detachedPanel} /> : <MainWindow />}
+            <TextContextMenu>
+              {isDetachedPanel(detachedPanel) ? <DetachedToolWindow panel={detachedPanel} /> : <MainWindow />}
+            </TextContextMenu>
             <TitleTooltips />
           </Tooltip.Provider>
         </I18nProvider>
