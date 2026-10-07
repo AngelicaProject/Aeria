@@ -29,12 +29,17 @@ runs:
     # A pull request is checked as GitHub would merge it into its base, and
     # a push as the commit it brought; the first parent is the base either
     # way.
+    #
+    # A pull request from a fork is checked out too: aeria-guard is already
+    # built, the checkout keeps no credentials, the token can only read, and
+    # nothing of the pull request is run, only read.
     - name: Check out the change
       uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       with:
         ref: ${{ github.event_name == 'pull_request_target' && format('refs/pull/{0}/merge', github.event.pull_request.number) || github.sha }}
         fetch-depth: 2
         persist-credentials: false
+        allow-unsafe-pr-checkout: true
 
     - name: Guard
       shell: bash

@@ -408,7 +408,9 @@ The action (`guard/action.yml` in this repository) builds `aeria-guard`
 from the commit it is taken from, before anything of the project is checked
 out, so nothing in a pull request reaches the build, and the project runs
 exactly the code it named. It then checks out the change without
-credentials: for a pull request GitHub's test merge with its base
+credentials, from a fork as from the repository itself (the checkout
+action refuses a fork's pull request under `pull_request_target` unless
+told to; nothing of it is run here): for a pull request GitHub's test merge with its base
 (`refs/pull/<number>/merge`), for a push the pushed commit, two commits
 deep, so the first parent is the base either way, and runs every stage
 against it. The project's files are only read; Git runs no filter or
