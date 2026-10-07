@@ -8,8 +8,8 @@ use std::path::{Path, PathBuf};
 
 use aeria_knowledge::knowledge::read_file;
 use aeria_knowledge::{
-    GlossaryDiagnostic, GlossaryEntry, KnowledgeFile, MAX_KNOWLEDGE_BYTES, parse_glossary,
-    write_glossary,
+    GlossaryDiagnostic, GlossaryEntry, KnowledgeFile, MAX_KNOWLEDGE_BYTES, folder_path,
+    parse_glossary, write_glossary,
 };
 use serde::{Deserialize, Serialize};
 use tauri::Manager;
@@ -45,9 +45,9 @@ pub struct TermInput {
     #[serde(default)]
     pub note: Option<String>,
     #[serde(default)]
-    pub forbidden: Vec<String>,
+    pub forms: Vec<String>,
     #[serde(default)]
-    pub settled: bool,
+    pub folder: String,
     #[serde(default)]
     pub match_case: bool,
 }
@@ -111,13 +111,13 @@ fn terms_file(entries: Vec<TermInput>) -> CommandResult<String> {
                 .note
                 .map(|note| note.trim().to_owned())
                 .filter(|note| !note.is_empty()),
-            forbidden: entry
-                .forbidden
+            forms: entry
+                .forms
                 .iter()
-                .map(|variant| variant.trim().to_owned())
-                .filter(|variant| !variant.is_empty())
+                .map(|form| form.trim().to_owned())
+                .filter(|form| !form.is_empty())
                 .collect(),
-            settled: entry.settled,
+            folder: folder_path(&entry.folder),
             match_case: entry.match_case,
         })
         .collect();
@@ -244,8 +244,8 @@ mod tests {
             term: term.to_owned(),
             translation: translation.to_owned(),
             note: Some("  ".to_owned()),
-            forbidden: vec![" Хай ".to_owned(), String::new()],
-            settled: true,
+            forms: vec![format!(" {}s ", term.trim()), String::new()],
+            folder: " Lore / ".to_owned(),
             match_case: false,
         }
     }
@@ -259,7 +259,7 @@ mod tests {
         .expect("valid");
         assert_eq!(
             text,
-            "term,translation,note,forbidden,settled\nAether,Эфир,,Хай,yes\nCrystal,Кристалл,,Хай,yes\n"
+            "term,translation,forms,note,folder\nAether,Эфир,Aethers,,Lore\nCrystal,Кристалл,Crystals,,Lore\n"
         );
         let duplicate = terms_file(vec![entry("Aether", "Эфир"), entry("aether", "Эфир")])
             .expect_err("duplicate");
@@ -269,6 +269,9 @@ mod tests {
             duplicate.message
         );
         assert!(terms_file(vec![entry("Aether", " ")]).is_err());
+        let form = terms_file(vec![entry("Aether", "Эфир"), entry("Aethers", "Эфиры")])
+            .expect_err("a form of another term");
+        assert!(form.message.starts_with("entry 2:"), "{}", form.message);
     }
 
     #[test]
@@ -284,7 +287,7 @@ mod tests {
         let text = terms_file(vec![entry("Aether", "Эфир")]).expect("valid");
         let saved = save(root, KnowledgeFile::Terms, None, &text).expect("terms");
         assert_eq!(saved.entries.len(), 1);
-        assert!(saved.entries[0].settled);
+        assert_eq!(saved.entries[0].folder, "Lore");
         assert_eq!(saved.terms_text.as_deref(), Some(text.as_str()));
         assert!(saved.diagnostics.is_empty());
     }

@@ -121,9 +121,13 @@ fn search_matches_text_in_translations_and_sources_but_never_macros() {
 #[test]
 fn problems_are_found_by_the_checks_a_translation_is_saved_with() {
     let (_directory, session) = project();
-    let terms = "term,translation,forbidden\ncook,кулинар,повар\n";
+    let terms = "term,translation,forms\ncook,кулинар,cooks\n";
     std::fs::create_dir_all(session.root().join("aeria-knowledge")).expect("dir");
     std::fs::write(session.root().join("aeria-knowledge/terms.csv"), terms).expect("terms");
+    // A change made by hand, which the checks refuse.
+    let file = session.root().join("po/Addon.po");
+    let text = std::fs::read_to_string(&file).expect("read");
+    std::fs::write(&file, text.replace("Спроси повара", "Спросил(а) повара")).expect("write");
     let knowledge = session.knowledge();
     let problems = session
         .corpus()
@@ -138,19 +142,14 @@ fn problems_are_found_by_the_checks_a_translation_is_saved_with() {
             &AtomicBool::new(false),
         )
         .expect("search");
-    // «Повар» and its inflected form «повара»; «Поварской» is another word.
-    assert_eq!(problems.total, 2);
+    assert_eq!(problems.total, 1);
     assert_eq!(
         problems.hits[0].findings[0],
-        Issue::ForbiddenTerm {
-            term: "cook".to_owned(),
-            translation: "кулинар".to_owned(),
-            variant: "повар".to_owned(),
-        }
+        Issue::BothGenders("(а)".to_owned())
     );
     assert_eq!(problems.issues.len(), 1);
-    assert_eq!(problems.issues[0].group, "forbiddenTerm:cook");
-    assert_eq!(problems.issues[0].count, 2);
+    assert_eq!(problems.issues[0].group, "bothGenders");
+    assert_eq!(problems.issues[0].count, 1);
     let unused = session
         .corpus()
         .search(
@@ -324,19 +323,19 @@ fn a_correction_leaves_a_reviewed_translation() {
 #[test]
 fn a_term_exception_lifts_the_term_and_undo_takes_it_back() {
     let (_directory, session) = project();
-    let terms = "term,translation,forbidden\ncook,кулинар,повар\n";
+    let terms = "term,translation\ncook,кулинар\n";
     std::fs::create_dir_all(session.root().join("aeria-knowledge")).expect("dir");
     std::fs::write(session.root().join("aeria-knowledge/terms.csv"), terms).expect("terms");
-    let problems = |session: &aeria_po::Session| {
+    let unused = |session: &aeria_po::Session, row| {
         session
-            .findings("Addon", 1, 0, 0)
+            .findings("Addon", row, 0, 0)
             .expect("findings")
             .0
             .iter()
-            .filter(|issue| issue.is_problem())
+            .filter(|issue| matches!(issue, Issue::TermNotUsed { .. }))
             .count()
     };
-    assert_eq!(problems(&session), 1);
+    assert_eq!(unused(&session, 1), 1);
 
     let edit = EntryEdit {
         path: "Addon.po".to_owned(),
@@ -357,26 +356,17 @@ fn a_term_exception_lifts_the_term_and_undo_takes_it_back() {
     );
     let text = std::fs::read_to_string(session.root().join("po/Addon.po")).expect("file");
     assert!(text.contains("#, aeria-term-exception: cook\nmsgctxt \"Addon:1:0:0\""));
-    assert_eq!(problems(&session), 0);
+    assert_eq!(unused(&session, 1), 0);
     assert_eq!(
         session.findings("Addon", 1, 0, 0).expect("findings").1,
         ["cook"]
     );
     // The exception is the string's alone.
-    assert_eq!(
-        session
-            .findings("Addon", 2, 0, 0)
-            .expect("findings")
-            .0
-            .iter()
-            .filter(|issue| issue.is_problem())
-            .count(),
-        1
-    );
+    assert_eq!(unused(&session, 2), 1);
 
     let undo: Vec<EntryEdit> = applied.done.iter().map(aeria_po::EditDone::undo).collect();
     assert_eq!(session.apply_edits(&undo).expect("undo").done.len(), 1);
-    assert_eq!(problems(&session), 1);
+    assert_eq!(unused(&session, 1), 1);
 }
 
 #[test]
@@ -418,13 +408,14 @@ fn search_all_returns_every_entry_past_the_hit_limit() {
 #[test]
 fn a_search_sees_every_change_of_the_files_and_the_knowledge() {
     let (_directory, session) = project();
-    let problems = |session: &aeria_po::Session| {
+    let unused = |session: &aeria_po::Session| {
         session
             .corpus()
             .search(
                 session.root(),
                 &Query {
-                    check: CheckFilter::Problems,
+                    check: CheckFilter::Advice,
+                    issue: Some("termNotUsed:cook".to_owned()),
                     ..Query::default()
                 },
                 &session.knowledge(),
@@ -435,7 +426,7 @@ fn a_search_sees_every_change_of_the_files_and_the_knowledge() {
             .total
     };
     assert_eq!(find(&session, &query("кулинар", MatchKind::Text)).total, 0);
-    assert_eq!(problems(&session), 0);
+    assert_eq!(unused(&session), 0);
 
     // A save of the session.
     session
@@ -452,10 +443,10 @@ fn a_search_sees_every_change_of_the_files_and_the_knowledge() {
     assert_eq!(found.hits[1].translation, "Кулинарный нож!");
 
     // A new term: the checks are made again with it.
-    let terms = "term,translation,forbidden\ncook,кулинар,повар\n";
+    let terms = "term,translation\ncook,кулинар\n";
     std::fs::create_dir_all(session.root().join("aeria-knowledge")).expect("dir");
     std::fs::write(session.root().join("aeria-knowledge/terms.csv"), terms).expect("terms");
-    assert_eq!(problems(&session), 2, "«Повар пришёл» and «Спроси повара»");
+    assert_eq!(unused(&session), 3);
 
     // A file removed is no longer found.
     std::fs::remove_file(&file).expect("remove");

@@ -9,7 +9,9 @@ use std::sync::Arc;
 use aeria_po::{Entry, PoFile};
 
 use crate::GitError;
-use crate::repository::{CommitSummary, GitRepository, validate_revision};
+use crate::repository::{
+    CommitSummary, FileChangeKind, FileStatus, GitRepository, validate_revision,
+};
 
 /// The folder of the project's PO files.
 pub const PO_DIR: &str = "po";
@@ -285,7 +287,7 @@ impl GitRepository {
         Ok(blobs)
     }
 
-    fn read_working(&self, path: &str) -> Result<Option<Vec<u8>>, GitError> {
+    pub(crate) fn read_working(&self, path: &str) -> Result<Option<Vec<u8>>, GitError> {
         let full = self.root().join(path);
         match std::fs::read(&full) {
             Ok(bytes) => Ok(Some(bytes)),
@@ -417,6 +419,66 @@ impl GitRepository {
                 .map(str::to_owned)
                 .collect(),
         ))
+    }
+
+    /// Every file a commit changed against its first parent (against the
+    /// empty tree for a root commit), as project-relative paths in path
+    /// order, with how each changed.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`GitError::InvalidInput`] for an invalid revision, or an
+    /// error when Git fails or prints a status it does not document.
+    pub fn commit_files(&self, revision: &str) -> Result<Vec<FileStatus>, GitError> {
+        validate_revision(revision)?;
+        let commit = self.commit(revision)?;
+        let mut args = vec![
+            "diff-tree",
+            "-r",
+            "-z",
+            "--name-status",
+            "--no-renames",
+            "--relative",
+        ];
+        match commit.parents.first() {
+            Some(parent) => args.push(parent),
+            None => args.push("--root"),
+        }
+        args.push(commit.id.as_str());
+        let text = self.run_text(&args)?;
+        // A root commit's output starts with the commit ID.
+        let mut fields = text
+            .split('\0')
+            .filter(|field| !field.is_empty() && *field != commit.id);
+        let mut files = Vec::new();
+        while let Some(status) = fields.next() {
+            let kind = match status {
+                "A" => FileChangeKind::Added,
+                "M" => FileChangeKind::Modified,
+                "D" => FileChangeKind::Deleted,
+                "T" => FileChangeKind::TypeChanged,
+                other => {
+                    return Err(GitError::Parse {
+                        message: format!("git diff-tree printed an unknown status {other:?}"),
+                    });
+                }
+            };
+            let Some(path) = fields.next() else {
+                return Err(GitError::Parse {
+                    message: "git diff-tree printed a status without a path".to_owned(),
+                });
+            };
+            files.push(FileStatus {
+                path: path.to_owned(),
+                original_path: None,
+                kind,
+                staged: false,
+                index: None,
+                worktree: None,
+            });
+        }
+        files.sort_by(|a, b| a.path.cmp(&b.path));
+        Ok(files)
     }
 
     /// The string changes a commit made against its first parent.

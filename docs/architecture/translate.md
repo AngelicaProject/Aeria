@@ -122,8 +122,8 @@ The task is JSON built from the files as they are when the request is sent:
   name as it stands alone: written in a sentence it declines like any word
   where the language declines names (Поговорите с Ко Рабнтой); only a name
   the game fills in through a macro keeps its stored form;
-- `terms`: terms of `terms.csv` that occur in the sources, with their notes
-  and forbidden variants, at most 60; a term goes only when it applies to a
+- `terms`: terms of `terms.csv` that occur in the sources, with their other
+  forms and notes, at most 60 (folders are not sent); a term goes only when it applies to a
   string of the request, not counting the strings with an exception for it;
 - `files`: each file of the request on its own, with
   - `about`: the file's header comment: its sheet, a quest's title, and

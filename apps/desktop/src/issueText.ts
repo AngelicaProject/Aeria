@@ -4,7 +4,6 @@ import type { CommandError, IssueDto } from "./types";
 const full: Partial<Record<IssueDto["kind"], MessageKey>> = {
   lineBreak: "issue.lineBreak",
   structure: "issue.structure",
-  forbiddenTerm: "issue.forbiddenTerm",
   mark: "issue.mark",
   mixedAlphabets: "issue.mixedAlphabets",
   bothGenders: "issue.bothGenders",
@@ -21,7 +20,6 @@ const full: Partial<Record<IssueDto["kind"], MessageKey>> = {
 const short: Partial<Record<IssueDto["kind"], MessageKey>> = {
   lineBreak: "issue.short.lineBreak",
   structure: "issue.short.structure",
-  forbiddenTerm: "issue.short.forbiddenTerm",
   mark: "issue.short.mark",
   mixedAlphabets: "issue.short.mixedAlphabets",
   bothGenders: "issue.short.bothGenders",
@@ -39,7 +37,6 @@ function params(issue: IssueDto): Record<string, string> {
   return {
     term: issue.term ?? "",
     translation: issue.translation ?? "",
-    variant: issue.variant ?? "",
     text: issue.text ?? "",
     phrases: issue.phrases.join(", "),
     length: String(issue.length ?? ""),
@@ -63,7 +60,7 @@ export function issueLabel(issue: IssueDto, t: Translate): string {
 
 /** The glossary term an exception can be made for: a term issue's term without a comma, which a flag cannot hold. */
 export function exceptionTerm(issue: IssueDto): string | null {
-  if (issue.kind !== "termNotUsed" && issue.kind !== "forbiddenTerm") return null;
+  if (issue.kind !== "termNotUsed") return null;
   const term = issue.term?.trim() ?? "";
   return term && !term.includes(",") ? term : null;
 }

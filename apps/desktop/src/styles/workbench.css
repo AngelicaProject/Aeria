@@ -109,6 +109,9 @@
   padding-bottom: var(--gutter);
 }
 .document { flex: 1; }
+/* The open sheet, kept without a box of its own under a commit tab. */
+.document-sheet { display: contents; }
+.document-sheet[hidden] { display: none; }
 
 /* Resize handles double as the gutters between panels. */
 .resize-handle { position: relative; flex: none; touch-action: none; }
@@ -181,6 +184,11 @@
 .doc-tab.active .doc-tab-icon { color: var(--accent-text); }
 .doc-tab-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .doc-tab.preview .doc-tab-label { font-style: italic; }
+/* A pinned tab always shows its pin, which unpins it. */
+.doc-tab.pinned .doc-tab-x { opacity: 1; color: var(--fg-subtle); }
+.doc-tab.pinned .doc-tab-close:hover .doc-tab-x { color: var(--fg); }
+.doc-tab.pinned.dirty .doc-tab-x { opacity: 0; }
+.doc-tab.pinned.dirty .doc-tab-close:hover .doc-tab-x { opacity: 1; }
 .doc-tab-close {
   position: relative;
   display: grid;

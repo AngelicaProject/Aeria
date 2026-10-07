@@ -1,0 +1,48 @@
+# Aeria Guard: the GitHub Action translation repositories run to guard
+# their main branch. Aeria writes the workflow that uses it
+# (crates/aeria-git/templates/aeria-guard.yml); see docs/architecture/git.md.
+#
+# The workflow names this action by an Aeria commit, so a project runs
+# exactly the code of that commit: aeria-guard is built here from it, before
+# anything of the project is checked out, so nothing in the project can
+# change the build. The project's files are then only read.
+name: Aeria Guard
+description: Checks a change to an Aeria translation project and summarizes it string by string for review.
+author: AngelicaProject
+
+inputs:
+  project:
+    description: The folder that holds aeria.json, relative to the repository.
+    default: "."
+
+runs:
+  using: composite
+  steps:
+    # The toolchain comes from rust-toolchain.toml beside Cargo.toml.
+    - name: Build aeria-guard
+      shell: bash
+      working-directory: ${{ github.action_path }}/..
+      run: |
+        cargo build --release --locked -p aeria-guard --target-dir "$RUNNER_TEMP/aeria-guard"
+        "$RUNNER_TEMP/aeria-guard/release/aeria-guard" --version
+
+    # A pull request is checked as GitHub would merge it into its base, and
+    # a push as the commit it brought; the first parent is the base either
+    # way.
+    - name: Check out the change
+      uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      with:
+        ref: ${{ github.event_name == 'pull_request_target' && format('refs/pull/{0}/merge', github.event.pull_request.number) || github.sha }}
+        fetch-depth: 2
+        persist-credentials: false
+
+    - name: Guard
+      shell: bash
+      env:
+        PROJECT: ${{ inputs.project }}
+      run: |
+        base=HEAD^1
+        if ! git rev-parse --verify --quiet "$base^{commit}" > /dev/null; then
+          base=
+        fi
+        "$RUNNER_TEMP/aeria-guard/release/aeria-guard" all --project "$PROJECT" ${base:+--base "$base"}

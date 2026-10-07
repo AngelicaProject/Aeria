@@ -30,7 +30,7 @@ pub enum ProjectAreaDto {
     FontFile,
     GitAttributes,
     FeedWorkflow,
-    CheckWorkflow,
+    GuardWorkflow,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
@@ -62,8 +62,11 @@ pub struct ProjectChangeDto {
     pub details: Vec<ChangeDetailDto>,
     /// More details existed than are listed.
     pub truncated: bool,
-    /// The content could not be compared (for example invalid JSON); only
-    /// the file-level change is known.
+    /// The content could not be read as its format (an older or invalid
+    /// terms file, invalid JSON), so `details` are its lines instead.
+    pub by_line: bool,
+    /// The content could not be compared at all (not text, or too large);
+    /// only the file-level change is known.
     pub unreadable: bool,
     /// Size in bytes after the change (before it for a removed file).
     pub size: u64,
@@ -92,7 +95,7 @@ fn area_of(path: &str) -> Option<ProjectAreaDto> {
         FONT_SETTINGS_FILE => ProjectAreaDto::FontSettings,
         ATTRIBUTES_FILE => ProjectAreaDto::GitAttributes,
         FEED_WORKFLOW_FILE => ProjectAreaDto::FeedWorkflow,
-        aeria_git::CHECK_WORKFLOW_FILE => ProjectAreaDto::CheckWorkflow,
+        aeria_git::GUARD_WORKFLOW_FILE => ProjectAreaDto::GuardWorkflow,
         _ if path.starts_with("fonts/") => ProjectAreaDto::FontFile,
         _ if path.starts_with("aeria-knowledge/") => ProjectAreaDto::Knowledge,
         _ => return None,
@@ -117,7 +120,7 @@ pub fn compare(
     };
     let size = after.or(before).map_or(0, |bytes| bytes.len() as u64);
     let details = match area {
-        ProjectAreaDto::FontFile | ProjectAreaDto::FeedWorkflow | ProjectAreaDto::CheckWorkflow => {
+        ProjectAreaDto::FontFile | ProjectAreaDto::FeedWorkflow | ProjectAreaDto::GuardWorkflow => {
             Some(Vec::new())
         }
         ProjectAreaDto::Terms => glossary_details(before, after),
@@ -125,6 +128,20 @@ pub fn compare(
         ProjectAreaDto::PackSettings
         | ProjectAreaDto::ProjectSettings
         | ProjectAreaDto::FontSettings => json_details(before, after),
+    };
+    // A file that does not read as its format is still text: show its lines.
+    let by_line = details.is_none()
+        && matches!(
+            area,
+            ProjectAreaDto::Terms
+                | ProjectAreaDto::PackSettings
+                | ProjectAreaDto::ProjectSettings
+                | ProjectAreaDto::FontSettings
+        );
+    let details = if by_line {
+        text_details(before, after)
+    } else {
+        details
     };
     let unreadable = details.is_none();
     let mut details = details.unwrap_or_default();
@@ -136,6 +153,7 @@ pub fn compare(
         kind,
         details,
         truncated,
+        by_line: by_line && !unreadable,
         unreadable,
         size,
     })
@@ -176,10 +194,14 @@ fn describe_entry(entry: &GlossaryEntry) -> String {
         text.push_str(" — ");
         text.push_str(note);
     }
-    if !entry.forbidden.is_empty() {
-        text.push_str(" (≠ ");
-        text.push_str(&entry.forbidden.join(", "));
+    if !entry.forms.is_empty() {
+        text.push_str(" (");
+        text.push_str(&entry.forms.join(", "));
         text.push(')');
+    }
+    if !entry.folder.is_empty() {
+        text.push_str(" · ");
+        text.push_str(&entry.folder);
     }
     text
 }
@@ -209,7 +231,9 @@ fn text_lines(bytes: Option<&[u8]>) -> Option<Vec<String>> {
     )
 }
 
-/// Added and removed lines from a longest-common-subsequence diff.
+/// Added and removed lines from a longest-common-subsequence diff; in a
+/// changed block the removed lines come before the added ones, as Git
+/// prints them.
 fn text_details(before: Option<&[u8]>, after: Option<&[u8]>) -> Option<Vec<ChangeDetailDto>> {
     let (old, new) = (text_lines(before)?, text_lines(after)?);
     // The table is quadratic; beyond this size only the file-level change
@@ -233,15 +257,7 @@ fn text_details(before: Option<&[u8]>, after: Option<&[u8]>) -> Option<Vec<Chang
         if i < old.len() && j < new.len() && old[i] == new[j] {
             i += 1;
             j += 1;
-        } else if j < new.len() && (i == old.len() || lengths[i][j + 1] >= lengths[i + 1][j]) {
-            details.push(ChangeDetailDto {
-                kind: ChangeKindDto::Added,
-                label: String::new(),
-                before: None,
-                after: Some(new[j].clone()),
-            });
-            j += 1;
-        } else {
+        } else if i < old.len() && (j == new.len() || lengths[i + 1][j] >= lengths[i][j + 1]) {
             details.push(ChangeDetailDto {
                 kind: ChangeKindDto::Removed,
                 label: String::new(),
@@ -249,6 +265,14 @@ fn text_details(before: Option<&[u8]>, after: Option<&[u8]>) -> Option<Vec<Chang
                 after: None,
             });
             i += 1;
+        } else {
+            details.push(ChangeDetailDto {
+                kind: ChangeKindDto::Added,
+                label: String::new(),
+                before: None,
+                after: Some(new[j].clone()),
+            });
+            j += 1;
         }
     }
     Some(details)
@@ -386,7 +410,7 @@ pub fn checkpoint_message(
             ProjectAreaDto::FontSettings | ProjectAreaDto::FontFile => "game fonts",
             ProjectAreaDto::GitAttributes => "Git attributes",
             ProjectAreaDto::FeedWorkflow => "feed workflow",
-            ProjectAreaDto::CheckWorkflow => "merge check workflow",
+            ProjectAreaDto::GuardWorkflow => "Aeria Guard workflow",
         };
         if !areas.contains(&name) {
             areas.push(name);
@@ -419,7 +443,7 @@ mod tests {
         assert!(is_project_path("aeria.json"));
         assert!(!is_project_path("fontsx"));
         assert!(is_project_path(".github/workflows/harmonia-feed.yml"));
-        assert!(is_project_path(".github/workflows/aeria-check.yml"));
+        assert!(is_project_path(".github/workflows/aeria-guard.yml"));
         assert!(!is_project_path(".github/workflows/other.yml"));
     }
 
@@ -448,7 +472,16 @@ mod tests {
         );
         assert!(compare(FONT_SETTINGS_FILE, Some(before), Some(before)).is_none());
         let broken = compare(PACK_SETTINGS_FILE, Some(b"{"), Some(before)).expect("change");
-        assert!(broken.unreadable);
+        assert!(broken.by_line && !broken.unreadable);
+        assert!(
+            broken
+                .details
+                .iter()
+                .any(|detail| detail.before.as_deref() == Some("{"))
+        );
+        let binary =
+            compare(PACK_SETTINGS_FILE, Some(&[0xff, 0xfe]), Some(before)).expect("change");
+        assert!(binary.unreadable && !binary.by_line);
     }
 
     #[test]
@@ -470,6 +503,16 @@ mod tests {
             ]
         );
         assert_eq!(change.details[1].after.as_deref(), Some("чокобо — птица"));
+        // A terms file of an older format is compared by line.
+        let older = "term,translation,forbidden\nGil,гил,\n".as_bytes();
+        let change = compare(TERMS_PATH, Some(older), Some(after)).expect("change");
+        assert!(change.by_line && !change.unreadable);
+        assert!(
+            change
+                .details
+                .iter()
+                .any(|detail| detail.before.as_deref() == Some("term,translation,forbidden"))
+        );
     }
 
     #[test]
@@ -489,8 +532,8 @@ mod tests {
         assert_eq!(
             lines,
             [
-                (ChangeKindDto::Added, None, Some("B")),
                 (ChangeKindDto::Removed, Some("b"), None),
+                (ChangeKindDto::Added, None, Some("B")),
                 (ChangeKindDto::Added, None, Some("d")),
             ]
         );

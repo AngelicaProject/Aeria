@@ -7,7 +7,9 @@ export type SheetDocumentTab = {
   /** The commit id of a commit tab. */
   commitId?: string;
   label: string;
+  /** Pinned tabs stay first and are not closed with the others. */
   pinned: boolean;
+  /** A preview is replaced by the next sheet or commit opened. */
   preview: boolean;
   dirty: boolean;
 };
@@ -18,10 +20,13 @@ export type DocumentTabsState = {
 };
 
 export type DocumentTabsAction =
-  | { type: "openSheet"; sheetName: string; pin?: boolean }
+  /** `keep` opens the sheet in a tab of its own instead of the preview. */
+  | { type: "openSheet"; sheetName: string; keep?: boolean }
   | { type: "openCommit"; commitId: string; label: string }
   | { type: "activate"; id: string }
-  | { type: "pin"; id: string }
+  /** Turns a preview into a tab of its own. */
+  | { type: "keep"; id: string }
+  | { type: "setPinned"; id: string; pinned: boolean }
   | { type: "setDirty"; id: string; dirty: boolean }
   | { type: "close"; id: string }
   | { type: "reorder"; id: string; beforeId: string | null };
@@ -36,8 +41,14 @@ export function documentIdForCommit(commitId: string): string {
   return `commit:${commitId}`;
 }
 
+/** Pinned tabs come first, each group in its own order. */
+function pinnedFirst(tabs: readonly SheetDocumentTab[]): SheetDocumentTab[] {
+  return [...tabs.filter((tab) => tab.pinned), ...tabs.filter((tab) => !tab.pinned)];
+}
+
+/** The tab that takes the place of a closed one in the tabs left: the next one, else the one before. */
 function selectNeighbor(tabs: readonly SheetDocumentTab[], closedIndex: number): string | null {
-  return tabs[closedIndex + 1]?.id ?? tabs[closedIndex - 1]?.id ?? null;
+  return tabs[closedIndex]?.id ?? tabs[closedIndex - 1]?.id ?? null;
 }
 
 export function reduceDocumentTabs(
@@ -49,8 +60,8 @@ export function reduceDocumentTabs(
       const id = documentIdForSheet(action.sheetName);
       const existing = state.tabs.find((tab) => tab.id === id);
       if (existing) {
-        const tabs = action.pin && !existing.pinned
-          ? state.tabs.map((tab) => tab.id === id ? { ...tab, pinned: true, preview: false } : tab)
+        const tabs = action.keep && existing.preview
+          ? state.tabs.map((tab) => tab.id === id ? { ...tab, preview: false } : tab)
           : state.tabs;
         return { tabs, activeId: id };
       }
@@ -60,12 +71,12 @@ export function reduceDocumentTabs(
         kind: "sheet",
         sheetName: action.sheetName,
         label: action.sheetName.split("/").at(-1) ?? action.sheetName,
-        pinned: Boolean(action.pin),
-        preview: !action.pin,
+        pinned: false,
+        preview: !action.keep,
         dirty: false,
       };
       const previewIndex = state.tabs.findIndex((candidate) => candidate.kind === "sheet" && candidate.preview && !candidate.pinned && !candidate.dirty);
-      if (previewIndex >= 0 && !action.pin) {
+      if (previewIndex >= 0 && !action.keep) {
         const tabs = [...state.tabs];
         tabs[previewIndex] = tab;
         return { tabs, activeId: id };
@@ -88,23 +99,28 @@ export function reduceDocumentTabs(
     }
     case "activate":
       return state.tabs.some((tab) => tab.id === action.id) ? { ...state, activeId: action.id } : state;
-    case "pin":
+    case "keep":
       return {
         ...state,
-        tabs: state.tabs.map((tab) => tab.id === action.id ? { ...tab, pinned: true, preview: false } : tab),
+        tabs: state.tabs.map((tab) => tab.id === action.id ? { ...tab, preview: false } : tab),
+      };
+    case "setPinned":
+      return {
+        ...state,
+        tabs: pinnedFirst(state.tabs.map((tab) => tab.id === action.id ? { ...tab, pinned: action.pinned, preview: false } : tab)),
       };
     case "setDirty":
       return {
         ...state,
         tabs: state.tabs.map((tab) => tab.id === action.id
-          ? { ...tab, dirty: action.dirty, pinned: action.dirty ? true : tab.pinned, preview: action.dirty ? false : tab.preview }
+          ? { ...tab, dirty: action.dirty, preview: action.dirty ? false : tab.preview }
           : tab),
       };
     case "close": {
       const index = state.tabs.findIndex((tab) => tab.id === action.id);
       if (index < 0) return state;
       const tabs = state.tabs.filter((tab) => tab.id !== action.id);
-      return { tabs, activeId: state.activeId === action.id ? selectNeighbor(tabs, Math.min(index, tabs.length - 1)) : state.activeId };
+      return { tabs, activeId: state.activeId === action.id ? selectNeighbor(tabs, index) : state.activeId };
     }
     case "reorder": {
       const fromIndex = state.tabs.findIndex((tab) => tab.id === action.id);
@@ -113,14 +129,32 @@ export function reduceDocumentTabs(
       const remaining = state.tabs.filter((tab) => tab.id !== action.id);
       const beforeIndex = action.beforeId === null ? remaining.length : remaining.findIndex((tab) => tab.id === action.beforeId);
       remaining.splice(beforeIndex < 0 ? remaining.length : beforeIndex, 0, moving);
-      return { ...state, tabs: remaining };
+      return { ...state, tabs: pinnedFirst(remaining) };
     }
   }
 }
 
+/**
+ * Closes tabs and says what becomes of the open sheet: when the next active
+ * tab is another sheet it opens (`open`); when the open sheet's tab closed
+ * and no sheet tab is active, no sheet stays open (`clear`). A commit tab
+ * leaves the sheet under it as it is.
+ */
+export function closeDocumentTabs(
+  state: DocumentTabsState,
+  ids: readonly string[],
+  openSheet: string | null,
+): { state: DocumentTabsState; open: string | null; clear: boolean } {
+  const next = ids.reduce((current, id) => reduceDocumentTabs(current, { type: "close", id }), state);
+  const active = next.tabs.find((tab) => tab.id === next.activeId);
+  const closesSheet = openSheet !== null && ids.includes(documentIdForSheet(openSheet));
+  if (active?.kind === "sheet") return { state: next, open: active.sheetName === openSheet ? null : active.sheetName, clear: false };
+  return { state: next, open: null, clear: closesSheet };
+}
+
 export const openPreviewTab = (state: DocumentTabsState, sheetName: string): DocumentTabsState =>
   reduceDocumentTabs(state, { type: "openSheet", sheetName });
-export const pinPreviewTab = (state: DocumentTabsState, id: string): DocumentTabsState =>
-  reduceDocumentTabs(state, { type: "pin", id });
+export const keepPreviewTab = (state: DocumentTabsState, id: string): DocumentTabsState =>
+  reduceDocumentTabs(state, { type: "keep", id });
 export const closeDocumentTab = (state: DocumentTabsState, id: string): DocumentTabsState =>
   reduceDocumentTabs(state, { type: "close", id });

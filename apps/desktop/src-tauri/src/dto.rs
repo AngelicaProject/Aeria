@@ -425,7 +425,7 @@ mod tests {
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct IssueDto {
-    /// `lineBreak`, `structure`, `forbiddenTerm`, `mark`, `mixedAlphabets`,
+    /// `lineBreak`, `structure`, `mark`, `mixedAlphabets`,
     /// `bothGenders`, `repeatedWord`, `termNotUsed`, `genderNotVaried`,
     /// `genderInOtherLanguages`, `machinePhrasing`, `staleTermException`,
     /// `labelTooLong`, `nameTooLong`, or `other`.
@@ -439,7 +439,6 @@ pub struct IssueDto {
     pub message: String,
     pub term: Option<String>,
     pub translation: Option<String>,
-    pub variant: Option<String>,
     /// The word with mixed alphabets, the form with both genders, the word
     /// written twice, or the mark as `U+0301`.
     pub text: Option<String>,
@@ -465,17 +464,6 @@ impl From<&aeria_po::Issue> for IssueDto {
             },
             aeria_po::Issue::Structure(_) => Self {
                 kind: "structure".to_owned(),
-                ..base
-            },
-            aeria_po::Issue::ForbiddenTerm {
-                term,
-                translation,
-                variant,
-            } => Self {
-                kind: "forbiddenTerm".to_owned(),
-                term: Some(term.clone()),
-                translation: Some(translation.clone()),
-                variant: Some(variant.clone()),
                 ..base
             },
             aeria_po::Issue::Mark(mark) => Self {

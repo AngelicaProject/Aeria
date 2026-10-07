@@ -8,30 +8,29 @@ pub const MAX_GLOSSARY_BYTES: u64 = 8 * 1024 * 1024;
 /// Most entries read.
 pub const MAX_GLOSSARY_ENTRIES: usize = 100_000;
 
-const COLUMNS: [&str; 6] = [
-    "term",
-    "translation",
-    "note",
-    "forbidden",
-    "settled",
-    "case",
-];
+const COLUMNS: [&str; 6] = ["term", "translation", "forms", "note", "folder", "case"];
 const TERMS_FILE: &str = "aeria-knowledge/terms.csv";
 
 /// One term.
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GlossaryEntry {
+    /// The term's headword, which names it: in term exceptions, and where
+    /// it is shown.
     pub term: String,
     pub translation: String,
+    /// Other forms of the term in the source, matched as the term:
+    /// `linkshells` beside `linkshell`, `the Scions` beside `Scions of the
+    /// Seventh Dawn`.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub forms: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
-    /// Translations that must not be used for the term.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub forbidden: Vec<String>,
-    /// A person decided the term; agents do not change it without asking.
-    #[serde(skip_serializing_if = "std::ops::Not::not")]
-    pub settled: bool,
+    /// The folder the term is filed in, as its names from the top joined
+    /// with `/`; empty at the top. Only for people: it never changes how
+    /// the term is used.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub folder: String,
     /// The term matches only with its case as written, but for a capital
     /// first letter: `the Maelstrom` matches `The Maelstrom`, not
     /// `the maelstrom`.
@@ -57,6 +56,26 @@ pub struct Glossary {
     finder: std::sync::OnceLock<Finder>,
 }
 
+impl GlossaryEntry {
+    /// The forms of the term in the source: its headword, then its other
+    /// forms.
+    pub fn all_forms(&self) -> impl Iterator<Item = &str> {
+        std::iter::once(self.term.as_str()).chain(self.forms.iter().map(String::as_str))
+    }
+}
+
+/// A folder path in its canonical form: its names trimmed, without empty
+/// ones, joined with `/`, so ` Lore / Places/` is `Lore/Places`.
+#[must_use]
+pub fn folder_path(folder: &str) -> String {
+    folder
+        .split('/')
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
 impl PartialEq for Glossary {
     fn eq(&self, other: &Self) -> bool {
         self.entries == other.entries && self.diagnostics == other.diagnostics
@@ -65,12 +84,14 @@ impl PartialEq for Glossary {
 
 impl Eq for Glossary {}
 
-/// The lowercase terms of a glossary in one automaton, which finds in a
-/// lowercase text every term that may occur, overlapping ones too. Most
+/// The lowercase forms of a glossary's terms in one automaton, which finds
+/// in a lowercase text every term that may occur, overlapping ones too. Most
 /// strings have no term, and a string's terms are then matched one by one.
 #[derive(Clone, Debug)]
 struct Finder {
     automaton: Option<aho_corasick::AhoCorasick>,
+    /// The entry of each pattern of the automaton.
+    owners: Vec<usize>,
     /// The entries the automaton was made for: entries added since are
     /// matched one by one.
     entries: usize,
@@ -89,12 +110,25 @@ impl Glossary {
     /// Indexes of the entries whose term may occur in `lower`, the lowercase
     /// text, in order.
     fn candidates(&self, lower: &str) -> Vec<usize> {
-        let finder = self.finder.get_or_init(|| Finder {
-            automaton: aho_corasick::AhoCorasick::builder()
-                .match_kind(aho_corasick::MatchKind::Standard)
-                .build(self.entries.iter().map(|entry| entry.term.to_lowercase()))
-                .ok(),
-            entries: self.entries.len(),
+        let finder = self.finder.get_or_init(|| {
+            let (owners, patterns): (Vec<usize>, Vec<String>) = self
+                .entries
+                .iter()
+                .enumerate()
+                .flat_map(|(index, entry)| {
+                    entry
+                        .all_forms()
+                        .map(move |form| (index, form.to_lowercase()))
+                })
+                .unzip();
+            Finder {
+                automaton: aho_corasick::AhoCorasick::builder()
+                    .match_kind(aho_corasick::MatchKind::Standard)
+                    .build(patterns)
+                    .ok(),
+                owners,
+                entries: self.entries.len(),
+            }
         });
         let Some(automaton) = finder
             .automaton
@@ -105,7 +139,7 @@ impl Glossary {
         };
         let mut found: Vec<usize> = automaton
             .find_overlapping_iter(lower)
-            .map(|found| found.pattern().as_usize())
+            .map(|found| finder.owners[found.pattern().as_usize()])
             .collect();
         found.sort_unstable();
         found.dedup();
@@ -126,7 +160,7 @@ fn glossary_error(message: impl Into<String>) -> GlossaryError {
     }
 }
 
-/// Whether a `settled` or `case` field is set.
+/// Whether a `case` field is set.
 fn is_yes(value: &str) -> bool {
     matches!(value.to_ascii_lowercase().as_str(), "yes" | "true" | "1")
 }
@@ -197,10 +231,24 @@ pub fn parse_glossary(bytes: &[u8]) -> Result<Glossary, GlossaryError> {
             reject("the term and its translation must not be empty".to_owned());
             continue;
         }
-        if !seen.insert(term.to_lowercase()) {
-            reject(format!("the term {term:?} is already defined above"));
+        let forms: Vec<String> = field(2)
+            .split(';')
+            .map(str::trim)
+            .filter(|form| !form.is_empty())
+            .map(str::to_owned)
+            .collect();
+        let mut own = std::collections::HashSet::new();
+        if let Some(repeated) = std::iter::once(term)
+            .chain(forms.iter().map(String::as_str))
+            .find(|form| {
+                let form = form.to_lowercase();
+                seen.contains(&form) || !own.insert(form)
+            })
+        {
+            reject(format!("the term {repeated:?} is already defined above"));
             continue;
         }
+        seen.extend(own);
         if glossary.entries.len() >= MAX_GLOSSARY_ENTRIES {
             reject(format!(
                 "only the first {MAX_GLOSSARY_ENTRIES} entries are used"
@@ -210,16 +258,11 @@ pub fn parse_glossary(bytes: &[u8]) -> Result<Glossary, GlossaryError> {
         glossary.entries.push(GlossaryEntry {
             term: term.to_owned(),
             translation: translation.to_owned(),
-            note: Some(field(2))
+            forms,
+            note: Some(field(3))
                 .filter(|note| !note.is_empty())
                 .map(str::to_owned),
-            forbidden: field(3)
-                .split(';')
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .map(str::to_owned)
-                .collect(),
-            settled: is_yes(field(4)),
+            folder: folder_path(field(4)),
             match_case: is_yes(field(5)),
         });
     }
@@ -243,13 +286,13 @@ pub fn write_glossary(entries: &[GlossaryEntry]) -> String {
     };
     let _ = writer.write_record(&COLUMNS[..columns]);
     for entry in entries {
-        let forbidden = entry.forbidden.join("; ");
+        let forms = entry.forms.join("; ");
         let record = [
             entry.term.as_str(),
             entry.translation.as_str(),
+            forms.as_str(),
             entry.note.as_deref().unwrap_or_default(),
-            forbidden.as_str(),
-            if entry.settled { "yes" } else { "" },
+            entry.folder.as_str(),
             if entry.match_case { "yes" } else { "" },
         ];
         let _ = writer.write_record(&record[..columns]);
@@ -392,17 +435,56 @@ impl<'a> Folded<'a> {
     }
 }
 
-/// How many times `entry`'s term occurs in `text`.
-fn count_term(text: &str, entry: &GlossaryEntry) -> usize {
-    Folded::new(text).spans(&entry.term, entry.match_case).len()
+/// The byte spans of `folded` where a form of `entry` occurs, in order.
+fn entry_spans(folded: &Folded<'_>, entry: &GlossaryEntry) -> Vec<std::ops::Range<usize>> {
+    let mut spans: Vec<std::ops::Range<usize>> = entry
+        .all_forms()
+        .flat_map(|form| folded.spans(form, entry.match_case))
+        .collect();
+    spans.sort_by_key(|span| (span.start, span.end));
+    spans.dedup();
+    spans
 }
 
-/// Whether the strings of `exceptions` name `entry`'s term, ignoring case.
+/// Whether `span` lies inside a longer span of `spans`.
+fn covered(span: &std::ops::Range<usize>, spans: &[std::ops::Range<usize>]) -> bool {
+    spans.iter().any(|longer| {
+        longer.len() > span.len() && longer.start <= span.start && span.end <= longer.end
+    })
+}
+
+/// How many occurrences sorted `spans` are: spans that overlap, such as
+/// `the Scions` and `Scions of the Seventh Dawn` in `the Scions of the
+/// Seventh Dawn`, are one.
+fn count_spans<'a>(spans: impl IntoIterator<Item = &'a std::ops::Range<usize>>) -> usize {
+    let mut count = 0;
+    let mut end = 0;
+    for span in spans {
+        if count == 0 || span.start >= end {
+            count += 1;
+            end = span.end;
+        } else {
+            end = end.max(span.end);
+        }
+    }
+    count
+}
+
+/// How many times `entry`'s term occurs in `text`, in any of its forms:
+/// forms that overlap are one occurrence.
+fn count_term(text: &str, entry: &GlossaryEntry) -> usize {
+    count_spans(&entry_spans(&Folded::new(text), entry))
+}
+
+/// Whether the strings of `exceptions` name `entry`'s term, by any of its
+/// forms, ignoring case.
 fn is_exception(entry: &GlossaryEntry, exceptions: &[String]) -> bool {
-    let term = entry.term.to_lowercase();
-    exceptions
-        .iter()
-        .any(|exception| exception.to_lowercase() == term)
+    exceptions.iter().any(|exception| {
+        let exception = exception.to_lowercase();
+        entry
+            .all_forms()
+            .any(|form| form.to_lowercase() == exception)
+    })
 }
 
 /// Letters an inflected ending replaces at the end of a word: vowels and
@@ -480,57 +562,11 @@ fn contains_inflected(target: &str, translation: &str) -> bool {
     })
 }
 
-/// How many times `translation` occurs in `target` with each of its words
-/// as written or inflected, in order: `Потомков Седьмой Зари` is one use of
-/// `Потомки Седьмой Зари`.
-fn count_inflected(target: &str, translation: &str) -> usize {
-    let stems: Vec<String> = words(translation)
-        .iter()
-        .map(|word| stem(word).to_owned())
-        .collect();
-    if stems.is_empty() {
-        return 0;
-    }
-    words(target)
-        .windows(stems.len())
-        .filter(|window| {
-            window
-                .iter()
-                .zip(&stems)
-                .all(|(word, stem)| inflects(word, stem))
-        })
-        .count()
-}
-
-/// Whether `target` uses a forbidden variant: as written, or, for a variant
-/// of words of at least four letters, in an inflected form (`эфироит` also
-/// forbids `эфироита`). A variant with other characters (`призыв.`) or a
-/// shorter word (`нин`) matches only as written.
-fn contains_variant(target: &str, variant: &str) -> bool {
-    if contains_term(target, variant) {
-        return true;
-    }
-    if variant.chars().any(|c| !is_word(c) && !c.is_whitespace()) {
-        return false;
-    }
-    let parts = words(variant);
-    if parts.is_empty() || parts.iter().any(|part| part.chars().count() < 4) {
-        return false;
-    }
-    let stems: Vec<&str> = parts.iter().map(|part| stem(part)).collect();
-    let target = words(target);
-    target.windows(stems.len()).any(|window| {
-        window
-            .iter()
-            .zip(&stems)
-            .all(|(word, stem)| inflects(word, stem))
-    })
-}
-
 impl Glossary {
-    /// Entries whose term occurs in `text`, each with how many times. An
-    /// occurrence inside an occurrence of a longer term is that term's
-    /// alone: `Scions of the Seventh Dawn` is not also `Scions`.
+    /// Entries whose term occurs in `text`, in any of its forms, each with
+    /// how many times. An occurrence inside an occurrence of a longer term
+    /// is that term's alone: `Scions of the Seventh Dawn` is not also
+    /// `Scions`; forms of one term that overlap are one occurrence.
     fn occurrences(&self, text: &str) -> Vec<(&GlossaryEntry, usize)> {
         let text = text_of(text);
         let folded = Folded::new(&text);
@@ -538,26 +574,17 @@ impl Glossary {
             .candidates(&folded.lower)
             .into_iter()
             .filter_map(|index| self.entries.get(index))
-            .map(|entry| (entry, folded.spans(&entry.term, entry.match_case)))
+            .map(|entry| (entry, entry_spans(&folded, entry)))
             .filter(|(_, spans)| !spans.is_empty())
             .collect();
         found
             .iter()
-            .enumerate()
-            .filter_map(|(index, (entry, spans))| {
-                let own = spans
-                    .iter()
-                    .filter(|span| {
-                        !found.iter().enumerate().any(|(other, (_, longer))| {
-                            other != index
-                                && longer.iter().any(|longer| {
-                                    longer.len() > span.len()
-                                        && longer.start <= span.start
-                                        && span.end <= longer.end
-                                })
-                        })
-                    })
-                    .count();
+            .filter_map(|(entry, spans)| {
+                let own = count_spans(
+                    spans
+                        .iter()
+                        .filter(|span| !found.iter().any(|(_, longer)| covered(span, longer))),
+                );
                 (own > 0).then_some((*entry, own))
             })
             .collect()
@@ -596,33 +623,18 @@ impl Glossary {
             .collect()
     }
 
-    /// The entry of a term, ignoring case.
+    /// The entry of a term by any of its forms, ignoring case.
     #[must_use]
     pub fn find(&self, term: &str) -> Option<&GlossaryEntry> {
         let term = term.to_lowercase();
         self.entries
             .iter()
-            .find(|entry| entry.term.to_lowercase() == term)
-    }
-
-    /// Forbidden variants a translation uses for terms of its source, each
-    /// with its entry, but for the terms of `exceptions`, while a term is
-    /// translated fewer times than the source has it. A translation with one
-    /// is wrong.
-    #[must_use]
-    pub fn forbidden_variants<'a>(
-        &'a self,
-        source: &str,
-        target: &str,
-        exceptions: &[String],
-    ) -> Vec<(&'a GlossaryEntry, &'a str)> {
-        self.review(source, target, exceptions).forbidden
+            .find(|entry| entry.all_forms().any(|form| form.to_lowercase() == term))
     }
 
     /// What the glossary finds in a translation of `source`, but for the
     /// terms of `exceptions`, with the terms of the source found once: see
-    /// [`Self::forbidden_variants`], [`Self::unused_terms`], and
-    /// [`Self::stale_exceptions`].
+    /// [`Self::unused_terms`] and [`Self::stale_exceptions`].
     #[must_use]
     pub fn review<'a, 'e>(
         &'a self,
@@ -636,17 +648,6 @@ impl Glossary {
         for (entry, count) in &found {
             if is_exception(entry, exceptions) {
                 continue;
-            }
-            // A forbidden variant is a problem while the term is not
-            // translated as often as the source has it: once every use is
-            // the term's translation, the variant is another word, such as
-            // `наследник` for an heir beside `Потомки` for the Scions.
-            if count_inflected(&target, &entry.translation) < *count {
-                for forbidden in &entry.forbidden {
-                    if contains_variant(&target, forbidden) {
-                        review.forbidden.push((entry, forbidden.as_str()));
-                    }
-                }
             }
             if count_term(&target, entry) < *count
                 && !contains_inflected(&target, &entry.translation)
@@ -664,16 +665,6 @@ impl Glossary {
             .map(String::as_str)
             .collect();
         review
-    }
-
-    /// Forbidden variants a translation uses for terms of its source, as
-    /// messages. A translation with one is wrong.
-    #[must_use]
-    pub fn forbidden_in(&self, source: &str, target: &str) -> Vec<String> {
-        self.forbidden_variants(source, target, &[])
-            .into_iter()
-            .map(|(entry, forbidden)| forbidden_message(entry, forbidden))
-            .collect()
     }
 
     /// Entries of terms of the source whose translation does not seem to be
@@ -715,21 +706,10 @@ impl Glossary {
 /// What [`Glossary::review`] finds in a translation.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct TermReview<'a, 'e> {
-    /// Forbidden variants the translation uses, with their entries.
-    pub forbidden: Vec<(&'a GlossaryEntry, &'a str)>,
     /// Terms of the source whose translation does not seem to be used.
     pub unused: Vec<&'a GlossaryEntry>,
     /// Exceptions that name no term of the source.
     pub stale: Vec<&'e str>,
-}
-
-/// The message of a forbidden variant a translation uses.
-#[must_use]
-pub fn forbidden_message(entry: &GlossaryEntry, forbidden: &str) -> String {
-    format!(
-        "the terms forbid {forbidden:?} for {:?}; use {:?}",
-        entry.term, entry.translation
-    )
 }
 
 /// The message of a term whose translation does not seem to be used.
@@ -766,16 +746,26 @@ mod tests {
 
     #[test]
     fn rows_are_read_and_invalid_rows_reported() {
-        let csv = "\u{feff}translation,term,forbidden,settled\nЭфир,Aether,Этер; Эфиръ,yes\n,Empty,,\nКристалл,Crystal,,\nКристал,crystal,,\n\n\"Мудрец, старший\",\"Sage, elder\",,\n";
+        let csv = "\u{feff}translation,term,forms,folder,case\nЭфир,Aether,aethers; ,Lore / Magic/,yes\n,Empty,,,\nКристалл,Crystal,,,\nКристал,crystal,,,\n\n\"Мудрец, старший\",\"Sage, elder\",,,\nЭфиры,Aetherial,AETHERS,,\nЛинк,linkshell,linkshells; Linkshell,,\n";
         let glossary = parse_glossary(csv.as_bytes()).expect("glossary");
         assert_eq!(glossary.entries.len(), 3);
-        assert_eq!(glossary.entries[0].forbidden, vec!["Этер", "Эфиръ"]);
-        assert!(glossary.entries[0].settled);
-        assert!(!glossary.entries[1].settled);
+        assert_eq!(glossary.entries[0].forms, vec!["aethers"]);
+        assert_eq!(glossary.entries[0].folder, "Lore/Magic");
+        assert!(glossary.entries[0].match_case);
+        assert!(!glossary.entries[1].match_case);
         assert_eq!(glossary.entries[2].term, "Sage, elder");
-        assert_eq!(glossary.diagnostics.len(), 2);
-        assert_eq!(glossary.diagnostics[0].line, 3);
+        let lines: Vec<u64> = glossary.diagnostics.iter().map(|d| d.line).collect();
+        assert_eq!(lines, [3, 5, 8, 9]);
         assert!(glossary.diagnostics[1].message.contains("already defined"));
+        assert!(glossary.diagnostics[2].message.contains("AETHERS"));
+        assert!(glossary.diagnostics[3].message.contains("Linkshell"));
+    }
+
+    #[test]
+    fn a_folder_path_is_its_trimmed_names_joined_with_slashes() {
+        assert_eq!(folder_path(" Lore / Places/ "), "Lore/Places");
+        assert_eq!(folder_path("//"), "");
+        assert_eq!(folder_path("Лор//Места"), "Лор/Места");
     }
 
     #[test]
@@ -783,6 +773,7 @@ mod tests {
         assert!(parse_glossary(b"term,meaning\na,b\n").is_err());
         assert!(parse_glossary(b"term\na\n").is_err());
         assert!(parse_glossary(b"term,term,translation\n").is_err());
+        assert!(parse_glossary(b"term,translation,forbidden\n").is_err());
         assert!(
             parse_glossary(b"term,translation\n")
                 .expect("empty")
@@ -795,16 +786,17 @@ mod tests {
     fn the_canonical_writer_round_trips() {
         let entries = vec![
             GlossaryEntry {
+                forms: vec!["aethers".to_owned(), "the aether".to_owned()],
                 note: Some("line \"one\"".to_owned()),
-                forbidden: vec!["Этер".to_owned()],
-                settled: true,
+                folder: "Lore/Magic".to_owned(),
                 match_case: true,
                 ..entry("Aether", "Эфир")
             },
             entry("Sage, elder", "Мудрец"),
         ];
         let text = write_glossary(&entries);
-        assert!(text.starts_with("term,translation,note,forbidden,settled,case\n"));
+        assert!(text.starts_with("term,translation,forms,note,folder,case\n"));
+        assert!(text.contains(",aethers; the aether,"));
         assert!(!text.contains('\r'));
         assert_eq!(
             parse_glossary(text.as_bytes()).expect("parse").entries,
@@ -835,10 +827,7 @@ mod tests {
     #[test]
     fn terms_are_words_of_the_text_never_of_macros() {
         let glossary = Glossary {
-            entries: vec![GlossaryEntry {
-                forbidden: vec!["Этерит".to_owned()],
-                ..entry("aetheryte", "эфирит")
-            }],
+            entries: vec![entry("aetheryte", "эфирит")],
             ..Glossary::default()
         };
         let source = r#"Return to <noun-en PlaceName 2 "<sheet Aetheryte $n1 8>" 2 1>?"#;
@@ -867,119 +856,79 @@ mod tests {
     }
 
     #[test]
-    fn checks_accept_inflections_and_find_forbidden_variants() {
-        let glossary = Glossary {
-            entries: vec![GlossaryEntry {
-                forbidden: vec!["Этер".to_owned()],
-                ..entry("Aether", "Эфир")
-            }],
-            ..Glossary::default()
-        };
+    fn checks_accept_inflections_and_tell_a_term_from_a_similar_word() {
+        let glossary = Glossary::new(vec![
+            entry("Aether", "Эфир"),
+            entry("aetheryte", "эфирит"),
+            entry("conjurer", "чародей"),
+        ]);
         assert!(
             glossary
                 .missing_in("The aether flows", "Эфиром полон мир")
                 .is_empty()
         );
         assert_eq!(
-            glossary
-                .forbidden_in("The aether flows", "Этер течёт")
-                .len(),
-            1
-        );
-        assert_eq!(
             glossary.missing_in("The aether flows", "Этер течёт").len(),
             1
         );
-        assert!(glossary.forbidden_in("Nothing here", "Этер").is_empty());
-    }
-
-    #[test]
-    fn stems_tell_a_term_from_a_similar_word_and_inflected_variants_are_forbidden() {
-        let glossary = Glossary {
-            entries: vec![
-                GlossaryEntry {
-                    forbidden: vec!["эфироит".to_owned(), "нин".to_owned()],
-                    ..entry("aetheryte", "эфирит")
-                },
-                GlossaryEntry {
-                    forbidden: vec!["заклинатель".to_owned(), "повелитель зверей".to_owned()],
-                    ..entry("conjurer", "чародей")
-                },
-            ],
-            ..Glossary::default()
-        };
         let source = "Limsa Lominsa Aetheryte Plaza";
         // «эфироита» shares «эфир» with «эфирит», but is another word.
         assert_eq!(glossary.missing_in(source, "Площадь эфироита").len(), 1);
         assert!(glossary.missing_in(source, "Площадь эфирита").is_empty());
-        assert_eq!(glossary.forbidden_in(source, "Площадь эфироита").len(), 1);
-        assert!(glossary.forbidden_in(source, "Площадь эфирита").is_empty());
-        // Short variants match only as written: «нина» is not «нин».
-        assert!(glossary.forbidden_in(source, "Нина у эфирита").is_empty());
-        let conjurer = "The conjurer waits";
-        assert_eq!(glossary.forbidden_in(conjurer, "Ждёт заклинателя").len(), 1);
-        assert_eq!(
+        assert!(
             glossary
-                .forbidden_in(conjurer, "Повелителя зверей нет")
-                .len(),
-            1
-        );
-        assert!(glossary.missing_in(conjurer, "Чародея ждут").is_empty());
-        // A name that starts with a forbidden variant is another word.
-        let aether = Glossary::new(vec![GlossaryEntry {
-            forbidden: vec!["этер".to_owned()],
-            ..entry("aether", "эфир")
-        }]);
-        assert!(
-            aether
-                .forbidden_in("The aether of Etheirys", "Эфир Этериса")
+                .missing_in("The conjurer waits", "Чародея ждут")
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn every_form_is_the_term() {
+        let glossary = Glossary::new(vec![
+            GlossaryEntry {
+                forms: vec!["linkshells".to_owned()],
+                ..entry("linkshell", "линкшелл")
+            },
+            GlossaryEntry {
+                forms: vec!["the Scions".to_owned(), "Scions".to_owned()],
+                ..entry("Scions of the Seventh Dawn", "Потомки Седьмой Зари")
+            },
+        ]);
+        let terms = |text: &str| -> Vec<String> {
+            glossary
+                .matches(text)
+                .iter()
+                .map(|entry| entry.term.clone())
+                .collect()
+        };
+        assert_eq!(terms("Two linkshells"), ["linkshell"]);
+        assert_eq!(terms("Ask the Scions"), ["Scions of the Seventh Dawn"]);
+        assert!(terms("Linkshellers").is_empty());
+        // A form inside a longer form is one occurrence.
+        let scions = &glossary.entries[1];
+        assert_eq!(count_term("The Scions of the Seventh Dawn", scions), 1);
+        assert_eq!(count_term("Scions and the Scions", scions), 2);
         assert!(
-            aether
-                .forbidden_in("The aether of Etheirys", "Эфир Этерисе")
-                .is_empty()
-        );
-        assert_eq!(
-            aether.forbidden_in("The aether flows", "Этера много").len(),
-            1
-        );
-        assert_eq!(
-            aether
-                .forbidden_in("The aether flows", "Этером полон")
-                .len(),
-            1
-        );
-        // Once the term is translated wherever the source has it, a variant
-        // is another word: an heir beside the Scions.
-        let scions = Glossary::new(vec![GlossaryEntry {
-            forbidden: vec!["Наследники".to_owned()],
-            ..entry("Scions", "Потомки")
-        }]);
-        let source = "The Scions welcome the heir.";
-        assert!(
-            scions
-                .forbidden_in(source, "Потомки встречают наследника.")
+            glossary
+                .missing_in("Join the Scions", "Вступите к Потомкам Седьмой Зари")
                 .is_empty()
         );
         assert_eq!(
-            scions
-                .forbidden_in(source, "Наследники встречают наследника.")
-                .len(),
+            glossary.missing_in("Your linkshells", "Ваши каналы").len(),
             1
         );
-        assert_eq!(
-            scions
-                .forbidden_in("Scions and Scions", "Потомки и Наследники")
-                .len(),
-            1,
-            "one use of two"
+        assert!(glossary.find("LINKSHELLS").is_some());
+        // An exception may name the term by any of its forms.
+        let exceptions = vec!["linkshells".to_owned()];
+        assert!(
+            glossary
+                .unused_terms("A linkshell", "Связь", &exceptions)
+                .is_empty()
         );
         assert!(
             glossary
-                .forbidden_in(conjurer, "Заклинательная сила")
-                .is_empty(),
-            "more than an ending"
+                .stale_exceptions("A linkshell", &exceptions)
+                .is_empty()
         );
     }
 
@@ -1044,22 +993,13 @@ mod tests {
     #[test]
     fn exceptions_lift_a_term_and_stale_ones_are_found() {
         let glossary = Glossary {
-            entries: vec![GlossaryEntry {
-                forbidden: vec!["водоворот".to_owned()],
-                ..entry("Maelstrom", "Мальстрём")
-            }],
+            entries: vec![entry("Maelstrom", "Мальстрём")],
             ..Glossary::default()
         };
         let source = "Maelstrom of Despair";
         let target = "Водоворот отчаяния";
-        assert_eq!(glossary.forbidden_variants(source, target, &[]).len(), 1);
         assert_eq!(glossary.unused_terms(source, target, &[]).len(), 1);
         let exceptions = vec!["maelstrom".to_owned()];
-        assert!(
-            glossary
-                .forbidden_variants(source, target, &exceptions)
-                .is_empty()
-        );
         assert!(
             glossary
                 .unused_terms(source, target, &exceptions)
@@ -1072,9 +1012,9 @@ mod tests {
             ["Maelstrom", "Ishgard"]
         );
         let review = glossary.review(source, target, &stale);
-        assert!(review.forbidden.is_empty() && review.unused.is_empty());
+        assert!(review.unused.is_empty());
         assert_eq!(review.stale, ["Ishgard"]);
         let review = glossary.review(source, target, &[]);
-        assert_eq!((review.forbidden.len(), review.unused.len()), (1, 1));
+        assert_eq!(review.unused.len(), 1);
     }
 }

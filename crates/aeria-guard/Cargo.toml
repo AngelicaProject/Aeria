@@ -1,15 +1,15 @@
 [package]
-name = "aeria-check"
+name = "aeria-guard"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 publish.workspace = true
 repository.workspace = true
-description = "Validates an Aeria translation repository before a merge, for CI."
+description = "Guards an Aeria translation repository: checks a change and summarizes it for review, in CI."
 
 [[bin]]
-name = "aeria-check"
+name = "aeria-guard"
 path = "src/main.rs"
 
 [dependencies]

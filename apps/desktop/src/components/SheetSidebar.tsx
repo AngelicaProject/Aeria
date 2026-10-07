@@ -1,5 +1,7 @@
+import { shortcutKey } from "../shortcuts";
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { NameSheetMark, useNameSheets } from "../ui/NameSheetMark";
+import { RightClickMenu, copyText } from "../ui/primitives/RightClickMenu";
 import { UiIcon } from "../ui/primitives/UiIcon";
 import { useI18n } from "../ui/i18n";
 import type { ProjectSheetDto, SheetProgressDto } from "../types";
@@ -30,7 +32,8 @@ type SheetSidebarProps = {
   quickFindSignal?: number;
   revealSignal?: number;
   collapseSignal?: number;
-  onSelect: (sheetName: string, pin?: boolean) => void;
+  /** `keep` opens the sheet in a tab of its own instead of the preview. */
+  onSelect: (sheetName: string, keep?: boolean) => void;
   progress?: ReadonlyMap<string, SheetProgressDto>;
 };
 
@@ -132,7 +135,7 @@ export const SheetSidebar = memo(function SheetSidebar({
   useEffect(() => {
     if (!active) return;
     function handleKeyDown(event: KeyboardEvent) {
-      if (event.ctrlKey && event.key.toLocaleLowerCase() === "f") {
+      if (event.ctrlKey && shortcutKey(event) === "f") {
         event.preventDefault();
         onOpenFilter();
       } else if (event.key === "Escape" && filterOpen) {
@@ -140,8 +143,8 @@ export const SheetSidebar = memo(function SheetSidebar({
         else onFilterOpenChange(false);
       }
     }
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
   }, [active, filterOpen, onFilterOpenChange, onOpenFilter, query]);
 
   useEffect(() => {
@@ -309,31 +312,45 @@ export const SheetSidebar = memo(function SheetSidebar({
                 const count = entry.sheet.translatableCellCount;
                 const sheetProgress = progress?.get(entry.sheet.name);
                 const share = sheetProgress && count > 0 ? Math.min(1, sheetProgress.translated / count) : 0;
+                const sheetName = entry.sheet.name;
                 return (
-                  <button
-                    ref={selected ? selectedRef : undefined}
-                    className={`${selected ? "sheet-tree-row leaf-row active" : "sheet-tree-row leaf-row"}${count === 0 ? " is-empty-sheet" : ""}${share >= 1 ? " is-complete" : ""}`}
-                    style={treeRowStyle(depth)}
-                    type="button"
-                    role="treeitem"
-                    aria-selected={selected}
-                    aria-level={depth + 1}
-                    aria-posinset={position.position}
-                    aria-setsize={position.size}
+                  <RightClickMenu
+                    key={sheetName}
                     disabled={disabled}
-                    key={entry.sheet.name}
-                    onClick={() => onSelect(entry.sheet.name)}
-                    onDoubleClick={() => onSelect(entry.sheet.name, true)}
-                    title={[entry.sheet.name, t("sheets.sourceRows", { count: entry.sheet.rowCount }), ...(sheetProgress ? [t("sheets.translatedOf", { translated: sheetProgress.translated, total: count })] : [])].join("\n")}
+                    entries={() => [
+                      { id: "open", icon: "arrowRight", label: t("common.open"), run: () => onSelect(sheetName) },
+                      { id: "openInTab", icon: "plus", label: t("sheets.menu.openInTab"), run: () => onSelect(sheetName, true) },
+                      { id: "separator", separator: true },
+                      { id: "copyName", icon: "copy", label: t("tabs.menu.copyName"), run: () => copyText(sheetName) },
+                    ]}
                   >
-                    <span className="sheet-tree-icon sheet-tree-sheet-icon" aria-hidden="true"><UiIcon icon="table2" size="sm" /></span>
-                    <span className="sheet-tree-name">{entry.name}</span>
-                    {nameSheets.has(entry.sheet.name) ? <NameSheetMark /> : null}
-                    <small className="sheet-tree-count">
-                      {formatSheetCount(count)}
-                    </small>
-                    {share > 0 ? <span className="sheet-tree-progress" aria-hidden="true"><span style={{ width: `${share * 100}%` }} /></span> : null}
-                  </button>
+                    <button
+                      ref={selected ? selectedRef : undefined}
+                      className={`${selected ? "sheet-tree-row leaf-row active" : "sheet-tree-row leaf-row"}${count === 0 ? " is-empty-sheet" : ""}${share >= 1 ? " is-complete" : ""}`}
+                      style={treeRowStyle(depth)}
+                      type="button"
+                      role="treeitem"
+                      aria-selected={selected}
+                      aria-level={depth + 1}
+                      aria-posinset={position.position}
+                      aria-setsize={position.size}
+                      disabled={disabled}
+                      onClick={() => onSelect(entry.sheet.name)}
+                      onDoubleClick={() => onSelect(entry.sheet.name, true)}
+                    // A middle click opens the sheet in a tab of its own, as in a browser.
+                    onMouseDown={(event) => { if (event.button === 1) event.preventDefault(); }}
+                    onAuxClick={(event) => { if (event.button === 1) onSelect(entry.sheet.name, true); }}
+                      title={[entry.sheet.name, t("sheets.sourceRows", { count: entry.sheet.rowCount }), ...(sheetProgress ? [t("sheets.translatedOf", { translated: sheetProgress.translated, total: count })] : [])].join("\n")}
+                    >
+                      <span className="sheet-tree-icon sheet-tree-sheet-icon" aria-hidden="true"><UiIcon icon="table2" size="sm" /></span>
+                      <span className="sheet-tree-name">{entry.name}</span>
+                      {nameSheets.has(entry.sheet.name) ? <NameSheetMark /> : null}
+                      <small className="sheet-tree-count">
+                        {formatSheetCount(count)}
+                      </small>
+                      {share > 0 ? <span className="sheet-tree-progress" aria-hidden="true"><span style={{ width: `${share * 100}%` }} /></span> : null}
+                    </button>
+                  </RightClickMenu>
                 );
               })}
             </div>

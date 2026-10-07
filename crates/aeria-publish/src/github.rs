@@ -17,7 +17,7 @@ use thiserror::Error;
 
 const API_BASE: &str = "https://api.github.com";
 const UPLOADS_BASE: &str = "https://uploads.github.com/";
-const API_VERSION: &str = "2022-11-28";
+pub(crate) const API_VERSION: &str = "2022-11-28";
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 const REQUEST_TIMEOUT: Duration = Duration::from_mins(15);
 const MAX_RELEASE_PAGES: u32 = 50;
@@ -175,8 +175,8 @@ pub enum PublishError {
 /// A GitHub REST API client for release publishing.
 #[derive(Clone, Debug)]
 pub struct GitHubClient {
-    http: reqwest::Client,
-    api_base: String,
+    pub(crate) http: reqwest::Client,
+    pub(crate) api_base: String,
     /// Upload URLs returned by the API must start with this, so the token is
     /// only ever sent to GitHub.
     uploads_base: String,
@@ -332,7 +332,7 @@ impl GitHubClient {
     }
 }
 
-async fn send(request: RequestBuilder) -> Result<Response, PublishError> {
+pub(crate) async fn send(request: RequestBuilder) -> Result<Response, PublishError> {
     let response = request
         .send()
         .await
@@ -353,7 +353,9 @@ async fn send(request: RequestBuilder) -> Result<Response, PublishError> {
     })
 }
 
-async fn parse<T: serde::de::DeserializeOwned>(response: Response) -> Result<T, PublishError> {
+pub(crate) async fn parse<T: serde::de::DeserializeOwned>(
+    response: Response,
+) -> Result<T, PublishError> {
     response
         .json()
         .await

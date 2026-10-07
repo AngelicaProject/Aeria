@@ -9,24 +9,13 @@ import {
   gitSetUpstream,
   normalizeCommandError,
 } from "../ipc";
-import type { CommandError, GitBranchDto, GitFileKind, GitOverviewDto } from "../types";
-import type { MessageKey } from "../i18n/translate";
+import type { CommandError, GitBranchDto, GitOverviewDto } from "../types";
 import { useI18n } from "../ui/i18n";
 import { Select } from "../ui/primitives/Select";
 import { UiIcon } from "../ui/primitives/UiIcon";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { GitBranchDelete } from "./GitBranchDelete";
-
-const fileKindLabel: Record<GitFileKind, MessageKey> = {
-  added: "git.file.added",
-  modified: "git.file.modified",
-  deleted: "git.file.deleted",
-  renamed: "git.file.renamed",
-  copied: "git.file.copied",
-  typeChanged: "git.file.typeChanged",
-  untracked: "git.file.untracked",
-  conflicted: "git.file.conflicted",
-};
+import { fileKindLabel } from "./GitFileChanges";
 
 const PROJECT_FILES = ["aeria-pack.json", "aeria-fonts.json", "aeria-glossary.csv", "aeria-guidance.md", ".gitattributes", ".github/workflows/harmonia-feed.yml"];
 

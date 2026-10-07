@@ -16,6 +16,9 @@ mod process;
 mod repository;
 mod sync;
 mod workflow;
+mod worktree;
+
+pub use worktree::FileVersions;
 
 use std::path::PathBuf;
 
@@ -37,8 +40,8 @@ pub use repository::{
 };
 pub use sync::IntegrateOutcome;
 pub use workflow::{
-    CHECK_WORKFLOW_FILE, CheckRelease, CheckWorkflowState, check_workflow_state,
-    install_check_workflow, render_check_workflow,
+    GUARD_WORKFLOW_FILE, GuardAction, GuardWorkflowState, guard_workflow_state,
+    install_guard_workflow, render_guard_workflow,
 };
 
 /// Errors raised by Git collaboration operations.
@@ -116,6 +119,18 @@ pub enum GitError {
         "incoming changes were rolled back because the resulting project is not valid: {reason}"
     )]
     IncomingRejected { reason: String },
+
+    /// The remote's rules refuse direct pushes to the branch: changes reach
+    /// it through pull requests.
+    #[error(
+        "{remote} accepts changes to {branch} only through pull requests; push them on a branch of your own and open a pull request"
+    )]
+    BranchProtected { remote: String, branch: String },
+
+    /// The commit is on a remote already; changing it would need a forced
+    /// push.
+    #[error("the commit is already on the remote; changing it would need a forced push")]
+    CommitPublished,
 
     /// A filesystem operation failed.
     #[error("filesystem operation '{operation}' failed for {path}: {source}")]

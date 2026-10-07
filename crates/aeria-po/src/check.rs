@@ -43,12 +43,6 @@ pub enum Issue {
     /// The structure policy refused the macros (`aeria_se`); the message is
     /// written for the model that produced the translation.
     Structure(String),
-    /// A forbidden variant of a term of the source.
-    ForbiddenTerm {
-        term: String,
-        translation: String,
-        variant: String,
-    },
     /// A stress or other combining mark the source does not have.
     Mark(char),
     /// A word that mixes alphabets, or has letters of another writing system.
@@ -87,7 +81,6 @@ impl Issue {
         match self {
             Self::LineBreak => "lineBreak".to_owned(),
             Self::Structure(_) => "structure".to_owned(),
-            Self::ForbiddenTerm { term, .. } => format!("forbiddenTerm:{}", term.to_lowercase()),
             Self::Mark(_) => "mark".to_owned(),
             Self::MixedAlphabets(_) => "mixedAlphabets".to_owned(),
             Self::BothGenders(_) => "bothGenders".to_owned(),
@@ -127,11 +120,6 @@ impl std::fmt::Display for Issue {
                 "the translation has a line break the source does not; the game breaks lines with <br>",
             ),
             Self::Structure(message) => f.write_str(message),
-            Self::ForbiddenTerm {
-                term,
-                translation,
-                variant,
-            } => write!(f, "the terms forbid {variant:?} for {term:?}; use {translation:?}"),
             Self::Mark(mark) => write!(
                 f,
                 "the translation has the mark U+{:04X} (a stress or accent); write the word without it",
@@ -352,16 +340,6 @@ pub fn check_translation(
         );
     }
     let terms = knowledge.terms.review(source, text, exceptions);
-    issues.extend(
-        terms
-            .forbidden
-            .iter()
-            .map(|(entry, variant)| Issue::ForbiddenTerm {
-                term: entry.term.clone(),
-                translation: entry.translation.clone(),
-                variant: (*variant).to_owned(),
-            }),
-    );
     issues.extend(letter_slips(target_language, source, text));
     let russian = target_language.eq_ignore_ascii_case("ru");
     if russian

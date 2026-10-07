@@ -11,8 +11,9 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use aeria_git::{
-    ConflictResolution, EntryChangeKind, FONT_SETTINGS_FILE, FONTS_DIR, GitError, GitExecutable,
-    GitRepository, IntegrateOutcome, KNOWLEDGE_DIR, PACK_SETTINGS_FILE, PendingCache,
+    ConflictResolution, EntryChangeKind, FONT_SETTINGS_FILE, FONTS_DIR, FileChangeKind, GitError,
+    GitExecutable, GitRepository, IntegrateOutcome, KNOWLEDGE_DIR, PACK_SETTINGS_FILE,
+    PendingCache,
 };
 use tempfile::TempDir;
 
@@ -215,6 +216,25 @@ fn checkpoints_commit_strings_and_their_history_is_read_per_string() {
     assert_eq!(commit.id, second.commit.id);
     assert_eq!(changes.len(), 1);
     assert_eq!(changes[0].before.translation, "Bonjour");
+
+    let files = repository
+        .commit_files(&second.commit.id)
+        .expect("commit files");
+    let summary: Vec<(&str, FileChangeKind)> = files
+        .iter()
+        .map(|file| (file.path.as_str(), file.kind))
+        .collect();
+    assert_eq!(summary, [(path.as_str(), FileChangeKind::Modified)]);
+    // A root commit lists what it added.
+    let root_files = repository
+        .commit_files(&first.commit.id)
+        .expect("root commit files");
+    assert!(
+        root_files
+            .iter()
+            .any(|file| file.path == path && file.kind == FileChangeKind::Added)
+    );
+    assert!(repository.commit_files("not a commit").is_err());
 
     let log = repository.log(0, 10).expect("log");
     assert_eq!(log.len(), 2);
@@ -864,4 +884,228 @@ fn branches_are_deleted_locally_and_on_the_remote_and_lost_work_needs_force() {
         !remote_heads.contains("refs/heads/merged"),
         "{remote_heads}"
     );
+}
+
+fn status_of(
+    repository: &GitRepository,
+    path: &str,
+) -> Option<(Option<FileChangeKind>, Option<FileChangeKind>)> {
+    repository
+        .status()
+        .expect("status")
+        .files
+        .into_iter()
+        .find(|file| file.path == path)
+        .map(|file| (file.index, file.worktree))
+}
+
+#[test]
+fn files_are_staged_unstaged_discarded_and_the_staged_ones_committed() {
+    let sandbox = Sandbox::new();
+    let repository = sandbox.project("project", "Ada");
+    let root = repository.root().to_owned();
+    let unit = id(0x7a, 1);
+    let path = shard_path(0x7a);
+    write_shard(&root, 0x7a, &[(unit, 1, "Bonjour", "")]);
+    repository.checkpoint(None).expect("first");
+
+    write_shard(&root, 0x7a, &[(unit, 1, "Salut", "")]);
+    write_shard(&root, 0x7b, &[(id(0x7b, 1), 1, "Nouveau", "")]);
+    fs::write(root.join("notes.txt"), "draft").expect("notes");
+    assert_eq!(
+        status_of(&repository, &path),
+        Some((None, Some(FileChangeKind::Modified)))
+    );
+    assert!(!repository.has_staged_changes().expect("staged"));
+
+    repository
+        .stage(std::slice::from_ref(&path))
+        .expect("stage");
+    assert_eq!(
+        status_of(&repository, &path),
+        Some((Some(FileChangeKind::Modified), None))
+    );
+    let staged = repository.staged_changes().expect("staged changes");
+    assert_eq!(staged.len(), 1);
+    assert_eq!(staged[0].after.translation, "Salut");
+
+    let committed = repository.commit_staged(None).expect("commit staged");
+    assert_eq!(committed.commit.subject, "Update 1 translation (Addon)");
+    // Only what was staged: the new file and the notes stay as they were.
+    assert_eq!(
+        status_of(&repository, &shard_path(0x7b)),
+        Some((None, Some(FileChangeKind::Untracked)))
+    );
+    assert!(status_of(&repository, "notes.txt").is_some());
+    assert!(matches!(
+        repository.commit_staged(None),
+        Err(GitError::NothingToCommit)
+    ));
+
+    let added = shard_path(0x7b);
+    repository
+        .stage(std::slice::from_ref(&added))
+        .expect("stage new");
+    assert_eq!(
+        status_of(&repository, &added),
+        Some((Some(FileChangeKind::Added), None))
+    );
+    repository
+        .unstage(std::slice::from_ref(&added))
+        .expect("unstage");
+    assert_eq!(
+        status_of(&repository, &added),
+        Some((None, Some(FileChangeKind::Untracked)))
+    );
+
+    write_shard(&root, 0x7a, &[(unit, 1, "Coucou", "")]);
+    repository
+        .discard(&[path.clone(), added.clone(), "notes.txt".to_owned()])
+        .expect("discard");
+    assert!(shard_text(&root, 0x7a).contains("Salut"));
+    assert!(!root.join(&added).exists());
+    assert!(!root.join("notes.txt").exists());
+    assert!(repository.status().expect("status").files.is_empty());
+
+    assert!(repository.stage(&["../outside".to_owned()]).is_err());
+}
+
+#[test]
+fn only_local_commits_are_undone_or_amended() {
+    let sandbox = Sandbox::new();
+    let remote = sandbox.bare_remote();
+    let repository = sandbox.project("project", "Ada");
+    repository.set_remote("origin", &remote).expect("remote");
+    let root = repository.root().to_owned();
+    let unit = id(0x10, 1);
+    write_shard(&root, 0x10, &[(unit, 1, "Un", "")]);
+    let first = repository.checkpoint(None).expect("first");
+    repository.push().expect("push");
+    assert!(
+        repository
+            .is_published(&first.commit.id)
+            .expect("published")
+    );
+    assert!(
+        repository
+            .unpublished_commits()
+            .expect("unpublished")
+            .is_empty()
+    );
+    assert!(matches!(
+        repository.undo_last_commit(),
+        Err(GitError::CommitPublished)
+    ));
+    assert!(matches!(
+        repository.amend(Some("Other")),
+        Err(GitError::CommitPublished)
+    ));
+
+    write_shard(&root, 0x10, &[(unit, 1, "One", "")]);
+    let second = repository.checkpoint(Some("Reword")).expect("second");
+    assert_eq!(
+        repository.unpublished_commits().expect("unpublished"),
+        std::collections::HashSet::from([second.commit.id.clone()])
+    );
+    write_shard(&root, 0x10, &[(unit, 1, "Uno", "")]);
+    let amended = repository.amend(None).expect("amend changes");
+    assert_eq!(amended.commit.subject, "Reword");
+    assert_eq!(amended.changes.len(), 1);
+    let amended = repository
+        .amend(Some("Reword again"))
+        .expect("amend message");
+    assert_eq!(amended.commit.subject, "Reword again");
+    assert_eq!(repository.log(0, 10).expect("log").len(), 2);
+
+    let undone = repository.undo_last_commit().expect("undo");
+    assert_eq!(undone.subject, "Reword again");
+    assert_eq!(repository.log(0, 10).expect("log").len(), 1);
+    // The changes are back, staged, and the file keeps them.
+    assert_eq!(
+        status_of(&repository, &shard_path(0x10)),
+        Some((Some(FileChangeKind::Modified), None))
+    );
+    assert!(shard_text(&root, 0x10).contains("Uno"));
+}
+
+#[test]
+fn a_reverted_commit_is_undone_per_string() {
+    let sandbox = Sandbox::new();
+    let repository = sandbox.project("project", "Ada");
+    let root = repository.root().to_owned();
+    let (one, two) = (id(0x10, 1), id(0x10, 2));
+    write_shard(&root, 0x10, &[(one, 1, "Un", ""), (two, 2, "Deux", "")]);
+    repository.checkpoint(None).expect("first");
+    write_shard(&root, 0x10, &[(one, 1, "One", ""), (two, 2, "Deux", "")]);
+    let reworded = repository.checkpoint(Some("Reword one")).expect("one");
+    write_shard(&root, 0x10, &[(one, 1, "One", ""), (two, 2, "Two", "")]);
+    repository.checkpoint(Some("Reword two")).expect("two");
+
+    let rejected = repository.revert(&reworded.commit.id, || Err("no".to_owned()));
+    assert!(matches!(rejected, Err(GitError::IncomingRejected { .. })));
+    assert_eq!(repository.log(0, 10).expect("log").len(), 3);
+    assert!(repository.status().expect("status").files.is_empty());
+
+    let reverted = repository
+        .revert(&reworded.commit.id, || Ok(()))
+        .expect("revert");
+    assert_eq!(reverted.subject, "Revert \"Reword one\"");
+    let text = shard_text(&root, 0x10);
+    assert!(
+        text.contains("\"Un\"") && text.contains("\"Two\""),
+        "{text}"
+    );
+
+    // A string changed again since the commit cannot be reverted.
+    write_shard(&root, 0x10, &[(one, 1, "Uno", ""), (two, 2, "Two", "")]);
+    let changed = repository
+        .checkpoint(Some("Reword one again"))
+        .expect("again");
+    write_shard(&root, 0x10, &[(one, 1, "Eins", ""), (two, 2, "Two", "")]);
+    repository
+        .checkpoint(Some("Reword one in German"))
+        .expect("german");
+    let head = repository.log(0, 1).expect("log")[0].id.clone();
+    let conflict = repository.revert(&changed.commit.id, || Ok(()));
+    assert!(
+        matches!(
+            conflict,
+            Err(GitError::TranslationConflicts { .. } | GitError::MergeConflict { .. })
+        ),
+        "{conflict:?}"
+    );
+    assert_eq!(repository.log(0, 1).expect("log")[0].id, head);
+    assert!(shard_text(&root, 0x10).contains("Eins"));
+    assert!(repository.status().expect("status").files.is_empty());
+}
+
+#[test]
+fn history_is_searched_and_branches_start_at_a_commit() {
+    let sandbox = Sandbox::new();
+    let repository = sandbox.project("project", "Ada");
+    let root = repository.root().to_owned();
+    write_shard(&root, 0x10, &[(id(0x10, 1), 1, "Un", "")]);
+    let first = repository.checkpoint(Some("Greetings")).expect("first");
+    write_shard(&root, 0x20, &[(id(0x20, 1), 1, "Deux", "")]);
+    repository.checkpoint(Some("Farewells")).expect("second");
+
+    let subjects = |query: &str, path: Option<&str>| -> Vec<String> {
+        repository
+            .search_log(0, 10, query, path)
+            .expect("search")
+            .into_iter()
+            .map(|commit| commit.subject)
+            .collect()
+    };
+    assert_eq!(subjects("greet", None), ["Greetings"]);
+    assert_eq!(subjects("ada", None), ["Farewells", "Greetings"]);
+    assert_eq!(subjects(&first.commit.id[..8], None), ["Greetings"]);
+    assert_eq!(subjects("", Some(&shard_path(0x20))), ["Farewells"]);
+    assert!(repository.search_log(0, 10, "", Some("../x")).is_err());
+
+    repository
+        .create_branch_at("from-greetings", &first.commit.id, || Ok(()))
+        .expect("branch");
+    assert_eq!(current_branch(&repository), "from-greetings");
+    assert!(!root.join(shard_path(0x20)).exists());
 }

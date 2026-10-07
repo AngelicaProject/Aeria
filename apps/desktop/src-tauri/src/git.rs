@@ -21,7 +21,8 @@ use tauri::Manager;
 use crate::commands::run_blocking;
 use crate::dto::SourceBindingDto;
 use crate::error::CommandError;
-use crate::project_changes::{self, ProjectChangeDto};
+use crate::file_changes::{self, FileChangeDto, WorkingChangesDto};
+use crate::project_changes;
 use crate::state::{Activity, DesktopState};
 
 type CommandResult<T> = Result<T, CommandError>;
@@ -117,20 +118,26 @@ pub struct GitFileDto {
     pub translation_data: bool,
 }
 
+impl From<FileChangeKind> for GitFileKindDto {
+    fn from(kind: FileChangeKind) -> Self {
+        match kind {
+            FileChangeKind::Added => Self::Added,
+            FileChangeKind::Modified => Self::Modified,
+            FileChangeKind::Deleted => Self::Deleted,
+            FileChangeKind::Renamed => Self::Renamed,
+            FileChangeKind::Copied => Self::Copied,
+            FileChangeKind::TypeChanged => Self::TypeChanged,
+            FileChangeKind::Untracked => Self::Untracked,
+            FileChangeKind::Conflicted => Self::Conflicted,
+        }
+    }
+}
+
 impl From<FileStatus> for GitFileDto {
     fn from(file: FileStatus) -> Self {
         Self {
             translation_data: file.is_translation_data(),
-            kind: match file.kind {
-                FileChangeKind::Added => GitFileKindDto::Added,
-                FileChangeKind::Modified => GitFileKindDto::Modified,
-                FileChangeKind::Deleted => GitFileKindDto::Deleted,
-                FileChangeKind::Renamed => GitFileKindDto::Renamed,
-                FileChangeKind::Copied => GitFileKindDto::Copied,
-                FileChangeKind::TypeChanged => GitFileKindDto::TypeChanged,
-                FileChangeKind::Untracked => GitFileKindDto::Untracked,
-                FileChangeKind::Conflicted => GitFileKindDto::Conflicted,
-            },
+            kind: file.kind.into(),
             path: file.path,
             original_path: file.original_path,
             staged: file.staged,
@@ -209,6 +216,10 @@ pub struct GitCommitDto {
     /// Branch and tag names at this commit (`HEAD -> main`, `tag: …`).
     pub refs: Vec<String>,
     pub subject: String,
+    /// The commit is on no remote yet: a push would publish it. Set only in
+    /// history listings.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub unpublished: bool,
 }
 
 impl From<CommitSummary> for GitCommitDto {
@@ -221,6 +232,7 @@ impl From<CommitSummary> for GitCommitDto {
             authored_at: commit.authored_at,
             refs: commit.refs,
             subject: commit.subject,
+            unpublished: false,
         }
     }
 }
@@ -363,8 +375,15 @@ impl StringHistoryDto {
 pub struct GitCommitChangesDto {
     pub commit: GitCommitDto,
     pub changes: Vec<EntryChangeDto>,
-    /// Glossary, guidance, settings, and font file changes.
-    pub project_changes: Vec<ProjectChangeDto>,
+    /// Every file the commit changed, with its string count or readable
+    /// change; empty for the result of a checkpoint.
+    pub files: Vec<FileChangeDto>,
+    /// No remote-tracking branch has the commit.
+    pub local: bool,
+    /// The name of the remote the branch syncs with.
+    pub remote: Option<String>,
+    /// The commit's page on the hosting service of the sync remote.
+    pub web_url: Option<String>,
 }
 
 impl GitCommitChangesDto {
@@ -372,9 +391,23 @@ impl GitCommitChangesDto {
         Self {
             changes: changes_dto(&outcome.changes, session),
             commit: outcome.commit.into(),
-            project_changes: Vec::new(),
+            files: Vec::new(),
+            local: true,
+            remote: None,
+            web_url: None,
         }
     }
+}
+
+/// How many string changes each file of `changes` has.
+fn strings_per_file<'a>(
+    changes: impl IntoIterator<Item = &'a EntryChange>,
+) -> BTreeMap<String, usize> {
+    let mut counts = BTreeMap::new();
+    for change in changes {
+        *counts.entry(change.path.clone()).or_default() += 1;
+    }
+    counts
 }
 
 #[derive(Clone, Copy, Debug, Serialize)]
@@ -621,9 +654,8 @@ pub(crate) fn git_checkpoint_with_state(
         let translations = (!changes.is_empty()).then(|| summarize_changes(&changes));
         project_changes::checkpoint_message(translations.as_deref(), &project_files)
     };
-    let mut outcome =
+    let outcome =
         GitCommitChangesDto::new(repository.checkpoint(message.as_deref())?, Some(&session));
-    outcome.project_changes = project_files;
     Ok(outcome)
 }
 
@@ -833,37 +865,200 @@ pub async fn git_pending_sheet_changes(
 }
 
 #[tauri::command(rename_all = "camelCase")]
-/// Commits Aeria-managed project data as the translator identity. A blank
-/// message is replaced by a generated summary. The commit is made on the
-/// current branch.
+/// Commits as Git tools do: what is staged when anything is, otherwise
+/// every change of the translations and project files (a checkpoint). With
+/// `amend`, the last commit is replaced instead, while no remote has it. A
+/// blank message is replaced by a generated summary (an amend keeps the
+/// commit's message).
 ///
 /// # Errors
 ///
 /// Returns a typed command error when the name is missing, there is nothing
-/// to commit, or Git fails.
-pub async fn git_checkpoint(
+/// to commit, the last commit is already pushed (`amend`), or Git fails.
+pub async fn git_commit(
     app: tauri::AppHandle,
     message: Option<String>,
+    amend: bool,
 ) -> CommandResult<GitCommitChangesDto> {
     run_sync(app, move |state| {
+        let session = state.session()?;
+        let repository = GitRepository::open(session.root(), state.git())?;
+        if amend {
+            let _writes = session.hold_writes();
+            return Ok(GitCommitChangesDto::new(
+                repository.amend(message.as_deref())?,
+                Some(&session),
+            ));
+        }
+        if repository.has_staged_changes()? {
+            return Ok(GitCommitChangesDto::new(
+                repository.commit_staged(message.as_deref())?,
+                Some(&session),
+            ));
+        }
         git_checkpoint_with_state(state, message.as_deref())
     })
     .await
 }
 
+/// Paths of one stage, unstage, or discard request, at most this many.
+const MAX_PATHS: usize = 100_000;
+
+fn bounded_paths(paths: &[String]) -> CommandResult<()> {
+    if paths.len() > MAX_PATHS {
+        return Err(CommandError::new(
+            "gitInvalidInput",
+            format!("at most {MAX_PATHS} files at once"),
+        ));
+    }
+    Ok(())
+}
+
 #[tauri::command(rename_all = "camelCase")]
-/// Returns the uncommitted glossary, guidance, settings, and font file
-/// changes, compared with `HEAD`.
+/// Stages files (`git add --all`).
+///
+/// # Errors
+///
+/// Returns a typed command error for an invalid path or a Git failure.
+pub async fn git_stage(app: tauri::AppHandle, paths: Vec<String>) -> CommandResult<()> {
+    bounded_paths(&paths)?;
+    run_sync(app, move |state| Ok(open_repository(state)?.stage(&paths)?)).await
+}
+
+#[tauri::command(rename_all = "camelCase")]
+/// Takes files out of the index, keeping their working-tree content.
+///
+/// # Errors
+///
+/// Returns a typed command error for an invalid path or a Git failure.
+pub async fn git_unstage(app: tauri::AppHandle, paths: Vec<String>) -> CommandResult<()> {
+    bounded_paths(&paths)?;
+    run_sync(app, move |state| {
+        Ok(open_repository(state)?.unstage(&paths)?)
+    })
+    .await
+}
+
+#[tauri::command(rename_all = "camelCase")]
+/// Discards the working-tree changes of files: tracked files get back their
+/// staged or committed content, untracked files are deleted. The editor's
+/// writes wait meanwhile, and its views read the files again.
+///
+/// # Errors
+///
+/// Returns a typed command error for an invalid path, a conflicted file, or
+/// a Git or file system failure.
+pub async fn git_discard(app: tauri::AppHandle, paths: Vec<String>) -> CommandResult<()> {
+    bounded_paths(&paths)?;
+    run_sync(app, move |state| {
+        let session = state.session()?;
+        let _writes = session.hold_writes();
+        let result = GitRepository::open(session.root(), state.git())?.discard(&paths);
+        session.touch();
+        Ok(result?)
+    })
+    .await
+}
+
+#[tauri::command(rename_all = "camelCase")]
+/// Undoes the last commit while no remote has it: its changes go back to the
+/// index. Returns the commit undone.
+///
+/// # Errors
+///
+/// Returns `gitCommitPublished` for a pushed commit, or another typed Git
+/// error.
+pub async fn git_undo_last_commit(app: tauri::AppHandle) -> CommandResult<GitCommitDto> {
+    run_sync(app, |state| {
+        Ok(open_repository(state)?.undo_last_commit()?.into())
+    })
+    .await
+}
+
+#[tauri::command(rename_all = "camelCase")]
+/// Reverts a commit with a new commit; PO files are joined per string, and
+/// the result must be a project for the open game version.
+///
+/// # Errors
+///
+/// Returns a typed command error when translations are uncommitted, a
+/// string or file conflicts, the result is not a valid project, or Git
+/// fails; the branch is then unchanged.
+pub async fn git_revert(app: tauri::AppHandle, commit_id: String) -> CommandResult<GitCommitDto> {
+    run_sync(app, move |state| {
+        let result = with_session_reload(state, |repository, accept| {
+            repository.revert(&commit_id, accept)
+        })?;
+        Ok(result?.into())
+    })
+    .await
+}
+
+#[tauri::command(rename_all = "camelCase")]
+/// Creates a branch at a commit and switches to it.
+///
+/// # Errors
+///
+/// Returns a typed command error when translations are uncommitted, the
+/// name is invalid, or the commit holds a project this session cannot open.
+pub async fn git_create_branch_at(
+    app: tauri::AppHandle,
+    name: String,
+    commit_id: String,
+) -> CommandResult<()> {
+    run_sync(app, move |state| {
+        let result = with_session_reload(state, |repository, accept| {
+            repository.create_branch_at(&name, &commit_id, accept)
+        })?;
+        result.map_err(|error| match error {
+            GitError::IncomingRejected { reason } => CommandError::new(
+                "gitSwitchIncompatible",
+                format!("the commit holds the project in a state this session cannot open, so Aeria stayed on the current branch: {reason}"),
+            ),
+            other => other.into(),
+        })
+    })
+    .await
+}
+
+#[tauri::command(rename_all = "camelCase")]
+/// Returns the uncommitted files: what the index holds against `HEAD`, and
+/// the working tree's changes against the index, PO files with how many
+/// strings changed and project files with their readable change.
 ///
 /// # Errors
 ///
 /// Returns a typed command error when no project is open or Git fails.
-pub async fn git_project_changes(app: tauri::AppHandle) -> CommandResult<Vec<ProjectChangeDto>> {
+pub async fn git_changed_files(app: tauri::AppHandle) -> CommandResult<WorkingChangesDto> {
     run_blocking(move || {
         let state = app.state::<DesktopState>();
         let repository = open_repository(&state)?;
-        let root = repository.root().to_owned();
-        Ok(project_changes::pending(&repository, &root)?)
+        Ok(file_changes::working_changes(
+            &repository,
+            &mut state.pending_cache(),
+        )?)
+    })
+    .await
+}
+
+#[tauri::command(rename_all = "camelCase")]
+/// Returns the string changes of one PO file: staged ones against `HEAD`,
+/// or the working tree's against the index.
+///
+/// # Errors
+///
+/// Returns a typed command error when no project is open or Git fails.
+pub async fn git_pending_file_changes(
+    app: tauri::AppHandle,
+    path: String,
+    staged: bool,
+) -> CommandResult<Vec<EntryChangeDto>> {
+    run_blocking(move || {
+        let state = app.state::<DesktopState>();
+        let session = state.session()?;
+        let repository = GitRepository::open(session.root(), state.git())?;
+        let changes = file_changes::file_strings(&repository, &path, staged)?;
+        Ok(changes_dto(&changes, Some(&session)))
     })
     .await
 }
@@ -948,15 +1143,26 @@ pub async fn git_log(
     app: tauri::AppHandle,
     skip: u32,
     limit: u32,
+    query: Option<String>,
+    path: Option<String>,
 ) -> CommandResult<Vec<GitCommitDto>> {
     run_blocking(move || {
         let limit = bounded_limit(limit)?;
         let repository = open_repository(&app.state::<DesktopState>())?;
         let skip = usize::try_from(skip).unwrap_or(usize::MAX);
-        Ok(repository
-            .log(skip, limit)?
+        let query = query.as_deref().map(str::trim).unwrap_or_default();
+        let commits = if query.is_empty() && path.is_none() {
+            repository.log(skip, limit)?
+        } else {
+            repository.search_log(skip, limit, query, path.as_deref())?
+        };
+        let unpublished = repository.unpublished_commits()?;
+        Ok(commits
             .into_iter()
-            .map(Into::into)
+            .map(|commit| GitCommitDto {
+                unpublished: unpublished.contains(&commit.id),
+                ..commit.into()
+            })
             .collect())
     })
     .await
@@ -976,8 +1182,17 @@ pub async fn git_commit_changes(
         let session = state.session()?;
         let repository = GitRepository::open(session.root(), state.git())?;
         let (commit, changes) = repository.commit_changes(&commit_id)?;
+        let files = file_changes::changed_files(
+            repository.commit_files(&commit.id)?,
+            &strings_per_file(&changes),
+            project_changes::of_commit(&repository, &commit.id)?,
+        );
+        let web_url = commit_web_url(&repository, &commit.id)?;
         Ok(GitCommitChangesDto {
-            project_changes: project_changes::of_commit(&repository, &commit.id)?,
+            files,
+            local: !repository.is_published(&commit.id)?,
+            remote: sync_remote(&repository)?.map(|remote| remote.name),
+            web_url,
             commit: commit.into(),
             changes: changes_dto(&changes, Some(&session)),
         })
@@ -1429,5 +1644,133 @@ mod tests {
         assert!(!is_sheet_file("po/Item/x/2000.po", "Item"));
         assert!(!is_sheet_file("po/Item/.po", "Item"));
         assert!(!is_sheet_file("Addon.po", "Addon"));
+    }
+}
+
+/// The web page of a commit on the hosting service of the remote the
+/// current branch syncs with (its upstream's remote, else `origin`, else the
+/// only remote): `https://<host>/<path>/commit/<id>`, with GitLab's
+/// `/-/commit/` and Bitbucket's `/commits/`. `None` for a local path or a
+/// URL that names no host and repository.
+fn commit_web_url(repository: &GitRepository, commit: &str) -> CommandResult<Option<String>> {
+    Ok(sync_remote(repository)?.and_then(|remote| web_url(&remote.url, commit)))
+}
+
+/// The remote the current branch syncs with: its upstream's remote, else
+/// `origin`, else the only remote.
+pub(crate) fn sync_remote(
+    repository: &GitRepository,
+) -> CommandResult<Option<aeria_git::RemoteInfo>> {
+    let remotes = repository.remotes()?;
+    let upstream_remote = repository.status()?.upstream.and_then(|upstream| {
+        upstream
+            .split_once('/')
+            .map(|(remote, _)| remote.to_owned())
+    });
+    let remote = upstream_remote
+        .and_then(|name| remotes.iter().find(|remote| remote.name == name))
+        .or_else(|| remotes.iter().find(|remote| remote.name == "origin"))
+        .or_else(|| (remotes.len() == 1).then(|| &remotes[0]));
+    Ok(remote.cloned())
+}
+
+/// See [`commit_web_url`].
+fn web_url(remote: &str, commit: &str) -> Option<String> {
+    let rest = if let Some(rest) = remote
+        .strip_prefix("https://")
+        .or_else(|| remote.strip_prefix("http://"))
+        .or_else(|| remote.strip_prefix("ssh://"))
+        .or_else(|| remote.strip_prefix("git://"))
+    {
+        let (authority, path) = rest.split_once('/')?;
+        let host = authority
+            .rsplit_once('@')
+            .map_or(authority, |(_, host)| host);
+        // An SSH port is not the web port.
+        let host = if remote.starts_with("ssh://") {
+            host.split_once(':').map_or(host, |(host, _)| host)
+        } else {
+            host
+        };
+        format!("{host}/{path}")
+    } else {
+        // scp-like: `git@host:owner/repo.git`.
+        let (authority, path) = remote.split_once(':')?;
+        let host = authority
+            .rsplit_once('@')
+            .map_or(authority, |(_, host)| host);
+        if host.is_empty() || host.contains(['/', '\\']) || host.len() == 1 || path.starts_with('/')
+        {
+            return None;
+        }
+        format!("{host}/{path}")
+    };
+    let rest = rest.trim_end_matches('/');
+    let rest = rest.strip_suffix(".git").unwrap_or(rest);
+    let (host, path) = rest.split_once('/')?;
+    if host.is_empty() || path.is_empty() || !host.contains('.') {
+        return None;
+    }
+    let commit_path = if host.contains("gitlab") {
+        "-/commit"
+    } else if host.contains("bitbucket") {
+        "commits"
+    } else {
+        "commit"
+    };
+    Some(format!("https://{host}/{path}/{commit_path}/{commit}"))
+}
+
+#[tauri::command(rename_all = "camelCase")]
+/// Opens a commit's page on the hosting service. The address comes from
+/// the sync remote, never the renderer.
+///
+/// # Errors
+///
+/// Returns `gitNoWebPage` when the remote is not a hosting service, or
+/// `openFailed`.
+pub async fn git_open_commit(app: tauri::AppHandle, commit_id: String) -> CommandResult<()> {
+    use tauri_plugin_opener::OpenerExt;
+
+    let state_app = app.clone();
+    let url = run_blocking(move || {
+        let state = state_app.state::<DesktopState>();
+        let repository = open_repository(&state)?;
+        let commit = repository.commit(&commit_id)?;
+        commit_web_url(&repository, &commit.id)
+    })
+    .await?
+    .ok_or_else(|| CommandError::new("gitNoWebPage", "the remote is not a hosting service"))?;
+    app.opener()
+        .open_url(url, None::<&str>)
+        .map_err(|error| CommandError::new("openFailed", error.to_string()))
+}
+
+#[cfg(test)]
+mod web_url_tests {
+    use super::web_url;
+
+    #[test]
+    fn hosting_remotes_have_commit_pages() {
+        let id = "abc123";
+        assert_eq!(
+            web_url("https://github.com/AngelicaProject/Prima.git", id).as_deref(),
+            Some("https://github.com/AngelicaProject/Prima/commit/abc123")
+        );
+        assert_eq!(
+            web_url("git@github.com:AngelicaProject/Prima.git", id).as_deref(),
+            Some("https://github.com/AngelicaProject/Prima/commit/abc123")
+        );
+        assert_eq!(
+            web_url("https://user:token@gitlab.com/group/sub/project", id).as_deref(),
+            Some("https://gitlab.com/group/sub/project/-/commit/abc123")
+        );
+        assert_eq!(
+            web_url("ssh://git@bitbucket.org:7999/team/repo.git", id).as_deref(),
+            Some("https://bitbucket.org/team/repo/commits/abc123")
+        );
+        assert_eq!(web_url(r"D:\Projects\prima.git", id), None);
+        assert_eq!(web_url("/srv/git/prima.git", id), None);
+        assert_eq!(web_url("C:/Projects/prima.git", id), None);
     }
 }

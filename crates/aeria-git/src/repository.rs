@@ -32,13 +32,13 @@ pub const PROJECT_PATHS: [&str; 8] = [
     FONTS_DIR,
     KNOWLEDGE_DIR,
     FEED_WORKFLOW_FILE,
-    crate::workflow::CHECK_WORKFLOW_FILE,
+    crate::workflow::GUARD_WORKFLOW_FILE,
 ];
 /// PO files are LF-only. This rule keeps Git from converting them on
 /// checkout (for example with `core.autocrlf=true`), so a file Aeria wrote
 /// is the file Git has.
 const ATTRIBUTES_RULE: &str = "*.po text eol=lf";
-const LOG_FORMAT: &str = "--format=%H%x1f%P%x1f%an%x1f%ae%x1f%at%x1f%D%x1f%s";
+pub(crate) const LOG_FORMAT: &str = "--format=%H%x1f%P%x1f%an%x1f%ae%x1f%at%x1f%D%x1f%s";
 
 /// A Git working tree that contains an Aeria project root.
 ///
@@ -102,8 +102,16 @@ pub enum FileChangeKind {
 pub struct FileStatus {
     pub path: String,
     pub original_path: Option<String>,
+    /// The change against `HEAD`: the working-tree change when there is
+    /// one, else the staged one.
     pub kind: FileChangeKind,
+    /// Whether the index holds a change of the file.
     pub staged: bool,
+    /// The change the index holds against `HEAD` (`git status` X).
+    pub index: Option<FileChangeKind>,
+    /// The change of the working tree against the index (`git status` Y);
+    /// an untracked file's is [`FileChangeKind::Untracked`].
+    pub worktree: Option<FileChangeKind>,
 }
 
 impl FileStatus {
@@ -723,7 +731,7 @@ impl GitRepository {
     }
 
     /// Stages and commits exactly the given Aeria-managed paths.
-    fn commit_managed_paths(
+    pub(crate) fn commit_managed_paths(
         &self,
         identity_options: Vec<&'static str>,
         paths: &[&'static str],
@@ -740,7 +748,7 @@ impl GitRepository {
     }
 
     /// Returns the Aeria-managed paths that exist or are tracked.
-    fn managed_paths(&self) -> Result<Vec<&'static str>, GitError> {
+    pub(crate) fn managed_paths(&self) -> Result<Vec<&'static str>, GitError> {
         let mut paths = Vec::new();
         for path in std::iter::once(PO_DIR).chain(PROJECT_PATHS) {
             if has_files(&self.root.join(path)) || self.is_tracked(path)? {
@@ -750,7 +758,7 @@ impl GitRepository {
         Ok(paths)
     }
 
-    fn has_managed_changes(&self, paths: &[&str]) -> Result<bool, GitError> {
+    pub(crate) fn has_managed_changes(&self, paths: &[&str]) -> Result<bool, GitError> {
         let mut args = vec!["status", "--porcelain", "--untracked-files=all", "--"];
         args.extend(paths);
         Ok(!self.run(&args)?.is_empty())
@@ -1155,6 +1163,8 @@ fn parse_status(output: &[u8], prefix: &str) -> Result<RepositoryStatus, GitErro
                     original_path: None,
                     kind: FileChangeKind::Conflicted,
                     staged: false,
+                    index: Some(FileChangeKind::Conflicted),
+                    worktree: Some(FileChangeKind::Conflicted),
                 }
             }
             "?" => FileStatus {
@@ -1162,6 +1172,8 @@ fn parse_status(output: &[u8], prefix: &str) -> Result<RepositoryStatus, GitErro
                 original_path: None,
                 kind: FileChangeKind::Untracked,
                 staged: false,
+                index: None,
+                worktree: Some(FileChangeKind::Untracked),
             },
             "!" => continue,
             _ => return Err(malformed(entry)),
@@ -1175,20 +1187,23 @@ fn tracked_file(xy: &str, path: &str, original: Option<&str>, prefix: &str) -> O
     let mut codes = xy.chars();
     let index = codes.next()?;
     let worktree = codes.next()?;
-    let code = if worktree == '.' { index } else { worktree };
-    let kind = match code {
-        'A' => FileChangeKind::Added,
-        'D' => FileChangeKind::Deleted,
-        'R' => FileChangeKind::Renamed,
-        'C' => FileChangeKind::Copied,
-        'T' => FileChangeKind::TypeChanged,
-        _ => FileChangeKind::Modified,
+    let kind_of = |code: char| match code {
+        '.' => None,
+        'A' => Some(FileChangeKind::Added),
+        'D' => Some(FileChangeKind::Deleted),
+        'R' => Some(FileChangeKind::Renamed),
+        'C' => Some(FileChangeKind::Copied),
+        'T' => Some(FileChangeKind::TypeChanged),
+        _ => Some(FileChangeKind::Modified),
     };
+    let (index, worktree) = (kind_of(index), kind_of(worktree));
     Some(FileStatus {
         path: strip_prefix(path, prefix),
         original_path: original.map(|original| strip_prefix(original, prefix)),
-        kind,
-        staged: index != '.',
+        kind: worktree.or(index).unwrap_or(FileChangeKind::Modified),
+        staged: index.is_some(),
+        index,
+        worktree,
     })
 }
 

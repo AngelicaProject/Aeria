@@ -1,6 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
-  CheckWorkflowDto,
   MacroIdiomDto,
   MacroInsertionDto,
   MacroViewDto,
@@ -8,7 +7,7 @@ import type {
   UpdateStatusDto,
   ExportOverviewDto,
   FontPreviewSizeDto,
-  ProjectChangeDto,
+  WorkingChangesDto,
   FontSettings,
   FontsOverviewDto,
   ImportedFontFileDto,
@@ -58,6 +57,8 @@ import type {
   TermCandidateDto,
   PhrasingDto,
   FixRequest,
+  GuardWorkflowDto,
+  ProtectionDto,
 } from "./types";
 
 export function normalizeCommandError(error: unknown): CommandError {
@@ -318,12 +319,43 @@ export function gitPendingSheetChanges(sheetName: string): Promise<EntryChangeDt
   return call<EntryChangeDto[]>("git_pending_sheet_changes", { sheetName });
 }
 
-export function gitCheckpoint(message: string | null): Promise<GitCommitChangesDto> {
-  return call<GitCommitChangesDto>("git_checkpoint", { message });
+/** Commits what is staged, or every translation and project file change; with `amend`, replaces the last commit. */
+export function gitCommit(message: string | null, amend = false): Promise<GitCommitChangesDto> {
+  return call<GitCommitChangesDto>("git_commit", { message, amend });
 }
 
-export function gitLog(skip: number, limit: number): Promise<GitCommitDto[]> {
-  return call<GitCommitDto[]>("git_log", { skip, limit });
+export function gitStage(paths: string[]): Promise<void> {
+  return call<void>("git_stage", { paths });
+}
+
+export function gitUnstage(paths: string[]): Promise<void> {
+  return call<void>("git_unstage", { paths });
+}
+
+/** Discards the working-tree changes of files; untracked files are deleted. */
+export function gitDiscard(paths: string[]): Promise<void> {
+  return call<void>("git_discard", { paths });
+}
+
+export function gitUndoLastCommit(): Promise<GitCommitDto> {
+  return call<GitCommitDto>("git_undo_last_commit");
+}
+
+export function gitRevert(commitId: string): Promise<GitCommitDto> {
+  return call<GitCommitDto>("git_revert", { commitId });
+}
+
+export function gitCreateBranchAt(name: string, commitId: string): Promise<void> {
+  return call<void>("git_create_branch_at", { name, commitId });
+}
+
+export function gitOpenCommit(commitId: string): Promise<void> {
+  return call<void>("git_open_commit", { commitId });
+}
+
+/** History newest first; `query` and `path` narrow it to matching commits. */
+export function gitLog(skip: number, limit: number, query: string | null = null, path: string | null = null): Promise<GitCommitDto[]> {
+  return call<GitCommitDto[]>("git_log", { skip, limit, query, path });
 }
 
 export function gitCommitChanges(commitId: string): Promise<GitCommitChangesDto> {
@@ -335,8 +367,14 @@ export function gitStringHistory(sourceBinding: SourceBinding, limit: number): P
   return call<StringHistoryDto>("git_string_history", { sourceBinding, limit });
 }
 
-export function gitProjectChanges(): Promise<ProjectChangeDto[]> {
-  return call<ProjectChangeDto[]>("git_project_changes");
+/** Every uncommitted file against HEAD, grouped by what a commit does with it. */
+export function gitChangedFiles(): Promise<WorkingChangesDto> {
+  return call<WorkingChangesDto>("git_changed_files");
+}
+
+/** The string changes of one PO file: staged ones, or the working tree's. */
+export function gitPendingFileChanges(path: string, staged: boolean): Promise<EntryChangeDto[]> {
+  return call<EntryChangeDto[]>("git_pending_file_changes", { path, staged });
 }
 
 export function gitRemoveRemote(name: string): Promise<GitOverviewDto> {
@@ -364,16 +402,31 @@ export function gitPush(): Promise<boolean> {
   return call<boolean>("git_push");
 }
 
-export function gitCheckWorkflow(): Promise<CheckWorkflowDto> {
-  return call<CheckWorkflowDto>("git_check_workflow");
+export function gitGuardWorkflow(): Promise<GuardWorkflowDto> {
+  return call<GuardWorkflowDto>("git_guard_workflow");
 }
 
-export function gitInstallCheckWorkflow(): Promise<CheckWorkflowDto> {
-  return call<CheckWorkflowDto>("git_install_check_workflow");
+export function gitInstallGuardWorkflow(): Promise<GuardWorkflowDto> {
+  return call<GuardWorkflowDto>("git_install_guard_workflow");
 }
 
-export function gitOpenBranchSettings(): Promise<void> {
-  return call<void>("git_open_branch_settings");
+/** How GitHub protects the main branch and the pack release tags; `null` when origin is not on GitHub. */
+export function gitRepositoryProtection(refresh = false): Promise<ProtectionDto | null> {
+  return call<ProtectionDto | null>("git_repository_protection", { refresh });
+}
+
+/** Writes the ruleset to import on GitHub to a file the person chose. */
+export function gitSaveRuleset(kind: "branch" | "tags", path: string): Promise<void> {
+  return call<void>("git_save_ruleset", { kind, path });
+}
+
+export function gitOpenRulesSettings(): Promise<void> {
+  return call<void>("git_open_rules_settings");
+}
+
+/** Opens GitHub's page for a pull request from the current branch. */
+export function gitOpenPullRequest(): Promise<void> {
+  return call<void>("git_open_pull_request");
 }
 
 export function gitBranches(): Promise<GitBranchDto[]> {

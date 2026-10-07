@@ -1,7 +1,8 @@
 name: CI
 
 # Aeria is released for Windows, so the application is checked on Windows.
-# Linux checks only aeria-check, the one Linux binary Aeria publishes.
+# Linux checks only aeria-guard, which translation repositories build and run
+# on Linux through the Aeria Guard action (guard/action.yml).
 # docs/development/ci.md describes what each job guarantees.
 #
 # Branches are checked through their pull requests; main is checked after
@@ -125,9 +126,9 @@ jobs:
       - name: Coverage floor
         run: cargo llvm-cov report --fail-under-lines 75
 
-  # aeria-check runs in the CI of translation repositories on Linux; the
-  # release builds it on the same runner.
-  check-linux:
+  # aeria-guard runs in the CI of translation repositories on Linux, built
+  # by the Aeria Guard action from the commit the repository names.
+  guard-linux:
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -137,7 +138,7 @@ jobs:
         with:
           toolchain: 1.98.1
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-      - run: cargo test -p aeria-check --locked
+      - run: cargo test -p aeria-guard --locked
 
   # Dependencies: known vulnerabilities, yanked crates, licenses, and sources
   # (deny.toml), and npm advisories for what the application ships.
@@ -178,7 +179,7 @@ jobs:
   # above passed, so jobs can change without changing the ruleset.
   ci:
     if: always()
-    needs: [frontend, rust, check-linux, supply-chain]
+    needs: [frontend, rust, guard-linux, supply-chain]
     runs-on: ubuntu-latest
     steps:
       - name: Require every job to pass

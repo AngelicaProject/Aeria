@@ -18,7 +18,8 @@
         "minHeight": 560,
         "center": true,
         "decorations": false,
-        "resizable": false
+        "resizable": false,
+        "dragDropEnabled": false
       }
     ],
     "security": {

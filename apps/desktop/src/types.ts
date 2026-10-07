@@ -356,6 +356,8 @@ export type GitCommitDto = {
   /** Branch and tag names at the commit: "HEAD -> main", "origin/main", "tag: harmonia/3". */
   refs: string[];
   subject: string;
+  /** On no remote yet: a push would publish it. Set only in history listings. */
+  unpublished?: boolean;
 };
 
 /** What a person can change about a string at one point in time. */
@@ -414,18 +416,33 @@ export function changeMark(kind: EntryChangeKind): ChangeMark {
   return kind === "translated" ? "added" : "modified";
 }
 
-export type ProjectArea = "terms" | "knowledge" | "projectSettings" | "packSettings" | "fontSettings" | "fontFile" | "gitAttributes" | "feedWorkflow" | "checkWorkflow";
+export type ProjectArea = "terms" | "knowledge" | "projectSettings" | "packSettings" | "fontSettings" | "fontFile" | "gitAttributes" | "feedWorkflow" | "guardWorkflow";
 
-/** The GitHub workflow that runs aeria-check on pull requests. */
-export type CheckWorkflowDto = {
+/** The Aeria Guard workflow, which checks pull requests into the main branch and pushes to it. */
+export type GuardWorkflowDto = {
   /** The origin remote is a github.com repository. */
   github: boolean;
   /** The project is the repository's top folder, where GitHub reads workflows. */
   topLevel: boolean;
-  /** This build can write the workflow (release builds only). */
-  available: boolean;
   state: "missing" | "current" | "different";
-  branchSettingsUrl: string | null;
+  /** The branch the workflow guards: the remote's default branch. */
+  branch: string;
+};
+
+/** How far a repository has the rules Aeria recommends; read from GitHub without signing in. */
+export type RuleStateDto<Rule> =
+  | { state: "protected" }
+  | { state: "partial"; missing: Rule[] }
+  | { state: "missing" }
+  | { state: "unknown" };
+
+export type BranchRule = "deletion" | "forcePush" | "pullRequest" | "guardCheck";
+export type TagRule = "creation" | "update" | "deletion";
+
+/** How GitHub protects the main branch and the pack release tags. */
+export type ProtectionDto = {
+  branch: RuleStateDto<BranchRule>;
+  tags: RuleStateDto<TagRule>;
 };
 
 export type ProjectChangeDetailDto = {
@@ -443,14 +460,45 @@ export type ProjectChangeDto = {
   kind: ChangeKind;
   details: ProjectChangeDetailDto[];
   truncated: boolean;
+  /** The file does not read as its format, so `details` are its lines. */
+  byLine: boolean;
+  /** The file cannot be compared at all: not text, or too large. */
   unreadable: boolean;
   size: number;
+};
+
+/** What a commit made in Aeria does with a file. */
+export type FileGroup = "translations" | "project" | "other";
+
+/** One changed file, as Git sees it. */
+export type FileChangeDto = {
+  path: string;
+  originalPath: string | null;
+  kind: GitFileKind;
+  group: FileGroup;
+  /** For a PO file, how many of its strings changed. */
+  strings: number | null;
+  /** For a project file whose content changed, the readable change. */
+  project: ProjectChangeDto | null;
+};
+
+/** The uncommitted files: what the index holds, and the working tree's changes against it. */
+export type WorkingChangesDto = {
+  staged: FileChangeDto[];
+  changes: FileChangeDto[];
 };
 
 export type GitCommitChangesDto = {
   commit: GitCommitDto;
   changes: EntryChangeDto[];
-  projectChanges: ProjectChangeDto[];
+  /** Every file the commit changed; empty for the result of a commit made here. */
+  files: FileChangeDto[];
+  /** No remote has the commit. */
+  local: boolean;
+  /** The name of the remote the branch syncs with. */
+  remote: string | null;
+  /** The commit's page on the hosting service, when the remote is one. */
+  webUrl: string | null;
 };
 
 /** A string changed differently here and on the remote. */
@@ -598,10 +646,10 @@ export type TermCandidateDto = {
   sheets: { sheet: string; count: number }[];
 };
 
-/** One term of `aeria-knowledge/terms.csv`; `settled` when a person decided it. */
-export type GlossaryEntry = { term: string; translation: string; note?: string; forbidden?: string[]; settled?: boolean; matchCase?: boolean };
+/** One term of `aeria-knowledge/terms.csv`. */
+export type GlossaryEntry = { term: string; translation: string; forms?: string[]; note?: string; folder?: string; matchCase?: boolean };
 
-export type TermInput = { term: string; translation: string; note: string | null; forbidden: string[]; settled: boolean; matchCase: boolean };
+export type TermInput = { term: string; translation: string; forms: string[]; note: string | null; folder: string; matchCase: boolean };
 
 /** The project's style and terms in `aeria-knowledge/`. */
 export type ProjectKnowledgeDto = {
@@ -862,7 +910,7 @@ export type SearchQueryDto = {
 
 /** One finding of the checks, as data; `message` is the English text for unknown kinds. */
 export type IssueDto = {
-  kind: "lineBreak" | "structure" | "forbiddenTerm" | "mark" | "mixedAlphabets" | "bothGenders" | "repeatedWord" | "termNotUsed" | "genderNotVaried" | "genderInOtherLanguages" | "machinePhrasing" | "staleTermException" | "labelTooLong" | "nameTooLong" | "other";
+  kind: "lineBreak" | "structure" | "mark" | "mixedAlphabets" | "bothGenders" | "repeatedWord" | "termNotUsed" | "genderNotVaried" | "genderInOtherLanguages" | "machinePhrasing" | "staleTermException" | "labelTooLong" | "nameTooLong" | "other";
   /** What may be wrong rather than a problem: it does not keep the translation from being saved or exported. */
   advice: boolean;
   /** Groups issues in the summary and filters by them. */
@@ -870,7 +918,6 @@ export type IssueDto = {
   message: string;
   term: string | null;
   translation: string | null;
-  variant: string | null;
   text: string | null;
   phrases: string[];
   /** The length of a translation longer than its budget, and the budget: characters for a label, bytes for a name. */
@@ -885,7 +932,7 @@ export type HintNameDto = { name: string; translation: string };
 /** A game name of the source with the string its translation comes from: every name sheet with it, the row's name when this is another form of it, and its coordinate. */
 export type HintGameNameDto = HintNameDto & { sheets: string[]; full: string | null; binding: SourceBinding | null };
 /** A glossary term of the source; `excepted` when a person decided it does not apply to the string. */
-export type HintTermDto = { term: string; translation: string; note: string | null; never: string[]; excepted: boolean };
+export type HintTermDto = { term: string; translation: string; note: string | null; excepted: boolean };
 /** What a machine translation request tells the model about one string. */
 export type StringHintsDto = {
   names: HintGameNameDto[];

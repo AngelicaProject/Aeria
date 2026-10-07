@@ -107,8 +107,6 @@ pub struct HintTermDto {
     pub term: String,
     pub translation: String,
     pub note: Option<String>,
-    /// Variants never to use.
-    pub never: Vec<String>,
     /// A person decided the term does not apply to this string.
     pub excepted: bool,
 }
@@ -119,7 +117,6 @@ impl From<HintTerm> for HintTermDto {
             term: term.term,
             translation: term.translation,
             note: term.note,
-            never: term.never,
             excepted: term.excepted,
         }
     }
@@ -370,7 +367,7 @@ mod tests {
             write_glossary(&[GlossaryEntry {
                 term: "Hello".to_owned(),
                 translation: "Bonjour".to_owned(),
-                forbidden: vec!["Salut".to_owned()],
+                forms: vec!["Hi".to_owned()],
                 ..GlossaryEntry::default()
             }]),
         )
@@ -380,17 +377,13 @@ mod tests {
         let found = string_hints_with(&state, &hello).expect("hints");
         assert_eq!(found.terms.len(), 1);
         assert_eq!(found.terms[0].translation, "Bonjour");
-        assert_eq!(found.terms[0].never, ["Salut"]);
         assert!(!found.terms[0].excepted);
         assert!(found.names.is_empty());
         assert_eq!(found.max_length, None);
 
         let draft = check_draft_with(&state, &hello, "Salut <i>là</i>").expect("check");
         assert!(
-            draft
-                .issues
-                .iter()
-                .any(|issue| issue.kind == "forbiddenTerm"),
+            draft.issues.iter().any(|issue| issue.kind == "termNotUsed"),
             "{:?}",
             draft.issues
         );

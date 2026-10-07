@@ -1,29 +1,29 @@
-//! The GitHub Actions workflow that validates pull requests with
-//! `aeria-check` before they merge.
+//! The GitHub Actions workflow that guards the main branch with Aeria
+//! Guard: it checks every pull request and push and summarizes the change
+//! for review.
 
 use std::fs;
 use std::io::{ErrorKind, Write};
 use std::path::Path;
 
 /// Where the workflow lives in the repository.
-pub const CHECK_WORKFLOW_FILE: &str = ".github/workflows/aeria-check.yml";
+pub const GUARD_WORKFLOW_FILE: &str = ".github/workflows/aeria-guard.yml";
 
-const TEMPLATE: &str = include_str!("../templates/aeria-check.yml");
+const TEMPLATE: &str = include_str!("../templates/aeria-guard.yml");
 
-/// The `aeria-check` release a workflow installs.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct CheckRelease<'a> {
-    /// The Aeria version that built it.
+/// The Aeria Guard action a workflow runs.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct GuardAction<'a> {
+    /// The Git revision of Aeria the action is taken from: a commit, so the
+    /// workflow runs exactly that code, or a branch for development builds.
+    pub reference: &'a str,
+    /// The Aeria version of that revision, as a comment for people.
     pub version: &'a str,
-    /// Where the `.tar.gz` with the binary is downloaded from.
-    pub url: &'a str,
-    /// SHA-256 of that archive, in lowercase hex.
-    pub sha256: &'a str,
 }
 
 /// Whether the repository has the workflow this Aeria would install.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum CheckWorkflowState {
+pub enum GuardWorkflowState {
     Missing,
     /// Identical to the rendered workflow, ignoring line endings.
     Current,
@@ -31,17 +31,21 @@ pub enum CheckWorkflowState {
     Different,
 }
 
-/// The workflow for a project in `project_prefix` (the project's folder
-/// relative to the repository, empty or ending in `/`).
+/// The workflow guarding `branch` for a project in `project_prefix` (the
+/// project's folder relative to the repository, empty or ending in `/`).
 #[must_use]
-pub fn render_check_workflow(release: &CheckRelease<'_>, project_prefix: &str) -> String {
+pub fn render_guard_workflow(
+    action: &GuardAction<'_>,
+    branch: &str,
+    project_prefix: &str,
+) -> String {
     let project = project_prefix.trim_end_matches('/');
     let project = if project.is_empty() { "." } else { project };
     TEMPLATE
         .replace("\r\n", "\n")
-        .replace("{{VERSION}}", release.version)
-        .replace("{{URL}}", &yaml_string(release.url))
-        .replace("{{SHA256}}", &yaml_string(release.sha256))
+        .replace("{{VERSION}}", action.version)
+        .replace("{{REF}}", action.reference)
+        .replace("{{BRANCH}}", &yaml_string(branch))
         .replace("{{PROJECT}}", &yaml_string(project))
 }
 
@@ -52,14 +56,14 @@ fn yaml_string(value: &str) -> String {
 
 /// # Errors
 /// Returns the I/O error when the file exists but cannot be read.
-pub fn check_workflow_state(
+pub fn guard_workflow_state(
     repository_root: &Path,
     rendered: &str,
-) -> std::io::Result<CheckWorkflowState> {
-    match fs::read_to_string(repository_root.join(CHECK_WORKFLOW_FILE)) {
-        Ok(text) if text.replace("\r\n", "\n") == rendered => Ok(CheckWorkflowState::Current),
-        Ok(_) => Ok(CheckWorkflowState::Different),
-        Err(error) if error.kind() == ErrorKind::NotFound => Ok(CheckWorkflowState::Missing),
+) -> std::io::Result<GuardWorkflowState> {
+    match fs::read_to_string(repository_root.join(GUARD_WORKFLOW_FILE)) {
+        Ok(text) if text.replace("\r\n", "\n") == rendered => Ok(GuardWorkflowState::Current),
+        Ok(_) => Ok(GuardWorkflowState::Different),
+        Err(error) if error.kind() == ErrorKind::NotFound => Ok(GuardWorkflowState::Missing),
         Err(error) => Err(error),
     }
 }
@@ -69,8 +73,8 @@ pub fn check_workflow_state(
 ///
 /// # Errors
 /// Returns the I/O error.
-pub fn install_check_workflow(repository_root: &Path, rendered: &str) -> std::io::Result<()> {
-    let path = repository_root.join(CHECK_WORKFLOW_FILE);
+pub fn install_guard_workflow(repository_root: &Path, rendered: &str) -> std::io::Result<()> {
+    let path = repository_root.join(GUARD_WORKFLOW_FILE);
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
@@ -92,49 +96,53 @@ pub fn install_check_workflow(repository_root: &Path, rendered: &str) -> std::io
 mod tests {
     use super::*;
 
-    const RELEASE: CheckRelease<'static> = CheckRelease {
+    const ACTION: GuardAction<'static> = GuardAction {
+        reference: "0123456789abcdef0123456789abcdef01234567",
         version: "0.2.0",
-        url: "https://github.com/AngelicaProject/Aeria/releases/download/v0.2.0/aeria-check-0.2.0-x86_64-unknown-linux-gnu.tar.gz",
-        sha256: "ab12",
     };
 
     #[test]
     fn the_template_is_filled_in() {
-        let text = render_check_workflow(&RELEASE, "");
-        for placeholder in ["{{VERSION}}", "{{URL}}", "{{SHA256}}", "{{PROJECT}}"] {
+        let text = render_guard_workflow(&ACTION, "main", "");
+        for placeholder in ["{{VERSION}}", "{{REF}}", "{{BRANCH}}", "{{PROJECT}}"] {
             assert!(!text.contains(placeholder), "{placeholder} is replaced");
         }
-        assert!(text.contains("AERIA_CHECK_SHA256: \"ab12\""));
-        assert!(text.contains("PROJECT: \".\""));
-        assert!(text.contains("Install aeria-check 0.2.0"));
+        assert!(text.contains(
+            "uses: AngelicaProject/Aeria/guard@0123456789abcdef0123456789abcdef01234567 # 0.2.0"
+        ));
+        assert!(text.contains("branches: [\"main\"]"));
+        assert!(text.contains("project: \".\""));
+        assert!(text.contains("name: Aeria Guard\n"));
         assert!(
-            render_check_workflow(&RELEASE, "translation/").contains("PROJECT: \"translation\"")
+            render_guard_workflow(&ACTION, "trunk", "translation/")
+                .contains("project: \"translation\"")
         );
     }
 
     #[test]
     fn the_workflow_is_installed_and_recognized() {
         let temp = tempfile::tempdir().expect("temp");
-        let rendered = render_check_workflow(&RELEASE, "");
+        let rendered = render_guard_workflow(&ACTION, "main", "");
         assert_eq!(
-            check_workflow_state(temp.path(), &rendered).expect("state"),
-            CheckWorkflowState::Missing
+            guard_workflow_state(temp.path(), &rendered).expect("state"),
+            GuardWorkflowState::Missing
         );
-        install_check_workflow(temp.path(), &rendered).expect("install");
+        install_guard_workflow(temp.path(), &rendered).expect("install");
         assert_eq!(
-            check_workflow_state(temp.path(), &rendered).expect("state"),
-            CheckWorkflowState::Current
+            guard_workflow_state(temp.path(), &rendered).expect("state"),
+            GuardWorkflowState::Current
         );
-        let newer = render_check_workflow(
-            &CheckRelease {
+        let newer = render_guard_workflow(
+            &GuardAction {
                 version: "0.3.0",
-                ..RELEASE
+                ..ACTION
             },
+            "main",
             "",
         );
         assert_eq!(
-            check_workflow_state(temp.path(), &newer).expect("state"),
-            CheckWorkflowState::Different
+            guard_workflow_state(temp.path(), &newer).expect("state"),
+            GuardWorkflowState::Different
         );
     }
 }

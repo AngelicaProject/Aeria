@@ -372,11 +372,9 @@
   line-height: 1.45;
 }
 .string-guide-row:hover { background: var(--hover); }
-.string-guide-row.is-bad { background: var(--bad-soft); }
 .string-guide-icon,
 .string-guide-mark { flex: none; width: 14px; margin-top: 2px; color: var(--fg-faint); }
 .string-guide-mark.is-ok { color: var(--ok); }
-.string-guide-mark.is-bad { color: var(--bad); }
 .string-guide-mark.is-todo { color: var(--warn); }
 .string-guide-label { flex: none; color: var(--fg-muted); }
 .string-guide-value { min-width: 0; color: var(--fg); overflow-wrap: anywhere; }
@@ -406,7 +404,6 @@
 .string-guide-except:focus-visible,
 .string-guide-row.is-excepted .string-guide-except { opacity: 1; }
 .string-guide-row.is-excepted .string-guide-insert { color: var(--fg-subtle); font-weight: 400; text-decoration: line-through; }
-.string-guide-never { color: var(--bad); font-size: var(--text-2xs); }
 /* Where a name's translation comes from: what it names, and the string. */
 .string-guide-origin {
   justify-self: start;

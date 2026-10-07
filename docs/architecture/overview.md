@@ -65,10 +65,10 @@ Deleting local cache must never delete a user's translation work.
 - `aeria-knowledge`: the project knowledge in `aeria-knowledge/` (style and terms): reading and checking it, and the rules every translation follows (see [`knowledge.md`](./knowledge.md)).
 - `aeria-model`: machine translation: the ChatGPT subscription sign-in, the Codex Responses client, and the run that translates the untranslated strings of `po/` (see [`translate.md`](./translate.md)).
 - `aeria-search`: local indexing, source search, translation memory, and query services.
-- `aeria-git`: repository operations and Git integration per string of the PO files, including HTTPS host credentials from the Git credential helper for forge adapters, and the merge check workflow template.
+- `aeria-git`: repository operations and Git integration per string of the PO files, including HTTPS host credentials from the Git credential helper for forge adapters, and the Aeria Guard workflow template.
 - `aeria-export`: Harmonia pack generation: selecting translations from `po/`, validation, the Pack Format v1 writer, signing, transport compression, and feed entries, and Pack Settings v1. String encoding is injected (`StringEncoder`); production uses the `aeria-se` codec.
 - `aeria-fonts`: glyphs for game fonts that lack target-language characters: Font Settings v1, the supported game font sizes and their native metrics, the bundled recommended source fonts, rasterization, and the optional `FONTS` pack section. `aeria-export` writes the section into the pack.
-- `aeria-check`: the `aeria-check` command for the CI of translation repositories: the integrity, translation, and merge stages of the [merge check](./git.md#merge-check-ci), built on the same checks as the desktop. It needs no game and does not depend on Tauri.
+- `aeria-guard`: the `aeria-guard` command for the CI of translation repositories: the integrity, translation, and changes stages of [Aeria Guard](./git.md#aeria-guard) and the review of a change, built on the same checks as the desktop. It needs no game and does not depend on Tauri; the Aeria Guard action (`guard/action.yml`) builds it from source.
 - `aeria-publish`: pack publishing adapters: signing keys in the OS credential store, GitHub releases over the REST API, and the feed workflow template. It receives the GitHub credential from its caller and never stores it.
 
 `apps/desktop/src-tauri` is an adapter/composition layer, not the home of domain logic.

@@ -1,3 +1,4 @@
+import { shortcutKey } from "../shortcuts";
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { flushSync } from "react-dom";
 import { Effect, getCurrentWindow } from "@tauri-apps/api/window";
@@ -64,7 +65,7 @@ import {
   type OccurrenceFilter,
   type TranslationOccurrenceView,
 } from "../translationOccurrences";
-import { initialDocumentTabsState, reduceDocumentTabs, type DocumentTabsState } from "../documentTabs";
+import { closeDocumentTabs, documentIdForSheet, initialDocumentTabsState, reduceDocumentTabs, type DocumentTabsState } from "../documentTabs";
 import { initialDockLayout, reduceDockLayout, type DockRegion } from "../dockLayout";
 import { createLoadProgress } from "../loadProgress";
 import { hasWindowsBackdrop } from "../ui/theme/windowBackdrop";
@@ -73,6 +74,7 @@ import { themeRegistry } from "../ui/theme/registry";
 import { usePreferences } from "../ui/preferences";
 import type { RowTarget } from "../commandPalette";
 import { UiIcon } from "../ui/primitives/UiIcon";
+import { copyText, type MenuEntry } from "../ui/primitives/RightClickMenu";
 import { reportUnsavedDraft } from "../ui/appUpdateStore";
 import { useI18n, type MessageKey, type Translate } from "../ui/i18n";
 
@@ -106,7 +108,12 @@ type SheetLoader = {
 };
 
 /** A string to open once its sheet has loaded far enough to contain it. */
-type PendingReveal = { sheetName: string; target: RowTarget };
+/**
+ * A string to select once its sheet has loaded. A `quiet` one is the string a
+ * sheet was left on: when it is gone the sheet opens at its top without a
+ * warning, and the strings filter stays as it is.
+ */
+type PendingReveal = { sheetName: string; target: RowTarget; quiet?: boolean };
 
 type EditorError = {
   title: string;
@@ -289,6 +296,10 @@ export function EditorShell({
   const focusTargetRequest = useRef(false);
   const loaderRef = useRef<SheetLoader | null>(null);
   const pendingReveal = useRef<PendingReveal | null>(null);
+  /** The string each sheet was last on, so a sheet opens again where it was left. */
+  const lastStrings = useRef(new Map<string, RowTarget>());
+  /** False while a commit tab covers the sheet, whose editor then takes no shortcuts. */
+  const sheetShown = useRef(true);
   /** Overlays saved while a sheet streams, applied to pages read before the save. */
   const overlayPatches = useRef(new Map<string, TranslationOverlayDto | null>());
   const selectedRowKeyRef = useRef<string | null>(null);
@@ -337,11 +348,11 @@ export function EditorShell({
   const handleDirtyChange = useCallback((nextDirty: boolean) => {
     hasDirtyDraft.current = nextDirty;
     setDirty(nextDirty);
-    const activeDocumentId = documentTabs.activeId;
-    if (activeDocumentId) {
-      setDocumentTabs((current) => reduceDocumentTabs(current, { type: "setDirty", id: activeDocumentId, dirty: nextDirty }));
+    if (selectedSheetName) {
+      const id = documentIdForSheet(selectedSheetName);
+      setDocumentTabs((current) => reduceDocumentTabs(current, { type: "setDirty", id, dirty: nextDirty }));
     }
-  }, [documentTabs.activeId]);
+  }, [selectedSheetName]);
 
   const applyOverlay = useCallback((sourceBinding: TranslationCellDto["sourceBinding"], translation: TranslationOverlayDto | null) => {
     const targetKey = bindingKey(sourceBinding);
@@ -368,6 +379,10 @@ export function EditorShell({
     setSelectedRowCursor(row ? cursorForRow(row) : null);
     setSelectedBinding(cell?.sourceBinding ?? null);
   }, []);
+
+  useEffect(() => {
+    if (selectedBinding) lastStrings.current.set(selectedBinding.sheetName, { rowId: selectedBinding.rowId, subrowId: selectedBinding.subrowId, columnIndex: selectedBinding.columnIndex });
+  }, [selectedBinding]);
 
   /** Hands streamed rows to the list, patched with overlays saved since they were read. */
   const commitRows = useCallback((loader: SheetLoader) => {
@@ -423,11 +438,11 @@ export function EditorShell({
       setEditorError(null);
       const key = bindingKey(cell.sourceBinding);
       const occurrence = flattenTranslationRows([row]).filter((candidate) => bindingKey(candidate.binding) === key);
-      if (filterOccurrences(occurrence, lensFilterRef.current).length === 0) setLensFilter(emptyOccurrenceFilter);
+      if (!reveal.quiet && filterOccurrences(occurrence, lensFilterRef.current).length === 0) setLensFilter(emptyOccurrenceFilter);
       return;
     }
     if (loader.failed) return;
-    setEditorError({
+    if (!reveal.quiet) setEditorError({
       title: t("workbench.error.stringNotFound"),
       tone: "warning",
       error: { code: "rowNotTranslatable", message: t("workbench.error.rowNotTranslatable", cellCoordinates(loader.sheetName, target)) },
@@ -448,7 +463,8 @@ export function EditorShell({
     const generation = ++requestGeneration.current;
     pendingAdvance.current = null;
     overlayPatches.current = new Map();
-    pendingReveal.current = reveal ? { sheetName, target: reveal } : null;
+    const left = reveal || refresh ? undefined : lastStrings.current.get(sheetName);
+    pendingReveal.current = reveal ? { sheetName, target: reveal } : left ? { sheetName, target: left, quiet: true } : null;
     const loader: SheetLoader = {
       generation,
       sheetName,
@@ -520,6 +536,24 @@ export function EditorShell({
     if (firstSheetName) void beginSheetLoad(firstSheetName, { immediate: false });
   }, [beginSheetLoad, firstSheetName]);
 
+  /** Leaves no sheet open, once the tab of the open one is closed. */
+  const clearSheet = useCallback(() => {
+    requestGeneration.current += 1;
+    loaderRef.current = null;
+    pendingReveal.current = null;
+    pendingAdvance.current = null;
+    hasDirtyDraft.current = false;
+    setDirty(false);
+    setSelectedSheetName(null);
+    setLoadedSheetName(null);
+    setRows([]);
+    setSelectedRowCursor(null);
+    setSelectedBinding(null);
+    setSheetLoading(false);
+    setSheetStreaming(false);
+    setEditorError(null);
+  }, []);
+
   const requestDiscardConfirmation = useCallback((message: string): Promise<boolean> => {
     if (!hasDirtyDraft.current) return Promise.resolve(true);
     if (discardRequestRef.current) return Promise.resolve(false);
@@ -569,46 +603,50 @@ export function EditorShell({
     };
   }, [requestDiscardConfirmation, t]);
 
-  const handleSheetSelect = useCallback(async (sheetName: string, pin = false) => {
+  // `keep` opens the sheet in a tab of its own, beside the preview.
+  const handleSheetSelect = useCallback(async (sheetName: string, keep = false) => {
+    // The open sheet only comes to the front, as it was.
     if (sheetName === selectedSheetName) {
-      const activeId = documentTabs.activeId;
-      if (pin && activeId) setDocumentTabs((current) => reduceDocumentTabs(current, { type: "pin", id: activeId }));
+      setDocumentTabs((current) => reduceDocumentTabs(current, { type: "openSheet", sheetName, keep }));
       return;
     }
     if (!(await requestDiscardConfirmation(t("workbench.discard.changeSheet")))) return;
-    setDocumentTabs((current) => reduceDocumentTabs(current, { type: "openSheet", sheetName, pin }));
+    setDocumentTabs((current) => reduceDocumentTabs(current, { type: "openSheet", sheetName, keep }));
     void beginSheetLoad(sheetName);
-  }, [beginSheetLoad, documentTabs.activeId, requestDiscardConfirmation, selectedSheetName, t]);
+  }, [beginSheetLoad, requestDiscardConfirmation, selectedSheetName, t]);
 
+  // A commit tab covers the open sheet without closing it, so going to one
+  // and back keeps the sheet, its string, and the draft as they were. Only
+  // another sheet replaces the open one.
   const handleDocumentSelect = useCallback(async (documentId: string) => {
     const document = documentTabs.tabs.find((tab) => tab.id === documentId);
     if (!document || document.id === documentTabs.activeId) return;
-    if (!(await requestDiscardConfirmation(t("workbench.discard.changeSheet")))) return;
+    const otherSheet = document.kind === "sheet" && document.sheetName !== selectedSheetName;
+    if (otherSheet && !(await requestDiscardConfirmation(t("workbench.discard.changeSheet")))) return;
     setDocumentTabs((current) => reduceDocumentTabs(current, { type: "activate", id: documentId }));
-    if (document.kind === "sheet") void beginSheetLoad(document.sheetName);
-  }, [beginSheetLoad, documentTabs.activeId, documentTabs.tabs, requestDiscardConfirmation, t]);
+    if (otherSheet) void beginSheetLoad(document.sheetName);
+  }, [beginSheetLoad, documentTabs.activeId, documentTabs.tabs, requestDiscardConfirmation, selectedSheetName, t]);
 
-  const handleDocumentClose = useCallback(async (documentId: string) => {
-    const document = documentTabs.tabs.find((tab) => tab.id === documentId);
-    if (!document) return;
-    if (document.kind === "sheet" && document.id === documentTabs.activeId && !(await requestDiscardConfirmation(t("workbench.discard.closeSheet")))) return;
-    const next = reduceDocumentTabs(documentTabs, { type: "close", id: documentId });
-    setDocumentTabs(next);
-    if (next.activeId && next.activeId !== documentTabs.activeId) {
-      const nextDocument = next.tabs.find((tab) => tab.id === next.activeId);
-      if (nextDocument?.kind === "sheet") void beginSheetLoad(nextDocument.sheetName);
-    }
-  }, [beginSheetLoad, documentTabs, requestDiscardConfirmation, t]);
+  // Closing the active sheet asks before its unsaved edit is lost.
+  // Closing the open sheet's tab closes the sheet: the next sheet tab opens,
+  // or none is left open.
+  const handleDocumentsClose = useCallback(async (documentIds: readonly string[]) => {
+    const closesSheet = selectedSheetName !== null && documentIds.includes(documentIdForSheet(selectedSheetName));
+    if (closesSheet && !(await requestDiscardConfirmation(t("workbench.discard.closeSheet")))) return;
+    const next = closeDocumentTabs(documentTabs, documentIds, selectedSheetName);
+    setDocumentTabs(next.state);
+    if (next.open) void beginSheetLoad(next.open);
+    else if (next.clear) clearSheet();
+  }, [beginSheetLoad, clearSheet, documentTabs, requestDiscardConfirmation, selectedSheetName, t]);
+  const handleDocumentClose = useCallback((documentId: string) => handleDocumentsClose([documentId]), [handleDocumentsClose]);
 
-  const openCommit = useCallback(async (commit: GitCommitDto) => {
-    const active = documentTabs.tabs.find((document) => document.id === documentTabs.activeId);
-    if (active?.kind === "sheet" && !(await requestDiscardConfirmation(t("workbench.discard.changeSheet")))) return;
+  const openCommit = useCallback((commit: GitCommitDto) => {
     setDocumentTabs((current) => reduceDocumentTabs(current, { type: "openCommit", commitId: commit.id, label: `${commit.id.slice(0, 7)} ${commit.subject}` }));
-  }, [documentTabs.activeId, documentTabs.tabs, requestDiscardConfirmation, t]);
-  const stableOpenCommit = useStableCallback((commit: GitCommitDto) => void openCommit(commit));
+  }, []);
+  const stableOpenCommit = useStableCallback((commit: GitCommitDto) => openCommit(commit));
 
-  const handleDocumentPin = useCallback((documentId: string) => {
-    setDocumentTabs((current) => reduceDocumentTabs(current, { type: "pin", id: documentId }));
+  const handleDocumentKeep = useCallback((documentId: string) => {
+    setDocumentTabs((current) => reduceDocumentTabs(current, { type: "keep", id: documentId }));
   }, []);
 
   const handleOccurrenceSelect = useCallback(async (occurrence: TranslationOccurrenceView) => {
@@ -844,12 +882,13 @@ export function EditorShell({
       const sameRow = selectedRowKeyRef.current === rowKey({ sheetName, rowId: target.rowId, subrowId: target.subrowId });
       if (!sameRow && !(await requestDiscardConfirmation(t("workbench.discard.openString")))) return;
       if (loaderRef.current !== loader) return;
+      setDocumentTabs((current) => reduceDocumentTabs(current, { type: "openSheet", sheetName }));
       pendingReveal.current = { sheetName, target };
       settleReveal(loader);
       return;
     }
     if (!(await requestDiscardConfirmation(t("workbench.discard.openString")))) return;
-    if (sheetName !== selectedSheetName) setDocumentTabs((current) => reduceDocumentTabs(current, { type: "openSheet", sheetName, pin: true }));
+    if (sheetName !== selectedSheetName) setDocumentTabs((current) => reduceDocumentTabs(current, { type: "openSheet", sheetName, keep: true }));
     setLensFilter(emptyOccurrenceFilter);
     void beginSheetLoad(sheetName, { reveal: target });
   }, [beginSheetLoad, requestDiscardConfirmation, selectedSheetName, settleReveal, sheetsByName, t]);
@@ -1006,6 +1045,7 @@ export function EditorShell({
         minHeight: 220,
         decorations: false,
         resizable: true,
+        dragDropEnabled: false,
         ...(hasWindowsBackdrop() ? { transparent: true, windowEffects: { effects: [Effect.Acrylic] } } : {}),
       });
       if (existing) {
@@ -1028,14 +1068,14 @@ export function EditorShell({
   useEffect(() => {
     function handleShortcut(event: KeyboardEvent) {
       if (event.defaultPrevented || discardRequestRef.current) return;
-      const key = event.key.toLocaleLowerCase();
+      const key = shortcutKey(event);
       const editable = isEditableTarget(event.target);
       if (event.ctrlKey && event.shiftKey && !event.altKey && key === "p") {
         event.preventDefault();
         openPalette(">");
         return;
       }
-      if (event.ctrlKey && event.shiftKey && !event.altKey && key === "enter" && !editable) {
+      if (event.ctrlKey && event.shiftKey && !event.altKey && key === "enter" && !editable && sheetShown.current) {
         event.preventDefault();
         editorRef.current?.approve();
         return;
@@ -1049,7 +1089,8 @@ export function EditorShell({
           openPalette(":");
         } else if (key === "w" && documentTabs.activeId) {
           event.preventDefault();
-          void handleDocumentClose(documentTabs.activeId);
+          // A pinned tab is closed only from its menu.
+          if (!documentTabs.tabs.find((tab) => tab.id === documentTabs.activeId)?.pinned) void handleDocumentClose(documentTabs.activeId);
         } else if (key === "b") {
           event.preventDefault();
           dispatchLayout({ type: "toggleRegion", regionId: "leftDock" });
@@ -1059,21 +1100,22 @@ export function EditorShell({
         } else if (key === ",") {
           event.preventDefault();
           openSettings();
-        } else if (key === "s" && !editable) {
+        } else if (key === "s" && !editable && sheetShown.current) {
           event.preventDefault();
           editorRef.current?.saveTarget(false);
-        } else if (key === "enter" && !editable) {
+        } else if (key === "enter" && !editable && sheetShown.current) {
           event.preventDefault();
           editorRef.current?.saveTarget(true);
         }
-      } else if (event.altKey && !event.ctrlKey && (event.key === "ArrowDown" || event.key === "ArrowUp") && !editable) {
+      } else if (event.altKey && !event.ctrlKey && (event.key === "ArrowDown" || event.key === "ArrowUp") && !editable && sheetShown.current) {
         event.preventDefault();
         navigateOccurrence(event.key === "ArrowDown" ? 1 : -1);
       }
     }
-    window.addEventListener("keydown", handleShortcut);
-    return () => window.removeEventListener("keydown", handleShortcut);
-  }, [documentTabs.activeId, handleDocumentClose, navigateOccurrence, openPalette, openSettings]);
+    // On the document, so the window's guard against browser commands runs after it.
+    document.addEventListener("keydown", handleShortcut);
+    return () => document.removeEventListener("keydown", handleShortcut);
+  }, [documentTabs.activeId, documentTabs.tabs, handleDocumentClose, navigateOccurrence, openPalette, openSettings]);
 
   // Presentation ---------------------------------------------------------
 
@@ -1086,7 +1128,20 @@ export function EditorShell({
     dirty: document.dirty,
     icon: document.kind === "commit" ? "gitCommit" : "table2",
   }));
+  const documentMenu = (documentId: string): MenuEntry[] => {
+    const document = documentTabs.tabs.find((tab) => tab.id === documentId);
+    if (document?.kind === "commit" && document.commitId) {
+      const commitId = document.commitId;
+      return [{ id: "copyId", icon: "copy", label: t("commit.action.copyId"), run: () => copyText(commitId) }];
+    }
+    if (!document) return [];
+    return [
+      { id: "reveal", icon: "locateFixed", label: t("tabs.menu.reveal"), disabled: document.id !== documentTabs.activeId, run: () => { showPanel("sheets", "left", false); setRevealSheetSignal((current) => current + 1); } },
+      { id: "copyName", icon: "copy", label: t("tabs.menu.copyName"), run: () => copyText(document.sheetName) },
+    ];
+  };
   const activeCommitId = documentTabs.tabs.find((document) => document.id === documentTabs.activeId)?.commitId ?? null;
+  sheetShown.current = activeCommitId === null;
 
   const sheetHeaderActions = <>
     <IconButton icon={hideEmptySheets ? "eyeOff" : "eye"} label={t(hideEmptySheets ? "workbench.showEmptySheets" : "workbench.hideEmptySheets")} pressed={hideEmptySheets} disabled={closing} onClick={() => setHideEmptySheets((current) => !current)} />
@@ -1300,67 +1355,72 @@ export function EditorShell({
               activeDocumentId={documentTabs.activeId}
               onSelect={(documentId) => void handleDocumentSelect(documentId)}
               onClose={(documentId) => void handleDocumentClose(documentId)}
-              onPin={handleDocumentPin}
+              onCloseMany={(documentIds) => void handleDocumentsClose(documentIds)}
+              menuFor={documentMenu}
+              onKeep={handleDocumentKeep}
+              onPinnedChange={(documentId, pinned) => setDocumentTabs((current) => reduceDocumentTabs(current, { type: "setPinned", id: documentId, pinned }))}
               onReorder={(documentId, beforeDocumentId) => setDocumentTabs((current) => reduceDocumentTabs(current, { type: "reorder", id: documentId, beforeId: beforeDocumentId }))}
             />
-            {activeCommitId ? (
-              <CommitView commitId={activeCommitId} onRevealBinding={stableRevealBinding} />
-            ) : !selectedSheetName ? (
-              <div className="document-empty empty-state">
-                <strong>{t("workbench.noSheetOpen")}</strong>
-                <p>{t("workbench.noSheetOpenHint")}</p>
-              </div>
-            ) : sheetHasNoRows ? (
-              <div className="document-empty empty-state">
-                <strong>{t("workbench.noRows")}</strong>
-                <p>{t("workbench.noRowsHint")}</p>
-              </div>
-            ) : (
-              <div className="document-split">
-                <TranslationList
-                  occurrences={visibleOccurrences}
-                  allOccurrences={allOccurrences}
-                  loadedOccurrenceCount={allOccurrences.length}
-                  sheetProgress={selectedSheetProgress}
-                  filter={lensFilter}
-                  onFilterChange={setLensFilter}
-                  selectedBinding={selectedBinding}
-                  selectedSheetName={selectedSheetName}
-                  loadedSheetName={loadedSheetName}
-                  disabled={closing}
-                  loading={sheetLoading}
-                  streaming={sheetStreaming}
-                  loadProgress={loadProgress}
-                  sheetStringCount={selectedSheet?.translatableCellCount ?? null}
-                  onSelect={selectOccurrence}
-                  onNavigate={stableNavigateOccurrence}
-                  changedKinds={changedKinds}
-                  onReveal={stableRevealBinding}
-                  onOpenSheet={stableOpenSheet}
-                  sceneTarget={sceneTarget}
-                  onSceneTargetShown={clearSceneTarget}
-                />
-                <ResizeHandle axis="y" label={t("workbench.resizeEditor")} {...resizeProps("editor", "--editor-height", -1)} />
-                <TranslationEditor
-                  ref={editorRef}
-                  key={selectedRow ? rowKey(selectedRow) : "empty-editor"}
-                  row={selectedRow}
-                  selectedBinding={selectedBinding}
-                  sourceLanguage={project.sourceLanguage}
-                  mutations={mutations}
-                  onDirtyChange={stableDirtyChange}
-                  onSelectCell={handleFieldSelect}
-                  onSaveTarget={saveTarget}
-                  onApprove={approve}
-                  onReview={review}
-                  onSaveNote={saveNote}
-                  onNavigate={stableNavigateFromEditor}
-                  takeFocusRequest={takeFocusRequest}
-                  checkpoint={selectedCheckpoint}
-                  historyRevision={workspaceRevision + projectRevision}
-                />
-              </div>
-            )}
+            {activeCommitId ? <CommitView commitId={activeCommitId} onRevealBinding={stableRevealBinding} onWorkspaceChanged={stableWorkspaceChanged} /> : null}
+            {/* Kept mounted under a commit tab, so the sheet returns as it was left. */}
+            <div className="document-sheet" hidden={activeCommitId !== null}>
+              {!selectedSheetName ? (
+                <div className="document-empty empty-state">
+                  <strong>{t("workbench.noSheetOpen")}</strong>
+                  <p>{t("workbench.noSheetOpenHint")}</p>
+                </div>
+              ) : sheetHasNoRows ? (
+                <div className="document-empty empty-state">
+                  <strong>{t("workbench.noRows")}</strong>
+                  <p>{t("workbench.noRowsHint")}</p>
+                </div>
+              ) : (
+                <div className="document-split">
+                  <TranslationList
+                    occurrences={visibleOccurrences}
+                    allOccurrences={allOccurrences}
+                    loadedOccurrenceCount={allOccurrences.length}
+                    sheetProgress={selectedSheetProgress}
+                    filter={lensFilter}
+                    onFilterChange={setLensFilter}
+                    selectedBinding={selectedBinding}
+                    selectedSheetName={selectedSheetName}
+                    loadedSheetName={loadedSheetName}
+                    disabled={closing}
+                    loading={sheetLoading}
+                    streaming={sheetStreaming}
+                    loadProgress={loadProgress}
+                    sheetStringCount={selectedSheet?.translatableCellCount ?? null}
+                    onSelect={selectOccurrence}
+                    onNavigate={stableNavigateOccurrence}
+                    changedKinds={changedKinds}
+                    onReveal={stableRevealBinding}
+                    onOpenSheet={stableOpenSheet}
+                    sceneTarget={sceneTarget}
+                    onSceneTargetShown={clearSceneTarget}
+                  />
+                  <ResizeHandle axis="y" label={t("workbench.resizeEditor")} {...resizeProps("editor", "--editor-height", -1)} />
+                  <TranslationEditor
+                    ref={editorRef}
+                    key={selectedRow ? rowKey(selectedRow) : "empty-editor"}
+                    row={selectedRow}
+                    selectedBinding={selectedBinding}
+                    sourceLanguage={project.sourceLanguage}
+                    mutations={mutations}
+                    onDirtyChange={stableDirtyChange}
+                    onSelectCell={handleFieldSelect}
+                    onSaveTarget={saveTarget}
+                    onApprove={approve}
+                    onReview={review}
+                    onSaveNote={saveNote}
+                    onNavigate={stableNavigateFromEditor}
+                    takeFocusRequest={takeFocusRequest}
+                    checkpoint={selectedCheckpoint}
+                    historyRevision={workspaceRevision + projectRevision}
+                  />
+                </div>
+              )}
+            </div>
           </section>
           {bottomOpen && bottomPanelId && detachedPanel !== bottomPanelId ? <>
             <ResizeHandle axis="y" label={t("workbench.resizeBottom")} {...resizeProps("bottomPanel", "--bottom-panel-height", -1)} />

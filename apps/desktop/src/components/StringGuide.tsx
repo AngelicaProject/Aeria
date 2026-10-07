@@ -210,10 +210,10 @@ function GuideColumn({ className, icon, title, count, action, children }: { clas
   );
 }
 
-/** A mark of how the translation stands with a hint: done, wrong, or still to do. */
-function StateMark({ state, title }: { state: "ok" | "bad" | "todo" | null; title?: string }) {
+/** A mark of how the translation stands with a hint: done or still to do. */
+function StateMark({ state, title }: { state: "ok" | "todo" | null; title?: string }) {
   if (state === null) return <span className="string-guide-mark" aria-hidden />;
-  const icon: UiIconName = state === "ok" ? "check" : state === "bad" ? "circleX" : "circle";
+  const icon: UiIconName = state === "ok" ? "check" : "circle";
   return <span className={`string-guide-mark is-${state}`} title={title}><UiIcon icon={icon} size="xs" /></span>;
 }
 
@@ -284,12 +284,9 @@ function StringFacts({ hints, draft, verdict, onPick }: { hints: StringHintsDto;
   );
 }
 
-function termState(term: HintTermDto, verdict: DraftCheckDto | null): { state: "ok" | "bad" | "todo" | null; variant?: string } {
-  if (term.excepted || verdict === null) return { state: null };
-  const forbidden = verdict.issues.find((issue) => issue.kind === "forbiddenTerm" && issue.term === term.term);
-  if (forbidden) return { state: "bad", variant: forbidden.variant ?? "" };
-  if (verdict.issues.some((issue) => issue.kind === "termNotUsed" && issue.term === term.term)) return { state: "todo" };
-  return { state: "ok" };
+function termState(term: HintTermDto, verdict: DraftCheckDto | null): "ok" | "todo" | null {
+  if (term.excepted || verdict === null) return null;
+  return verdict.issues.some((issue) => issue.kind === "termNotUsed" && issue.term === term.term) ? "todo" : "ok";
 }
 
 /** What the strings of a name sheet name, by sheet. */
@@ -348,10 +345,10 @@ function Words({ hints, draft, verdict, onPick, onReveal, onException }: { hints
   return (
     <ul className="string-guide-list">
       {hints.terms.map((term) => {
-        const { state, variant } = termState(term, verdict);
-        const stateTitle = state === "bad" ? t("hints.term.forbidden", { variant: variant ?? "" }) : state === "todo" ? t("hints.term.unused") : state === "ok" ? t("hints.term.used") : undefined;
+        const state = termState(term, verdict);
+        const stateTitle = state === "todo" ? t("hints.term.unused") : state === "ok" ? t("hints.term.used") : undefined;
         return (
-          <li className={`string-guide-row is-term${term.excepted ? " is-excepted" : ""}${state === "bad" ? " is-bad" : ""}`} key={`term:${term.term}`}>
+          <li className={`string-guide-row is-term${term.excepted ? " is-excepted" : ""}`} key={`term:${term.term}`}>
             <StateMark state={state} {...(stateTitle ? { title: stateTitle } : {})} />
             <div className="string-guide-entry">
               <div className="string-guide-pair">
@@ -369,7 +366,6 @@ function Words({ hints, draft, verdict, onPick, onReveal, onException }: { hints
                   {t(term.excepted ? "hints.term.restore" : "hints.term.except")}
                 </button>
               </div>
-              {term.never.length > 0 ? <div className="string-guide-never">{t("hints.term.never", { variants: term.never.join(", ") })}</div> : null}
               {term.note ? <div className="string-guide-note">{term.note}</div> : null}
             </div>
           </li>

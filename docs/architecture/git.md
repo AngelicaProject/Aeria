@@ -20,15 +20,20 @@ instead of committing them.
 
 "Checkpoint" names Aeria's commit operation in this documentation and in
 code. The interface calls it what Git users know: a commit (the button is
-labelled Commit).
+labelled Commit). As in other Git tools, **Commit** takes what is staged
+when anything is (see [Working-tree operations](#working-tree-operations));
+with nothing staged it is a checkpoint.
 
 ## Git in the desktop
 
 - The **Git dock** is the whole everyday view and follows the repository on
-  its own (below): the branch, which can be switched there, its state against
-  the upstream with Fetch, Pull, and Push, the uncommitted changes (strings grouped by sheet, and project files
-  grouped by area), the checkpoint composer, and the project history with a
-  commit graph. Clicking a commit opens it in a document tab.
+  its own (below): the branch, which can be switched there, and its state
+  against the upstream with Fetch, Pull, and Push above two tabs: Changes,
+  the commit composer over the uncommitted files (see
+  [Changed files](#changed-files)) with the operations of
+  [Working-tree operations](#working-tree-operations), and History, the
+  project history with a commit graph, a search, and a file filter.
+  Clicking a commit opens it in a document tab.
 - **Settings → Repository** holds the setup: remotes, the upstream, the main
   branch, the translator identity, local branches, and working-tree files
   outside the project.
@@ -133,10 +138,10 @@ A checkpoint stages and commits only Aeria-managed paths (`git commit
 --only`): `po/` and the project files `aeria.json`, `.gitattributes`, `aeria-pack.json`, `aeria-fonts.json`, the
 `fonts/` directory of source fonts, the `aeria-knowledge/` directory of
 [project knowledge](../formats/knowledge-v1.md), and the workflows
-`.github/workflows/harmonia-feed.yml` and `.github/workflows/aeria-check.yml`
+`.github/workflows/harmonia-feed.yml` and `.github/workflows/aeria-guard.yml`
 (`PROJECT_PATHS`); a path without a file is left out, since Git has no empty
-folders. Unrelated staged or modified files are left untouched and listed in
-Settings → Repository as other files. A blank message is replaced by a
+folders. Unrelated staged or modified files are left untouched and listed as
+other files. A blank message is replaced by a
 deterministic summary: the string changes, for example `Translate 3 strings,
 update 1 translation (Addon, Quest)`, followed by the changed project areas
 (`; update terms, game fonts`), or `Update glossary, pack settings` when no
@@ -145,14 +150,78 @@ string changed.
 A file `aeria-collaboration.json` left by an earlier Aeria is not a project
 file: Aeria neither reads nor commits it, and it can be deleted with Git.
 
+### Changed files
+
+Uncommitted changes (from `git status`) and each commit's changes (against
+its first parent, from `git diff-tree`) are shown as the files Git reports,
+each with its status (added, modified, deleted, renamed, copied, type
+changed, untracked, or conflicted) (`file_changes.rs`). The uncommitted
+files are split as Git splits them: **Staged Changes**, what the index
+holds against `HEAD`, and the working tree's changes against the index, in
+three groups by what a checkpoint does with them:
+
+- **Translations**: the PO files of `po/`, each with how many of its strings
+  changed and, opened, those changes (see
+  [String changes and history](#string-changes-and-history));
+- **Project files**: the files of [Checkpoint](#checkpoint) besides the
+  translations, each with its readable change (below);
+- **Not committed**: every other file. A checkpoint leaves them as they
+  are; a commit takes them only when they are staged.
+
+A file partly staged appears in both lists, each with its own side of the
+change. A commit's files use the same three groups.
+
+### Working-tree operations
+
+The dock offers the operations Git tools offer on uncommitted files and
+recent commits, each a single Git operation (`aeria-git::worktree`). Paths
+are project-relative and read literally (`--literal-pathspecs`):
+
+- **Stage** (`git add --all`) and **Unstage** (`git restore --staged`;
+  before the first commit, `git rm --cached`) one file, a group, or every
+  staged file.
+- **Discard** gives a file back its staged or committed content (`git
+  restore --worktree`) and deletes an untracked file, after a confirmation
+  that names what cannot be restored. Staged changes stay. A conflicted
+  file is not discarded. The editor's writes wait while files change, and
+  its views read them again.
+- **Commit** takes what is staged when anything is (`git commit`), with a
+  blank message replaced by a summary of the staged string changes;
+  otherwise it is a checkpoint.
+- **Commit (Amend)** replaces the last commit with one that also holds the
+  new changes, what is staged or else what a checkpoint would take; a blank
+  message keeps the commit's message, and without changes only the message
+  changes. **Undo Last Commit** (`git reset --soft HEAD~1`, or removing the
+  branch's only commit) brings the last commit's changes back to the index
+  and its message back to the composer. Both refuse a merge commit, a merge
+  in progress, and a commit any remote-tracking branch contains
+  (`git branch --remotes --contains`), since changing it would need a forced
+  push.
+- **Revert** commits the undoing of a commit that is not a merge (`git
+  revert --no-commit`, then a commit `Revert "<subject>"`). It requires
+  committed translations, as Pull does; PO files that conflict are joined
+  per string (see [Per-string merge](#per-string-merge)) with no
+  resolutions, and a string changed again since, any other conflict, or a
+  result that is not a project for the open game version leaves the branch
+  as it was.
+- **Create branch** at a commit creates the branch there and switches to
+  it, with the requirements and validation of a branch switch (see
+  [Branches](#branches)); a failed switch deletes the new branch again.
+- **Copy** a commit's ID or subject, and **Open on server**: the commit's
+  page on the hosting service of the remote the branch syncs with,
+  `https://<host>/<path>/commit/<id>` (GitLab `/-/commit/`, Bitbucket
+  `/commits/`) for an HTTP(S), SSH, or scp-like remote URL without its
+  credentials; the action is named after the remote (**Open on origin**).
+  A local path has no page. The address comes from the remote,
+  never from the renderer.
+
 ### Project file changes
 
-Uncommitted changes (`HEAD` against the working tree) and each commit's
-changes (against its first parent) are shown for project files in readable
-form, computed in the desktop (`project_changes.rs`):
+Project files are shown in readable form, computed in the desktop
+(`project_changes.rs`):
 
 - the glossary is compared by term: added, removed, and changed entries with
-  translation, note, and forbidden translations;
+  translation, note, other forms, and folder;
 - the style and `.gitattributes` are compared by line;
 - project, pack, and font settings are compared by field, with
   list entries keyed by their `id` or `font` (`fonts › MiedingerMid › source:
@@ -160,7 +229,10 @@ form, computed in the desktop (`project_changes.rs`):
 - font files are reported as added, replaced, or removed with their size;
 - the workflows are reported as added, updated, or removed.
 
-A file that cannot be parsed is reported as changed but unreadable.
+A terms or settings file that does not read as its format (a terms file of
+an older format, invalid JSON) is compared by line instead, and says so. A
+file that is not text, or too large to compare by line, is reported as
+changed without its content.
 
 ### String changes and history
 
@@ -262,49 +334,117 @@ Repository, after a confirmation, and never the current branch:
   "Delete anyway". Remote branches are judged by their remote-tracking
   branches as last fetched.
 
-## Merge check CI
+## Aeria Guard
 
 A Git host merges a pull request as plain text and lets files be edited on
-its website, without Aeria's checks. A text merge that happens to apply can
-still leave conflict markers, broken macros, or removed translations. The
-merge check catches that before the merge.
+its website or in any editor, without Aeria's checks. A text merge that
+happens to apply can still leave conflict markers or broken macros, and a
+file edited outside Aeria can change the game's text, which only a game
+update in Aeria may change. Aeria Guard is the gate of the main branch
+against both, and it summarizes every change for the person who merges it.
 
-`aeria-check` (crate `aeria-check`) runs the checks Aeria runs when it saves
-a translation, without the game, in three stages:
+### Stages
 
-1. **Integrity**: no Git conflict markers in PO files or any project file;
-   `aeria.json` reads; Collaboration, Pack, and Font Settings are valid, and
-   every font file the font settings name exists.
+`aeria-guard` (crate `aeria-guard`) runs, without the game, in three stages:
+
+1. **Integrity**: no Git conflict markers in PO files, the knowledge files,
+   or any project file; `aeria.json` reads; Pack and Font Settings are
+   valid, and every font file the font settings name exists.
 2. **Translations**: every PO file reads without a problem; every `msgctxt`
    is an identity once per file; every translation passes the checks of a
    translation against its `msgid` (see
    [`po-project.md`](./po-project.md#checking)); the knowledge files read.
-3. **Merge**: compared with the base revision (`--base`), a change of the
-   project languages or of the game version, and translations the base has
-   that the result lost, are warnings for the reviewer.
+3. **Changes**, compared with the base revision (`--base`):
+   - While the game version and the project languages stay, the game's data
+     stays as the base has it: no PO file is added or removed, and in every
+     PO file the header, the set of strings, and each string's `msgid` and
+     `#.` notes are unchanged, kept strings of removed game text included.
+     Any difference is an error. Translations, notes, fuzzy marks, reviews,
+     and term exceptions may change.
+   - A change of the game version or the languages is a warning that the
+     game's text was not compared and that the update must come from Aeria.
+   - Translations the base has that the change loses, changed project
+     settings or fonts (they change the pack every player gets), and changed
+     files under `.github/` (they run with the repository's permissions once
+     merged) are warnings; other files outside the project's data are
+     notices.
 
-Errors fail the check; warnings and notices do not. In GitHub Actions the
-findings become annotations on the files and each stage adds a section to
-the job summary. Checks that need the game, such as whether a `msgid` is
-still the game's text, stay with Aeria.
+Errors fail the guard; warnings and notices do not. In GitHub Actions the
+findings become annotations on the files, and each stage adds a section to
+the run's summary. Checks that need the game, such as whether a `msgid` is
+still the game's text, stay with Aeria. `aeria-guard --review --base REV`
+prints the review below on its own.
 
-For a repository whose `origin` is on github.com and whose project is the
-repository's top folder, the Git dock offers
-`.github/workflows/aeria-check.yml`. The workflow checks out GitHub's test
-merge of a pull request with its base (`fetch-depth: 2`, so `HEAD^1` is the
-base), downloads the `aeria-check` archive built with the same Aeria release,
-verifies its SHA-256, and runs the stages as separate steps; the merge stage
-runs only for pull requests. It also runs on pushes. The URL and SHA-256 come
-from the release build (`AERIA_CHECK_URL`, `AERIA_CHECK_SHA256`), so
-development builds cannot offer the workflow. Like the feed workflow it is a
-project file: installing only writes it, the next checkpoint commits it, and
-the dock offers an update when the file differs from what this Aeria writes.
-Making the check required is a branch protection setting on GitHub, which
-Aeria cannot change; the dock links to the repository's branch settings and
-also recommends "Require branches to be up to date before merging". With it,
-a pull request merges only when its branch already contains the base;
-GitHub's merge then produces exactly the branch's tree, and the check remains
-a second line of defense.
+### Review
+
+With a base, the run's summary also gets a review of the change: the
+strings whose translation, note, fuzzy mark, or review changed, file by
+file in folded tables with the source and the text before and after; the
+terms added, removed, or changed by headword; how many lines of the style
+changed; and every other file changed. Long lists are cut to stay within
+GitHub's summary size.
+
+### Workflow and action
+
+The repository runs Aeria Guard through `.github/workflows/aeria-guard.yml`,
+which the Git dock writes (`aeria_git::render_guard_workflow`). It is a
+project file: writing it commits nothing, a checkpoint commits it, and the
+dock offers an update when the file differs from what this Aeria writes.
+The workflow:
+
+- runs on `pull_request_target` for pull requests into the remote's default
+  branch, on pushes to that branch, and by hand. With
+  `pull_request_target` the workflow comes from the base branch, so a pull
+  request cannot change or switch off the check that judges it; its token
+  can only read (`permissions: contents: read`);
+- has one job, **Aeria Guard**, the status check the branch requires;
+- uses the action `AngelicaProject/Aeria/guard@<commit>`, naming by its
+  commit the Aeria the dock's build was made from (`AERIA_COMMIT` of the
+  release build; `main` for a development build), with the version as a
+  comment. Updating the workflow, by hand or with Dependabot, changes that
+  line.
+
+The action (`guard/action.yml` in this repository) builds `aeria-guard`
+from the commit it is taken from, before anything of the project is checked
+out, so nothing in a pull request reaches the build, and the project runs
+exactly the code it named. It then checks out the change without
+credentials: for a pull request GitHub's test merge with its base
+(`refs/pull/<number>/merge`), for a push the pushed commit, two commits
+deep, so the first parent is the base either way, and runs every stage
+against it. The project's files are only read; Git runs no filter or
+textual conversion of theirs, since those need repository configuration
+that a checkout does not carry.
+
+GitHub reads workflows only from the repository's top folder, so the dock
+offers the workflow only for a project there.
+
+### Protection on GitHub
+
+Aeria Guard decides only when GitHub requires it. A translation repository
+is protected by two rulesets, which the dock saves as files to import on
+GitHub (Settings → Rules → Rulesets → New ruleset → Import a ruleset;
+`aeria_publish::branch_ruleset` and `tag_ruleset`):
+
+- **Main branch** (the default branch): no deletion, no force push, changes
+  only through pull requests that merge with a merge commit (it keeps each
+  branch's history, which the [per-string merge](#per-string-merge) reads),
+  and the Aeria Guard check must pass on a branch that is up to date with
+  the base. Nobody bypasses it: maintainers work in branches too.
+- **Pack releases** (`refs/tags/harmonia/**/*`): only maintainers and
+  administrators create release tags, and nobody moves or deletes them, so
+  a published pack stays what players were given.
+
+The dock reads whether the repository has these rules from GitHub's API
+without signing in, which works for public repositories, and reuses the
+answer for ten minutes; a private repository, classic branch protection, or
+no connection leaves the answer unknown.
+
+When the remote refuses a push to a protected branch (GitHub's `GH006` and
+`GH013`), Push reports `gitBranchProtected` instead of Git's output: the
+commits go on in a new branch created at the current commit, and reach the
+main branch through a pull request. For a branch other than the guarded
+one, the dock opens GitHub's page for a pull request from it; for a fork,
+GitHub proposes the repository it was forked from.
 
 ## Remotes and upstream
 
@@ -323,5 +463,15 @@ order in the Git dock, loaded in pages of 100 as the list scrolls, with branch a
 merges included; a project in a subdirectory shows its path-limited history
 with rewritten parents (`--parents`) so the graph stays connected. The graph
 lanes are laid out in the renderer (`commitGraph.ts`). Clicking a commit
-opens it in a document tab with its string changes and project file
-changes; one unpinned commit tab is reused while browsing.
+opens it in a document tab with its changed files; one unpinned commit tab
+is reused while browsing.
+
+A commit of `HEAD` that no remote-tracking branch contains, as last
+fetched (`git rev-list HEAD --not --remotes`), is marked as not pushed yet,
+in the list and in its commit tab: these are the commits Push would publish,
+a merge commit of a Pull among them. Without a remote nothing is marked.
+
+History can be searched and filtered by file: the newest 50,000 commits of
+`HEAD` (path-limited to the project, or to one file) are matched by subject,
+author name or email, or ID prefix, ignoring case. A narrowed history shows
+short IDs instead of the graph, whose lanes would not connect.

@@ -9,19 +9,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
 
 [[package]]
-name = "aeria-check"
-version = "0.1.0"
-dependencies = [
- "aeria-export",
- "aeria-fonts",
- "aeria-git",
- "aeria-knowledge",
- "aeria-po",
- "serde_json",
- "tempfile",
-]
-
-[[package]]
 name = "aeria-core"
 version = "0.1.0"
 dependencies = [
@@ -96,6 +83,19 @@ dependencies = [
  "aeria-po",
  "tempfile",
  "thiserror 2.0.20",
+]
+
+[[package]]
+name = "aeria-guard"
+version = "0.1.0"
+dependencies = [
+ "aeria-export",
+ "aeria-fonts",
+ "aeria-git",
+ "aeria-knowledge",
+ "aeria-po",
+ "serde_json",
+ "tempfile",
 ]
 
 [[package]]

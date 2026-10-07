@@ -7,6 +7,7 @@ import { mayHaveScene } from "../dialogueScene";
 import { sheetDialogue } from "../ipc";
 import { Segmented } from "../ui/primitives/Segmented";
 import { UiIcon } from "../ui/primitives/UiIcon";
+import { RightClickMenu, copyText } from "../ui/primitives/RightClickMenu";
 import { ReviewDot } from "./ReviewDot";
 import { MacroPreview } from "./MacroPreview";
 import { DialogueScene } from "./DialogueScene";
@@ -319,23 +320,30 @@ export const TranslationList = memo(function TranslationList({
               const continuation = !occurrence.firstInRow && occurrences[item.index - 1]?.rowKey === occurrence.rowKey;
               const changeKind = changedKinds.get(key);
               return (
-                <div
-                  id={`lens-${domKey(key)}`}
-                  className={`lens-row${selected ? " selected" : ""}${continuation ? " continuation" : ""}${changeKind ? ` git-${changeKind}` : ""}`}
-                  title={changeKind ? t(changedLabels[changeKind]) : undefined}
-                  role="option"
-                  aria-selected={selected}
-                  aria-disabled={disabled || undefined}
+                <RightClickMenu
                   key={key}
-                  style={{ transform: `translateY(${item.start}px)`, height: item.size }}
-                  onClick={() => { if (!disabled) onSelect(occurrence); }}
+                  entries={() => [
+                    { id: "copySource", icon: "copy", label: t("edit.copySource"), run: () => copyText(occurrence.sourceMacro) },
+                    { id: "copyTranslation", icon: "copy", label: t("edit.copyTranslation"), disabled: !occurrence.targetMacro, run: () => copyText(occurrence.targetMacro ?? "") },
+                  ]}
                 >
-                  <span className="lens-status"><ReviewDot state={occurrence.state} /></span>
-                  <span className="lens-coord mono">{continuation ? "" : `${occurrence.binding.rowId}:${occurrence.binding.subrowId}`}</span>
-                  <span className="lens-field mono">{t("common.column", { column: String(occurrence.binding.columnIndex) })}</span>
-                  <span className="lens-text lens-source" title={occurrence.sourceMacro}>{occurrence.formattingOnly ? <span className="lens-tag" title={t("list.formattingHint")}>{t("list.formattingTag")}</span> : null}<MacroPreview text={occurrence.sourceMacro} empty="" /></span>
-                  <span className="lens-text lens-target" title={occurrence.targetMacro ?? t("review.untranslated")}><MacroPreview text={occurrence.targetMacro} empty={t("review.untranslated")} /></span>
-                </div>
+                  <div
+                    id={`lens-${domKey(key)}`}
+                    className={`lens-row${selected ? " selected" : ""}${continuation ? " continuation" : ""}${changeKind ? ` git-${changeKind}` : ""}`}
+                    title={changeKind ? t(changedLabels[changeKind]) : undefined}
+                    role="option"
+                    aria-selected={selected}
+                    aria-disabled={disabled || undefined}
+                    style={{ transform: `translateY(${item.start}px)`, height: item.size }}
+                    onClick={() => { if (!disabled) onSelect(occurrence); }}
+                  >
+                    <span className="lens-status"><ReviewDot state={occurrence.state} /></span>
+                    <span className="lens-coord mono">{continuation ? "" : `${occurrence.binding.rowId}:${occurrence.binding.subrowId}`}</span>
+                    <span className="lens-field mono">{t("common.column", { column: String(occurrence.binding.columnIndex) })}</span>
+                    <span className="lens-text lens-source" title={occurrence.sourceMacro}>{occurrence.formattingOnly ? <span className="lens-tag" title={t("list.formattingHint")}>{t("list.formattingTag")}</span> : null}<MacroPreview text={occurrence.sourceMacro} empty="" /></span>
+                    <span className="lens-text lens-target" title={occurrence.targetMacro ?? t("review.untranslated")}><MacroPreview text={occurrence.targetMacro} empty={t("review.untranslated")} /></span>
+                  </div>
+                </RightClickMenu>
               );
             })}
           </div>

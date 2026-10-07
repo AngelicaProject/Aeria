@@ -4,7 +4,8 @@ GitHub Actions configuration lives in `.github/workflows/ci.yml`. This document 
 
 Aeria is released for Windows, so CI checks the application on Windows. The
 desktop application is not checked on Linux until it is released there; Linux
-checks only `aeria-check`, the one Linux binary Aeria publishes.
+checks only `aeria-guard`, which translation repositories build and run on
+Linux through the Aeria Guard action (`guard/action.yml`).
 
 CI runs for every pull request and for every push to `main`. A new push to a
 pull request cancels its running checks; runs on `main` are never cancelled,
@@ -17,7 +18,7 @@ read-only repository permissions.
 | --- | --- | --- |
 | `frontend` | `windows-latest` | The renderer and release tooling tests pass, TypeScript type-checks, and the renderer builds. |
 | `rust` | `windows-latest` | The workspace is formatted, has no Clippy warnings, and passes all its tests on Windows under a Cyrillic path with the bundled MinGit; line coverage stays above the floor. |
-| `check-linux` | `ubuntu-22.04` | `aeria-check` passes its tests on the runner its release is built on. |
+| `guard-linux` | `ubuntu-22.04` | `aeria-guard` passes its tests on Linux, where the Aeria Guard action builds and runs it. |
 | `supply-chain` | `ubuntu-latest` | Dependencies have no known vulnerability, no yanked crate, only allowed licenses, and come from crates.io; workflows pass `actionlint` and `zizmor`. |
 | `ci` | `ubuntu-latest` | Every job above passed. |
 
