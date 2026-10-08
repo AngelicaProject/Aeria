@@ -703,6 +703,9 @@ fn problems(shared: &Shared, strings: &Strings, id: &str, answer: &Answer) -> Ve
         }
         Some(_) => {}
     }
+    if let Some(debris) = answer_debris(&entry.source, &answer.text) {
+        return vec![debris];
+    }
     if let Some(fix) = &shared.options.fix {
         return correction_problems(shared, fix, entry, answer);
     }
@@ -730,6 +733,22 @@ fn problems(shared: &Shared, strings: &Strings, id: &str, answer: &Answer) -> Ve
     found.extend(agreement_problems(&entry.source, &answer.text));
     found.extend(sound_problems(&entry.source, &answer.text));
     found
+}
+
+/// The separators of the answer's JSON (`", "`, `","`, `", [`) inside a
+/// translation whose source has none: what a reading of a broken answer
+/// left of the elements after the translation.
+fn answer_debris(source: &str, text: &str) -> Option<String> {
+    let compact = |text: &str| -> String { text.chars().filter(|c| !c.is_whitespace()).collect() };
+    let (source, text) = (compact(source), compact(text));
+    ["\",\"", "\",["]
+        .iter()
+        .any(|separator| text.contains(separator) && !source.contains(separator))
+        .then(|| {
+            "the translation holds separators of the answer's JSON: answer the translation \
+             alone as its own string, and the reason and terms as their own elements"
+                .to_owned()
+        })
 }
 
 /// The terms a correction of `entry` decides: those of its `fix` whose
@@ -1684,6 +1703,14 @@ mod tests {
         assert_eq!(context.len(), 2);
         assert!(context[1].starts_with("macro: <if $gn7>"), "{}", context[1]);
         assert!(context[1].contains("ObjStr row"), "{}", context[1]);
+    }
+
+    #[test]
+    fn what_a_broken_answer_left_of_its_json_is_refused() {
+        assert!(answer_debris("Mount Yorn", r#"Гора Йорн","",["mount"#).is_some());
+        assert!(answer_debris("Hi", r#"Привет", "калька"#).is_some());
+        assert!(answer_debris("Hi", "Привет, «друг»").is_none());
+        assert!(answer_debris(r#"Say "yes", "no""#, r#"Скажи «да», "нет""#).is_none());
     }
 
     #[test]

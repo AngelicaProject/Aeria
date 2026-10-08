@@ -509,6 +509,18 @@ fn followed_by(rest: &str, then: char) -> bool {
     rest.trim_start().starts_with(then)
 }
 
+/// The separators `"`, `,`, then `open` of `text`, with any whitespace
+/// between them, from the last: the byte of each one's quote and of its
+/// `open`.
+fn separators(text: &str, open: char) -> impl Iterator<Item = (usize, usize)> + '_ {
+    text.rmatch_indices('"').filter_map(move |(at, _)| {
+        let after = text[at + 1..].trim_start().strip_prefix(',')?.trim_start();
+        after
+            .starts_with(open)
+            .then(|| (at, text.len() - after.len()))
+    })
+}
+
 /// The entries of an answer that is not valid JSON (see [`parse_lenient`]).
 fn salvage(text: &str, reasons: bool) -> HashMap<String, Answer> {
     let starts = entry_starts(text);
@@ -537,18 +549,18 @@ fn salvage(text: &str, reasons: bool) -> HashMap<String, Answer> {
             continue;
         };
         // A correction's terms that do not apply end the entry as an array
-        // of plain words: `"reason", ["mount"]]`.
+        // of plain words: `"reason", ["mount"]]`, with or without spaces.
         let mut other_meaning = Vec::new();
         let trimmed: String;
         if reasons
-            && let Some(split) = second.rfind("\", [")
-            && let Some(close) = second[split + 3..].find(']')
-            && followed_by(&second[split + 3 + close + 1..], ']')
-            && let Some(terms) =
-                serde_json::from_str::<Value>(&second[split + 3..=split + 3 + close])
-                    .ok()
-                    .as_ref()
-                    .and_then(terms_of)
+            && let Some((split, terms)) = separators(second, '[').find_map(|(split, open)| {
+                let close = open + second[open..].find(']')?;
+                if !followed_by(&second[close + 1..], ']') {
+                    return None;
+                }
+                let terms = serde_json::from_str::<Value>(&second[open..=close]).ok()?;
+                Some((split, terms_of(&terms)?))
+            })
         {
             other_meaning = terms;
             trimmed = format!("{}]", &second[..=split]);
@@ -564,11 +576,13 @@ fn salvage(text: &str, reasons: bool) -> HashMap<String, Answer> {
         };
         let mut rest = &second[..second_end];
         let mut reason = None;
+        // A reason has no quotes and no macros, so the last separator before
+        // one ends the translation.
         if reasons
-            && let Some(split) = rest.rfind("\", \"")
-            && !rest[split + 4..].contains(['"', '<'])
+            && let Some((split, open)) = separators(rest, '"').next()
+            && !rest[open + 1..].contains(['"', '<'])
         {
-            reason = Some(rest[split + 4..].trim().to_owned()).filter(|reason| !reason.is_empty());
+            reason = Some(rest[open + 1..].trim().to_owned()).filter(|reason| !reason.is_empty());
             rest = &rest[..split];
         }
         if let (Some(start), Some(translation)) =
@@ -655,6 +669,15 @@ mod tests {
         assert_eq!(salvaged["2"].text, r#"Привет, "друг""#);
         assert_eq!(salvaged["2"].reason.as_deref(), Some("калька"));
         assert!(salvaged["2"].other_meaning.is_empty());
+        // Without spaces between the elements, as models often write.
+        let tight = r#"{"1":["Mount Yorn","Гора Йорн","",["mount"]],"2":["Hi","Привет, "друг"","калька"],"3":["x","<sheet Item "y" 1>",""]}"#;
+        let salvaged = parse_lenient(tight, true);
+        assert_eq!(salvaged["1"].text, "Гора Йорн");
+        assert_eq!(salvaged["1"].other_meaning, ["mount"]);
+        assert_eq!(salvaged["2"].text, r#"Привет, "друг""#);
+        assert_eq!(salvaged["2"].reason.as_deref(), Some("калька"));
+        assert_eq!(salvaged["3"].text, r#"<sheet Item "y" 1>"#);
+        assert_eq!(salvaged["3"].reason, None);
         let text = fix_instructions("en", "ru", None, false, false, None);
         assert!(text.contains("fourth element"));
     }

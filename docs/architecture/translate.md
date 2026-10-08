@@ -233,8 +233,11 @@ as `\<sigh>` or `\<click>` (in macro text `\<` is a literal `<`): it renders
 it in its language. An answer that is not valid JSON,
 most often for a quote the model did not escape inside macro text, is read
 entry by entry (`"id": ["first words", "translation"]`, a bare quote read as
-part of its string); what is read this way is checked like any answer, so a
-wrong reading is refused, never written. A string the answer has no
+part of its string, the elements separated with or without spaces); what is
+read this way is checked like any answer, so a wrong reading is refused,
+never written: a translation that holds the answer's separators (`","`,
+`",[`) its source does not have is what a reading left of the elements after
+it, and is refused. A string the answer has no
 readable translation of is asked for again with the failing ones. A batch's
 failing translations go back up to twice, each time in one request with each problem stated; what
 still fails stays as it was and is listed in the run's status with its
