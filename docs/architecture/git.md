@@ -300,6 +300,10 @@ joins them entry by entry (`aeria-git::merge_file`):
   branch and another text on the other are a conflict of the string. Git's
   own merge, which joins them without one, leaves a review mark whose
   fingerprint no longer matches, so the string is not reviewed.
+- A string's term exceptions and model exceptions are joined apart from its
+  state: a side whose exceptions equal the base takes the other side's, and
+  when both changed them the local ones stay. A branch that only decided
+  terms and one that only translated both keep their work.
 
 Joined files are written in the canonical format and committed as the merge
 commit. Conflicting strings are reported with their base, local, and incoming

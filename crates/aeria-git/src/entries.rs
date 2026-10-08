@@ -648,6 +648,25 @@ fn same_strings(ours: &PoFile, theirs: &PoFile) -> bool {
             .all(|(ours, theirs)| key(ours) == key(theirs))
 }
 
+/// Takes the other branch's term exceptions and model exceptions of a
+/// string when only that branch changed them; when both did, ours stay. They
+/// are decisions about the source, apart from the translation, so a branch
+/// that only decided terms and one that only translated both keep their
+/// work.
+fn merge_exceptions(entry: &mut Entry, other: &Entry, base: Option<&Entry>) {
+    let exceptions = |entry: &Entry| {
+        (
+            entry.term_exceptions.clone(),
+            entry.model_exceptions.clone(),
+        )
+    };
+    let base = base.map(exceptions).unwrap_or_default();
+    if exceptions(entry) == base {
+        entry.term_exceptions.clone_from(&other.term_exceptions);
+        entry.model_exceptions.clone_from(&other.model_exceptions);
+    }
+}
+
 /// Joins two versions of a file entry by entry: a string one branch changed
 /// takes that branch's change, and a string both changed differently takes
 /// the side `resolutions` names or is a conflict. `None` when the versions
@@ -674,6 +693,7 @@ pub fn merge_file(
         .collect();
     let mut conflicts = Vec::new();
     for (entry, other) in merged.entries.iter_mut().zip(&theirs.entries) {
+        merge_exceptions(entry, other, base.get(entry.context.as_str()).copied());
         let ours_state = EntryState::of(entry);
         let theirs_state = EntryState::of(other);
         if ours_state == theirs_state {
@@ -836,5 +856,31 @@ mod tests {
         let changes = diff_file("po/A.po", Some(base.as_bytes()), Some(ours.as_bytes()));
         assert_eq!(changes[0].kind, EntryChangeKind::Marked);
         assert!(changes[0].after.reviewed);
+    }
+
+    #[test]
+    fn decisions_on_terms_merge_apart_from_the_translation() {
+        let base = file(&[("A:1:0:0", "первый"), ("A:2:0:0", "второй")]);
+        // One branch decides a term of the first string; the other
+        // translates the second again.
+        let decided = format!(
+            "#, aeria-term-model-exception: mount 3f9a1c0b7d2e\n{}",
+            file(&[("A:1:0:0", "первый"), ("A:2:0:0", "второй")])
+        );
+        let translated = file(&[("A:1:0:0", "первый"), ("A:2:0:0", "другой")]);
+        for (ours, theirs) in [(&decided, &translated), (&translated, &decided)] {
+            let (merged, conflicts) = merge_file(
+                "po/A.po",
+                Some(base.as_bytes()),
+                ours.as_bytes(),
+                theirs.as_bytes(),
+                &BTreeMap::new(),
+            )
+            .expect("mergeable");
+            assert!(conflicts.is_empty());
+            let merged = PoFile::parse(&merged).0;
+            assert_eq!(merged.entries[0].model_exceptions.len(), 1, "{merged:?}");
+            assert_eq!(merged.entries[1].translation, "другой");
+        }
     }
 }
