@@ -193,23 +193,58 @@ fn change_label(change: &EntryChange) -> String {
     if change.kind != EntryChangeKind::Marked {
         return kind_label(change.kind).to_owned();
     }
-    let mut parts = Vec::new();
+    let mut parts: Vec<String> = Vec::new();
     if change.before.note != change.after.note {
-        parts.push("note");
+        parts.push("note".to_owned());
     }
     if change.before.fuzzy != change.after.fuzzy {
-        parts.push(if change.after.fuzzy {
-            "fuzzy"
-        } else {
-            "not fuzzy"
-        });
+        parts.push(
+            if change.after.fuzzy {
+                "fuzzy"
+            } else {
+                "not fuzzy"
+            }
+            .to_owned(),
+        );
     }
     if change.before.reviewed != change.after.reviewed {
-        parts.push(if change.after.reviewed {
-            "reviewed"
-        } else {
-            "not reviewed"
-        });
+        parts.push(
+            if change.after.reviewed {
+                "reviewed"
+            } else {
+                "not reviewed"
+            }
+            .to_owned(),
+        );
+    }
+    for (what, before, after) in [
+        (
+            "term exception",
+            &change.before.term_exceptions,
+            &change.after.term_exceptions,
+        ),
+        (
+            "AI: another meaning",
+            &change.before.model_exceptions,
+            &change.after.model_exceptions,
+        ),
+    ] {
+        let added: Vec<&str> = after
+            .iter()
+            .filter(|term| !before.contains(term))
+            .map(String::as_str)
+            .collect();
+        let removed: Vec<&str> = before
+            .iter()
+            .filter(|term| !after.contains(term))
+            .map(String::as_str)
+            .collect();
+        if !added.is_empty() {
+            parts.push(format!("{what}: {}", added.join(", ")));
+        }
+        if !removed.is_empty() {
+            parts.push(format!("{what} removed: {}", removed.join(", ")));
+        }
     }
     parts.join(", ")
 }

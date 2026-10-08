@@ -26,7 +26,8 @@ pub fn is_po_path(path: &str) -> bool {
 }
 
 /// What a person can change about a string: its translation, whether it is
-/// fuzzy, its note, and whether they reviewed it.
+/// fuzzy, its note, whether they reviewed it, and the terms that do not
+/// apply to it.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct EntryState {
     pub translation: String,
@@ -35,15 +36,35 @@ pub struct EntryState {
     /// A person reviewed the translation as it is (see
     /// [`Entry::is_reviewed`]); a mark of another text counts as none.
     pub reviewed: bool,
+    /// The terms of the string's term exceptions, a person's decisions.
+    pub term_exceptions: Vec<String>,
+    /// The terms of its model exceptions, a correction run's decisions.
+    pub model_exceptions: Vec<String>,
 }
 
 impl EntryState {
     fn of(entry: &Entry) -> Self {
         Self {
+            term_exceptions: entry.term_exceptions.clone(),
+            model_exceptions: entry
+                .model_exceptions
+                .iter()
+                .map(|exception| exception.term.clone())
+                .collect(),
+            ..Self::joined(entry)
+        }
+    }
+
+    /// The state the join of two branches compares: without the
+    /// exceptions, which join apart (see [`merge_exceptions`]).
+    fn joined(entry: &Entry) -> Self {
+        Self {
             translation: entry.translation.clone(),
             fuzzy: entry.fuzzy,
             note: (!entry.notes.is_empty()).then(|| entry.notes.join("\n")),
             reviewed: entry.is_reviewed(),
+            term_exceptions: Vec::new(),
+            model_exceptions: Vec::new(),
         }
     }
 }
@@ -57,7 +78,8 @@ pub enum EntryChangeKind {
     Changed,
     /// Its translation was removed.
     Cleared,
-    /// Only its note, its fuzzy mark, or its review changed.
+    /// Only its note, its fuzzy mark, its review, or its term or model
+    /// exceptions changed.
     Marked,
 }
 
@@ -113,7 +135,8 @@ fn parse(bytes: Option<&[u8]>) -> PoFile {
         .unwrap_or_default()
 }
 
-/// The strings whose translation, fuzzy mark, or note differ between two
+/// The strings whose translation, fuzzy mark, note, review, or exceptions
+/// differ between two
 /// versions of a file, in the order of the later version.
 #[must_use]
 pub fn diff_file(path: &str, before: Option<&[u8]>, after: Option<&[u8]>) -> Vec<EntryChange> {
@@ -694,14 +717,14 @@ pub fn merge_file(
     let mut conflicts = Vec::new();
     for (entry, other) in merged.entries.iter_mut().zip(&theirs.entries) {
         merge_exceptions(entry, other, base.get(entry.context.as_str()).copied());
-        let ours_state = EntryState::of(entry);
-        let theirs_state = EntryState::of(other);
+        let ours_state = EntryState::joined(entry);
+        let theirs_state = EntryState::joined(other);
         if ours_state == theirs_state {
             continue;
         }
         let base_state = base
             .get(entry.context.as_str())
-            .map(|entry| EntryState::of(entry))
+            .map(|entry| EntryState::joined(entry))
             .unwrap_or_default();
         let take_theirs = if base_state == ours_state {
             true
@@ -882,5 +905,11 @@ mod tests {
             assert_eq!(merged.entries[0].model_exceptions.len(), 1, "{merged:?}");
             assert_eq!(merged.entries[1].translation, "другой");
         }
+        // A diff reports a decision alone as a mark with its term.
+        let changes = diff_file("po/A.po", Some(base.as_bytes()), Some(decided.as_bytes()));
+        assert_eq!(changes.len(), 1);
+        assert_eq!(changes[0].kind, EntryChangeKind::Marked);
+        assert_eq!(changes[0].after.model_exceptions, ["mount"]);
+        assert!(changes[0].before.model_exceptions.is_empty());
     }
 }

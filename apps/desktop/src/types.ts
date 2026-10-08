@@ -367,6 +367,10 @@ export type EntryVersionDto = {
   translatorNote: string | null;
   /** A person reviewed the translation as it is. */
   reviewed?: boolean;
+  /** Terms a person decided do not apply to the string. */
+  termExceptions?: string[];
+  /** Terms a correction with AI decided do not apply to the string. */
+  modelExceptions?: string[];
 };
 
 export type EntryChangeKind = "translated" | "changed" | "cleared" | "marked";

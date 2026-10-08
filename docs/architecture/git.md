@@ -241,8 +241,11 @@ views are derived directly from Git data (`aeria-git::entries`):
 
 - **Pending changes** compare each changed PO file in the working tree with
   `HEAD` entry by entry and report each string whose translation, fuzzy mark,
-  or note changed: translated (it had none), changed, cleared, or marked
-  (only the mark or the note changed), with the before and after state.
+  note, review, or term and model exceptions changed: translated (it had
+  none), changed, cleared, or marked (only a mark, the note, or an
+  exception changed), with the before and after state; a mark names the
+  terms an exception added or removed, so the decisions of a correction run
+  (*AI: another meaning: mount*) are read string by string.
 - **Commit changes** compare a commit with its first parent the same way.
 - **String history** reads the last 200 commits of the string's file (`git
   log -- <file>`, merges left out, so a change is attributed to the commit
@@ -382,7 +385,7 @@ prints the review below on its own.
 ### Review
 
 With a base, the run's summary also gets a review of the change: the
-strings whose translation, note, fuzzy mark, or review changed, file by
+strings whose translation, note, fuzzy mark, review, or exceptions changed, file by
 file in folded tables with the source and the text before and after; the
 terms added, removed, or changed by headword; how many lines of the style
 changed; and every other file changed. Long lists are cut to stay within

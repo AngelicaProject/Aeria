@@ -246,6 +246,10 @@ pub struct EntryVersionDto {
     pub translator_note: Option<String>,
     /// A person reviewed the translation as it is.
     pub reviewed: bool,
+    /// Terms a person decided do not apply to the string.
+    pub term_exceptions: Vec<String>,
+    /// Terms a correction run's model decided do not apply to the string.
+    pub model_exceptions: Vec<String>,
 }
 
 impl From<&EntryState> for EntryVersionDto {
@@ -255,6 +259,8 @@ impl From<&EntryState> for EntryVersionDto {
             fuzzy: state.fuzzy,
             translator_note: state.note.clone(),
             reviewed: state.reviewed,
+            term_exceptions: state.term_exceptions.clone(),
+            model_exceptions: state.model_exceptions.clone(),
         }
     }
 }
