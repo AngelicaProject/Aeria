@@ -124,7 +124,8 @@ The task is JSON built from the files as they are when the request is sent:
   the game fills in through a macro keeps its stored form;
 - `terms`: terms of `terms.csv` that occur in the sources, with their other
   forms and notes, at most 60 (folders are not sent); a term goes only when it applies to a
-  string of the request, not counting the strings with an exception for it;
+  string of the request, not counting the strings with an exception for it,
+  a person's or a model's that holds;
 - `files`: each file of the request on its own, with
   - `about`: the file's header comment: its sheet, a quest's title, and
     whether its strings are in play order;
@@ -142,7 +143,8 @@ The task is JSON built from the files as they are when the request is sent:
     translation most likely needs one too, `maxLength` for an interface
     label and `maxBytes` for a name in the world (below), the previous
     source and translation of a fuzzy one, and
-    `termExceptions`: the terms of `terms` that do not apply to it (see
+    `termExceptions`: the terms of `terms` that do not apply to it, by a
+    person's exception or a model's that holds (see
     [`po-project.md`](./po-project.md#term-exceptions)), which the
     instructions say to translate by their meaning.
 
@@ -279,7 +281,8 @@ any of:
   below and the review in Git are for;
 - **the issues of the checks**: what the checks find in the translation,
   problems and advice, every kind or only the kinds chosen (`Fix::groups`,
-  by `Issue::group`, as project search groups them). A problem always goes,
+  by `Issue::group`, as project search groups them; a kind alone, such as
+  `termNotUsed`, takes every group of the kind, every term). A problem always goes,
   since a corrected translation must pass the checks; a term exception
   that names no term of the source does not, since a person removes it;
 - **adapting** (`Fix::adapt`): a fuzzy translation, whose source changed
@@ -307,7 +310,42 @@ style; they are the same for every request of the run, so the prompt cache
 holds them. The answer has the same form, first words included, and a third
 string: why the translation changed, in a few words of the target language
 (`обращение по французской строке`, `калька`), empty when it did not. A
-reason is not checked and never written to the project.
+reason is not checked and never written to the project. A fourth element,
+only when a term does not apply, lists those terms (see
+[Deciding terms](#deciding-terms)).
+
+### Deciding terms
+
+A term the checks find unused in a translation asks the correction for a
+decision: does the term apply to this string? The instructions say it
+applies where the word of the source is the thing the term names, as its
+translation and note describe it, and does not where the word means
+something else there: an everyday word or another part of speech (`mount
+up` beside a mount the player rides), part of the name of something else
+(`Mount Gulg`), or a sense the note rules out. The other client languages of
+the string's context show how the official localizations read the word. A
+term that applies is used, declined as the sentence needs, with the rest of
+the sentence agreeing with it; a term that does not is translated by its
+meaning and named in the answer's fourth element. The decision is by meaning
+alone: a term is never named to keep a translation unchanged.
+
+Every such term is decided: a corrected translation that leaves an unused
+term unnamed is refused, changed or not, with a problem that asks to use the
+term or name it. A named term that was not asked about is no decision. The
+decisions are written with the correction as one edit (`EditKind::Decide`),
+under the same conditions as a correction: a term that does not apply gets a
+[model exception](./po-project.md#model-exceptions) for the glossary entry
+it was decided for, and a term that applies loses its model exception. An
+answer that leaves the translation as it was and names a term is written for
+its decision alone. Since a model exception holds only while the term's
+entry is unchanged, a run after a term's note or translation changed
+decides every string of that term again, and a run after a game update
+decides the strings whose source changed; the strings decided before are
+not sent again.
+
+A run over every term (search with the checks filter **Every term**, then
+**Fix with AI**) brings the corpus to the glossary: each string either uses
+the term or keeps a decision that the term means something else there.
 
 A correction may not make a translation worse. It is refused when it has a
 problem of the checks, an issue of a kind the translation did not have
@@ -315,16 +353,18 @@ problem of the checks, an issue of a kind the translation did not have
 alone is held to), or, when it changed the translation, advice it was asked
 to fix. An answer that leaves the translation as it was says that the
 advice does not apply to the string: it is counted as unchanged and not
-written. Refused corrections go back with their problems like refused
+written, but for the terms it decides. Refused corrections go back with their problems like refused
 translations, and what still fails is listed and not written.
 
 A correction is written as a bulk edit of the session
-(`EditKind::Correct`): only while the entry still has the translation the
+(`EditKind::Correct`, or `EditKind::Decide` with decisions on terms): only
+while the entry still has the translation the
 request was built from, and never over a review, so work saved meanwhile and
 a review made meanwhile are kept. The fuzzy mark stays. The run's status
 lists the first 1,000 corrections it wrote, each before and after with its
-reason, so a person reads them as an editor's notes before reading the
-diff. Like any run, a
+reason and the terms it decided do not apply, so a person reads them as an
+editor's notes before reading the diff, and counts the strings where it
+decided a term does not apply. Like any run, a
 correction does not commit, and its changes are reviewed and reverted
 through Git.
 

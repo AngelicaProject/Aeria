@@ -112,8 +112,9 @@ pub struct Query {
     /// Entry states to keep; empty for all.
     pub states: Vec<State>,
     pub check: CheckFilter,
-    /// With a check filter, only entries with an issue of this group (see
-    /// [`Issue::group`]).
+    /// With a check filter, only entries with an issue of this group, or of
+    /// this kind of grouped issues (see [`Issue::group`] and
+    /// [`Issue::is_of`]).
     pub issue: Option<String>,
 }
 
@@ -626,10 +627,10 @@ impl Search<'_> {
             .cloned()
             .collect();
         if let Some(group) = &query.issue {
-            if !findings.iter().any(|issue| issue.group() == *group) {
+            if !findings.iter().any(|issue| issue.is_of(group)) {
                 return None;
             }
-            findings.sort_by_key(|issue| issue.group() != *group);
+            findings.sort_by_key(|issue| !issue.is_of(group));
         }
         (!findings.is_empty()).then_some(findings)
     }

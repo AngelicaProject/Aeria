@@ -95,6 +95,15 @@ impl Issue {
         }
     }
 
+    /// Whether the issue is of `group`, or of its kind when `group` names
+    /// the kind alone: `termNotUsed` takes `termNotUsed:pugilist` and every
+    /// other term.
+    #[must_use]
+    pub fn is_of(&self, group: &str) -> bool {
+        let own = self.group();
+        own == group || own.split_once(':').is_some_and(|(kind, _)| kind == group)
+    }
+
     /// A problem stops a translation from being saved and exported; the rest
     /// is advice.
     #[must_use]
@@ -305,9 +314,28 @@ fn repeated_word(source: &str, text: &str) -> Option<String> {
 /// Russian forms that write both genders at once, such as `готов(а)`.
 const BOTH_GENDERS: [&str; 6] = ["(а)", "(ла)", "(ая)", "(на)", "(ен)", "(ой)"];
 
+/// The terms that do not apply to a string: the exceptions a person made,
+/// then the model exceptions that still hold for the glossary as it is (see
+/// [`crate::po::ModelException::holds`]).
+#[must_use]
+pub fn applied_exceptions(entry: &Entry, terms: &aeria_knowledge::Glossary) -> Vec<String> {
+    entry
+        .term_exceptions
+        .iter()
+        .cloned()
+        .chain(
+            entry
+                .model_exceptions
+                .iter()
+                .filter(|exception| exception.holds(terms))
+                .map(|exception| exception.term.clone()),
+        )
+        .collect()
+}
+
 /// Checks `text` as the translation of `entry` against its source, its `#.`
-/// lines (with the other client languages), the terms a person decided do
-/// not apply to it, its length budget, and the project knowledge.
+/// lines (with the other client languages), the terms a person or a model
+/// decided do not apply to it, its length budget, and the project knowledge.
 #[must_use]
 pub fn check_translation(
     knowledge: &Knowledge,
@@ -317,7 +345,7 @@ pub fn check_translation(
 ) -> Verdict {
     let source = entry.source.as_str();
     let extracted = entry.extracted.as_slice();
-    let exceptions = entry.term_exceptions.as_slice();
+    let exceptions = applied_exceptions(entry, &knowledge.terms);
     let mut issues = Vec::new();
     if text.contains('\n') && !source.contains('\n') {
         issues.push(Issue::LineBreak);
@@ -339,7 +367,7 @@ pub fn check_translation(
                 .map(|error| Issue::Structure(error.message)),
         );
     }
-    let terms = knowledge.terms.review(source, text, exceptions);
+    let terms = knowledge.terms.review(source, text, &exceptions);
     issues.extend(letter_slips(target_language, source, text));
     let russian = target_language.eq_ignore_ascii_case("ru");
     if russian
@@ -355,9 +383,12 @@ pub fn check_translation(
         translation: entry.translation.clone(),
     }));
     issues.extend(
+        // Only a person's exception is theirs to remove; a model exception
+        // that names no term of the source is decided again by a later run.
         terms
             .stale
             .iter()
+            .filter(|term| entry.term_exceptions.iter().any(|known| known == *term))
             .map(|term| Issue::StaleTermException((*term).to_owned())),
     );
     if source.contains("$gn4") && !text.contains("$gn4") {

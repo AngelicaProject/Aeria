@@ -90,6 +90,10 @@ Seventh Dawn` is not also `Scions`. A string's term exceptions take their
 terms out of matching for that string; an exception names a term by its
 headword, and one that names another of its forms takes the term out too (see
 [`../architecture/po-project.md`](../architecture/po-project.md#term-exceptions)).
+A model exception does the same while the term's entry is the one it was
+decided for: a change of the headword, translation, forms, note, or case
+ends it, a change of the folder does not (see
+[`../architecture/po-project.md`](../architecture/po-project.md#model-exceptions)).
 Matching selects the terms a batch of machine translation needs and drives
 the checks of a translation; it never changes a translation.
 

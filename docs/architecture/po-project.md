@@ -110,6 +110,7 @@ msgstr "Ателина из Гильдии лучников хочет убед�
 | `# ` lines | translator notes | people |
 | `#, fuzzy` and `#\| msgid` | a game update changed the source; `#\| msgid` is the source the translation was written for | Aeria, in a game update |
 | `#, aeria-term-exception: <term>` | a term of the glossary does not apply to this string; see [Term exceptions](#term-exceptions) | people, through Aeria |
+| `#, aeria-term-model-exception: <term> <fingerprint>` | a correction run's model decided a term of the glossary does not apply to this string; see [Model exceptions](#model-exceptions) | machine translation, when correcting |
 | `#, aeria-reviewed: <fingerprint>` | a person reviewed the translation whose fingerprint this is; see [Reviews](#reviews) | people, through Aeria |
 | `msgctxt` | the entry's identity; see [Identity](#identity) | Aeria |
 | `msgid` | the source text as macro text ([`strings.md`](./strings.md#macro-text)) | Aeria |
@@ -117,10 +118,12 @@ msgstr "Ателина из Гильдии лучников хочет убед�
 
 `fuzzy` states a fact of the game, not an opinion of a translator: the
 source changed after the translation was written. Term exceptions and the
-review mark are the decisions of a person that Aeria reads: all are flags of
-the same `#,` line, `fuzzy` first, then one `aeria-term-exception` flag per
-term in the order they were added, then the review mark
-(`#, fuzzy, aeria-term-exception: the Maelstrom, aeria-reviewed: 3f9a1c0b7d2e`).
+review mark are the decisions of a person that Aeria reads, and model
+exceptions the decisions of a correction run: all are flags of the same `#,`
+line, `fuzzy` first, then one `aeria-term-exception` flag per term in the
+order they were added, then one `aeria-term-model-exception` flag per term,
+then the review mark
+(`#, fuzzy, aeria-term-exception: the Maelstrom, aeria-term-model-exception: mount 1d4e0f7a9c2b, aeria-reviewed: 3f9a1c0b7d2e`).
 Aeria keeps no other flag; a file written by another tool loses its other
 flags when Aeria writes it.
 
@@ -132,8 +135,9 @@ string with an exception for the term. In that string the checks do not ask
 for the term's translation, and machine translation
 is told the term does not apply (see
 [`translate.md`](./translate.md#the-request)). Only a person adds or removes
-an exception, from the editor or from search; machine translation never
-does, so which terms apply to a string never depends on AI judgment.
+an exception, from the editor or from search; machine translation records
+its own decisions apart, as [model exceptions](#model-exceptions), and a
+person's exception always comes first.
 
 The flag holds the term's headword as the glossary writes it and is
 compared ignoring case; a flag naming another form of the term counts for
@@ -143,6 +147,33 @@ the meaning of the source; it is dropped when a game update changes the
 source (see [Game updates](#game-updates)). An exception that names no term
 of the source, because the term left the glossary or matches no longer, is
 advice.
+
+### Model exceptions
+
+A correction run decides, for each term the checks find unused in a
+translation, whether the term applies to the string (see
+[`translate.md`](./translate.md#deciding-terms)). A term it decides does not
+apply gets a model exception: the flag holds the term's headword and the
+fingerprint of the term's glossary entry it was decided for, the first twelve
+hexadecimal digits of the SHA-256 of the entry's headword, translation,
+forms, note, and case (`aeria_po::term_fingerprint`); the folder is not part
+of it. A model exception works as a term exception while it holds: the
+glossary still has the term and its entry has that fingerprint. Another
+translation, form, note, or case of the term ends every decision made for the
+old one: the checks ask for the term again, and the next correction run
+decides again, so a better note reaches every string it concerns.
+
+A person's decision comes first. The model adds no exception for a term the
+person made one for; a person who adds or removes an exception for a term
+removes its model exception, so **Restore** in the string guide gives the
+term back to the string, and **Confirm** makes the model's decision the
+person's. A decision that a term applies removes the string's model
+exception for it. A model exception stays when the translation changes and
+is dropped when a game update changes the source, as a term exception is;
+one that no longer holds or names no term of the source is not advice, since
+a later run replaces it. No identity, game update, merge, or export depends
+on a model exception: only the checks, machine translation, and the string
+guide read it.
 
 Entries are ordered as the game orders them: play order in a scene, row and
 column order elsewhere. The `#.` lines are derived only from the game, so
@@ -319,7 +350,7 @@ reverted. The desktop offers it when it opens a project for an older version.
    | Previous entry | New entry with the same `msgctxt` | Result |
    | --- | --- | --- |
    | same `msgid` | exists | translation, notes, and marks are kept |
-   | other `msgid` | exists | translation, notes, and review mark are kept; `#, fuzzy` and `#\| msgid` with the previous source; term exceptions are dropped |
+   | other `msgid` | exists | translation, notes, and review mark are kept; `#, fuzzy` and `#\| msgid` with the previous source; term exceptions and model exceptions are dropped |
    | any | none | the entry becomes obsolete (`#~`) at the end of its file, with its translation and notes |
    | none | exists | a new entry with an empty `msgstr` |
 

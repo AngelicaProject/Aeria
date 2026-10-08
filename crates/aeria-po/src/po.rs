@@ -18,6 +18,12 @@ pub struct Entry {
     /// `#, aeria-term-exception: <term>` flags: terms of the glossary a
     /// person decided do not apply to this string.
     pub term_exceptions: Vec<String>,
+    /// `#, aeria-term-model-exception: <term> <fingerprint>` flags: terms of
+    /// the glossary a correction run's model decided do not apply to this
+    /// string, each with the [`term_fingerprint`] of the term's entry it
+    /// decided for. A decision holds only while the entry is still that one
+    /// (see [`ModelException::holds`]); a person's exception comes first.
+    pub model_exceptions: Vec<ModelException>,
     /// `#, aeria-reviewed: <fingerprint>`: a person reviewed the
     /// translation whose [`fingerprint`] this is. The mark holds only while
     /// the translation is still that text (see [`Entry::is_reviewed`]).
@@ -107,6 +113,73 @@ pub fn unquote(literal: &str) -> Option<String> {
 
 /// The flag of a term exception: `#, aeria-term-exception: the Maelstrom`.
 pub const TERM_EXCEPTION_FLAG: &str = "aeria-term-exception";
+
+/// The flag of a model's term exception:
+/// `#, aeria-term-model-exception: mount 3f9a1c0b7d2e`.
+pub const MODEL_EXCEPTION_FLAG: &str = "aeria-term-model-exception";
+
+/// A term a model decided does not apply to a string: its headword, and the
+/// [`term_fingerprint`] of the glossary entry it decided for.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct ModelException {
+    pub term: String,
+    pub fingerprint: String,
+}
+
+impl ModelException {
+    /// The decision for `entry` as the glossary has it now.
+    #[must_use]
+    pub fn of(entry: &aeria_knowledge::GlossaryEntry) -> Self {
+        Self {
+            term: entry.term.clone(),
+            fingerprint: term_fingerprint(entry),
+        }
+    }
+
+    /// The decision still holds: the glossary has the term, and its entry is
+    /// the one the model decided for. Another translation, form, note, or
+    /// case of the term asks for a new decision.
+    #[must_use]
+    pub fn holds(&self, glossary: &aeria_knowledge::Glossary) -> bool {
+        glossary
+            .find(&self.term)
+            .is_some_and(|entry| term_fingerprint(entry) == self.fingerprint)
+    }
+
+    /// The flag's value, `<term> <fingerprint>`, or `None` for one it does
+    /// not read.
+    fn parse(value: &str) -> Option<Self> {
+        let (term, fingerprint) = value.trim().rsplit_once(' ')?;
+        let term = term.trim();
+        (can_be_exception(term)
+            && fingerprint.len() == 12
+            && fingerprint.bytes().all(|byte| byte.is_ascii_hexdigit()))
+        .then(|| Self {
+            term: term.to_owned(),
+            fingerprint: fingerprint.to_ascii_lowercase(),
+        })
+    }
+}
+
+/// The fingerprint of a glossary entry in a model's term exception: the
+/// first twelve hexadecimal digits of the SHA-256 of what decides whether
+/// the term applies: its headword, translation, forms, note, and case. Its
+/// folder is not part of it: folders only organize terms for people.
+#[must_use]
+pub fn term_fingerprint(entry: &aeria_knowledge::GlossaryEntry) -> String {
+    let mut text = String::new();
+    for part in [
+        entry.term.as_str(),
+        entry.translation.as_str(),
+        &entry.forms.join(";"),
+        entry.note.as_deref().unwrap_or_default(),
+        if entry.match_case { "case" } else { "" },
+    ] {
+        text.push_str(part);
+        text.push('\0');
+    }
+    fingerprint(&text)
+}
 
 /// The flag of a reviewed translation: `#, aeria-reviewed: 3f9a1c0b7d2e`.
 pub const REVIEWED_FLAG: &str = "aeria-reviewed";
@@ -225,6 +298,12 @@ fn write_entry(text: &mut String, entry: &Entry, prefix: &str) {
             .iter()
             .map(|term| format!("{TERM_EXCEPTION_FLAG}: {term}")),
     );
+    flags.extend(entry.model_exceptions.iter().map(|exception| {
+        format!(
+            "{MODEL_EXCEPTION_FLAG}: {} {}",
+            exception.term, exception.fingerprint
+        )
+    }));
     if let Some(reviewed) = &entry.reviewed {
         flags.push(format!("{REVIEWED_FLAG}: {reviewed}"));
     }
@@ -394,6 +473,17 @@ impl Parser {
                         .any(|known| known == term)
                 {
                     target.entry.term_exceptions.push(term.to_owned());
+                } else if let Some(exception) = flag
+                    .strip_prefix(MODEL_EXCEPTION_FLAG)
+                    .and_then(|rest| rest.strip_prefix(':'))
+                    .and_then(ModelException::parse)
+                    && !target
+                        .entry
+                        .model_exceptions
+                        .iter()
+                        .any(|known| known.term.eq_ignore_ascii_case(&exception.term))
+                {
+                    target.entry.model_exceptions.push(exception);
                 } else if let Some(mark) = flag
                     .strip_prefix(REVIEWED_FLAG)
                     .and_then(|rest| rest.strip_prefix(':'))
@@ -520,6 +610,10 @@ mod tests {
                     fuzzy: true,
                     previous: Some("Old \"name\"".to_owned()),
                     term_exceptions: vec!["the Maelstrom".to_owned(), "Scions".to_owned()],
+                    model_exceptions: vec![ModelException {
+                        term: "Mount Gulg".to_owned(),
+                        fingerprint: "3f9a1c0b7d2e".to_owned(),
+                    }],
                     reviewed: Some(fingerprint("Имя \\<")),
                     context: "quest/000/A:TEXT_A_SEQ_00:1".to_owned(),
                     source: "Name <if $gn4>a<else>b</if>".to_owned(),
@@ -558,7 +652,7 @@ mod tests {
         assert_eq!(read.write(), text);
         assert_eq!(read.field("Language"), Some("ru"));
         assert!(text.contains(&format!(
-            "#, fuzzy, aeria-term-exception: the Maelstrom, aeria-term-exception: Scions, aeria-reviewed: {}\n",
+            "#, fuzzy, aeria-term-exception: the Maelstrom, aeria-term-exception: Scions, aeria-term-model-exception: Mount Gulg 3f9a1c0b7d2e, aeria-reviewed: {}\n",
             fingerprint("Имя \\<")
         )));
     }
@@ -608,6 +702,48 @@ mod tests {
         assert!(can_be_exception("the Maelstrom"));
         assert!(!can_be_exception("Sage, elder"));
         assert!(!can_be_exception(" "));
+    }
+
+    #[test]
+    fn a_model_exception_holds_while_its_term_is_the_one_decided_for() {
+        let text = "msgctxt \"S:1:0:0\"\nmsgid \"x\"\nmsgstr \"\"\n";
+        let with = |flags: &str| PoFile::parse(&format!("{flags}\n{text}")).0.entries[0].clone();
+        let entry = with(
+            "#, aeria-term-model-exception: mount 3F9A1C0B7D2E, aeria-term-model-exception: x 12",
+        );
+        assert_eq!(
+            entry.model_exceptions,
+            [ModelException {
+                term: "mount".to_owned(),
+                fingerprint: "3f9a1c0b7d2e".to_owned(),
+            }],
+            "a fingerprint that is not twelve hexadecimal digits is not read"
+        );
+        assert!(
+            with("#, aeria-term-model-exception: mount")
+                .model_exceptions
+                .is_empty()
+        );
+        let term = aeria_knowledge::GlossaryEntry {
+            term: "mount".to_owned(),
+            translation: "маунт".to_owned(),
+            ..aeria_knowledge::GlossaryEntry::default()
+        };
+        let glossary = aeria_knowledge::Glossary::new(vec![term.clone()]);
+        let decided = ModelException::of(&term);
+        assert!(decided.holds(&glossary));
+        // A new note asks for a new decision; a folder does not.
+        let noted = aeria_knowledge::Glossary::new(vec![aeria_knowledge::GlossaryEntry {
+            note: Some("Не применять к глаголу.".to_owned()),
+            ..term.clone()
+        }]);
+        assert!(!decided.holds(&noted));
+        let filed = aeria_knowledge::Glossary::new(vec![aeria_knowledge::GlossaryEntry {
+            folder: "Интерфейс".to_owned(),
+            ..term
+        }]);
+        assert!(decided.holds(&filed));
+        assert!(!decided.holds(&aeria_knowledge::Glossary::default()));
     }
 
     #[test]

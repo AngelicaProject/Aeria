@@ -22,6 +22,7 @@ export function TranslationCorrections({ corrections, total, onReveal }: Transla
               {corrected.binding ? `${corrected.binding.sheetName} ${corrected.binding.rowId}:${corrected.binding.subrowId} · ${corrected.binding.columnIndex}` : corrected.context}
             </button>
             {corrected.reason ? <p className="translate-correction-reason">{corrected.reason}</p> : null}
+            {corrected.otherMeaning && corrected.otherMeaning.length > 0 ? <p className="translate-correction-reason">{t("translate.otherMeaning", { terms: corrected.otherMeaning.join(", ") })}</p> : null}
             <div className="git-diff">
               {diffWords(corrected.before, corrected.after).map((part, index) => part.kind === "same"
                 ? <span key={index}>{part.text}</span>

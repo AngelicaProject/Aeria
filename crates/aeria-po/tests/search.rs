@@ -370,6 +370,114 @@ fn a_term_exception_lifts_the_term_and_undo_takes_it_back() {
 }
 
 #[test]
+fn a_model_decision_lifts_a_term_until_the_term_changes_or_a_person_decides() {
+    let (_directory, session) = project();
+    let write_terms = |terms: &str| {
+        std::fs::create_dir_all(session.root().join("aeria-knowledge")).expect("dir");
+        std::fs::write(session.root().join("aeria-knowledge/terms.csv"), terms).expect("terms");
+    };
+    write_terms("term,translation\ncook,кулинар\n");
+    let unused = |session: &aeria_po::Session, row| {
+        session
+            .findings("Addon", row, 0, 0)
+            .expect("findings")
+            .0
+            .iter()
+            .filter(|issue| matches!(issue, Issue::TermNotUsed { .. }))
+            .count()
+    };
+    let cook = session.knowledge().terms.entries[0].clone();
+    let decide =
+        |context: &str, expected: &str, correction: Option<&str>, applies: bool| EntryEdit {
+            path: "Addon.po".to_owned(),
+            context: context.to_owned(),
+            expected_text: expected.to_owned(),
+            expected_fuzzy: false,
+            kind: EditKind::Decide {
+                correction: correction.map(str::to_owned),
+                terms: vec![aeria_po::TermDecision {
+                    exception: aeria_po::ModelException::of(&cook),
+                    applies,
+                }],
+            },
+        };
+    let applied = session
+        .apply_edits(&[decide("Addon:1:0:0", "Повар пришёл", None, false)])
+        .expect("decide");
+    assert_eq!(applied.done.len(), 1, "a decision alone is written");
+    let text = std::fs::read_to_string(session.root().join("po/Addon.po")).expect("file");
+    assert!(
+        text.contains(&format!(
+            "#, aeria-term-model-exception: cook {}\nmsgctxt \"Addon:1:0:0\"",
+            aeria_po::term_fingerprint(&cook)
+        )),
+        "{text}"
+    );
+    assert_eq!(unused(&session, 1), 0);
+    assert_eq!(unused(&session, 2), 1, "the decision is the string's alone");
+
+    // A new note of the term asks for the decision again.
+    write_terms("term,translation,forms,note\ncook,кулинар,,Профессия.\n");
+    assert_eq!(unused(&session, 1), 1);
+    write_terms("term,translation\ncook,кулинар\n");
+    assert_eq!(unused(&session, 1), 0);
+
+    // A decision that the term applies, with its correction, removes it.
+    let applied = session
+        .apply_edits(&[decide(
+            "Addon:1:0:0",
+            "Повар пришёл",
+            Some("Кулинар пришёл"),
+            true,
+        )])
+        .expect("decide");
+    assert_eq!(applied.done.len(), 1);
+    assert!(applied.done[0].after.model_exceptions.is_empty());
+    assert_eq!(unused(&session, 1), 0);
+
+    // A person's exception comes first: the model does not add its own.
+    session
+        .set_term_exception("Addon", 2, 0, 0, "cook", true)
+        .expect("exception");
+    let applied = session
+        .apply_edits(&[decide("Addon:2:0:0", "Спроси повара", None, false)])
+        .expect("decide");
+    assert!(applied.done.is_empty(), "{applied:?}");
+}
+
+#[test]
+fn a_kind_of_term_issues_finds_every_term() {
+    let (_directory, session) = project();
+    std::fs::create_dir_all(session.root().join("aeria-knowledge")).expect("dir");
+    std::fs::write(
+        session.root().join("aeria-knowledge/terms.csv"),
+        "term,translation\ncook,кулинар\nknife,клинок\n",
+    )
+    .expect("terms");
+    let found = |issue: &str| {
+        session
+            .corpus()
+            .search(
+                session.root(),
+                &Query {
+                    check: CheckFilter::Advice,
+                    issue: Some(issue.to_owned()),
+                    ..Query::default()
+                },
+                &session.knowledge(),
+                "ru",
+                &AtomicBool::new(false),
+            )
+            .expect("search")
+            .total
+    };
+    assert_eq!(found("termNotUsed:knife"), 1);
+    assert_eq!(found("termNotUsed:cook"), 3);
+    assert_eq!(found("termNotUsed"), 3, "the cook's knife counts once");
+    assert_eq!(found("termNot"), 0, "a kind is named whole");
+}
+
+#[test]
 fn search_all_returns_every_entry_past_the_hit_limit() {
     let directory = tempfile::tempdir().expect("directory");
     let game_dir = directory.path().join("game");

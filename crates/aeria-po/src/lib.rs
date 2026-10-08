@@ -17,14 +17,14 @@ pub mod search;
 pub mod session;
 
 pub use candidates::{Candidate, Example, Rendering, term_candidates};
-pub use check::{Finding, Issue, Verdict, check_file, check_translation};
+pub use check::{Finding, Issue, Verdict, applied_exceptions, check_file, check_translation};
 pub use generate::{GenerateError, Languages, identity_keys, identity_of, is_entry, sheet_files};
 pub use identity::{Identity, ROWS_PER_FILE, RowName, SheetPaths, is_scene, splits};
 pub use merge::{merge, merge_files};
 pub use phrasing::{Cue, Opener, Phrasing, phrasing};
 pub use po::{
-    Entry, Header, PoFile, Problem, REVIEWED_FLAG, TERM_EXCEPTION_FLAG, can_be_exception,
-    fingerprint, quote, unquote,
+    Entry, Header, MODEL_EXCEPTION_FLAG, ModelException, PoFile, Problem, REVIEWED_FLAG,
+    TERM_EXCEPTION_FLAG, can_be_exception, fingerprint, quote, term_fingerprint, unquote,
 };
 pub use project::{
     FORMAT, FileProblems, GAME_VERSION_FIELD, PO_DIR, ProjectError, READ_FORMATS, README_PATH,
@@ -38,6 +38,6 @@ pub use search::{
 };
 pub use session::{
     CellView, EditDone, EditError, EditKind, EditSkipped, EditsApplied, EntryEdit, EntryState,
-    OpenError, Page, RowView, Session, SheetProgress, SkipReason, Translation, set_term_exception,
-    write_atomically,
+    OpenError, Page, RowView, Session, SheetProgress, SkipReason, TermDecision, Translation,
+    set_term_exception, write_atomically,
 };

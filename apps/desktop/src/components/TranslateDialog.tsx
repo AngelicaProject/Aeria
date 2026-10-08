@@ -309,6 +309,7 @@ export const TranslateDialog = memo(function TranslateDialog({ open, onOpenChang
                   <p className="export-facts">
                     <span>{t(status.fixing ? "translate.progressFix" : "translate.progress", { written: formatNumber(status.written), strings: formatNumber(status.strings) })}</span>
                     {status.unchanged > 0 ? <span>{t("translate.unchanged", { count: status.unchanged })}</span> : null}
+                    {status.decided > 0 ? <span>{t("translate.decided", { count: status.decided })}</span> : null}
                     {status.rejected > 0 ? <span>{t("translate.rejected", { count: status.rejected })}</span> : null}
                     <span>{t("translate.tokens", { input: formatNumber(status.inputTokens), output: formatNumber(status.outputTokens) })}</span>
                     {cachedShare !== null ? <span>{t("translate.cached", { percent: Math.round(cachedShare * 100) })}</span> : null}

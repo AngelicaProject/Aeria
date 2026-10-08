@@ -22,8 +22,12 @@ pub struct HintTerm {
     pub term: String,
     pub translation: String,
     pub note: Option<String>,
-    /// A person decided the term does not apply to this string.
+    /// A person, or a correction run's model, decided the term does not
+    /// apply to this string.
     pub excepted: bool,
+    /// The decision is the model's: its model exception holds and the
+    /// person made none.
+    pub by_model: bool,
 }
 
 /// What one string's translation goes by besides its source.
@@ -56,7 +60,9 @@ pub fn hints(names: &Names, glossary: &Glossary, entry: &Entry) -> StringHints {
             .map(str::to_owned)
     };
     let excepted = glossary.matches(&entry.source);
-    let applying = glossary.matches_except(&entry.source, &entry.term_exceptions);
+    let exceptions = aeria_po::applied_exceptions(entry, glossary);
+    let applying = glossary.matches_except(&entry.source, &exceptions);
+    let by_person = glossary.matches_except(&entry.source, &entry.term_exceptions);
     StringHints {
         names: names.in_texts([entry.source.as_str()], NAMES),
         terms: excepted
@@ -66,6 +72,8 @@ pub fn hints(names: &Names, glossary: &Glossary, entry: &Entry) -> StringHints {
                 translation: term.translation.clone(),
                 note: term.note.clone(),
                 excepted: !applying.iter().any(|entry| entry.term == term.term),
+                by_model: by_person.iter().any(|entry| entry.term == term.term)
+                    && !applying.iter().any(|entry| entry.term == term.term),
             })
             .collect(),
         speaker: line("speaker: ").map(|label| {
@@ -163,6 +171,29 @@ mod tests {
         );
         assert_eq!(found.gendered, vec!["source", "fr"]);
         assert_eq!(found.max_length, None);
+    }
+
+    #[test]
+    fn a_model_decision_shows_as_the_models_while_it_holds() {
+        let mount = term("mount", "маунт");
+        let glossary = Glossary::new(vec![mount.clone()]);
+        let decided = Entry {
+            model_exceptions: vec![aeria_po::ModelException::of(&mount)],
+            ..entry("Mount an attack.", &[], &[])
+        };
+        let found = hints(&Names::new(Vec::new()), &glossary, &decided);
+        assert!(found.terms[0].excepted && found.terms[0].by_model);
+        // A person's exception is the person's.
+        let both = Entry {
+            term_exceptions: vec!["mount".to_owned()],
+            ..decided.clone()
+        };
+        let found = hints(&Names::new(Vec::new()), &glossary, &both);
+        assert!(found.terms[0].excepted && !found.terms[0].by_model);
+        // Another translation of the term asks for a new decision.
+        let changed = Glossary::new(vec![term("mount", "ездовое животное")]);
+        let found = hints(&Names::new(Vec::new()), &changed, &decided);
+        assert!(!found.terms[0].excepted && !found.terms[0].by_model);
     }
 
     #[test]

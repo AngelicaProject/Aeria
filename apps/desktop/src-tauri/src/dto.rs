@@ -366,6 +366,7 @@ mod tests {
                             note: Some("check later".to_owned()),
                             previous: None,
                             term_exceptions: Vec::new(),
+                            model_exceptions: Vec::new(),
                             reviewed: false,
                             review_stale: false,
                         }),

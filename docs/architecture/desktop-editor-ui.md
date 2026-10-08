@@ -480,7 +480,7 @@ not re-render the workbench.
   translation has no condition on `$gn4`.
 - **Names and terms** lists the glossary terms of the source, each with its
   translation, note, and whether a term exception keeps
-  it out, and the game's names in the source with the project's
+  it out (a model exception shows as *AI: another meaning*), and the game's names in the source with the project's
   translations, with a link to the glossary. Under each name is what it
   names, from every name sheet with it (*character, enemy*), the row's name
   when it is another form of it (*place, a form of «The Walk»*), and the
@@ -490,8 +490,11 @@ not re-render the workbench.
   translation: used or not used yet (amber). A name counts as used as the glossary counts a term's translation:
   each of its words as written or inflected. A term's **Not this term**
   (on hover) adds a term exception to the string, and **Restore** on an
-  excepted term removes it (see
-  [`po-project.md`](./po-project.md#term-exceptions)).
+  excepted term removes it; a term a correction decided does not apply also
+  has **Confirm**, which makes the decision the person's exception, while
+  **Restore** gives the term back to the string (see
+  [`po-project.md`](./po-project.md#term-exceptions) and
+  [`po-project.md`](./po-project.md#model-exceptions)).
 - **Macros** lists the parts of the source the editor draws as chips or
   formatting markers, once each with a count, grouped by what a translation
   may do with them: keep (game data), conditions, letter case, formatting,
@@ -587,8 +590,11 @@ there are any, the notice of a bulk edit and the strings chosen.
   groups, one per term, so the chip opens a list rather than laying them
   out: a filter field (Enter takes the first match), *Any issue*, then the
   other kinds and the terms in sections, each with its strings, most
-  first. The list is of the result without an issue chosen, so choosing
-  one does not narrow it.
+  first; the terms begin with *Every term*, which keeps the strings with
+  any term not used, the start of a correction that decides every term of
+  the project (see [`translate.md`](./translate.md#deciding-terms)). The
+  list is of the result without an issue chosen, so choosing one does not
+  narrow it.
 - **The result** is one virtualized list grouped by sheet, the files of a
   sheet (`Item/10000.po`, `Item/12000.po`) together, with each sheet's
   count, and its files listed on hover when there are several. While an

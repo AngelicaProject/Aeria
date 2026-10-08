@@ -45,6 +45,10 @@ pub struct Translation {
     pub previous: Option<String>,
     /// Terms a person decided do not apply to the string.
     pub term_exceptions: Vec<String>,
+    /// Terms a correction run's model decided do not apply to the string,
+    /// whether or not the decision still holds (see
+    /// [`crate::po::ModelException::holds`]).
+    pub model_exceptions: Vec<crate::po::ModelException>,
     /// A person reviewed the translation as it is (see
     /// [`crate::po::Entry::is_reviewed`]); machine translation leaves it.
     pub reviewed: bool,
@@ -60,6 +64,7 @@ impl Translation {
             || entry.fuzzy
             || note.is_some()
             || !entry.term_exceptions.is_empty()
+            || !entry.model_exceptions.is_empty()
             || entry.reviewed.is_some())
         .then(|| Self {
             text: entry.translation.clone(),
@@ -67,6 +72,7 @@ impl Translation {
             note,
             previous: entry.previous.clone().filter(|_| entry.fuzzy),
             term_exceptions: entry.term_exceptions.clone(),
+            model_exceptions: entry.model_exceptions.clone(),
             reviewed: entry.is_reviewed(),
             review_stale: entry.review_is_stale(),
         })
@@ -82,6 +88,7 @@ pub struct EntryState {
     /// The source the translation was written for, while it is fuzzy.
     pub previous: Option<String>,
     pub term_exceptions: Vec<String>,
+    pub model_exceptions: Vec<crate::po::ModelException>,
     /// The review mark, as its flag holds it.
     pub reviewed: Option<String>,
 }
@@ -93,6 +100,7 @@ impl EntryState {
             fuzzy: entry.fuzzy,
             previous: entry.previous.clone(),
             term_exceptions: entry.term_exceptions.clone(),
+            model_exceptions: entry.model_exceptions.clone(),
             reviewed: entry.reviewed.clone(),
         }
     }
@@ -120,6 +128,24 @@ pub enum EditKind {
     /// A term exception is added or removed: the glossary term does not
     /// apply to the string (see [`set_term_exception`]).
     TermException { term: String, add: bool },
+    /// A correction run's decisions on terms of the source, with its
+    /// correction when it changed the translation: a term decided not to
+    /// apply gets a model exception for the entry it was decided for, and a
+    /// term decided to apply loses its model exception. A term a person
+    /// decided keeps the person's decision. A reviewed translation is a
+    /// person's: neither its text nor its decisions are written.
+    Decide {
+        correction: Option<String>,
+        terms: Vec<TermDecision>,
+    },
+}
+
+/// A model's decision on a term of a string's source.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TermDecision {
+    /// The term, with the fingerprint of the glossary entry decided for.
+    pub exception: crate::po::ModelException,
+    pub applies: bool,
 }
 
 /// An edit of one entry, made only while the entry still has the
@@ -849,7 +875,9 @@ impl Session {
 
     /// Adds or removes a term exception of a string: the glossary term does
     /// not apply to it, so the checks neither ask for its translation nor
-    /// forbid its variants there, and machine translation is told so.
+    /// forbid its variants there, and machine translation is told so. The
+    /// person's decision either way takes the place of a model's: removing
+    /// an exception removes the model exception of the term too.
     ///
     /// # Errors
     ///
@@ -1169,31 +1197,47 @@ fn apply_edit(
     }
     let before = EntryState::of(entry);
     let reviewed = entry.is_reviewed();
-    if reviewed && matches!(edit.kind, EditKind::Correct(_) | EditKind::Adapt(_)) {
+    if reviewed
+        && matches!(
+            edit.kind,
+            EditKind::Correct(_) | EditKind::Adapt(_) | EditKind::Decide { .. }
+        )
+    {
         return Err(SkipReason::Reviewed);
     }
+    let text = match &edit.kind {
+        EditKind::Replace(new) | EditKind::Correct(new) | EditKind::Adapt(new) => Some(new),
+        EditKind::Decide { correction, .. } => correction.as_ref(),
+        _ => None,
+    };
+    if let Some(new) = text {
+        if !new.is_empty() {
+            let verdict = check_translation(knowledge, target, entry, new);
+            if !verdict.problems.is_empty() {
+                return Err(SkipReason::Invalid(
+                    verdict
+                        .issues
+                        .into_iter()
+                        .filter(crate::check::Issue::is_problem)
+                        .collect(),
+                ));
+            }
+        }
+        new.clone_into(&mut entry.translation);
+        // A person's replacement keeps a review: they wrote the text.
+        if reviewed || new.is_empty() {
+            entry.set_reviewed(reviewed);
+        }
+        if matches!(edit.kind, EditKind::Adapt(_)) {
+            entry.fuzzy = false;
+            entry.previous = None;
+        }
+    }
     match &edit.kind {
-        EditKind::Replace(new) | EditKind::Correct(new) | EditKind::Adapt(new) => {
-            if !new.is_empty() {
-                let verdict = check_translation(knowledge, target, entry, new);
-                if !verdict.problems.is_empty() {
-                    return Err(SkipReason::Invalid(
-                        verdict
-                            .issues
-                            .into_iter()
-                            .filter(crate::check::Issue::is_problem)
-                            .collect(),
-                    ));
-                }
-            }
-            new.clone_into(&mut entry.translation);
-            // A person's replacement keeps a review: they wrote the text.
-            if reviewed || new.is_empty() {
-                entry.set_reviewed(reviewed);
-            }
-            if matches!(edit.kind, EditKind::Adapt(_)) {
-                entry.fuzzy = false;
-                entry.previous = None;
+        EditKind::Replace(_) | EditKind::Correct(_) | EditKind::Adapt(_) => {}
+        EditKind::Decide { terms, .. } => {
+            for decision in terms {
+                set_model_exception(entry, &decision.exception, !decision.applies);
             }
         }
         EditKind::Clear => {
@@ -1210,6 +1254,7 @@ fn apply_edit(
             entry.fuzzy = state.fuzzy;
             entry.previous.clone_from(&state.previous);
             entry.term_exceptions.clone_from(&state.term_exceptions);
+            entry.model_exceptions.clone_from(&state.model_exceptions);
             entry.reviewed.clone_from(&state.reviewed);
         }
         EditKind::TermException { term, add } => set_term_exception(entry, term, *add),
@@ -1223,15 +1268,39 @@ fn apply_edit(
     }))
 }
 
+/// Adds or removes the model exception of a term, compared ignoring case. A
+/// term a person made an exception for keeps the person's decision, and a
+/// term that cannot be written as a flag is not added.
+fn set_model_exception(
+    entry: &mut crate::po::Entry,
+    exception: &crate::po::ModelException,
+    add: bool,
+) {
+    let lower = exception.term.trim().to_lowercase();
+    entry
+        .model_exceptions
+        .retain(|known| known.term.to_lowercase() != lower);
+    let person = entry
+        .term_exceptions
+        .iter()
+        .any(|known| known.to_lowercase() == lower);
+    if add && !person && crate::po::can_be_exception(&exception.term) {
+        entry.model_exceptions.push(exception.clone());
+    }
+}
+
 /// Adds or removes the exception of `term`, compared ignoring case. A term
 /// that cannot be written as a flag (see [`crate::po::can_be_exception`]) is
-/// not added.
+/// not added. A person's decision either way replaces the model's.
 pub fn set_term_exception(entry: &mut crate::po::Entry, term: &str, add: bool) {
     let term = term.trim();
     let lower = term.to_lowercase();
     entry
         .term_exceptions
         .retain(|known| known.to_lowercase() != lower);
+    entry
+        .model_exceptions
+        .retain(|known| known.term.to_lowercase() != lower);
     if add && crate::po::can_be_exception(term) {
         entry.term_exceptions.push(term.to_owned());
     }

@@ -178,7 +178,9 @@ term, variant, or word), so an interface words them in its own language; each
 has the English message Aeria has always written, and a group (the kind, with
 the term for term issues). With a checks filter a search also counts, over
 every entry found, the entries with an issue of each group, most first, and
-can keep only the entries with an issue of one group.
+can keep only the entries with an issue of one group, or of one kind of
+grouped issues: `termNotUsed` keeps the entries with any term whose
+translation does not seem to be used (`Issue::is_of`).
 
 A search returns at most 2,000 entries with the byte ranges of their matches,
 every file with an entry found and its count, and counts the rest; a new search in the desktop cancels the one in

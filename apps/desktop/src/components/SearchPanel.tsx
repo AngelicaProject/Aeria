@@ -16,7 +16,7 @@ import { FixDialog } from "./FixDialog";
 import { ReplacePreviewDialog } from "./ReplacePreviewDialog";
 import { useStickyState } from "./GitShared";
 import { SearchResultList, chooseKey, type SearchResultListHandle } from "./SearchResultList";
-import { SearchIssuePicker } from "./SearchIssuePicker";
+import { ALL_TERMS, SearchIssuePicker } from "./SearchIssuePicker";
 import { SearchScope, defaultFields, scopeNarrowed, type Scope } from "./SearchScope";
 
 
@@ -698,7 +698,7 @@ export function SearchPanel({ onRevealBinding, onWorkspaceChanged, onOpenTransla
       <FixDialog
         count={fixing?.length ?? null}
         fuzzy={fixing?.filter((entry) => entry.expectedFuzzy).length ?? 0}
-        issue={chosenIssue ? issueLabel(chosenIssue, t) : null}
+        issue={query.issue === ALL_TERMS ? t("search.issue.allTerms") : chosenIssue ? issueLabel(chosenIssue, t) : null}
         issuesFirst={check !== "any"}
         onCancel={() => setFixing(null)}
         onFix={(issues, proofread, adapt, request) => { if (fixing) startFix(fixing, issues, proofread, adapt, request); }}

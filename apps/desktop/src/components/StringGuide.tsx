@@ -355,7 +355,18 @@ function Words({ hints, draft, verdict, onPick, onReveal, onException }: { hints
                 <span className="string-guide-source">{term.term}</span>
                 <UiIcon icon="arrowRight" size="xs" className="string-guide-arrow" />
                 <button className="string-guide-insert" type="button" disabled={!onPick} title={t("hints.insertTitle", { text: term.translation })} onClick={() => insert(term.translation)}>{term.translation}</button>
-                <span className="string-guide-tag">{term.excepted ? t("hints.term.excepted") : t("hints.term")}</span>
+                <span className="string-guide-tag" {...(term.byModel ? { title: t("hints.term.byModelTitle", { term: term.term }) } : {})}>{term.byModel ? t("hints.term.byModel") : term.excepted ? t("hints.term.excepted") : t("hints.term")}</span>
+                {term.byModel ? (
+                  <button
+                    className="string-guide-link string-guide-except"
+                    type="button"
+                    disabled={!onException}
+                    title={t("hints.term.confirmTitle", { term: term.term })}
+                    onClick={() => onException?.(term.term, true)}
+                  >
+                    {t("hints.term.confirm")}
+                  </button>
+                ) : null}
                 <button
                   className="string-guide-link string-guide-except"
                   type="button"

@@ -107,8 +107,11 @@ pub struct HintTermDto {
     pub term: String,
     pub translation: String,
     pub note: Option<String>,
-    /// A person decided the term does not apply to this string.
+    /// A person, or a correction run's model, decided the term does not
+    /// apply to this string.
     pub excepted: bool,
+    /// The decision is the model's.
+    pub by_model: bool,
 }
 
 impl From<HintTerm> for HintTermDto {
@@ -118,6 +121,7 @@ impl From<HintTerm> for HintTermDto {
             translation: term.translation,
             note: term.note,
             excepted: term.excepted,
+            by_model: term.by_model,
         }
     }
 }

@@ -594,6 +594,8 @@ export type TranslationCorrected = {
   before: string;
   after: string;
   reason: string | null;
+  /** The terms the correction decided do not apply to the string. */
+  otherMeaning?: string[];
 };
 
 export type TranslationStatus = {
@@ -605,6 +607,8 @@ export type TranslationStatus = {
   written: number;
   /** Translations a correction answered unchanged. */
   unchanged: number;
+  /** Strings a correction decided a term does not apply to. */
+  decided: number;
   rejected: number;
   rejections: TranslationRejected[];
   /** The first translations a correction wrote, with why each changed. */
@@ -931,8 +935,8 @@ export type IssueDto = {
 export type HintNameDto = { name: string; translation: string };
 /** A game name of the source with the string its translation comes from: every name sheet with it, the row's name when this is another form of it, and its coordinate. */
 export type HintGameNameDto = HintNameDto & { sheets: string[]; full: string | null; binding: SourceBinding | null };
-/** A glossary term of the source; `excepted` when a person decided it does not apply to the string. */
-export type HintTermDto = { term: string; translation: string; note: string | null; excepted: boolean };
+/** A glossary term of the source; `excepted` when a person or a correction's model decided it does not apply to the string, `byModel` when the model did. */
+export type HintTermDto = { term: string; translation: string; note: string | null; excepted: boolean; byModel: boolean };
 /** What a machine translation request tells the model about one string. */
 export type StringHintsDto = {
   names: HintGameNameDto[];

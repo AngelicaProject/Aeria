@@ -9,10 +9,12 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use aeria_knowledge::GlossaryEntry;
 use aeria_knowledge::Knowledge;
 use aeria_po::length::{Unit, length_budget};
 use aeria_po::{
-    EditKind, Entry, EntryEdit, Issue, PO_DIR, PoFile, Session, check_translation, is_scene,
+    EditKind, Entry, EntryEdit, Issue, ModelException, PO_DIR, PoFile, Session, TermDecision,
+    check_translation, is_scene,
 };
 use serde::Serialize;
 use tokio::task::JoinSet;
@@ -105,7 +107,7 @@ pub fn fix_issues(fix: &Fix, knowledge: &Knowledge, target: &str, entry: &Entry)
             issue.is_problem()
                 || (fix.issues
                     && !matches!(issue, Issue::StaleTermException(_))
-                    && (fix.groups.is_empty() || fix.groups.contains(&issue.group())))
+                    && (fix.groups.is_empty() || fix.groups.iter().any(|group| issue.is_of(group))))
         })
         .collect()
 }
@@ -132,6 +134,9 @@ pub struct Corrected {
     pub before: String,
     pub after: String,
     pub reason: Option<String>,
+    /// The terms the correction decided do not apply to the string.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub other_meaning: Vec<String>,
 }
 
 /// A string whose translation still failed the checks after the retries; it
@@ -204,6 +209,8 @@ pub struct Status {
     pub written: usize,
     /// Translations a correction answered unchanged.
     pub unchanged: usize,
+    /// Strings a correction decided a term does not apply to.
+    pub decided: usize,
     pub rejected: usize,
     /// The run corrects translations rather than translating.
     pub fixing: bool,
@@ -445,6 +452,7 @@ impl Shared {
 struct Done {
     written: usize,
     unchanged: usize,
+    decided: usize,
     rejected: Vec<Rejected>,
     corrected: Vec<Corrected>,
 }
@@ -590,7 +598,7 @@ fn file_task(
                 })
                 .flatten(),
             max_length: length_budget(entry),
-            term_exceptions: entry.term_exceptions.clone(),
+            term_exceptions: aeria_po::applied_exceptions(entry, &shared.knowledge.terms),
             translation: shared
                 .options
                 .fix
@@ -635,7 +643,8 @@ fn build(shared: &Shared, pack: &[Batch]) -> Result<Option<Built>, String> {
         .map(|(_, _, entry)| entry.source.as_str())
         .collect();
     // A term goes with the batch when it applies to one of its strings: a
-    // string's term exceptions keep its term out.
+    // string's term exceptions, a person's or a model's that holds, keep its
+    // term out.
     let names = shared.names.in_texts(
         titles
             .iter()
@@ -645,11 +654,10 @@ fn build(shared: &Shared, pack: &[Batch]) -> Result<Option<Built>, String> {
     );
     let mut terms: Vec<Term> = Vec::new();
     for (_, _, string) in &strings {
-        for entry in shared
-            .knowledge
-            .terms
-            .matches_except(&string.source, &string.term_exceptions)
-        {
+        for entry in shared.knowledge.terms.matches_except(
+            &string.source,
+            &aeria_po::applied_exceptions(string, &shared.knowledge.terms),
+        ) {
             if terms.len() < TERMS && !terms.iter().any(|term| term.term == entry.term) {
                 terms.push(Term {
                     term: entry.term.clone(),
@@ -696,7 +704,7 @@ fn problems(shared: &Shared, strings: &Strings, id: &str, answer: &Answer) -> Ve
         Some(_) => {}
     }
     if let Some(fix) = &shared.options.fix {
-        return correction_problems(shared, fix, entry, &answer.text);
+        return correction_problems(shared, fix, entry, answer);
     }
     let mut found = Vec::new();
     if let Some(budget) = length_budget(entry) {
@@ -724,16 +732,76 @@ fn problems(shared: &Shared, strings: &Strings, id: &str, answer: &Answer) -> Ve
     found
 }
 
+/// The terms a correction of `entry` decides: those of its `fix` whose
+/// translation the checks find unused, as the glossary has them.
+fn asked_terms<'a>(
+    fix: &Fix,
+    knowledge: &'a Knowledge,
+    target: &str,
+    entry: &Entry,
+) -> Vec<&'a GlossaryEntry> {
+    let mut terms: Vec<&GlossaryEntry> = Vec::new();
+    for issue in fix_issues(fix, knowledge, target, entry) {
+        if let Issue::TermNotUsed { term, .. } = issue
+            && let Some(found) = knowledge.terms.find(&term)
+            && !terms.iter().any(|known| known.term == found.term)
+        {
+            terms.push(found);
+        }
+    }
+    terms
+}
+
+/// The terms of `asked` an answer decided do not apply, by any of their
+/// forms; a term it names that was not asked is not a decision.
+fn other_meaning<'a>(
+    asked: &[&'a GlossaryEntry],
+    knowledge: &Knowledge,
+    answer: &Answer,
+) -> Vec<&'a GlossaryEntry> {
+    asked
+        .iter()
+        .filter(|term| {
+            answer.other_meaning.iter().any(|named| {
+                knowledge
+                    .terms
+                    .find(named)
+                    .is_some_and(|found| found.term == term.term)
+            })
+        })
+        .copied()
+        .collect()
+}
+
+/// `entry` with the model exceptions of `terms`, as a correction's
+/// decisions write them.
+fn with_decisions(entry: &Entry, terms: &[&GlossaryEntry]) -> Entry {
+    let mut decided = entry.clone();
+    for term in terms {
+        let lower = term.term.to_lowercase();
+        decided
+            .model_exceptions
+            .retain(|known| known.term.to_lowercase() != lower);
+        decided.model_exceptions.push(ModelException::of(term));
+    }
+    decided
+}
+
 /// The problems of a correction of `entry`'s translation, which may not
 /// make it worse: a problem of the checks, an issue of a kind the
 /// translation did not have (a length too long, machine phrasing, or what
 /// machine translation alone is held to), and, unless the answer left the
 /// translation as it was, the advice it was asked to fix. An unchanged
-/// answer says that advice does not apply.
-fn correction_problems(shared: &Shared, fix: &Fix, entry: &Entry, text: &str) -> Vec<String> {
+/// answer says that advice does not apply. A term the checks find unused is
+/// decided: the answer names it among the terms that do not apply, or the
+/// corrected translation uses it.
+fn correction_problems(shared: &Shared, fix: &Fix, entry: &Entry, answer: &Answer) -> Vec<String> {
     let (knowledge, target) = (&*shared.knowledge, shared.target.as_str());
+    let text = answer.text.as_str();
+    let terms = asked_terms(fix, knowledge, target, entry);
+    let decided = with_decisions(entry, &other_meaning(&terms, knowledge, answer));
     let before = check_translation(knowledge, target, entry, &entry.translation);
-    let after = check_translation(knowledge, target, entry, text);
+    let after = check_translation(knowledge, target, &decided, text);
     let asked: HashSet<String> = fix_issues(fix, knowledge, target, entry)
         .iter()
         .map(Issue::group)
@@ -743,7 +811,16 @@ fn correction_problems(shared: &Shared, fix: &Fix, entry: &Entry, text: &str) ->
     for issue in after.issues.iter().filter(|issue| !issue.is_problem()) {
         let group = issue.group();
         let new = !before.issues.iter().any(|old| old.group() == group);
-        if new || (changed && asked.contains(&group)) {
+        if let Issue::TermNotUsed { term, .. } = issue
+            && terms
+                .iter()
+                .any(|asked| asked.term.eq_ignore_ascii_case(term))
+        {
+            found.push(format!(
+                "{issue}: where the term applies to this string, use its translation; where \
+                 the word means something else here, list {term:?} in the fourth element"
+            ));
+        } else if new || (changed && asked.contains(&group)) {
             found.push(issue.to_string());
         }
     }
@@ -908,11 +985,7 @@ async fn settle(
             .map(|(id, _, _)| {
                 (
                     id.clone(),
-                    Answer {
-                        start: None,
-                        text: String::new(),
-                        reason: None,
-                    },
+                    Answer::bare(None, String::new()),
                     vec![MISSING.to_owned()],
                 )
             }),
@@ -993,6 +1066,7 @@ async fn translate(shared: Arc<Shared>, pack: Pack) -> Result<Done, ModelError> 
         return Ok(Done {
             written: 0,
             unchanged: 0,
+            decided: 0,
             rejected: Vec::new(),
             corrected: Vec::new(),
         });
@@ -1029,15 +1103,53 @@ async fn translate(shared: Arc<Shared>, pack: Pack) -> Result<Done, ModelError> 
     Ok(Done {
         written,
         unchanged: 0,
+        decided: 0,
         rejected,
         corrected: Vec::new(),
     })
 }
 
+/// What a correction that passed the checks writes to `entry`: its
+/// adaptation, its correction, or its decisions on the terms it was asked
+/// about with the correction when it made one; and the terms it decided do
+/// not apply. `None` when it left the translation as it was and decided no
+/// term.
+fn correction_edit(
+    fix: &Fix,
+    knowledge: &Knowledge,
+    target: &str,
+    entry: &Entry,
+    answer: &Answer,
+) -> Option<(EditKind, Vec<String>)> {
+    let changed = answer.text != entry.translation;
+    // An adapted translation answered unchanged still fits the new source:
+    // it is written to clear the fuzzy mark.
+    if fix.adapt && entry.fuzzy {
+        return Some((EditKind::Adapt(answer.text.clone()), Vec::new()));
+    }
+    let asked = asked_terms(fix, knowledge, target, entry);
+    if asked.is_empty() {
+        return changed.then(|| (EditKind::Correct(answer.text.clone()), Vec::new()));
+    }
+    let other = other_meaning(&asked, knowledge, answer);
+    let kind = EditKind::Decide {
+        correction: changed.then(|| answer.text.clone()),
+        terms: asked
+            .iter()
+            .map(|term| TermDecision {
+                exception: ModelException::of(term),
+                applies: !other.iter().any(|known| known.term == term.term),
+            })
+            .collect(),
+    };
+    Some((kind, other.iter().map(|term| term.term.clone()).collect()))
+}
+
 /// Writes the corrections of a pack that passed the checks, each only while
 /// its translation is still the one the request was built from and not
-/// reviewed, so work saved meanwhile is kept. An answer that left the
-/// translation as it was is counted, not written.
+/// reviewed, so work saved meanwhile is kept, with the decisions on the
+/// terms it was asked about. An answer that left the translation as it was
+/// and decided no term is counted, not written.
 async fn correct(
     shared: &Shared,
     built: &Built,
@@ -1046,27 +1158,29 @@ async fn correct(
 ) -> Result<Done, ModelError> {
     let mut unchanged = 0;
     let mut edits = Vec::new();
+    let mut decided: HashMap<&str, Vec<String>> = HashMap::new();
     for (id, path, entry) in &built.strings {
         let Some(answer) = answers.get(id).filter(|answer| !answer.text.is_empty()) else {
             continue;
         };
-        // An adapted translation answered unchanged still fits the new source:
-        // it is written to clear the fuzzy mark.
-        let adapt = shared.options.fix.as_ref().is_some_and(|fix| fix.adapt) && entry.fuzzy;
-        if answer.text == entry.translation && !adapt {
+        let Some(fix) = &shared.options.fix else {
+            continue;
+        };
+        let Some((kind, other)) =
+            correction_edit(fix, &shared.knowledge, &shared.target, entry, answer)
+        else {
             unchanged += 1;
             continue;
+        };
+        if !other.is_empty() {
+            decided.insert(entry.context.as_str(), other);
         }
         edits.push(EntryEdit {
             path: path.clone(),
             context: entry.context.clone(),
             expected_text: entry.translation.clone(),
             expected_fuzzy: entry.fuzzy,
-            kind: if adapt {
-                EditKind::Adapt(answer.text.clone())
-            } else {
-                EditKind::Correct(answer.text.clone())
-            },
+            kind,
         });
     }
     let applied = {
@@ -1099,11 +1213,26 @@ async fn correct(
             before: done.before.text.clone(),
             after: done.after.text.clone(),
             reason: reasons.get(done.context.as_str()).cloned().flatten(),
+            other_meaning: decided
+                .get(done.context.as_str())
+                .cloned()
+                .unwrap_or_default(),
         })
         .collect();
+    let decided = applied
+        .done
+        .iter()
+        .filter(|done| {
+            done.after
+                .model_exceptions
+                .iter()
+                .any(|exception| !done.before.model_exceptions.contains(exception))
+        })
+        .count();
     Ok(Done {
         written: applied.done.len(),
         unchanged,
+        decided,
         rejected,
         corrected,
     })
@@ -1425,6 +1554,7 @@ async fn drain(
                     status.batches_done += 1;
                     status.written += done.written;
                     status.unchanged += done.unchanged;
+                    status.decided += done.decided;
                     status.rejected += done.rejected.len();
                     let room = LISTED_REJECTIONS.saturating_sub(status.rejections.len());
                     status
