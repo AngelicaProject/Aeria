@@ -36,7 +36,7 @@ use std::process::Command;
 use aeria_export::PackSettings;
 use aeria_fonts::{FontSettings, project_path};
 use aeria_git::PROJECT_PATHS;
-use aeria_knowledge::{Knowledge, KnowledgeFile};
+use aeria_knowledge::KnowledgeFile;
 use aeria_po::{Entry, PO_DIR, PoFile, SETTINGS_FILE, Settings, check_file, list, read_settings};
 
 pub use review::review;
@@ -303,7 +303,7 @@ fn translations(report: &mut Reporter<'_>) {
     let target = read_settings(&root)
         .map(|settings| settings.target_language)
         .unwrap_or_default();
-    let knowledge = Knowledge::load(&root);
+    let knowledge = aeria_po::project_knowledge(&root).knowledge;
     for problem in &knowledge.problems {
         report.add(Severity::Error, None, problem.clone());
     }

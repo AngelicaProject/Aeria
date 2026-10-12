@@ -1,13 +1,12 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Dialog } from "radix-ui";
-import { normalizeCommandError, translationNameSheets, translationRetry, translationStart, translationStatus, translationStop } from "../ipc";
+import { normalizeCommandError, translationRetry, translationStart, translationStatus, translationStop } from "../ipc";
 import type { CommandError, ProjectSheetDto, SheetProgressDto, SourceBinding, TranslationStatus, TranslationStop } from "../types";
 import type { MessageKey } from "../i18n/translate";
 import { buildSheetTree, findSheetMatches, type SheetTreeEntry, type SheetTreeFolder } from "../sheetExplorer";
 import { ErrorBanner } from "./ErrorBanner";
 import { TranslationCorrections } from "./TranslationCorrections";
 import { TranslationRejections } from "./TranslationRejections";
-import { NameSheetMark } from "../ui/NameSheetMark";
 import { UiIcon } from "../ui/primitives/UiIcon";
 import { useI18n, type Translate } from "../ui/i18n";
 import { usePreferences } from "../ui/preferences";
@@ -49,7 +48,7 @@ const stopLabels: Readonly<Record<TranslationStop["reason"], MessageKey>> = {
   failed: "translate.stop.failed",
 };
 
-function describeStop(stop: TranslationStop, t: Translate, locale: string): string {
+export function describeStop(stop: TranslationStop, t: Translate, locale: string): string {
   if (stop.reason === "usageLimit" && stop.resetsAt !== null) {
     return t("translate.stop.usageLimitUntil", { time: new Date(stop.resetsAt * 1000).toLocaleString(locale) });
   }
@@ -108,7 +107,6 @@ export const TranslateDialog = memo(function TranslateDialog({ open, onOpenChang
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
   const [query, setQuery] = useState("");
   const [fuzzy, setFuzzy] = useState(false);
-  const [nameSheets, setNameSheets] = useState<readonly string[]>([]);
   const [status, setStatus] = useState<TranslationStatus | null>(null);
   const [error, setError] = useState<CommandError | null>(null);
   const wasRunning = useRef(false);
@@ -139,7 +137,6 @@ export const TranslateDialog = memo(function TranslateDialog({ open, onOpenChang
 
   useEffect(() => {
     if (!open) return;
-    translationNameSheets().then(setNameSheets).catch(() => setNameSheets([]));
     setSelected((current) => current.size > 0 || !sheetName || !(remainingOf(sheetName) ?? 1) ? current : new Set([sheetName]));
     // Only when the dialog opens: the choice stays as the translator left it.
   }, [open]);
@@ -225,7 +222,6 @@ export const TranslateDialog = memo(function TranslateDialog({ open, onOpenChang
             <span className="translate-twisty" />
             <Check checked={selected.has(name)} mixed={false} label={name} onChange={(on) => toggle([name], on)} />
             <span className="translate-name">{entry.name}</span>
-            {nameSheets.includes(name) ? <NameSheetMark /> : null}
             {remainingLabel(remainingOf(name))}
           </label>,
         );
@@ -264,7 +260,6 @@ export const TranslateDialog = memo(function TranslateDialog({ open, onOpenChang
             <div className="translate-picker">
               <input className="input" type="search" placeholder={t("translate.search")} aria-label={t("translate.search")} value={query} disabled={running} onChange={(event) => setQuery(event.target.value)} />
               <div className="translate-presets">
-                <button className="button button-ghost translate-preset" type="button" disabled={running} onClick={() => choose(nameSheets.filter((name) => allNames.includes(name)))}>{t("translate.preset.names")}</button>
                 <button className="button button-ghost translate-preset" type="button" disabled={running} onClick={() => choose(allNames.filter((name) => name.startsWith("quest/")))}>{t("translate.preset.quests")}</button>
                 <button className="button button-ghost translate-preset" type="button" disabled={running} onClick={() => choose(allNames)}>{t("translate.preset.untranslated")}</button>
                 <button className="button button-ghost translate-preset" type="button" disabled={running || selected.size === 0} onClick={() => setSelected(new Set())}>{t("translate.preset.none")}</button>
@@ -276,7 +271,6 @@ export const TranslateDialog = memo(function TranslateDialog({ open, onOpenChang
                         <span className="translate-twisty" />
                         <Check checked={selected.has(match.sheet.name)} mixed={false} label={match.sheet.name} onChange={(on) => toggle([match.sheet.name], on)} />
                         <span className="translate-name">{match.basename}{match.breadcrumb ? <span className="muted"> · {match.breadcrumb}</span> : null}</span>
-                        {nameSheets.includes(match.sheet.name) ? <NameSheetMark /> : null}
                         {remainingLabel(remainingOf(match.sheet.name))}
                       </label>
                     ))
@@ -309,6 +303,7 @@ export const TranslateDialog = memo(function TranslateDialog({ open, onOpenChang
                   <p className="export-facts">
                     <span>{t(status.fixing ? "translate.progressFix" : "translate.progress", { written: formatNumber(status.written), strings: formatNumber(status.strings) })}</span>
                     {status.unchanged > 0 ? <span>{t("translate.unchanged", { count: status.unchanged })}</span> : null}
+                    {status.decided > 0 ? <span>{t("translate.decided", { count: status.decided })}</span> : null}
                     {status.rejected > 0 ? <span>{t("translate.rejected", { count: status.rejected })}</span> : null}
                     <span>{t("translate.tokens", { input: formatNumber(status.inputTokens), output: formatNumber(status.outputTokens) })}</span>
                     {cachedShare !== null ? <span>{t("translate.cached", { percent: Math.round(cachedShare * 100) })}</span> : null}

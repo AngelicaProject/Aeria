@@ -679,7 +679,7 @@ fn project_files_are_committed_only_by_checkpoints() {
     fs::create_dir_all(root.join(KNOWLEDGE_DIR)).expect("knowledge");
     fs::write(
         root.join(KNOWLEDGE_DIR).join("terms.csv"),
-        "term,translation\n",
+        "term,translation,category\n",
     )
     .expect("terms");
     fs::write(root.join(KNOWLEDGE_DIR).join("style.md"), "Use ты.\n").expect("style");
@@ -1108,4 +1108,87 @@ fn history_is_searched_and_branches_start_at_a_commit() {
         .expect("branch");
     assert_eq!(current_branch(&repository), "from-greetings");
     assert!(!root.join(shard_path(0x20)).exists());
+}
+
+#[test]
+fn a_branch_switch_carries_uncommitted_strings_and_joins_them_per_string() {
+    let sandbox = Sandbox::new();
+    let repository = sandbox.project("project", "Ada");
+    let root = repository.root().to_owned();
+    let (one, two) = (id(0x10, 1), id(0x10, 2));
+    write_shard(&root, 0x10, &[(one, 1, "", ""), (two, 2, "", "")]);
+    write_shard(&root, 0x20, &[(id(0x20, 1), 1, "", "")]);
+    repository.checkpoint(None).expect("initial");
+
+    // The other branch translates the first string.
+    repository.create_branch("other").expect("create");
+    write_shard(&root, 0x10, &[(one, 1, "Un", ""), (two, 2, "", "")]);
+    repository.checkpoint(None).expect("other");
+    repository.switch_branch("main", || Ok(())).expect("back");
+
+    // Uncommitted on main: the second string, and a file the other branch
+    // never changed.
+    write_shard(&root, 0x10, &[(one, 1, "", ""), (two, 2, "Deux", "")]);
+    write_shard(&root, 0x20, &[(id(0x20, 1), 1, "Trois", "")]);
+
+    // A rejected switch leaves the branch and the work as they were.
+    match repository.switch_branch("other", || Err("blocked".to_owned())) {
+        Err(GitError::IncomingRejected { .. }) => {}
+        other => panic!("expected rejection, got {other:?}"),
+    }
+    assert_eq!(current_branch(&repository), "main");
+    assert!(shard_text(&root, 0x10).contains("\"Deux\""));
+    assert!(!shard_text(&root, 0x10).contains("\"Un\""));
+    assert!(shard_text(&root, 0x20).contains("\"Trois\""));
+
+    repository
+        .switch_branch("other", || Ok(()))
+        .expect("switch");
+    assert_eq!(current_branch(&repository), "other");
+    let joined = shard_text(&root, 0x10);
+    assert!(
+        joined.contains("\"Un\"") && joined.contains("\"Deux\""),
+        "{joined}"
+    );
+    assert!(shard_text(&root, 0x20).contains("\"Trois\""));
+    let changed: Vec<String> = repository
+        .status()
+        .expect("status")
+        .files
+        .into_iter()
+        .map(|file| file.path)
+        .collect();
+    assert_eq!(changed, [shard_path(0x10), shard_path(0x20)]);
+
+    // The same string changed differently on both sides stops the switch.
+    write_shard(&root, 0x10, &[(one, 1, "Uno", ""), (two, 2, "Deux", "")]);
+    match repository.switch_branch("main", || Ok(())) {
+        Err(GitError::CarryConflict {
+            branch,
+            files,
+            conflicts,
+        }) => {
+            assert_eq!(branch, "main");
+            assert!(files.is_empty());
+            assert_eq!(conflicts.len(), 1);
+        }
+        other => panic!("expected a carry conflict, got {other:?}"),
+    }
+    assert_eq!(current_branch(&repository), "other");
+    assert!(shard_text(&root, 0x10).contains("\"Uno\""));
+
+    // A branch started at a commit carries the work the same way.
+    write_shard(&root, 0x10, &[(one, 1, "Un", ""), (two, 2, "Deux", "")]);
+    let first = repository
+        .log(0, 10)
+        .expect("log")
+        .last()
+        .expect("first")
+        .id
+        .clone();
+    repository
+        .create_branch_at("from-start", &first, || Ok(()))
+        .expect("branch at");
+    assert_eq!(current_branch(&repository), "from-start");
+    assert!(shard_text(&root, 0x10).contains("\"Deux\""));
 }

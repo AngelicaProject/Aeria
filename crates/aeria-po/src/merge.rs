@@ -13,7 +13,7 @@ use crate::po::{Entry, Header, PoFile};
 /// | `before` | result |
 /// | --- | --- |
 /// | same `msgid` | translation, notes, and marks kept |
-/// | other `msgid` | translation, notes, and review mark kept; fuzzy, with the source the translation was written for as `#\| msgid`; term exceptions dropped |
+/// | other `msgid` | translation, notes, and review mark kept; fuzzy, with the source the translation was written for as `#\| msgid`; term exceptions, model exceptions, and model renderings dropped |
 ///
 /// A reviewed translation stays reviewed when its source changes: it is a
 /// person's, so machine translation leaves it, and the fuzzy mark asks the
@@ -26,6 +26,8 @@ fn carry(before: &Entry, entry: &mut Entry) {
         entry.fuzzy = before.fuzzy;
         entry.previous.clone_from(&before.previous);
         entry.term_exceptions.clone_from(&before.term_exceptions);
+        entry.model_exceptions.clone_from(&before.model_exceptions);
+        entry.model_renderings.clone_from(&before.model_renderings);
     } else if !before.translation.is_empty() {
         entry.fuzzy = true;
         // The source the translation was written for: the previous source,
@@ -244,18 +246,31 @@ mod tests {
     fn term_exceptions_last_while_the_source_does() {
         let mut excepted = entry("S:1:0:0", "Maelstrom of Despair", "Вихрь отчаяния");
         excepted.term_exceptions = vec!["Maelstrom".to_owned()];
+        excepted.model_exceptions = vec![crate::po::ModelException {
+            term: "Despair".to_owned(),
+            fingerprint: "3f9a1c0b7d2e".to_owned(),
+        }];
+        excepted.model_renderings = vec![crate::po::ModelRendering {
+            term: "Despair".to_owned(),
+            fingerprint: "3f9a1c0b7d2e".to_owned(),
+            word: "отчаянный".to_owned(),
+        }];
         let previous = file(vec![excepted]);
         let same = merge(
             Some(&previous),
             file(vec![entry("S:1:0:0", "Maelstrom of Despair", "")]),
         );
         assert_eq!(same.entries[0].term_exceptions, ["Maelstrom"]);
+        assert_eq!(same.entries[0].model_exceptions.len(), 1);
+        assert_eq!(same.entries[0].model_renderings.len(), 1);
         let changed = merge(
             Some(&previous),
             file(vec![entry("S:1:0:0", "Maelstrom of Hope", "")]),
         );
         assert!(changed.entries[0].fuzzy);
         assert!(changed.entries[0].term_exceptions.is_empty());
+        assert!(changed.entries[0].model_exceptions.is_empty());
+        assert!(changed.entries[0].model_renderings.is_empty());
     }
 
     #[test]

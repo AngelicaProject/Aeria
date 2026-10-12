@@ -1,6 +1,5 @@
 import { shortcutKey } from "../shortcuts";
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
-import { NameSheetMark, useNameSheets } from "../ui/NameSheetMark";
 import { RightClickMenu, copyText } from "../ui/primitives/RightClickMenu";
 import { UiIcon } from "../ui/primitives/UiIcon";
 import { useI18n } from "../ui/i18n";
@@ -92,7 +91,6 @@ export const SheetSidebar = memo(function SheetSidebar({
   progress,
 }: SheetSidebarProps) {
   const { t } = useI18n();
-  const nameSheets = useNameSheets();
   const [expandedFolders, setExpandedFolders] = useState<Set<string>>(() => new Set());
   const [query, setQuery] = useState("");
   const selectedRef = useRef<HTMLButtonElement>(null);
@@ -344,7 +342,6 @@ export const SheetSidebar = memo(function SheetSidebar({
                     >
                       <span className="sheet-tree-icon sheet-tree-sheet-icon" aria-hidden="true"><UiIcon icon="table2" size="sm" /></span>
                       <span className="sheet-tree-name">{entry.name}</span>
-                      {nameSheets.has(entry.sheet.name) ? <NameSheetMark /> : null}
                       <small className="sheet-tree-count">
                         {formatSheetCount(count)}
                       </small>

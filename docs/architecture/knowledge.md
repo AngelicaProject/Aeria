@@ -6,14 +6,54 @@ whoever writes it. Machine translation sends both with every request (see
 [`translate.md`](./translate.md)); the checks of
 [`po-project.md`](./po-project.md#checking) enforce what can be checked.
 
-## The game is its own glossary
+## The terms are the one glossary
 
-Names of people, places, monsters, items, actions, and statuses are strings of
-their sheets in `po/`, and their translations are how the project renders them
-everywhere. Context comes from the game too: a quest or cutscene is one file
-with its journal, objectives, and dialogue, each line names its speaker, and
-every string carries the other client languages. The project knowledge holds
-only what the game cannot tell.
+What the project agreed to render one way is a term, whatever it is: a lore
+word, a name of a person, a place, or a thing, or a word that names are
+made of, such as a material or a kind of item. A term is a name of the
+source, its translation as it stands alone, a category saying what the name
+is (`место`, `существо`, `организация`), and a note. The terms come from two
+places:
+
+- `terms.csv`, written by a person or an agent;
+- the sheets the project declared part of the glossary (`term-sheets.csv`):
+  sheets where a row is a name the rest of the game refers to, such as the
+  titles of quests or the names of characters. Each name of such a sheet is
+  a term with the sheet's category: its translation is the one its strings
+  have most often, so a name translated after a game update is a term at
+  once, and a row translated another way does not take the name.
+
+A term of `terms.csv` takes the place of the sheet's term of its name and
+category: it is how a person corrects or settles a name of a sheet, and the
+editor writes a change of a sheet's term there. A name may mean several
+things in several categories, such as `Mist`, a district and a creature:
+each meaning is a term, and machine translation gets every meaning of a name
+found in a string, with its category and note, and uses the one the string
+means.
+
+The terms say how a name is translated, not how a sentence writes it: the
+translation is the name as it stands alone, and a sentence puts it in the
+number, case, and capitalization it needs. The checks find a term used in
+any of those forms (see
+[`glossary-v1.md`](../formats/glossary-v1.md#matching)). A string whose
+translation does not use a term of its source gets the advice of the checks,
+whatever the string is, a row of the term's own sheet included; a correction
+run then corrects the string or decides that the name means another thing
+there (see [`translate.md`](./translate.md#deciding-terms)). So a term
+changed in the glossary reaches every string that names it through the
+checks and the corrections, and the glossary never writes a string itself.
+`aeria_po::project_knowledge` reads the terms of the declared sheets, and a
+project's session reads them again when a file of a declared sheet changes.
+
+The other strings of the game that are names (items, actions, characters)
+are strings like any other: they follow the terms, and the checks hold them
+to the terms as they hold a line of dialogue. A name that is neither a term
+of the file nor of a declared sheet is translated where it occurs, and
+nothing ties its occurrences together.
+
+Context comes from the game: a quest or cutscene is one file with its
+journal, objectives, and dialogue, each line names its speaker, and every
+string carries the other client languages.
 
 ## Project knowledge
 
@@ -25,22 +65,19 @@ The knowledge is the `aeria-knowledge` directory at the project root:
   usual decisions written down (see
   [`knowledge-v1.md`](../formats/knowledge-v1.md#files)), for the
   translators to change rather than to write from nothing;
-- `terms.csv`: terms that are not strings of the game, such as lore words,
-  with their translation, their other forms in the source (`linkshells`
-  beside `linkshell`, `the Scions` beside `Scions of the Seventh Dawn`), a
-  note, and the folder people file them in.
+- `term-sheets.csv`: the sheets of the game that are part of the glossary,
+  each with the category and note of its names;
+- `terms.csv`: the terms, with their translation, category, note, other
+  wordings in the source (`the Scions` beside `Scions of the Seventh
+  Dawn`).
 
 The format is [Project Knowledge Format v1](../formats/knowledge-v1.md);
 `aeria-knowledge` owns reading and checking it. The knowledge is committed with the translations (see
-[`git.md`](./git.md#checkpoint)), and a new project gets both files without
+[`git.md`](./git.md#checkpoint)), and a new project gets the files without
 entries.
 
-The desktop edits the terms and the style in the project knowledge dialog
-(see [`desktop-editor-ui.md`](./desktop-editor-ui.md#project-knowledge-dialog)),
-which also lists glossary candidates: names the project translates in
-several ways (see [`search.md`](./search.md#glossary-candidates)), and the
-phrases its translations open sentences with (see
-[`search.md`](./search.md#openers)).
+The desktop edits the terms in the glossary tab and the style in the style
+dialog (see [`desktop-editor-ui.md`](./desktop-editor-ui.md#glossary-tab)).
 A file that cannot be read,
 and rows the format excludes, are reported with their file and line and left
 out; the rest of the knowledge is used.

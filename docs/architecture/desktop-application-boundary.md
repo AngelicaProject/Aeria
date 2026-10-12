@@ -227,20 +227,15 @@ nothing and needs no project.
 
 `string_hints(sourceBinding)` returns what a machine translation request
 tells the model about one string, from `aeria_model::hints` over the
-string's entry (`Session::entry`): the game's names in its source with the
-project's translations, each with every name sheet that has it, the row's
-name for another form of it, and the coordinate of the string its
-translation comes from (`Session::coordinate_of`), the glossary terms of its source (with their notes
+string's entry (`Session::entry`): the glossary terms of its source (with their notes
 and whether a term exception keeps one out), its speaker
-label with the name it stands for, the kind of a quest's text, the length of
+label, the kind of a quest's text, the length of
 an interface label, and the texts whose line varies with the player
-character's gender. The project's translated names are read once and again
-only when a file of a name sheet changed (`hints::NamesCache`).
+character's gender.
 `check_draft(sourceBinding, text)` checks a translation before it is saved:
 the issues of `Session::check_text`, the same checks a save runs, the
-source's game data the text lacks (`aeria_se::missing_game_data`), the names
-of the hints whose translation it uses
-(`aeria_knowledge::uses_translation`), and the characters it shows. Neither
+source's game data the text lacks (`aeria_se::missing_game_data`), and the
+characters it shows. Neither
 command writes anything.
 
 `game_glyph_font()` returns, as raw bytes, a TrueType font of the private use
@@ -300,8 +295,7 @@ failures map to stable `git*` error codes such as `gitUnavailable`,
 
 `model_account`, `model_sign_in_start`, `model_open_sign_in_page`,
 `model_sign_in_poll`, `model_sign_out`, and `model_list` sign in to a ChatGPT
-subscription and list its models; `translation_name_sheets` lists the name
-sheets a run translates first, and
+subscription and list its models;
 `translation_start(scope, fuzzy, model, effort)`, `translation_status`, and
 `translation_stop` run [machine translation](./translate.md). A scope names
 sheets, and folders of sheets ending with `/`; empty is the whole project. One
@@ -309,9 +303,14 @@ run goes at a time (`translationRunning`); it runs on the async runtime and
 its status is read while it goes. Model failures map to `model*` codes such as
 `modelSignInRequired` and `modelUsageLimit`.
 
-`project_knowledge`, `save_knowledge_style`, and `save_knowledge_terms` read
+`project_knowledge`, `save_knowledge_style`, `save_knowledge_terms`, and
+`save_knowledge_sheets` read
 and write the [project knowledge](../formats/knowledge-v1.md) files for the
-editor dialog. A save replaces the file through a temporary file and rename
+editor dialog. `project_knowledge` also returns the strings of the sheets
+declared part of the glossary as `aeria_po::project_knowledge` reads them:
+the terms they are, and the strings whose name another term already has,
+each with the translation that stands. `string_binding(context)` returns
+where a string is in the game, so the dialog opens it in the editor. A save replaces the file through a temporary file and rename
 only if it still has the content the dialog loaded, so a file changed since,
 by hand or by Git, is reported as `projectKnowledgeConflict` and not
 overwritten; an invalid entry or a file over the size limit is
@@ -320,11 +319,15 @@ overwritten; an invalid entry or a file over the size limit is
 A background thread started at setup asks the session every 1.5 seconds which
 of the sheets the editor has shown changed on disk, by Git, by hand, or by a
 machine translation run, and emits `project://files-changed` with their names;
-the renderer reloads the open sheet. The same thread emits `project://changed`
-when the project's files changed in any way the session knows of: the session
-counts its own writes (a save, a bulk edit, machine translation) and Git
-operations that change the working tree report themselves to it. Views of the
-whole project, such as search, read their result again.
+the renderer reloads the open sheet when it is one of them. The same thread
+emits `project://changed` when the project's files changed in any way the
+session knows of: the session counts its own writes (a save, a bulk edit,
+machine translation) and Git operations that change the working tree report
+themselves to it. Views of the whole project, such as search, read their
+result again. A machine translation run writes every few seconds, so the
+renderer follows each event at most once every three seconds: the first
+change after a quiet interval at once, the ones that come sooner together
+when the interval has passed.
 
 Commands that require an active project report `noProjectOpen` before
 validating project-scoped payload.

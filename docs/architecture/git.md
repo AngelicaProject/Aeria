@@ -44,7 +44,10 @@ The dock polls a fingerprint of `git status --porcelain=v2 --branch` (branch,
 `HEAD`, upstream, ahead/behind, changed files) every two seconds while the
 window is visible and when it gains focus, and reloads only when the
 fingerprint changed; it has no refresh button. Changes made outside Aeria
-therefore show up by themselves.
+therefore show up by themselves. Such a reload reads the branches, the
+repository protection, and the history again only when the branch, `HEAD`,
+the upstream, or ahead/behind moved, since changed files alone do not change
+them.
 
 ## Branches are ordinary Git
 
@@ -205,7 +208,7 @@ are project-relative and read literally (`--literal-pathspecs`):
   result that is not a project for the open game version leaves the branch
   as it was.
 - **Create branch** at a commit creates the branch there and switches to
-  it, with the requirements and validation of a branch switch (see
+  it, carrying the uncommitted work and validated as a branch switch (see
   [Branches](#branches)); a failed switch deletes the new branch again.
 - **Copy** a commit's ID or subject, and **Open on server**: the commit's
   page on the hosting service of the remote the branch syncs with,
@@ -241,8 +244,13 @@ views are derived directly from Git data (`aeria-git::entries`):
 
 - **Pending changes** compare each changed PO file in the working tree with
   `HEAD` entry by entry and report each string whose translation, fuzzy mark,
-  or note changed: translated (it had none), changed, cleared, or marked
-  (only the mark or the note changed), with the before and after state.
+  note, review, term and model exceptions, or model renderings changed:
+  translated (it had none), changed, cleared, or marked (only a mark, the
+  note, an exception, or a rendering changed), with the before and after
+  state; a mark names the terms an exception or a rendering added or
+  removed, so the decisions of a correction run (*AI: another meaning:
+  mount*, *AI: rendered by a word: aether = эфирный*) are read string by
+  string.
 - **Commit changes** compare a commit with its first parent the same way.
 - **String history** reads the last 200 commits of the string's file (`git
   log -- <file>`, merges left out, so a change is attributed to the commit
@@ -300,6 +308,10 @@ joins them entry by entry (`aeria-git::merge_file`):
   branch and another text on the other are a conflict of the string. Git's
   own merge, which joins them without one, leaves a review mark whose
   fingerprint no longer matches, so the string is not reviewed.
+- A string's term exceptions, model exceptions, and model renderings are
+  joined apart from its state: a side whose decisions equal the base takes
+  the other side's, and when both changed them the local ones stay. A branch that only decided
+  terms and one that only translated both keep their work.
 
 Joined files are written in the canonical format and committed as the merge
 commit. Conflicting strings are reported with their base, local, and incoming
@@ -309,9 +321,23 @@ files as text; a real conflict there is resolved by editing the file.
 ## Branches
 
 The Git dock switches between branches: local branches, and remote branches
-without a local one, which check out as tracking branches. A switch requires
-committed translations and is undone when the branch holds a project for
-another game version or in an older format. A new branch is created from
+without a local one, which check out as tracking branches. A switch carries
+the uncommitted work to the other branch, as `git switch` does:
+
+- A file changed here that the other branch does not change moves as it is,
+  staged or not.
+- A PO file the other branch also changed is joined per string (see
+  [Per-string merge](#per-string-merge)) with the current commit as the base
+  and the other branch as the incoming side, and is left unstaged. A string
+  changed differently here and there has no resolution to choose: the
+  switch stops.
+- Any other file both changed, including a PO file new on both sides or
+  deleted here, stops the switch.
+
+A switch that stops names the files and counts the strings, and leaves the
+branch and the uncommitted work as they were. A switch is also undone, with
+the uncommitted work restored, when the branch holds a project for another
+game version or in an older format. A new branch is created from
 `HEAD` on request; upstreams need no setup, since the first Push of a branch
 publishes it and sets its upstream. Settings → Repository can point a branch
 with commits at another fetched remote branch, and explains when there is
@@ -378,7 +404,7 @@ prints the review below on its own.
 ### Review
 
 With a base, the run's summary also gets a review of the change: the
-strings whose translation, note, fuzzy mark, or review changed, file by
+strings whose translation, note, fuzzy mark, review, or exceptions changed, file by
 file in folded tables with the source and the text before and after; the
 terms added, removed, or changed by headword; how many lines of the style
 changed; and every other file changed. Long lists are cut to stay within

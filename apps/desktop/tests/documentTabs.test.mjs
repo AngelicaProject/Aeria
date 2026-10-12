@@ -8,6 +8,7 @@ import {
   openPreviewTab,
   keepPreviewTab,
   documentIdForCommit,
+  GLOSSARY_DOCUMENT_ID,
   reduceDocumentTabs,
 } from "../src/documentTabs.ts";
 
@@ -52,6 +53,22 @@ test("commit tabs reuse one preview, sit beside sheets, and never replace a shee
   assert.deepEqual(state.tabs.map((tab) => tab.kind), ["sheet", "commit", "commit"]);
   state = closeDocumentTab(state, documentIdForCommit("c3"));
   assert.ok(state.activeId);
+});
+
+test("the glossary has one tab, never a preview, and keeps the sheet under it", () => {
+  let state = openPreviewTab(initialDocumentTabsState, "A");
+  state = reduceDocumentTabs(state, { type: "openGlossary", label: "Terms" });
+  state = reduceDocumentTabs(state, { type: "activate", id: documentIdForSheet("A") });
+  state = reduceDocumentTabs(state, { type: "openGlossary", label: "Terms" });
+  assert.deepEqual(state.tabs.map((tab) => tab.kind), ["sheet", "glossary"]);
+  assert.equal(state.activeId, GLOSSARY_DOCUMENT_ID);
+  assert.equal(state.tabs[1].preview, false);
+  // Another sheet takes the sheet preview, not the glossary.
+  state = openPreviewTab(state, "B");
+  assert.deepEqual(state.tabs.map((tab) => tab.kind), ["sheet", "glossary"]);
+  const closed = closeDocumentTabs(state, [GLOSSARY_DOCUMENT_ID], "B");
+  assert.equal(closed.clear, false);
+  assert.equal(closed.open, null);
 });
 
 test("closing tabs opens the next sheet or leaves none open", () => {

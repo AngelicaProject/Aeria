@@ -509,31 +509,30 @@ impl GitRepository {
         Ok(())
     }
 
-    /// Creates a branch at a commit and switches to it. Translation changes
-    /// must be committed first; `accept` validates the resulting project, and
-    /// on failure the previous branch is restored and the new one deleted.
+    /// Creates a branch at a commit and switches to it, carrying the
+    /// uncommitted work as a branch switch does; `accept` validates the
+    /// resulting project, and on failure the previous branch and the
+    /// uncommitted work are restored and the new branch deleted.
     ///
     /// # Errors
     ///
-    /// Returns [`GitError::UncommittedTranslations`],
-    /// [`GitError::IncomingRejected`], [`GitError::InvalidInput`] for an
-    /// invalid name or revision, or another typed Git error.
+    /// Returns [`GitError::CarryConflict`], [`GitError::IncomingRejected`],
+    /// [`GitError::InvalidInput`] for an invalid name or revision, or another
+    /// typed Git error.
     pub fn create_branch_at<F>(&self, name: &str, revision: &str, accept: F) -> Result<(), GitError>
     where
         F: FnOnce() -> Result<(), String>,
     {
         self.validate_branch_name(name)?;
         validate_revision(revision)?;
-        self.require_clean_translations()?;
-        let previous = self.current_branch()?;
-        let previous_commit = self.head()?;
-        self.run(&["switch", "--quiet", "-c", name, revision])?;
+        let target = self.commit(revision)?.id;
+        let carried = self.switch_carrying(
+            name,
+            Some(&target),
+            &["switch", "--quiet", "-c", name, &target],
+        )?;
         if let Err(reason) = accept() {
-            match (previous, previous_commit) {
-                (Some(branch), _) => self.run(&["switch", "--quiet", &branch])?,
-                (None, Some(commit)) => self.run(&["switch", "--quiet", "--detach", &commit])?,
-                (None, None) => Vec::new(),
-            };
+            self.switch_back(&carried)?;
             self.run(&["branch", "--quiet", "-D", name])?;
             return Err(GitError::IncomingRejected { reason });
         }

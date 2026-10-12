@@ -118,7 +118,6 @@ dependencies = [
  "aeria-se",
  "aeria-source",
  "aeria-sqpack",
- "aho-corasick",
  "base64 0.23.1",
  "keyring",
  "reqwest",

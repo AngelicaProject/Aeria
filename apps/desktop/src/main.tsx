@@ -11,6 +11,7 @@ import "./styles/workbench.css";
 import "./styles/editor.css";
 import "./styles/git.css";
 import "./styles/search.css";
+import "./styles/glossary.css";
 import "./styles/overlays.css";
 
 // The web view's own commands (print, reload, find, going back) never run.

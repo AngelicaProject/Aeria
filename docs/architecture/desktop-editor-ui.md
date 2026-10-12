@@ -478,20 +478,20 @@ not re-render the workbench.
   **Insert a choice**, the gender choice of the insertion menu. A label or
   name longer than its length is advice, amber, as is a gendered line whose
   translation has no condition on `$gn4`.
-- **Names and terms** lists the glossary terms of the source, each with its
+- **Terms** lists the glossary terms of the source, each with its
   translation, note, and whether a term exception keeps
-  it out, and the game's names in the source with the project's
-  translations, with a link to the glossary. Under each name is what it
-  names, from every name sheet with it (*character, enemy*), the row's name
-  when it is another form of it (*place, a form of «The Walk»*), and the
-  string its translation comes from, which a click opens in the editor: a
-  name is found by its letters alone, so an ordinary word such as *Walk* in
-  *A Walk in the Park* can be found as one, and the origin shows it. Each is marked once there is a
-  translation: used or not used yet (amber). A name counts as used as the glossary counts a term's translation:
-  each of its words as written or inflected. A term's **Not this term**
+  it out (a model exception shows as *AI: another meaning*, a model
+  rendering as *AI: as «эфирный»*), with a link to the glossary; a term's
+  name opens it there. Each is marked once there is a
+  translation: used or not used yet (amber). A term's **Not this term**
   (on hover) adds a term exception to the string, and **Restore** on an
-  excepted term removes it (see
-  [`po-project.md`](./po-project.md#term-exceptions)).
+  excepted term removes it; a term a correction decided does not apply also
+  has **Confirm**, which makes the decision the person's exception, while
+  **Restore** gives the term back to the string; **Restore** beside a
+  model rendering removes the decision that the word renders the term (see
+  [`po-project.md`](./po-project.md#term-exceptions),
+  [`po-project.md`](./po-project.md#model-exceptions), and
+  [`po-project.md`](./po-project.md#model-renderings)).
 - **Macros** lists the parts of the source the editor draws as chips or
   formatting markers, once each with a count, grouped by what a translation
   may do with them: keep (game data), conditions, letter case, formatting,
@@ -524,11 +524,7 @@ names form collapsible folders for display only, while the canonical sheet name
 is passed unchanged to Rust. Its per-sheet translatable-cell count comes from the
 game's translation permission (see [`source.md`](./source.md)), not the
 sheet's physical row count, and each sheet
-with translations shows a coverage bar from `translation_progress`. A sheet
-of names (`translation_name_sheets`, the `NAME_SHEETS` of machine
-translation) has a mark: its translations go with every request whose
-strings use its names, and the model writes them exactly, so a mistake there
-spreads through the project. Sheets with
+with translations shows a coverage bar from `translation_progress`. Sheets with
 no permitted source strings are hidden by default. Hovering or focusing the
 Sheets dock reveals icon actions to show empty sheets, open the name filter,
 reveal the active sheet, and collapse folders. The filter takes space only while
@@ -557,8 +553,8 @@ there are any, the notice of a bulk edit and the strings chosen.
   that found nothing.
 - **Scope.** A line of chips under the query says what the search covers,
   each with its current value: the fields (translation and source by
-  default; notes and string ID can be added), the sheets (all, the sheets
-  and folders typed, such as `quest/, Addon`, or only the sheets of names),
+  default; notes and string ID can be added), the sheets (all, or the sheets
+  and folders typed, such as `quest/, Addon`),
   the string states, and the checks (none, problems, or advice; what each means is
   its tooltip). A chip that narrows the search is marked, and **Clear
   filters** puts every filter but the fields back. The query and scope are
@@ -587,8 +583,11 @@ there are any, the notice of a bulk edit and the strings chosen.
   groups, one per term, so the chip opens a list rather than laying them
   out: a filter field (Enter takes the first match), *Any issue*, then the
   other kinds and the terms in sections, each with its strings, most
-  first. The list is of the result without an issue chosen, so choosing
-  one does not narrow it.
+  first; the terms begin with *Every term*, which keeps the strings with
+  any term not used, the start of a correction that decides every term of
+  the project (see [`translate.md`](./translate.md#deciding-terms)). The
+  list is of the result without an issue chosen, so choosing one does not
+  narrow it.
 - **The result** is one virtualized list grouped by sheet, the files of a
   sheet (`Item/10000.po`, `Item/12000.po`) together, with each sheet's
   count, and its files listed on hover when there are several. While an
@@ -753,8 +752,9 @@ Dialogs that write project files (export, fonts, project knowledge)
 refresh the dock when they close. A pull, branch switch, discard, revert,
 or new branch at a commit that changed the working tree reloads the current
 sheet and
-progress, and so does a change of a shown sheet's file by Git, by hand, or by
-machine translation (`project://files-changed`).
+progress. A change of a shown sheet's file by Git, by hand, or by machine
+translation (`project://files-changed`) reloads the progress, and the current
+sheet when it is one of the changed sheets.
 
 ## String history
 
@@ -768,60 +768,112 @@ without the string says so. History shows every committed change to the
 selected string with its author, and its uncommitted change; "Use this text"
 puts a historical text into the editor as an unsaved draft.
 
-## Project knowledge dialog
+## Glossary tab
 
-The project knowledge dialog opens from the Translation menu (**Terms**,
-**Style**) and the command palette. It edits the two files of the
-[project knowledge](./knowledge.md#project-knowledge):
-`aeria-knowledge/terms.csv` and `style.md`.
+**Terms** in the Translation menu and the command palette, and the link and
+term names of the string guide, open the glossary as a document tab beside
+the sheets: one tab, never a preview, kept with its edits while another tab
+is shown, and the open sheet stays under it as it was. It holds the whole
+glossary (see
+[`knowledge.md`](./knowledge.md#the-terms-are-the-one-glossary)): the terms
+of `aeria-knowledge/terms.csv` and the terms of the declared sheets
+(`term-sheets.csv`), in three panes: facets, the table of terms, and the
+chosen term's fields. The files are read when the tab is first shown, and
+again when the project changed while no term is being edited.
 
-The Terms tab has three panes: folders, the list of terms, and the chosen
-term's fields.
-
-- The folder tree shows **All terms** and every folder with its parents and
-  the count of terms inside, collapsible. Choosing a folder lists its terms
-  and its subfolders' terms, and a term added then goes into it. **New
-  folder** makes a folder inside the chosen one, named at once; a folder is
-  renamed by its pencil or a double click, and removing it moves its terms
-  and subfolders to its parent, after a confirmation when it holds any.
-  Terms dragged from the list follow the pointer as a card (with their
-  count when several), the folder under it is highlighted, and a collapsed
-  one opens after a moment; released on a folder they move into it, on
-  **All terms** to the top, and elsewhere or with Escape they stay. A folder exists in the
-  file only while it has terms, so a new one stays empty only until the
-  dialog closes.
-- The list is virtualized and filtered by a search of headwords, forms,
-  translations, and notes. Each term shows its headword, its other forms,
-  its translation, its folder while the list spans folders, and a mark when
-  it needs fixing. Arrow keys, Home, and End move the choice; Ctrl-click
-  adds or removes a term and Shift-click takes a range, so a drag that
-  starts on a chosen term moves every chosen one.
-- The chosen term's fields are its headword, other forms, translation,
-  note, folder, and **Match case**, with its problem and **Remove term**.
-  Other forms are chips: Enter or `;` adds what is typed, a chip's ×
+- The facets choose what the table shows, with the count of each over the
+  whole glossary: **All terms**, **Project terms** (`terms.csv`), or **From
+  sheets**; under **Needs attention**, **Errors** (project terms that block
+  saving), **Not applied in strings** (terms some translations do not use
+  in their meaning, as the checks find: the advice `termNotUsed`, which
+  names the meaning found in the source by its headword, so a string counts
+  for the meanings of that headword its source uses, as **Uses** counts
+  them; counted over the project when the terms are read and after each
+  correction run), and
+  **Same as the sheet** (project terms the sheets give alike); one category, the most
+  used first, eight shown until more are asked for; and one declared sheet,
+  which shows its terms and the project terms that replace them. **Add a
+  sheet** takes a sheet by name, offering the matching sheets of the
+  project, its column, and the category of its terms, and saves it at once;
+  removing a sheet (its context menu or its settings) takes its terms out of
+  the glossary and leaves its strings as they are.
+- The table is virtualized, one line per term: its headword with its other
+  forms, its translation, its category, its source (the sheet, or the
+  project with the sheet it replaces), and how many strings of the project
+  use it. A term some translations do not use shows how many (*not applied
+  in 12 strings*). Each header orders the
+  table by its column, then the other way, then back to the order of the
+  files; **Uses** counts the strings that use each term, as the checks find
+  a term, when it is first chosen and again after the terms are read again.
+  The search finds headwords, forms, translations, categories, notes, and
+  the translations of the sheets' strings; the chosen category and sheet
+  show as chips beside it. Arrow keys, Page Up and Down, Home, and End move
+  the choice and Shift extends it; Ctrl-click adds or removes a term,
+  Shift-click takes a range, Ctrl+A takes every term shown, Delete removes
+  the chosen project terms, and Enter or a double click moves into the
+  translation. Ctrl+F finds and Ctrl+S saves while the tab is shown.
+- A project term's fields are its headword, translation, category, other
+  forms, note, and **Match case**, with its problem; **The sheets give**
+  lists the sheet terms it replaces, marked where the translation differs,
+  each with **Open the string** (a new term shows the sheet term of its name
+  and category it will replace once saved); **Other meanings** lists the
+  other terms of its name, each chosen by a click. A term the sheets give alike is marked
+  **Same as the sheet**, and removing it changes nothing. A category is
+  typed or chosen from those in use, and offers to create the one typed;
+  every term and sheet has one, so clearing the field keeps the category it
+  had. Other forms are chips: Enter or `;` adds what is typed, a chip's ×
   removes it, and a double click or Backspace in the empty field takes a
-  chip back to edit. **Add term** adds an empty term and chooses it.
+  chip back to edit.
+- A sheet term shows its headword, translation, category, other spellings,
+  sheet, and **Translations in the strings**: each translation its strings
+  have with how many, the term's first. Another translation typed, **Use
+  this translation** on another of the strings', or **Edit as a project
+  term** makes it a term of `terms.csv`, saved with the other project terms:
+  the glossary never writes a string, and the checks and corrections bring
+  the strings that name the term to it. **Open the string** opens its first
+  string in the editor without closing the tab.
+- A term some translations do not use lists them under **Not applied in
+  strings**, each with its sheet, source, and translation and opened in the
+  editor by a click, with **Fix with AI**: a correction run of those
+  translations that fixes the term's advice and decides, for each, whether
+  the term applies (see
+  [`translate.md`](./translate.md#deciding-terms)), with an optional
+  **Request** for every translation. Several chosen terms are fixed at once,
+  and **Not applied in strings** fixes every term it shows: by name when a
+  category, sheet, or search narrows it, else every term at once. The run
+  needs a model chosen in Settings, saved terms, and no other run going;
+  while it goes and after it ends, the top of the fields shows its progress,
+  **Stop**, and what it wrote (each before and after with the changed words
+  marked and why it changed, and the terms it decided do not apply or a word
+  renders) and refused, each opened in the editor. When it ends, the editor
+  and the counts are read again.
+- Both kinds of term list **Strings**: the strings of the project whose
+  source uses the term as the saved glossary has it, as **Uses** counts
+  them, each with its sheet, source, and translation (or that it has none,
+  and that its source changed), the first 300 shown with how many there
+  are; a click opens the string in the editor without closing the tab. A
+  term not saved yet has none to show.
+- With a sheet chosen and no term, the fields are the sheet's: the category
+  and note of the terms of each column declared, each saved when changed.
+  A sheet declared with several columns is one facet. With several terms
+  chosen, **Set category** and **Remove** act on the project terms among
+  them; the context menu of a term offers the same, and a sheet term's
+  **Open the string** and **Edit as a project term**.
 
-A term with an empty headword or translation, or a headword or form repeated
-case-insensitively, is marked and blocks saving; the count of such terms
-next to **Save** chooses them one by one. Rows the file excludes are listed with their line numbers; saving
-removes them only after confirmation. The Candidates tab finds the names
-the project translates in several ways (`project_term_candidates`, see
-[`search.md`](./search.md#glossary-candidates)): each with its translated
-strings, its sheets, its renderings with their counts as choices, and
-examples of each. **Add to the glossary** adds a term row with the chosen
-rendering as its translation, in the chosen folder, and match case on, and shows it in the Terms tab to review and save; **Skip** hides
-the candidate on this computer until the skipped ones are shown again. The
-Openers tab counts the phrases the translations open sentences with
-(`project_phrasing`, see [`search.md`](./search.md#openers)): each with its
-strings, the share of them without the source words behind it, those words
-with their shares, and examples of the strings without them. **Write in the
-style** adds a line about the opener to the Style tab for the person to
-finish. The Style tab is a Markdown text area
-for `style.md` and shows its size against the 8 MiB limit. Each tab
-has **Revert** and **Save**; closing with unsaved changes asks first. A save
-fails, without writing, when the file changed since it was loaded, for
-example by Git.
+A project term with an empty headword, translation, or category, or a
+headword or form repeated case-insensitively in the same category or across
+names, is marked and blocks saving; the count of such terms in the footer
+shows them. Rows the file excludes are listed with their line numbers;
+saving removes them only after confirmation. **Revert** drops the edits; the
+tab shows a dot while they are unsaved, and closing it, the project, or the
+window asks first. A save fails, without writing, when the file changed since
+it was loaded, for example by Git.
+
+**Style** in the Translation menu and the command palette opens the style
+dialog: a Markdown text area for `aeria-knowledge/style.md` with its size
+against the 8 MiB limit, **Revert**, and **Save**; closing it with unsaved
+changes asks first, and a save fails when the file changed since it was
+loaded.
 
 ## Machine translation
 

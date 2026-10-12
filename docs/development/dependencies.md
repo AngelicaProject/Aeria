@@ -102,8 +102,7 @@ one pass.
 `aeria-model` uses `reqwest`, `rustls`, and `keyring` as `aeria-publish`
 does, for the Codex Responses API and the ChatGPT sign-in, whose refresh token
 is kept in the OS credential store; `base64` (MIT OR Apache-2.0) to read the
-account from the sign-in's token; `aho-corasick` to find the game's names in a
-batch in one pass; and `tokio` with only `rt`, `sync`, `time`, and `macros` to
+account from the sign-in's token; and `tokio` with only `rt`, `sync`, `time`, and `macros` to
 run the requests of a batch concurrently.
 
 The desktop adds `tauri-plugin-opener` (Apache-2.0 OR MIT) to open GitHub

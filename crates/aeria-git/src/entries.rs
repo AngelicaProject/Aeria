@@ -26,7 +26,8 @@ pub fn is_po_path(path: &str) -> bool {
 }
 
 /// What a person can change about a string: its translation, whether it is
-/// fuzzy, its note, and whether they reviewed it.
+/// fuzzy, its note, whether they reviewed it, and the terms that do not
+/// apply to it.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct EntryState {
     pub translation: String,
@@ -35,15 +36,44 @@ pub struct EntryState {
     /// A person reviewed the translation as it is (see
     /// [`Entry::is_reviewed`]); a mark of another text counts as none.
     pub reviewed: bool,
+    /// The terms of the string's term exceptions, a person's decisions.
+    pub term_exceptions: Vec<String>,
+    /// The terms of its model exceptions, a correction run's decisions.
+    pub model_exceptions: Vec<String>,
+    /// Its model renderings, a correction run's decisions, each as
+    /// `term = word`.
+    pub model_renderings: Vec<String>,
 }
 
 impl EntryState {
     fn of(entry: &Entry) -> Self {
         Self {
+            term_exceptions: entry.term_exceptions.clone(),
+            model_exceptions: entry
+                .model_exceptions
+                .iter()
+                .map(|exception| exception.term.clone())
+                .collect(),
+            model_renderings: entry
+                .model_renderings
+                .iter()
+                .map(|rendering| format!("{} = {}", rendering.term, rendering.word))
+                .collect(),
+            ..Self::joined(entry)
+        }
+    }
+
+    /// The state the join of two branches compares: without the
+    /// exceptions, which join apart (see [`merge_exceptions`]).
+    fn joined(entry: &Entry) -> Self {
+        Self {
             translation: entry.translation.clone(),
             fuzzy: entry.fuzzy,
             note: (!entry.notes.is_empty()).then(|| entry.notes.join("\n")),
             reviewed: entry.is_reviewed(),
+            term_exceptions: Vec::new(),
+            model_exceptions: Vec::new(),
+            model_renderings: Vec::new(),
         }
     }
 }
@@ -57,7 +87,8 @@ pub enum EntryChangeKind {
     Changed,
     /// Its translation was removed.
     Cleared,
-    /// Only its note, its fuzzy mark, or its review changed.
+    /// Only its note, its fuzzy mark, its review, or its term or model
+    /// exceptions changed.
     Marked,
 }
 
@@ -82,6 +113,10 @@ fn file_stamp(path: &std::path::Path) -> Option<FileStamp> {
     let metadata = std::fs::metadata(path).ok()?;
     Some((metadata.len(), metadata.modified().ok()))
 }
+
+/// Files of one call of Git and one thread's turn in
+/// [`GitRepository::pending_files`].
+const PENDING_PACK: usize = 32;
 
 /// A changed PO file, relative to the project root, with its string changes.
 pub type PendingFile = (String, Arc<Vec<EntryChange>>);
@@ -113,7 +148,8 @@ fn parse(bytes: Option<&[u8]>) -> PoFile {
         .unwrap_or_default()
 }
 
-/// The strings whose translation, fuzzy mark, or note differ between two
+/// The strings whose translation, fuzzy mark, note, review, or exceptions
+/// differ between two
 /// versions of a file, in the order of the later version.
 #[must_use]
 pub fn diff_file(path: &str, before: Option<&[u8]>, after: Option<&[u8]>) -> Vec<EntryChange> {
@@ -354,22 +390,58 @@ impl GitRepository {
             })
             .map(|(path, _)| *path)
             .collect();
-        let committed = if status.head.is_some() {
-            let specs: Vec<String> = stale
-                .iter()
-                .map(|path| format!("HEAD:{}", self.top_level_path(path)))
-                .collect();
-            self.read_blobs(&specs)?
-        } else {
-            vec![None; stale.len()]
+        // A project can have thousands of changed files after a bulk edit or
+        // a machine translation run: they are read and compared in packs on
+        // several threads, each pack's committed versions in one call of Git.
+        let packs: Vec<&[&str]> = stale.chunks(PENDING_PACK).collect();
+        let committed = status.head.is_some();
+        let compare = |pack: &[&str]| -> Result<Vec<_>, GitError> {
+            let before = if committed {
+                let specs: Vec<String> = pack
+                    .iter()
+                    .map(|path| format!("HEAD:{}", self.top_level_path(path)))
+                    .collect();
+                self.read_blobs(&specs)?
+            } else {
+                vec![None; pack.len()]
+            };
+            pack.iter()
+                .zip(before)
+                .map(|(path, before)| {
+                    let stamp = file_stamp(&self.root().join(path));
+                    let after = self.read_working(path)?;
+                    let changes = diff_file(path, before.as_deref(), after.as_deref());
+                    Ok(((*path).to_owned(), stamp, changes))
+                })
+                .collect()
         };
-        for (path, before) in stale.into_iter().zip(committed) {
-            let stamp = file_stamp(&self.root().join(path));
-            let after = self.read_working(path)?;
-            let changes = diff_file(path, before.as_deref(), after.as_deref());
-            cache
-                .files
-                .insert(path.to_owned(), (stamp, Arc::new(changes)));
+        let next = std::sync::atomic::AtomicUsize::new(0);
+        let compared = std::sync::Mutex::new(Vec::with_capacity(packs.len()));
+        let workers = std::thread::available_parallelism().map_or(4, std::num::NonZero::get);
+        std::thread::scope(|scope| {
+            for _ in 0..workers.min(packs.len()) {
+                scope.spawn(|| {
+                    loop {
+                        let index = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        let Some(pack) = packs.get(index) else {
+                            return;
+                        };
+                        let done = compare(pack);
+                        compared
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner)
+                            .push(done);
+                    }
+                });
+            }
+        });
+        for pack in compared
+            .into_inner()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+        {
+            for (path, stamp, changes) in pack? {
+                cache.files.insert(path, (stamp, Arc::new(changes)));
+            }
         }
         cache.files.retain(|path, _| paths.contains(path.as_str()));
         Ok(paths
@@ -648,6 +720,28 @@ fn same_strings(ours: &PoFile, theirs: &PoFile) -> bool {
             .all(|(ours, theirs)| key(ours) == key(theirs))
 }
 
+/// Takes the other branch's term exceptions, model exceptions, and model
+/// renderings of a string when only that branch changed them; when both
+/// did, ours stay. They
+/// are decisions about the source, apart from the translation, so a branch
+/// that only decided terms and one that only translated both keep their
+/// work.
+fn merge_exceptions(entry: &mut Entry, other: &Entry, base: Option<&Entry>) {
+    let exceptions = |entry: &Entry| {
+        (
+            entry.term_exceptions.clone(),
+            entry.model_exceptions.clone(),
+            entry.model_renderings.clone(),
+        )
+    };
+    let base = base.map(exceptions).unwrap_or_default();
+    if exceptions(entry) == base {
+        entry.term_exceptions.clone_from(&other.term_exceptions);
+        entry.model_exceptions.clone_from(&other.model_exceptions);
+        entry.model_renderings.clone_from(&other.model_renderings);
+    }
+}
+
 /// Joins two versions of a file entry by entry: a string one branch changed
 /// takes that branch's change, and a string both changed differently takes
 /// the side `resolutions` names or is a conflict. `None` when the versions
@@ -674,14 +768,15 @@ pub fn merge_file(
         .collect();
     let mut conflicts = Vec::new();
     for (entry, other) in merged.entries.iter_mut().zip(&theirs.entries) {
-        let ours_state = EntryState::of(entry);
-        let theirs_state = EntryState::of(other);
+        merge_exceptions(entry, other, base.get(entry.context.as_str()).copied());
+        let ours_state = EntryState::joined(entry);
+        let theirs_state = EntryState::joined(other);
         if ours_state == theirs_state {
             continue;
         }
         let base_state = base
             .get(entry.context.as_str())
-            .map(|entry| EntryState::of(entry))
+            .map(|entry| EntryState::joined(entry))
             .unwrap_or_default();
         let take_theirs = if base_state == ours_state {
             true
@@ -836,5 +931,58 @@ mod tests {
         let changes = diff_file("po/A.po", Some(base.as_bytes()), Some(ours.as_bytes()));
         assert_eq!(changes[0].kind, EntryChangeKind::Marked);
         assert!(changes[0].after.reviewed);
+    }
+
+    #[test]
+    fn decisions_on_terms_merge_apart_from_the_translation() {
+        let base = file(&[("A:1:0:0", "первый"), ("A:2:0:0", "второй")]);
+        // One branch decides a term of the first string; the other
+        // translates the second again.
+        let decided = format!(
+            "#, aeria-term-model-exception: mount 3f9a1c0b7d2e\n{}",
+            file(&[("A:1:0:0", "первый"), ("A:2:0:0", "второй")])
+        );
+        let translated = file(&[("A:1:0:0", "первый"), ("A:2:0:0", "другой")]);
+        for (ours, theirs) in [(&decided, &translated), (&translated, &decided)] {
+            let (merged, conflicts) = merge_file(
+                "po/A.po",
+                Some(base.as_bytes()),
+                ours.as_bytes(),
+                theirs.as_bytes(),
+                &BTreeMap::new(),
+            )
+            .expect("mergeable");
+            assert!(conflicts.is_empty());
+            let merged = PoFile::parse(&merged).0;
+            assert_eq!(merged.entries[0].model_exceptions.len(), 1, "{merged:?}");
+            assert_eq!(merged.entries[1].translation, "другой");
+        }
+        // A diff reports a decision alone as a mark with its term.
+        let changes = diff_file("po/A.po", Some(base.as_bytes()), Some(decided.as_bytes()));
+        assert_eq!(changes.len(), 1);
+        assert_eq!(changes[0].kind, EntryChangeKind::Marked);
+        assert_eq!(changes[0].after.model_exceptions, ["mount"]);
+        assert!(changes[0].before.model_exceptions.is_empty());
+        // So is a decision that a word renders a term.
+        let rendered = format!(
+            "#, aeria-term-model-rendering: aether 3f9a1c0b7d2e эфирный\n{}",
+            file(&[("A:1:0:0", "первый"), ("A:2:0:0", "второй")])
+        );
+        let (merged, conflicts) = merge_file(
+            "po/A.po",
+            Some(base.as_bytes()),
+            translated.as_bytes(),
+            rendered.as_bytes(),
+            &BTreeMap::new(),
+        )
+        .expect("mergeable");
+        assert!(conflicts.is_empty());
+        assert_eq!(
+            PoFile::parse(&merged).0.entries[0].model_renderings.len(),
+            1
+        );
+        let changes = diff_file("po/A.po", Some(base.as_bytes()), Some(rendered.as_bytes()));
+        assert_eq!(changes[0].kind, EntryChangeKind::Marked);
+        assert_eq!(changes[0].after.model_renderings, ["aether = эфирный"]);
     }
 }

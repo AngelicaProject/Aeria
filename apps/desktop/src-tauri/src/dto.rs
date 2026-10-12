@@ -366,6 +366,8 @@ mod tests {
                             note: Some("check later".to_owned()),
                             previous: None,
                             term_exceptions: Vec::new(),
+                            model_exceptions: Vec::new(),
+                            model_renderings: Vec::new(),
                             reviewed: false,
                             review_stale: false,
                         }),
@@ -440,7 +442,8 @@ pub struct IssueDto {
     pub term: Option<String>,
     pub translation: Option<String>,
     /// The word with mixed alphabets, the form with both genders, the word
-    /// written twice, or the mark as `U+0301`.
+    /// written twice, the word in another case than its term, or the mark
+    /// as `U+0301`.
     pub text: Option<String>,
     pub phrases: Vec<String>,
     /// The length of a translation longer than its budget, and the budget:

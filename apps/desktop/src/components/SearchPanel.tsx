@@ -8,7 +8,6 @@ import { choose, chosenByPath, commonTerm, groupBySheet, reconcileChosen, result
 import type { MessageKey } from "../i18n/translate";
 import { useI18n } from "../ui/i18n";
 import { usePreferences } from "../ui/preferences";
-import { useNameSheets } from "../ui/NameSheetMark";
 import { IconButton } from "../ui/primitives/IconButton";
 import { UiIcon } from "../ui/primitives/UiIcon";
 import { ConfirmDialog } from "./ConfirmDialog";
@@ -16,8 +15,9 @@ import { FixDialog } from "./FixDialog";
 import { ReplacePreviewDialog } from "./ReplacePreviewDialog";
 import { useStickyState } from "./GitShared";
 import { SearchResultList, chooseKey, type SearchResultListHandle } from "./SearchResultList";
-import { SearchIssuePicker } from "./SearchIssuePicker";
+import { ALL_TERMS, SearchIssuePicker } from "./SearchIssuePicker";
 import { SearchScope, defaultFields, scopeNarrowed, type Scope } from "./SearchScope";
+import { throttled } from "../throttle";
 
 
 type SearchPanelProps = {
@@ -46,8 +46,8 @@ function keysLearned(): boolean {
   }
 }
 
-/** How long changes of the project's files settle before the result is read again. */
-const LIVE_MS = 500;
+/** How often the result is read again, at most, while the project's files keep changing. */
+const LIVE_MS = 3000;
 
 const skipLabels: Record<BulkEditDto["skipped"][number]["reason"], MessageKey> = {
   changed: "search.skipped.changed",
@@ -76,8 +76,6 @@ export function SearchPanel({ onRevealBinding, onWorkspaceChanged, onOpenTransla
   const [fields, setFields] = useStickyState<readonly SearchField[]>("search.fields", defaultFields);
   const [pathsText, setPathsText] = useStickyState("search.paths", "");
   // Only the sheets of names, which machine translation spreads through the project.
-  const [nameSheetsOnly, setNameSheetsOnly] = useStickyState("search.nameSheets", false);
-  const nameSheets = useNameSheets();
   const [states, setStates] = useStickyState<readonly SearchState[]>("search.states", []);
   const [check, setCheck] = useStickyState<SearchCheck>("search.check", "any");
   const [issueGroup, setIssueGroup] = useStickyState<string | null>("search.issue", null);
@@ -138,12 +136,12 @@ export function SearchPanel({ onRevealBinding, onWorkspaceChanged, onOpenTransla
     kind: regex ? "regex" : wholeWord ? "word" : "text",
     caseSensitive,
     fields: [...fields],
-    paths: nameSheetsOnly ? [...nameSheets] : pathsText.split(/[,\s]+/).map((path) => path.trim()).filter(Boolean),
+    paths: pathsText.split(/[,\s]+/).map((path) => path.trim()).filter(Boolean),
     contexts: [],
     states: [...states],
     check,
     issue: check === "any" ? null : issueGroup,
-  }), [caseSensitive, check, fields, issueGroup, nameSheets, nameSheetsOnly, pathsText, regex, states, text, wholeWord]);
+  }), [caseSensitive, check, fields, issueGroup, pathsText, regex, states, text, wholeWord]);
   // A scope of sheets alone finds every string of them, as a state or check filter alone does.
   const active = query.text !== "" || query.check !== "any" || query.states.length > 0 || query.paths.length > 0;
 
@@ -212,13 +210,10 @@ export function SearchPanel({ onRevealBinding, onWorkspaceChanged, onOpenTransla
   const liveRef = useRef<() => void>(() => undefined);
   liveRef.current = () => { if (active && busy === null) void runSearch(query); };
   useEffect(() => {
-    let timer: number | undefined;
-    const subscription = listen("project://changed", () => {
-      window.clearTimeout(timer);
-      timer = window.setTimeout(() => liveRef.current(), LIVE_MS);
-    });
+    const follow = throttled(() => liveRef.current(), LIVE_MS);
+    const subscription = listen("project://changed", () => follow.trigger());
     return () => {
-      window.clearTimeout(timer);
+      follow.cancel();
       void subscription.then((unlisten) => unlisten()).catch(() => undefined);
     };
   }, []);
@@ -484,18 +479,17 @@ export function SearchPanel({ onRevealBinding, onWorkspaceChanged, onOpenTransla
   const issueList = allIssues?.key === queryWithoutIssue ? allIssues.issues : result?.issues ?? [];
   const chosenIssue = !query.issue ? null : issueList.find((count) => count.issue.group === query.issue)?.issue ?? null;
 
-  const scope: Scope = { fields, pathsText, nameSheetsOnly, states, check };
+  const scope: Scope = { fields, pathsText, states, check };
   const changeScope = (change: Partial<Scope>) => {
     if (change.fields !== undefined) setFields(change.fields);
     if (change.pathsText !== undefined) setPathsText(change.pathsText);
-    if (change.nameSheetsOnly !== undefined) setNameSheetsOnly(change.nameSheetsOnly);
     if (change.states !== undefined) setStates(change.states);
     if (change.check !== undefined) {
       setCheck(change.check);
       setIssueGroup(null);
     }
   };
-  const clearScope = () => changeScope({ pathsText: "", nameSheetsOnly: false, states: [], check: "any" });
+  const clearScope = () => changeScope({ pathsText: "", states: [], check: "any" });
   const narrowed = scopeNarrowed(scope);
 
   const patternError = error?.code === "searchPattern" ? error : null;
@@ -630,7 +624,6 @@ export function SearchPanel({ onRevealBinding, onWorkspaceChanged, onOpenTransla
               rows={rows}
               chosen={selected}
               chosenOf={chosenOf}
-              nameSheets={nameSheets}
               replacing={replacing}
               disabled={disabled}
               onToggleGroup={toggleGroup}
@@ -698,7 +691,7 @@ export function SearchPanel({ onRevealBinding, onWorkspaceChanged, onOpenTransla
       <FixDialog
         count={fixing?.length ?? null}
         fuzzy={fixing?.filter((entry) => entry.expectedFuzzy).length ?? 0}
-        issue={chosenIssue ? issueLabel(chosenIssue, t) : null}
+        issue={query.issue === ALL_TERMS ? t("search.issue.allTerms") : chosenIssue ? issueLabel(chosenIssue, t) : null}
         issuesFirst={check !== "any"}
         onCancel={() => setFixing(null)}
         onFix={(issues, proofread, adapt, request) => { if (fixing) startFix(fixing, issues, proofread, adapt, request); }}

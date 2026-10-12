@@ -68,6 +68,7 @@ export function TranslationRejections({ rejections, total, running, onReveal, on
               <details className="translate-rejection-text">
                 <summary>{t("translate.rejectedText")}</summary>
                 <p>{rejected.translation}</p>
+                {rejected.decisions.length > 0 ? <p className="muted">{t("translate.rejectedDecisions", { terms: rejected.decisions.join(", ") })}</p> : null}
               </details>
             ) : null}
           </li>

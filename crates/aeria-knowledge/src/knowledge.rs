@@ -6,10 +6,12 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use crate::glossary::{Glossary, GlossaryEntry, parse_glossary};
+use crate::sheets::{TermSheet, parse_term_sheets};
 
 /// The knowledge directory at the project root.
 pub const KNOWLEDGE_DIR: &str = "aeria-knowledge";
-/// Largest knowledge file read.
+/// Largest style file read; the terms have their own limit (see
+/// [`KnowledgeFile::max_bytes`]).
 pub const MAX_KNOWLEDGE_BYTES: u64 = 8 * 1024 * 1024;
 
 /// A knowledge file.
@@ -18,10 +20,12 @@ pub const MAX_KNOWLEDGE_BYTES: u64 = 8 * 1024 * 1024;
 pub enum KnowledgeFile {
     Style,
     Terms,
+    /// The sheets of the game that are part of the glossary.
+    Sheets,
 }
 
 impl KnowledgeFile {
-    pub const ALL: [Self; 2] = [Self::Style, Self::Terms];
+    pub const ALL: [Self; 3] = [Self::Style, Self::Terms, Self::Sheets];
 
     /// The file name inside [`KNOWLEDGE_DIR`].
     #[must_use]
@@ -29,6 +33,16 @@ impl KnowledgeFile {
         match self {
             Self::Style => "style.md",
             Self::Terms => "terms.csv",
+            Self::Sheets => "term-sheets.csv",
+        }
+    }
+
+    /// The largest file of this kind that is read or written.
+    #[must_use]
+    pub const fn max_bytes(self) -> u64 {
+        match self {
+            Self::Style | Self::Sheets => MAX_KNOWLEDGE_BYTES,
+            Self::Terms => crate::glossary::MAX_GLOSSARY_BYTES,
         }
     }
 
@@ -44,12 +58,14 @@ impl KnowledgeFile {
     }
 
     /// The text of the file in a new project: a starting style of the usual
-    /// decisions for the translators to change, and terms with no entries.
+    /// decisions for the translators to change, terms with no entries, and
+    /// no sheet declared part of the glossary.
     #[must_use]
     pub fn empty(self) -> String {
         match self {
             Self::Style => include_str!("default_style.md").to_owned(),
             Self::Terms => crate::glossary::write_glossary(&[]),
+            Self::Sheets => crate::sheets::write_term_sheets(&[]),
         }
     }
 }
@@ -82,7 +98,12 @@ pub fn create_empty(root: &Path) -> Result<Vec<String>, String> {
 pub struct Knowledge {
     /// `style.md` as written.
     pub style: Option<String>,
+    /// The terms of `terms.csv`. A project's session adds the terms of the
+    /// sheets it declares part of the glossary (see [`Self::sheets`]).
     pub terms: Glossary,
+    /// The sheets of the game declared part of the glossary: each of their
+    /// translated strings is a term.
+    pub sheets: Vec<TermSheet>,
     /// Why a file or an entry could not be used, with the file and line.
     pub problems: Vec<String>,
 }
@@ -92,6 +113,7 @@ pub struct Knowledge {
 pub struct KnowledgeTexts {
     pub style: Option<String>,
     pub terms: Option<String>,
+    pub sheets: Option<String>,
 }
 
 /// Reads one knowledge file as text. A missing file is `None`.
@@ -104,8 +126,8 @@ pub fn read_file(root: &Path, file: KnowledgeFile) -> Result<Option<String>, Str
     let path = file.path(root);
     let name = file.relative_path();
     match fs::metadata(&path) {
-        Ok(metadata) if metadata.len() > MAX_KNOWLEDGE_BYTES => {
-            return Err(format!("{name} is larger than {MAX_KNOWLEDGE_BYTES} bytes"));
+        Ok(metadata) if metadata.len() > file.max_bytes() => {
+            return Err(format!("{name} is larger than {} bytes", file.max_bytes()));
         }
         Ok(_) => {}
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -133,6 +155,7 @@ impl Knowledge {
         let texts = KnowledgeTexts {
             style: read(KnowledgeFile::Style),
             terms: read(KnowledgeFile::Terms),
+            sheets: read(KnowledgeFile::Sheets),
         };
         let mut knowledge = Self::from_texts(&texts);
         knowledge.problems.splice(0..0, problems);
@@ -164,9 +187,24 @@ impl Knowledge {
             }
             None => Glossary::default(),
         };
+        let sheets_name = KnowledgeFile::Sheets.relative_path();
+        let sheets = match texts.sheets.as_deref().map(parse_term_sheets) {
+            Some(Ok((sheets, rejected))) => {
+                for (line, message) in rejected {
+                    problems.push(format!("{sheets_name} line {line}: {message}"));
+                }
+                sheets
+            }
+            Some(Err(message)) => {
+                problems.push(format!("{sheets_name}: {message}"));
+                Vec::new()
+            }
+            None => Vec::new(),
+        };
         Self {
             style: texts.style.clone(),
             terms,
+            sheets,
             problems,
         }
     }
@@ -186,7 +224,7 @@ mod tests {
     fn empty_files_read_without_problems_and_are_never_replaced() {
         let directory = tempfile::tempdir().expect("directory");
         let root = directory.path();
-        assert_eq!(create_empty(root).expect("create").len(), 2);
+        assert_eq!(create_empty(root).expect("create").len(), 3);
         let knowledge = Knowledge::load(root);
         assert!(knowledge.problems.is_empty(), "{:?}", knowledge.problems);
         assert!(knowledge.terms.entries.is_empty());
@@ -200,11 +238,40 @@ mod tests {
         let knowledge = Knowledge::from_texts(&KnowledgeTexts {
             style: None,
             terms: Some(
-                "term,translation,forms\nAether,Эфир,aethers\nMoogle,Моогл,,\n,broken,,\n"
+                "term,translation,forms,category\nAether,Эфир,aethers,понятие\nMoogle,Моогл,,\n,broken,,понятие\n"
+                    .to_owned(),
+            ),
+            sheets: Some(
+                "sheet,column,category\nQuest,0,задание\nPlaceName,,место\nQuest,,задание\n,1,задание\n"
                     .to_owned(),
             ),
         });
-        assert_eq!(knowledge.problems.len(), 1, "{:?}", knowledge.problems);
+        assert_eq!(
+            knowledge.sheets,
+            [
+                TermSheet {
+                    sheet: "Quest".to_owned(),
+                    column: 0,
+                    category: "задание".to_owned(),
+                    note: None,
+                },
+                TermSheet {
+                    sheet: "PlaceName".to_owned(),
+                    column: 0,
+                    category: "место".to_owned(),
+                    note: None,
+                },
+            ]
+        );
+        let knowledge = Knowledge {
+            problems: knowledge
+                .problems
+                .into_iter()
+                .filter(|problem| !problem.contains("term-sheets.csv"))
+                .collect(),
+            ..knowledge
+        };
+        assert_eq!(knowledge.problems.len(), 2, "{:?}", knowledge.problems);
         let found = knowledge.terms_in("Some aether, kupo.");
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].translation, "Эфир");
@@ -218,7 +285,7 @@ mod tests {
         fs::create_dir(root.join(KNOWLEDGE_DIR)).expect("dir");
         fs::write(
             KnowledgeFile::Terms.path(root),
-            "\u{feff}term,translation\nAether,Эфир\n",
+            "\u{feff}term,translation,category\nAether,Эфир,понятие\n",
         )
         .expect("terms");
         fs::write(KnowledgeFile::Style.path(root), [0xff, 0xfe]).expect("style");

@@ -16,6 +16,9 @@ type SearchIssuePickerProps = {
 
 type Item = { group: string | null; label: string; title: string; count: number | null };
 
+/** The group that keeps a string with any term the translation does not seem to use. */
+export const ALL_TERMS = "termNotUsed";
+
 /**
  * Which issue the result keeps, as one chip that opens a filterable list:
  * a project has hundreds of groups, one per term, so they are not laid out
@@ -32,15 +35,19 @@ export function SearchIssuePicker({ issues, value, onChange }: SearchIssuePicker
     label: issueLabel(issue, t),
     title: describeIssue(issue, t),
     count,
+    // The case of terms is one group of every term, listed with the other kinds.
     term: issue.term !== null && issue.term !== "",
   })), [issues, t]);
   const needle = filter.trim().toLocaleLowerCase();
   const shown = needle === "" ? items : items.filter((item) => item.label.toLocaleLowerCase().includes(needle) || item.title.toLocaleLowerCase().includes(needle));
+  const terms = shown.filter((item) => item.term);
+  const allTerms: Item = { group: ALL_TERMS, label: t("search.issue.allTerms"), title: "", count: null };
   const sections = [
     { key: "other", label: t("search.issue.other"), items: shown.filter((item) => !item.term) },
-    { key: "terms", label: t("search.issue.terms"), items: shown.filter((item) => item.term) },
+    // Every term at once comes first while more than one is listed, or while it is chosen.
+    { key: "terms", label: t("search.issue.terms"), items: terms.length > 1 || value === ALL_TERMS ? [allTerms, ...terms] : terms },
   ].filter((section) => section.items.length > 0);
-  const chosen = items.find((item) => item.group === value);
+  const chosen = value === ALL_TERMS ? allTerms : items.find((item) => item.group === value);
 
   const choose = (group: string | null) => {
     onChange(group);

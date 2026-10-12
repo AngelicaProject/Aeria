@@ -25,8 +25,7 @@ retrieved example translations help more than term lists, and repeated
 refinement passes change fluency and style but rarely fix meaning.
 
 People keep the work that needs judgment: the style and terms (see
-[`knowledge.md`](./knowledge.md)), the name sheets every later run follows,
-reading and fixing the result (a fixed translation is an example for the next
+[`knowledge.md`](./knowledge.md)), reading and fixing the result (a fixed translation is an example for the next
 batches of its file), fuzzy strings after a game update, and text that
 deserves translation by hand.
 
@@ -87,14 +86,8 @@ request alone. The batches of a scene go one after another: the next part of
 a quest or cutscene is sent when the one before it has answered, so it sees
 that part's translations among its examples. Other requests go side by side.
 
-The batches of the name sheets go first, one sheet at a time in the order of
-`NAME_SHEETS` in `aeria-model` (places, towns, races, and tribes; classes,
-statuses, actions, and traits; items, mounts, and minions; titles, residents,
-monsters, and objects; FATEs, duties, and quests), and the translated names
-are read again after each of them. Everything else follows in one queue. So
-an action named after a place, a quest named after a character, and every
-line of dialogue use the names the same run just wrote, and one run of the
-whole project needs no care about the order of sheets.
+The order of sheets does not matter: what ties a name to its mentions is the
+terms, which a run reads once, not what the run wrote before.
 
 ## The request
 
@@ -106,30 +99,25 @@ the macro authoring reference of [`strings.md`](./strings.md),
 
 The task is JSON built from the files as they are when the request is sent:
 
-- `names`: the game's names that occur in the request's sources or a quest's
-  title as whole words,
-  with their translations from the name sheets of `po/` (`Action`,
-  `BNpcName`, `ENpcResident`, `Item`, `PlaceName`, `Quest`, `Status`, and
-  others; short, capitalized strings without macros; a name translated
-  several ways gives its most frequent translation), at most 80. Each has
-  `from`: what it names and every name sheet with it (`the name of a
-  character and an enemy (sheets ENpcResident, BNpcName)`), and, for
-  another form of a row's name such as one without its article, that name
-  (`a form of "The Walk"`). A name is found by its letters alone, so an
-  ordinary word can be found as one, as `Walk` in `A Walk in the Park`; the
-  instructions say to use a name's translation only where the word is that
-  name, and to translate it by its meaning otherwise. The translation is the
-  name as it stands alone: written in a sentence it declines like any word
-  where the language declines names (Поговорите с Ко Рабнтой); only a name
-  the game fills in through a macro keeps its stored form;
-- `terms`: terms of `terms.csv` that occur in the sources, with their other
-  forms and notes, at most 60 (folders are not sent); a term goes only when it applies to a
-  string of the request, not counting the strings with an exception for it;
+- `terms`: the terms that occur in the sources, of `terms.csv` and of the
+  declared sheets, each with its `category`, other wordings, and note, at
+  most 200; a name with several meanings is one item
+  per meaning, and the model uses the meaning the string means, and none
+  where the word of the source is not the thing the category names. A term
+  goes only when it applies to a string of the request, not counting the
+  strings with an exception for it, a person's or a model's that holds. A
+  term's translation is the name as it stands alone: a sentence writes it
+  in the number, case, and capitals it needs, declined like any word where
+  the language declines names (Поговорите с Ко Рабнтой), with a capital
+  where a sentence or a title begins and as the language writes the name
+  elsewhere; only a name the game fills in through a macro keeps its stored
+  form. The translations of the
+  game's name sheets are not sent as such: a name the project agreed on is a
+  term, of `terms.csv` or of a sheet declared part of the glossary
+  (see [`knowledge.md`](./knowledge.md#the-terms-are-the-one-glossary));
 - `files`: each file of the request on its own, with
   - `about`: the file's header comment: its sheet, a quest's title, and
     whether its strings are in play order;
-  - `speakers`: the speaker labels of the file's strings (`ALPHINAUD`) whose
-    letters match a translated name, with the name and its translation;
   - `examples`: translated strings of the same file, the ones a person
     reviewed first, then nearest to the batch
     first: up to 40 shared among the files, at least 5 each;
@@ -142,11 +130,12 @@ The task is JSON built from the files as they are when the request is sent:
     translation most likely needs one too, `maxLength` for an interface
     label and `maxBytes` for a name in the world (below), the previous
     source and translation of a fuzzy one, and
-    `termExceptions`: the terms of `terms` that do not apply to it (see
+    `termExceptions`: the terms of `terms` that do not apply to it, by a
+    person's exception or a model's that holds (see
     [`po-project.md`](./po-project.md#term-exceptions)), which the
     instructions say to translate by their meaning.
 
-The editor's string guide shows a person the same names, terms, speaker,
+The editor's string guide shows a person the same terms, speaker label,
 length, and gender marks of one string; `aeria_model::hints` reads them for
 both (see
 [`desktop-editor-ui.md`](./desktop-editor-ui.md#string-guide)). This is a
@@ -231,12 +220,16 @@ as `\<sigh>` or `\<click>` (in macro text `\<` is a literal `<`): it renders
 it in its language. An answer that is not valid JSON,
 most often for a quote the model did not escape inside macro text, is read
 entry by entry (`"id": ["first words", "translation"]`, a bare quote read as
-part of its string); what is read this way is checked like any answer, so a
-wrong reading is refused, never written. A string the answer has no
+part of its string, the elements separated with or without spaces); what is
+read this way is checked like any answer, so a wrong reading is refused,
+never written: a translation that holds the answer's separators (`","`,
+`",[`) its source does not have is what a reading left of the elements after
+it, and is refused. A string the answer has no
 readable translation of is asked for again with the failing ones. A batch's
 failing translations go back up to twice, each time in one request with each problem stated; what
 still fails stays as it was and is listed in the run's status with its
-problems and the model's last translation, which is never written. Advice
+problems, the model's last translation, which is never written, and what
+that answer decided of the terms a correction asked about. Advice
 does not reject a translation. The listed strings can be translated again
 in one run of exactly those strings (`translation_retry`), after a person
 fixed what refused them, such as a term that does not apply (see
@@ -279,7 +272,8 @@ any of:
   below and the review in Git are for;
 - **the issues of the checks**: what the checks find in the translation,
   problems and advice, every kind or only the kinds chosen (`Fix::groups`,
-  by `Issue::group`, as project search groups them). A problem always goes,
+  by `Issue::group`, as project search groups them; a kind alone, such as
+  `termNotUsed`, takes every group of the kind, every term). A problem always goes,
   since a corrected translation must pass the checks; a term exception
   that names no term of the source does not, since a person removes it;
 - **adapting** (`Fix::adapt`): a fuzzy translation, whose source changed
@@ -298,8 +292,8 @@ adapting, every fuzzy one; with the issues alone, a string without any is
 not. This is the one place advice reaches a
 model, and only the advice a person chose.
 
-The request is built as for translating, with the same names, terms,
-speakers, examples, and hints of each string, and two more fields:
+The request is built as for translating, with the same terms, examples, and
+hints of each string, and two more fields:
 `translation`, the current translation, and `fix`, the messages of its
 issues. The instructions are those of translating with what a correction
 may change in place of "translate every string", and the request after the
@@ -307,7 +301,73 @@ style; they are the same for every request of the run, so the prompt cache
 holds them. The answer has the same form, first words included, and a third
 string: why the translation changed, in a few words of the target language
 (`обращение по французской строке`, `калька`), empty when it did not. A
-reason is not checked and never written to the project.
+reason is not checked and never written to the project. A fourth element,
+only when the answer decides a term, lists the terms that do not apply and,
+as `term = word`, the terms a word of the translation renders (see
+[Deciding terms](#deciding-terms)).
+
+### Deciding terms
+
+A term the checks find unused in a translation asks the correction for a
+decision: does the term apply to this string? The instructions say it
+applies where the word of the source is the thing the term names, as its
+translation and note describe it, and does not where the word means
+something else there: an everyday word or another part of speech (`mount
+up` beside a mount the player rides), part of the name of something else
+(`Mount Gulg`), or a sense the note rules out. The other client languages of
+the string's context show how the official localizations read the word. A
+term that applies is used, declined as the sentence needs, with the rest of
+the sentence agreeing with it; a term that does not is translated by its
+meaning and named in the answer's fourth element. The decision is by meaning
+alone: a term is never named to keep a translation unchanged.
+
+A term that applies can be rendered by another word made from its
+translation, as the adjective of a noun («эфирный компрессор» for an aether
+compressor where `aether` is «эфир»), which the checks do not read as the
+term. The answer then keeps the word and names the term with it in the
+fourth element, as `aether = эфирный`; a name of several words is kept word
+by word. The instructions allow only one word
+of the same root as the term's translation, and no synonym, pronoun, or
+paraphrase; which word that is, is the model's judgment (see
+[`po-project.md`](./po-project.md#model-renderings)). A word the corrected
+translation does not have renders nothing.
+
+A correction that brings one term or name into a translation can take the
+word of another term out of it: «Нефритовый разлив» for the Jadeite Flood
+no longer has «потоп», which `the Flood` of the same string was read in.
+Such a term, unused only in the corrected translation, is asked about with
+the others.
+
+Every such term is decided: a corrected translation that leaves an unused
+term unnamed is refused, changed or not, with a problem that asks to use the
+term, name the word that renders it, or name it as one that does not apply.
+A term is named by any of its forms; a name that is no term, such as the
+words of the source that hold one (`Neo-Ishgardian` for `Ishgardian`), names
+the one asked term found in it. A named term that was not asked about is no
+decision, and a term named as not applying is not also rendered. The decisions are written with the
+correction as one edit (`EditKind::Decide`), under the same conditions as a
+correction: a term that does not apply gets a
+[model exception](./po-project.md#model-exceptions) for the glossary entry
+it was decided for, and a term that applies loses its model exception and
+keeps the words named for it as
+[model renderings](./po-project.md#model-renderings), but only the words
+the checks need: a word named for a term whose translation the corrected
+text uses as the terms write it is not kept. An answer that leaves
+the translation as it was and names a term is written for its decision
+alone. Every string of a run is counted once: as written, as left as it
+was (an answer that changed nothing of its entry, or was not written
+because the entry changed meanwhile), or as refused. Since a model exception holds only while the term's
+entry is unchanged, a run after a term's note or translation changed
+decides every string of that term again, and a run after a game update
+decides the strings whose source changed; the strings decided before are
+not sent again.
+
+A run over every term (search with the checks filter **Every term**, then
+**Fix with AI**) brings the corpus to the glossary: each string either uses
+the term, keeps the word that renders it, or keeps a decision that the term
+means something else there. The glossary tab starts the same run for one term, the
+terms chosen, or every term not applied in strings (see
+[`desktop-editor-ui.md`](./desktop-editor-ui.md#glossary-tab)).
 
 A correction may not make a translation worse. It is refused when it has a
 problem of the checks, an issue of a kind the translation did not have
@@ -315,16 +375,19 @@ problem of the checks, an issue of a kind the translation did not have
 alone is held to), or, when it changed the translation, advice it was asked
 to fix. An answer that leaves the translation as it was says that the
 advice does not apply to the string: it is counted as unchanged and not
-written. Refused corrections go back with their problems like refused
+written, but for the terms it decides. Refused corrections go back with their problems like refused
 translations, and what still fails is listed and not written.
 
 A correction is written as a bulk edit of the session
-(`EditKind::Correct`): only while the entry still has the translation the
+(`EditKind::Correct`, or `EditKind::Decide` with decisions on terms): only
+while the entry still has the translation the
 request was built from, and never over a review, so work saved meanwhile and
 a review made meanwhile are kept. The fuzzy mark stays. The run's status
 lists the first 1,000 corrections it wrote, each before and after with its
-reason, so a person reads them as an editor's notes before reading the
-diff. Like any run, a
+reason, the terms it decided do not apply, and the terms it decided a word
+renders, so a person reads them as an
+editor's notes before reading the diff, and counts the strings where it
+decided a term does not apply. Like any run, a
 correction does not commit, and its changes are reviewed and reverted
 through Git.
 
@@ -350,8 +413,7 @@ again.
 
 The dialog chooses what to translate in a tree of the project's sheets,
 with a search and each sheet's and folder's untranslated strings, and with
-quick choices: the name sheets, the quests, and every sheet with
-untranslated strings. It shows, every second while it is open: strings
+quick choices: the quests and every sheet with untranslated strings. It shows, every second while it is open: strings
 written of the
 run's strings, strings a correction left as they were, strings refused by
 the checks, tokens used, the share of

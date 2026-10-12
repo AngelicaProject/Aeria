@@ -18,6 +18,18 @@ pub struct Entry {
     /// `#, aeria-term-exception: <term>` flags: terms of the glossary a
     /// person decided do not apply to this string.
     pub term_exceptions: Vec<String>,
+    /// `#, aeria-term-model-exception: <term> <fingerprint>` flags: terms of
+    /// the glossary a correction run's model decided do not apply to this
+    /// string, each with the [`term_fingerprint`] of the term's entry it
+    /// decided for. A decision holds only while the entry is still that one
+    /// (see [`ModelException::holds`]); a person's exception comes first.
+    pub model_exceptions: Vec<ModelException>,
+    /// `#, aeria-term-model-rendering: <term> <fingerprint> <word>` flags:
+    /// words of the translation a correction run's model decided render a
+    /// term of the glossary that applies to this string, each with the
+    /// [`term_fingerprint`] of the term's entry it decided for (see
+    /// [`ModelRendering::holds`]).
+    pub model_renderings: Vec<ModelRendering>,
     /// `#, aeria-reviewed: <fingerprint>`: a person reviewed the
     /// translation whose [`fingerprint`] this is. The mark holds only while
     /// the translation is still that text (see [`Entry::is_reviewed`]).
@@ -107,6 +119,170 @@ pub fn unquote(literal: &str) -> Option<String> {
 
 /// The flag of a term exception: `#, aeria-term-exception: the Maelstrom`.
 pub const TERM_EXCEPTION_FLAG: &str = "aeria-term-exception";
+
+/// The flag of a model's term exception:
+/// `#, aeria-term-model-exception: mount 3f9a1c0b7d2e`.
+pub const MODEL_EXCEPTION_FLAG: &str = "aeria-term-model-exception";
+
+/// A term a model decided does not apply to a string: its headword, and the
+/// [`term_fingerprint`] of the glossary entry it decided for.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct ModelException {
+    pub term: String,
+    pub fingerprint: String,
+}
+
+impl ModelException {
+    /// The decision for `entry`, the one meaning of its name.
+    #[must_use]
+    pub fn of(entry: &aeria_knowledge::GlossaryEntry) -> Self {
+        Self {
+            term: entry.term.clone(),
+            fingerprint: term_fingerprint(entry),
+        }
+    }
+
+    /// The decision for the name of `entry` as the glossary has it now,
+    /// with all its meanings.
+    #[must_use]
+    pub fn of_name(
+        glossary: &aeria_knowledge::Glossary,
+        entry: &aeria_knowledge::GlossaryEntry,
+    ) -> Self {
+        Self {
+            term: entry.term.clone(),
+            fingerprint: name_fingerprint(glossary, entry),
+        }
+    }
+
+    /// The decision still holds: the glossary has the term, and its
+    /// meanings are those the model decided for. Another translation, form,
+    /// note, case, or meaning of the term asks for a new decision.
+    #[must_use]
+    pub fn holds(&self, glossary: &aeria_knowledge::Glossary) -> bool {
+        glossary
+            .find(&self.term)
+            .is_some_and(|entry| name_fingerprint(glossary, entry) == self.fingerprint)
+    }
+
+    /// The flag's value, `<term> <fingerprint>`, or `None` for one it does
+    /// not read.
+    fn parse(value: &str) -> Option<Self> {
+        let (term, fingerprint) = value.trim().rsplit_once(' ')?;
+        let term = term.trim();
+        (can_be_exception(term)
+            && fingerprint.len() == 12
+            && fingerprint.bytes().all(|byte| byte.is_ascii_hexdigit()))
+        .then(|| Self {
+            term: term.to_owned(),
+            fingerprint: fingerprint.to_ascii_lowercase(),
+        })
+    }
+}
+
+/// The flag of a word a model decided renders a term:
+/// `#, aeria-term-model-rendering: aether 3f9a1c0b7d2e эфирный`.
+pub const MODEL_RENDERING_FLAG: &str = "aeria-term-model-rendering";
+
+/// A word of a translation a model decided renders a term that applies to
+/// the string: the term's headword, the [`term_fingerprint`] of the glossary
+/// entry it decided for, and the word.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct ModelRendering {
+    pub term: String,
+    pub fingerprint: String,
+    pub word: String,
+}
+
+impl ModelRendering {
+    /// The decision that `word` renders `entry`, the one meaning of its
+    /// name.
+    #[must_use]
+    pub fn of(entry: &aeria_knowledge::GlossaryEntry, word: &str) -> Self {
+        Self {
+            term: entry.term.clone(),
+            fingerprint: term_fingerprint(entry),
+            word: word.trim().to_owned(),
+        }
+    }
+
+    /// The decision that `word` renders the name of `entry` as the glossary
+    /// has it now, with all its meanings.
+    #[must_use]
+    pub fn of_name(
+        glossary: &aeria_knowledge::Glossary,
+        entry: &aeria_knowledge::GlossaryEntry,
+        word: &str,
+    ) -> Self {
+        Self {
+            term: entry.term.clone(),
+            fingerprint: name_fingerprint(glossary, entry),
+            word: word.trim().to_owned(),
+        }
+    }
+
+    /// The decision still holds: the glossary has the term, and its
+    /// meanings are those the model decided for. The checks count it only
+    /// while the translation has the word.
+    #[must_use]
+    pub fn holds(&self, glossary: &aeria_knowledge::Glossary) -> bool {
+        glossary
+            .find(&self.term)
+            .is_some_and(|entry| name_fingerprint(glossary, entry) == self.fingerprint)
+    }
+
+    /// The flag's value, `<term> <fingerprint> <word>`, or `None` for one
+    /// it does not read.
+    fn parse(value: &str) -> Option<Self> {
+        let (decision, word) = value.trim().rsplit_once(' ')?;
+        let ModelException { term, fingerprint } = ModelException::parse(decision)?;
+        Some(Self {
+            term,
+            fingerprint,
+            word: word.to_owned(),
+        })
+    }
+}
+
+/// The fingerprint of a glossary entry in a model's term exception: the
+/// first twelve hexadecimal digits of the SHA-256 of what decides whether
+/// the term applies: its headword, translation, forms, note, and case. Its
+/// category tells it from the other meanings of its name (see
+/// [`name_fingerprint`]).
+#[must_use]
+pub fn term_fingerprint(entry: &aeria_knowledge::GlossaryEntry) -> String {
+    let mut text = String::new();
+    for part in [
+        entry.term.as_str(),
+        entry.translation.as_str(),
+        &entry.forms.join(";"),
+        entry.note.as_deref().unwrap_or_default(),
+        if entry.match_case { "case" } else { "" },
+    ] {
+        text.push_str(part);
+        text.push('\0');
+    }
+    fingerprint(&text)
+}
+
+/// The fingerprint of a name in a model's decision: the
+/// [`term_fingerprint`] of its one meaning, or of the fingerprints and
+/// categories of all its meanings in order.
+#[must_use]
+pub fn name_fingerprint(
+    glossary: &aeria_knowledge::Glossary,
+    entry: &aeria_knowledge::GlossaryEntry,
+) -> String {
+    let senses = glossary.senses(entry);
+    if senses.len() <= 1 {
+        return term_fingerprint(entry);
+    }
+    let joined: Vec<String> = senses
+        .into_iter()
+        .map(|sense| format!("{} {}", term_fingerprint(sense), sense.category))
+        .collect();
+    fingerprint(&joined.join("\0"))
+}
 
 /// The flag of a reviewed translation: `#, aeria-reviewed: 3f9a1c0b7d2e`.
 pub const REVIEWED_FLAG: &str = "aeria-reviewed";
@@ -225,6 +401,18 @@ fn write_entry(text: &mut String, entry: &Entry, prefix: &str) {
             .iter()
             .map(|term| format!("{TERM_EXCEPTION_FLAG}: {term}")),
     );
+    flags.extend(entry.model_exceptions.iter().map(|exception| {
+        format!(
+            "{MODEL_EXCEPTION_FLAG}: {} {}",
+            exception.term, exception.fingerprint
+        )
+    }));
+    flags.extend(entry.model_renderings.iter().map(|rendering| {
+        format!(
+            "{MODEL_RENDERING_FLAG}: {} {} {}",
+            rendering.term, rendering.fingerprint, rendering.word
+        )
+    }));
     if let Some(reviewed) = &entry.reviewed {
         flags.push(format!("{REVIEWED_FLAG}: {reviewed}"));
     }
@@ -394,6 +582,24 @@ impl Parser {
                         .any(|known| known == term)
                 {
                     target.entry.term_exceptions.push(term.to_owned());
+                } else if let Some(exception) = flag
+                    .strip_prefix(MODEL_EXCEPTION_FLAG)
+                    .and_then(|rest| rest.strip_prefix(':'))
+                    .and_then(ModelException::parse)
+                    && !target
+                        .entry
+                        .model_exceptions
+                        .iter()
+                        .any(|known| known.term.eq_ignore_ascii_case(&exception.term))
+                {
+                    target.entry.model_exceptions.push(exception);
+                } else if let Some(rendering) = flag
+                    .strip_prefix(MODEL_RENDERING_FLAG)
+                    .and_then(|rest| rest.strip_prefix(':'))
+                    .and_then(ModelRendering::parse)
+                    && !target.entry.model_renderings.contains(&rendering)
+                {
+                    target.entry.model_renderings.push(rendering);
                 } else if let Some(mark) = flag
                     .strip_prefix(REVIEWED_FLAG)
                     .and_then(|rest| rest.strip_prefix(':'))
@@ -520,6 +726,15 @@ mod tests {
                     fuzzy: true,
                     previous: Some("Old \"name\"".to_owned()),
                     term_exceptions: vec!["the Maelstrom".to_owned(), "Scions".to_owned()],
+                    model_exceptions: vec![ModelException {
+                        term: "Mount Gulg".to_owned(),
+                        fingerprint: "3f9a1c0b7d2e".to_owned(),
+                    }],
+                    model_renderings: vec![ModelRendering {
+                        term: "Mount Gulg".to_owned(),
+                        fingerprint: "1d4e0f7a9c2b".to_owned(),
+                        word: "гульгский".to_owned(),
+                    }],
                     reviewed: Some(fingerprint("Имя \\<")),
                     context: "quest/000/A:TEXT_A_SEQ_00:1".to_owned(),
                     source: "Name <if $gn4>a<else>b</if>".to_owned(),
@@ -558,7 +773,7 @@ mod tests {
         assert_eq!(read.write(), text);
         assert_eq!(read.field("Language"), Some("ru"));
         assert!(text.contains(&format!(
-            "#, fuzzy, aeria-term-exception: the Maelstrom, aeria-term-exception: Scions, aeria-reviewed: {}\n",
+            "#, fuzzy, aeria-term-exception: the Maelstrom, aeria-term-exception: Scions, aeria-term-model-exception: Mount Gulg 3f9a1c0b7d2e, aeria-term-model-rendering: Mount Gulg 1d4e0f7a9c2b гульгский, aeria-reviewed: {}\n",
             fingerprint("Имя \\<")
         )));
     }
@@ -608,6 +823,71 @@ mod tests {
         assert!(can_be_exception("the Maelstrom"));
         assert!(!can_be_exception("Sage, elder"));
         assert!(!can_be_exception(" "));
+    }
+
+    #[test]
+    fn a_model_exception_holds_while_its_term_is_the_one_decided_for() {
+        let text = "msgctxt \"S:1:0:0\"\nmsgid \"x\"\nmsgstr \"\"\n";
+        let with = |flags: &str| PoFile::parse(&format!("{flags}\n{text}")).0.entries[0].clone();
+        let entry = with(
+            "#, aeria-term-model-exception: mount 3F9A1C0B7D2E, aeria-term-model-exception: x 12",
+        );
+        assert_eq!(
+            entry.model_exceptions,
+            [ModelException {
+                term: "mount".to_owned(),
+                fingerprint: "3f9a1c0b7d2e".to_owned(),
+            }],
+            "a fingerprint that is not twelve hexadecimal digits is not read"
+        );
+        assert!(
+            with("#, aeria-term-model-exception: mount")
+                .model_exceptions
+                .is_empty()
+        );
+        let term = aeria_knowledge::GlossaryEntry {
+            term: "mount".to_owned(),
+            translation: "маунт".to_owned(),
+            ..aeria_knowledge::GlossaryEntry::default()
+        };
+        let glossary = aeria_knowledge::Glossary::new(vec![term.clone()]);
+        let decided = ModelException::of(&term);
+        assert!(decided.holds(&glossary));
+        // A new note asks for a new decision.
+        let noted = aeria_knowledge::Glossary::new(vec![aeria_knowledge::GlossaryEntry {
+            note: Some("Не применять к глаголу.".to_owned()),
+            ..term.clone()
+        }]);
+        assert!(!decided.holds(&noted));
+    }
+
+    #[test]
+    fn a_model_rendering_holds_while_its_term_is_the_one_decided_for() {
+        let text = "msgctxt \"S:1:0:0\"\nmsgid \"x\"\nmsgstr \"\"\n";
+        let with = |flags: &str| PoFile::parse(&format!("{flags}\n{text}")).0.entries[0].clone();
+        let term = aeria_knowledge::GlossaryEntry {
+            term: "Seventh Dawn".to_owned(),
+            translation: "Седьмая Заря".to_owned(),
+            ..aeria_knowledge::GlossaryEntry::default()
+        };
+        let glossary = aeria_knowledge::Glossary::new(vec![term.clone()]);
+        let decided = ModelRendering::of(&term, " заревой ");
+        let entry = with(&format!(
+            "#, aeria-term-model-rendering: Seventh Dawn {} заревой, aeria-term-model-rendering: Seventh Dawn {} заревой, aeria-term-model-rendering: Seventh Dawn заревой",
+            decided.fingerprint, decided.fingerprint
+        ));
+        assert_eq!(
+            entry.model_renderings,
+            std::slice::from_ref(&decided),
+            "once, and not without a fingerprint"
+        );
+        assert!(decided.holds(&glossary));
+        let retranslated = aeria_knowledge::Glossary::new(vec![aeria_knowledge::GlossaryEntry {
+            translation: "Седьмой Рассвет".to_owned(),
+            ..term
+        }]);
+        assert!(!decided.holds(&retranslated));
+        assert!(!decided.holds(&aeria_knowledge::Glossary::default()));
     }
 
     #[test]

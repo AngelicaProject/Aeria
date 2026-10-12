@@ -1,6 +1,5 @@
 //! What a request tells the model about one string, for the person who
-//! translates it: the game's names and the project's terms in its source,
-//! who says it, how long an interface label or a world object's name may
+//! translates it: the project's terms in its source, who says it, how long an interface label or a world object's name may
 //! be, and whether its line varies with the player character's gender. A
 //! request and the editor read these the same way, so the person sees what
 //! the model is told: what a request comes to say about one string is read
@@ -11,30 +10,31 @@ use aeria_knowledge::Glossary;
 use aeria_po::Entry;
 use aeria_po::length::{Budget, length_budget};
 
-use crate::names::{Name, Names};
-
-/// Most names of one string listed; a request of many strings has more.
-const NAMES: usize = 40;
-
 /// A term of the glossary that occurs in a string's source.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct HintTerm {
     pub term: String,
     pub translation: String,
     pub note: Option<String>,
-    /// A person decided the term does not apply to this string.
+    /// What the term names in this meaning.
+    pub category: String,
+    /// A person, or a correction run's model, decided the term does not
+    /// apply to this string.
     pub excepted: bool,
+    /// The decision is the model's: its model exception holds and the
+    /// person made none.
+    pub by_model: bool,
+    /// The words a correction run's model decided render the term in this
+    /// string's translation, while the decisions hold and the term applies.
+    pub rendered: Vec<String>,
 }
 
 /// What one string's translation goes by besides its source.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct StringHints {
-    /// The game's names in the source with the project's translations.
-    pub names: Vec<Name>,
     pub terms: Vec<HintTerm>,
-    /// The speaker label of a line (`ALPHINAUD`), with the name and
-    /// translation it stands for when the project translates that name.
-    pub speaker: Option<(String, Option<(String, String)>)>,
+    /// The speaker label of a line (`ALPHINAUD`).
+    pub speaker: Option<String>,
     /// The kind of a quest's text (`journal`, `objective`).
     pub kind: Option<String>,
     /// The longest an interface label's translation may show, or a world
@@ -47,7 +47,7 @@ pub struct StringHints {
 
 /// The hints of the string `entry`.
 #[must_use]
-pub fn hints(names: &Names, glossary: &Glossary, entry: &Entry) -> StringHints {
+pub fn hints(glossary: &Glossary, entry: &Entry) -> StringHints {
     let line = |prefix: &str| {
         entry
             .extracted
@@ -56,22 +56,35 @@ pub fn hints(names: &Names, glossary: &Glossary, entry: &Entry) -> StringHints {
             .map(str::to_owned)
     };
     let excepted = glossary.matches(&entry.source);
-    let applying = glossary.matches_except(&entry.source, &entry.term_exceptions);
+    let exceptions = aeria_po::applied_exceptions(entry, glossary);
+    let applying = glossary.matches_except(&entry.source, &exceptions);
+    let by_person = glossary.matches_except(&entry.source, &entry.term_exceptions);
     StringHints {
-        names: names.in_texts([entry.source.as_str()], NAMES),
         terms: excepted
             .into_iter()
-            .map(|term| HintTerm {
-                term: term.term.clone(),
-                translation: term.translation.clone(),
-                note: term.note.clone(),
-                excepted: !applying.iter().any(|entry| entry.term == term.term),
+            .map(|term| {
+                let excepted = !applying.iter().any(|entry| entry.term == term.term);
+                HintTerm {
+                    term: term.term.clone(),
+                    translation: term.translation.clone(),
+                    note: term.note.clone(),
+                    category: term.category.clone(),
+                    excepted,
+                    by_model: excepted && by_person.iter().any(|entry| entry.term == term.term),
+                    rendered: entry
+                        .model_renderings
+                        .iter()
+                        .filter(|rendering| {
+                            !excepted
+                                && rendering.term.to_lowercase() == term.term.to_lowercase()
+                                && rendering.holds(glossary)
+                        })
+                        .map(|rendering| rendering.word.clone())
+                        .collect(),
+                }
             })
             .collect(),
-        speaker: line("speaker: ").map(|label| {
-            let name = names.speaker(&label);
-            (label, name)
-        }),
+        speaker: line("speaker: "),
         kind: line("kind: "),
         max_length: length_budget(entry),
         gendered: gendered(&entry.source, &entry.extracted)
@@ -126,14 +139,9 @@ mod tests {
     }
 
     #[test]
-    fn a_line_has_its_names_terms_speaker_and_gender() {
-        let names = Names::new(vec![
-            ("Minfilia".to_owned(), "Минфилия".to_owned()),
-            ("Alphinaud".to_owned(), "Альфино".to_owned()),
-        ]);
+    fn a_line_has_its_terms_speaker_and_gender() {
         let glossary = Glossary::new(vec![term("Scions", "Потомки"), term("aether", "эфир")]);
         let found = hints(
-            &names,
             &glossary,
             &entry(
                 "The Scions ask Minfilia about the aether, <if $gn4>lass<else>lad</if>.",
@@ -145,7 +153,6 @@ mod tests {
                 &["aether"],
             ),
         );
-        assert_eq!(found.names, vec![Name::new("Minfilia", "Минфилия")]);
         assert_eq!(
             found
                 .terms
@@ -154,21 +161,52 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![("Scions", false), ("aether", true)]
         );
-        assert_eq!(
-            found.speaker,
-            Some((
-                "ALPHINAUD".to_owned(),
-                Some(("Alphinaud".to_owned(), "Альфино".to_owned()))
-            ))
-        );
+        assert_eq!(found.speaker.as_deref(), Some("ALPHINAUD"));
         assert_eq!(found.gendered, vec!["source", "fr"]);
         assert_eq!(found.max_length, None);
     }
 
     #[test]
+    fn a_model_decision_shows_as_the_models_while_it_holds() {
+        let mount = term("mount", "маунт");
+        let glossary = Glossary::new(vec![mount.clone()]);
+        let decided = Entry {
+            model_exceptions: vec![aeria_po::ModelException::of(&mount)],
+            ..entry("Mount an attack.", &[], &[])
+        };
+        let found = hints(&glossary, &decided);
+        assert!(found.terms[0].excepted && found.terms[0].by_model);
+        // A word the model decided renders the term shows while the term
+        // applies.
+        let rendered = Entry {
+            model_renderings: vec![aeria_po::ModelRendering::of(&mount, "маунтовый")],
+            ..entry("Mount an attack.", &[], &[])
+        };
+        let found = hints(&glossary, &rendered);
+        assert_eq!(found.terms[0].rendered, ["маунтовый"]);
+        assert!(!found.terms[0].excepted);
+        let excepted = Entry {
+            term_exceptions: vec!["mount".to_owned()],
+            ..rendered
+        };
+        let found = hints(&glossary, &excepted);
+        assert!(found.terms[0].rendered.is_empty());
+        // A person's exception is the person's.
+        let both = Entry {
+            term_exceptions: vec!["mount".to_owned()],
+            ..decided.clone()
+        };
+        let found = hints(&glossary, &both);
+        assert!(found.terms[0].excepted && !found.terms[0].by_model);
+        // Another translation of the term asks for a new decision.
+        let changed = Glossary::new(vec![term("mount", "ездовое животное")]);
+        let found = hints(&changed, &decided);
+        assert!(!found.terms[0].excepted && !found.terms[0].by_model);
+    }
+
+    #[test]
     fn an_interface_label_has_its_length() {
         let found = hints(
-            &Names::new(Vec::new()),
             &Glossary::default(),
             &Entry {
                 context: "Addon:1:0:0".to_owned(),

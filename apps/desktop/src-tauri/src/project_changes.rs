@@ -199,10 +199,8 @@ fn describe_entry(entry: &GlossaryEntry) -> String {
         text.push_str(&entry.forms.join(", "));
         text.push(')');
     }
-    if !entry.folder.is_empty() {
-        text.push_str(" · ");
-        text.push_str(&entry.folder);
-    }
+    text.push_str(" · ");
+    text.push_str(&entry.category);
     text
 }
 
@@ -486,8 +484,11 @@ mod tests {
 
     #[test]
     fn terms_are_compared_by_term() {
-        let before = "term,translation,note\nGil,гил,\nChocobo,чокобо,\n".as_bytes();
-        let after = "term,translation,note\nChocobo,чокобо,птица\nAether,эфир,\n".as_bytes();
+        let before = "term,translation,note,category\nGil,гил,,валюта\nChocobo,чокобо,,существо\n"
+            .as_bytes();
+        let after =
+            "term,translation,note,category\nChocobo,чокобо,птица,существо\nAether,эфир,,понятие\n"
+                .as_bytes();
         let change = compare(TERMS_PATH, Some(before), Some(after)).expect("change");
         let summary: Vec<(ChangeKindDto, &str)> = change
             .details
@@ -502,7 +503,10 @@ mod tests {
                 (ChangeKindDto::Removed, "Gil")
             ]
         );
-        assert_eq!(change.details[1].after.as_deref(), Some("чокобо — птица"));
+        assert_eq!(
+            change.details[1].after.as_deref(),
+            Some("чокобо — птица · существо")
+        );
         // A terms file of an older format is compared by line.
         let older = "term,translation,forbidden\nGil,гил,\n".as_bytes();
         let change = compare(TERMS_PATH, Some(older), Some(after)).expect("change");

@@ -2,6 +2,7 @@
 //! subscription and one run at a time over files of the open project (see
 //! `docs/architecture/translate.md`).
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
@@ -10,6 +11,8 @@ use aeria_model::{Codex, Fix, KeyringStore, ModelError, ModelInfo, Options, Run,
 use serde::{Deserialize, Serialize};
 use tauri::Manager;
 
+use crate::commands::run_blocking;
+use crate::dto::SourceBindingDto;
 use crate::error::CommandError;
 use crate::paths::AeriaPaths;
 use crate::state::DesktopState;
@@ -22,6 +25,10 @@ pub struct Translation {
     codex: OnceLock<Arc<Codex>>,
     login: Mutex<Option<DeviceLogin>>,
     run: Mutex<Option<Arc<Run>>>,
+    /// Where in the game the strings the run lists are, found once per run:
+    /// the status is read every second and finding a string can read its
+    /// sheet from the game.
+    bindings: Mutex<HashMap<String, Option<SourceBindingDto>>>,
 }
 
 impl Translation {
@@ -38,6 +45,30 @@ impl Translation {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .clone()
+    }
+
+    /// Where each of `contexts` is in the game, found only for those not
+    /// seen before in this run.
+    fn bindings<'a>(
+        &self,
+        session: Option<&aeria_po::Session>,
+        contexts: impl Iterator<Item = &'a str>,
+    ) -> HashMap<String, Option<SourceBindingDto>> {
+        let mut known = self.bindings.lock().unwrap_or_else(PoisonError::into_inner);
+        // Without a project nothing is found, and nothing is kept as not found.
+        let Some(session) = session else {
+            return known.clone();
+        };
+        let mut missing: Vec<&str> = contexts
+            .filter(|context| !known.contains_key(*context))
+            .collect();
+        // A context begins with its sheet, so sorted ones read each sheet once.
+        missing.sort_unstable();
+        missing.dedup();
+        for context in missing {
+            known.insert(context.to_owned(), crate::search::binding(session, context));
+        }
+        known.clone()
     }
 }
 
@@ -188,14 +219,6 @@ fn paths_of(session: &aeria_po::Session, scope: &[String]) -> Vec<String> {
 }
 
 #[tauri::command(rename_all = "camelCase")]
-/// The sheets whose strings are the game's names, in the order a run
-/// translates them before any other sheet.
-#[must_use]
-pub fn translation_name_sheets() -> Vec<&'static str> {
-    aeria_model::names::NAME_SHEETS.to_vec()
-}
-
-#[tauri::command(rename_all = "camelCase")]
 /// Starts translating `scope` (see [`paths_of`]) of the open project with
 /// `model`. One run at a time; its progress is [`translation_status`].
 ///
@@ -253,6 +276,11 @@ pub(crate) fn start_run(app: &tauri::AppHandle, options: Options) -> CommandResu
             None => Run::new(),
         });
         *current = Some(Arc::clone(&run));
+        translation
+            .bindings
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clear();
         run
     };
     tauri::async_runtime::spawn(aeria_model::run::run(session, codex, options, run));
@@ -314,9 +342,12 @@ pub(crate) fn running() -> CommandError {
 pub struct RejectionDto {
     pub path: String,
     pub context: String,
-    pub binding: Option<crate::dto::SourceBindingDto>,
+    pub binding: Option<SourceBindingDto>,
     /// The model's last translation, which was not written.
     pub translation: String,
+    /// What the model's last answer decided of the terms it was asked
+    /// about, as it wrote it.
+    pub decisions: Vec<String>,
     pub problems: Vec<crate::dto::IssueDto>,
 }
 
@@ -326,7 +357,7 @@ pub struct RejectionDto {
 pub struct CorrectionDto {
     #[serde(flatten)]
     pub corrected: aeria_model::Corrected,
-    pub binding: Option<crate::dto::SourceBindingDto>,
+    pub binding: Option<SourceBindingDto>,
 }
 
 /// The progress of a run, with its rejected strings and the corrections it
@@ -341,8 +372,8 @@ pub struct StatusDto {
 }
 
 fn rejection_dto(
-    session: Option<&aeria_po::Session>,
     rejected: &aeria_model::Rejected,
+    binding: Option<SourceBindingDto>,
 ) -> RejectionDto {
     let mut problems: Vec<crate::dto::IssueDto> = rejected
         .problems
@@ -364,31 +395,51 @@ fn rejection_dto(
     RejectionDto {
         path: rejected.path.clone(),
         context: rejected.context.clone(),
-        binding: session.and_then(|session| crate::search::binding(session, &rejected.context)),
+        binding,
         translation: rejected.translation.clone(),
+        decisions: rejected.decisions.clone(),
         problems,
     }
 }
 
 #[tauri::command(rename_all = "camelCase")]
 /// The progress of the last run; `None` before one started.
-#[must_use]
-#[allow(clippy::needless_pass_by_value)]
-pub fn translation_status(app: tauri::AppHandle) -> Option<StatusDto> {
-    let status = app.state::<Translation>().run()?.status();
+///
+/// # Errors
+///
+/// Returns an internal error when the desktop worker fails.
+pub async fn translation_status(app: tauri::AppHandle) -> CommandResult<Option<StatusDto>> {
+    run_blocking(move || Ok(status_with_state(&app))).await
+}
+
+fn status_with_state(app: &tauri::AppHandle) -> Option<StatusDto> {
+    let translation = app.state::<Translation>();
+    let status = translation.run()?.status();
     let session = app.state::<DesktopState>().session().ok();
+    let bindings = translation.bindings(
+        session.as_deref(),
+        status
+            .rejections
+            .iter()
+            .map(|rejected| rejected.context.as_str())
+            .chain(
+                status
+                    .corrections
+                    .iter()
+                    .map(|corrected| corrected.context.as_str()),
+            ),
+    );
+    let binding = |context: &str| bindings.get(context).cloned().flatten();
     let rejections = status
         .rejections
         .iter()
-        .map(|rejected| rejection_dto(session.as_deref(), rejected))
+        .map(|rejected| rejection_dto(rejected, binding(&rejected.context)))
         .collect();
     let corrections = status
         .corrections
         .iter()
         .map(|corrected| CorrectionDto {
-            binding: session
-                .as_deref()
-                .and_then(|session| crate::search::binding(session, &corrected.context)),
+            binding: binding(&corrected.context),
             corrected: corrected.clone(),
         })
         .collect();
@@ -513,7 +564,7 @@ pub async fn translation_fix(
 /// not an entry of the project.
 pub async fn translation_fix_string(
     app: tauri::AppHandle,
-    source_binding: crate::dto::SourceBindingDto,
+    source_binding: SourceBindingDto,
     fix: FixDto,
     model: String,
     effort: Option<String>,

@@ -1,8 +1,8 @@
 export type SheetDocumentTab = {
   id: string;
-  /** `commit` shows one commit of the project history. */
-  kind: "sheet" | "commit";
-  /** Empty for a commit. */
+  /** `commit` shows one commit of the project history; `glossary` the project's terms. */
+  kind: "sheet" | "commit" | "glossary";
+  /** Empty for a commit and the glossary. */
   sheetName: string;
   /** The commit id of a commit tab. */
   commitId?: string;
@@ -23,6 +23,8 @@ export type DocumentTabsAction =
   /** `keep` opens the sheet in a tab of its own instead of the preview. */
   | { type: "openSheet"; sheetName: string; keep?: boolean }
   | { type: "openCommit"; commitId: string; label: string }
+  /** The glossary has one tab of its own, never a preview. */
+  | { type: "openGlossary"; label: string }
   | { type: "activate"; id: string }
   /** Turns a preview into a tab of its own. */
   | { type: "keep"; id: string }
@@ -40,6 +42,8 @@ export function documentIdForSheet(sheetName: string): string {
 export function documentIdForCommit(commitId: string): string {
   return `commit:${commitId}`;
 }
+
+export const GLOSSARY_DOCUMENT_ID = "glossary";
 
 /** Pinned tabs come first, each group in its own order. */
 function pinnedFirst(tabs: readonly SheetDocumentTab[]): SheetDocumentTab[] {
@@ -97,6 +101,11 @@ export function reduceDocumentTabs(
       }
       return { tabs: [...state.tabs, tab], activeId: id };
     }
+    case "openGlossary": {
+      if (state.tabs.some((tab) => tab.id === GLOSSARY_DOCUMENT_ID)) return { ...state, activeId: GLOSSARY_DOCUMENT_ID };
+      const tab: SheetDocumentTab = { id: GLOSSARY_DOCUMENT_ID, kind: "glossary", sheetName: "", label: action.label, pinned: false, preview: false, dirty: false };
+      return { tabs: [...state.tabs, tab], activeId: GLOSSARY_DOCUMENT_ID };
+    }
     case "activate":
       return state.tabs.some((tab) => tab.id === action.id) ? { ...state, activeId: action.id } : state;
     case "keep":
@@ -137,8 +146,8 @@ export function reduceDocumentTabs(
 /**
  * Closes tabs and says what becomes of the open sheet: when the next active
  * tab is another sheet it opens (`open`); when the open sheet's tab closed
- * and no sheet tab is active, no sheet stays open (`clear`). A commit tab
- * leaves the sheet under it as it is.
+ * and no sheet tab is active, no sheet stays open (`clear`). A commit or
+ * glossary tab leaves the sheet under it as it is.
  */
 export function closeDocumentTabs(
   state: DocumentTabsState,

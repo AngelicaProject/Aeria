@@ -112,8 +112,9 @@ pub struct Query {
     /// Entry states to keep; empty for all.
     pub states: Vec<State>,
     pub check: CheckFilter,
-    /// With a check filter, only entries with an issue of this group (see
-    /// [`Issue::group`]).
+    /// With a check filter, only entries with an issue of this group, or of
+    /// this kind of grouped issues (see [`Issue::group`] and
+    /// [`Issue::is_of`]).
     pub issue: Option<String>,
 }
 
@@ -138,6 +139,17 @@ pub struct Hit {
     pub matches: Vec<FieldMatch>,
     /// The problems, or terms not used, when the search filters by them.
     pub findings: Vec<Issue>,
+}
+
+/// A string that uses a term.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TermString {
+    /// The file, relative to `po/`.
+    pub path: String,
+    pub context: String,
+    pub source: String,
+    pub translation: String,
+    pub fuzzy: bool,
 }
 
 /// The entries a search found in one file.
@@ -626,10 +638,10 @@ impl Search<'_> {
             .cloned()
             .collect();
         if let Some(group) = &query.issue {
-            if !findings.iter().any(|issue| issue.group() == *group) {
+            if !findings.iter().any(|issue| issue.is_of(group)) {
                 return None;
             }
-            findings.sort_by_key(|issue| issue.group() != *group);
+            findings.sort_by_key(|issue| !issue.is_of(group));
         }
         (!findings.is_empty()).then_some(findings)
     }
@@ -985,6 +997,111 @@ impl Corpus {
             .issues
             .sort_by(|a, b| b.count.cmp(&a.count).then_with(|| a.group.cmp(&b.group)));
         Ok(found)
+    }
+
+    /// How many strings of the project use each term of `glossary`, by the
+    /// index of its entry: the strings whose source has the term, as the
+    /// checks find it, over the whole game.
+    ///
+    /// A cancelled count stops early: the caller drops what it returns.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when `po/` or a file cannot be read.
+    pub fn term_usage(
+        &self,
+        root: &Path,
+        glossary: &aeria_knowledge::Glossary,
+        cancel: &AtomicBool,
+    ) -> Result<Vec<usize>, SearchError> {
+        let files = self.files(root, &[], cancel)?;
+        // One count per worker, each over every `workers`-th file.
+        let workers = std::thread::available_parallelism()
+            .map_or(4, std::num::NonZero::get)
+            .min(files.len().max(1));
+        let parts = parallel(workers, cancel, |worker| {
+            let mut strings = vec![0; glossary.entries.len()];
+            for (_, file) in files.iter().skip(worker).step_by(workers) {
+                if cancel.load(Ordering::Relaxed) {
+                    break;
+                }
+                for entry in &file.entries {
+                    glossary.count_uses(file.view(entry).source.text, &mut strings);
+                }
+            }
+            Ok(strings)
+        })?;
+        let mut total = vec![0; glossary.entries.len()];
+        for (_, part) in parts {
+            for (sum, count) in total.iter_mut().zip(part) {
+                *sum += count;
+            }
+        }
+        Ok(total)
+    }
+
+    /// The strings whose source uses the term of the glossary entry at
+    /// `entry`, as [`Self::term_usage`] counts them: the first `limit` in
+    /// file order, and how many there are.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when `po/` or a file cannot be read.
+    pub fn term_strings(
+        &self,
+        root: &Path,
+        glossary: &aeria_knowledge::Glossary,
+        entry: usize,
+        limit: usize,
+        cancel: &AtomicBool,
+    ) -> Result<(Vec<TermString>, usize), SearchError> {
+        let files = self.files(root, &[], cancel)?;
+        let workers = std::thread::available_parallelism()
+            .map_or(4, std::num::NonZero::get)
+            .min(files.len().max(1));
+        // Each worker keeps the first `limit` of its files by their place.
+        let parts = parallel(workers, cancel, |worker| {
+            let mut found: Vec<(usize, TermString)> = Vec::new();
+            let mut count = 0;
+            for (place, (path, file)) in files.iter().enumerate().skip(worker).step_by(workers) {
+                if cancel.load(Ordering::Relaxed) {
+                    break;
+                }
+                for text in &file.entries {
+                    let view = file.view(text);
+                    if !glossary.uses(view.source.text, entry) {
+                        continue;
+                    }
+                    count += 1;
+                    if found.len() < limit {
+                        found.push((
+                            place,
+                            TermString {
+                                path: path.clone(),
+                                context: view.context.to_owned(),
+                                source: view.source.text.to_owned(),
+                                translation: view.translation.text.to_owned(),
+                                fuzzy: view.fuzzy,
+                            },
+                        ));
+                    }
+                }
+            }
+            Ok((found, count))
+        })?;
+        let mut total = 0;
+        let mut strings: Vec<(usize, TermString)> = Vec::new();
+        for (_, (found, count)) in parts {
+            total += count;
+            strings.extend(found);
+        }
+        // Stable: the strings of one file keep their order.
+        strings.sort_by_key(|(place, _)| *place);
+        strings.truncate(limit);
+        Ok((
+            strings.into_iter().map(|(_, string)| string).collect(),
+            total,
+        ))
     }
 
     /// Every entry a search finds, in file order, without the limit of
