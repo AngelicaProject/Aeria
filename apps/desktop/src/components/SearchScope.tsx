@@ -33,7 +33,6 @@ const checkHints: Partial<Record<SearchCheck, MessageKey>> = {
 export type Scope = {
   fields: readonly SearchField[];
   pathsText: string;
-  nameSheetsOnly: boolean;
   states: readonly SearchState[];
   check: SearchCheck;
 };
@@ -42,7 +41,7 @@ export const defaultFields: readonly SearchField[] = ["translation", "source"];
 
 /** Whether the scope keeps fewer strings than a plain search does. */
 export function scopeNarrowed(scope: Scope): boolean {
-  return scope.pathsText.trim() !== "" || scope.nameSheetsOnly || scope.states.length > 0 || scope.check !== "any";
+  return scope.pathsText.trim() !== "" || scope.states.length > 0 || scope.check !== "any";
 }
 
 type SearchScopeProps = {
@@ -93,7 +92,7 @@ export function SearchScope({ scope, onChange, onClear, children }: SearchScopeP
       ? t("search.where.all")
       : scope.fields.map((field) => t(fieldLabels[field])).join(", ");
   const paths = scope.pathsText.split(/[,\s]+/).map((path) => path.trim()).filter(Boolean);
-  const sheetsValue = scope.nameSheetsOnly ? t("search.nameSheets") : paths.length > 0 ? paths.join(", ") : t("search.sheets.all");
+  const sheetsValue = paths.length > 0 ? paths.join(", ") : t("search.sheets.all");
   const statesValue = scope.states.length === 0 ? t("search.states.any") : scope.states.map((state) => t(stateLabels[state])).join(", ");
   const fieldsDefault = scope.fields.length === defaultFields.length && defaultFields.every((field) => scope.fields.includes(field));
 
@@ -117,7 +116,7 @@ export function SearchScope({ scope, onChange, onClear, children }: SearchScopeP
 
       <Popover.Root>
         <Popover.Trigger asChild>
-          <ScopeChip label={t("search.paths")} value={sheetsValue} active={scope.nameSheetsOnly || paths.length > 0} />
+          <ScopeChip label={t("search.paths")} value={sheetsValue} active={paths.length > 0} />
         </Popover.Trigger>
         <Popover.Portal>
           <Popover.Content className="menu-content scope-sheets" align="start" sideOffset={4} collisionPadding={8}>
@@ -126,16 +125,11 @@ export function SearchScope({ scope, onChange, onClear, children }: SearchScopeP
               <input
                 className="input"
                 autoFocus
-                value={scope.nameSheetsOnly ? "" : scope.pathsText}
-                placeholder={scope.nameSheetsOnly ? t("search.nameSheetsChosen") : t("search.pathsPlaceholder")}
-                disabled={scope.nameSheetsOnly}
+                value={scope.pathsText}
+                placeholder={t("search.pathsPlaceholder")}
                 spellCheck={false}
                 onChange={(event) => onChange({ pathsText: event.target.value })}
               />
-            </label>
-            <label className="checkbox">
-              <input type="checkbox" checked={scope.nameSheetsOnly} onChange={(event) => onChange({ nameSheetsOnly: event.target.checked })} />
-              <UiIcon icon="bookMarked" size="xs" />{t("search.nameSheetsOnly")}
             </label>
           </Popover.Content>
         </Popover.Portal>

@@ -113,6 +113,16 @@ pub enum GitError {
     #[error("{} translated strings were changed differently here and on the remote", conflicts.len())]
     TranslationConflicts { conflicts: Vec<EntryConflict> },
 
+    /// Uncommitted changes cannot move to the branch being switched to: the
+    /// files are not PO files that join per string, or the strings changed
+    /// differently there. Nothing was switched or changed.
+    #[error("{}", carry_conflict_message(branch, files, conflicts))]
+    CarryConflict {
+        branch: String,
+        files: Vec<String>,
+        conflicts: Vec<EntryConflict>,
+    },
+
     /// Incoming changes merged cleanly but were rejected by workspace
     /// validation. The merge was rolled back.
     #[error(
@@ -139,4 +149,21 @@ pub enum GitError {
         path: PathBuf,
         source: std::io::Error,
     },
+}
+
+fn carry_conflict_message(branch: &str, files: &[String], conflicts: &[EntryConflict]) -> String {
+    let mut reasons = Vec::new();
+    if !files.is_empty() {
+        reasons.push(format!("{} changed there too", files.join(", ")));
+    }
+    if !conflicts.is_empty() {
+        reasons.push(format!(
+            "{} translated strings were changed differently there",
+            conflicts.len()
+        ));
+    }
+    format!(
+        "uncommitted changes cannot move to {branch}: {}; commit them first or discard them",
+        reasons.join(", and ")
+    )
 }

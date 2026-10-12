@@ -4,7 +4,6 @@ import { describeIssue, exceptionTerm } from "../issueText";
 import { nextRow, type Chosen, type ResultRow, type SheetGroup } from "../searchResults";
 import type { SearchHitDto } from "../types";
 import { useI18n } from "../ui/i18n";
-import { NameSheetMark } from "../ui/NameSheetMark";
 import { IconButton } from "../ui/primitives/IconButton";
 import { UiIcon } from "../ui/primitives/UiIcon";
 import { RightClickMenu, copyText, type MenuEntry } from "../ui/primitives/RightClickMenu";
@@ -54,7 +53,6 @@ type SearchResultListProps = {
   chosen: Chosen;
   /** How many strings of the files are chosen. */
   chosenOf: (paths: readonly string[]) => number;
-  nameSheets: ReadonlySet<string>;
   replacing: boolean;
   disabled: boolean;
   onToggleGroup: (group: SheetGroup) => void;
@@ -81,7 +79,7 @@ type SearchResultListProps = {
  * search field.
  */
 export const SearchResultList = forwardRef<SearchResultListHandle, SearchResultListProps>(function SearchResultList(props, ref) {
-  const { rows, chosen, chosenOf, nameSheets, replacing, disabled } = props;
+  const { rows, chosen, chosenOf, replacing, disabled } = props;
   const { t } = useI18n();
   const listRef = useRef<HTMLDivElement | null>(null);
   const activeKey = useRef<string | null>(null);
@@ -280,7 +278,6 @@ export const SearchResultList = forwardRef<SearchResultListHandle, SearchResultL
                   >
                     <UiIcon icon={row.open ? "chevronDown" : "chevronRight"} size="xs" />
                     <span className="search-sheet-name">{group.sheet}</span>
-                    {nameSheets.has(group.sheet) ? <NameSheetMark /> : null}
                     {group.files.length > 1 ? (
                       <span className="search-sheet-path">{t("search.files", { count: group.files.length })}</span>
                     ) : folder && folder !== group.sheet ? <span className="search-sheet-path">{folder}</span> : null}

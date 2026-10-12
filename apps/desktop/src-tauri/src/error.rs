@@ -146,6 +146,7 @@ impl From<GitError> for CommandError {
             GitError::MergeConflict { .. } => "gitMergeConflict",
             GitError::IncomingRejected { .. } => "gitIncomingRejected",
             GitError::TranslationConflicts { .. } => "gitTranslationConflicts",
+            GitError::CarryConflict { .. } => "gitCarryConflict",
             GitError::CommitPublished => "gitCommitPublished",
             GitError::BranchProtected { .. } => "gitBranchProtected",
             GitError::Io { .. } => "gitIo",

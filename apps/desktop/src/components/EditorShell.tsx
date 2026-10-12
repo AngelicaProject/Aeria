@@ -50,7 +50,8 @@ import { WindowChrome } from "./WindowChrome";
 import type { ApplicationMenuDefinition } from "./ApplicationMenu";
 import { ExportDialog } from "./ExportDialog";
 import { TranslateDialog } from "./TranslateDialog";
-import { ProjectGuideDialog, type ProjectGuideTab } from "./ProjectGuideDialog";
+import { GlossaryView, type GlossaryFocus, type GlossaryViewHandle } from "./GlossaryView";
+import { StyleDialog } from "./StyleDialog";
 import { WorkbenchToolDock, toolTitle, type WorkbenchTool } from "./WorkbenchToolDock";
 import { CommitView } from "./GitHistory";
 import { changeMark, type GitCommitDto } from "../types";
@@ -65,7 +66,7 @@ import {
   type OccurrenceFilter,
   type TranslationOccurrenceView,
 } from "../translationOccurrences";
-import { closeDocumentTabs, documentIdForSheet, initialDocumentTabsState, reduceDocumentTabs, type DocumentTabsState } from "../documentTabs";
+import { GLOSSARY_DOCUMENT_ID, closeDocumentTabs, documentIdForSheet, initialDocumentTabsState, reduceDocumentTabs, type DocumentTabsState } from "../documentTabs";
 import { initialDockLayout, reduceDockLayout, type DockRegion } from "../dockLayout";
 import { createLoadProgress } from "../loadProgress";
 import { hasWindowsBackdrop } from "../ui/theme/windowBackdrop";
@@ -73,6 +74,7 @@ import { useTheme } from "../ui/theme/theme";
 import { themeRegistry } from "../ui/theme/registry";
 import { usePreferences } from "../ui/preferences";
 import type { RowTarget } from "../commandPalette";
+import { throttled } from "../throttle";
 import { UiIcon } from "../ui/primitives/UiIcon";
 import { copyText, type MenuEntry } from "../ui/primitives/RightClickMenu";
 import { reportUnsavedDraft } from "../ui/appUpdateStore";
@@ -122,6 +124,8 @@ type EditorError = {
 };
 
 const RECENT_SHEET_LIMIT = 8;
+/** How often the workbench follows files changed outside the editor, at most. */
+const FILES_CHANGED_INTERVAL_MS = 3000;
 
 type DiscardRequest = {
   message: string;
@@ -217,6 +221,7 @@ export function EditorShell({
   onProjectChanged,
 }: EditorShellProps) {
   const firstSheetName = project.sheets.find((sheet) => sheet.translatableCellCount > 0)?.name ?? project.sheets[0]?.name ?? null;
+  const sheetNames = useMemo(() => project.sheets.map((sheet) => sheet.name), [project.sheets]);
   const sheetsByName = useMemo(() => {
     const byName = new Map<string, ProjectSheetDto>();
     for (const sheet of project.sheets) byName.set(sheet.name, sheet);
@@ -242,8 +247,10 @@ export function EditorShell({
   const [editorError, setEditorError] = useState<EditorError | null>(null);
   const [discardRequest, setDiscardRequest] = useState<DiscardRequest | null>(null);
 
+  // Unsaved edits of the glossary tab.
+  const [glossaryDirty, setGlossaryDirty] = useState(false);
   // An application update waits for drafts and saves in flight.
-  const unsavedDraft = dirty || mutations.length > 0;
+  const unsavedDraft = dirty || mutations.length > 0 || glossaryDirty;
   useEffect(() => reportUnsavedDraft(unsavedDraft), [unsavedDraft]);
   useEffect(() => () => reportUnsavedDraft(false), []);
   const [layout, dispatchLayout] = useReducer(reduceWorkbenchLayout, initialWorkbenchLayout);
@@ -262,13 +269,25 @@ export function EditorShell({
   const [lensFilter, setLensFilter] = useState<OccurrenceFilter>(emptyOccurrenceFilter);
   const [progress, setProgress] = useState<readonly SheetProgressDto[]>([]);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [guide, setGuide] = useState<{ open: boolean; tab: ProjectGuideTab }>({ open: false, tab: "terms" });
-  const openGuide = useCallback((tab: ProjectGuideTab) => setGuide({ open: true, tab }), []);
-  const openTerms = useCallback(() => openGuide("terms"), [openGuide]);
-  const setGuideOpen = useCallback((open: boolean) => {
-    setGuide((current) => ({ ...current, open }));
+  const [styleOpen, setStyleOpenState] = useState(false);
+  const setStyleOpen = useCallback((open: boolean) => {
+    setStyleOpenState(open);
     if (!open) setProjectRevision((current) => current + 1);
   }, []);
+  // The glossary is a tab of its own; a term asked for is shown in it.
+  const [glossaryFocus, setGlossaryFocus] = useState<GlossaryFocus | null>(null);
+  const openTerms = useCallback((term?: { term: string; category: string }) => {
+    setDocumentTabs((current) => reduceDocumentTabs(current, { type: "openGlossary", label: t("glossary.tab") }));
+    if (term) setGlossaryFocus((current) => ({ ...term, nonce: (current?.nonce ?? 0) + 1 }));
+  }, [t]);
+  const glossaryRef = useRef<GlossaryViewHandle>(null);
+  const glossaryDirtyRef = useRef(false);
+  const handleGlossaryDirty = useCallback((next: boolean) => {
+    glossaryDirtyRef.current = next;
+    setGlossaryDirty(next);
+    setDocumentTabs((current) => current.tabs.some((tab) => tab.id === GLOSSARY_DOCUMENT_ID) ? reduceDocumentTabs(current, { type: "setDirty", id: GLOSSARY_DOCUMENT_ID, dirty: next }) : current);
+  }, []);
+  const bumpProjectRevision = useCallback(() => setProjectRevision((current) => current + 1), []);
   const [translateOpen, setTranslateOpen] = useState(false);
   const openTranslate = useCallback(() => setTranslateOpen(true), []);
   const [searchSeed, setSearchSeed] = useState<{ text: string; nonce: number } | undefined>(undefined);
@@ -554,8 +573,9 @@ export function EditorShell({
     setEditorError(null);
   }, []);
 
-  const requestDiscardConfirmation = useCallback((message: string): Promise<boolean> => {
-    if (!hasDirtyDraft.current) return Promise.resolve(true);
+  // `glossary` also asks for unsaved terms, when the whole project goes away.
+  const requestDiscardConfirmation = useCallback((message: string, glossary = false): Promise<boolean> => {
+    if (!hasDirtyDraft.current && !(glossary && glossaryDirtyRef.current)) return Promise.resolve(true);
     if (discardRequestRef.current) return Promise.resolve(false);
     return new Promise((resolve) => {
       const request = { message, resolve };
@@ -580,10 +600,10 @@ export function EditorShell({
           allowWindowClose.current = false;
           return;
         }
-        if (!hasDirtyDraft.current) return;
+        if (!hasDirtyDraft.current && !glossaryDirtyRef.current) return;
         event.preventDefault();
         void (async () => {
-          if (!(await requestDiscardConfirmation(t("workbench.discard.closeApp")))) return;
+          if (!(await requestDiscardConfirmation(t("workbench.discard.closeApp"), true))) return;
           allowWindowClose.current = true;
           try {
             await getCurrentWindow().close();
@@ -633,11 +653,17 @@ export function EditorShell({
   const handleDocumentsClose = useCallback(async (documentIds: readonly string[]) => {
     const closesSheet = selectedSheetName !== null && documentIds.includes(documentIdForSheet(selectedSheetName));
     if (closesSheet && !(await requestDiscardConfirmation(t("workbench.discard.closeSheet")))) return;
+    if (documentIds.includes(GLOSSARY_DOCUMENT_ID) && glossaryDirtyRef.current && !(await new Promise<boolean>((resolve) => {
+      const request = { message: t("glossary.discard"), resolve };
+      discardRequestRef.current = request;
+      setDiscardRequest(request);
+    }))) return;
+    if (documentIds.includes(GLOSSARY_DOCUMENT_ID)) handleGlossaryDirty(false);
     const next = closeDocumentTabs(documentTabs, documentIds, selectedSheetName);
     setDocumentTabs(next.state);
     if (next.open) void beginSheetLoad(next.open);
     else if (next.clear) clearSheet();
-  }, [beginSheetLoad, clearSheet, documentTabs, requestDiscardConfirmation, selectedSheetName, t]);
+  }, [beginSheetLoad, clearSheet, documentTabs, handleGlossaryDirty, requestDiscardConfirmation, selectedSheetName, t]);
   const handleDocumentClose = useCallback((documentId: string) => handleDocumentsClose([documentId]), [handleDocumentsClose]);
 
   const openCommit = useCallback((commit: GitCommitDto) => {
@@ -783,7 +809,7 @@ export function EditorShell({
   }, [applyOverlay, confirmMutationDiscard, runMutation, selectedRow, t]);
 
   const handleClose = useCallback(async () => {
-    if (!(await requestDiscardConfirmation(t("workbench.discard.closeProject")))) return;
+    if (!(await requestDiscardConfirmation(t("workbench.discard.closeProject"), true))) return;
     flushSync(() => {
       setClosing(true);
       setEditorError(null);
@@ -799,7 +825,7 @@ export function EditorShell({
   }, [onClosed, requestDiscardConfirmation, showError, t]);
 
   const handleWindowClose = useCallback(async () => {
-    if (!(await requestDiscardConfirmation(t("workbench.discard.closeApp")))) return;
+    if (!(await requestDiscardConfirmation(t("workbench.discard.closeApp"), true))) return;
     allowWindowClose.current = true;
     try {
       await getCurrentWindow().close();
@@ -888,7 +914,8 @@ export function EditorShell({
       return;
     }
     if (!(await requestDiscardConfirmation(t("workbench.discard.openString")))) return;
-    if (sheetName !== selectedSheetName) setDocumentTabs((current) => reduceDocumentTabs(current, { type: "openSheet", sheetName, keep: true }));
+    // The sheet's tab comes to the front, also from the glossary or a commit.
+    setDocumentTabs((current) => reduceDocumentTabs(current, { type: "openSheet", sheetName, keep: true }));
     setLensFilter(emptyOccurrenceFilter);
     void beginSheetLoad(sheetName, { reveal: target });
   }, [beginSheetLoad, requestDiscardConfirmation, selectedSheetName, settleReveal, sheetsByName, t]);
@@ -923,11 +950,30 @@ export function EditorShell({
     openCommit: stableOpenCommit,
   }), [stableOpenCommit, stableRevealBinding, stableWorkspaceChanged]);
 
+  // A file of a shown sheet changed outside the editor, by Git, by hand, or
+  // by machine translation, which writes every few seconds: the views of the
+  // project follow at most once an interval, and the open sheet reloads only
+  // when it is one of the changed sheets.
+  const stableFilesChanged = useStableCallback((sheets: ReadonlySet<string>) => {
+    setWorkspaceRevision((current) => current + 1);
+    if (selectedSheetName && sheets.has(selectedSheetName)) void beginSheetLoad(selectedSheetName, { immediate: false, refresh: true });
+  });
   useEffect(() => {
-    // A file of a shown sheet changed outside the editor, by Git or by hand.
-    const subscription = listen<string[]>("project://files-changed", () => stableWorkspaceChanged());
-    return () => { void subscription.then((unlisten) => unlisten()); };
-  }, [stableWorkspaceChanged]);
+    let changed = new Set<string>();
+    const follow = throttled(() => {
+      const sheets = changed;
+      changed = new Set();
+      stableFilesChanged(sheets);
+    }, FILES_CHANGED_INTERVAL_MS);
+    const subscription = listen<string[]>("project://files-changed", ({ payload }) => {
+      for (const sheet of payload) changed.add(sheet);
+      follow.trigger();
+    });
+    return () => {
+      follow.cancel();
+      void subscription.then((unlisten) => unlisten());
+    };
+  }, [stableFilesChanged]);
   const openPalette = useCallback((input: string) => {
     setPalette((current) => ({ open: true, input, key: current.key + 1 }));
   }, []);
@@ -936,6 +982,7 @@ export function EditorShell({
     setSettingsSection(section);
     setSettingsOpen(true);
   }, []);
+  const openTranslationSettings = useCallback(() => openSettings("translation"), [openSettings]);
 
   const handleRestoreTarget = useCallback(async (targetMacro: string) => {
     if (!selectedBinding) return;
@@ -1100,6 +1147,12 @@ export function EditorShell({
         } else if (key === ",") {
           event.preventDefault();
           openSettings();
+        } else if (key === "s" && documentTabs.activeId === GLOSSARY_DOCUMENT_ID) {
+          event.preventDefault();
+          glossaryRef.current?.save();
+        } else if (key === "f" && documentTabs.activeId === GLOSSARY_DOCUMENT_ID) {
+          event.preventDefault();
+          glossaryRef.current?.focusSearch();
         } else if (key === "s" && !editable && sheetShown.current) {
           event.preventDefault();
           editorRef.current?.saveTarget(false);
@@ -1126,7 +1179,7 @@ export function EditorShell({
     pinned: document.pinned,
     preview: document.preview,
     dirty: document.dirty,
-    icon: document.kind === "commit" ? "gitCommit" : "table2",
+    icon: document.kind === "commit" ? "gitCommit" : document.kind === "glossary" ? "bookMarked" : "table2",
   }));
   const documentMenu = (documentId: string): MenuEntry[] => {
     const document = documentTabs.tabs.find((tab) => tab.id === documentId);
@@ -1134,14 +1187,16 @@ export function EditorShell({
       const commitId = document.commitId;
       return [{ id: "copyId", icon: "copy", label: t("commit.action.copyId"), run: () => copyText(commitId) }];
     }
-    if (!document) return [];
+    if (!document || document.kind === "glossary") return [];
     return [
       { id: "reveal", icon: "locateFixed", label: t("tabs.menu.reveal"), disabled: document.id !== documentTabs.activeId, run: () => { showPanel("sheets", "left", false); setRevealSheetSignal((current) => current + 1); } },
       { id: "copyName", icon: "copy", label: t("tabs.menu.copyName"), run: () => copyText(document.sheetName) },
     ];
   };
   const activeCommitId = documentTabs.tabs.find((document) => document.id === documentTabs.activeId)?.commitId ?? null;
-  sheetShown.current = activeCommitId === null;
+  const glossaryOpen = documentTabs.tabs.some((document) => document.id === GLOSSARY_DOCUMENT_ID);
+  const glossaryActive = documentTabs.activeId === GLOSSARY_DOCUMENT_ID;
+  sheetShown.current = activeCommitId === null && !glossaryActive;
 
   const sheetHeaderActions = <>
     <IconButton icon={hideEmptySheets ? "eyeOff" : "eye"} label={t(hideEmptySheets ? "workbench.showEmptySheets" : "workbench.hideEmptySheets")} pressed={hideEmptySheets} disabled={closing} onClick={() => setHideEmptySheets((current) => !current)} />
@@ -1154,7 +1209,7 @@ export function EditorShell({
     if (panelId === "sheets") {
       return <SheetSidebar sheets={project.sheets} selectedSheetName={selectedSheetName} disabled={closing} active={active} hideEmpty={hideEmptySheets} onHideEmptyChange={setHideEmptySheets} filterOpen={sheetFilterOpen} onFilterOpenChange={setSheetFilterOpen} onOpenFilter={focusSheetFilter} quickFindSignal={quickFindSignal} revealSignal={revealSheetSignal} collapseSignal={collapseSheetsSignal} onSelect={handleSheetSelect} progress={progressBySheet} />;
     }
-    if (panelId === "hints") return <StringGuide revision={workspaceRevision + projectRevision} onOpenTerms={openTerms} onReveal={stableRevealBinding} onOpenTranslate={openTranslate} />;
+    if (panelId === "hints") return <StringGuide revision={workspaceRevision + projectRevision} onOpenTerms={openTerms} onOpenTranslate={openTranslate} />;
     const tool: WorkbenchTool = panelId === "search" ? "search" : "git";
     return <WorkbenchToolDock activeTool={tool} selectedBinding={selectedBinding} onOpenCommit={stableOpenCommit} selectedCommitId={activeCommitId} onOpenRepositorySettings={openRepositorySettings} projectRevision={projectRevision} selectedKey={selectedKey} workspaceRevision={workspaceRevision} onWorkspaceChanged={stableWorkspaceChanged} pending={pendingState} onRevealBinding={stableRevealBinding} onOpenTranslate={openTranslate} searchSeed={searchSeed} />;
   };
@@ -1220,8 +1275,8 @@ export function EditorShell({
         { kind: "command", id: "copy-source", label: t("menu.copySource"), ...(selectedRow ? { onSelect: () => editorRef.current?.copySource() } : {}) },
         { kind: "command", id: "revert", label: t("menu.revert"), ...(dirty ? { onSelect: () => editorRef.current?.revert() } : {}) },
         { kind: "separator", id: "translation-sep-1" },
-        { kind: "command", id: "terms", label: t("menu.terms"), onSelect: () => openGuide("terms") },
-        { kind: "command", id: "style", label: t("menu.style"), onSelect: () => openGuide("style") },
+        { kind: "command", id: "terms", label: t("menu.terms"), onSelect: () => openTerms() },
+        { kind: "command", id: "style", label: t("menu.style"), onSelect: () => setStyleOpen(true) },
         { kind: "separator", id: "translation-sep-2" },
         { kind: "command", id: "machine-translation", label: t("menu.machineTranslation"), onSelect: () => setTranslateOpen(true) },
       ],
@@ -1289,8 +1344,8 @@ export function EditorShell({
     { id: "view-bottom", category: category.view, title: t("command.toggleBottom"), shortcut: "Ctrl+J", icon: "panelBottom", run: () => dispatchLayout({ type: "toggleRegion", regionId: "bottomPanel" }) },
     { id: "view-filter-sheets", category: category.view, title: t("workbench.filterSheets"), shortcut: "Ctrl+F", icon: "search", run: handleQuickFind },
     { id: "view-reveal-sheet", category: category.view, title: t("workbench.revealSheet"), icon: "locateFixed", enabled: selectedSheetName !== null, run: () => { showPanel("sheets", "left", false); setRevealSheetSignal((current) => current + 1); } },
-    { id: "project-terms", category: category.translation, title: t("menu.terms"), icon: "languages", run: () => openGuide("terms") },
-    { id: "project-style", category: category.translation, title: t("menu.style"), icon: "messageSquare", run: () => openGuide("style") },
+    { id: "project-terms", category: category.translation, title: t("menu.terms"), icon: "languages", run: () => openTerms() },
+    { id: "project-style", category: category.translation, title: t("menu.style"), icon: "messageSquare", run: () => setStyleOpen(true) },
     { id: "git-open", category: category.git, title: t("command.showChanges"), icon: "gitBranch", run: () => showPanel("git", "right", false) },
     { id: "prefs-settings", category: category.preferences, title: t("command.openSettings"), shortcut: "Ctrl+,", icon: "settings", run: () => openSettings() },
     { id: "prefs-theme", category: category.preferences, title: t("settings.theme.title"), icon: "palette", run: () => openSettings("appearance") },
@@ -1362,8 +1417,14 @@ export function EditorShell({
               onReorder={(documentId, beforeDocumentId) => setDocumentTabs((current) => reduceDocumentTabs(current, { type: "reorder", id: documentId, beforeId: beforeDocumentId }))}
             />
             {activeCommitId ? <CommitView commitId={activeCommitId} onRevealBinding={stableRevealBinding} onWorkspaceChanged={stableWorkspaceChanged} /> : null}
-            {/* Kept mounted under a commit tab, so the sheet returns as it was left. */}
-            <div className="document-sheet" hidden={activeCommitId !== null}>
+            {/* Kept mounted while its tab is open, so its edits stay when another tab is shown. */}
+            {glossaryOpen ? (
+              <div className="document-glossary" hidden={!glossaryActive}>
+                <GlossaryView ref={glossaryRef} active={glossaryActive} revision={workspaceRevision + projectRevision} sheetNames={sheetNames} onRevealBinding={stableRevealBinding} onDirtyChange={handleGlossaryDirty} onSaved={bumpProjectRevision} onFilesChanged={stableWorkspaceChanged} onOpenSettings={openTranslationSettings} focus={glossaryFocus} />
+              </div>
+            ) : null}
+            {/* Kept mounted under a commit or glossary tab, so the sheet returns as it was left. */}
+            <div className="document-sheet" hidden={activeCommitId !== null || glossaryActive}>
               {!selectedSheetName ? (
                 <div className="document-empty empty-state">
                   <strong>{t("workbench.noSheetOpen")}</strong>
@@ -1468,7 +1529,7 @@ export function EditorShell({
         onDiscard={() => resolveDiscardConfirmation(true)}
       />
       <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} initialSection={settingsSection} projectOpen project={project} onProjectChanged={onProjectChanged} />
-      <ProjectGuideDialog open={guide.open} initialTab={guide.tab} onOpenChange={setGuideOpen} />
+      <StyleDialog open={styleOpen} onOpenChange={setStyleOpen} />
       <ExportDialog open={exportOpen} onOpenChange={setExportOpen} onOpenChanges={() => { setExportOpen(false); showPanel("git", "right", false); }} />
       <TranslateDialog open={translateOpen} onOpenChange={setTranslateOpen} sheets={project.sheets} progress={progressBySheet} sheetName={selectedSheetName} onOpenSettings={() => { setTranslateOpen(false); openSettings("translation"); }} onFilesChanged={handleWorkspaceChanged} onRevealBinding={stableRevealBinding} />
       {palette.open ? (

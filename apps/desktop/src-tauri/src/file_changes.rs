@@ -174,7 +174,6 @@ pub fn working_changes(
             ));
         }
         if let Some(kind) = file.worktree {
-            let read = repository.working_file(&file.path)?;
             let before = if file.index.is_some() {
                 staged
             } else {
@@ -184,6 +183,13 @@ pub fn working_changes(
                 None
             } else {
                 Some(pending.get(&file.path).copied().unwrap_or_default())
+            };
+            // A PO file whose strings are counted already is not read again:
+            // a project can have thousands of them changed.
+            let read = match group_of(&file.path) {
+                FileGroupDto::Translations if strings.is_some() => None,
+                FileGroupDto::Other => None,
+                _ => repository.working_file(&file.path)?,
             };
             working.changes.push(change(
                 &file.path,
@@ -251,7 +257,7 @@ mod tests {
         let terms = project_changes::compare(
             "aeria-knowledge/terms.csv",
             None,
-            Some(b"term,translation\nGil,gil\n"),
+            Some(b"term,translation,category\nGil,gil,currency\n"),
         )
         .expect("terms");
         let strings = BTreeMap::from([("po/Addon.po".to_owned(), 3)]);

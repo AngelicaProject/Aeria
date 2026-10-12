@@ -55,77 +55,6 @@ rebuilt. A cancelled or failed build leaves no index.
   against a query, ignoring case. Translations change with every edit, so
   they are searched in the project's files rather than indexed.
 
-## Glossary candidates
-
-`aeria_po::term_candidates` finds where a project disagrees with itself: names
-of its English sources that its translations render in several ways and
-its glossary does not have, such as `Kojin` as «Кодзин», «Кудзин», and
-«Койдзин». It reads every file of `po/`, several at a time, and takes about
-seven seconds on a project of the whole game. A person decides what becomes
-a term.
-
-1. A *candidate* is a capitalized phrase of the plain text of the sources:
-   up to four words, hyphenated names whole (`Radz-at-Han`), joined by `of`,
-   `the`, `de`, or `del` (`Students of Baldesion`). The first word of a
-   sentence and leading function words (`The`, `You`) are not part of it.
-   It is in at least 12 strings, at least 6 of them outside interface
-   sheets (whose labels are capitalized anyway), not in more than four in
-   five of them inside a longer candidate, and not a term of the glossary
-   (compared without case and a leading `the`).
-2. A *rendering* is a Russian word of the translations of the candidate's
-   translated strings that is in at least 4 and a twentieth of them, at
-   least 30 times more frequent there than in all translations, and with
-   at least three tenths of all its strings among them: the candidate's
-   translation, not a word around it. Words are compared without their
-   endings, and bases that differ only at the end are forms of one word
-   (Кодзина, Кодзину); other spellings differ in the middle (Шарлаян,
-   Шаллаян).
-3. Words that share at least three fifths of their strings are one
-   rendering (Лимсы Ломинсы). The rendering with most strings is the main
-   one; another with at least 4 strings and a twentieth, sharing at most
-   three twentieths of its strings with the main one, is its rival.
-4. A candidate with rivals is reported, with each rendering's words as
-   translations most often write them, its strings, and up to three
-   examples. A rendering's word that sounds like the name comes first: its
-   first consonants are the same, and three of its first four, or all of
-   the shorter, follow each other in both (`Kojin`, «Кодзин», «Кудзин»:
-   `kdzn`). When every rendering has such a word, the candidate is
-   *spellings* of one name, almost always a real disagreement; otherwise its
-   renderings are other words, translations of the name or words around it,
-   for the person to check. Spellings come first, then by the strings of the
-   rivals.
-
-The result is a heuristic: a rendering can still be a word that goes with a
-name rather than translate it, so the person reviews each candidate.
-
-## Openers
-
-`aeria_po::phrasing` counts the phrases the translations open sentences with,
-such as «Похоже,» or «Ну что,», over the translated strings that are not
-fuzzy. Whether a line reads as a translation cannot be judged from one short
-string, which is why the checks hold only a few words to it (see
-[`knowledge.md`](./knowledge.md)); a habit of the translations shows over the
-whole project. Machine translation tends to render one word of the source
-the same way every time, and to add a phrase the source has no word for.
-
-1. An *opener* is one to three words at the start of a sentence of a
-   translation's plain text, after a speaker's label, followed by a comma,
-   a dash, or an ellipsis. One that opens sentences of at least 50 strings
-   is counted, at most 80 of them, most strings first. A name is left out:
-   a word the translations write with a capital in most of its uses inside
-   a sentence (Альфино, …).
-2. A *cue* of an opener is a word of the sources' plain text in at least
-   3 % of its strings and at least six times as frequent there as in all
-   translated strings, ranked by its share times the logarithm of that
-   ratio; at most four are kept. Cues are found from the project, never
-   listed, so they work for any pair of languages: «Похоже,» comes with
-   `seems`, `seem`, and `appears`.
-3. An opener's strings whose source has none of its cues are counted, with
-   three of them as examples: there the phrase was added.
-
-The count reads every file, about seven seconds for the whole game. What
-the style says about an opener is a person's decision.
-
 ## Terminology candidates
 
 `SourceIndex::term_candidates` finds names that recur in the game's text,
@@ -176,7 +105,8 @@ project, and lists the entries found in file order (files sorted by path):
 Findings of the checks are data (`aeria_po::Issue`: the kind with its
 term, variant, or word), so an interface words them in its own language; each
 has the English message Aeria has always written, and a group (the kind, with
-the term for term issues). With a checks filter a search also counts, over
+the term for a term whose translation is not used; the case of terms,
+`termCase`, is one group of every term). With a checks filter a search also counts, over
 every entry found, the entries with an issue of each group, most first, and
 can keep only the entries with an issue of one group, or of one kind of
 grouped issues: `termNotUsed` keeps the entries with any term whose

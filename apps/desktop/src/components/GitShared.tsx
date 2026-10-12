@@ -30,6 +30,7 @@ export function changeLabel(change: Pick<EntryChangeDto, "kind" | "before" | "af
   if (Boolean(change.before.reviewed) !== Boolean(change.after.reviewed)) parts.push(t(change.after.reviewed ? "git.change.reviewed" : "git.change.unreviewed"));
   parts.push(...exceptionChanges(change.before.termExceptions, change.after.termExceptions, "git.change.exception", "git.change.exceptionRemoved", t));
   parts.push(...exceptionChanges(change.before.modelExceptions, change.after.modelExceptions, "git.change.modelException", "git.change.modelExceptionRemoved", t));
+  parts.push(...exceptionChanges(change.before.modelRenderings, change.after.modelRenderings, "git.change.modelRendering", "git.change.modelRenderingRemoved", t));
   return parts.join(", ") || t("git.change.changed");
 }
 
@@ -45,10 +46,12 @@ function exceptionChanges(before: string[] | undefined, after: string[] | undefi
   ];
 }
 
-/** Whether a string's term or model exceptions changed. */
+/** Whether a string's term exceptions or a correction's decisions on its terms changed. */
 function exceptionsChanged(change: Pick<EntryChangeDto, "before" | "after">): boolean {
   const same = (a: string[] | undefined, b: string[] | undefined) => (a ?? []).join("\n") === (b ?? []).join("\n");
-  return !same(change.before.termExceptions, change.after.termExceptions) || !same(change.before.modelExceptions, change.after.modelExceptions);
+  return !same(change.before.termExceptions, change.after.termExceptions)
+    || !same(change.before.modelExceptions, change.after.modelExceptions)
+    || !same(change.before.modelRenderings, change.after.modelRenderings);
 }
 
 /** The text a change shows: the translation after it, or before it for a removal. */

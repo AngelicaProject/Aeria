@@ -2,14 +2,9 @@
 //! selected string (`aeria_model::hints`), and what the checks find in the
 //! translation being typed, before it is saved.
 
-use std::path::PathBuf;
-use std::sync::{Arc, Weak};
-use std::time::SystemTime;
-
 use aeria_model::hints::{HintTerm, hints};
-use aeria_model::names::{Names, name_sheet_of};
 use aeria_po::length::{self, Budget, Unit, length_budget};
-use aeria_po::{Entry, PO_DIR, Session};
+use aeria_po::{Entry, Session};
 use serde::Serialize;
 use tauri::Manager;
 
@@ -20,98 +15,22 @@ use crate::state::DesktopState;
 
 type CommandResult<T> = Result<T, CommandError>;
 
-/// A file's modification time and length.
-type Stamp = Option<(SystemTime, u64)>;
-
-fn stamp(path: &std::path::Path) -> Stamp {
-    let metadata = std::fs::metadata(path).ok()?;
-    Some((metadata.modified().ok()?, metadata.len()))
-}
-
-/// The translated names of the open project, read again when a file of a
-/// name sheet changed. Reading them takes a second or two on a project of
-/// the whole game, so the guide of every string shares one reading.
-pub struct NamesCache {
-    loaded: Option<LoadedNames>,
-}
-
-struct LoadedNames {
-    session: Weak<Session>,
-    files: Vec<(PathBuf, Stamp)>,
-    names: Arc<Names>,
-}
-
-impl NamesCache {
-    pub const fn new() -> Self {
-        Self { loaded: None }
-    }
-
-    pub(crate) fn names(&mut self, session: &Arc<Session>) -> Arc<Names> {
-        if let Some(loaded) = &self.loaded
-            && loaded
-                .session
-                .upgrade()
-                .is_some_and(|seen| Arc::ptr_eq(&seen, session))
-            && loaded.files.iter().all(|(path, seen)| stamp(path) == *seen)
-        {
-            return Arc::clone(&loaded.names);
-        }
-        let root = session.root();
-        let files = aeria_po::list(root)
-            .unwrap_or_default()
-            .into_iter()
-            .filter(|path| name_sheet_of(path).is_some())
-            .map(|path| {
-                let full = root.join(PO_DIR).join(path);
-                let seen = stamp(&full);
-                (full, seen)
-            })
-            .collect();
-        let names = Arc::new(Names::load(root));
-        self.loaded = Some(LoadedNames {
-            session: Arc::downgrade(session),
-            files,
-            names: Arc::clone(&names),
-        });
-        names
-    }
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct HintNameDto {
-    pub name: String,
-    pub translation: String,
-}
-
-/// A game name of a string's source with the string its translation comes
-/// from.
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct HintGameNameDto {
-    pub name: String,
-    pub translation: String,
-    /// Every name sheet with this name and translation, such as `Action`
-    /// and `Item` for `Potion`.
-    pub sheets: Vec<String>,
-    /// The row's name when this is another form of it, such as `The Walk`
-    /// for `Walk`.
-    pub full: Option<String>,
-    /// The string the translation comes from, to open it in the editor.
-    pub binding: Option<SourceBindingDto>,
-}
-
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HintTermDto {
     pub term: String,
     pub translation: String,
     pub note: Option<String>,
+    /// What the term names in this meaning.
+    pub category: String,
     /// A person, or a correction run's model, decided the term does not
     /// apply to this string.
     pub excepted: bool,
     /// The decision is the model's.
     pub by_model: bool,
+    /// The words a correction run's model decided render the term in this
+    /// string's translation.
+    pub rendered: Vec<String>,
 }
 
 impl From<HintTerm> for HintTermDto {
@@ -120,8 +39,10 @@ impl From<HintTerm> for HintTermDto {
             term: term.term,
             translation: term.translation,
             note: term.note,
+            category: term.category,
             excepted: term.excepted,
             by_model: term.by_model,
+            rendered: term.rendered,
         }
     }
 }
@@ -131,9 +52,6 @@ impl From<HintTerm> for HintTermDto {
 pub struct HintSpeakerDto {
     /// The speaker label of the line, such as `ALPHINAUD`.
     pub label: String,
-    /// The name the label stands for and its translation, when the project
-    /// translates that name.
-    pub name: Option<HintNameDto>,
 }
 
 #[derive(Debug, Eq, PartialEq, Serialize)]
@@ -160,7 +78,6 @@ impl From<Budget> for LengthBudgetDto {
 #[derive(Debug, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StringHintsDto {
-    pub names: Vec<HintGameNameDto>,
     pub terms: Vec<HintTermDto>,
     pub speaker: Option<HintSpeakerDto>,
     /// The kind of a quest's text: `journal`, `objective`, or `other`.
@@ -181,8 +98,6 @@ pub struct DraftCheckDto {
     /// The game data of the source the text lacks, each by its spelling in
     /// the source.
     pub missing: Vec<String>,
-    /// The names of the guide whose translation the text uses.
-    pub names_used: Vec<String>,
     /// The length of the text in the unit of the string's length budget:
     /// the bytes of a world object's name, otherwise the characters it
     /// shows, macros not counted.
@@ -209,36 +124,10 @@ fn string_hints_with(
     let (_, Some(entry)) = entry_of(&session, binding)? else {
         return Ok(StringHintsDto::default());
     };
-    let names = state.names_cache().names(&session);
-    let found = hints(&names, &session.knowledge().terms, &entry);
+    let found = hints(&session.knowledge().terms, &entry);
     Ok(StringHintsDto {
-        names: found
-            .names
-            .into_iter()
-            .map(|name| HintGameNameDto {
-                binding: session.coordinate_of(&name.context).map(
-                    |(sheet_name, row_id, subrow_id, column_index)| SourceBindingDto {
-                        sheet_name,
-                        row_id,
-                        subrow_id,
-                        column_index,
-                    },
-                ),
-                sheets: if name.sheets.is_empty() {
-                    vec![name.sheet().to_owned()]
-                } else {
-                    name.sheets
-                },
-                name: name.source,
-                translation: name.translation,
-                full: name.full,
-            })
-            .collect(),
         terms: found.terms.into_iter().map(HintTermDto::from).collect(),
-        speaker: found.speaker.map(|(label, name)| HintSpeakerDto {
-            label,
-            name: name.map(|(name, translation)| HintNameDto { name, translation }),
-        }),
+        speaker: found.speaker.map(|label| HintSpeakerDto { label }),
         kind: found.kind,
         max_length: found.max_length.map(LengthBudgetDto::from),
         gendered: found.gendered,
@@ -256,7 +145,6 @@ fn check_draft_with(
         return Ok(DraftCheckDto {
             issues: Vec::new(),
             missing: Vec::new(),
-            names_used: Vec::new(),
             length: length::visible_length(text),
         });
     };
@@ -269,17 +157,6 @@ fn check_draft_with(
                 .find_map(|prefix| line.strip_prefix(prefix))
         })
         .collect();
-    let names = state.names_cache().names(&session);
-    let names_used = if text.is_empty() {
-        Vec::new()
-    } else {
-        names
-            .in_texts([entry.source.as_str()], usize::MAX)
-            .into_iter()
-            .filter(|name| aeria_knowledge::uses_translation(text, &name.translation))
-            .map(|name| name.source)
-            .collect()
-    };
     Ok(DraftCheckDto {
         issues: session
             .check_text(&entry, text)
@@ -291,7 +168,6 @@ fn check_draft_with(
         } else {
             aeria_se::missing_game_data(&entry.source, text, &localizations)
         },
-        names_used,
         length: length::length_in(
             length_budget(&entry).map_or(Unit::Characters, |budget| budget.unit),
             text,
@@ -300,8 +176,7 @@ fn check_draft_with(
 }
 
 #[tauri::command(rename_all = "camelCase")]
-/// The guide of a string: the game's names and the project's terms in its
-/// source, its speaker or kind, the length of an interface label, and
+/// The guide of a string: the project's terms in its source, its speaker or kind, the length of an interface label, and
 /// whether its line varies with the player character's gender, as a
 /// machine translation request reads them.
 ///
@@ -319,7 +194,7 @@ pub async fn string_hints(
 #[tauri::command(rename_all = "camelCase")]
 /// What the checks find in `text` as the translation of a string, before it
 /// is saved: the issues a save reports, the source's game data it lacks,
-/// the names of the guide it uses, and its length.
+/// and its length.
 ///
 /// # Errors
 ///
@@ -372,6 +247,7 @@ mod tests {
                 term: "Hello".to_owned(),
                 translation: "Bonjour".to_owned(),
                 forms: vec!["Hi".to_owned()],
+                category: "приветствие".to_owned(),
                 ..GlossaryEntry::default()
             }]),
         )
@@ -382,7 +258,6 @@ mod tests {
         assert_eq!(found.terms.len(), 1);
         assert_eq!(found.terms[0].translation, "Bonjour");
         assert!(!found.terms[0].excepted);
-        assert!(found.names.is_empty());
         assert_eq!(found.max_length, None);
 
         let draft = check_draft_with(&state, &hello, "Salut <i>là</i>").expect("check");

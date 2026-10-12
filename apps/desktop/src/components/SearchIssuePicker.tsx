@@ -35,6 +35,7 @@ export function SearchIssuePicker({ issues, value, onChange }: SearchIssuePicker
     label: issueLabel(issue, t),
     title: describeIssue(issue, t),
     count,
+    // The case of terms is one group of every term, listed with the other kinds.
     term: issue.term !== null && issue.term !== "",
   })), [issues, t]);
   const needle = filter.trim().toLocaleLowerCase();

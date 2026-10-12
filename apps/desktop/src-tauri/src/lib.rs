@@ -67,20 +67,21 @@ pub use guard_workflow::{
     git_open_rules_settings, git_repository_protection, git_save_ruleset,
 };
 pub use guide::{
-    ProjectKnowledgeDto, TermInput, project_knowledge, save_knowledge_style, save_knowledge_terms,
+    ProjectKnowledgeDto, TermInput, project_knowledge, save_knowledge_sheets, save_knowledge_style,
+    save_knowledge_terms, string_binding, term_strings, term_unapplied, term_unapplied_strings,
+    term_usage,
 };
 pub use search::{
-    SearchState, project_edit_undo, project_phrasing, project_replace_apply,
-    project_replace_preview, project_retranslate, project_search, project_search_cancel,
-    project_search_entries, project_search_prepare, project_term_candidates,
-    project_term_exception,
+    SearchState, project_edit_undo, project_replace_apply, project_replace_preview,
+    project_retranslate, project_search, project_search_cancel, project_search_entries,
+    project_search_prepare, project_term_exception,
 };
 pub use state::{Activity, DesktopState};
 pub use translate::{
     ModelAccountDto, ModelSignInDto, Translation, model_account, model_list,
     model_open_sign_in_page, model_sign_in_poll, model_sign_in_start, model_sign_out,
-    translation_fix, translation_fix_string, translation_name_sheets, translation_retry,
-    translation_start, translation_status, translation_stop,
+    translation_fix, translation_fix_string, translation_retry, translation_start,
+    translation_status, translation_stop,
 };
 pub use updates::{
     AvailableUpdateDto, UpdateChannel, UpdateDownloadDto, UpdateStatusDto, Updates, update_check,
@@ -202,6 +203,12 @@ pub fn run() {
             project_knowledge,
             save_knowledge_style,
             save_knowledge_terms,
+            save_knowledge_sheets,
+            term_usage,
+            term_strings,
+            term_unapplied,
+            term_unapplied_strings,
+            string_binding,
             export_overview,
             export_save_settings,
             export_generate_key,
@@ -223,7 +230,6 @@ pub fn run() {
             model_sign_in_poll,
             model_sign_out,
             model_list,
-            translation_name_sheets,
             translation_start,
             translation_status,
             translation_retry,
@@ -234,8 +240,6 @@ pub fn run() {
             project_search_cancel,
             project_search_entries,
             project_search_prepare,
-            project_term_candidates,
-            project_phrasing,
             project_replace_preview,
             project_replace_apply,
             project_edit_undo,

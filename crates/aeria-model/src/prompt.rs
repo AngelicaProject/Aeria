@@ -1,7 +1,6 @@
 //! What a request says: instructions that are the same for every request of
-//! a run, and the batch with what it needs: the game's names and the
-//! project's terms that occur in it, and translated strings of the same file
-//! as examples.
+//! a run, and the batch with what it needs: the project's terms that occur
+//! in it, and translated strings of the same file as examples.
 
 use std::collections::HashMap;
 use std::fmt::Write as _;
@@ -11,8 +10,6 @@ use aeria_knowledge::rules::{
 };
 use aeria_po::length::{Budget, Unit};
 use serde_json::{Value, json};
-
-use crate::names::Name;
 
 /// The instructions of every request of a run: the rules of a translation,
 /// the project's style, and the answer's form.
@@ -73,8 +70,10 @@ pub fn fix_instructions(
          translation as macro text; then why it changed, in a few words of \
          {target_language} without quotes (обращение по французской строке, канцелярит, \
          калька, потерян смысл источника), or an empty string when it did not; and, only \
-         when a term of its `fix` does not apply to the string, a fourth element: the array \
-         of those terms as `terms` writes them ([\"Go\", \"Иди\", \"\", [\"mount\"]]). The \
+         when you decide so of a term of its `fix`, a fourth element: the array of the \
+         terms that do not apply to the string, as `terms` writes them, and of the terms a \
+         word of the translation renders, each as the term, ` = `, and that word \
+         ([\"Go\", \"Иди\", \"\", [\"mount\", \"aether = эфирный\"]]). The \
          first words show which string a translation belongs to; give every string its own \
          translation. Answer every string."
     );
@@ -88,7 +87,13 @@ const TERM_DECISIONS: &str = "An item of `fix` that says the terms translate a t
      string. It applies where the word of the source is the thing the term names, as its \
      `translation` and `note` describe it; then the corrected translation uses the term's \
      translation, declined as the sentence needs, and the rest of the sentence agrees with \
-     it. It does not apply where the word means something else here: an everyday word or \
+     it. Where the sentence needs another word made from the term's translation, as the \
+     adjective of a noun (эфирный компрессор for an aether compressor when aether is \
+     эфир), the term applies and that word renders it: keep the word and list the term \
+     with it in the answer's fourth element, as `aether = эфирный`, the word as the \
+     corrected translation writes it. Only one word of the same root as the term's \
+     translation renders a term: a synonym, a pronoun, or a paraphrase does not, and the \
+     project trusts you to name no such word. It does not apply where the word means something else here: an everyday word or \
      another part of speech (mount up, mount an attack beside a mount the player rides), \
      part of a name of something else (Mount Gulg, a place), or a sense the note rules out; \
      then translate the word by its meaning and list the term in the answer's fourth \
@@ -122,7 +127,7 @@ const PROOFREADING: &str = "Proofread every translation of this run as the edito
      of the speaker. Keep what is right as it is: a translation that already reads well \
      answers unchanged, and a sound change is the smallest one that fixes it. A name of a \
      thing of the game (an action, a status, an item, a place, a duty, a menu, a tab, a \
-     button) keeps the form the translation gives it unless `names` or `terms` give \
+     button) keeps the form the translation gives it unless `terms` give \
      another: the game shows it under that name, and a player looks for it there.\n\n";
 
 /// What the instructions of a translation and of a correction share: the
@@ -154,21 +159,21 @@ fn rules(source_language: &str, target_language: &str, style: Option<&str>) -> S
         );
     }
     text.push_str(
-        "The request is JSON: `names` are the game's names found in the batch, each with the \
-         project's translation and `from`: what it names and the sheet of the game it comes \
-         from. A name is found by its letters alone, so a word that only looks like one is \
-         listed too: `Walk` in \"A Walk in the Park\" is not the place \"The Walk\". Where a \
-         word of a string is that name, you use its translation, in the form the sentence \
-         needs: the translation is the name as it stands alone, and in a language that \
-         declines names it declines like any written word (Поговорите с Ко Рабнтой); only a \
-         name the game fills in through a macro keeps its stored form. Where the word \
-         means something else, you translate it by its meaning. `terms` are the project's \
-         terms, each with its other forms in the source (`forms`), which you use exactly; \
+        "The request is JSON: `terms` are the project's terms found in the batch: the words \
+         and the names of people, places, and things the project agreed on, each with the \
+         `category` of thing it names (a place, a creature, an order), its other wordings in \
+         the source (`forms`), and often a `note` on where it applies. A name with several \
+         meanings has one item per meaning: use the one the string means, and none where the \
+         word of the source is not the thing a category names. A term's translation is the \
+         name as it stands alone, in its base form: write it in the number, case, and \
+         capitals the sentence needs, declined like any written word in a language that \
+         declines names (Поговорите с Ко Рабнтой), with a capital where a sentence or a \
+         title begins and as the language writes the name elsewhere; only a name the game \
+         fills in through a macro keeps its stored form. A name the terms do not have you render by the \
+         project's style, and the same way wherever the batch has it. \
          `files` are the files of the batch, each on its own: `about` says what the file is: its sheet, a \
          quest's title, and whether its strings are in play order, so that a batch continues \
-         the strings before it; `speakers` are the characters who speak in the file by their \
-         labels (the `speaker` of a string's context) with their names and the project's \
-         translations; `examples` are translated strings of the same file, whose wording you \
+         the strings before it; `examples` are translated strings of the same file, whose wording you \
          continue; `strings` are the strings to translate, each with its `id`, its `source`, \
          and `context`: the other client languages (ja, de, fr), the speaker or kind of a \
          line, other fields of its row, and what its macros do. A string with `gendered` \
@@ -221,9 +226,10 @@ pub struct Answer {
     pub text: String,
     /// Why a correction changed the translation, as the model says.
     pub reason: Option<String>,
-    /// The terms of a correction's `fix` the model decided do not apply to
-    /// the string, as it names them.
-    pub other_meaning: Vec<String>,
+    /// What a correction decided of the terms of its `fix`, as the model
+    /// writes it: a term that does not apply to the string by its name, a
+    /// term a word of the translation renders as `term = word`.
+    pub decisions: Vec<String>,
 }
 
 impl Answer {
@@ -234,7 +240,7 @@ impl Answer {
             start,
             text,
             reason: None,
-            other_meaning: Vec::new(),
+            decisions: Vec::new(),
         }
     }
 }
@@ -247,6 +253,8 @@ pub struct Term {
     /// Other forms of the term in the source.
     pub forms: Vec<String>,
     pub note: Option<String>,
+    /// What the term names in this meaning.
+    pub category: String,
 }
 
 /// One file of a request: what it is, who speaks, translated strings as
@@ -256,30 +264,22 @@ pub struct FileTask {
     /// The file, relative to the project root: `po/...`.
     pub file: String,
     pub about: String,
-    /// Speaker labels with their names and translations.
-    pub speakers: Vec<(String, String, String)>,
     pub examples: Vec<(String, String)>,
     pub items: Vec<Item>,
 }
 
 /// The task of one request.
 #[must_use]
-pub fn input(files: &[FileTask], names: &[Name], terms: &[Term]) -> String {
+pub fn input(files: &[FileTask], terms: &[Term]) -> String {
     let value = json!({
-        "names": names
-            .iter()
-            .map(|name| {
-                let mut value = json!({ "name": name.source, "translation": name.translation });
-                if let Some(origin) = name.origin() {
-                    value["from"] = Value::from(origin);
-                }
-                value
-            })
-            .collect::<Vec<_>>(),
         "terms": terms
             .iter()
             .map(|term| {
-                let mut value = json!({ "term": term.term, "translation": term.translation });
+                let mut value = json!({
+                    "term": term.term,
+                    "translation": term.translation,
+                    "category": term.category,
+                });
                 if !term.forms.is_empty() {
                     value["forms"] = Value::from(term.forms.clone());
                 }
@@ -298,11 +298,6 @@ fn file_value(task: &FileTask) -> Value {
     json!({
         "file": task.file,
         "about": task.about,
-        "speakers": task
-            .speakers
-            .iter()
-            .map(|(label, name, translation)| json!({ "speaker": label, "name": name, "translation": translation }))
-            .collect::<Vec<_>>(),
         "examples": task
             .examples
             .iter()
@@ -399,7 +394,7 @@ pub fn parse(text: &str) -> Result<HashMap<String, Answer>, String> {
                         rest @ ..,
                     ] if rest.len() <= 1 => Answer {
                         reason: Some(reason.trim().to_owned()).filter(|reason| !reason.is_empty()),
-                        other_meaning: match rest.first() {
+                        decisions: match rest.first() {
                             None => Vec::new(),
                             Some(terms) => terms_of(terms)?,
                         },
@@ -548,9 +543,9 @@ fn salvage(text: &str, reasons: bool) -> HashMap<String, Answer> {
         let Some(mut second) = after.strip_prefix('"') else {
             continue;
         };
-        // A correction's terms that do not apply end the entry as an array
-        // of plain words: `"reason", ["mount"]]`, with or without spaces.
-        let mut other_meaning = Vec::new();
+        // A correction's decisions on terms end the entry as an array of
+        // plain words: `"reason", ["mount"]]`, with or without spaces.
+        let mut decisions = Vec::new();
         let trimmed: String;
         if reasons
             && let Some((split, terms)) = separators(second, '[').find_map(|(split, open)| {
@@ -562,7 +557,7 @@ fn salvage(text: &str, reasons: bool) -> HashMap<String, Answer> {
                 Some((split, terms_of(&terms)?))
             })
         {
-            other_meaning = terms;
+            decisions = terms;
             trimmed = format!("{}]", &second[..=split]);
             second = &trimmed;
         }
@@ -594,7 +589,7 @@ fn salvage(text: &str, reasons: bool) -> HashMap<String, Answer> {
                     start: Some(start),
                     text: translation,
                     reason,
-                    other_meaning,
+                    decisions,
                 },
             );
         }
@@ -658,28 +653,29 @@ mod tests {
     fn a_correction_names_the_terms_that_do_not_apply() {
         let valid = r#"{"1": ["Mount up", "По коням", "", ["mount", " "]], "2": ["Ride", "Маунт", "термин"], "3": ["x", "y", "", "mount"]}"#;
         let parsed = parse_lenient(valid, true);
-        assert_eq!(parsed["1"].other_meaning, ["mount"]);
+        assert_eq!(parsed["1"].decisions, ["mount"]);
         assert_eq!(parsed["1"].text, "По коням");
-        assert!(parsed["2"].other_meaning.is_empty());
+        assert!(parsed["2"].decisions.is_empty());
         assert!(!parsed.contains_key("3"), "terms are an array");
         let broken = r#"{"1": ["Mount up", "По <sheet Item "x" 1> коням", "", ["mount", "Mount Gulg"]], "2": ["Hi", "Привет, "друг"", "калька"]}"#;
         let salvaged = parse_lenient(broken, true);
         assert_eq!(salvaged["1"].text, r#"По <sheet Item "x" 1> коням"#);
-        assert_eq!(salvaged["1"].other_meaning, ["mount", "Mount Gulg"]);
+        assert_eq!(salvaged["1"].decisions, ["mount", "Mount Gulg"]);
         assert_eq!(salvaged["2"].text, r#"Привет, "друг""#);
         assert_eq!(salvaged["2"].reason.as_deref(), Some("калька"));
-        assert!(salvaged["2"].other_meaning.is_empty());
+        assert!(salvaged["2"].decisions.is_empty());
         // Without spaces between the elements, as models often write.
-        let tight = r#"{"1":["Mount Yorn","Гора Йорн","",["mount"]],"2":["Hi","Привет, "друг"","калька"],"3":["x","<sheet Item "y" 1>",""]}"#;
+        let tight = r#"{"1":["Mount Yorn","Гора Йорн","",["mount","aether = эфирный"]],"2":["Hi","Привет, "друг"","калька"],"3":["x","<sheet Item "y" 1>",""]}"#;
         let salvaged = parse_lenient(tight, true);
         assert_eq!(salvaged["1"].text, "Гора Йорн");
-        assert_eq!(salvaged["1"].other_meaning, ["mount"]);
+        assert_eq!(salvaged["1"].decisions, ["mount", "aether = эфирный"]);
         assert_eq!(salvaged["2"].text, r#"Привет, "друг""#);
         assert_eq!(salvaged["2"].reason.as_deref(), Some("калька"));
         assert_eq!(salvaged["3"].text, r#"<sheet Item "y" 1>"#);
         assert_eq!(salvaged["3"].reason, None);
         let text = fix_instructions("en", "ru", None, false, false, None);
         assert!(text.contains("fourth element"));
+        assert!(text.contains("aether = эфирный"));
     }
 
     #[test]
@@ -693,11 +689,6 @@ mod tests {
             &[FileTask {
                 file: "po/Addon/0.po".to_owned(),
                 about: "Addon".to_owned(),
-                speakers: vec![(
-                    "MINFILIA".to_owned(),
-                    "Minfilia".to_owned(),
-                    "Минфилия".to_owned(),
-                )],
                 examples: Vec::new(),
                 items: vec![Item {
                     id: "1".to_owned(),
@@ -710,25 +701,20 @@ mod tests {
                     fix: Vec::new(),
                 }],
             }],
-            &[
-                Name::new("Minfilia", "Минфилия"),
-                Name {
-                    context: "PlaceName:1861:0:2".to_owned(),
-                    full: Some("The Walk".to_owned()),
-                    ..Name::new("Walk", "переход")
-                },
-            ],
-            &[],
+            &[Term {
+                term: "Minfilia".to_owned(),
+                translation: "Минфилия".to_owned(),
+                forms: Vec::new(),
+                note: None,
+                category: "персонаж".to_owned(),
+            }],
         );
         let value: Value = serde_json::from_str(&input).expect("json");
         assert_eq!(value["files"][0]["strings"][0]["context"][0], "de: Ok");
-        assert_eq!(value["names"][0]["translation"], "Минфилия");
-        assert!(value["names"][0].get("from").is_none());
-        assert_eq!(
-            value["names"][1]["from"],
-            "the name of a place (sheet PlaceName), a form of \"The Walk\""
-        );
-        assert_eq!(value["files"][0]["speakers"][0]["speaker"], "MINFILIA");
+        assert_eq!(value["terms"][0]["translation"], "Минфилия");
+        assert_eq!(value["terms"][0]["category"], "персонаж");
+        assert!(value.get("names").is_none());
+        assert!(value["files"][0].get("speakers").is_none());
         assert_eq!(value["files"][0]["about"], "Addon");
         assert!(value["files"][0]["strings"][0].get("gendered").is_none());
         assert_eq!(
@@ -794,7 +780,6 @@ mod tests {
                 ..FileTask::default()
             }],
             &[],
-            &[],
         );
         let value: Value = serde_json::from_str(&input).expect("json");
         let strings = &value["files"][0]["strings"];
@@ -829,7 +814,6 @@ mod tests {
                 ],
                 ..FileTask::default()
             }],
-            &[],
             &[],
         );
         let value: Value = serde_json::from_str(&input).expect("json");

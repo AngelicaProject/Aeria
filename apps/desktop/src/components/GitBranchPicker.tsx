@@ -9,8 +9,6 @@ import { UiIcon } from "../ui/primitives/UiIcon";
 type GitBranchPickerProps = {
   branches: readonly GitBranchDto[];
   current: string | null;
-  /** Why switching is not possible right now, such as uncommitted translations. */
-  switchBlocked: string | null;
   disabled: boolean;
   blockLabels: Readonly<Record<NonNullable<GitBranchDto["blocked"]>, MessageKey>>;
   onSwitch: (name: string) => void;
@@ -31,7 +29,7 @@ function localName(remoteBranch: string): string {
  * It filters as you type, creates a branch from HEAD, and offers to delete
  * any branch but the current one.
  */
-export function GitBranchPicker({ branches, current, switchBlocked, disabled, blockLabels, onSwitch, onCreate, onDelete }: GitBranchPickerProps) {
+export function GitBranchPicker({ branches, current, disabled, blockLabels, onSwitch, onCreate, onDelete }: GitBranchPickerProps) {
   const { t } = useI18n();
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -71,7 +69,7 @@ export function GitBranchPicker({ branches, current, switchBlocked, disabled, bl
 
   const item = (branch: GitBranchDto, target: string) => {
     const blocked = branch.blocked ? t(blockLabels[branch.blocked]) : null;
-    const unavailable = !branch.current && (blocked !== null || switchBlocked !== null);
+    const unavailable = !branch.current && blocked !== null;
     return (
       <li key={branch.name} className="git-branch-row">
         <button
@@ -79,7 +77,7 @@ export function GitBranchPicker({ branches, current, switchBlocked, disabled, bl
           className={branch.current ? "git-branch-item current" : "git-branch-item"}
           disabled={disabled || unavailable || branch.current}
           aria-current={branch.current ? "true" : undefined}
-          title={blocked ?? (branch.current ? undefined : switchBlocked) ?? branch.name}
+          title={blocked ?? branch.name}
           onClick={() => choose(target)}
         >
           <span className="git-branch-check">{branch.current ? <UiIcon icon="check" size="xs" /> : null}</span>
@@ -133,7 +131,6 @@ export function GitBranchPicker({ branches, current, switchBlocked, disabled, bl
               }}
             />
           </label>
-          {switchBlocked ? <p className="git-branch-note">{switchBlocked}</p> : null}
           {creating ? null : (
             <div className="git-branch-lists">
               {shownLocal.length > 0 ? <>

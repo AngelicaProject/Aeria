@@ -250,6 +250,9 @@ pub struct EntryVersionDto {
     pub term_exceptions: Vec<String>,
     /// Terms a correction run's model decided do not apply to the string.
     pub model_exceptions: Vec<String>,
+    /// Terms a correction run's model decided a word of the translation
+    /// renders, each as `term = word`.
+    pub model_renderings: Vec<String>,
 }
 
 impl From<&EntryState> for EntryVersionDto {
@@ -261,6 +264,7 @@ impl From<&EntryState> for EntryVersionDto {
             reviewed: state.reviewed,
             term_exceptions: state.term_exceptions.clone(),
             model_exceptions: state.model_exceptions.clone(),
+            model_renderings: state.model_renderings.clone(),
         }
     }
 }
@@ -1001,12 +1005,14 @@ pub async fn git_revert(app: tauri::AppHandle, commit_id: String) -> CommandResu
 }
 
 #[tauri::command(rename_all = "camelCase")]
-/// Creates a branch at a commit and switches to it.
+/// Creates a branch at a commit and switches to it, carrying uncommitted
+/// work.
 ///
 /// # Errors
 ///
-/// Returns a typed command error when translations are uncommitted, the
-/// name is invalid, or the commit holds a project this session cannot open.
+/// Returns a typed command error when uncommitted work conflicts with the
+/// commit, the name is invalid, or the commit holds a project this session
+/// cannot open.
 pub async fn git_create_branch_at(
     app: tauri::AppHandle,
     name: String,
@@ -1309,13 +1315,14 @@ pub async fn git_create_branch(app: tauri::AppHandle, name: String) -> CommandRe
 }
 
 #[tauri::command(rename_all = "camelCase")]
-/// Switches to a branch and reloads the project; the switch is undone when
-/// the branch does not reload against the open game source.
+/// Switches to a branch carrying uncommitted work and reloads the project;
+/// the switch is undone when the branch does not reload against the open
+/// game source.
 ///
 /// # Errors
 ///
-/// Returns a typed command error for uncommitted translations, a rejected
-/// branch, or a Git failure.
+/// Returns a typed command error when uncommitted work conflicts with the
+/// branch, for a rejected branch, or a Git failure.
 pub async fn git_switch_branch(app: tauri::AppHandle, name: String) -> CommandResult<()> {
     run_sync(app, move |state| {
         let result = with_session_reload(state, |repository, accept| {

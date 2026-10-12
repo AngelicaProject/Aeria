@@ -367,7 +367,13 @@ pub fn check_translation(
                 .map(|error| Issue::Structure(error.message)),
         );
     }
-    let terms = knowledge.terms.review(source, text, &exceptions);
+    let rendered: Vec<(&str, &str)> = entry
+        .model_renderings
+        .iter()
+        .filter(|rendering| rendering.holds(&knowledge.terms))
+        .map(|rendering| (rendering.term.as_str(), rendering.word.as_str()))
+        .collect();
+    let terms = knowledge.terms.review(source, text, &exceptions, &rendered);
     issues.extend(letter_slips(target_language, source, text));
     let russian = target_language.eq_ignore_ascii_case("ru");
     if russian
@@ -380,7 +386,8 @@ pub fn check_translation(
     issues.extend(repeated_word(source, text).map(Issue::RepeatedWord));
     issues.extend(terms.unused.iter().map(|entry| Issue::TermNotUsed {
         term: entry.term.clone(),
-        translation: entry.translation.clone(),
+        // Every meaning of the name, any of which would do.
+        translation: knowledge.terms.translations_of(entry),
     }));
     issues.extend(
         // Only a person's exception is theirs to remove; a model exception

@@ -36,6 +36,8 @@ import type {
   RecentProjectDto,
   SheetProgressDto,
   SourceBinding,
+  TermSheetDto,
+  TermUsageDto,
   TranslationRowCursorDto,
   TranslationRowPageDto,
   StringHintsDto,
@@ -54,11 +56,13 @@ import type {
   SearchEntryDto,
   SearchQueryDto,
   SearchResultDto,
-  TermCandidateDto,
-  PhrasingDto,
   FixRequest,
   GuardWorkflowDto,
   ProtectionDto,
+  TermKey,
+  TermStringsDto,
+  UnappliedStringDto,
+  UnappliedTermDto,
 } from "./types";
 
 export function normalizeCommandError(error: unknown): CommandError {
@@ -502,10 +506,6 @@ export function modelList(): Promise<ModelInfo[]> {
  * What a machine translation of `scope` would translate. The scope names
  * sheets, and folders of sheets ending with "/"; empty is the whole project.
  */
-/** The sheets whose strings are the game's names, in the order a run translates them first. */
-export function translationNameSheets(): Promise<string[]> {
-  return call<string[]>("translation_name_sheets");
-}
 
 export function translationStart(scope: string[], fuzzy: boolean, model: string, effort: string | null): Promise<void> {
   return call<void>("translation_start", { scope, fuzzy, model, effort });
@@ -544,19 +544,38 @@ export function saveKnowledgeStyle(expected: string | null, text: string): Promi
   return call<ProjectKnowledgeDto>("save_knowledge_style", { expected, text });
 }
 
-
-/** Names the project renders in several ways that the glossary does not have. */
-/** The phrases the project's translations open sentences with, and the source words behind them. */
-export function projectPhrasing(): Promise<PhrasingDto> {
-  return call<PhrasingDto>("project_phrasing");
-}
-
-export function projectTermCandidates(): Promise<TermCandidateDto[]> {
-  return call<TermCandidateDto[]>("project_term_candidates");
-}
-
 export function saveKnowledgeTerms(expected: string | null, entries: TermInput[]): Promise<ProjectKnowledgeDto> {
   return call<ProjectKnowledgeDto>("save_knowledge_terms", { expected, entries });
+}
+
+/** Declares the sheets that are part of the glossary, if the file still has the `expected` content. */
+export function saveKnowledgeSheets(expected: string | null, sheets: TermSheetDto[]): Promise<ProjectKnowledgeDto> {
+  return call<ProjectKnowledgeDto>("save_knowledge_sheets", { expected, sheets });
+}
+
+/** How many strings of the game use each term of the saved glossary. */
+export function termUsage(): Promise<TermUsageDto[]> {
+  return call<TermUsageDto[]>("term_usage");
+}
+
+/** The strings whose source uses a term of the saved glossary; null when it has no such term. */
+export function termStrings(term: string, category: string): Promise<TermStringsDto | null> {
+  return call<TermStringsDto | null>("term_strings", { term, category });
+}
+
+/** For each meaning of a term of the saved glossary, how many translations do not use it. */
+export function termUnapplied(): Promise<UnappliedTermDto[]> {
+  return call<UnappliedTermDto[]>("term_unapplied");
+}
+
+/** Every translated string that does not use one of the meanings named, or any term when none is named. */
+export function termUnappliedStrings(terms: TermKey[]): Promise<UnappliedStringDto[]> {
+  return call<UnappliedStringDto[]>("term_unapplied_strings", { terms });
+}
+
+/** Where the string with `context` is in the game; null when the game has no such string. */
+export function stringBinding(context: string): Promise<SourceBinding | null> {
+  return call<SourceBinding | null>("string_binding", { context });
 }
 
 export function exportOverview(): Promise<ExportOverviewDto> {

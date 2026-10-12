@@ -121,7 +121,7 @@ fn search_matches_text_in_translations_and_sources_but_never_macros() {
 #[test]
 fn problems_are_found_by_the_checks_a_translation_is_saved_with() {
     let (_directory, session) = project();
-    let terms = "term,translation,forms\ncook,кулинар,cooks\n";
+    let terms = "term,translation,forms,category\ncook,кулинар,cooks,профессия\n";
     std::fs::create_dir_all(session.root().join("aeria-knowledge")).expect("dir");
     std::fs::write(session.root().join("aeria-knowledge/terms.csv"), terms).expect("terms");
     // A change made by hand, which the checks refuse.
@@ -323,7 +323,7 @@ fn a_correction_leaves_a_reviewed_translation() {
 #[test]
 fn a_term_exception_lifts_the_term_and_undo_takes_it_back() {
     let (_directory, session) = project();
-    let terms = "term,translation\ncook,кулинар\n";
+    let terms = "term,translation,category\ncook,кулинар,профессия\n";
     std::fs::create_dir_all(session.root().join("aeria-knowledge")).expect("dir");
     std::fs::write(session.root().join("aeria-knowledge/terms.csv"), terms).expect("terms");
     let unused = |session: &aeria_po::Session, row| {
@@ -370,13 +370,63 @@ fn a_term_exception_lifts_the_term_and_undo_takes_it_back() {
 }
 
 #[test]
+fn a_model_rendering_is_kept_with_its_word_until_the_term_does_not_apply() {
+    let (_directory, session) = project();
+    std::fs::create_dir_all(session.root().join("aeria-knowledge")).expect("dir");
+    std::fs::write(
+        session.root().join("aeria-knowledge/terms.csv"),
+        "term,translation,category\ncook,кулинар,профессия\n",
+    )
+    .expect("terms");
+    let cook = session.knowledge().terms.entries[0].clone();
+    let decide = |applies: bool, words: &[&str]| EntryEdit {
+        path: "Addon.po".to_owned(),
+        context: "Addon:2:0:0".to_owned(),
+        expected_text: session
+            .translation("Addon", 2, 0, 0)
+            .expect("read")
+            .expect("translated")
+            .text,
+        expected_fuzzy: false,
+        kind: EditKind::Decide {
+            correction: None,
+            terms: vec![aeria_po::TermDecision {
+                exception: aeria_po::ModelException::of(&cook),
+                applies,
+                rendered: words.iter().map(|word| (*word).to_owned()).collect(),
+            }],
+        },
+    };
+    // Each word once, and only a single word.
+    let applied = session
+        .apply_edits(&[decide(true, &["кулинарный", "два слова", "кулинарный"])])
+        .expect("decide");
+    assert_eq!(
+        applied.done[0].after.model_renderings,
+        [aeria_po::ModelRendering::of(&cook, "кулинарный")]
+    );
+    // A decision that the term does not apply takes the words away.
+    let applied = session
+        .apply_edits(&[decide(false, &["кулинарный"])])
+        .expect("decide");
+    assert!(applied.done[0].after.model_renderings.is_empty());
+    assert_eq!(applied.done[0].after.model_exceptions.len(), 1);
+    // Undo gives the words back, and a decision without words removes them.
+    let undo: Vec<EntryEdit> = applied.done.iter().map(aeria_po::EditDone::undo).collect();
+    let undone = session.apply_edits(&undo).expect("undo");
+    assert_eq!(undone.done[0].after.model_renderings.len(), 1);
+    let applied = session.apply_edits(&[decide(true, &[])]).expect("decide");
+    assert!(applied.done[0].after.model_renderings.is_empty());
+}
+
+#[test]
 fn a_model_decision_lifts_a_term_until_the_term_changes_or_a_person_decides() {
     let (_directory, session) = project();
     let write_terms = |terms: &str| {
         std::fs::create_dir_all(session.root().join("aeria-knowledge")).expect("dir");
         std::fs::write(session.root().join("aeria-knowledge/terms.csv"), terms).expect("terms");
     };
-    write_terms("term,translation\ncook,кулинар\n");
+    write_terms("term,translation,category\ncook,кулинар,профессия\n");
     let unused = |session: &aeria_po::Session, row| {
         session
             .findings("Addon", row, 0, 0)
@@ -398,6 +448,7 @@ fn a_model_decision_lifts_a_term_until_the_term_changes_or_a_person_decides() {
                 terms: vec![aeria_po::TermDecision {
                     exception: aeria_po::ModelException::of(&cook),
                     applies,
+                    rendered: Vec::new(),
                 }],
             },
         };
@@ -417,9 +468,9 @@ fn a_model_decision_lifts_a_term_until_the_term_changes_or_a_person_decides() {
     assert_eq!(unused(&session, 2), 1, "the decision is the string's alone");
 
     // A new note of the term asks for the decision again.
-    write_terms("term,translation,forms,note\ncook,кулинар,,Профессия.\n");
+    write_terms("term,translation,forms,note,category\ncook,кулинар,,Профессия.,профессия\n");
     assert_eq!(unused(&session, 1), 1);
-    write_terms("term,translation\ncook,кулинар\n");
+    write_terms("term,translation,category\ncook,кулинар,профессия\n");
     assert_eq!(unused(&session, 1), 0);
 
     // A decision that the term applies, with its correction, removes it.
@@ -451,7 +502,7 @@ fn a_kind_of_term_issues_finds_every_term() {
     std::fs::create_dir_all(session.root().join("aeria-knowledge")).expect("dir");
     std::fs::write(
         session.root().join("aeria-knowledge/terms.csv"),
-        "term,translation\ncook,кулинар\nknife,клинок\n",
+        "term,translation,category\ncook,кулинар,профессия\nknife,клинок,оружие\n",
     )
     .expect("terms");
     let found = |issue: &str| {
@@ -551,7 +602,7 @@ fn a_search_sees_every_change_of_the_files_and_the_knowledge() {
     assert_eq!(found.hits[1].translation, "Кулинарный нож!");
 
     // A new term: the checks are made again with it.
-    let terms = "term,translation\ncook,кулинар\n";
+    let terms = "term,translation,category\ncook,кулинар,профессия\n";
     std::fs::create_dir_all(session.root().join("aeria-knowledge")).expect("dir");
     std::fs::write(session.root().join("aeria-knowledge/terms.csv"), terms).expect("terms");
     assert_eq!(unused(&session), 3);
@@ -573,4 +624,45 @@ fn a_sheet_typed_wrong_is_reported() {
     );
     assert_eq!(found.unknown_paths, ["Adon"]);
     assert!(found.total > 0);
+}
+
+#[test]
+fn the_strings_of_a_term_are_those_its_use_counts() {
+    let (_directory, session) = project();
+    std::fs::create_dir_all(session.root().join("aeria-knowledge")).expect("dir");
+    std::fs::write(
+        session.root().join("aeria-knowledge/terms.csv"),
+        "term,translation,category\ncook,кулинар,профессия\ncook's knife,поварской нож,предмет\n",
+    )
+    .expect("terms");
+    let knowledge = session.knowledge();
+    let strings = |entry: usize, limit: usize| {
+        session
+            .corpus()
+            .term_strings(
+                session.root(),
+                &knowledge.terms,
+                entry,
+                limit,
+                &AtomicBool::new(false),
+            )
+            .expect("strings")
+    };
+    // A word inside another word, or a term inside a longer term, is not
+    // the term.
+    let (found, total) = strings(0, 10);
+    let sources: Vec<&str> = found.iter().map(|string| string.source.as_str()).collect();
+    assert_eq!(sources, ["The cook arrives", "Ask the cook"]);
+    assert_eq!(found[1].translation, "Спроси повара");
+    assert_eq!(total, 2);
+    let usage = session
+        .corpus()
+        .term_usage(session.root(), &knowledge.terms, &AtomicBool::new(false))
+        .expect("usage");
+    assert_eq!(usage[0], total);
+    // The first strings are kept, the rest counted.
+    let (found, total) = strings(0, 1);
+    assert_eq!((found.len(), total), (1, 2));
+    assert_eq!(found[0].context, "Addon:1:0:0");
+    assert_eq!(strings(1, 10).1, 1);
 }

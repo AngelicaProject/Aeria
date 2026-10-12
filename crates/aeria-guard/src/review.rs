@@ -228,6 +228,11 @@ fn change_label(change: &EntryChange) -> String {
             &change.before.model_exceptions,
             &change.after.model_exceptions,
         ),
+        (
+            "AI: rendered by a word",
+            &change.before.model_renderings,
+            &change.after.model_renderings,
+        ),
     ] {
         let added: Vec<&str> = after
             .iter()
@@ -290,9 +295,7 @@ fn term_text(entry: &GlossaryEntry) -> String {
     if let Some(note) = entry.note.as_deref().filter(|note| !note.is_empty()) {
         let _ = write!(text, "\nnote: {note}");
     }
-    if !entry.folder.is_empty() {
-        let _ = write!(text, "\nfolder: {}", entry.folder);
-    }
+    let _ = write!(text, "\ncategory: {}", entry.category);
     if entry.match_case {
         text.push_str("\nmatches case");
     }
@@ -379,9 +382,10 @@ mod tests {
 
     #[test]
     fn terms_are_compared_by_headword() {
-        let before = b"term,translation\nLinkshell,linkshell\nEorzea,Eorzea\n";
+        let before =
+            b"term,translation,category\nLinkshell,linkshell,system\nEorzea,Eorzea,place\n";
         let after =
-            b"term,translation,forms\nlinkshell,linkshell,linkshells\nAetheryte,aetheryte,\n";
+            b"term,translation,forms,category\nlinkshell,linkshell,linkshells,system\nAetheryte,aetheryte,,place\n";
         let (rows, _) = term_changes(Some(before), Some(after)).expect("terms");
         let summary: Vec<_> = rows
             .iter()

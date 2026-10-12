@@ -97,6 +97,8 @@ export function GitPanel({ selectedKey, workspaceRevision, projectRevision, onWo
   const [working, setWorking] = useState<WorkingChangesDto>(NO_CHANGES);
   // Changes with every refresh, so open files read their strings again.
   const [filesRevision, setFilesRevision] = useState(0);
+  // False until the changed files were read once: a project with thousands of them takes a while.
+  const [filesRead, setFilesRead] = useState(false);
   const [historyRevision, setHistoryRevision] = useState(0);
   // Kept while the window lives, so reopening the Git tab keeps it as it was left.
   const [tab, setTab] = useStickyState<GitTab>("git.tab", "changes");
@@ -121,22 +123,34 @@ export function GitPanel({ selectedKey, workspaceRevision, projectRevision, onWo
   // Git requires only a name; the email is optional (see aeria-git identity rules).
   const identityComplete = Boolean(identity?.name);
 
-  const refresh = useCallback(async () => {
+  // Branches, the guard, and the history depend on the commits alone: a
+  // refresh for changed files, which machine translation makes every few
+  // seconds, reads them again only when the branch or a commit moved.
+  const refsKey = useRef<string | null>(null);
+  const refresh = useCallback(async (full = true) => {
     try {
       const [next, nextStamp] = await Promise.all([gitOverview(), gitStateStamp()]);
       stamp.current = nextStamp;
       setOverview(next);
-      if (next.repository) {
+      const repository = next.repository;
+      const key = repository ? [repository.branch, repository.head, repository.upstream, repository.ahead, repository.behind].join(" ") : null;
+      const refsChanged = full || key !== refsKey.current;
+      refsKey.current = key;
+      if (repository) {
         if (externalPending) await externalPending.refresh();
         setWorking(await gitChangedFiles());
+        setFilesRead(true);
         setFilesRevision((current) => current + 1);
-        setBranches(await gitBranches());
-        // Optional: a failure only hides the guard and pull requests.
-        setGuardWorkflow(await gitGuardWorkflow().catch(() => null));
+        if (refsChanged) {
+          setBranches(await gitBranches());
+          // Optional: a failure only hides the guard and pull requests.
+          setGuardWorkflow(await gitGuardWorkflow().catch(() => null));
+        }
       } else {
         setWorking(NO_CHANGES);
+        setFilesRead(true);
       }
-      setHistoryRevision((current) => current + 1);
+      if (refsChanged) setHistoryRevision((current) => current + 1);
       setError(null);
     } catch (caught) {
       setError(normalizeCommandError(caught));
@@ -144,8 +158,11 @@ export function GitPanel({ selectedKey, workspaceRevision, projectRevision, onWo
     // Depend on the stable refresh callback, not the pending object that changes with every fetch.
   }, [externalPending?.refresh]);
 
+  const shownProject = useRef<number | undefined | null>(null);
   useEffect(() => {
-    void refresh();
+    const full = shownProject.current !== projectRevision;
+    shownProject.current = projectRevision;
+    void refresh(full);
   }, [refresh, workspaceRevision, projectRevision]);
 
   // Follow the repository without a refresh button: poll a cheap fingerprint
@@ -156,7 +173,7 @@ export function GitPanel({ selectedKey, workspaceRevision, projectRevision, onWo
       if (document.visibilityState !== "visible" || busy !== null) return;
       try {
         const next = await gitStateStamp();
-        if (!cancelled && stamp.current !== undefined && next !== stamp.current) await refresh();
+        if (!cancelled && stamp.current !== undefined && next !== stamp.current) await refresh(false);
       } catch {
         // A transient failure is reported by the next full refresh.
       }
@@ -288,7 +305,6 @@ export function GitPanel({ selectedKey, workspaceRevision, projectRevision, onWo
             <GitBranchPicker
               branches={branches}
               current={status.branch}
-              switchBlocked={status.hasTranslationChanges ? t("git.switchBlocked") : null}
               disabled={busy !== null}
               blockLabels={blockLabels}
               onSwitch={(name) => void run("switch", async () => { await gitSwitchBranch(name); onWorkspaceChanged?.(); return t("git.switched", { name }); })}
@@ -415,7 +431,7 @@ export function GitPanel({ selectedKey, workspaceRevision, projectRevision, onWo
               <div className="git-form-actions"><button className="button button-ghost" type="button" onClick={() => setIdentityDraft(null)}>{t("common.cancel")}</button><button className="button button-primary" type="submit" disabled={busy !== null}>{t("common.save")}</button></div>
             </form>
           ) : null}
-          {changeCount === 0 ? <p className="muted">{t("git.noChanges")}</p>
+          {changeCount === 0 ? <p className="muted">{t(filesRead ? "git.noChanges" : "common.loading")}</p>
             : <FileChangeList files={changes} staged={staged} stringsOf={gitPendingFileChanges} actions={fileActions} onHistory={showHistory} revision={filesRevision} selectedKey={selectedKey} onRevealBinding={onRevealBinding} viewKey="pending" />}
           <ConfirmDialog
             open={discarding !== null}

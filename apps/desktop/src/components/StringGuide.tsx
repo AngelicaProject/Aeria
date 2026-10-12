@@ -6,7 +6,7 @@ import { describeIssue, errorText } from "../issueText";
 import type { MessageKey } from "../i18n/translate";
 import { useMacroIdioms } from "../macroIdioms";
 import { guideMacros, macroState, ruleOrder, type GuideMacro } from "../stringGuide";
-import type { CommandError, DraftCheckDto, FixRequest, HintGameNameDto, HintTermDto, IssueDto, MacroInsertionDto, MacroRule, SourceBinding, StringHintsDto } from "../types";
+import type { CommandError, DraftCheckDto, FixRequest, HintTermDto, IssueDto, MacroInsertionDto, MacroRule, SourceBinding, StringHintsDto } from "../types";
 import { useEditorFocus } from "../ui/editorFocus";
 import { loadIcon } from "../ui/gameGlyphs";
 import { useI18n } from "../ui/i18n";
@@ -21,10 +21,9 @@ const CHECK_DELAY_MS = 250;
 type StringGuideProps = {
   /** Bumps when the project's files may have changed (save, knowledge, sync). */
   revision: number;
-  /** Opens the project's terms. */
-  onOpenTerms: () => void;
+  /** Opens the project's terms, at one term when given. */
+  onOpenTerms: (term?: { term: string; category: string }) => void;
   /** Opens a string in the editor, such as the one a name's translation comes from. */
-  onReveal: (binding: SourceBinding) => void;
   /** Shows the machine translation dialog, which follows a running run. */
   onOpenTranslate: () => void;
 };
@@ -37,13 +36,13 @@ type Loaded<T> = { key: string; value: T };
 /**
  * The string guide: what helps translate the string in the editor. It shows
  * what a machine translation request tells the model about the string (the
- * game's names and the project's terms in its source, who says it, the
+ * project's terms in its source, who says it, the
  * length of an interface label, a line that varies with the player
  * character's gender), the parts of its macros with what a translation may
  * do with each, and what the checks find in the translation as it is typed.
- * Picking a name, a term, or a macro adds it to the translation.
+ * Picking a term or a macro adds it to the translation.
  */
-export const StringGuide = memo(function StringGuide({ revision, onOpenTerms, onReveal, onOpenTranslate }: StringGuideProps) {
+export const StringGuide = memo(function StringGuide({ revision, onOpenTerms, onOpenTranslate }: StringGuideProps) {
   const { t } = useI18n();
   const { preferences } = usePreferences();
   const [fixing, setFixing] = useState(false);
@@ -144,7 +143,7 @@ export const StringGuide = memo(function StringGuide({ revision, onOpenTerms, on
   if (!shown) return <div className="string-guide-empty"><span className="spinner spinner-xs" />{t("common.loading")}</div>;
 
   const hasFacts = shown.speaker !== null || shown.maxLength !== null || shown.gendered.length > 0 || (shown.kind !== null && shown.kind !== "other");
-  const hasWords = shown.names.length > 0 || shown.terms.length > 0;
+  const hasWords = shown.terms.length > 0;
   const hasMacros = (macros?.length ?? 0) > 0;
   const findings = verdict ? verdict.issues.length : 0;
   // Machine translation corrects the saved translation, so the draft must be it.
@@ -160,10 +159,10 @@ export const StringGuide = memo(function StringGuide({ revision, onOpenTerms, on
           className="is-words"
           icon="bookMarked"
           title={t("hints.words")}
-          count={shown.names.length + shown.terms.length}
-          action={<button className="string-guide-link" type="button" onClick={onOpenTerms}>{t("hints.openTerms")}</button>}
+          count={shown.terms.length}
+          action={<button className="string-guide-link" type="button" onClick={() => onOpenTerms()}>{t("hints.openTerms")}</button>}
         >
-          <Words hints={shown} draft={draft} verdict={verdict} onPick={focus.busy ? undefined : pick} onReveal={onReveal} onException={onException} />
+          <Words hints={shown} verdict={verdict} onPick={focus.busy ? undefined : pick} onException={onException} onOpenTerm={onOpenTerms} />
         </GuideColumn>
       ) : null}
       {hasMacros ? (
@@ -250,9 +249,7 @@ function StringFacts({ hints, draft, verdict, onPick }: { hints: StringHintsDto;
         <span className="string-guide-fact" title={t("hints.speakerTitle", { label: hints.speaker.label })}>
           <UiIcon icon="user" size="xs" className="string-guide-icon" />
           <span className="string-guide-label">{t("hints.speaker")}</span>
-          {hints.speaker.name ? (
-            <span className="string-guide-value"><strong>{hints.speaker.name.translation}</strong><span className="muted"> · {hints.speaker.name.name}</span></span>
-          ) : <span className="string-guide-value">{speakerName(hints.speaker.label)}</span>}
+          <span className="string-guide-value">{speakerName(hints.speaker.label)}</span>
         </span>
       ) : null}
       {kind ? (
@@ -289,58 +286,11 @@ function termState(term: HintTermDto, verdict: DraftCheckDto | null): "ok" | "to
   return verdict.issues.some((issue) => issue.kind === "termNotUsed" && issue.term === term.term) ? "todo" : "ok";
 }
 
-/** What the strings of a name sheet name, by sheet. */
-const NAME_KINDS: Readonly<Record<string, MessageKey>> = {
-  PlaceName: "hints.from.place",
-  Town: "hints.from.town",
-  Race: "hints.from.race",
-  Tribe: "hints.from.clan",
-  GuardianDeity: "hints.from.deity",
-  ClassJob: "hints.from.classJob",
-  Status: "hints.from.status",
-  Action: "hints.from.action",
-  Trait: "hints.from.trait",
-  Item: "hints.from.item",
-  EventItem: "hints.from.keyItem",
-  Mount: "hints.from.mount",
-  Companion: "hints.from.minion",
-  Ornament: "hints.from.accessory",
-  Title: "hints.from.title",
-  ENpcResident: "hints.from.character",
-  BNpcName: "hints.from.enemy",
-  EObjName: "hints.from.object",
-  Fate: "hints.from.fate",
-  InstanceContent: "hints.from.duty",
-  ContentFinderCondition: "hints.from.duty",
-  Quest: "hints.from.quest",
-};
-
-function NameOrigin({ name, onReveal }: { name: HintGameNameDto; onReveal: (binding: SourceBinding) => void }) {
-  const { t } = useI18n();
-  const kinds: string[] = [];
-  for (const sheet of name.sheets) {
-    const key = NAME_KINDS[sheet];
-    const kind = key ? t(key) : sheet;
-    if (!kinds.includes(kind)) kinds.push(kind);
-  }
-  const kind = kinds.join(", ");
-  const text = name.full ? t("hints.from.form", { kind, full: name.full }) : kind;
-  const binding = name.binding;
-  if (!binding) return <div className="string-guide-origin">{text}</div>;
-  const where = `${binding.sheetName} ${binding.rowId}:${binding.subrowId}`;
-  return (
-    <button className="string-guide-origin is-link" type="button" title={t("hints.from.open", { where })} onClick={() => onReveal(binding)}>
-      {text}<span className="mono"> · {where}</span>
-    </button>
-  );
-}
-
 /** Adds or removes a term exception of the string; absent while one is being written. */
 type ExceptionHandler = ((term: string, add: boolean) => void) | undefined;
 
-function Words({ hints, draft, verdict, onPick, onReveal, onException }: { hints: StringHintsDto; draft: string; verdict: DraftCheckDto | null; onPick: ((pick: ChipPick) => void) | undefined; onReveal: (binding: SourceBinding) => void; onException: ExceptionHandler }) {
+function Words({ hints, verdict, onPick, onException, onOpenTerm }: { hints: StringHintsDto; verdict: DraftCheckDto | null; onPick: ((pick: ChipPick) => void) | undefined; onException: ExceptionHandler; onOpenTerm: (term: { term: string; category: string }) => void }) {
   const { t } = useI18n();
-  const drafted = draft.trim().length > 0;
   const insert = (text: string) => onPick?.({ insert: text });
   return (
     <ul className="string-guide-list">
@@ -348,14 +298,28 @@ function Words({ hints, draft, verdict, onPick, onReveal, onException }: { hints
         const state = termState(term, verdict);
         const stateTitle = state === "todo" ? t("hints.term.unused") : state === "ok" ? t("hints.term.used") : undefined;
         return (
-          <li className={`string-guide-row is-term${term.excepted ? " is-excepted" : ""}`} key={`term:${term.term}`}>
+          <li className={`string-guide-row is-term${term.excepted ? " is-excepted" : ""}`} key={`term:${term.term}:${term.category}:${term.translation}`}>
             <StateMark state={state} {...(stateTitle ? { title: stateTitle } : {})} />
             <div className="string-guide-entry">
               <div className="string-guide-pair">
-                <span className="string-guide-source">{term.term}</span>
+                <button className="string-guide-source string-guide-open" type="button" title={t("hints.term.openTitle", { term: term.term })} onClick={() => onOpenTerm({ term: term.term, category: term.category })}>{term.term}</button>
                 <UiIcon icon="arrowRight" size="xs" className="string-guide-arrow" />
                 <button className="string-guide-insert" type="button" disabled={!onPick} title={t("hints.insertTitle", { text: term.translation })} onClick={() => insert(term.translation)}>{term.translation}</button>
-                <span className="string-guide-tag" {...(term.byModel ? { title: t("hints.term.byModelTitle", { term: term.term }) } : {})}>{term.byModel ? t("hints.term.byModel") : term.excepted ? t("hints.term.excepted") : t("hints.term")}</span>
+                <span className="string-guide-tag" {...(term.byModel ? { title: t("hints.term.byModelTitle", { term: term.term }) } : {})}>{term.byModel ? t("hints.term.byModel") : term.excepted ? t("hints.term.excepted") : term.category}</span>
+                {term.rendered.length > 0 ? (
+                  <>
+                    <span className="string-guide-tag" title={t("hints.term.renderedTitle", { term: term.term, words: term.rendered.join(", ") })}>{t("hints.term.rendered", { words: term.rendered.join(", ") })}</span>
+                    <button
+                      className="string-guide-link string-guide-except"
+                      type="button"
+                      disabled={!onException}
+                      title={t("hints.term.unrenderTitle", { term: term.term, words: term.rendered.join(", ") })}
+                      onClick={() => onException?.(term.term, false)}
+                    >
+                      {t("hints.term.restore")}
+                    </button>
+                  </>
+                ) : null}
                 {term.byModel ? (
                   <button
                     className="string-guide-link string-guide-except"
@@ -378,24 +342,6 @@ function Words({ hints, draft, verdict, onPick, onReveal, onException }: { hints
                 </button>
               </div>
               {term.note ? <div className="string-guide-note">{term.note}</div> : null}
-            </div>
-          </li>
-        );
-      })}
-      {hints.names.map((name) => {
-        const used = verdict?.namesUsed.includes(name.name) ?? false;
-        const state = !drafted || verdict === null ? null : used ? "ok" : "todo";
-        return (
-          <li className="string-guide-row" key={`name:${name.name}`}>
-            <StateMark state={state} {...(state ? { title: t(used ? "hints.name.used" : "hints.name.unused") } : {})} />
-            <div className="string-guide-entry">
-              <div className="string-guide-pair">
-                <span className="string-guide-source">{name.name}</span>
-                <UiIcon icon="arrowRight" size="xs" className="string-guide-arrow" />
-                <button className="string-guide-insert" type="button" disabled={!onPick} title={t("hints.insertTitle", { text: name.translation })} onClick={() => insert(name.translation)}>{name.translation}</button>
-                <span className="string-guide-tag">{t("hints.name")}</span>
-              </div>
-              <NameOrigin name={name} onReveal={onReveal} />
             </div>
           </li>
         );

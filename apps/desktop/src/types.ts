@@ -371,6 +371,8 @@ export type EntryVersionDto = {
   termExceptions?: string[];
   /** Terms a correction with AI decided do not apply to the string. */
   modelExceptions?: string[];
+  /** Terms a correction with AI decided a word of the translation renders, each as `term = word`. */
+  modelRenderings?: string[];
 };
 
 export type EntryChangeKind = "translated" | "changed" | "cleared" | "marked";
@@ -560,6 +562,8 @@ export type TranslationRejected = {
   binding: SourceBinding | null;
   /** The model's last translation, which was not written. */
   translation: string;
+  /** What the model's last answer decided of the terms it was asked about, as it wrote it. */
+  decisions: string[];
   problems: IssueDto[];
 };
 
@@ -600,6 +604,8 @@ export type TranslationCorrected = {
   reason: string | null;
   /** The terms the correction decided do not apply to the string. */
   otherMeaning?: string[];
+  /** The terms the correction decided a word of the translation renders, each as `term = word`. */
+  rendered?: string[];
 };
 
 export type TranslationStatus = {
@@ -631,33 +637,50 @@ export type TranslationStatus = {
   startedAt: number;
 };
 
-/** A string where a glossary candidate is rendered one way. */
-export type TermExampleDto = { path: string; context: string; binding: SourceBinding | null; source: string; translation: string };
+/** A term of `aeria-knowledge/terms.csv`: one meaning of its name; `category` says what it names. */
+export type GlossaryEntry = { term: string; translation: string; forms?: string[]; note?: string; matchCase?: boolean; category: string };
 
-/** One way the project renders a glossary candidate. */
-/** A phrase the translations open sentences with, with the source words that come with it. */
-export type OpenerDto = { phrase: string; strings: number; cues: { word: string; strings: number }[]; unsupported: number; examples: TermExampleDto[] };
+export type TermInput = { term: string; translation: string; forms: string[]; note: string | null; matchCase: boolean; category: string };
 
-/** The openers of the project's translations. */
-export type PhrasingDto = { translated: number; openers: OpenerDto[] };
+/** A sheet of the game declared part of the glossary: the strings of its column are terms. */
+/** How many strings of the game use one term. */
+export type TermUsageDto = { term: string; category: string; strings: number };
 
-export type TermRenderingDto = { words: string[]; strings: number; examples: TermExampleDto[] };
+export type TermSheetDto = { sheet: string; column: number; category: string; note?: string | null };
 
-/** A name the project renders in several ways, the most used rendering first. */
-export type TermCandidateDto = {
-  phrase: string;
+/** A term of the declared sheets: a name with the translation its strings have most often. */
+export type SheetTermDto = {
+  /** The sheet of its first string. */
+  sheet: string;
+  /** The `msgctxt` of its first string, to open it in the editor. */
+  context: string;
+  term: string;
+  translation: string;
+  category: string;
+  /** The other spellings of the name in the sheets. */
+  forms: string[];
+  /** How many strings of the sheets have the name. */
   strings: number;
-  translated: number;
-  renderings: TermRenderingDto[];
-  /** Every rendering sounds like the name: spellings of one name rather than other words. */
-  spellings: boolean;
-  sheets: { sheet: string; count: number }[];
+  /** Each translation of the name among those strings with how many have it, the term's first. */
+  variants: { translation: string; strings: number }[];
 };
 
-/** One term of `aeria-knowledge/terms.csv`. */
-export type GlossaryEntry = { term: string; translation: string; forms?: string[]; note?: string; folder?: string; matchCase?: boolean };
+/** A meaning of a term some translations do not use, and how many. */
+export type UnappliedTermDto = { term: string; category: string; strings: number };
 
-export type TermInput = { term: string; translation: string; forms: string[]; note: string | null; folder: string; matchCase: boolean };
+/** A meaning of a term, by its headword and category. */
+export type TermKey = { term: string; category: string };
+
+/** A translated string whose translation does not use a term it should; `path` is relative to `po/`. */
+export type UnappliedStringDto = { path: string; context: string; source: string; translation: string; fuzzy: boolean };
+
+/** The strings whose source uses a term: the first few hundred, and how many there are. */
+export type TermStringsDto = { strings: { context: string; source: string; translation: string; fuzzy: boolean }[]; total: number };
+
+/** A term of the sheets an entry of `terms.csv` takes the place of; `entry` is its place in `entries`. */
+export type ReplacedTermDto = { entry: number; term: SheetTermDto };
+
+
 
 /** The project's style and terms in `aeria-knowledge/`. */
 export type ProjectKnowledgeDto = {
@@ -669,7 +692,16 @@ export type ProjectKnowledgeDto = {
   diagnostics: { line: number; message: string }[];
   styleError: string | null;
   termsError: string | null;
+  /** `term-sheets.csv` exactly as read, sent back when saving. */
+  sheetsText: string | null;
+  sheets: TermSheetDto[];
+  sheetTerms: SheetTermDto[];
+  /** The headwords of terms of `terms.csv` the sheets give alike. */
+  redundant: string[];
+  /** The terms of the sheets the entries take the place of. */
+  replaced: ReplacedTermDto[];
 };
+
 
 /** Project-shared pack settings in aeria-pack.json. */
 export type PackSettings = {
@@ -935,18 +967,14 @@ export type IssueDto = {
 
 /** What the checks find in a string's saved translation, and its term exceptions. */
 
-/** A game name with the project's translation. */
-export type HintNameDto = { name: string; translation: string };
-/** A game name of the source with the string its translation comes from: every name sheet with it, the row's name when this is another form of it, and its coordinate. */
-export type HintGameNameDto = HintNameDto & { sheets: string[]; full: string | null; binding: SourceBinding | null };
-/** A glossary term of the source; `excepted` when a person or a correction's model decided it does not apply to the string, `byModel` when the model did. */
-export type HintTermDto = { term: string; translation: string; note: string | null; excepted: boolean; byModel: boolean };
+/** A glossary term of the source; `excepted` when a person or a correction's model decided it does not apply to the string, `byModel` when the model did; `rendered` holds the words of the translation a correction's model decided render it. */
+/** A term of the string, one item per meaning of its name: `category` says what it names in this meaning. */
+export type HintTermDto = { term: string; translation: string; note: string | null; category: string; excepted: boolean; byModel: boolean; rendered: string[] };
 /** What a machine translation request tells the model about one string. */
 export type StringHintsDto = {
-  names: HintGameNameDto[];
   terms: HintTermDto[];
-  /** The speaker label of a line, with the name it stands for when the project translates it. */
-  speaker: { label: string; name: HintNameDto | null } | null;
+  /** The speaker label of a line. */
+  speaker: { label: string } | null;
   /** The kind of a quest's text: `journal`, `objective`, or `other`. */
   kind: string | null;
   /** The longest an interface label's translation may show, or a world object's name may be. */
@@ -959,8 +987,6 @@ export type DraftCheckDto = {
   issues: IssueDto[];
   /** The source's game data the text lacks, by its spelling in the source. */
   missing: string[];
-  /** Names of the guide whose translation the text uses. */
-  namesUsed: string[];
   /** In the unit of the string's length budget: bytes of a world object's name, otherwise characters shown, macros not counted. */
   length: number;
 };
