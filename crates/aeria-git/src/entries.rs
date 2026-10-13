@@ -742,11 +742,71 @@ fn merge_exceptions(entry: &mut Entry, other: &Entry, base: Option<&Entry>) {
     }
 }
 
+/// Which version of a file a join takes its strings and their source texts
+/// from.
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum Side {
+    Ours,
+    Theirs,
+}
+
+/// An entry of the version that kept the base's strings, as a game update
+/// carries it to `game`, the same string in the other version (see
+/// [`aeria_po::merge::carry`]): a translation whose source changed becomes
+/// fuzzy.
+fn carried(entry: &Entry, game: &Entry) -> Entry {
+    let mut fresh = Entry {
+        extracted: game.extracted.clone(),
+        context: game.context.clone(),
+        source: game.source.clone(),
+        ..Entry::default()
+    };
+    aeria_po::merge::carry(entry, &mut fresh);
+    fresh
+}
+
+/// A string the updated version no longer has: what the other branch
+/// changed of it is kept with the obsolete entries, as the update keeps it.
+/// `joined` are the strings both versions have.
+fn keep_left_strings(
+    merged: &mut PoFile,
+    other: &PoFile,
+    base: &HashMap<&str, &Entry>,
+    joined: &BTreeSet<String>,
+) {
+    let mut kept = false;
+    for other in &other.entries {
+        let unchanged = base
+            .get(other.context.as_str())
+            .is_some_and(|base| EntryState::of(base) == EntryState::of(other));
+        if unchanged || joined.contains(&other.context) {
+            continue;
+        }
+        let Some(obsolete) = aeria_po::merge::obsolete(other) else {
+            continue;
+        };
+        merged
+            .obsolete
+            .retain(|entry| entry.context != obsolete.context);
+        merged.obsolete.push(obsolete);
+        kept = true;
+    }
+    if kept {
+        merged.obsolete.sort_by(|a, b| a.context.cmp(&b.context));
+    }
+}
+
 /// Joins two versions of a file entry by entry: a string one branch changed
 /// takes that branch's change, and a string both changed differently takes
-/// the side `resolutions` names or is a conflict. `None` when the versions
-/// differ in more than translations, fuzzy marks, and notes (for example
-/// one branch updated the game), which the caller merges as text.
+/// the side `resolutions` names or is a conflict.
+///
+/// The versions hold the same strings with the same source texts, or one of
+/// them holds those of `base` and the other was made again for the game: a
+/// game update on one branch. The result then has the updated version's
+/// strings, and each string the other branch changed is carried to it as
+/// the update carries a translation, so one whose source changed is fuzzy.
+/// `None` when the versions differ in any other way, which the caller
+/// merges as text.
 #[must_use]
 pub fn merge_file(
     path: &str,
@@ -755,37 +815,75 @@ pub fn merge_file(
     theirs: &[u8],
     resolutions: &BTreeMap<String, ConflictResolution>,
 ) -> Option<(String, Vec<EntryConflict>)> {
-    let (mut merged, ours_problems) = PoFile::parse(&String::from_utf8_lossy(ours));
+    let (ours, ours_problems) = PoFile::parse(&String::from_utf8_lossy(ours));
     let (theirs, theirs_problems) = PoFile::parse(&String::from_utf8_lossy(theirs));
-    if !ours_problems.is_empty() || !theirs_problems.is_empty() || !same_strings(&merged, &theirs) {
+    if !ours_problems.is_empty() || !theirs_problems.is_empty() {
         return None;
     }
-    let base = parse(base);
-    let base: HashMap<&str, &Entry> = base
+    let base_file = parse(base);
+    let updated = if same_strings(&ours, &theirs) {
+        Side::Ours
+    } else if base.is_some() && same_strings(&base_file, &ours) {
+        Side::Theirs
+    } else if base.is_some() && same_strings(&base_file, &theirs) {
+        Side::Ours
+    } else {
+        return None;
+    };
+    let (mut merged, other) = match updated {
+        Side::Ours => (ours, theirs),
+        Side::Theirs => (theirs, ours),
+    };
+    let base: HashMap<&str, &Entry> = base_file
+        .entries
+        .iter()
+        .map(|entry| (entry.context.as_str(), entry))
+        .collect();
+    let others: HashMap<&str, &Entry> = other
         .entries
         .iter()
         .map(|entry| (entry.context.as_str(), entry))
         .collect();
     let mut conflicts = Vec::new();
-    for (entry, other) in merged.entries.iter_mut().zip(&theirs.entries) {
-        merge_exceptions(entry, other, base.get(entry.context.as_str()).copied());
-        let ours_state = EntryState::joined(entry);
-        let theirs_state = EntryState::joined(other);
-        if ours_state == theirs_state {
+    let mut joined = BTreeSet::new();
+    for entry in &mut merged.entries {
+        let Some(other) = others.get(entry.context.as_str()) else {
+            continue;
+        };
+        joined.insert(entry.context.clone());
+        let other = carried(other, entry);
+        let base = base
+            .get(entry.context.as_str())
+            .map(|base| carried(base, entry));
+        // Ours stay when both branches decided terms.
+        match updated {
+            Side::Ours => merge_exceptions(entry, &other, base.as_ref()),
+            Side::Theirs => {
+                let mut kept = other.clone();
+                merge_exceptions(&mut kept, entry, base.as_ref());
+                entry.term_exceptions = kept.term_exceptions;
+                entry.model_exceptions = kept.model_exceptions;
+                entry.model_renderings = kept.model_renderings;
+            }
+        }
+        let state = EntryState::joined(entry);
+        let other_state = EntryState::joined(&other);
+        if state == other_state {
             continue;
         }
-        let base_state = base
-            .get(entry.context.as_str())
-            .map(|entry| EntryState::joined(entry))
-            .unwrap_or_default();
-        let take_theirs = if base_state == ours_state {
-            true
+        let base_state = base.as_ref().map(EntryState::joined).unwrap_or_default();
+        let (ours_state, theirs_state) = match updated {
+            Side::Ours => (state, other_state),
+            Side::Theirs => (other_state, state),
+        };
+        let take = if base_state == ours_state {
+            Side::Theirs
         } else if base_state == theirs_state {
-            false
+            Side::Ours
         } else {
             match resolutions.get(&entry.context) {
-                Some(ConflictResolution::Ours) => false,
-                Some(ConflictResolution::Theirs) => true,
+                Some(ConflictResolution::Ours) => Side::Ours,
+                Some(ConflictResolution::Theirs) => Side::Theirs,
                 None => {
                     conflicts.push(EntryConflict {
                         path: path.to_owned(),
@@ -795,18 +893,19 @@ pub fn merge_file(
                         ours: ours_state,
                         theirs: theirs_state,
                     });
-                    false
+                    Side::Ours
                 }
             }
         };
-        if take_theirs {
-            entry.translation.clone_from(&other.translation);
+        if take != updated {
+            entry.translation = other.translation;
             entry.fuzzy = other.fuzzy;
-            entry.previous.clone_from(&other.previous);
-            entry.notes.clone_from(&other.notes);
-            entry.reviewed.clone_from(&other.reviewed);
+            entry.previous = other.previous;
+            entry.notes = other.notes;
+            entry.reviewed = other.reviewed;
         }
     }
+    keep_left_strings(&mut merged, &other, &base, &joined);
     Some((merged.write(), conflicts))
 }
 
@@ -879,6 +978,127 @@ mod tests {
                 "po/A.po",
                 None,
                 ours.as_bytes(),
+                other.as_bytes(),
+                &BTreeMap::new()
+            )
+            .is_none()
+        );
+    }
+
+    /// A file of strings as (`msgctxt`, `msgid`, `msgstr`), with lines put
+    /// before a string's `msgctxt` after `|` in its `msgctxt`.
+    fn game_file(version: &str, entries: &[(&str, &str, &str)], obsolete: &str) -> String {
+        let mut text = format!("msgid \"\"\nmsgstr \"\"\n\"X-Game-Version: {version}\\n\"\n\n");
+        for (context, source, translation) in entries {
+            let (context, marks) = context.split_once('|').unwrap_or((context, ""));
+            let _ = write!(
+                text,
+                "{marks}msgctxt \"{context}\"\nmsgid \"{source}\"\nmsgstr \"{translation}\"\n\n"
+            );
+        }
+        text + obsolete
+    }
+
+    #[test]
+    fn a_branch_joins_with_a_game_update_as_the_update_carries_it() {
+        let base = game_file(
+            "1",
+            &[
+                ("A:1:0:0", "one", "один"),
+                ("A:2:0:0", "two", ""),
+                ("A:3:0:0", "three", "три"),
+                ("A:4:0:0", "four", "четыре"),
+            ],
+            "",
+        );
+        // The update: the first source changed, the fourth string left the
+        // game, and a fifth came.
+        let update = game_file(
+            "2",
+            &[
+                ("A:1:0:0|#, fuzzy\n#| msgid \"one\"\n", "first", "один"),
+                ("A:2:0:0", "two", ""),
+                ("A:3:0:0", "three", "три"),
+                ("A:5:0:0", "five", ""),
+            ],
+            "#~ msgctxt \"A:4:0:0\"\n#~ msgid \"four\"\n#~ msgstr \"четыре\"\n",
+        );
+        // The branch of the previous version translated the first string
+        // again, the second, and the fourth.
+        let branch = game_file(
+            "1",
+            &[
+                ("A:1:0:0", "one", "раз"),
+                ("A:2:0:0", "two", "два"),
+                ("A:3:0:0", "three", "три"),
+                ("A:4:0:0", "four", "4"),
+            ],
+            "",
+        );
+        let expected = game_file(
+            "2",
+            &[
+                ("A:1:0:0|#, fuzzy\n#| msgid \"one\"\n", "first", "раз"),
+                ("A:2:0:0", "two", "два"),
+                ("A:3:0:0", "three", "три"),
+                ("A:5:0:0", "five", ""),
+            ],
+            "#~ msgctxt \"A:4:0:0\"\n#~ msgid \"four\"\n#~ msgstr \"4\"\n",
+        );
+        // Whichever side the update is on, the result is the same.
+        for (ours, theirs) in [(&branch, &update), (&update, &branch)] {
+            let (merged, conflicts) = merge_file(
+                "po/A.po",
+                Some(base.as_bytes()),
+                ours.as_bytes(),
+                theirs.as_bytes(),
+                &BTreeMap::new(),
+            )
+            .expect("mergeable");
+            assert!(conflicts.is_empty(), "{conflicts:?}");
+            assert_eq!(merged, PoFile::parse(&expected).0.write());
+        }
+
+        // A translation the updated branch accepted, changed on the other
+        // branch too, is a conflict of the string.
+        let accepted = update.replace(
+            "#, fuzzy\n#| msgid \"one\"\nmsgctxt \"A:1:0:0\"\nmsgid \"first\"\nmsgstr \"один\"",
+            "msgctxt \"A:1:0:0\"\nmsgid \"first\"\nmsgstr \"первый\"",
+        );
+        assert_ne!(accepted, update);
+        let (_, conflicts) = merge_file(
+            "po/A.po",
+            Some(base.as_bytes()),
+            branch.as_bytes(),
+            accepted.as_bytes(),
+            &BTreeMap::new(),
+        )
+        .expect("mergeable");
+        assert_eq!(conflicts.len(), 1);
+        assert_eq!(conflicts[0].source, "first");
+        assert!(conflicts[0].ours.fuzzy && conflicts[0].ours.translation == "раз");
+        assert!(!conflicts[0].theirs.fuzzy && conflicts[0].theirs.translation == "первый");
+        let resolutions = BTreeMap::from([("A:1:0:0".to_owned(), ConflictResolution::Ours)]);
+        let (merged, conflicts) = merge_file(
+            "po/A.po",
+            Some(base.as_bytes()),
+            branch.as_bytes(),
+            accepted.as_bytes(),
+            &resolutions,
+        )
+        .expect("mergeable");
+        assert!(conflicts.is_empty());
+        assert!(merged.contains(
+            "#, fuzzy\n#| msgid \"one\"\nmsgctxt \"A:1:0:0\"\nmsgid \"first\"\nmsgstr \"раз\""
+        ));
+
+        // Two branches that both left the base's strings do not join.
+        let other = game_file("3", &[("A:1:0:0", "uno", "")], "");
+        assert!(
+            merge_file(
+                "po/A.po",
+                Some(base.as_bytes()),
+                update.as_bytes(),
                 other.as_bytes(),
                 &BTreeMap::new()
             )

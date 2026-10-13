@@ -18,7 +18,7 @@ use crate::po::{Entry, Header, PoFile};
 /// A reviewed translation stays reviewed when its source changes: it is a
 /// person's, so machine translation leaves it, and the fuzzy mark asks the
 /// person to look at it again.
-fn carry(before: &Entry, entry: &mut Entry) {
+pub fn carry(before: &Entry, entry: &mut Entry) {
     entry.translation.clone_from(&before.translation);
     entry.notes.clone_from(&before.notes);
     entry.reviewed.clone_from(&before.reviewed);
@@ -44,7 +44,8 @@ fn carry(before: &Entry, entry: &mut Entry) {
 }
 
 /// An entry the game no longer has, kept for its translation or notes.
-fn obsolete(entry: &Entry) -> Option<Entry> {
+#[must_use]
+pub fn obsolete(entry: &Entry) -> Option<Entry> {
     (!entry.translation.is_empty() || !entry.notes.is_empty()).then(|| Entry {
         extracted: Vec::new(),
         line: 0,

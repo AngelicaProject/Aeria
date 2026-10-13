@@ -559,6 +559,79 @@ fn a_pull_keeps_uncommitted_strings_and_joins_them_per_string() {
     assert_eq!(changed(&grace), [shard_path(0x20)]);
 }
 
+/// Writes `po/10.po` for a game version, with strings as (`msgid`,
+/// `msgstr`) in the order of their rows from 1.
+fn write_versioned(root: &Path, version: &str, strings: &[(&str, &str)]) {
+    let mut text = format!("msgid \"\"\nmsgstr \"\"\n\"X-Game-Version: {version}\\n\"\n");
+    for (row, (source, translation)) in (1..).zip(strings) {
+        text.push('\n');
+        text.push_str(&record((id(row, 0), 0, translation, "")).replace("Source 0", source));
+    }
+    fs::write(root.join(shard_path(0x10)), text).expect("file");
+}
+
+#[test]
+fn work_of_the_previous_game_version_joins_a_pulled_game_update() {
+    let sandbox = Sandbox::new();
+    let remote = sandbox.bare_remote();
+    let ada = sandbox.project("ada", "Ada");
+    ada.set_remote("origin", &remote).expect("remote");
+    write_versioned(
+        ada.root(),
+        "1",
+        &[("one", ""), ("two", ""), ("three", "три")],
+    );
+    ada.checkpoint(None).expect("initial");
+    ada.push().expect("push");
+    let grace = sandbox.clone(&remote, "grace", "Grace");
+    let linus = sandbox.clone(&remote, "linus", "Linus");
+
+    // Ada updates the project to a game whose first source changed.
+    write_versioned(
+        ada.root(),
+        "2",
+        &[("first", ""), ("two", ""), ("three", "три")],
+    );
+    ada.checkpoint(Some("Update to game version 2"))
+        .expect("update");
+    ada.push().expect("push");
+
+    // Uncommitted work of the previous version is carried to the update.
+    write_versioned(
+        grace.root(),
+        "1",
+        &[("one", "раз"), ("two", "два"), ("three", "три")],
+    );
+    grace.fetch().expect("fetch");
+    assert_eq!(
+        grace.integrate(&no_resolutions(), || Ok(())).expect("pull"),
+        IntegrateOutcome::FastForward
+    );
+    let carried =
+        "#, fuzzy\n#| msgid \"one\"\nmsgctxt \"Addon:1:0:0\"\nmsgid \"first\"\nmsgstr \"раз\"\n";
+    let joined = shard_text(grace.root(), 0x10);
+    assert!(joined.contains(carried), "{joined}");
+    assert!(joined.contains("X-Game-Version: 2") && joined.contains("\"два\""));
+    assert_eq!(grace.pending_changes().expect("pending").len(), 2);
+
+    // So are commits of the previous version, in the merge.
+    write_versioned(
+        linus.root(),
+        "1",
+        &[("one", "раз"), ("two", "два"), ("three", "три")],
+    );
+    linus.checkpoint(None).expect("linus");
+    linus.fetch().expect("fetch");
+    assert_eq!(
+        linus
+            .integrate(&no_resolutions(), || Ok(()))
+            .expect("merge"),
+        IntegrateOutcome::Merged
+    );
+    assert_eq!(shard_text(linus.root(), 0x10), joined);
+    assert!(linus.status().expect("status").files.is_empty());
+}
+
 #[test]
 fn same_unit_conflicts_are_reported_and_resolved_only_explicitly() {
     let sandbox = Sandbox::new();

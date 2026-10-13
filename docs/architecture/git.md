@@ -304,10 +304,22 @@ that Git usually merges on its own. When Git reports a PO file as conflicted,
 Aeria reads the base, local, and incoming versions from the index stages and
 joins them entry by entry (`aeria-git::merge_file`):
 
-- The two versions must hold the same entries in the same order with the same
-  `msgid`, comments, header, and obsolete entries: only translations, fuzzy
-  marks, and notes may differ. Otherwise (for example one side updated the
-  project to a new game version) the file is reported as a conflict and the
+- The two versions hold the same entries in the same order with the same
+  `msgid`, comments, header, and obsolete entries: only what a person or
+  machine translation changes differs.
+- Or one version holds those of the base and the other was made again for
+  the game: one side updated the project to a new game version (see
+  [`po-project.md`](./po-project.md#game-updates)). The joined file then has
+  the updated version's entries, header, and obsolete entries, and each
+  string the other side changed is first carried to it by the rule of the
+  update: with the same `msgid` as it is; with another, its translation is
+  fuzzy with the source it was written for, and its term exceptions, model
+  exceptions, and model renderings are dropped; a string the update no
+  longer has is kept as obsolete with what that side made of it. Work made
+  for the previous game version therefore joins an update, whichever side
+  made which.
+- Versions that differ in any other way (both sides changed the game's text
+  differently, or a file does not read) are a conflict of the file, and the
   merge aborts.
 - For each entry, a side equal to the base takes the other side; two equal
   sides take either. Two sides that changed the string differently are a
