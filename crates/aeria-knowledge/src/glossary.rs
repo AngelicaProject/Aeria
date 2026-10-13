@@ -788,19 +788,23 @@ fn inserts_vowel(word: &str, stem: &str) -> bool {
     })
 }
 
-/// Whether every word of `translation` appears in `target`, allowing for
-/// inflected endings: some word of the target is the word's stem with an
-/// ending, so `эфирита` uses `эфирит` and `эфироита` does not. A word of
+/// Whether the words of `translation` appear in `target` one after another,
+/// in order, allowing for inflected endings: each is the word's stem with an
+/// ending, so `эфирита` uses `эфирит` and `эфироита` does not, and
+/// `списке целей ... задания` does not use `список заданий`. A word of
 /// `rendered` stands for the whole translation while the target has it, as
 /// written or inflected.
 fn contains_inflected(target: &str, translation: &str, rendered: &[&str]) -> bool {
     let target = words(target);
-    let has = |word: &String| target.iter().any(|candidate| is_form(candidate, word));
-    words(translation).iter().all(has)
-        || rendered.iter().any(|form| {
-            let form = words(form);
-            !form.is_empty() && form.iter().all(has)
-        })
+    let has = |phrase: &[String]| {
+        !phrase.is_empty()
+            && target.windows(phrase.len()).any(|run| {
+                run.iter()
+                    .zip(phrase)
+                    .all(|(candidate, word)| is_form(candidate, word))
+            })
+    };
+    has(&words(translation)) || rendered.iter().any(|form| has(&words(form)))
 }
 
 impl Glossary {
@@ -1075,6 +1079,37 @@ mod tests {
         assert_eq!(
             glossary.missing_in("Ask Minfilia.", "Спросите Крил.").len(),
             1
+        );
+    }
+
+    #[test]
+    fn the_words_of_a_translation_are_used_together() {
+        let glossary = Glossary::new(vec![entry("Duty List", "Список заданий")]);
+        let source = "Open the journal or duty list.";
+        assert_eq!(
+            glossary
+                .missing_in(
+                    source,
+                    "Чтобы принять задания, откройте журнал или списке целей.",
+                )
+                .len(),
+            1
+        );
+        assert_eq!(
+            glossary
+                .missing_in(source, "Заданий список откройте.")
+                .len(),
+            1
+        );
+        assert!(
+            glossary
+                .missing_in(source, "Откройте журнал или список заданий.")
+                .is_empty()
+        );
+        assert!(
+            glossary
+                .missing_in(source, "Откройте журнал или <i>списке заданий</i>.")
+                .is_empty()
         );
     }
 

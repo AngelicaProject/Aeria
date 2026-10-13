@@ -147,10 +147,11 @@ the checks of a translation; it never changes a translation.
   `колец`.
 - A term whose translation does not seem to be used is reported as advice,
   once for its name: a name is used when the translation of one of its
-  meanings is, and the advice gives the translations of all of them. Each
-  word of a translation must appear in the target, as written or
-  inflected, and in any case, so `эфирита` and `Эфирита` use `эфирит` and
-  `эфироита` does not: the terms give a name as it stands alone, and a
+  meanings is, and the advice gives the translations of all of them. The
+  words of a translation must appear in the target one after another and
+  in their order, each as written or inflected, and in any case, so
+  `эфирита` and `Эфирита` use `эфирит` and `эфироита` does not, and
+  `списке целей` with `задания` elsewhere does not use `список заданий`: the terms give a name as it stands alone, and a
   sentence writes it in the number, case, and capitals it needs. A word made
   from the translation, such as the adjective `эфирный` of `эфир`, is
   another word and not read as the term, but for a string where a
