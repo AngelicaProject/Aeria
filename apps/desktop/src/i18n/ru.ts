@@ -1344,7 +1344,6 @@ export const ru: Catalog = {
   "git.pullRequestTitle": "Открыть на GitHub pull request из этой ветки в {branch}",
   "git.branchProtected": "{remote} принимает изменения в {branch} только через pull request. Создайте ветку в списке веток: коммиты перейдут в неё. Отправьте её (Push) и откройте pull request.",
   "git.pullTitle": "Pull: получить и смержить upstream-ветку; при конфликте переводы сливаются по записям (msgctxt)",
-  "git.pullBlocked": "Сделайте коммит перед pull",
   "git.pullWithChoices": "Разрешить и выполнить pull",
   "git.push": "Push",
   "git.pushTitle": "Отправить ваши коммиты в upstream-ветку",

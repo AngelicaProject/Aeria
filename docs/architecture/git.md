@@ -202,7 +202,7 @@ are project-relative and read literally (`--literal-pathspecs`):
   push.
 - **Revert** commits the undoing of a commit that is not a merge (`git
   revert --no-commit`, then a commit `Revert "<subject>"`). It requires
-  committed translations, as Pull does; PO files that conflict are joined
+  committed translations; PO files that conflict are joined
   per string (see [Per-string merge](#per-string-merge)) with no
   resolutions, and a string changed again since, any other conflict, or a
   result that is not a project for the open game version leaves the branch
@@ -270,12 +270,22 @@ remote). None of them rebases or force-pushes.
 
 - **Fetch** fetches that remote.
 - **Pull** fetches, then integrates the incoming commits of the branch's
-  upstream. Uncommitted changes in `po/` block it. A branch that is only
+  upstream. A branch that is only
   behind fast-forwards; a diverged branch is merged. PO files that conflict
   textually are joined per string (see [Per-string merge](#per-string-merge)).
   Any other conflicted file, or a string changed differently on both sides
   without an explicit resolution, aborts the merge and leaves the repository
-  unchanged. After everything merged, the result must still be for the open
+  unchanged. Uncommitted work stays, as in a branch switch (see
+  [Branches](#branches)): a file the incoming commits do not change is left
+  as it is, staged or not, and a PO file they change too is joined per
+  string with the integrated file, with the commit the work was made on as
+  the base, and left unstaged. A string changed differently here,
+  uncommitted, and there has no resolution to choose, and any other file
+  both changed does not join: the pull stops, names the files and counts
+  the strings, and leaves the branch and the work as they were; committed,
+  the string is a conflict to resolve. A merge commit would take staged
+  changes with it, so a diverged branch with anything staged is not
+  merged. After everything merged, the result must still be for the open
   game version (`aeria.json` `gameVersion`); otherwise the branch is reset to
   its starting commit with `git reset --merge`, and the project must first be
   updated to that game version. The editor's writes are held while Pull

@@ -142,6 +142,7 @@ impl From<GitError> for CommandError {
             GitError::DetachedHead => "gitDetachedHead",
             GitError::UnbornHead => "gitNoCommits",
             GitError::MergeInProgress => "gitMergeInProgress",
+            GitError::StagedChanges => "gitStagedChanges",
             GitError::NoRemote => "gitNoRemote",
             GitError::MergeConflict { .. } => "gitMergeConflict",
             GitError::IncomingRejected { .. } => "gitIncomingRejected",

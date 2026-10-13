@@ -1309,7 +1309,6 @@ export const en = {
   "git.pullRequestTitle": "Open a pull request from this branch into {branch} on GitHub",
   "git.branchProtected": "{remote} accepts changes to {branch} only through pull requests. Create a branch here in the branch list: your commits go along with it. Push it and open a pull request.",
   "git.pullTitle": "Pull: fetch and merge the upstream branch; on a conflict, translations merge entry by entry (msgctxt)",
-  "git.pullBlocked": "Commit your changes before pulling",
   "git.pullWithChoices": "Resolve and pull",
   "git.push": "Push",
   "git.pushTitle": "Push your commits to the upstream branch",

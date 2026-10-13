@@ -87,6 +87,10 @@ pub enum GitError {
     #[error("translation changes are not committed; commit them first")]
     UncommittedTranslations,
 
+    /// A merge commit would take the staged changes with it.
+    #[error("staged changes would go into the merge commit; commit or unstage them first")]
+    StagedChanges,
+
     /// The repository is not on a branch.
     #[error("the repository is not on a branch (detached HEAD)")]
     DetachedHead,

@@ -18,6 +18,9 @@ pub(crate) struct Carried {
     branch: Option<String>,
     commit: Option<String>,
     files: Vec<(String, Vec<u8>, String)>,
+    /// What the index held for the files [`GitRepository::set_aside`] took,
+    /// as `git update-index --cacheinfo` takes it.
+    staged: Vec<String>,
 }
 
 /// One branch.
@@ -174,6 +177,7 @@ impl GitRepository {
             branch: self.current_branch()?,
             commit,
             files,
+            staged: Vec::new(),
         };
         self.restore_from_head(&carried)?;
         if let Err(error) = self.run(switch) {
@@ -196,15 +200,9 @@ impl GitRepository {
         self.write_carried(carried, |(_, original, _)| original)
     }
 
-    /// The uncommitted PO files that `target` changed too, joined per
-    /// string with `head` as the base. Any other file both changed, or a
-    /// string both changed differently, is a [`GitError::CarryConflict`].
-    fn join_with(
-        &self,
-        branch: &str,
-        head: &str,
-        target: &str,
-    ) -> Result<Vec<(String, Vec<u8>, String)>, GitError> {
+    /// The uncommitted files, staged or not, that `range` changed too, as
+    /// paths from the repository's top folder.
+    fn changed_here_and(&self, range: &[&str]) -> Result<Vec<String>, GitError> {
         let names = |args: &[&str]| -> Result<BTreeSet<String>, GitError> {
             Ok(self
                 .run_text(args)?
@@ -225,42 +223,74 @@ impl GitRepository {
         if local.is_empty() {
             return Ok(Vec::new());
         }
-        let changed = names(&["diff", "--name-only", "--no-renames", "-z", head, target])?;
+        let mut args = vec!["diff", "--name-only", "--no-renames", "-z"];
+        args.extend(range);
+        let changed = names(&args)?;
+        Ok(local.intersection(&changed).cloned().collect())
+    }
 
-        let mut joined = Vec::new();
+    /// The project's PO file behind a path from the repository's top
+    /// folder, with its content in the working tree; `Err` with the path
+    /// for any other file, or one that cannot be read.
+    fn uncommitted_po(&self, top: &str) -> Result<(String, Vec<u8>), String> {
+        let path = strip_prefix(top, self.prefix());
+        if top.starts_with(self.prefix())
+            && is_po_path(&path)
+            && let Ok(content) = fs::read(self.root().join(&path))
+        {
+            return Ok((path, content));
+        }
+        Err(path)
+    }
+
+    /// The uncommitted PO files that `target` changed too, joined per
+    /// string with `head` as the base. Any other file both changed, or a
+    /// string both changed differently, is a [`GitError::CarryConflict`].
+    fn join_with(
+        &self,
+        branch: &str,
+        head: &str,
+        target: &str,
+    ) -> Result<Vec<(String, Vec<u8>, String)>, GitError> {
+        let mut work = Vec::new();
         let mut files = Vec::new();
+        for top in self.changed_here_and(&[head, target])? {
+            match self.uncommitted_po(&top) {
+                Ok((path, ours)) => work.push((path, ours, String::new())),
+                Err(path) => files.push(path),
+            }
+        }
+        self.join_work(branch, head, target, &mut work, files)?;
+        Ok(work)
+    }
+
+    /// Joins each uncommitted file of `work` per string with its version in
+    /// `theirs`, with `base` as the base. `files` are the files already
+    /// known not to join. A file new on both sides has no base to join
+    /// from; it, and a string both sides changed differently, is a
+    /// [`GitError::CarryConflict`].
+    fn join_work(
+        &self,
+        branch: &str,
+        base: &str,
+        theirs: &str,
+        work: &mut [(String, Vec<u8>, String)],
+        mut files: Vec<String>,
+    ) -> Result<(), GitError> {
         let mut conflicts = Vec::new();
-        for top in local.intersection(&changed) {
-            let path = strip_prefix(top, self.prefix());
-            let inside = top.starts_with(self.prefix()) && is_po_path(&path);
-            let ours = if inside {
-                fs::read(self.root().join(&path)).ok()
-            } else {
-                None
-            };
-            let theirs = if inside {
-                self.file_at(target, &path)?
-            } else {
-                None
-            };
-            // A file new on both sides has no base to join from.
-            let base = if inside {
-                self.file_at(head, &path)?
-            } else {
-                None
-            };
-            let merged = match (base.as_deref(), ours.as_deref(), theirs.as_deref()) {
-                (Some(base), Some(ours), Some(theirs)) => {
-                    merge_file(&path, Some(base), ours, theirs, &BTreeMap::new())
+        for (path, ours, joined) in work.iter_mut() {
+            let merged = match (self.file_at(base, path)?, self.file_at(theirs, path)?) {
+                (Some(base), Some(theirs)) => {
+                    merge_file(path, Some(&base), ours, &theirs, &BTreeMap::new())
                 }
                 _ => None,
             };
-            match (merged, ours) {
-                (Some((text, found)), Some(ours)) => {
+            match merged {
+                Some((text, found)) => {
                     conflicts.extend(found);
-                    joined.push((path, ours, text));
+                    *joined = text;
                 }
-                _ => files.push(path),
+                None => files.push(path.clone()),
             }
         }
         if !files.is_empty() || !conflicts.is_empty() {
@@ -270,7 +300,82 @@ impl GitRepository {
                 conflicts,
             });
         }
-        Ok(joined)
+        Ok(())
+    }
+
+    /// Sets aside the uncommitted work that the commits of `target` since
+    /// it parted from `HEAD` changed too, so they can be integrated: those
+    /// files get their committed content, and [`Self::rejoin`] joins the
+    /// work with the result. Any such file that is not a PO file of the
+    /// project is a [`GitError::CarryConflict`].
+    pub(crate) fn set_aside(&self, target: &str) -> Result<Carried, GitError> {
+        let mut work = Vec::new();
+        let mut files = Vec::new();
+        for top in self.changed_here_and(&[&format!("HEAD...{target}")])? {
+            match self.uncommitted_po(&top) {
+                Ok((path, ours)) => work.push((path, ours, String::new())),
+                Err(path) => files.push(path),
+            }
+        }
+        if !files.is_empty() {
+            return Err(GitError::CarryConflict {
+                branch: target.to_owned(),
+                files,
+                conflicts: Vec::new(),
+            });
+        }
+        let mut carried = Carried {
+            branch: self.current_branch()?,
+            commit: self.head()?,
+            files: work,
+            staged: Vec::new(),
+        };
+        if !carried.files.is_empty() {
+            let mut args = vec![
+                "--literal-pathspecs",
+                "ls-files",
+                "--stage",
+                "--full-name",
+                "-z",
+                "--",
+            ];
+            args.extend(carried.files.iter().map(|(path, ..)| path.as_str()));
+            carried.staged = self
+                .run_text(&args)?
+                .split('\0')
+                .filter_map(|entry| {
+                    let (fields, path) = entry.split_once('\t')?;
+                    let mut fields = fields.split(' ');
+                    Some(format!("{},{},{path}", fields.next()?, fields.next()?))
+                })
+                .collect();
+        }
+        self.restore_from_head(&carried)?;
+        Ok(carried)
+    }
+
+    /// Joins the work [`Self::set_aside`] took with the files as `HEAD` has
+    /// them now, per string, with the commit it was made on as the base.
+    /// Nothing is written: see [`Self::write_joined`].
+    pub(crate) fn rejoin(&self, target: &str, carried: &mut Carried) -> Result<(), GitError> {
+        let Some(base) = carried.commit.clone() else {
+            return Ok(());
+        };
+        self.join_work(target, &base, "HEAD", &mut carried.files, Vec::new())
+    }
+
+    /// Writes the work joined by [`Self::rejoin`], unstaged.
+    pub(crate) fn write_joined(&self, carried: &Carried) -> Result<(), GitError> {
+        self.write_carried(carried, |(_, _, joined)| joined.as_bytes())
+    }
+
+    /// Gives the work [`Self::set_aside`] took back as it was, staged as
+    /// it was.
+    pub(crate) fn write_set_aside(&self, carried: &Carried) -> Result<(), GitError> {
+        for entry in &carried.staged {
+            self.run(&["update-index", "--cacheinfo", entry])?;
+        }
+        self.write_carried(carried, |(_, original, _)| original)
     }
 
     /// Gives the carried files their committed content, staged and in the

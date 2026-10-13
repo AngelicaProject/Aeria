@@ -320,7 +320,7 @@ export function GitPanel({ selectedKey, workspaceRevision, projectRevision, onWo
             <button className="button button-ghost" type="button" disabled={busy !== null} title={t("git.fetchTitle")} onClick={() => void run("fetch", async () => { await gitFetch(); return t("git.fetched"); })}>
               {busy === "fetch" ? <span className="spinner" /> : <UiIcon icon="refreshCw" size="sm" />}{t("git.fetch")}
             </button>
-            <button className="button button-ghost" type="button" disabled={busy !== null || status.hasTranslationChanges} title={t(status.hasTranslationChanges ? "git.pullBlocked" : "git.pullTitle")} onClick={() => void run("pull", async () => describePull(await gitPull()))}>
+            <button className="button button-ghost" type="button" disabled={busy !== null} title={t("git.pullTitle")} onClick={() => void run("pull", async () => describePull(await gitPull()))}>
               {busy === "pull" ? <span className="spinner" /> : <UiIcon icon="arrowDown" size="sm" />}{t("git.pull")}{status.behind > 0 ? <span className="git-ops-count">{status.behind}</span> : null}
             </button>
             <button className="button button-ghost" type="button" disabled={busy !== null || status.head === null || (status.upstream !== null && status.behind > 0)} title={t(status.upstream !== null && status.behind > 0 ? "git.pushBehind" : status.upstream === null ? "git.pushPublish" : "git.pushTitle")} onClick={() => void run("push", async () => t(await gitPush() ? "git.pushed" : "git.nothingToPush"))}>
