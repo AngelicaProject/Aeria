@@ -998,12 +998,25 @@ corners. Reduce transparency, High Contrast Dark, and other platforms use an
 opaque theme-colored backdrop.
 
 The launcher offers **Update project** for an existing repository and an
-installed game. Opening a project whose files are for an older game version
-asks before updating it, and meanwhile fetches the branch's upstream: when
-the upstream already holds the project for the installed game, the question
-names it and **Pull the update** is the main action, with **Update
-project** beside it (see
-[`po-project.md`](./po-project.md#an-update-made-by-someone-else)). After
+installed game; it asks the same question as opening a project whose files
+are for an older game version. Before anything can be chosen, the question
+fetches the branch's upstream and says that it is checking the repository
+(see [`po-project.md`](./po-project.md#an-update-made-by-someone-else)):
+
+- the upstream already holds the project for the installed game: the
+  question becomes *Get the updated project from the repository?*, names
+  the upstream, says that the files come from the repository and nothing is
+  made again, and has one action, **Get the update**. Only after getting
+  it failed, for example on a string changed differently here and there, is
+  **Update project** offered beside it, so the project can still be opened;
+- the remote answered that it does not, or the project has no remote: the
+  question is *Update the project to the new game version?* with **Update
+  project**;
+- the remote did not answer: the question says so and that updating here may
+  make the same update a second time, with **Check again** beside **Update
+  project**.
+
+After
 an update the workbench shows a summary: translations
 to check because their source changed, translations kept as obsolete, files
 written, and the commit. The status bar shows how many strings of the project

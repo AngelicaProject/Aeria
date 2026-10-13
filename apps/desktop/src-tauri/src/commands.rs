@@ -11,8 +11,8 @@ use aeria_source::GameSource;
 use tauri::{Manager, State};
 
 use crate::dto::{
-    GameOpenResultDto, OtherLanguageTextDto, ProjectOpenResultDto, ProjectSummaryDto,
-    RecentProjectDto, SheetProgressDto, SourceBindingDto, SourceUpdateNeededDto,
+    GameOpenResultDto, IncomingUpdateDto, OtherLanguageTextDto, ProjectOpenResultDto,
+    ProjectSummaryDto, RecentProjectDto, SheetProgressDto, SourceBindingDto, SourceUpdateNeededDto,
     SourceUpdateReportDto, TranslationOverlayDto, TranslationRowCursorDto, TranslationRowPageDto,
 };
 use crate::error::CommandError;
@@ -246,25 +246,44 @@ pub async fn update_project_from_game(
     .await
 }
 
-/// The upstream of the project's branch when it already holds the project
-/// for `game_version`, so the update can be pulled instead of made here.
-/// The remote is fetched first; without a connection the upstream as last
-/// fetched answers. `None` also without a repository or an upstream.
+/// Whether the upstream of the project's branch already holds the project
+/// for `game_version`, so the update is pulled instead of made here. The
+/// remote is fetched first. When it does not answer, the upstream as last
+/// fetched can still hold the update; otherwise the answer is unknown.
+/// Without a repository, a remote, or an upstream there is nothing to ask.
 pub(crate) fn incoming_update(
     state: &DesktopState,
     repository_root: &Path,
     game_version: &str,
-) -> Option<String> {
-    let repository = GitRepository::discover(repository_root, state.git()).ok()??;
-    let _ = repository.fetch();
-    let (upstream, commit) = repository.upstream_head().ok()??;
-    let settings = repository
-        .file_at(&commit, aeria_po::SETTINGS_FILE)
-        .ok()??;
-    let settings: aeria_po::Settings = serde_json::from_slice(&settings).ok()?;
-    (aeria_po::READ_FORMATS.contains(&settings.format.as_str())
-        && settings.game_version == game_version)
-        .then_some(upstream)
+) -> IncomingUpdateDto {
+    let Ok(Some(repository)) = GitRepository::discover(repository_root, state.git()) else {
+        return IncomingUpdateDto::None;
+    };
+    let fetched = match repository.fetch() {
+        Ok(()) => true,
+        Err(aeria_git::GitError::NoRemote | aeria_git::GitError::DetachedHead) => {
+            return IncomingUpdateDto::None;
+        }
+        Err(_) => false,
+    };
+    let holds_update = |commit: &str| {
+        let settings = repository
+            .file_at(commit, aeria_po::SETTINGS_FILE)
+            .ok()
+            .flatten()?;
+        let settings: aeria_po::Settings = serde_json::from_slice(&settings).ok()?;
+        Some(
+            aeria_po::READ_FORMATS.contains(&settings.format.as_str())
+                && settings.game_version == game_version,
+        )
+    };
+    match repository.upstream_head() {
+        Ok(Some((upstream, commit))) if holds_update(&commit) == Some(true) => {
+            IncomingUpdateDto::Incoming { upstream }
+        }
+        Ok(_) if fetched => IncomingUpdateDto::None,
+        _ => IncomingUpdateDto::Unknown,
+    }
 }
 
 /// Whether the update a project needs is already on its branch's upstream;
@@ -278,7 +297,7 @@ pub(crate) fn incoming_update(
 pub async fn incoming_project_update(
     app: tauri::AppHandle,
     repository_root: String,
-) -> CommandResult<Option<String>> {
+) -> CommandResult<IncomingUpdateDto> {
     run_blocking(move || {
         let state = app.state::<DesktopState>();
         let root = PathBuf::from(&repository_root);

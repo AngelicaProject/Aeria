@@ -414,23 +414,25 @@ player sees a translation meant for another string.
 
 One collaborator updates the project and publishes the commit; the others
 receive it with Git. A project opened with a game newer than its files
-cannot be read until it is for that game, so the desktop looks at the
-upstream of its branch before it updates: it fetches the remote and reads
-`gameVersion` of `aeria.json` there. When that is the installed version and
-the format is one this Aeria reads, it offers to pull the update instead of
-making it again (`incoming_update`, `pull_update_with_game`).
+cannot be read until it is for that game, so the desktop asks the upstream
+of its branch before it updates (`incoming_update`): it fetches the remote
+and reads `gameVersion` of `aeria.json` there.
+
+| Upstream | The desktop offers |
+| --- | --- |
+| holds the project for the installed game, in a format this Aeria reads | only to pull the update (`pull_update_with_game`); the project is not made again here |
+| answered, and does not hold it; or the project has no repository, remote, or upstream | the update made here |
+| did not answer, and as last fetched does not hold it | to check again, or the update made here, saying that the repository may already have it |
 
 The pull is the Pull of [`git.md`](./git.md#fetch-pull-and-push) with no
 resolutions, and its result must be for the installed game, or the branch
 stays as it was. Uncommitted work and local commits made for the previous
 version join the update per string, by the rule of the table above (see
 [`git.md`](./git.md#per-string-merge)). A string changed differently here
-and there stops the pull; the project can then be updated here, opened, and
-pulled with the conflict resolved in the Git dock, since two updates to the
-same game by the same Aeria write the same game text.
-
-An upstream that does not hold the update yet, or no remote, leaves only
-the update made here.
+and there stops the pull and leaves the branch and the work as they were;
+the desktop then also offers the update made here, after which the project
+opens and the Git dock pulls with the conflict to resolve, since two updates
+to the same game by the same Aeria write the same game text.
 
 ## Earlier projects
 

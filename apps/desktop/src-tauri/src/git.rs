@@ -1614,7 +1614,10 @@ mod tests {
         close_project_with_state(&grace).expect("close");
 
         // Until Ada publishes the update, there is none to pull.
-        assert_eq!(incoming_update(&grace, &grace_root, NEWER), None);
+        assert_eq!(
+            incoming_update(&grace, &grace_root, NEWER),
+            crate::dto::IncomingUpdateDto::None
+        );
         update_with_game(&ada, &ada_root, open(newer.path()), &cache).expect("update");
         ada_repository.push().expect("publish the update");
         assert!(matches!(
@@ -1622,8 +1625,17 @@ mod tests {
             GameOpenOutcome::SourceUpdateRequired { .. }
         ));
         assert_eq!(
-            incoming_update(&grace, &grace_root, NEWER).as_deref(),
-            Some("origin/main")
+            incoming_update(&grace, &grace_root, NEWER),
+            crate::dto::IncomingUpdateDto::Incoming {
+                upstream: "origin/main".to_owned()
+            }
+        );
+        // A project without a repository has nobody to ask.
+        let alone = sandbox.path().join("alone");
+        fs::create_dir_all(&alone).expect("alone");
+        assert_eq!(
+            incoming_update(&grace, &alone, NEWER),
+            crate::dto::IncomingUpdateDto::None
         );
 
         let project =

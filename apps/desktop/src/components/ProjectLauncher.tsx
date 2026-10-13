@@ -23,6 +23,7 @@ import type {
   ProjectOpenResultDto,
   RecentProjectAvailability,
   RecentProjectDto,
+  IncomingUpdateDto,
   SourceUpdateNeededDto,
 } from "../types";
 import { ErrorBanner } from "./ErrorBanner";
@@ -256,16 +257,21 @@ export function ProjectLauncher({ initialError, onProjectReady }: ProjectLaunche
   const [version, setVersion] = useState<string | null>(null);
   const [pendingUpdate, setPendingUpdate] = useState<PendingSourceUpdate | null>(null);
   const [applyingUpdate, setApplyingUpdate] = useState(false);
-  /** The upstream that already holds the pending update, once the remote answered. */
-  const [incomingUpdate, setIncomingUpdate] = useState<string | null>(null);
+  /** Whether the pending update is already on the upstream; `null` while the remote is asked. */
+  const [incomingUpdate, setIncomingUpdate] = useState<IncomingUpdateDto | null>(null);
+  const [incomingCheck, setIncomingCheck] = useState(0);
+  /** The project whose update could not be pulled: it may then be updated here. */
+  const [pullFailedRoot, setPullFailedRoot] = useState<string | null>(null);
   const pendingRoot = pendingUpdate?.root ?? null;
   useEffect(() => {
     setIncomingUpdate(null);
     if (pendingRoot === null) return;
     let disposed = false;
-    void incomingProjectUpdate(pendingRoot).then((upstream) => { if (!disposed) setIncomingUpdate(upstream); }).catch(() => undefined);
+    void incomingProjectUpdate(pendingRoot)
+      .then((incoming) => { if (!disposed) setIncomingUpdate(incoming); })
+      .catch(() => { if (!disposed) setIncomingUpdate({ status: "unknown" }); });
     return () => { disposed = true; };
-  }, [pendingRoot]);
+  }, [pendingRoot, incomingCheck]);
   const busyRef = useRef<LauncherJob | null>(null);
   const now = useMemo(() => Date.now(), [recentState]);
 
@@ -334,7 +340,8 @@ export function ProjectLauncher({ initialError, onProjectReady }: ProjectLaunche
           setBusy("open");
         });
       }
-      if (job === "open" || job === "clone") {
+      // An update is asked for like an open: the repository may hold it already.
+      if (job === "open" || job === "clone" || job === "update") {
         const opened = await openProjectFromGame(root);
         if (opened.status === "opened") {
           onProjectReady(opened.result);
@@ -343,9 +350,7 @@ export function ProjectLauncher({ initialError, onProjectReady }: ProjectLaunche
         }
         return;
       }
-      const result = job === "update"
-        ? await updateProjectFromGame(repositoryRoot)
-        : await initializeProjectFromGame(newProjectRoot!, sourceLanguage, targetLanguage!);
+      const result = await initializeProjectFromGame(newProjectRoot!, sourceLanguage, targetLanguage!);
       onProjectReady(result);
     } catch (caughtError) {
       setError({ operation, error: normalizeCommandError(caughtError) });
@@ -389,6 +394,7 @@ export function ProjectLauncher({ initialError, onProjectReady }: ProjectLaunche
       onProjectReady(result);
     } catch (caughtError) {
       setPendingUpdate(null);
+      if (pull) setPullFailedRoot(root);
       setError({ operation, error: normalizeCommandError(caughtError) });
     } finally {
       setApplyingUpdate(false);
@@ -559,9 +565,11 @@ export function ProjectLauncher({ initialError, onProjectReady }: ProjectLaunche
         mode="confirm"
         needed={pendingUpdate?.needed ?? null}
         incoming={incomingUpdate}
+        pullFailed={pendingRoot !== null && pendingRoot === pullFailedRoot}
         busy={applyingUpdate}
         onConfirm={() => void handleApplySourceUpdate()}
         onPull={() => void handleApplySourceUpdate(true)}
+        onCheckAgain={() => setIncomingCheck((current) => current + 1)}
         onClose={() => setPendingUpdate(null)}
       />
     </main>

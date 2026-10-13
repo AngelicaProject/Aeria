@@ -20,6 +20,7 @@ import type {
   CommandError,
   GameOpenResultDto,
   GameSettingsDto,
+  IncomingUpdateDto,
   GitBranchDto,
   GitCommitChangesDto,
   GitCommitDto,
@@ -188,13 +189,9 @@ export function updateProjectFromGame(repositoryRoot: string): Promise<ProjectOp
   return call<ProjectOpenResultDto>("update_project_from_game", { repositoryRoot });
 }
 
-/**
- * The upstream of the project's branch when it already holds the project
- * for the configured game, after a fetch; `null` when the update is not
- * there.
- */
-export function incomingProjectUpdate(repositoryRoot: string): Promise<string | null> {
-  return call<string | null>("incoming_project_update", { repositoryRoot });
+/** Fetches the project's remote and tells whether its branch's upstream already holds the project for the configured game. */
+export function incomingProjectUpdate(repositoryRoot: string): Promise<IncomingUpdateDto> {
+  return call<IncomingUpdateDto>("incoming_project_update", { repositoryRoot });
 }
 
 /**
