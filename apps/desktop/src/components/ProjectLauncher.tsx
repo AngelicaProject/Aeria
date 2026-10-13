@@ -13,6 +13,8 @@ import {
   normalizeCommandError,
   openProjectFromGame,
   openRecentProject,
+  incomingProjectUpdate,
+  pullProjectUpdate,
   updateProjectFromGame,
 } from "../ipc";
 import type {
@@ -21,6 +23,7 @@ import type {
   ProjectOpenResultDto,
   RecentProjectAvailability,
   RecentProjectDto,
+  IncomingUpdateDto,
   SourceUpdateNeededDto,
 } from "../types";
 import { ErrorBanner } from "./ErrorBanner";
@@ -57,6 +60,7 @@ type LauncherJob = "open" | "clone" | "create" | "update";
 type PendingSourceUpdate = {
   needed: SourceUpdateNeededDto;
   operation: LauncherErrorOperation;
+  root: string;
   apply: () => Promise<ProjectOpenResultDto>;
 };
 
@@ -253,6 +257,21 @@ export function ProjectLauncher({ initialError, onProjectReady }: ProjectLaunche
   const [version, setVersion] = useState<string | null>(null);
   const [pendingUpdate, setPendingUpdate] = useState<PendingSourceUpdate | null>(null);
   const [applyingUpdate, setApplyingUpdate] = useState(false);
+  /** Whether the pending update is already on the upstream; `null` while the remote is asked. */
+  const [incomingUpdate, setIncomingUpdate] = useState<IncomingUpdateDto | null>(null);
+  const [incomingCheck, setIncomingCheck] = useState(0);
+  /** The project whose update could not be pulled: it may then be updated here. */
+  const [pullFailedRoot, setPullFailedRoot] = useState<string | null>(null);
+  const pendingRoot = pendingUpdate?.root ?? null;
+  useEffect(() => {
+    setIncomingUpdate(null);
+    if (pendingRoot === null) return;
+    let disposed = false;
+    void incomingProjectUpdate(pendingRoot)
+      .then((incoming) => { if (!disposed) setIncomingUpdate(incoming); })
+      .catch(() => { if (!disposed) setIncomingUpdate({ status: "unknown" }); });
+    return () => { disposed = true; };
+  }, [pendingRoot, incomingCheck]);
   const busyRef = useRef<LauncherJob | null>(null);
   const now = useMemo(() => Date.now(), [recentState]);
 
@@ -321,18 +340,17 @@ export function ProjectLauncher({ initialError, onProjectReady }: ProjectLaunche
           setBusy("open");
         });
       }
-      if (job === "open" || job === "clone") {
+      // An update is asked for like an open: the repository may hold it already.
+      if (job === "open" || job === "clone" || job === "update") {
         const opened = await openProjectFromGame(root);
         if (opened.status === "opened") {
           onProjectReady(opened.result);
         } else {
-          setPendingUpdate({ needed: opened.update, operation, apply: () => updateProjectFromGame(root) });
+          setPendingUpdate({ needed: opened.update, operation, root, apply: () => updateProjectFromGame(root) });
         }
         return;
       }
-      const result = job === "update"
-        ? await updateProjectFromGame(repositoryRoot)
-        : await initializeProjectFromGame(newProjectRoot!, sourceLanguage, targetLanguage!);
+      const result = await initializeProjectFromGame(newProjectRoot!, sourceLanguage, targetLanguage!);
       onProjectReady(result);
     } catch (caughtError) {
       setError({ operation, error: normalizeCommandError(caughtError) });
@@ -353,6 +371,7 @@ export function ProjectLauncher({ initialError, onProjectReady }: ProjectLaunche
         setPendingUpdate({
           needed: opened.update,
           operation: "recentOpen",
+          root: project.repositoryRoot,
           apply: async () => {
             const updated = await openRecentProject(project.id, true);
             if (updated.status !== "opened") throw { code: "sourceUpdateRequired", message: t("launcher.error.updateNotApplied") };
@@ -365,16 +384,17 @@ export function ProjectLauncher({ initialError, onProjectReady }: ProjectLaunche
     } finally { setRecentBusyId(null); }
   }
 
-  async function handleApplySourceUpdate() {
+  async function handleApplySourceUpdate(pull = false) {
     if (!pendingUpdate || applyingUpdate) return;
-    const { apply, operation } = pendingUpdate;
+    const { apply, operation, root } = pendingUpdate;
     flushSync(() => { setApplyingUpdate(true); setError(null); });
     try {
-      const result = await apply();
+      const result = await (pull ? pullProjectUpdate(root) : apply());
       setPendingUpdate(null);
       onProjectReady(result);
     } catch (caughtError) {
       setPendingUpdate(null);
+      if (pull) setPullFailedRoot(root);
       setError({ operation, error: normalizeCommandError(caughtError) });
     } finally {
       setApplyingUpdate(false);
@@ -544,8 +564,12 @@ export function ProjectLauncher({ initialError, onProjectReady }: ProjectLaunche
         open={pendingUpdate !== null}
         mode="confirm"
         needed={pendingUpdate?.needed ?? null}
+        incoming={incomingUpdate}
+        pullFailed={pendingRoot !== null && pendingRoot === pullFailedRoot}
         busy={applyingUpdate}
         onConfirm={() => void handleApplySourceUpdate()}
+        onPull={() => void handleApplySourceUpdate(true)}
+        onCheckAgain={() => setIncomingCheck((current) => current + 1)}
         onClose={() => setPendingUpdate(null)}
       />
     </main>

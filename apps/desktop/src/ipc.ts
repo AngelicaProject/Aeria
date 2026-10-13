@@ -20,6 +20,7 @@ import type {
   CommandError,
   GameOpenResultDto,
   GameSettingsDto,
+  IncomingUpdateDto,
   GitBranchDto,
   GitCommitChangesDto,
   GitCommitDto,
@@ -186,6 +187,19 @@ export function setGamePath(path: string | null): Promise<GameSettingsDto> {
  */
 export function updateProjectFromGame(repositoryRoot: string): Promise<ProjectOpenResultDto> {
   return call<ProjectOpenResultDto>("update_project_from_game", { repositoryRoot });
+}
+
+/** Fetches the project's remote and tells whether its branch's upstream already holds the project for the configured game. */
+export function incomingProjectUpdate(repositoryRoot: string): Promise<IncomingUpdateDto> {
+  return call<IncomingUpdateDto>("incoming_project_update", { repositoryRoot });
+}
+
+/**
+ * Pulls the project's update to the configured game from its upstream and
+ * opens the project. Work made for the previous game version joins it.
+ */
+export function pullProjectUpdate(repositoryRoot: string): Promise<ProjectOpenResultDto> {
+  return call<ProjectOpenResultDto>("pull_project_update", { repositoryRoot });
 }
 
 /** Creates a project for the configured game installation. */

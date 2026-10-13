@@ -174,6 +174,16 @@ export type SourceUpdateNeededDto = {
   gameVersion: string;
 };
 
+/**
+ * Whether the update a project needs is already on its branch's upstream:
+ * `none` when the remote answered that it is not (or there is no remote),
+ * `unknown` when the remote did not answer.
+ */
+export type IncomingUpdateDto =
+  | { status: "incoming"; upstream: string }
+  | { status: "none" }
+  | { status: "unknown" };
+
 /** What updating a project to the installed game did. */
 export type SourceUpdateReportDto = {
   previousGameVersion: string;

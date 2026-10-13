@@ -78,23 +78,45 @@ impl GitRepository {
         Ok(())
     }
 
+    /// The upstream of the current branch on a remote, such as
+    /// `origin/main`, with its commit as last fetched; `None` without one.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when Git fails.
+    pub fn upstream_head(&self) -> Result<Option<(String, String)>, GitError> {
+        let Some(branch) = self.current_branch()? else {
+            return Ok(None);
+        };
+        let Some(upstream) = self.upstream(&branch)? else {
+            return Ok(None);
+        };
+        let commit = self.verify_ref(&format!("refs/remotes/{upstream}"))?;
+        Ok(commit.map(|commit| (upstream, commit)))
+    }
+
     /// Integrates the already fetched commits of the current branch's
     /// upstream.
     ///
-    /// Translation changes must be checkpointed first. PO files that
-    /// conflict textually are joined per string (see
-    /// [`crate::entries::merge_file`]). A string both sides changed
-    /// differently is resolved only by its entry in `resolutions`, keyed by
-    /// `msgctxt`; otherwise the merge is aborted and the strings are
-    /// returned as [`GitError::TranslationConflicts`]. Once everything
-    /// merged, `accept` must validate the resulting project; on failure the
-    /// branch is reset to its starting commit.
+    /// Uncommitted work stays: a file the incoming commits do not change is
+    /// left as it is, and a PO file they change too is joined per string
+    /// with the integrated file and left unstaged (see
+    /// [`Self::set_aside`]). PO files that conflict textually are joined
+    /// per string (see [`crate::entries::merge_file`]). A string both sides
+    /// committed differently is resolved only by its entry in
+    /// `resolutions`, keyed by `msgctxt`; otherwise the merge is aborted
+    /// and the strings are returned as [`GitError::TranslationConflicts`].
+    /// Once everything merged, `accept` must validate the resulting
+    /// project; on failure the branch is reset to its starting commit.
     ///
     /// # Errors
     ///
     /// Returns [`GitError::TranslationConflicts`], [`GitError::MergeConflict`],
-    /// [`GitError::IncomingRejected`], [`GitError::UncommittedTranslations`],
-    /// or another typed Git error. The branch is unchanged after an error.
+    /// [`GitError::IncomingRejected`], [`GitError::CarryConflict`] for
+    /// uncommitted work that does not join with the incoming commits,
+    /// [`GitError::StagedChanges`] when a merge would commit staged
+    /// changes, or another typed Git error. The branch and the uncommitted
+    /// work are unchanged after an error.
     pub fn integrate<F>(
         &self,
         resolutions: &BTreeMap<String, ConflictResolution>,
@@ -104,29 +126,46 @@ impl GitRepository {
         F: FnOnce() -> Result<(), String>,
     {
         let branch = self.require_branch()?;
-        self.require_clean_translations()?;
-
+        if self.merge_in_progress()? {
+            return Err(GitError::MergeInProgress);
+        }
         let Some(upstream) = self.upstream(&branch)? else {
             return Ok(IntegrateOutcome::UpToDate);
         };
         let Some(before) = self.head()? else {
             return Err(GitError::UnbornHead);
         };
+        let (ahead, behind) = self.ahead_behind(&upstream)?;
+        if behind == 0 {
+            return Ok(IntegrateOutcome::UpToDate);
+        }
+        // Git refuses a merge commit while anything is staged: it would
+        // commit that too.
+        if ahead > 0 && self.has_staged_changes()? {
+            return Err(GitError::StagedChanges);
+        }
 
-        let outcome = match self.merge_from(&upstream, resolutions) {
-            Ok(outcome) => outcome,
+        let mut carried = self.set_aside(&upstream)?;
+        let integrated = self.merge_from(&upstream, resolutions).and_then(|outcome| {
+            self.rejoin(&upstream, &mut carried)?;
+            if outcome.changed_working_tree()
+                && let Err(reason) = accept()
+            {
+                return Err(GitError::IncomingRejected { reason });
+            }
+            Ok(outcome)
+        });
+        match integrated {
+            Ok(outcome) => {
+                self.write_joined(&carried)?;
+                Ok(outcome)
+            }
             Err(error) => {
                 self.reset_to(&before)?;
-                return Err(error);
+                self.write_set_aside(&carried)?;
+                Err(error)
             }
-        };
-        if outcome.changed_working_tree()
-            && let Err(reason) = accept()
-        {
-            self.reset_to(&before)?;
-            return Err(GitError::IncomingRejected { reason });
         }
-        Ok(outcome)
     }
 
     pub(crate) fn require_clean_translations(&self) -> Result<(), GitError> {

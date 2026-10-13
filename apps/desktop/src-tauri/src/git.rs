@@ -1556,6 +1556,108 @@ mod tests {
     }
 
     #[test]
+    fn an_update_on_the_upstream_is_pulled_with_the_work_of_the_previous_version() {
+        use crate::commands::{
+            GameOpenOutcome, close_project_with_state, incoming_update, pull_update_with_game,
+            update_with_game,
+        };
+        const NEWER: &str = "2026.10.01.0000.0000";
+        let sandbox = tempfile::tempdir().expect("sandbox");
+        let git = isolated_git(sandbox.path());
+        let game = crate::test_support::test_game();
+        let newer = tempfile::tempdir().expect("newer game");
+        aeria_sqpack::testing::FakeGame::new(NEWER)
+            .with_text(
+                "Synthetic",
+                &aeria_sqpack::testing::TextSheet::new(2, &[0])
+                    .row(42, &[(0, "Hello there, friend")]),
+            )
+            .write(newer.path())
+            .expect("write");
+        let open = crate::test_support::open;
+        let cache = sandbox.path().join("cache");
+        let remote = sandbox.path().join("remote.git");
+        let created = std::process::Command::new(
+            std::env::var_os("AERIA_GIT_PATH")
+                .filter(|path| !path.is_empty())
+                .unwrap_or_else(|| "git".into()),
+        )
+        .args(["init", "--quiet", "--bare", "--initial-branch=main"])
+        .arg(&remote)
+        .status()
+        .expect("create remote");
+        assert!(created.success());
+
+        // Ada creates the project and publishes it; Grace clones it and
+        // translates a string without committing.
+        let ada = DesktopState::new();
+        ada.set_git(git.clone());
+        let ada_root = sandbox.path().join("ada");
+        fs::create_dir_all(&ada_root).expect("ada root");
+        initialize_with_game(&ada, &ada_root, open(game.path()), &cache, "fr").expect("create");
+        let ada_repository = GitRepository::init(&ada_root, git.clone()).expect("init");
+        ada_repository
+            .set_identity("Ada", None, false)
+            .expect("identity");
+        let remote_url = remote.to_string_lossy().into_owned();
+        ada_repository
+            .set_remote("origin", &remote_url)
+            .expect("remote");
+        git_checkpoint_with_state(&ada, None).expect("initial checkpoint");
+        ada_repository.push().expect("publish");
+        let grace = DesktopState::new();
+        grace.set_git(git.clone());
+        let grace_root = sandbox.path().join("grace");
+        GitRepository::clone_from(&remote_url, &grace_root, git).expect("clone");
+        open_with_game(&grace, &grace_root, open(game.path()), &cache).expect("open");
+        set_translation_target_with_state(&grace, &binding(), "Bonjour").expect("target");
+        close_project_with_state(&grace).expect("close");
+
+        // Until Ada publishes the update, there is none to pull.
+        assert_eq!(
+            incoming_update(&grace, &grace_root, NEWER),
+            crate::dto::IncomingUpdateDto::None
+        );
+        update_with_game(&ada, &ada_root, open(newer.path()), &cache).expect("update");
+        ada_repository.push().expect("publish the update");
+        assert!(matches!(
+            open_with_game(&grace, &grace_root, open(newer.path()), &cache).expect("open"),
+            GameOpenOutcome::SourceUpdateRequired { .. }
+        ));
+        assert_eq!(
+            incoming_update(&grace, &grace_root, NEWER),
+            crate::dto::IncomingUpdateDto::Incoming {
+                upstream: "origin/main".to_owned()
+            }
+        );
+        // A project without a repository has nobody to ask.
+        let alone = sandbox.path().join("alone");
+        fs::create_dir_all(&alone).expect("alone");
+        assert_eq!(
+            incoming_update(&grace, &alone, NEWER),
+            crate::dto::IncomingUpdateDto::None
+        );
+
+        let project =
+            pull_update_with_game(&grace, &grace_root, open(newer.path()), &cache).expect("pull");
+        assert_eq!(project.game_version, NEWER);
+        let grace_repository = GitRepository::open(&grace_root, grace.git()).expect("repository");
+        assert_eq!(
+            grace_repository.head().expect("head"),
+            ada_repository.head().expect("head")
+        );
+        // Grace's translation is still hers to commit, for the new source.
+        let page = page_translation_rows_with_state(&grace, "Synthetic", None, 10).expect("page");
+        let overlay = page.rows[0].cells[0].translation.as_ref().expect("kept");
+        assert_eq!(overlay.target_macro, "Bonjour");
+        assert!(overlay.fuzzy);
+        assert_eq!(
+            grace_repository.pending_changes().expect("pending").len(),
+            1
+        );
+    }
+
+    #[test]
     #[allow(clippy::too_many_lines)] // one scenario
     fn pull_and_sync_bring_incoming_translations_into_the_open_project() {
         let sandbox = tempfile::tempdir().expect("sandbox");

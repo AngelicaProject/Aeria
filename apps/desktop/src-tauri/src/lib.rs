@@ -27,9 +27,10 @@ use tauri::Manager;
 
 pub use commands::{
     close_project, current_project, default_projects_directory_path, forget_recent_project,
-    initialize_project_from_game, list_recent_projects, open_project_from_game,
-    open_recent_project, page_translation_rows, set_project_target_language, set_translation_note,
-    set_translation_review, set_translation_target, set_translation_term_exception, sheet_dialogue,
+    incoming_project_update, initialize_project_from_game, list_recent_projects,
+    open_project_from_game, open_recent_project, page_translation_rows, pull_project_update,
+    set_project_target_language, set_translation_note, set_translation_review,
+    set_translation_target, set_translation_term_exception, sheet_dialogue,
     source_in_other_languages, translation_progress, update_project_from_game,
 };
 pub use dto::{
@@ -141,6 +142,8 @@ pub fn run() {
             default_projects_directory_path,
             initialize_project_from_game,
             update_project_from_game,
+            incoming_project_update,
+            pull_project_update,
             current_project,
             close_project,
             list_recent_projects,

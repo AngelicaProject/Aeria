@@ -440,13 +440,196 @@ fn sync_fast_forwards_and_merges_adjacent_units_semantically() {
     assert!(merged.contains("\"Deux !\""));
     assert!(grace.status().expect("status").files.is_empty());
     assert!(grace.push().expect("push merge"));
+}
 
-    // Uncommitted translations block integration.
-    write_shard(&grace_root, 0x20, &[(id(0x20, 1), 4, "Quatre !", "")]);
+#[test]
+fn a_pull_keeps_uncommitted_strings_and_joins_them_per_string() {
+    let sandbox = Sandbox::new();
+    let remote = sandbox.bare_remote();
+    let (one, two, three) = (id(0x10, 1), id(0x10, 2), id(0x10, 3));
+
+    let ada = sandbox.project("ada", "Ada");
+    ada.set_remote("origin", &remote).expect("remote");
+    write_shard(
+        ada.root(),
+        0x10,
+        &[(one, 1, "", ""), (two, 2, "", ""), (three, 3, "", "")],
+    );
+    write_shard(ada.root(), 0x20, &[(id(0x20, 1), 4, "", "")]);
+    ada.checkpoint(None).expect("initial");
+    ada.push().expect("push");
+    let grace = sandbox.clone(&remote, "grace", "Grace");
+    let root = grace.root().to_owned();
+
+    // Ada translates the first string; Grace has the second uncommitted,
+    // and a file Ada never changed.
+    write_shard(
+        ada.root(),
+        0x10,
+        &[(one, 1, "Un", ""), (two, 2, "", ""), (three, 3, "", "")],
+    );
+    ada.checkpoint(None).expect("ada one");
+    ada.push().expect("push");
+    write_shard(
+        &root,
+        0x10,
+        &[(one, 1, "", ""), (two, 2, "Deux", ""), (three, 3, "", "")],
+    );
+    write_shard(&root, 0x20, &[(id(0x20, 1), 4, "Quatre", "")]);
+    grace.fetch().expect("fetch");
+
+    // A rejected pull leaves the branch and the work as they were.
+    let before = grace.head().expect("head");
+    match grace.integrate(&no_resolutions(), || Err("blocked".to_owned())) {
+        Err(GitError::IncomingRejected { .. }) => {}
+        other => panic!("expected rejection, got {other:?}"),
+    }
+    assert_eq!(grace.head().expect("head"), before);
+    assert!(shard_text(&root, 0x10).contains("\"Deux\""));
+
+    assert_eq!(
+        grace.integrate(&no_resolutions(), || Ok(())).expect("pull"),
+        IntegrateOutcome::FastForward
+    );
+    let joined = shard_text(&root, 0x10);
+    assert!(
+        joined.contains("\"Un\"") && joined.contains("\"Deux\""),
+        "{joined}"
+    );
+    let changed = |repository: &GitRepository| -> Vec<String> {
+        repository
+            .status()
+            .expect("status")
+            .files
+            .into_iter()
+            .map(|file| file.path)
+            .collect()
+    };
+    assert_eq!(changed(&grace), [shard_path(0x10), shard_path(0x20)]);
+
+    // The same string changed here, uncommitted, and there stops the pull.
+    write_shard(
+        ada.root(),
+        0x10,
+        &[(one, 1, "Un", ""), (two, 2, "Dos", ""), (three, 3, "", "")],
+    );
+    ada.checkpoint(None).expect("ada two");
+    ada.push().expect("push");
+    grace.fetch().expect("fetch");
+    let before = grace.head().expect("head");
+    match grace.integrate(&no_resolutions(), || Ok(())) {
+        Err(GitError::CarryConflict {
+            files, conflicts, ..
+        }) => {
+            assert!(files.is_empty());
+            assert_eq!(conflicts.len(), 1);
+            assert_eq!(conflicts[0].context, two.to_string());
+        }
+        other => panic!("expected a carry conflict, got {other:?}"),
+    }
+    assert_eq!(grace.head().expect("head"), before);
+    assert_eq!(shard_text(&root, 0x10), joined);
+
+    // Committed, the string is a conflict to resolve; the work in the
+    // other file stays uncommitted through the merge.
+    grace.stage(&[shard_path(0x10)]).expect("stage");
+    // A merge commit would take what is staged with it.
     assert!(matches!(
         grace.integrate(&no_resolutions(), || Ok(())),
-        Err(GitError::UncommittedTranslations)
+        Err(GitError::CarryConflict { .. })
     ));
+    grace.commit_staged(None).expect("commit one file");
+    grace.stage(&[shard_path(0x20)]).expect("stage");
+    assert!(matches!(
+        grace.integrate(&no_resolutions(), || Ok(())),
+        Err(GitError::StagedChanges)
+    ));
+    grace.unstage(&[shard_path(0x20)]).expect("unstage");
+    assert!(matches!(
+        grace.integrate(&no_resolutions(), || Ok(())),
+        Err(GitError::TranslationConflicts { .. })
+    ));
+    let resolutions = BTreeMap::from([(two.to_string(), ConflictResolution::Ours)]);
+    assert_eq!(
+        grace.integrate(&resolutions, || Ok(())).expect("merge"),
+        IntegrateOutcome::Merged
+    );
+    assert!(shard_text(&root, 0x10).contains("\"Deux\""));
+    assert!(shard_text(&root, 0x20).contains("\"Quatre\""));
+    assert_eq!(changed(&grace), [shard_path(0x20)]);
+}
+
+/// Writes `po/10.po` for a game version, with strings as (`msgid`,
+/// `msgstr`) in the order of their rows from 1.
+fn write_versioned(root: &Path, version: &str, strings: &[(&str, &str)]) {
+    let mut text = format!("msgid \"\"\nmsgstr \"\"\n\"X-Game-Version: {version}\\n\"\n");
+    for (row, (source, translation)) in (1..).zip(strings) {
+        text.push('\n');
+        text.push_str(&record((id(row, 0), 0, translation, "")).replace("Source 0", source));
+    }
+    fs::write(root.join(shard_path(0x10)), text).expect("file");
+}
+
+#[test]
+fn work_of_the_previous_game_version_joins_a_pulled_game_update() {
+    let sandbox = Sandbox::new();
+    let remote = sandbox.bare_remote();
+    let ada = sandbox.project("ada", "Ada");
+    ada.set_remote("origin", &remote).expect("remote");
+    write_versioned(
+        ada.root(),
+        "1",
+        &[("one", ""), ("two", ""), ("three", "три")],
+    );
+    ada.checkpoint(None).expect("initial");
+    ada.push().expect("push");
+    let grace = sandbox.clone(&remote, "grace", "Grace");
+    let linus = sandbox.clone(&remote, "linus", "Linus");
+
+    // Ada updates the project to a game whose first source changed.
+    write_versioned(
+        ada.root(),
+        "2",
+        &[("first", ""), ("two", ""), ("three", "три")],
+    );
+    ada.checkpoint(Some("Update to game version 2"))
+        .expect("update");
+    ada.push().expect("push");
+
+    // Uncommitted work of the previous version is carried to the update.
+    write_versioned(
+        grace.root(),
+        "1",
+        &[("one", "раз"), ("two", "два"), ("three", "три")],
+    );
+    grace.fetch().expect("fetch");
+    assert_eq!(
+        grace.integrate(&no_resolutions(), || Ok(())).expect("pull"),
+        IntegrateOutcome::FastForward
+    );
+    let carried =
+        "#, fuzzy\n#| msgid \"one\"\nmsgctxt \"Addon:1:0:0\"\nmsgid \"first\"\nmsgstr \"раз\"\n";
+    let joined = shard_text(grace.root(), 0x10);
+    assert!(joined.contains(carried), "{joined}");
+    assert!(joined.contains("X-Game-Version: 2") && joined.contains("\"два\""));
+    assert_eq!(grace.pending_changes().expect("pending").len(), 2);
+
+    // So are commits of the previous version, in the merge.
+    write_versioned(
+        linus.root(),
+        "1",
+        &[("one", "раз"), ("two", "два"), ("three", "три")],
+    );
+    linus.checkpoint(None).expect("linus");
+    linus.fetch().expect("fetch");
+    assert_eq!(
+        linus
+            .integrate(&no_resolutions(), || Ok(()))
+            .expect("merge"),
+        IntegrateOutcome::Merged
+    );
+    assert_eq!(shard_text(linus.root(), 0x10), joined);
+    assert!(linus.status().expect("status").files.is_empty());
 }
 
 #[test]

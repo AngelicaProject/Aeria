@@ -202,7 +202,7 @@ are project-relative and read literally (`--literal-pathspecs`):
   push.
 - **Revert** commits the undoing of a commit that is not a merge (`git
   revert --no-commit`, then a commit `Revert "<subject>"`). It requires
-  committed translations, as Pull does; PO files that conflict are joined
+  committed translations; PO files that conflict are joined
   per string (see [Per-string merge](#per-string-merge)) with no
   resolutions, and a string changed again since, any other conflict, or a
   result that is not a project for the open game version leaves the branch
@@ -270,12 +270,22 @@ remote). None of them rebases or force-pushes.
 
 - **Fetch** fetches that remote.
 - **Pull** fetches, then integrates the incoming commits of the branch's
-  upstream. Uncommitted changes in `po/` block it. A branch that is only
+  upstream. A branch that is only
   behind fast-forwards; a diverged branch is merged. PO files that conflict
   textually are joined per string (see [Per-string merge](#per-string-merge)).
   Any other conflicted file, or a string changed differently on both sides
   without an explicit resolution, aborts the merge and leaves the repository
-  unchanged. After everything merged, the result must still be for the open
+  unchanged. Uncommitted work stays, as in a branch switch (see
+  [Branches](#branches)): a file the incoming commits do not change is left
+  as it is, staged or not, and a PO file they change too is joined per
+  string with the integrated file, with the commit the work was made on as
+  the base, and left unstaged. A string changed differently here,
+  uncommitted, and there has no resolution to choose, and any other file
+  both changed does not join: the pull stops, names the files and counts
+  the strings, and leaves the branch and the work as they were; committed,
+  the string is a conflict to resolve. A merge commit would take staged
+  changes with it, so a diverged branch with anything staged is not
+  merged. After everything merged, the result must still be for the open
   game version (`aeria.json` `gameVersion`); otherwise the branch is reset to
   its starting commit with `git reset --merge`, and the project must first be
   updated to that game version. The editor's writes are held while Pull
@@ -294,10 +304,22 @@ that Git usually merges on its own. When Git reports a PO file as conflicted,
 Aeria reads the base, local, and incoming versions from the index stages and
 joins them entry by entry (`aeria-git::merge_file`):
 
-- The two versions must hold the same entries in the same order with the same
-  `msgid`, comments, header, and obsolete entries: only translations, fuzzy
-  marks, and notes may differ. Otherwise (for example one side updated the
-  project to a new game version) the file is reported as a conflict and the
+- The two versions hold the same entries in the same order with the same
+  `msgid`, comments, header, and obsolete entries: only what a person or
+  machine translation changes differs.
+- Or one version holds those of the base and the other was made again for
+  the game: one side updated the project to a new game version (see
+  [`po-project.md`](./po-project.md#game-updates)). The joined file then has
+  the updated version's entries, header, and obsolete entries, and each
+  string the other side changed is first carried to it by the rule of the
+  update: with the same `msgid` as it is; with another, its translation is
+  fuzzy with the source it was written for, and its term exceptions, model
+  exceptions, and model renderings are dropped; a string the update no
+  longer has is kept as obsolete with what that side made of it. Work made
+  for the previous game version therefore joins an update, whichever side
+  made which.
+- Versions that differ in any other way (both sides changed the game's text
+  differently, or a file does not read) are a conflict of the file, and the
   merge aborts.
 - For each entry, a side equal to the base takes the other side; two equal
   sides take either. Two sides that changed the string differently are a

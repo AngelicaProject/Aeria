@@ -130,6 +130,20 @@ pub struct SourceUpdateNeededDto {
     pub game_version: String,
 }
 
+/// Whether the update a project needs is already on its branch's upstream.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "status", rename_all = "camelCase")]
+pub enum IncomingUpdateDto {
+    /// The upstream holds the project for the installed game.
+    Incoming { upstream: String },
+    /// The remote answered and its branch does not hold the update, or
+    /// there is no remote to ask.
+    None,
+    /// The remote did not answer, and the upstream as last fetched does not
+    /// hold the update.
+    Unknown,
+}
+
 /// What updating a project to the installed game did.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
