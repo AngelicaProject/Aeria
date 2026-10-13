@@ -246,6 +246,105 @@ pub async fn update_project_from_game(
     .await
 }
 
+/// The upstream of the project's branch when it already holds the project
+/// for `game_version`, so the update can be pulled instead of made here.
+/// The remote is fetched first; without a connection the upstream as last
+/// fetched answers. `None` also without a repository or an upstream.
+pub(crate) fn incoming_update(
+    state: &DesktopState,
+    repository_root: &Path,
+    game_version: &str,
+) -> Option<String> {
+    let repository = GitRepository::discover(repository_root, state.git()).ok()??;
+    let _ = repository.fetch();
+    let (upstream, commit) = repository.upstream_head().ok()??;
+    let settings = repository
+        .file_at(&commit, aeria_po::SETTINGS_FILE)
+        .ok()??;
+    let settings: aeria_po::Settings = serde_json::from_slice(&settings).ok()?;
+    (aeria_po::READ_FORMATS.contains(&settings.format.as_str())
+        && settings.game_version == game_version)
+        .then_some(upstream)
+}
+
+/// Whether the update a project needs is already on its branch's upstream;
+/// see [`incoming_update`].
+///
+/// # Errors
+///
+/// Returns a typed error when the settings cannot be read or no game
+/// installation is available.
+#[tauri::command(rename_all = "camelCase")]
+pub async fn incoming_project_update(
+    app: tauri::AppHandle,
+    repository_root: String,
+) -> CommandResult<Option<String>> {
+    run_blocking(move || {
+        let state = app.state::<DesktopState>();
+        let root = PathBuf::from(&repository_root);
+        let game_version = project_game(&app, &root)?.version().to_string();
+        Ok(incoming_update(&state, &root, &game_version))
+    })
+    .await
+}
+
+/// Brings a project to the installed game by pulling its branch's upstream,
+/// which holds the update, then opens the project. Uncommitted work and
+/// local commits made for the previous game version join the update (see
+/// `docs/architecture/git.md`); a result for any other game version leaves
+/// the branch as it was.
+pub(crate) fn pull_update_with_game(
+    state: &DesktopState,
+    repository_root: &Path,
+    source: Arc<GameSource>,
+    cache_root: &Path,
+) -> CommandResult<ProjectSummaryDto> {
+    load_catalog_with_cache(cache_root, &source)?;
+    let repository = GitRepository::open(repository_root, state.git())?;
+    let game_version = source.version().to_string();
+    // Without a connection, the upstream as last fetched is integrated.
+    let _ = repository.fetch();
+    repository.integrate(&std::collections::BTreeMap::new(), || {
+        let settings =
+            aeria_po::read_settings(repository_root).map_err(|error| error.to_string())?;
+        if settings.game_version == game_version {
+            Ok(())
+        } else {
+            Err(format!(
+                "its files are for game version {}, and the installed game is {game_version}",
+                settings.game_version
+            ))
+        }
+    })?;
+    let session = Session::open(repository_root, source)?;
+    replace_project(state, session)
+}
+
+/// Pulls the update of an existing project to the configured game
+/// installation and opens it; see [`pull_update_with_game`].
+///
+/// # Errors
+///
+/// Returns a typed error when the settings cannot be read, no game
+/// installation is available, or the pull fails or does not bring the
+/// project to the installed game.
+#[tauri::command(rename_all = "camelCase")]
+pub async fn pull_project_update(
+    app: tauri::AppHandle,
+    repository_root: String,
+) -> CommandResult<ProjectOpenResultDto> {
+    let cache_root = cache_root(&app)?;
+    let registry_path = app_registry_path(&app);
+    run_blocking(move || {
+        let state = app.state::<DesktopState>();
+        let root = PathBuf::from(&repository_root);
+        let source = project_game(&app, &root)?;
+        let project = pull_update_with_game(&state, &root, source, &cache_root)?;
+        Ok(remember_project(&state, project, registry_path, None))
+    })
+    .await
+}
+
 /// Creates a project for the configured game installation, in a new or empty
 /// folder, and makes it the active project.
 ///

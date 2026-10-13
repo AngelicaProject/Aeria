@@ -78,6 +78,23 @@ impl GitRepository {
         Ok(())
     }
 
+    /// The upstream of the current branch on a remote, such as
+    /// `origin/main`, with its commit as last fetched; `None` without one.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when Git fails.
+    pub fn upstream_head(&self) -> Result<Option<(String, String)>, GitError> {
+        let Some(branch) = self.current_branch()? else {
+            return Ok(None);
+        };
+        let Some(upstream) = self.upstream(&branch)? else {
+            return Ok(None);
+        };
+        let commit = self.verify_ref(&format!("refs/remotes/{upstream}"))?;
+        Ok(commit.map(|commit| (upstream, commit)))
+    }
+
     /// Integrates the already fetched commits of the current branch's
     /// upstream.
     ///

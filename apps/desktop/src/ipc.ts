@@ -188,6 +188,23 @@ export function updateProjectFromGame(repositoryRoot: string): Promise<ProjectOp
   return call<ProjectOpenResultDto>("update_project_from_game", { repositoryRoot });
 }
 
+/**
+ * The upstream of the project's branch when it already holds the project
+ * for the configured game, after a fetch; `null` when the update is not
+ * there.
+ */
+export function incomingProjectUpdate(repositoryRoot: string): Promise<string | null> {
+  return call<string | null>("incoming_project_update", { repositoryRoot });
+}
+
+/**
+ * Pulls the project's update to the configured game from its upstream and
+ * opens the project. Work made for the previous game version joins it.
+ */
+export function pullProjectUpdate(repositoryRoot: string): Promise<ProjectOpenResultDto> {
+  return call<ProjectOpenResultDto>("pull_project_update", { repositoryRoot });
+}
+
 /** Creates a project for the configured game installation. */
 export function initializeProjectFromGame(
   repositoryRoot: string,

@@ -998,7 +998,13 @@ corners. Reduce transparency, High Contrast Dark, and other platforms use an
 opaque theme-colored backdrop.
 
 The launcher offers **Update project** for an existing repository and an
-installed game. After an update the workbench shows a summary: translations
+installed game. Opening a project whose files are for an older game version
+asks before updating it, and meanwhile fetches the branch's upstream: when
+the upstream already holds the project for the installed game, the question
+names it and **Pull the update** is the main action, with **Update
+project** beside it (see
+[`po-project.md`](./po-project.md#an-update-made-by-someone-else)). After
+an update the workbench shows a summary: translations
 to check because their source changed, translations kept as obsolete, files
 written, and the commit. The status bar shows how many strings of the project
 have a changed source and filters the list to them. See

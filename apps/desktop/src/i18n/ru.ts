@@ -683,6 +683,8 @@ export const ru: Catalog = {
   "sourceUpdate.summaryDescription": "Файлы проекта теперь для версии игры {version} (были для {previous}).",
   "sourceUpdate.preservedNote": "Ни один перевод не теряется: перевод с изменившимся исходником сохраняется и помечается, а перевод строки, ушедшей из игры, остаётся в файле как устаревший.",
   "sourceUpdate.confirm": "Обновить проект",
+  "sourceUpdate.incoming": "Обновление до этой версии уже есть в {upstream}.",
+  "sourceUpdate.pull": "Получить обновление",
   "sourceUpdate.updating": "Обновление…",
   "hints.title": "Справка по строке",
   "hints.noString": "Выберите строку: справка покажет её имена, термины и макросы и то, что проверки находят в переводе по ходу ввода.",

@@ -678,6 +678,8 @@ export const en = {
   "sourceUpdate.summaryDescription": "The project's files are now for game version {version} (they were for {previous}).",
   "sourceUpdate.preservedNote": "No translation is lost: a translation whose source changed is kept and marked, and one whose string left the game stays in its file as obsolete.",
   "sourceUpdate.confirm": "Update project",
+  "sourceUpdate.incoming": "The update to this version is already on {upstream}.",
+  "sourceUpdate.pull": "Pull the update",
   "sourceUpdate.updating": "Updating…",
   "hints.title": "String guide",
   "hints.noString": "Select a string: the guide shows its names, terms, and macros, and what the checks find in the translation as it is typed.",

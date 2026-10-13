@@ -11,13 +11,16 @@ type SourceUpdateDialogProps = {
   needed?: SourceUpdateNeededDto | null;
   /** What an update did, for `summary`. */
   report?: SourceUpdateReportDto | null;
+  /** The upstream that already holds the update, for `confirm`; pulling it is then the main action. */
+  incoming?: string | null;
   busy?: boolean;
   onConfirm?: () => void;
+  onPull?: () => void;
   onClose: () => void;
 };
 
 /** Asks before updating a project to a new game version, or tells what the update did. */
-export function SourceUpdateDialog({ open, mode, needed = null, report = null, busy = false, onConfirm, onClose }: SourceUpdateDialogProps) {
+export function SourceUpdateDialog({ open, mode, needed = null, report = null, incoming = null, busy = false, onConfirm, onPull, onClose }: SourceUpdateDialogProps) {
   const { t } = useI18n();
   const version = (mode === "confirm" ? needed?.gameVersion : report?.gameVersion) ?? "";
   const previous = (mode === "confirm" ? needed?.previousGameVersion : report?.previousGameVersion) ?? "";
@@ -44,14 +47,19 @@ export function SourceUpdateDialog({ open, mode, needed = null, report = null, b
                 {report.commit ? t("sourceUpdate.committed", { commit: report.commit.slice(0, 7) }) : t("sourceUpdate.notCommitted")}
               </p>
             </>
-          ) : <p className="dialog-description">{t("sourceUpdate.preservedNote")}</p>}
+          ) : <p className="dialog-description">{t(incoming ? "sourceUpdate.incoming" : "sourceUpdate.preservedNote", { upstream: incoming ?? "" })}</p>}
           <div className="dialog-actions">
             {mode === "confirm" ? (
               <>
                 <button className="button button-secondary" type="button" disabled={busy} onClick={onClose}>{t("common.cancel")}</button>
-                <button className="button button-primary" type="button" disabled={busy || !onConfirm} onClick={onConfirm}>
-                  {t(busy ? "sourceUpdate.updating" : "sourceUpdate.confirm")}
+                <button className={incoming ? "button button-secondary" : "button button-primary"} type="button" disabled={busy || !onConfirm} onClick={onConfirm}>
+                  {t(busy && !incoming ? "sourceUpdate.updating" : "sourceUpdate.confirm")}
                 </button>
+                {incoming ? (
+                  <button className="button button-primary" type="button" disabled={busy || !onPull} onClick={onPull}>
+                    {t(busy ? "sourceUpdate.updating" : "sourceUpdate.pull")}
+                  </button>
+                ) : null}
               </>
             ) : (
               <button className="button button-primary" type="button" onClick={onClose}>{t("common.close")}</button>

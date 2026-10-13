@@ -410,6 +410,28 @@ string whose meaning moved (a renumbered list, a reordered column) becomes
 fuzzy and is fixed as ordinary work; since fuzzy entries are not exported, no
 player sees a translation meant for another string.
 
+### An update made by someone else
+
+One collaborator updates the project and publishes the commit; the others
+receive it with Git. A project opened with a game newer than its files
+cannot be read until it is for that game, so the desktop looks at the
+upstream of its branch before it updates: it fetches the remote and reads
+`gameVersion` of `aeria.json` there. When that is the installed version and
+the format is one this Aeria reads, it offers to pull the update instead of
+making it again (`incoming_update`, `pull_update_with_game`).
+
+The pull is the Pull of [`git.md`](./git.md#fetch-pull-and-push) with no
+resolutions, and its result must be for the installed game, or the branch
+stays as it was. Uncommitted work and local commits made for the previous
+version join the update per string, by the rule of the table above (see
+[`git.md`](./git.md#per-string-merge)). A string changed differently here
+and there stops the pull; the project can then be updated here, opened, and
+pulled with the conflict resolved in the Git dock, since two updates to the
+same game by the same Aeria write the same game text.
+
+An upstream that does not hold the update yet, or no remote, leaves only
+the update made here.
+
 ## Earlier projects
 
 There is no migration. A project of the earlier format has no `aeria.json`
