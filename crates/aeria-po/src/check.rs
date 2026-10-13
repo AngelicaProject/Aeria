@@ -308,7 +308,10 @@ fn repeated_word(source: &str, text: &str) -> Option<String> {
                 found
             })
     };
-    repeated(source).is_none().then(|| repeated(text)).flatten()
+    // Most translations repeat no word: the source is read only for one
+    // that does.
+    let found = repeated(text)?;
+    repeated(source).is_none().then_some(found)
 }
 
 /// Russian forms that write both genders at once, such as `готов(а)`.

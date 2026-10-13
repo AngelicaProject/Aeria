@@ -51,6 +51,8 @@ pub struct Glossary {
     pub diagnostics: Vec<GlossaryDiagnostic>,
     /// Finds the terms of `entries` in a text in one pass, made on first use.
     finder: std::sync::OnceLock<Finder>,
+    /// The entries by their lowercase names, made on first use.
+    names: std::sync::OnceLock<Names>,
 }
 
 impl GlossaryEntry {
@@ -95,6 +97,19 @@ struct Finder {
     entries: usize,
 }
 
+/// The entries of a glossary by their lowercase forms and headwords, so a
+/// term is found by its name without lowercasing every entry.
+#[derive(Clone, Debug)]
+struct Names {
+    /// The first entry with each form.
+    forms: std::collections::HashMap<String, usize>,
+    /// Every entry with each headword, in order.
+    headwords: std::collections::HashMap<String, Vec<usize>>,
+    /// The entries the index was made for: with others, entries are
+    /// compared one by one.
+    entries: usize,
+}
+
 impl Glossary {
     /// A glossary of `entries`.
     #[must_use]
@@ -110,16 +125,52 @@ impl Glossary {
     pub fn append(&mut self, entries: Vec<GlossaryEntry>) {
         self.entries.extend(entries);
         self.finder = std::sync::OnceLock::new();
+        self.names = std::sync::OnceLock::new();
     }
 
     /// The meanings of the name of `entry`: every entry with its headword,
     /// ignoring case, in order.
     #[must_use]
     pub fn senses(&self, entry: &GlossaryEntry) -> Vec<&GlossaryEntry> {
-        self.entries
-            .iter()
-            .filter(|other| other.same_name(entry))
+        let Some(names) = self.names() else {
+            return self
+                .entries
+                .iter()
+                .filter(|other| other.same_name(entry))
+                .collect();
+        };
+        names
+            .headwords
+            .get(&entry.term.to_lowercase())
+            .into_iter()
+            .flatten()
+            .filter_map(|&index| self.entries.get(index))
             .collect()
+    }
+
+    /// The index of the entries by name, unless entries were added since it
+    /// was made.
+    fn names(&self) -> Option<&Names> {
+        let names = self.names.get_or_init(|| {
+            let mut forms = std::collections::HashMap::new();
+            let mut headwords: std::collections::HashMap<String, Vec<usize>> =
+                std::collections::HashMap::new();
+            for (index, entry) in self.entries.iter().enumerate() {
+                for form in entry.all_forms() {
+                    forms.entry(form.to_lowercase()).or_insert(index);
+                }
+                headwords
+                    .entry(entry.term.to_lowercase())
+                    .or_default()
+                    .push(index);
+            }
+            Names {
+                forms,
+                headwords,
+                entries: self.entries.len(),
+            }
+        });
+        (names.entries == self.entries.len()).then_some(names)
     }
 
     /// Indexes of the entries whose term may occur in `lower`, the lowercase
@@ -550,15 +601,40 @@ fn count_spans<'a>(spans: impl IntoIterator<Item = &'a std::ops::Range<usize>>) 
 
 /// How many times `entry`'s term occurs in `text`, in any of its forms:
 /// forms that overlap are one occurrence.
+#[cfg(test)]
 fn count_term(text: &str, entry: &GlossaryEntry) -> usize {
     count_spans(&entry_spans(&Folded::new(text), entry))
 }
 
-/// Whether `text` keeps the term as the source writes it wherever the
+/// A translation as the terms of a source are looked for in it: its text,
+/// folded, and its words, each made once for all the terms.
+struct Target<'a> {
+    folded: Folded<'a>,
+    words: Vec<String>,
+}
+
+impl<'a> Target<'a> {
+    fn new(text: &'a str) -> Self {
+        Self {
+            folded: Folded::new(text),
+            words: words(text),
+        }
+    }
+
+    /// Whether the translation uses the term of `entry` found `count` times
+    /// in the source: keeps it as written, or has the words of its
+    /// translation or of one of `rendered`.
+    fn uses(&self, entry: &GlossaryEntry, count: usize, rendered: &[&str]) -> bool {
+        kept_as_written(&self.folded, entry, count)
+            || contains_inflected(&self.words, &entry.translation, rendered)
+    }
+}
+
+/// Whether `folded` keeps the term as the source writes it wherever the
 /// source has it (`count` times): part of a name left untranslated. A term
 /// whose translation only spells it another way (`FATE` as `F.A.T.E.`) is
 /// never kept, since the terms say how to write it.
-fn kept_as_written(text: &str, entry: &GlossaryEntry, count: usize) -> bool {
+fn kept_as_written(folded: &Folded<'_>, entry: &GlossaryEntry, count: usize) -> bool {
     let letters = |text: &str| -> String {
         text.chars()
             .filter(|letter| letter.is_alphanumeric())
@@ -567,7 +643,7 @@ fn kept_as_written(text: &str, entry: &GlossaryEntry, count: usize) -> bool {
     };
     let respelled =
         entry.translation != entry.term && letters(&entry.translation) == letters(&entry.term);
-    !respelled && count_term(text, entry) >= count
+    !respelled && count_spans(&entry_spans(folded, entry)) >= count
 }
 
 /// Whether the strings of `exceptions` name `entry`'s term, by any of its
@@ -625,7 +701,17 @@ const MYA_ENDINGS: [&str; 7] = ["ени", "енем", "ена", "ен", "ена�
 /// `-ся` declines before it (`клубящиеся`, `клубящихся`), and a noun in
 /// `-мя` takes `-ен-` (`пламя`, `пламени`).
 fn is_form(candidate: &str, word: &str) -> bool {
-    let (candidate, word) = (candidate.replace('ё', "е"), word.replace('ё', "е"));
+    let without_yo = |text: &str| {
+        text.chars()
+            .next()
+            .map(|first| if first == 'ё' { 'е' } else { first })
+    };
+    // Every form begins as its word does: most words of a text are not
+    // compared further.
+    if without_yo(candidate) != without_yo(word) {
+        return false;
+    }
+    let (candidate, word) = (yo_as_e(candidate), yo_as_e(word));
     // A word as written is its own form, whatever letter it ends with
     // (`Сигурэ`, `XII`).
     if candidate == word {
@@ -643,6 +729,15 @@ fn is_form(candidate: &str, word: &str) -> bool {
             && candidate
                 .strip_prefix(stem)
                 .is_some_and(|ending| MYA_ENDINGS.contains(&ending)))
+}
+
+/// `text` with `ё` written as `е`, copied only when it has one.
+fn yo_as_e(text: &str) -> std::borrow::Cow<'_, str> {
+    if text.contains('ё') {
+        std::borrow::Cow::Owned(text.replace('ё', "е"))
+    } else {
+        std::borrow::Cow::Borrowed(text)
+    }
 }
 
 /// The lowercase words of a text, in order. An apostrophe between letters
@@ -788,14 +883,13 @@ fn inserts_vowel(word: &str, stem: &str) -> bool {
     })
 }
 
-/// Whether the words of `translation` appear in `target` one after another,
-/// in order, allowing for inflected endings: each is the word's stem with an
-/// ending, so `эфирита` uses `эфирит` and `эфироита` does not, and
-/// `списке целей ... задания` does not use `список заданий`. A word of
-/// `rendered` stands for the whole translation while the target has it, as
-/// written or inflected.
-fn contains_inflected(target: &str, translation: &str, rendered: &[&str]) -> bool {
-    let target = words(target);
+/// Whether the words of `translation` appear in `target`, the words of a
+/// text, one after another, in order, allowing for inflected endings: each
+/// is the word's stem with an ending, so `эфирита` uses `эфирит` and
+/// `эфироита` does not, and `списке целей ... задания` does not use
+/// `список заданий`. A word of `rendered` stands for the whole translation
+/// while the target has it, as written or inflected.
+fn contains_inflected(target: &[String], translation: &str, rendered: &[&str]) -> bool {
     let has = |phrase: &[String]| {
         !phrase.is_empty()
             && target.windows(phrase.len()).any(|run| {
@@ -909,9 +1003,16 @@ impl Glossary {
     #[must_use]
     pub fn find(&self, term: &str) -> Option<&GlossaryEntry> {
         let term = term.to_lowercase();
-        self.entries
-            .iter()
-            .find(|entry| entry.all_forms().any(|form| form.to_lowercase() == term))
+        let Some(names) = self.names() else {
+            return self
+                .entries
+                .iter()
+                .find(|entry| entry.all_forms().any(|form| form.to_lowercase() == term));
+        };
+        names
+            .forms
+            .get(&term)
+            .and_then(|&index| self.entries.get(index))
     }
 
     /// What the glossary finds in a translation of `source`, but for the
@@ -929,6 +1030,7 @@ impl Glossary {
     ) -> TermReview<'a, 'e> {
         let found = self.occurrences(source);
         let target = text_of(target);
+        let target = Target::new(&target);
         // A name is used when the translation of one of its meanings is.
         let used: Vec<bool> = found
             .iter()
@@ -938,8 +1040,7 @@ impl Glossary {
                     .filter(|(term, _)| term.to_lowercase() == entry.term.to_lowercase())
                     .map(|(_, word)| *word)
                     .collect();
-                kept_as_written(&target, entry, *count)
-                    || contains_inflected(&target, &entry.translation, &rendered)
+                target.uses(entry, *count, &rendered)
             })
             .collect();
         let mut review = TermReview::default();
@@ -980,13 +1081,11 @@ impl Glossary {
         exceptions: &[String],
     ) -> Vec<&GlossaryEntry> {
         let target = text_of(target);
+        let target = Target::new(&target);
         let found = self.occurrences(source);
         let used: Vec<bool> = found
             .iter()
-            .map(|(entry, count)| {
-                kept_as_written(&target, entry, *count)
-                    || contains_inflected(&target, &entry.translation, &[])
-            })
+            .map(|(entry, count)| target.uses(entry, *count, &[]))
             .collect();
         // A name is used when one of its meanings is; it is told once.
         found
@@ -1080,6 +1179,30 @@ mod tests {
             glossary.missing_in("Ask Minfilia.", "Спросите Крил.").len(),
             1
         );
+    }
+
+    #[test]
+    fn a_term_is_found_by_name_after_entries_are_added() {
+        let mut glossary = Glossary::new(vec![
+            sense("Gaia", "Гея", "персонаж"),
+            entry("Minfilia", "Минфилия"),
+        ]);
+        assert_eq!(
+            glossary.find("MINFILIA").map(|e| e.translation.as_str()),
+            Some("Минфилия")
+        );
+        assert!(glossary.find("Ryne").is_none());
+        glossary.append(vec![sense("gaia", "Гайя", "место"), entry("Ryne", "Рина")]);
+        assert_eq!(
+            glossary.find("ryne").map(|e| e.translation.as_str()),
+            Some("Рина")
+        );
+        let senses: Vec<&str> = glossary
+            .senses(&glossary.entries[0])
+            .into_iter()
+            .map(|sense| sense.translation.as_str())
+            .collect();
+        assert_eq!(senses, ["Гея", "Гайя"]);
     }
 
     #[test]
