@@ -335,8 +335,10 @@ pub fn can_be_exception(term: &str) -> bool {
 }
 
 /// A comment's text on one line.
+/// A comment as one line. Reading drops the white space a line ends with,
+/// so it is not written: a file read and written again keeps its bytes.
 fn comment_line(text: &str) -> String {
-    text.replace('\r', "").replace('\n', "\\n")
+    text.trim_end().replace('\r', "").replace('\n', "\\n")
 }
 
 impl PoFile {
@@ -776,6 +778,21 @@ mod tests {
             "#, fuzzy, aeria-term-exception: the Maelstrom, aeria-term-exception: Scions, aeria-term-model-exception: Mount Gulg 3f9a1c0b7d2e, aeria-term-model-rendering: Mount Gulg 1d4e0f7a9c2b гульгский, aeria-reviewed: {}\n",
             fingerprint("Имя \\<")
         )));
+    }
+
+    #[test]
+    fn a_comment_ending_in_white_space_is_written_as_it_reads_back() {
+        let mut file = sample();
+        file.entries[0].extracted = vec!["de: bis ".to_owned(), "column 4:  ".to_owned()];
+        file.entries[0].notes = vec!["a note ".to_owned()];
+        let text = file.write();
+        assert!(
+            text.contains("#. de: bis\n#. column 4:\n# a note\n"),
+            "{text}"
+        );
+        let (read, problems) = PoFile::parse(&text);
+        assert!(problems.is_empty(), "{problems:?}\n{text}");
+        assert_eq!(read.write(), text);
     }
 
     #[test]

@@ -220,7 +220,8 @@ column order elsewhere. The `#.` lines are derived only from the game, so
 every collaborator with the same game version produces the same bytes for
 them and Git never sees them conflict. Files are written in one canonical
 form, one line per field, so a save changes only the lines of the string it
-changed.
+changed. A comment line never ends in white space, also when the game's text
+it shows does: reading a file drops it.
 
 ### Reviews
 
