@@ -20,14 +20,20 @@ import { SearchScope, defaultFields, scopeNarrowed, type Scope } from "./SearchS
 import { throttled } from "../throttle";
 
 
+/**
+ * A search set from outside; a new `nonce` applies it again. With `states`
+ * it is a search of the whole project for strings in those states.
+ */
+export type SearchSeed = { text: string; states?: readonly SearchState[]; nonce: number };
+
 type SearchPanelProps = {
   onRevealBinding?: ((binding: SourceBinding) => void) | undefined;
   /** A bulk edit wrote files: the editor reads them again. */
   onWorkspaceChanged?: (() => void) | undefined;
   /** Shows the machine translation dialog, which follows a running run. */
   onOpenTranslate?: (() => void) | undefined;
-  /** Text to search for, set from outside (the palette's `#`); a new `nonce` applies it again. */
-  seed?: { text: string; nonce: number } | undefined;
+  /** A search set from outside: the palette's `#`, the status bar's changed sources. */
+  seed?: SearchSeed | undefined;
 };
 
 /**
@@ -122,10 +128,20 @@ export function SearchPanel({ onRevealBinding, onWorkspaceChanged, onOpenTransla
     void projectSearchPrepare().catch(() => undefined);
   }, []);
 
+  // The panel is mounted again each time its tool is shown: a seed applied
+  // before must not replace the search made since.
+  const [seedApplied, setSeedApplied] = useStickyState("search.seed", 0);
   useEffect(() => {
-    if (seed) {
+    if (seed && seed.nonce !== seedApplied) {
+      setSeedApplied(seed.nonce);
       setText(seed.text);
       setRegex(false);
+      if (seed.states) {
+        setStates(seed.states);
+        setPathsText("");
+        setCheck("any");
+        setIssueGroup(null);
+      }
       inputRef.current?.focus();
     }
     // Only a new seed applies; the setters are stable.

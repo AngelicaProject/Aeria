@@ -53,6 +53,7 @@ import { TranslateDialog } from "./TranslateDialog";
 import { GlossaryView, type GlossaryFocus, type GlossaryViewHandle } from "./GlossaryView";
 import { StyleDialog } from "./StyleDialog";
 import { WorkbenchToolDock, toolTitle, type WorkbenchTool } from "./WorkbenchToolDock";
+import type { SearchSeed } from "./SearchPanel";
 import { CommitView } from "./GitHistory";
 import { changeMark, type GitCommitDto } from "../types";
 import { detachedPanelTitle, type DetachedPanel } from "./DetachedToolWindow";
@@ -290,7 +291,7 @@ export function EditorShell({
   const bumpProjectRevision = useCallback(() => setProjectRevision((current) => current + 1), []);
   const [translateOpen, setTranslateOpen] = useState(false);
   const openTranslate = useCallback(() => setTranslateOpen(true), []);
-  const [searchSeed, setSearchSeed] = useState<{ text: string; nonce: number } | undefined>(undefined);
+  const [searchSeed, setSearchSeed] = useState<SearchSeed | undefined>(undefined);
   const [exportOpen, setExportOpenState] = useState(false);
   const setExportOpen = useCallback((open: boolean) => {
     setExportOpenState(open);
@@ -1520,7 +1521,7 @@ export function EditorShell({
         dirty={dirty}
         projectProgress={projectProgress}
         fuzzyCount={fuzzyCount}
-        onShowFuzzy={() => setLensFilter({ ...emptyOccurrenceFilter, status: "fuzzy" })}
+        onShowFuzzy={() => { setSearchSeed((current) => ({ text: "", states: ["fuzzy"], nonce: (current?.nonce ?? 0) + 1 })); showPanel("search", "left", false); }}
       />
       <ConfirmDialog
         open={discardRequest !== null}

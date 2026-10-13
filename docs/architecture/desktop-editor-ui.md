@@ -1020,6 +1020,7 @@ After
 an update the workbench shows a summary: translations
 to check because their source changed, translations kept as obsolete, files
 written, and the commit. The status bar shows how many strings of the project
-have a changed source and filters the list to them. See
+have a changed source; clicking the count finds them in the
+[Search tool](#search-tool), whichever sheets they are in. See
 [`po-project.md`](./po-project.md#game-updates).
 

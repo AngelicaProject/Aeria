@@ -4,7 +4,7 @@ import type { PendingChangesDto, SourceBinding } from "../types";
 import { useI18n } from "../ui/i18n";
 import { Segmented } from "../ui/primitives/Segmented";
 import { GitPanel } from "./GitPanel";
-import { SearchPanel } from "./SearchPanel";
+import { SearchPanel, type SearchSeed } from "./SearchPanel";
 import type { GitCommitDto } from "../types";
 
 export type WorkbenchTool = "search" | "git";
@@ -26,8 +26,8 @@ type WorkbenchToolDockProps = {
   onRevealBinding?: (binding: SourceBinding) => void;
   /** Shows the machine translation dialog. */
   onOpenTranslate?: () => void;
-  /** Text the Search tool searches for, set from the palette. */
-  searchSeed?: { text: string; nonce: number } | undefined;
+  /** What the Search tool searches for, set from the palette or the status bar. */
+  searchSeed?: SearchSeed | undefined;
 };
 
 export function toolTitle(tool: WorkbenchTool): MessageKey {
