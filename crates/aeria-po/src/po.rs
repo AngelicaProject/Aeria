@@ -334,11 +334,14 @@ pub fn can_be_exception(term: &str) -> bool {
     !term.is_empty() && !term.contains([',', '\n', '\r'])
 }
 
-/// A comment's text on one line.
 /// A comment as one line. Reading drops the white space a line ends with,
-/// so it is not written: a file read and written again keeps its bytes.
+/// so it is not written: a file read and written again keeps its bytes. A
+/// line break is text, written as `\n`, and stays.
 fn comment_line(text: &str) -> String {
-    text.trim_end().replace('\r', "").replace('\n', "\\n")
+    text.replace('\r', "")
+        .replace('\n', "\\n")
+        .trim_end()
+        .to_owned()
 }
 
 impl PoFile {
@@ -792,6 +795,24 @@ mod tests {
         );
         let (read, problems) = PoFile::parse(&text);
         assert!(problems.is_empty(), "{problems:?}\n{text}");
+        assert_eq!(read.write(), text);
+    }
+
+    #[test]
+    fn a_comment_ending_in_a_line_break_keeps_it() {
+        let mut file = sample();
+        file.entries[0].extracted = vec!["column 14: sung.\n".to_owned(), "fr: IL.\r\n".to_owned()];
+        let text = file.write();
+        assert!(
+            text.contains("#. column 14: sung.\\n\n#. fr: IL.\\n\n"),
+            "{text}"
+        );
+        let (read, problems) = PoFile::parse(&text);
+        assert!(problems.is_empty(), "{problems:?}\n{text}");
+        assert_eq!(
+            read.entries[0].extracted,
+            ["column 14: sung.\n", "fr: IL.\n"]
+        );
         assert_eq!(read.write(), text);
     }
 
