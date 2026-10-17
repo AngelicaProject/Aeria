@@ -696,6 +696,34 @@ const ENDINGS: [&str; 52] = [
     "ами", "ями",
 ];
 
+/// Endings of a noun in `-а` or `-я` (`Носка`, `Эорзея`, `гильдия`): its
+/// cases in both numbers, so `Носке` is a form of `Носка` and `Носкее`,
+/// with an ending of an adjective, is not.
+const NOUN_A_ENDINGS: [&str; 20] = [
+    "", "а", "я", "ы", "и", "е", "у", "ю", "й", "ь", "ой", "ей", "ою", "ею", "ам", "ям", "ами",
+    "ями", "ах", "ях",
+];
+
+/// Endings of an adjective in `-ая`, `-яя`, or `-ый` (`Западная`,
+/// `первобытный`): its genders, cases, and numbers, so `Западной` is a form
+/// of `Западная` and `Западна`, with an ending of a noun, is not.
+const ADJECTIVE_ENDINGS: [&str; 26] = [
+    "ая", "яя", "ой", "ей", "ую", "юю", "ою", "ею", "ый", "ий", "ого", "его", "ому", "ему", "ым",
+    "им", "ом", "ем", "ое", "ее", "ые", "ие", "ых", "их", "ыми", "ими",
+];
+
+/// The endings a word declines with, by the letters its stem leaves off:
+/// a noun in `-а` or `-я` and an adjective in `-ая`, `-яя`, or `-ый` take
+/// only their own; any other word, whose ending does not tell a noun from an
+/// adjective (`гений`, `знание`), takes any of [`ENDINGS`].
+fn endings_after(trimmed: &str) -> &'static [&'static str] {
+    match trimmed {
+        "ая" | "яя" | "ый" => &ADJECTIVE_ENDINGS,
+        _ if trimmed.ends_with(['а', 'я']) => &NOUN_A_ENDINGS,
+        _ => &ENDINGS,
+    }
+}
+
 /// Most letters an inflected form adds to a stem.
 const MAX_ENDING: usize = 4;
 
@@ -741,6 +769,15 @@ fn is_form(candidate: &str, word: &str) -> bool {
     if candidate == word {
         return true;
     }
+    // A word written with hyphens declines part by part (`Лимса-Ломинса`,
+    // `Лимсу-Ломинсу`) and has as many parts in each of its forms.
+    if candidate.contains('-') || word.contains('-') {
+        let (candidates, parts) = (candidate.split('-'), word.split('-'));
+        return candidate.matches('-').count() == word.matches('-').count()
+            && candidates
+                .zip(parts)
+                .all(|(candidate, part)| is_form(candidate, part));
+    }
     if let (Some(candidate), Some(word)) = (candidate.strip_suffix("ся"), word.strip_suffix("ся"))
         && word.chars().count() >= 3
     {
@@ -764,8 +801,9 @@ fn yo_as_e(text: &str) -> std::borrow::Cow<'_, str> {
     }
 }
 
-/// The lowercase words of a text, in order. An apostrophe between letters
-/// is part of its word, so `Уль'ды` is one word, a form of `Уль'да`.
+/// The lowercase words of a text, in order. An apostrophe or a hyphen
+/// between letters is part of its word, so `Уль'ды` is one word, a form of
+/// `Уль'да`, and `Ла-Носке` is one word, not a form of `Ла Носка`.
 fn words(text: &str) -> Vec<String> {
     written_words(&text.to_lowercase())
         .into_iter()
@@ -785,7 +823,7 @@ fn written_words(text: &str) -> Vec<(String, bool)> {
     let letters: Vec<char> = text.chars().collect();
     let in_word = |at: usize| {
         is_word(letters[at])
-            || (APOSTROPHES.contains(&letters[at])
+            || ((APOSTROPHES.contains(&letters[at]) || HYPHENS.contains(&letters[at]))
                 && at > 0
                 && is_word(letters[at - 1])
                 && letters.get(at + 1).copied().is_some_and(is_word))
@@ -795,8 +833,15 @@ fn written_words(text: &str) -> Vec<(String, bool)> {
     let mut begins = true;
     for (at, letter) in letters.iter().enumerate() {
         if in_word(at) {
-            // One spelling of the apostrophe, whichever the text writes.
-            word.push(if is_word(*letter) { *letter } else { '\'' });
+            // One spelling of the apostrophe and of the hyphen, whichever
+            // the text writes.
+            word.push(if is_word(*letter) {
+                *letter
+            } else if HYPHENS.contains(letter) {
+                '-'
+            } else {
+                '\''
+            });
             continue;
         }
         if !word.is_empty() {
@@ -814,6 +859,9 @@ fn written_words(text: &str) -> Vec<(String, bool)> {
 /// Apostrophes a name is written with.
 const APOSTROPHES: [char; 3] = ['\'', '’', 'ʼ'];
 
+/// Hyphens a word is written with: `Ла-Носка`.
+const HYPHENS: [char; 3] = ['-', '\u{2010}', '\u{2011}'];
+
 /// Whether `word` is an inflected form of a word with this stem, which
 /// leaves `trimmed` off the word: the stem with an ending, or the stem with
 /// or without a vowel that comes and goes when the word is declined
@@ -826,15 +874,17 @@ fn inflects(word: &str, stem: &str, trimmed: &str) -> bool {
         || inserts_vowel(word, stem)
 }
 
-/// Whether `word` is `stem` with an ending of declension. Before the ending
-/// it may take back part of what the stem left off the word (`чарод` + `е` +
-/// `я` of `чародей`) or `ь` and `й` (`ноч` + `ь` + `ю`), but not all of a
-/// final vowel: an ending takes the vowel's place, so `Ализея` is not a form
-/// of `Ализе`.
+/// Whether `word` is `stem` with an ending of declension, one of those
+/// [`endings_after`] gives for `trimmed`. Before the ending it may take back
+/// part of what the stem left off the word (`чарод` + `е` + `я` of
+/// `чародей`) or `ь` and `й` (`ноч` + `ь` + `ю`), but not all of a final
+/// vowel: an ending takes the vowel's place, so `Ализея` is not a form of
+/// `Ализе`.
 fn declines(word: &str, stem: &str, trimmed: &str) -> bool {
     let Some(ending) = word.strip_prefix(stem) else {
         return false;
     };
+    let endings = endings_after(trimmed);
     ending.chars().count() <= MAX_ENDING
         && ending
             .char_indices()
@@ -844,7 +894,7 @@ fn declines(word: &str, stem: &str, trimmed: &str) -> bool {
                 let taken = &ending[..split];
                 let signs = taken.chars().all(|c| "ьй".contains(c));
                 let part = taken.len() < trimmed.len() && trimmed.starts_with(taken);
-                (signs || part) && ENDINGS.contains(&&ending[split..])
+                (signs || part) && endings.contains(&&ending[split..])
             })
 }
 
@@ -1203,6 +1253,43 @@ mod tests {
             glossary.missing_in("Ask Minfilia.", "Спросите Крил.").len(),
             1
         );
+    }
+
+    #[test]
+    fn a_word_declines_only_with_endings_of_its_kind() {
+        let glossary = Glossary::new(vec![entry("Western La Noscea", "Западная Ла Носка")]);
+        let source = "Visit western La Noscea.";
+        for used in [
+            "в Западной Ла Носке",
+            "Западную Ла Носку",
+            "над Западными Ла Носками",
+        ] {
+            assert!(glossary.missing_in(source, used).is_empty(), "{used}");
+        }
+        for unused in [
+            "в Западной Ла Носкее",
+            "в Западной Ла-Носке",
+            "в Западной Ла-Носкее",
+            "в Западна Ла Носке",
+        ] {
+            assert_eq!(glossary.missing_in(source, unused).len(), 1, "{unused}");
+        }
+        assert!(is_form("эорзее", "эорзея"));
+        assert!(is_form("гильдией", "гильдия"));
+        assert!(is_form("гильдий", "гильдия"));
+        assert!(!is_form("носком", "носка"));
+        assert!(is_form("первобытных", "первобытный"));
+        assert!(!is_form("первобытна", "первобытный"));
+    }
+
+    #[test]
+    fn a_hyphenated_word_is_one_word() {
+        let glossary = Glossary::new(vec![entry("Limsa Lominsa", "Лимса-Ломинса")]);
+        let source = "Return to Limsa Lominsa.";
+        assert!(glossary.missing_in(source, "в Лимсу-Ломинсу").is_empty());
+        assert_eq!(glossary.missing_in(source, "в Лимсу Ломинсу").len(), 1);
+        assert_eq!(words("Ла‑Носка и Ла-Носка"), ["ла-носка", "и", "ла-носка"]);
+        assert_eq!(words("слово - другое"), ["слово", "другое"]);
     }
 
     #[test]
