@@ -334,7 +334,14 @@ export function EditorShell({
     [rows, selectedRowCursor],
   );
   const allOccurrences = useMemo(() => flattenTranslationRows(rows), [rows]);
-  const visibleOccurrences = useMemo(() => filterOccurrences(allOccurrences, lensFilter), [allOccurrences, lensFilter]);
+  const selectedKey = useMemo(() => selectedBinding ? bindingKey(selectedBinding) : null, [selectedBinding]);
+  // The selected string stays in the filtered list once saved out of the
+  // filter, until another string is selected or the filter changes, so the
+  // list does not jump under the cursor.
+  const [keptString, setKeptString] = useState<{ key: string | null; filter: OccurrenceFilter }>({ key: selectedKey, filter: lensFilter });
+  if (keptString.key !== selectedKey) setKeptString({ key: selectedKey, filter: lensFilter });
+  const keepKey = keptString.filter === lensFilter ? keptString.key : null;
+  const visibleOccurrences = useMemo(() => filterOccurrences(allOccurrences, lensFilter, keepKey), [allOccurrences, keepKey, lensFilter]);
   const sheetHasNoRows = selectedSheetName !== null && loadedSheetName === selectedSheetName && !sheetLoading && !sheetStreaming && rows.length === 0;
 
   const progressBySheet = useMemo(() => new Map(progress.map((entry) => [entry.sheetName, entry])), [progress]);
@@ -834,8 +841,6 @@ export function EditorShell({
       allowWindowClose.current = false;
     }
   }, [requestDiscardConfirmation, t]);
-
-  const selectedKey = useMemo(() => selectedBinding ? bindingKey(selectedBinding) : null, [selectedBinding]);
 
   const handleWorkspaceChanged = useCallback(() => {
     setWorkspaceRevision((current) => current + 1);

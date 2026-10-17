@@ -79,14 +79,20 @@ export function isOccurrenceFilterActive(filter: OccurrenceFilter): boolean {
   return filter.status !== "all" || filter.kind !== "all" || filter.query.trim().length > 0;
 }
 
-/** Filters the loaded occurrences; once the sheet has finished loading this covers the whole sheet. */
+/**
+ * Filters the loaded occurrences; once the sheet has finished loading this
+ * covers the whole sheet. The string of binding key `keep` stays whatever
+ * the filter, so a string saved out of the filter does not leave the list.
+ */
 export function filterOccurrences(
   occurrences: readonly TranslationOccurrenceView[],
   filter: OccurrenceFilter,
+  keep: string | null = null,
 ): readonly TranslationOccurrenceView[] {
   if (!isOccurrenceFilterActive(filter)) return occurrences;
   const query = filter.query.trim().toLocaleLowerCase();
   return occurrences.filter((occurrence) => {
+    if (keep !== null && occurrenceKey(occurrence) === keep) return true;
     if (filter.status === "untranslated" ? occurrence.state !== null : filter.status !== "all" && occurrence.state !== filter.status) {
       return false;
     }

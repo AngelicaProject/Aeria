@@ -3,8 +3,8 @@ import type { GlossaryEntry, ReplacedTermDto, SheetTermDto, TermInput } from "./
 /**
  * A term of `terms.csv` being edited. `term` is the headword, `forms` its
  * other forms in the source, and `matchCase` marks a term that matches only
- * with its case as written. Rows read from the file have their place in it
- * as `key`; rows added later have higher keys.
+ * with its case as written. `key` identifies the row while the glossary is
+ * open; it is not its place in the file.
  */
 export type GlossaryRow = { key: number; term: string; translation: string; forms: string[]; note: string; matchCase: boolean; category: string };
 
@@ -25,9 +25,21 @@ export function splitForms(text: string): string[] {
   return text.split(";").map((form) => form.trim()).filter(Boolean);
 }
 
-export function rowsFromEntries(entries: readonly GlossaryEntry[]): GlossaryRow[] {
-  return entries.map((entry, index) => ({
-    key: index,
+/**
+ * The entries as rows. A row of `previous` with an entry's name and category
+ * gives it its key, so a term read again after a save or a change of the
+ * file stays the one chosen; other entries take keys after every key of
+ * `previous`.
+ */
+export function rowsFromEntries(entries: readonly GlossaryEntry[], previous: readonly GlossaryRow[] = []): GlossaryRow[] {
+  const known = new Map<string, number[]>();
+  for (const row of previous) {
+    const name = usageKey(row.term, row.category);
+    known.set(name, [...(known.get(name) ?? []), row.key]);
+  }
+  let next = previous.reduce((high, row) => Math.max(high, row.key + 1), 0);
+  return entries.map((entry) => ({
+    key: known.get(usageKey(entry.term, entry.category))?.shift() ?? next++,
     term: entry.term,
     translation: entry.translation,
     forms: [...(entry.forms ?? [])],
@@ -120,15 +132,24 @@ export function unappliedOf(item: GlossaryItem, unapplied: Unapplied | null): nu
   return unapplied?.get(usageKey(itemTerm(item), itemCategory(item))) ?? 0;
 }
 
-/** The entries of `terms.csv` as list items, with the terms of the sheets each takes the place of. */
+/**
+ * The entries of `terms.csv` as list items, with the terms of the sheets each
+ * takes the place of. `replaced` names entries by their place in the file,
+ * and `savedKeys` holds the key of the row read from each place; without it
+ * the keys are the places.
+ */
 export function entryItems(
   rows: readonly GlossaryRow[],
   problems: ReadonlyMap<number, RowProblem>,
   replaced: readonly ReplacedTermDto[],
   redundant: readonly string[],
+  savedKeys: readonly number[] | null = null,
 ): GlossaryItem[] {
   const replacedBy = new Map<number, SheetTermDto[]>();
-  for (const { entry, term } of replaced) replacedBy.set(entry, [...(replacedBy.get(entry) ?? []), term]);
+  for (const { entry, term } of replaced) {
+    const key = savedKeys === null ? entry : savedKeys[entry];
+    if (key !== undefined) replacedBy.set(key, [...(replacedBy.get(key) ?? []), term]);
+  }
   const same = new Set(redundant);
   return rows.map((row): GlossaryItem => {
     const replacedTerms = replacedBy.get(row.key) ?? [];
@@ -175,13 +196,17 @@ export type GlossaryFilter = { view: GlossaryView; category: string | null; shee
 
 export const emptyGlossaryFilter: GlossaryFilter = { view: "all", category: null, sheet: null, query: "" };
 
-export function filterItems(items: readonly GlossaryItem[], filter: GlossaryFilter, unapplied: Unapplied | null = null): GlossaryItem[] {
+/**
+ * The items the filter shows. The item `keep` is shown whatever the filter,
+ * so a term being edited does not leave the list.
+ */
+export function filterItems(items: readonly GlossaryItem[], filter: GlossaryFilter, unapplied: Unapplied | null = null, keep: string | null = null): GlossaryItem[] {
   const needle = filter.query.trim().toLocaleLowerCase();
-  return items.filter((item) =>
+  return items.filter((item) => item.id === keep || (
     inView(item, filter.view, unapplied)
     && (filter.category === null || categoryKey(itemCategory(item)) === filter.category)
     && (filter.sheet === null || (item.kind === "sheet" ? item.term.sheet === filter.sheet : item.replaced.some((term) => term.sheet === filter.sheet)))
-    && (needle === "" || item.search.includes(needle)));
+    && (needle === "" || item.search.includes(needle))));
 }
 
 export type CategoryCount = { key: string; label: string; count: number };

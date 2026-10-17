@@ -60,6 +60,10 @@ test("filters loaded occurrences by review state and text", async () => {
   assert.deepEqual(filterOccurrences(occurrences, { status: "fuzzy", kind: "all", query: "" }).map((item) => item.sourceMacro), ["Hello <num 1>"]);
   assert.deepEqual(filterOccurrences(occurrences, { status: "all", kind: "all", query: "bonj" }).map((item) => item.sourceMacro), ["Hello <num 1>"]);
   assert.equal(filterOccurrences(occurrences, { status: "translated", kind: "all", query: "" }).length, 0);
+  // A kept string stays in its place, though the filter no longer matches it.
+  const kept = occurrenceKey(occurrences[0]);
+  assert.deepEqual(filterOccurrences(occurrences, { status: "untranslated", kind: "all", query: "" }, kept).map((item) => item.sourceMacro), ["Hello <num 1>", "World", "..."]);
+  assert.deepEqual(filterOccurrences(occurrences, { status: "all", kind: "all", query: "world" }, kept).map((item) => item.sourceMacro), ["Hello <num 1>", "World"]);
 
   assert.equal(adjacentOccurrence(occurrences, binding(0), 1)?.sourceMacro, "World");
   assert.equal(adjacentOccurrence(occurrences, binding(3), 1)?.sourceMacro, "...");
