@@ -246,9 +246,10 @@ impl ModelRendering {
 
 /// The fingerprint of a glossary entry in a model's term exception: the
 /// first twelve hexadecimal digits of the SHA-256 of what decides whether
-/// the term applies: its headword, translation, forms, note, and case. Its
-/// category tells it from the other meanings of its name (see
-/// [`name_fingerprint`]).
+/// the term applies: its headword, translation, forms, note, and case, and
+/// whether it is indeclinable, which is part of it only when set, so that
+/// the decisions of terms without it hold as they were. Its category tells
+/// it from the other meanings of its name (see [`name_fingerprint`]).
 #[must_use]
 pub fn term_fingerprint(entry: &aeria_knowledge::GlossaryEntry) -> String {
     let mut text = String::new();
@@ -261,6 +262,9 @@ pub fn term_fingerprint(entry: &aeria_knowledge::GlossaryEntry) -> String {
     ] {
         text.push_str(part);
         text.push('\0');
+    }
+    if entry.indeclinable {
+        text.push_str("indeclinable\0");
     }
     fingerprint(&text)
 }

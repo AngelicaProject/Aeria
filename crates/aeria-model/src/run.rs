@@ -636,6 +636,7 @@ fn build(shared: &Shared, pack: &[Batch]) -> Result<Option<Built>, String> {
                     forms: entry.forms.clone(),
                     note: entry.full_note(),
                     category: entry.category.clone(),
+                    indeclinable: shared.knowledge.terms.fixed_words(entry),
                 });
             }
         }

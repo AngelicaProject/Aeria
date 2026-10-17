@@ -485,7 +485,8 @@ not re-render the workbench.
 - **Terms** lists the glossary terms of the source, each with its
   translation, note, and whether a term exception keeps
   it out (a model exception shows as *AI: another meaning*, a model
-  rendering as *AI: as «эфирный»*), with a link to the glossary; a term's
+  rendering as *AI: as «эфирный»*), the words of its translation that are
+  never declined (*not declined: иксали*), with a link to the glossary; a term's
   name opens it there. Each is marked once there is a
   translation: used or not used yet (amber). A term's **Not this term**
   (on hover) adds a term exception to the string, and **Restore** on an
@@ -827,7 +828,7 @@ again when the project changed while no term is being edited.
   the fields keep the focus while it writes, and the counts shown stay
   until they are counted again.
 - A project term's fields are its headword, translation, category, other
-  forms, note, and **Match case**, with its problem; **The sheets give**
+  forms, note, **Match case**, and **Indeclinable**, with its problem; **The sheets give**
   lists the sheet terms it replaces, marked where the translation differs,
   each with **Open the string** (a new term shows the sheet term of its name
   and category it will replace once saved); **Other meanings** lists the

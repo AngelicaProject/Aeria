@@ -158,15 +158,17 @@ translation, whether the term applies to the string (see
 apply gets a model exception: the flag holds the term's headword and the
 fingerprint of the term's glossary entry it was decided for, the first twelve
 hexadecimal digits of the SHA-256 of the entry's headword, translation,
-forms, note, and case (`aeria_po::term_fingerprint`); the note is the
+forms, note, and case, and of whether it is indeclinable only when it is,
+so that the decisions on other terms hold as they were
+(`aeria_po::term_fingerprint`); the note is the
 entry's own, without the note of its category, so a change of a category's
 note does not end the decisions on the project's terms of it (see
 [`../formats/knowledge-v1.md`](../formats/knowledge-v1.md#the-terms-of-the-sheets)). A name with several meanings has the fingerprint of the fingerprints
 and categories of all its meanings in order (`aeria_po::name_fingerprint`):
 the category of a name's one meaning does not change it. A model exception
 works as a term exception while it holds: the glossary still has the term
-and its meanings have that fingerprint. Another translation, form, note, or
-case of the term, a meaning added or removed, or another category of a name
+and its meanings have that fingerprint. Another translation, form, note,
+case, or indeclinability of the term, a meaning added or removed, or another category of a name
 with several meanings ends every decision made for the old one: the checks ask for the term again, and the next correction run
 decides again, so a better note reaches every string it concerns.
 
