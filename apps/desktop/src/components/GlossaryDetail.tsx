@@ -62,6 +62,10 @@ export function EntryDetail({ item, sheetsGive, fix, categories, senses, disable
         <input type="checkbox" checked={row.matchCase} disabled={disabled} onChange={(event) => onChange({ matchCase: event.target.checked })} />
         {t("glossary.field.matchCase")}
       </label>
+      <label className="glossary-check" title={t("glossary.field.indeclinableTitle")}>
+        <input type="checkbox" checked={row.indeclinable} disabled={disabled} onChange={(event) => onChange({ indeclinable: event.target.checked })} />
+        {t("glossary.field.indeclinable")}
+      </label>
       {item.problem ? <p className="glossary-problem"><UiIcon icon="circleAlert" size="xs" />{t(problemLabels[item.problem])}</p> : null}
       {fix}
       {sheetsGive.length > 0 ? (

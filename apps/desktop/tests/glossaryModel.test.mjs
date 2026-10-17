@@ -39,8 +39,10 @@ test("rows round-trip entries and trim edits", () => {
   const rows = rowsFromEntries(entries);
   assert.deepEqual(rows[0].forms, ["aethers"]);
   assert.deepEqual(inputsFromRows([{ ...rows[1], term: " Crystal ", note: "  ", forms: [" crystals ", " "], category: " предмет " }]), [
-    { term: "Crystal", translation: "Кристалл", forms: ["crystals"], note: null, matchCase: false, category: "предмет" },
+    { term: "Crystal", translation: "Кристалл", forms: ["crystals"], note: null, matchCase: false, indeclinable: false, category: "предмет" },
   ]);
+  assert.equal(rowsFromEntries([{ term: "Ixal", translation: "иксали", indeclinable: true, category: "племя" }])[0].indeclinable, true);
+  assert.equal(rowsChanged([{ ...rows[0], indeclinable: true }, rows[1]], entries), true);
   assert.equal(rowsFromEntries([{ term: "the Maelstrom", translation: "Мальстрём", matchCase: true, category: "организация" }])[0].matchCase, true);
   assert.equal(rowsChanged([{ ...rows[0], matchCase: true }, rows[1]], entries), true);
   assert.equal(rowsChanged(rows, entries), false);
@@ -51,7 +53,7 @@ test("rows round-trip entries and trim edits", () => {
 test("rows read again keep the keys of their terms", () => {
   const before = rowsFromEntries(entries);
   // A term removed and one added before a save: the file is written in the order of the rows.
-  const edited = [before[1], { key: 7, term: "Gil", translation: "гил", forms: [], note: "", matchCase: false, category: "валюта" }];
+  const edited = [before[1], { key: 7, term: "Gil", translation: "гил", forms: [], note: "", matchCase: false, indeclinable: false, category: "валюта" }];
   const saved = [entries[1], { term: "Gil", translation: "гил", category: "валюта" }];
   assert.deepEqual(rowsFromEntries(saved, edited).map((row) => row.key), [1, 7]);
   // An entry no row had takes a key after every key in use.
@@ -79,7 +81,7 @@ test("forms typed together are split at semicolons", () => {
 });
 
 test("problems follow the glossary format rules", () => {
-  const row = (key, term, translation, forms = [], category = "понятие") => ({ key, term, translation, forms, note: "", matchCase: false, category });
+  const row = (key, term, translation, forms = [], category = "понятие") => ({ key, term, translation, forms, note: "", matchCase: false, indeclinable: false, category });
   const rows = [
     row(1, "Aether", "Эфир", ["aethers"]),
     row(2, "aether", "Эфир"),

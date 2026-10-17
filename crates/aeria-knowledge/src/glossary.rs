@@ -7,7 +7,15 @@ use serde::Serialize;
 /// keeps every name it agrees on as a term has tens of thousands.
 pub const MAX_GLOSSARY_BYTES: u64 = 64 * 1024 * 1024;
 
-const COLUMNS: [&str; 6] = ["term", "translation", "forms", "note", "case", "category"];
+const COLUMNS: [&str; 7] = [
+    "term",
+    "translation",
+    "forms",
+    "note",
+    "case",
+    "indeclinable",
+    "category",
+];
 const TERMS_FILE: &str = "aeria-knowledge/terms.csv";
 
 /// One term.
@@ -35,6 +43,11 @@ pub struct GlossaryEntry {
     /// `the maelstrom`.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub match_case: bool,
+    /// The translation is never declined: its words stay as written in a
+    /// translation, here and in the translation of every other term that
+    /// has them (`иксали` in `тупокоготь иксали`).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub indeclinable: bool,
     /// What kind of thing the term names in this meaning (`место`,
     /// `существо`): a name may have one meaning per category.
     pub category: String,
@@ -58,6 +71,8 @@ pub struct Glossary {
     finder: std::sync::OnceLock<Finder>,
     /// The entries by their lowercase names, made on first use.
     names: std::sync::OnceLock<Names>,
+    /// The words of each indeclinable translation, made on first use.
+    fixed: std::sync::OnceLock<Vec<Vec<String>>>,
 }
 
 impl GlossaryEntry {
@@ -149,6 +164,44 @@ impl Glossary {
         self.entries.extend(entries);
         self.finder = std::sync::OnceLock::new();
         self.names = std::sync::OnceLock::new();
+        self.fixed = std::sync::OnceLock::new();
+    }
+
+    /// The words of the translation of each indeclinable term, lowercase
+    /// and with `ё` as `е`, each phrase once.
+    fn fixed(&self) -> &[Vec<String>] {
+        self.fixed.get_or_init(|| {
+            let mut phrases: Vec<Vec<String>> = Vec::new();
+            for entry in self.entries.iter().filter(|entry| entry.indeclinable) {
+                let phrase: Vec<String> = words(&entry.translation)
+                    .iter()
+                    .map(|word| yo_as_e(word).into_owned())
+                    .collect();
+                if !phrase.is_empty() && !phrases.contains(&phrase) {
+                    phrases.push(phrase);
+                }
+            }
+            phrases
+        })
+    }
+
+    /// The indeclinable words of the translation of `entry`: the
+    /// translations of indeclinable terms it has, each as one lowercase
+    /// phrase, such as `иксали` of `тупокоготь иксали`; all of it for an
+    /// indeclinable term.
+    #[must_use]
+    pub fn fixed_words(&self, entry: &GlossaryEntry) -> Vec<String> {
+        let translation = words(&entry.translation);
+        let mut found: Vec<String> = Vec::new();
+        for phrase in self.fixed() {
+            let text = phrase.join(" ");
+            if !found.contains(&text)
+                && !fixed_spans(&translation, std::slice::from_ref(phrase)).is_empty()
+            {
+                found.push(text);
+            }
+        }
+        found
     }
 
     /// The meanings of the name of `entry`: every entry with its headword,
@@ -247,7 +300,7 @@ fn glossary_error(message: impl Into<String>) -> GlossaryError {
     }
 }
 
-/// Whether a `case` field is set.
+/// Whether a `case` or `indeclinable` field is set.
 fn is_yes(value: &str) -> bool {
     matches!(value.to_ascii_lowercase().as_str(), "yes" | "true" | "1")
 }
@@ -298,7 +351,7 @@ pub fn parse_glossary(bytes: &[u8]) -> Result<Glossary, GlossaryError> {
         };
         let term = field(0);
         let translation = field(1);
-        let category = field(5);
+        let category = field(6);
         if term.is_empty() || translation.is_empty() || category.is_empty() {
             reject("the term, its translation, and its category must not be empty".to_owned());
             continue;
@@ -346,6 +399,7 @@ pub fn parse_glossary(bytes: &[u8]) -> Result<Glossary, GlossaryError> {
                 .map(str::to_owned),
             category_note: None,
             match_case: is_yes(field(4)),
+            indeclinable: is_yes(field(5)),
             category: category.to_owned(),
         });
     }
@@ -371,7 +425,7 @@ fn header_index(
             return Err(glossary_error(format!("column {name:?} appears twice")));
         }
     }
-    if index[0].is_none() || index[1].is_none() || index[5].is_none() {
+    if index[0].is_none() || index[1].is_none() || index[6].is_none() {
         return Err(glossary_error(
             "the header must name the columns term, translation, and category",
         ));
@@ -380,18 +434,24 @@ fn header_index(
 }
 
 /// Writes entries in the canonical form: the header (`case` only when an
-/// entry matches case), one entry per line, LF line endings, and quoting
-/// only where needed.
+/// entry matches case, `indeclinable` only when an entry is indeclinable),
+/// one entry per line, LF line endings, and quoting only where needed.
 #[must_use]
 pub fn write_glossary(entries: &[GlossaryEntry]) -> String {
     let mut writer = csv::WriterBuilder::new()
         .terminator(csv::Terminator::Any(b'\n'))
         .flexible(true)
         .from_writer(Vec::new());
-    // `case` is written only when an entry matches case, so a file without
-    // it stays as it was.
+    // `case` and `indeclinable` are written only when an entry sets them,
+    // so a file without them stays as it was, and readable by versions of
+    // Aeria that do not know `indeclinable`.
     let with_case = entries.iter().any(|entry| entry.match_case);
-    let wanted = |column: &str| column != "case" || with_case;
+    let with_indeclinable = entries.iter().any(|entry| entry.indeclinable);
+    let wanted = |column: &str| match column {
+        "case" => with_case,
+        "indeclinable" => with_indeclinable,
+        _ => true,
+    };
     let header: Vec<&str> = COLUMNS
         .iter()
         .copied()
@@ -406,6 +466,7 @@ pub fn write_glossary(entries: &[GlossaryEntry]) -> String {
             forms.as_str(),
             entry.note.as_deref().unwrap_or_default(),
             if entry.match_case { "yes" } else { "" },
+            if entry.indeclinable { "yes" } else { "" },
             entry.category.as_str(),
         ];
         let fields: Vec<&str> = COLUMNS
@@ -647,10 +708,17 @@ impl<'a> Target<'a> {
 
     /// Whether the translation uses the term of `entry` found `count` times
     /// in the source: keeps it as written, or has the words of its
-    /// translation or of one of `rendered`.
-    fn uses(&self, entry: &GlossaryEntry, count: usize, rendered: &[&str]) -> bool {
+    /// translation or of one of `rendered`, the words of the `fixed`
+    /// phrases as written.
+    fn uses(
+        &self,
+        entry: &GlossaryEntry,
+        count: usize,
+        rendered: &[&str],
+        fixed: &[Vec<String>],
+    ) -> bool {
         kept_as_written(&self.folded, entry, count)
-            || contains_inflected(&self.words, &entry.translation, rendered)
+            || contains_inflected(&self.words, &entry.translation, rendered, fixed)
     }
 }
 
@@ -961,18 +1029,57 @@ fn inserts_vowel(word: &str, stem: &str) -> bool {
 /// text, one after another, in order, allowing for inflected endings: each
 /// is the word's stem with an ending, so `эфирита` uses `эфирит` and
 /// `эфироита` does not, and `списке целей ... задания` does not use
-/// `список заданий`. A word of `rendered` stands for the whole translation
-/// while the target has it, as written or inflected.
-fn contains_inflected(target: &[String], translation: &str, rendered: &[&str]) -> bool {
+/// `список заданий`. The words of a `fixed` phrase, the translation of an
+/// indeclinable term, appear only as written: while `иксали` is fixed,
+/// `тупокоготь иксалов` does not use `тупокоготь иксали`. A word of
+/// `rendered` stands for the whole translation while the target has it, as
+/// written or inflected.
+fn contains_inflected(
+    target: &[String],
+    translation: &str,
+    rendered: &[&str],
+    fixed: &[Vec<String>],
+) -> bool {
     let has = |phrase: &[String]| {
+        let kept = fixed_spans(phrase, fixed);
         !phrase.is_empty()
             && target.windows(phrase.len()).any(|run| {
                 run.iter()
                     .zip(phrase)
-                    .all(|(candidate, word)| is_form(candidate, word))
+                    .enumerate()
+                    .all(|(at, (candidate, word))| {
+                        if kept.get(at).copied().unwrap_or(false) {
+                            yo_as_e(candidate) == yo_as_e(word)
+                        } else {
+                            is_form(candidate, word)
+                        }
+                    })
             })
     };
     has(&words(translation)) || rendered.iter().any(|form| has(&words(form)))
+}
+
+/// Which of `words` belong to an occurrence of one of the `fixed` phrases,
+/// compared with `ё` as `е`; empty when none does.
+fn fixed_spans(words: &[String], fixed: &[Vec<String>]) -> Vec<bool> {
+    let mut kept = vec![false; words.len()];
+    let mut any = false;
+    for phrase in fixed.iter().filter(|phrase| !phrase.is_empty()) {
+        if phrase.len() > words.len() {
+            continue;
+        }
+        for start in 0..=words.len() - phrase.len() {
+            if words[start..start + phrase.len()]
+                .iter()
+                .zip(phrase)
+                .all(|(word, fixed)| yo_as_e(word) == fixed.as_str())
+            {
+                kept[start..start + phrase.len()].fill(true);
+                any = true;
+            }
+        }
+    }
+    if any { kept } else { Vec::new() }
 }
 
 impl Glossary {
@@ -1114,7 +1221,7 @@ impl Glossary {
                     .filter(|(term, _)| term.to_lowercase() == entry.term.to_lowercase())
                     .map(|(_, word)| *word)
                     .collect();
-                target.uses(entry, *count, &rendered)
+                target.uses(entry, *count, &rendered, self.fixed())
             })
             .collect();
         let mut review = TermReview::default();
@@ -1159,7 +1266,7 @@ impl Glossary {
         let found = self.occurrences(source);
         let used: Vec<bool> = found
             .iter()
-            .map(|(entry, count)| target.uses(entry, *count, &[]))
+            .map(|(entry, count)| target.uses(entry, *count, &[], self.fixed()))
             .collect();
         // A name is used when one of its meanings is; it is told once.
         found
@@ -1524,6 +1631,89 @@ mod tests {
             parse_glossary(text.as_bytes()).expect("parse").entries,
             entries
         );
+    }
+
+    #[test]
+    fn indeclinable_is_written_only_when_a_term_is() {
+        let plain = write_glossary(&[entry("Aether", "Эфир")]);
+        assert!(plain.starts_with("term,translation,forms,note,category\n"));
+        let entries = vec![
+            GlossaryEntry {
+                indeclinable: true,
+                ..sense("Ixal", "иксали", "племя")
+            },
+            entry("Aether", "Эфир"),
+        ];
+        let text = write_glossary(&entries);
+        assert!(text.starts_with("term,translation,forms,note,indeclinable,category\n"));
+        assert!(text.contains("Ixal,иксали,,,yes,племя\n"));
+        assert_eq!(
+            parse_glossary(text.as_bytes()).expect("parse").entries,
+            entries
+        );
+        let read = parse_glossary("term,translation,indeclinable,category\nIxal,иксали,TRUE,племя\nNamazu,намазу,no,племя\n".as_bytes())
+            .expect("parse");
+        assert!(read.entries[0].indeclinable);
+        assert!(!read.entries[1].indeclinable);
+    }
+
+    #[test]
+    fn an_indeclinable_translation_is_used_only_as_written() {
+        let glossary = Glossary::new(vec![
+            GlossaryEntry {
+                indeclinable: true,
+                ..sense("Ixal", "Иксали", "племя")
+            },
+            sense("Ixali dulltalon", "тупокоготь иксали", "существо"),
+            sense("Ixali Logging Grounds", "Лесозаготовки иксали", "место"),
+            entry("Aether", "Эфир"),
+        ]);
+        let unused = |source: &str, target: &str| -> Vec<String> {
+            glossary
+                .review(source, target, &[], &[])
+                .unused
+                .iter()
+                .map(|entry| entry.term.clone())
+                .collect()
+        };
+        // The term itself: any case of its letters, but no ending.
+        assert!(unused("The Ixal attack!", "Иксали атакуют!").is_empty());
+        assert!(unused("The Ixal attack!", "иксали атакуют!").is_empty());
+        assert_eq!(unused("The Ixal attack!", "Иксалы атакуют!"), ["Ixal"]);
+        // Inside another term the indeclinable words stay, the others decline.
+        assert!(unused("Ixali dulltalons", "тупокогти иксали").is_empty());
+        assert!(unused("Ixali dulltalon", "тупокоготь иксали").is_empty());
+        assert_eq!(
+            unused("Ixali dulltalons", "тупокогти иксалов"),
+            ["Ixali dulltalon"]
+        );
+        assert_eq!(
+            unused("near the Ixali Logging Grounds", "у Лесозаготовок иксалей"),
+            ["Ixali Logging Grounds"]
+        );
+        assert!(unused("near the Ixali Logging Grounds", "у Лесозаготовок иксали").is_empty());
+        // Other terms decline as before.
+        assert!(unused("the aether", "эфира").is_empty());
+        assert_eq!(glossary.fixed_words(&glossary.entries[1]), ["иксали"]);
+        assert_eq!(glossary.fixed_words(&glossary.entries[0]), ["иксали"]);
+        assert!(glossary.fixed_words(&glossary.entries[3]).is_empty());
+    }
+
+    #[test]
+    fn indeclinable_words_compare_e_with_yo_and_follow_appended_terms() {
+        let mut glossary = Glossary::new(vec![GlossaryEntry {
+            indeclinable: true,
+            ..entry("Moogle", "Мёгл")
+        }]);
+        let unused = |glossary: &Glossary, source: &str, target: &str| {
+            glossary.review(source, target, &[], &[]).unused.len()
+        };
+        assert_eq!(unused(&glossary, "a moogle", "мегл"), 0);
+        assert_eq!(unused(&glossary, "a moogle", "мёгла"), 1);
+        // A term of the sheets added after the file's has the fixed word too.
+        glossary.append(vec![entry("moogle mog", "мёгл мог")]);
+        assert_eq!(unused(&glossary, "the moogle mog", "мёгла мога"), 1);
+        assert_eq!(unused(&glossary, "the moogle mog", "мёгл мога"), 0);
     }
 
     #[test]

@@ -23,6 +23,8 @@ pub struct HintTermDto {
     pub note: Option<String>,
     /// What the term names in this meaning.
     pub category: String,
+    /// The words of its translation that are never declined.
+    pub indeclinable: Vec<String>,
     /// A person, or a correction run's model, decided the term does not
     /// apply to this string.
     pub excepted: bool,
@@ -40,6 +42,7 @@ impl From<HintTerm> for HintTermDto {
             translation: term.translation,
             note: term.note,
             category: term.category,
+            indeclinable: term.indeclinable,
             excepted: term.excepted,
             by_model: term.by_model,
             rendered: term.rendered,

@@ -313,7 +313,7 @@ export const GlossaryView = forwardRef<GlossaryViewHandle, GlossaryViewProps>(fu
     const key = nextKey.current++;
     const category = row.category ?? counts.categories.find((candidate) => candidate.key === filter.category)?.label ?? "";
     const term = shown.length === 0 ? filter.query.trim() : "";
-    setRows((current) => [...current, { key, term, translation: "", forms: [], note: "", matchCase: false, ...row, category }]);
+    setRows((current) => [...current, { key, term, translation: "", forms: [], note: "", matchCase: false, indeclinable: false, ...row, category }]);
     chooseOnly(entryId(key));
   };
 

@@ -100,7 +100,10 @@ the macro authoring reference of [`strings.md`](./strings.md),
 The task is JSON built from the files as they are when the request is sent:
 
 - `terms`: the terms that occur in the sources, of `terms.csv` and of the
-  declared sheets, each with its `category`, other wordings, and note (a
+  declared sheets, each with its `category`, other wordings, the words of
+  its translation that are never declined (`indeclinable`, from the
+  indeclinable terms of `terms.csv`; see
+  [`../formats/glossary-v1.md`](../formats/glossary-v1.md#matching)), and note (a
   term of `terms.csv` with its category's note before its own; see
   [`../formats/knowledge-v1.md`](../formats/knowledge-v1.md#the-terms-of-the-sheets)), at
   most 200; a name with several meanings is one item

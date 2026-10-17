@@ -131,6 +131,8 @@ pub struct TermInput {
     pub forms: Vec<String>,
     #[serde(default)]
     pub match_case: bool,
+    #[serde(default)]
+    pub indeclinable: bool,
     /// What kind of thing the term names in this meaning.
     #[serde(default)]
     pub category: String,
@@ -221,6 +223,7 @@ fn terms_file(entries: Vec<TermInput>) -> CommandResult<String> {
                 .filter(|form| !form.is_empty())
                 .collect(),
             match_case: entry.match_case,
+            indeclinable: entry.indeclinable,
             category: entry.category.trim().to_owned(),
         })
         .collect();
@@ -744,6 +747,7 @@ mod tests {
             note: Some("  ".to_owned()),
             forms: vec![format!(" {}s ", term.trim()), String::new()],
             match_case: false,
+            indeclinable: false,
             category: " понятие ".to_owned(),
         }
     }

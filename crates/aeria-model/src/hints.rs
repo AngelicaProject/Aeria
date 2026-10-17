@@ -18,6 +18,8 @@ pub struct HintTerm {
     pub note: Option<String>,
     /// What the term names in this meaning.
     pub category: String,
+    /// The words of its translation that are never declined.
+    pub indeclinable: Vec<String>,
     /// A person, or a correction run's model, decided the term does not
     /// apply to this string.
     pub excepted: bool,
@@ -69,6 +71,7 @@ pub fn hints(glossary: &Glossary, entry: &Entry) -> StringHints {
                     translation: term.translation.clone(),
                     note: term.full_note(),
                     category: term.category.clone(),
+                    indeclinable: glossary.fixed_words(term),
                     excepted,
                     by_model: excepted && by_person.iter().any(|entry| entry.term == term.term),
                     rendered: entry

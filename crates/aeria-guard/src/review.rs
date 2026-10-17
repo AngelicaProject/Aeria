@@ -299,6 +299,9 @@ fn term_text(entry: &GlossaryEntry) -> String {
     if entry.match_case {
         text.push_str("\nmatches case");
     }
+    if entry.indeclinable {
+        text.push_str("\nindeclinable");
+    }
     text
 }
 

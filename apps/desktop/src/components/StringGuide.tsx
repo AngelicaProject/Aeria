@@ -306,6 +306,9 @@ function Words({ hints, verdict, onPick, onException, onOpenTerm }: { hints: Str
                 <UiIcon icon="arrowRight" size="xs" className="string-guide-arrow" />
                 <button className="string-guide-insert" type="button" disabled={!onPick} title={t("hints.insertTitle", { text: term.translation })} onClick={() => insert(term.translation)}>{term.translation}</button>
                 <span className="string-guide-tag" {...(term.byModel ? { title: t("hints.term.byModelTitle", { term: term.term }) } : {})}>{term.byModel ? t("hints.term.byModel") : term.excepted ? t("hints.term.excepted") : term.category}</span>
+                {term.indeclinable.length > 0 ? (
+                  <span className="string-guide-tag" title={t("hints.term.indeclinableTitle", { words: term.indeclinable.join(", ") })}>{t("hints.term.indeclinable", { words: term.indeclinable.join(", ") })}</span>
+                ) : null}
                 {term.rendered.length > 0 ? (
                   <>
                     <span className="string-guide-tag" title={t("hints.term.renderedTitle", { term: term.term, words: term.rendered.join(", ") })}>{t("hints.term.rendered", { words: term.rendered.join(", ") })}</span>

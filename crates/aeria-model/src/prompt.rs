@@ -169,7 +169,10 @@ fn rules(source_language: &str, target_language: &str, style: Option<&str>) -> S
          capitals the sentence needs, declined like any written word in a language that \
          declines names (Поговорите с Ко Рабнтой), with a capital where a sentence or a \
          title begins and as the language writes the name elsewhere; only a name the game \
-         fills in through a macro keeps its stored form. A name the terms do not have you render by the \
+         fills in through a macro keeps its stored form. The words a term lists as \
+         `indeclinable` are never declined: write them as its translation has them in every \
+         number and case, and decline only its other words (тупокогтей иксали for \
+         `тупокоготь иксали` where `иксали` is indeclinable). A name the terms do not have you render by the \
          project's style, and the same way wherever the batch has it. \
          `files` are the files of the batch, each on its own: `about` says what the file is: its sheet, a \
          quest's title, and whether its strings are in play order, so that a batch continues \
@@ -255,6 +258,9 @@ pub struct Term {
     pub note: Option<String>,
     /// What the term names in this meaning.
     pub category: String,
+    /// The words of its translation that are never declined (see
+    /// `Glossary::fixed_words`).
+    pub indeclinable: Vec<String>,
 }
 
 /// One file of a request: what it is, who speaks, translated strings as
@@ -285,6 +291,9 @@ pub fn input(files: &[FileTask], terms: &[Term]) -> String {
                 }
                 if let Some(note) = &term.note {
                     value["note"] = Value::from(note.as_str());
+                }
+                if !term.indeclinable.is_empty() {
+                    value["indeclinable"] = Value::from(term.indeclinable.clone());
                 }
                 value
             })
@@ -701,18 +710,31 @@ mod tests {
                     fix: Vec::new(),
                 }],
             }],
-            &[Term {
-                term: "Minfilia".to_owned(),
-                translation: "Минфилия".to_owned(),
-                forms: Vec::new(),
-                note: None,
-                category: "персонаж".to_owned(),
-            }],
+            &[
+                Term {
+                    term: "Minfilia".to_owned(),
+                    translation: "Минфилия".to_owned(),
+                    forms: Vec::new(),
+                    note: None,
+                    category: "персонаж".to_owned(),
+                    indeclinable: Vec::new(),
+                },
+                Term {
+                    term: "Ixali dulltalon".to_owned(),
+                    translation: "тупокоготь иксали".to_owned(),
+                    forms: Vec::new(),
+                    note: None,
+                    category: "существо".to_owned(),
+                    indeclinable: vec!["иксали".to_owned()],
+                },
+            ],
         );
         let value: Value = serde_json::from_str(&input).expect("json");
         assert_eq!(value["files"][0]["strings"][0]["context"][0], "de: Ok");
         assert_eq!(value["terms"][0]["translation"], "Минфилия");
         assert_eq!(value["terms"][0]["category"], "персонаж");
+        assert!(value["terms"][0].get("indeclinable").is_none());
+        assert_eq!(value["terms"][1]["indeclinable"][0], "иксали");
         assert!(value.get("names").is_none());
         assert!(value["files"][0].get("speakers").is_none());
         assert_eq!(value["files"][0]["about"], "Addon");

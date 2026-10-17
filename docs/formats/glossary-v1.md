@@ -35,6 +35,7 @@ The first record names the columns, in any order:
 | `forms` | no | Other forms of the term in the source, separated by `;`: inflected forms (`linkshells` beside `linkshell`) and other wordings of the same term (`the Scions` beside `Scions of the Seventh Dawn`). Each is matched as the term. |
 | `note` | no | Guidance for translators, such as usage, gender, or declension. |
 | `case` | no | `yes`, `true`, or `1`, ignoring case, when every form of the term matches only with its case as written, but for a capital first letter: `the Maelstrom` matches `The Maelstrom` and not `the maelstrom`. Anything else, or an empty field, matches ignoring case. |
+| `indeclinable` | no | `yes`, `true`, or `1`, ignoring case, when the translation is never declined (`иксали`, `намазу`): its words appear in a translation only as written, here and in the translation of every other term that has them (see [Matching](#matching)). Anything else, or an empty field, lets it decline. |
 | `category` | yes | What the term names in this meaning, as a short label (`организация`, `существо`): a name may have one meaning per category. |
 
 A missing `term`, `translation`, or `category` column, a repeated column, or any other
@@ -70,8 +71,12 @@ Excluded records do not make the file invalid; the remaining entries are used.
 
 When the desktop's knowledge editor saves the file, it writes the header
 `term,translation,forms,note`, then `,case` only when an entry matches
-case, then `,category`, one record per entry in the editor's order, LF line endings, quoting only where
-required, forms joined with `; `, and `yes` or an empty field for `case`.
+case, `,indeclinable` only when an entry is indeclinable, then `,category`,
+one record per entry in the editor's order, LF line endings, quoting only where
+required, forms joined with `; `, and `yes` or an empty field for `case` and
+`indeclinable`. A file without indeclinable terms keeps the header that
+versions of Aeria without the `indeclinable` column read; they refuse a file
+that has it, as any unknown column.
 The editor shows excluded records and drops them only after the user
 confirms; it also replaces a file that cannot be read at all only after
 confirmation. The editor never writes an entry that would be excluded.
@@ -108,8 +113,8 @@ its headword, every meaning of the name included, and one that names
 another of its forms takes the term out too (see
 [`../architecture/po-project.md`](../architecture/po-project.md#term-exceptions)).
 A model exception does the same while the term's meanings are the ones it
-was decided for: a change of the headword, translation, forms, note, or
-case of a meaning, a meaning added or removed, or a change of the category
+was decided for: a change of the headword, translation, forms, note,
+case, or indeclinability of a meaning, a meaning added or removed, or a change of the category
 of a name with several meanings ends it (see
 [`../architecture/po-project.md`](../architecture/po-project.md#model-exceptions)).
 Matching selects the terms a batch of machine translation needs and drives
@@ -133,6 +138,12 @@ the checks of a translation; it never changes a translation.
   `эры`; `око`, `оке`; `Гея`, `Геи`.
 - `ё` and `е` are one letter: a text may write either (`племён`,
   `племен`).
+- The translation of an indeclinable term is never declined. Its words, in
+  the translation of any term that has them one after another, appear in a
+  translation only as written, in any case of their letters and with `ё`
+  as `е`, while the term's other words decline: with `Ixal` as `иксали`
+  indeclinable, `тупокогти иксали` uses `тупокоготь иксали`, and
+  `тупокогти иксалов` and `Иксалы` do not use their terms.
 - A noun in `-мя` takes `-ен-` when declined: `пламя`, `пламени`; `племя`,
   `племён`.
 - A word in `-ся` declines before it: `Клубящиеся`, `Клубящихся`.

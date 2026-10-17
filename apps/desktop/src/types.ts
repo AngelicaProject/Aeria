@@ -648,9 +648,9 @@ export type TranslationStatus = {
 };
 
 /** A term of `aeria-knowledge/terms.csv`: one meaning of its name; `category` says what it names. */
-export type GlossaryEntry = { term: string; translation: string; forms?: string[]; note?: string; matchCase?: boolean; category: string };
+export type GlossaryEntry = { term: string; translation: string; forms?: string[]; note?: string; matchCase?: boolean; indeclinable?: boolean; category: string };
 
-export type TermInput = { term: string; translation: string; forms: string[]; note: string | null; matchCase: boolean; category: string };
+export type TermInput = { term: string; translation: string; forms: string[]; note: string | null; matchCase: boolean; indeclinable: boolean; category: string };
 
 /** A sheet of the game declared part of the glossary: the strings of its column are terms. */
 /** How many strings of the game use one term. */
@@ -979,7 +979,7 @@ export type IssueDto = {
 
 /** A glossary term of the source; `excepted` when a person or a correction's model decided it does not apply to the string, `byModel` when the model did; `rendered` holds the words of the translation a correction's model decided render it. */
 /** A term of the string, one item per meaning of its name: `category` says what it names in this meaning. */
-export type HintTermDto = { term: string; translation: string; note: string | null; category: string; excepted: boolean; byModel: boolean; rendered: string[] };
+export type HintTermDto = { term: string; translation: string; note: string | null; category: string; indeclinable: string[]; excepted: boolean; byModel: boolean; rendered: string[] };
 /** What a machine translation request tells the model about one string. */
 export type StringHintsDto = {
   terms: HintTermDto[];

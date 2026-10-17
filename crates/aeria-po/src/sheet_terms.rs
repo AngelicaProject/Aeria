@@ -206,6 +206,7 @@ fn term_of(strings: &[&Named], sheets: &[TermSheet]) -> Option<(GlossaryEntry, S
         // words of a sentence.
         category_note: None,
         match_case: true,
+        indeclinable: false,
         category: sheet.category.clone(),
     };
     let term = SheetTerm {

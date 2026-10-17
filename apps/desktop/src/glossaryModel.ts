@@ -2,11 +2,12 @@ import type { GlossaryEntry, ReplacedTermDto, SheetTermDto, TermInput, TermSheet
 
 /**
  * A term of `terms.csv` being edited. `term` is the headword, `forms` its
- * other forms in the source, and `matchCase` marks a term that matches only
- * with its case as written. `key` identifies the row while the glossary is
- * open; it is not its place in the file.
+ * other forms in the source, `matchCase` marks a term that matches only
+ * with its case as written, and `indeclinable` one whose translation is never
+ * declined. `key` identifies the row while the glossary is open; it is not
+ * its place in the file.
  */
-export type GlossaryRow = { key: number; term: string; translation: string; forms: string[]; note: string; matchCase: boolean; category: string };
+export type GlossaryRow = { key: number; term: string; translation: string; forms: string[]; note: string; matchCase: boolean; indeclinable: boolean; category: string };
 
 export type RowProblem = "emptyTerm" | "emptyTranslation" | "emptyCategory" | "duplicateTerm";
 
@@ -64,6 +65,7 @@ export function rowsFromEntries(entries: readonly GlossaryEntry[], previous: rea
     forms: [...(entry.forms ?? [])],
     note: entry.note ?? "",
     matchCase: entry.matchCase ?? false,
+    indeclinable: entry.indeclinable ?? false,
     category: entry.category,
   }));
 }
@@ -75,6 +77,7 @@ export function inputsFromRows(rows: readonly GlossaryRow[]): TermInput[] {
     forms: row.forms.map((form) => form.trim()).filter(Boolean),
     note: row.note.trim() || null,
     matchCase: row.matchCase,
+    indeclinable: row.indeclinable,
     category: row.category.trim(),
   }));
 }
