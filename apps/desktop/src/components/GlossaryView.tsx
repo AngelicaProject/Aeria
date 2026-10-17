@@ -6,6 +6,8 @@ import {
   type GlossarySort,
   type SortKey,
   categoryKey,
+  categoryNote,
+  categorySheets,
   emptyGlossaryFilter,
   entryId,
   entryItems,
@@ -22,7 +24,7 @@ import {
   unappliedOf,
   usageKey,
 } from "../glossaryModel";
-import { normalizeCommandError, projectKnowledge, saveKnowledgeSheets, saveKnowledgeTerms, stringBinding, termUnapplied, termUnappliedStrings, termUsage, translationFix, translationStatus } from "../ipc";
+import { normalizeCommandError, projectForgetModelDecisions, projectKnowledge, saveKnowledgeSheets, saveKnowledgeTerms, stringBinding, termUnapplied, termUnappliedStrings, termUsage, translationFix, translationStatus } from "../ipc";
 import type { CommandError, ProjectKnowledgeDto, SourceBinding, TermKey, TermSheetDto, TranslationStatus } from "../types";
 import { useI18n } from "../ui/i18n";
 import { usePreferences } from "../ui/preferences";
@@ -30,7 +32,7 @@ import type { MenuEntry } from "../ui/primitives/RightClickMenu";
 import { UiIcon } from "../ui/primitives/UiIcon";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { ErrorBanner } from "./ErrorBanner";
-import { BulkDetail, EntryDetail, SheetSettings, SheetTermDetail, type Sense } from "./GlossaryDetail";
+import { BulkDetail, CategorySettings, EntryDetail, SheetSettings, SheetTermDetail, type Sense } from "./GlossaryDetail";
 import { GlossaryFacets } from "./GlossaryFacets";
 import { FixControls, type FixBlock, RunPanel, UnappliedStrings } from "./GlossaryFix";
 import { GlossaryTable, type GlossaryTableHandle } from "./GlossaryTable";
@@ -85,7 +87,9 @@ export const GlossaryView = forwardRef<GlossaryViewHandle, GlossaryViewProps>(fu
   const nextKey = useRef(0);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<{ title: string; error: CommandError } | null>(null);
-  const [confirm, setConfirm] = useState<{ message: string; run: () => void } | null>(null);
+  const [confirm, setConfirm] = useState<{ message: string; label?: string; run: () => void } | null>(null);
+  // What the last drop of the model's decisions on a category did.
+  const [forgotten, setForgotten] = useState<{ category: string; message: string } | null>(null);
   const [filter, setFilter] = useState<GlossaryFilter>(emptyGlossaryFilter);
   const [sort, setSort] = useState<GlossarySort>({ key: "order", descending: false });
   const [selection, setSelection] = useState<Selection>(noSelection);
@@ -272,6 +276,14 @@ export const GlossaryView = forwardRef<GlossaryViewHandle, GlossaryViewProps>(fu
   };
   const chooseOnly = (id: string) => setSelection({ ids: new Set([id]), active: id });
 
+  // Choosing a category or a sheet lets the chosen terms go, so the detail
+  // shows its settings.
+  const changeFilter = (next: GlossaryFilter) => {
+    if ((next.category !== null && next.category !== filter.category) || (next.sheet !== null && next.sheet !== filter.sheet)) setSelection(noSelection);
+    setFilter(next);
+  };
+  const openCategory = (category: string) => changeFilter({ ...filter, category: categoryKey(category), sheet: null });
+
   const activeItem = selection.active === null ? null : byId.get(selection.active) ?? null;
   const chosen = [...selection.ids].flatMap((id) => byId.get(id) ?? []);
   const chosenEntries = chosen.filter((item): item is Extract<GlossaryItem, { kind: "entry" }> => item.kind === "entry");
@@ -385,6 +397,30 @@ export const GlossaryView = forwardRef<GlossaryViewHandle, GlossaryViewProps>(fu
       .finally(() => setBusy(false));
   };
 
+  // The model's decisions on a category's terms are dropped, for the next
+  // correction run to decide them anew.
+  const forget = (key: string, label: string) => {
+    setConfirm({
+      message: t("glossary.category.forgetConfirm", { category: label }),
+      label: t("glossary.category.forgetRun"),
+      run: () => {
+        setBusy(true);
+        setError(null);
+        setForgotten(null);
+        void projectForgetModelDecisions(label)
+          .then((result) => {
+            const skipped = result.skipped.length > 0 ? ` ${t("glossary.category.forgottenSkipped", { count: result.skipped.length })}` : "";
+            setForgotten({ category: key, message: t("glossary.category.forgotten", { count: result.done }) + skipped });
+            onFilesChanged();
+            recount();
+            setStringsRevision((value) => value + 1);
+          })
+          .catch((reason: unknown) => setError({ title: t("glossary.category.forgetError"), error: normalizeCommandError(reason) }))
+          .finally(() => setBusy(false));
+      },
+    });
+  };
+
   const openString = (context: string) => {
     void stringBinding(context)
       .then((binding) => { if (binding) onRevealBinding(binding); })
@@ -471,14 +507,34 @@ export const GlossaryView = forwardRef<GlossaryViewHandle, GlossaryViewProps>(fu
       return <BulkDetail count={chosen.length} entries={chosenEntries.length} categories={categoryNames} disabled={busy} fix={bulkFix} onCategory={(category) => setCategory(chosenEntries.map((item) => item.row.key), category)} onRemove={() => remove(chosenEntries.map((item) => item.row.key))} />;
     }
     if (activeItem?.kind === "entry") {
-      return <EntryDetail key={activeItem.id} item={activeItem} sheetsGive={sheetsGive(activeItem)} fix={unappliedFor(activeItem)} categories={categoryNames} senses={sensesOf(activeItem)} disabled={busy} onChange={(patch) => change(activeItem.row.key, patch)} onRemove={() => remove([activeItem.row.key])} onOpen={openString} onChoose={chooseOnly} />;
+      const category = activeItem.row.category;
+      return <EntryDetail key={activeItem.id} item={activeItem} sheetsGive={sheetsGive(activeItem)} fix={unappliedFor(activeItem)} categories={categoryNames} senses={sensesOf(activeItem)} disabled={busy} categoryNote={categoryNote(sheets, category)} onChange={(patch) => change(activeItem.row.key, patch)} onRemove={() => remove([activeItem.row.key])} onOpen={openString} onChoose={chooseOnly} onOpenCategory={() => openCategory(category)} />;
     }
     if (activeItem?.kind === "sheet") {
-      return <SheetTermDetail key={activeItem.id} term={activeItem.term} fix={unappliedFor(activeItem)} senses={sensesOf(activeItem)} disabled={busy} onSettle={(translation) => settle(activeItem.term, translation)} onOpen={openString} onChoose={chooseOnly} />;
+      const category = activeItem.term.category;
+      return <SheetTermDetail key={activeItem.id} term={activeItem.term} fix={unappliedFor(activeItem)} senses={sensesOf(activeItem)} disabled={busy} categoryNote={categoryNote(sheets, category)} onSettle={(translation) => settle(activeItem.term, translation)} onOpen={openString} onChoose={chooseOnly} onOpenCategory={() => openCategory(category)} />;
     }
     if (filterSheets.length > 0) {
       const name = filterSheets[0]!.sheet;
       return <SheetSettings key={name} sheets={filterSheets} count={counts.sheets.get(name) ?? 0} categories={categoryNames} disabled={busy} onChange={(before, after) => saveSheets(sheets.map((sheet) => sheet === before ? after : sheet))} onRemove={() => { setFilter((current) => ({ ...current, sheet: null })); saveSheets(sheets.filter((sheet) => sheet.sheet !== name)); }} />;
+    }
+    const category = filter.category === null ? undefined : counts.categories.find((candidate) => candidate.key === filter.category);
+    if (category) {
+      const key = category.key;
+      return (
+        <CategorySettings
+          key={key}
+          category={category.label}
+          count={category.count}
+          sheets={categorySheets(sheets, key)}
+          disabled={busy}
+          forgetBlock={runGoing || otherRun ? t("glossary.fix.busy") : null}
+          forgotten={forgotten?.category === key ? forgotten.message : null}
+          onNote={(note) => saveSheets(sheets.map((sheet) => categoryKey(sheet.category) === key ? { ...sheet, note } : sheet))}
+          onForget={() => forget(key, category.label)}
+          onOpenSheet={(sheet) => changeFilter({ ...filter, sheet })}
+        />
+      );
     }
     return (
       <section className="glossary-detail glossary-detail-empty">
@@ -502,7 +558,7 @@ export const GlossaryView = forwardRef<GlossaryViewHandle, GlossaryViewProps>(fu
       <div className="glossary-panes">
         <GlossaryFacets
           filter={filter}
-          onFilter={setFilter}
+          onFilter={changeFilter}
           views={counts.views}
           pending={unapplied === null ? new Set(["unapplied"]) : new Set()}
           categories={counts.categories}
@@ -584,7 +640,7 @@ export const GlossaryView = forwardRef<GlossaryViewHandle, GlossaryViewProps>(fu
           {detail}
         </div>
       </div>
-      <ConfirmDialog open={confirm !== null} message={confirm?.message ?? ""} confirmLabel={t("glossary.save")} cancelLabel={t("glossary.cancel")} onKeepEditing={() => setConfirm(null)} onDiscard={() => { const run = confirm?.run; setConfirm(null); run?.(); }} />
+      <ConfirmDialog open={confirm !== null} message={confirm?.message ?? ""} confirmLabel={confirm?.label ?? t("glossary.save")} cancelLabel={t("glossary.cancel")} onKeepEditing={() => setConfirm(null)} onDiscard={() => { const run = confirm?.run; setConfirm(null); run?.(); }} />
     </div>
   );
 });

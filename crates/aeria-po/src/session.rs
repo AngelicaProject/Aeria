@@ -155,6 +155,12 @@ pub enum EditKind {
         correction: Option<String>,
         terms: Vec<TermDecision>,
     },
+    /// The model's decisions on these terms, by headword, compared ignoring
+    /// case, are dropped, so the checks ask for the terms again and the next
+    /// correction run decides them anew. A person's term exceptions stay,
+    /// and a reviewed translation's decisions are a person's: they are not
+    /// dropped.
+    ForgetModel(Vec<String>),
 }
 
 /// A model's decision on a term of a string's source.
@@ -1191,6 +1197,46 @@ impl Session {
         Ok(applied)
     }
 
+    /// Drops the model's decisions on `terms`, by headword, from every
+    /// string that has one (see [`EditKind::ForgetModel`]): the strings come
+    /// back to the checks, for the next correction run to decide. Strings
+    /// with a reviewed translation keep theirs and are reported skipped.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when `po/` cannot be listed or a file cannot be read
+    /// or written.
+    pub fn forget_model_decisions(&self, terms: &[String]) -> Result<EditsApplied, EditError> {
+        let wanted: Vec<String> = terms.iter().map(|term| term.to_lowercase()).collect();
+        let decided = |term: &str| wanted.contains(&term.to_lowercase());
+        let mut edits = Vec::new();
+        for path in list(&self.root)? {
+            let full = self.root.join(PO_DIR).join(&path);
+            let text = std::fs::read_to_string(&full)
+                .map_err(|source| ProjectError::Io { path: full, source })?;
+            for entry in PoFile::parse(&text).0.entries {
+                if entry
+                    .model_exceptions
+                    .iter()
+                    .any(|known| decided(&known.term))
+                    || entry
+                        .model_renderings
+                        .iter()
+                        .any(|known| decided(&known.term))
+                {
+                    edits.push(EntryEdit {
+                        path: path.clone(),
+                        context: entry.context,
+                        expected_text: entry.translation,
+                        expected_fuzzy: entry.fuzzy,
+                        kind: EditKind::ForgetModel(terms.to_vec()),
+                    });
+                }
+            }
+        }
+        self.apply_edits(&edits)
+    }
+
     /// How much of each sheet with entries is translated, by sheet name.
     /// Files are read again only when they changed, so the first call reads
     /// every file and later ones only the changed files.
@@ -1236,7 +1282,10 @@ fn apply_edit(
     if reviewed
         && matches!(
             edit.kind,
-            EditKind::Correct(_) | EditKind::Adapt(_) | EditKind::Decide { .. }
+            EditKind::Correct(_)
+                | EditKind::Adapt(_)
+                | EditKind::Decide { .. }
+                | EditKind::ForgetModel(_)
         )
     {
         return Err(SkipReason::Reviewed);
@@ -1296,6 +1345,14 @@ fn apply_edit(
             entry.reviewed.clone_from(&state.reviewed);
         }
         EditKind::TermException { term, add } => set_term_exception(entry, term, *add),
+        EditKind::ForgetModel(terms) => {
+            let decided = |term: &str| {
+                let term = term.to_lowercase();
+                terms.iter().any(|known| known.to_lowercase() == term)
+            };
+            entry.model_exceptions.retain(|known| !decided(&known.term));
+            entry.model_renderings.retain(|known| !decided(&known.term));
+        }
     }
     let after = EntryState::of(entry);
     Ok((after != before).then(|| EditDone {

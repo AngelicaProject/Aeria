@@ -204,6 +204,7 @@ fn term_of(strings: &[&Named], sheets: &[TermSheet]) -> Option<(GlossaryEntry, S
         note: (!notes.is_empty()).then(|| notes.join("\n")),
         // A name is found as the game writes it: `In the Mist` is not the
         // words of a sentence.
+        category_note: None,
         match_case: true,
         category: sheet.category.clone(),
     };
@@ -246,10 +247,29 @@ fn says_no_more(entry: &GlossaryEntry, term: &GlossaryEntry) -> bool {
             .all(|form| spellings.contains(&form.to_lowercase()))
 }
 
+/// The note of `category`: the notes of the declared sheets of that
+/// category, ignoring case, each once, in the order the sheets are declared,
+/// each on its own line. `None` when none of them has a note.
+fn category_note(sheets: &[TermSheet], category: &str) -> Option<String> {
+    let category = category.to_lowercase();
+    let mut notes: Vec<&str> = Vec::new();
+    for sheet in sheets
+        .iter()
+        .filter(|sheet| sheet.category.to_lowercase() == category)
+    {
+        let note = sheet.note.as_deref().map_or("", str::trim);
+        if !note.is_empty() && !notes.contains(&note) {
+            notes.push(note);
+        }
+    }
+    (!notes.is_empty()).then(|| notes.join("\n"))
+}
+
 /// Reads the knowledge of the project at `root` and adds the terms of the
 /// sheets it declares: one per name and category, after the terms of
 /// `terms.csv`, in the order their names first appear, but for the names a
-/// term of `terms.csv` already gives.
+/// term of `terms.csv` already gives. A term of `terms.csv` takes the note
+/// of its category (see [`category_note`]), said before its own.
 #[must_use]
 pub fn project_knowledge(root: &Path) -> ProjectKnowledge {
     let mut knowledge = Knowledge::load(root);
@@ -328,6 +348,9 @@ pub fn project_knowledge(root: &Path) -> ProjectKnowledge {
         known.push(translation);
         added.push(entry);
         loaded.sheet_terms.push(term);
+    }
+    for entry in &mut knowledge.terms.entries {
+        entry.category_note = category_note(&sheets, &entry.category);
     }
     knowledge.terms.append(added);
     loaded.knowledge = knowledge;
@@ -448,6 +471,52 @@ mod tests {
         assert!(crier.match_case);
         // The file and its folder are what the terms were read from.
         assert_eq!(loaded.read.len(), 2);
+    }
+
+    #[test]
+    fn a_term_of_the_file_takes_its_categorys_note_before_its_own() {
+        let directory = tempfile::tempdir().expect("directory");
+        let root = directory.path();
+        write(
+            root,
+            "aeria-knowledge/terms.csv",
+            "term,translation,forms,note,category\nLa Noscea,Ла Носка,,Не путать с городом.,Место\nMist,Туман,,Названия мест.,место\nThancred,Танкред,,,персонаж\nSylph,сильф,,,существо\n",
+        );
+        write(
+            root,
+            "aeria-knowledge/term-sheets.csv",
+            "sheet,column,category,note\nPlaceName,0,место,Названия мест.\nPlaceName,2,место,Названия мест.\nTerritoryType,1,место,Склонять.\nENpcResident,0,персонаж,\n",
+        );
+        write(
+            root,
+            "po/PlaceName/0.po",
+            &entry("PlaceName:1:0:0", "Gridania", "Гридания"),
+        );
+        let loaded = project_knowledge(root);
+        let note = |term: &str| {
+            loaded
+                .knowledge
+                .terms
+                .find(term)
+                .and_then(GlossaryEntry::full_note)
+        };
+        // The notes of the category's sheets, each once, then the term's own;
+        // a line the category already says is not repeated.
+        assert_eq!(
+            note("La Noscea").as_deref(),
+            Some("Названия мест.\nСклонять.\nНе путать с городом.")
+        );
+        assert_eq!(note("Mist").as_deref(), Some("Названия мест.\nСклонять."));
+        // A category whose sheets say nothing, or no sheet declares, adds
+        // nothing.
+        assert_eq!(note("Thancred"), None);
+        assert_eq!(note("Sylph"), None);
+        // The sheets' own terms keep the notes of their sheets.
+        assert_eq!(note("Gridania").as_deref(), Some("Названия мест."));
+        // The term's own note stays as the file writes it.
+        let mist = loaded.knowledge.terms.find("Mist").expect("Mist");
+        assert_eq!(mist.note.as_deref(), Some("Названия мест."));
+        assert!(loaded.redundant.is_empty());
     }
 
     #[test]

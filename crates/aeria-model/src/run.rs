@@ -634,7 +634,7 @@ fn build(shared: &Shared, pack: &[Batch]) -> Result<Option<Built>, String> {
                     term: entry.term.clone(),
                     translation: entry.translation.clone(),
                     forms: entry.forms.clone(),
-                    note: entry.note.clone(),
+                    note: entry.full_note(),
                     category: entry.category.clone(),
                 });
             }

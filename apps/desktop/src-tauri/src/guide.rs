@@ -213,6 +213,7 @@ fn terms_file(entries: Vec<TermInput>) -> CommandResult<String> {
                 .note
                 .map(|note| note.trim().to_owned())
                 .filter(|note| !note.is_empty()),
+            category_note: None,
             forms: entry
                 .forms
                 .iter()

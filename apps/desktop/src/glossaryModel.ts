@@ -1,4 +1,4 @@
-import type { GlossaryEntry, ReplacedTermDto, SheetTermDto, TermInput } from "./types";
+import type { GlossaryEntry, ReplacedTermDto, SheetTermDto, TermInput, TermSheetDto } from "./types";
 
 /**
  * A term of `terms.csv` being edited. `term` is the headword, `forms` its
@@ -18,6 +18,25 @@ export function usageKey(term: string, category: string): string {
 /** The key categories are grouped by: ignoring case and surrounding space. */
 export function categoryKey(category: string): string {
   return category.trim().toLocaleLowerCase();
+}
+
+/** The declared sheets of a category, by its key, in their order. */
+export function categorySheets(sheets: readonly TermSheetDto[], key: string): TermSheetDto[] {
+  return sheets.filter((sheet) => categoryKey(sheet.category) === key);
+}
+
+/**
+ * The note of a category: the notes of its declared sheets, each once, in
+ * their order, each on its own line, as the terms of the project take it
+ * before their own. Empty when none of them has one.
+ */
+export function categoryNote(sheets: readonly TermSheetDto[], category: string): string {
+  const notes: string[] = [];
+  for (const sheet of categorySheets(sheets, categoryKey(category))) {
+    const note = (sheet.note ?? "").trim();
+    if (note && !notes.includes(note)) notes.push(note);
+  }
+  return notes.join("\n");
 }
 
 /** The forms typed into a forms field: `;` separates several. */

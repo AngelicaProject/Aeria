@@ -78,6 +78,16 @@ A name translated alike in several categories, ignoring case, is one term,
 of the category where it first appears: a character and the same character
 as a foe.
 
+A record of `terms.csv` of a category the sheets declare, ignoring case,
+takes the note of that category before its own: the notes of the
+category's declared sheets, each once, in the order they are declared,
+then the lines of its own note the category does not already say, each on
+its own line. The category's note is said wherever the term is explained,
+to machine translation and in the string guide, but is not part of the
+record as written: `terms.csv` keeps its own note, and a model's decision
+on the term holds while its own note is unchanged (see
+[`../architecture/po-project.md`](../architecture/po-project.md#model-exceptions)).
+
 A record of `terms.csv` with the name as its headword or a form, ignoring
 case, takes the place of the sheets' term of that name in its own category,
 ignoring case; a sheets' term of the name in another category stays another

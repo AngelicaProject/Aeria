@@ -73,9 +73,9 @@ pub use guide::{
     term_usage,
 };
 pub use search::{
-    SearchState, project_edit_undo, project_replace_apply, project_replace_preview,
-    project_retranslate, project_search, project_search_cancel, project_search_entries,
-    project_search_prepare, project_term_exception,
+    SearchState, project_edit_undo, project_forget_model_decisions, project_replace_apply,
+    project_replace_preview, project_retranslate, project_search, project_search_cancel,
+    project_search_entries, project_search_prepare, project_term_exception,
 };
 pub use state::{Activity, DesktopState};
 pub use translate::{
@@ -247,7 +247,8 @@ pub fn run() {
             project_replace_apply,
             project_edit_undo,
             project_retranslate,
-            project_term_exception
+            project_term_exception,
+            project_forget_model_decisions
         ])
         .run(tauri::generate_context!())
         .expect("failed to run Aeria desktop application");

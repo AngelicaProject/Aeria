@@ -25,6 +25,11 @@ pub struct GlossaryEntry {
     pub forms: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
+    /// The note of the term's category, which the project's sheets give a
+    /// term of `terms.csv`: said before [`Self::note`] wherever the term is
+    /// explained, but not part of the term as written or decided for.
+    #[serde(skip)]
+    pub category_note: Option<String>,
     /// The term matches only with its case as written, but for a capital
     /// first letter: `the Maelstrom` matches `The Maelstrom`, not
     /// `the maelstrom`.
@@ -56,6 +61,24 @@ pub struct Glossary {
 }
 
 impl GlossaryEntry {
+    /// What is said of the term: the note of its category, then its own
+    /// note, each line once. `None` when neither says anything.
+    #[must_use]
+    pub fn full_note(&self) -> Option<String> {
+        let mut lines: Vec<&str> = Vec::new();
+        for line in [&self.category_note, &self.note]
+            .into_iter()
+            .flatten()
+            .flat_map(|note| note.lines())
+        {
+            let line = line.trim();
+            if !line.is_empty() && !lines.contains(&line) {
+                lines.push(line);
+            }
+        }
+        (!lines.is_empty()).then(|| lines.join("\n"))
+    }
+
     /// The forms of the term in the source: its headword, then its other
     /// forms.
     pub fn all_forms(&self) -> impl Iterator<Item = &str> {
@@ -321,6 +344,7 @@ pub fn parse_glossary(bytes: &[u8]) -> Result<Glossary, GlossaryError> {
             note: Some(field(3))
                 .filter(|note| !note.is_empty())
                 .map(str::to_owned),
+            category_note: None,
             match_case: is_yes(field(4)),
             category: category.to_owned(),
         });
