@@ -100,7 +100,9 @@ the macro authoring reference of [`strings.md`](./strings.md),
 The task is JSON built from the files as they are when the request is sent:
 
 - `terms`: the terms that occur in the sources, of `terms.csv` and of the
-  declared sheets, each with its `category`, other wordings, and note, at
+  declared sheets, each with its `category`, other wordings, and note (a
+  term of `terms.csv` with its category's note before its own; see
+  [`../formats/knowledge-v1.md`](../formats/knowledge-v1.md#the-terms-of-the-sheets)), at
   most 200; a name with several meanings is one item
   per meaning, and the model uses the meaning the string means, and none
   where the word of the source is not the thing the category names. A term

@@ -693,6 +693,11 @@ export function projectTermException(entries: EntryRefDto[], term: string, add: 
   return call<BulkEditDto>("project_term_exception", { entries, term, add });
 }
 
+/** Drops the model's decisions on the terms of a category, for the next correction run to decide them anew; an undo reverts it. */
+export function projectForgetModelDecisions(category: string): Promise<BulkEditDto> {
+  return call<BulkEditDto>("project_forget_model_decisions", { category });
+}
+
 export function projectRetranslate(entries: EntryRefDto[], model: string, effort: string | null): Promise<BulkEditDto> {
   return call<BulkEditDto>("project_retranslate", { entries, model, effort });
 }

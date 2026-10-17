@@ -666,3 +666,80 @@ fn the_strings_of_a_term_are_those_its_use_counts() {
     assert_eq!(found[0].context, "Addon:1:0:0");
     assert_eq!(strings(1, 10).1, 1);
 }
+
+#[test]
+fn a_categorys_note_keeps_the_models_decisions_until_they_are_forgotten() {
+    let (_directory, session) = project();
+    let knowledge = session.root().join("aeria-knowledge");
+    std::fs::create_dir_all(&knowledge).expect("dir");
+    std::fs::write(
+        knowledge.join("terms.csv"),
+        "term,translation,category\ncook,кулинар,профессия\n",
+    )
+    .expect("terms");
+    let unused = |session: &aeria_po::Session, row| {
+        session
+            .findings("Addon", row, 0, 0)
+            .expect("findings")
+            .0
+            .iter()
+            .filter(|issue| matches!(issue, Issue::TermNotUsed { .. }))
+            .count()
+    };
+    let cook = session.knowledge().terms.entries[0].clone();
+    let decide = |context: &str, expected: &str| EntryEdit {
+        path: "Addon.po".to_owned(),
+        context: context.to_owned(),
+        expected_text: expected.to_owned(),
+        expected_fuzzy: false,
+        kind: EditKind::Decide {
+            correction: None,
+            terms: vec![aeria_po::TermDecision {
+                exception: aeria_po::ModelException::of(&cook),
+                applies: false,
+                rendered: Vec::new(),
+            }],
+        },
+    };
+    session
+        .apply_edits(&[decide("Addon:1:0:0", "Повар пришёл")])
+        .expect("decide");
+    session
+        .set_term_exception("Addon", 2, 0, 0, "cook", true)
+        .expect("exception");
+    assert_eq!((unused(&session, 1), unused(&session, 2)), (0, 0));
+
+    // A note of the term's category reaches the term but does not end the
+    // model's decision.
+    std::fs::write(
+        knowledge.join("term-sheets.csv"),
+        "sheet,column,category,note\nClassJob,0,профессия,Профессии ремесленников.\n",
+    )
+    .expect("sheets");
+    let noted = session.knowledge();
+    let entry = noted.terms.find("cook").expect("cook");
+    assert_eq!(entry.note, None);
+    assert_eq!(
+        entry.full_note().as_deref(),
+        Some("Профессии ремесленников.")
+    );
+    assert_eq!(unused(&session, 1), 0);
+
+    // Forgetting the model's decisions asks for the term again; a person's
+    // exception stays.
+    let forgotten = session
+        .forget_model_decisions(&["Cook".to_owned()])
+        .expect("forget");
+    assert_eq!(forgotten.done.len(), 1);
+    assert!(forgotten.done[0].after.model_exceptions.is_empty());
+    assert_eq!((unused(&session, 1), unused(&session, 2)), (1, 0));
+
+    // Undo gives the decision back.
+    let undo: Vec<EntryEdit> = forgotten
+        .done
+        .iter()
+        .map(aeria_po::EditDone::undo)
+        .collect();
+    session.apply_edits(&undo).expect("undo");
+    assert_eq!(unused(&session, 1), 0);
+}

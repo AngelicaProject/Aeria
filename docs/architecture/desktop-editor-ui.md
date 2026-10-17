@@ -796,7 +796,9 @@ again when the project changed while no term is being edited.
   correction run), and
   **Same as the sheet** (project terms the sheets give alike); one category, the most
   used first, eight shown until more are asked for; and one declared sheet,
-  which shows its terms and the project terms that replace them. **Add a
+  which shows its terms and the project terms that replace them. Choosing a
+  category or a sheet lets the chosen terms go, so the fields show its
+  settings. **Add a
   sheet** takes a sheet by name, offering the matching sheets of the
   project, its column, and the category of its terms, and saves it at once;
   removing a sheet (its context menu or its settings) takes its terms out of
@@ -835,9 +837,11 @@ again when the project changed while no term is being edited.
   every term and sheet has one, so clearing the field keeps the category it
   had. Other forms are chips: Enter or `;` adds what is typed, a chip's ×
   removes it, and a double click or Backspace in the empty field takes a
-  chip back to edit.
+  chip back to edit. Under its note, **From the category** shows the note of
+  its category, which machine translation gets before the term's own, with
+  **Edit**, which opens the category's settings.
 - A sheet term shows its headword, translation, category, other spellings,
-  sheet, and **Translations in the strings**: each translation its strings
+  the note of its category with **Edit**, sheet, and **Translations in the strings**: each translation its strings
   have with how many, the term's first. Another translation typed, **Use
   this translation** on another of the strings', or **Edit as a project
   term** makes it a term of `terms.csv`, saved with the other project terms:
@@ -867,7 +871,15 @@ again when the project changed while no term is being edited.
   term not saved yet has none to show.
 - With a sheet chosen and no term, the fields are the sheet's: the category
   and note of the terms of each column declared, each saved when changed.
-  A sheet declared with several columns is one facet. With several terms
+  A sheet declared with several columns is one facet. With a category
+  chosen and no sheet or term, the fields are the category's: its note,
+  kept by its declared sheets and saved to every one of them when changed
+  (marked when they have different notes; a category no sheet declares has
+  none), its sheets, each chosen by a click, and **Decide again with AI**,
+  which asks first and then drops the model's decisions on every term of
+  the category (see
+  [`po-project.md`](./po-project.md#model-exceptions)), saying how many
+  strings it changed. With several terms
   chosen, **Set category** and **Remove** act on the project terms among
   them; the context menu of a term offers the same, and a sheet term's
   **Open the string** and **Edit as a project term**.

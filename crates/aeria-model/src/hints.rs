@@ -67,7 +67,7 @@ pub fn hints(glossary: &Glossary, entry: &Entry) -> StringHints {
                 HintTerm {
                     term: term.term.clone(),
                     translation: term.translation.clone(),
-                    note: term.note.clone(),
+                    note: term.full_note(),
                     category: term.category.clone(),
                     excepted,
                     by_model: excepted && by_person.iter().any(|entry| entry.term == term.term),

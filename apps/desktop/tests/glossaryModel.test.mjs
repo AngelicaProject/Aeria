@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  categoryNote,
+  categorySheets,
   emptyGlossaryFilter,
   entryItems,
   facetCounts,
@@ -143,4 +145,17 @@ test("a column orders the list, equals keeping their order", () => {
   assert.deepEqual(order({ key: "order", descending: false }), ["b", "A", "c"]);
   const usage = new Map([[usageKey("c", "x"), 7], [usageKey("A", "X"), 7], [usageKey("b", "x"), 1]]);
   assert.deepEqual(order({ key: "uses", descending: true }, usage), ["A", "c", "b"]);
+});
+
+test("a category's note is the notes of its sheets, each once", () => {
+  const sheets = [
+    { sheet: "PlaceName", column: 0, category: "место", note: "Названия мест." },
+    { sheet: "PlaceName", column: 2, category: "Место", note: "Названия мест." },
+    { sheet: "TerritoryType", column: 1, category: "место", note: " Склонять. " },
+    { sheet: "ENpcResident", column: 0, category: "персонаж", note: null },
+  ];
+  assert.equal(categoryNote(sheets, " МЕСТО "), "Названия мест.\nСклонять.");
+  assert.equal(categoryNote(sheets, "персонаж"), "");
+  assert.equal(categoryNote(sheets, "задание"), "");
+  assert.deepEqual(categorySheets(sheets, "место").map((sheet) => `${sheet.sheet}:${sheet.column}`), ["PlaceName:0", "PlaceName:2", "TerritoryType:1"]);
 });

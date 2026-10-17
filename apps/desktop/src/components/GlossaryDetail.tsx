@@ -20,14 +20,17 @@ type EntryDetailProps = {
   categories: readonly string[];
   senses: readonly Sense[];
   disabled: boolean;
+  /** The note of the term's category, said before its own; empty when none. */
+  categoryNote: string;
   onChange: (patch: Partial<GlossaryRow>) => void;
   onRemove: () => void;
   onOpen: (context: string) => void;
   onChoose: (id: string) => void;
+  onOpenCategory: () => void;
 };
 
 /** The fields of a term of the project, with what the sheets give for its name. */
-export function EntryDetail({ item, sheetsGive, fix, categories, senses, disabled, onChange, onRemove, onOpen, onChoose }: EntryDetailProps) {
+export function EntryDetail({ item, sheetsGive, fix, categories, senses, disabled, categoryNote, onChange, onRemove, onOpen, onChoose, onOpenCategory }: EntryDetailProps) {
   const { t } = useI18n();
   const row = item.row;
   const id = `glossary-entry-${row.key}`;
@@ -54,6 +57,7 @@ export function EntryDetail({ item, sheetsGive, fix, categories, senses, disable
         <label htmlFor={`${id}-note`}>{t("glossary.field.note")}</label>
         <textarea id={`${id}-note`} className="input glossary-note" value={row.note} spellCheck readOnly={disabled} onChange={(event) => onChange({ note: event.target.value })} />
       </div>
+      <CategoryNote category={row.category.trim()} note={categoryNote} onOpen={onOpenCategory} />
       <label className="glossary-check" title={t("glossary.field.matchCaseTitle")}>
         <input type="checkbox" checked={row.matchCase} disabled={disabled} onChange={(event) => onChange({ matchCase: event.target.checked })} />
         {t("glossary.field.matchCase")}
@@ -92,10 +96,13 @@ type SheetTermDetailProps = {
   fix: ReactNode;
   senses: readonly Sense[];
   disabled: boolean;
+  /** The note of the term's category; empty when none. */
+  categoryNote: string;
   /** Makes the term a term of the project with this translation. */
   onSettle: (translation: string) => void;
   onOpen: (context: string) => void;
   onChoose: (id: string) => void;
+  onOpenCategory: () => void;
 };
 
 /**
@@ -103,7 +110,7 @@ type SheetTermDetailProps = {
  * have. Another translation, typed or taken from the strings, makes it a
  * term of the project.
  */
-export function SheetTermDetail({ term, fix, senses, disabled, onSettle, onOpen, onChoose }: SheetTermDetailProps) {
+export function SheetTermDetail({ term, fix, senses, disabled, categoryNote, onSettle, onOpen, onChoose, onOpenCategory }: SheetTermDetailProps) {
   const { t } = useI18n();
   const id = `glossary-sheet-${term.context}`;
   const [translation, setTranslation] = useState(term.translation);
@@ -145,6 +152,7 @@ export function SheetTermDetail({ term, fix, senses, disabled, onSettle, onOpen,
           <span className="glossary-detail-value">{term.forms.join("; ")}</span>
         </div>
       ) : null}
+      <CategoryNote category={term.category} note={categoryNote} onOpen={onOpenCategory} />
       {fix}
       <div className="glossary-field">
         <span className="glossary-field-label">{t("glossary.detail.variants")}</span>
@@ -169,6 +177,21 @@ export function SheetTermDetail({ term, fix, senses, disabled, onSettle, onOpen,
         <button className="button button-ghost" type="button" disabled={disabled} onClick={() => onSettle(term.translation)}><UiIcon icon="pencil" size="sm" />{t("glossary.detail.edit")}</button>
       </div>
     </section>
+  );
+}
+
+/** The note of a term's category, shown as it is said before the term's own, with a way to its settings. */
+function CategoryNote({ category, note, onOpen }: { category: string; note: string; onOpen: () => void }) {
+  const { t } = useI18n();
+  if (!note || !category) return null;
+  return (
+    <div className="glossary-field">
+      <span className="glossary-field-label">
+        {t("glossary.category.from", { category })}
+        <button type="button" className="link-button" onClick={onOpen}>{t("glossary.category.edit")}</button>
+      </span>
+      <p className="glossary-category-note">{note}</p>
+    </div>
   );
 }
 
@@ -324,6 +347,80 @@ export function BulkDetail({ count, entries, categories, disabled, fix, onCatego
           </div>
         </>
       ) : null}
+    </section>
+  );
+}
+
+type CategorySettingsProps = {
+  /** The category as its terms write it. */
+  category: string;
+  count: number;
+  /** The declared sheets of the category, which keep its note. */
+  sheets: readonly TermSheetDto[];
+  disabled: boolean;
+  /** Why the model's decisions cannot be dropped now, or null. */
+  forgetBlock: string | null;
+  /** What the last drop of the model's decisions did, or null. */
+  forgotten: string | null;
+  onNote: (note: string | null) => void;
+  onForget: () => void;
+  onOpenSheet: (sheet: string) => void;
+};
+
+/**
+ * A category: the note its sheets keep, saved to all of them at once, the
+ * sheets themselves, and a way to have the model decide its terms again.
+ */
+export function CategorySettings({ category, count, sheets, disabled, forgetBlock, forgotten, onNote, onForget, onOpenSheet }: CategorySettingsProps) {
+  const { t } = useI18n();
+  const notes = [...new Set(sheets.map((sheet) => (sheet.note ?? "").trim()))];
+  const differ = notes.length > 1;
+  const savedNote = notes.filter((note) => note !== "").join(" ");
+  const [note, setNote] = useState(savedNote);
+  useEffect(() => { setNote(savedNote); }, [savedNote, category]);
+  const names = [...new Set(sheets.map((sheet) => sheet.sheet))];
+  return (
+    <section className="glossary-detail" aria-label={category}>
+      <div className="glossary-detail-title">
+        <UiIcon icon="listFilter" size="sm" />
+        <span>{category}</span>
+        <span className="muted">{t("glossary.count", { count })}</span>
+      </div>
+      {sheets.length > 0 ? (
+        <div className="glossary-field glossary-field-grow">
+          <label htmlFor="glossary-category-note">{t("glossary.category.note")}</label>
+          <textarea
+            id="glossary-category-note"
+            className="input glossary-note"
+            value={note}
+            spellCheck
+            title={t("glossary.category.noteTitle")}
+            readOnly={disabled}
+            onChange={(event) => setNote(event.target.value)}
+            onBlur={() => { if (note.trim() !== savedNote) onNote(note.trim() || null); }}
+          />
+          {differ ? <p className="glossary-problem"><UiIcon icon="circleAlert" size="xs" />{t("glossary.category.notesDiffer")}</p> : null}
+        </div>
+      ) : <p className="muted">{t("glossary.category.noSheets")}</p>}
+      {names.length > 0 ? (
+        <div className="glossary-field">
+          <span className="glossary-field-label">{t("glossary.category.sheets")}</span>
+          <ul className="glossary-senses">
+            {names.map((name) => (
+              <li key={name}>
+                <UiIcon icon="table2" size="xs" />
+                <button type="button" className="link-button" onClick={() => onOpenSheet(name)}>{name}</button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+      <div className="glossary-detail-actions">
+        <button className="button button-secondary" type="button" disabled={disabled || forgetBlock !== null} title={forgetBlock ?? t("glossary.category.forgetTitle")} onClick={onForget}>
+          <UiIcon icon="sparkles" size="sm" />{t("glossary.category.forget")}
+        </button>
+      </div>
+      {forgotten ? <p className="muted">{forgotten}</p> : null}
     </section>
   );
 }
