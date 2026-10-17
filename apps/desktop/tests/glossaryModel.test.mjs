@@ -46,6 +46,31 @@ test("rows round-trip entries and trim edits", () => {
   assert.equal(rowsChanged([rows[0]], entries), true);
 });
 
+test("rows read again keep the keys of their terms", () => {
+  const before = rowsFromEntries(entries);
+  // A term removed and one added before a save: the file is written in the order of the rows.
+  const edited = [before[1], { key: 7, term: "Gil", translation: "гил", forms: [], note: "", matchCase: false, category: "валюта" }];
+  const saved = [entries[1], { term: "Gil", translation: "гил", category: "валюта" }];
+  assert.deepEqual(rowsFromEntries(saved, edited).map((row) => row.key), [1, 7]);
+  // An entry no row had takes a key after every key in use.
+  assert.deepEqual(rowsFromEntries([...saved, entries[0]], edited).map((row) => row.key), [1, 7, 8]);
+  // Entries of one name and category take the keys of such rows in turn.
+  const twice = [entries[0], entries[0]];
+  assert.deepEqual(rowsFromEntries(twice, rowsFromEntries(twice)).map((row) => row.key), [0, 1]);
+
+  // What an entry replaces is named by its place in the file, and reaches the row read from it.
+  const tangle = sheetTerm("PlaceName:413:0:0", "Crystal", "Кристаллы", "предмет", "PlaceName");
+  const items = entryItems(rowsFromEntries(saved, edited), new Map(), [{ entry: 0, term: tangle }], [], [1, 7]);
+  assert.deepEqual(items.map((item) => item.replaced.length), [1, 0]);
+});
+
+test("a kept term stays in the list whatever the filter", () => {
+  const items = entryItems(rowsFromEntries(entries), new Map(), [], []);
+  const shown = (keep) => filterItems(items, { ...emptyGlossaryFilter, query: "crystal" }, null, keep).map((item) => item.id);
+  assert.deepEqual(shown(null), ["entry:1"]);
+  assert.deepEqual(shown("entry:0"), ["entry:0", "entry:1"]);
+});
+
 test("forms typed together are split at semicolons", () => {
   assert.deepEqual(splitForms(" linkshells; ; LS "), ["linkshells", "LS"]);
   assert.deepEqual(splitForms("  "), []);

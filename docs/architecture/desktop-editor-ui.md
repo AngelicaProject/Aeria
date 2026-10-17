@@ -446,6 +446,10 @@ does what no other button does; the shortcut works on every string. A translated
 without edits only moves on; an empty target does nothing. When the selected
 string has left the filtered list, for example a fuzzy filter after accepting
 it, the next and previous strings are found from its place in sheet order.
+A string saved out of the filter (translated under *Untranslated*, or no
+longer matching the text filter) stays in the list in its place until
+another string is selected or the filter changes, so the list does not move
+under the cursor.
 
 Unsaved target or note drafts are marked and protected by a discard
 confirmation when changing rows, changing sheets, closing the project, or
@@ -812,6 +816,14 @@ again when the project changed while no term is being edited.
   Shift-click takes a range, Ctrl+A takes every term shown, Delete removes
   the chosen project terms, and Enter or a double click moves into the
   translation. Ctrl+F finds and Ctrl+S saves while the tab is shown.
+  The chosen term stays in the table while it is edited and saved, though it
+  no longer matches the search or the view, until another term is chosen or
+  the filter changes. **Add** keeps the filter as it is: the new term is
+  chosen and shown, with the category the filter has, and a search that
+  found nothing gives it its headword; the field to type next takes the
+  focus. A save, or the files read again, keeps the chosen terms chosen,
+  the fields keep the focus while it writes, and the counts shown stay
+  until they are counted again.
 - A project term's fields are its headword, translation, category, other
   forms, note, and **Match case**, with its problem; **The sheets give**
   lists the sheet terms it replaces, marked where the translation differs,

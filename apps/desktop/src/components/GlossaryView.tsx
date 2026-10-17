@@ -78,6 +78,10 @@ export const GlossaryView = forwardRef<GlossaryViewHandle, GlossaryViewProps>(fu
   const { preferences } = usePreferences();
   const [saved, setSaved] = useState<ProjectKnowledgeDto | null>(null);
   const [rows, setRows] = useState<GlossaryRow[]>([]);
+  const rowsRef = useRef(rows);
+  rowsRef.current = rows;
+  // The key of the row read from each entry of the saved file.
+  const [savedKeys, setSavedKeys] = useState<readonly number[]>([]);
   const nextKey = useRef(0);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<{ title: string; error: CommandError } | null>(null);
@@ -90,6 +94,11 @@ export const GlossaryView = forwardRef<GlossaryViewHandle, GlossaryViewProps>(fu
   // How many translations do not use each term, by name; null until counted.
   const [unapplied, setUnapplied] = useState<ReadonlyMap<string, number> | null>(null);
   const [checking, setChecking] = useState(false);
+  // Counts read before the terms changed stay shown until counted again, so
+  // a save neither empties a view of them nor reorders the list twice.
+  const [usageStale, setUsageStale] = useState(false);
+  const [unappliedStale, setUnappliedStale] = useState(false);
+  const recount = useCallback(() => { setUsageStale(true); setUnappliedStale(true); }, []);
   // A correction run the glossary started, with the terms it decides, and
   // whether another run goes.
   const [run, setRun] = useState<{ terms: string[]; status: TranslationStatus | null } | null>(null);
@@ -102,14 +111,15 @@ export const GlossaryView = forwardRef<GlossaryViewHandle, GlossaryViewProps>(fu
   const detailRef = useRef<HTMLDivElement>(null);
   const loadedRevision = useRef<number | null>(null);
 
+  // The rows shown keep their keys, so the chosen terms stay chosen.
   const show = useCallback((knowledge: ProjectKnowledgeDto) => {
     setSaved(knowledge);
-    setUsage(null);
-    setUnapplied(null);
-    const next = rowsFromEntries(knowledge.entries);
-    nextKey.current = next.length;
+    recount();
+    const next = rowsFromEntries(knowledge.entries, rowsRef.current);
+    nextKey.current = Math.max(nextKey.current, ...next.map((row) => row.key + 1));
+    setSavedKeys(next.map((row) => row.key));
     setRows(next);
-  }, []);
+  }, [recount]);
 
   const dirty = saved !== null && rowsChanged(rows, saved.entries);
   useEffect(() => onDirtyChange(dirty), [dirty, onDirtyChange]);
@@ -125,18 +135,25 @@ export const GlossaryView = forwardRef<GlossaryViewHandle, GlossaryViewProps>(fu
 
   const problems = useMemo(() => rowProblems(rows), [rows]);
   const fromSheets = useMemo(() => sheetItems(saved?.sheetTerms ?? []), [saved]);
-  const entries = useMemo(() => entryItems(rows, problems, saved?.replaced ?? [], saved?.redundant ?? []), [problems, rows, saved]);
+  const entries = useMemo(() => entryItems(rows, problems, saved?.replaced ?? [], saved?.redundant ?? [], savedKeys), [problems, rows, saved, savedKeys]);
   const items = useMemo(() => [...entries, ...fromSheets], [entries, fromSheets]);
   const byId = useMemo(() => new Map(items.map((item) => [item.id, item])), [items]);
   const counts = useMemo(() => facetCounts(items, unapplied), [items, unapplied]);
   const query = useDeferredValue(filter.query);
-  const shown = useMemo(() => sortItems(filterItems(items, { ...filter, query }, unapplied), sort, usage), [filter, items, query, sort, unapplied, usage]);
+  // The active term stays in the list while it is edited and saved, though
+  // it no longer matches; choosing another term or changing the filter
+  // lets it go.
+  const [kept, setKept] = useState<{ id: string | null; filter: GlossaryFilter }>({ id: selection.active, filter });
+  if (kept.id !== selection.active) setKept({ id: selection.active, filter });
+  const keep = kept.filter === filter ? kept.id : null;
+  const shown = useMemo(() => sortItems(filterItems(items, { ...filter, query }, unapplied, keep), sort, usage), [filter, items, keep, query, sort, unapplied, usage]);
   const categoryNames = useMemo(() => counts.categories.map((category) => category.label), [counts]);
   const sheets = useMemo(() => saved?.sheets ?? [], [saved]);
 
   const countUsage = useCallback(() => {
     if (counting) return;
     setCounting(true);
+    setUsageStale(false);
     void termUsage()
       .then((found) => setUsage(new Map(found.map((term) => [usageKey(term.term, term.category), term.strings]))))
       // A failed count is not asked again until the terms are read again.
@@ -146,21 +163,22 @@ export const GlossaryView = forwardRef<GlossaryViewHandle, GlossaryViewProps>(fu
 
   // The uses are counted once the terms are read, and again after each read.
   useEffect(() => {
-    if (active && saved && usage === null && !counting) countUsage();
-  }, [active, countUsage, counting, saved, usage]);
+    if (active && saved && (usage === null || usageStale) && !counting) countUsage();
+  }, [active, countUsage, counting, saved, usage, usageStale]);
 
   // The translations that do not use a term are found by the checks, once
   // the terms are read and again after a run.
   const checkUnapplied = useCallback(() => {
     setChecking(true);
+    setUnappliedStale(false);
     void termUnapplied()
       .then((found) => setUnapplied(new Map(found.map((term) => [usageKey(term.term, term.category), term.strings]))))
       .catch((reason: unknown) => { setUnapplied(new Map()); setError({ title: t("glossary.loadError"), error: normalizeCommandError(reason) }); })
       .finally(() => setChecking(false));
   }, [t]);
   useEffect(() => {
-    if (active && saved && unapplied === null && !checking) checkUnapplied();
-  }, [active, checkUnapplied, checking, saved, unapplied]);
+    if (active && saved && (unapplied === null || unappliedStale) && !checking) checkUnapplied();
+  }, [active, checkUnapplied, checking, saved, unapplied, unappliedStale]);
 
   // A run of the glossary is read every second until it ends; then what it
   // wrote reaches the editor and the counts.
@@ -174,8 +192,7 @@ export const GlossaryView = forwardRef<GlossaryViewHandle, GlossaryViewProps>(fu
         setRun((value) => value && { ...value, status });
         if (status && !status.running) {
           onFilesChanged();
-          setUnapplied(null);
-          setUsage(null);
+          recount();
           setStringsRevision((value) => value + 1);
         }
       })
@@ -183,7 +200,7 @@ export const GlossaryView = forwardRef<GlossaryViewHandle, GlossaryViewProps>(fu
     read();
     const timer = window.setInterval(read, POLL_MS);
     return () => { current = false; window.clearInterval(timer); };
-  }, [onFilesChanged, run?.status?.running, run !== null, t]);
+  }, [onFilesChanged, recount, run?.status?.running, run !== null, t]);
 
   // Another run, from the machine translation dialog or search, is asked
   // about while the tab is shown.
@@ -278,14 +295,29 @@ export const GlossaryView = forwardRef<GlossaryViewHandle, GlossaryViewProps>(fu
     setRows((current) => current.map((row) => row.key === key ? { ...row, ...patch } : row));
   };
 
+  // The new term stays in the list as the chosen one, under the filter as it
+  // is. A search that found nothing names it.
   const add = (row: Partial<GlossaryRow> = {}) => {
     const key = nextKey.current++;
     const category = row.category ?? counts.categories.find((candidate) => candidate.key === filter.category)?.label ?? "";
-    setRows((current) => [...current, { key, term: "", translation: "", forms: [], note: "", matchCase: false, ...row, category }]);
-    // The new term stays in view: only filters it would miss are cleared.
-    setFilter((current) => ({ ...current, query: "", sheet: null, view: current.view === "entries" ? "entries" : "all", category: row.category === undefined ? current.category : null }));
+    const term = shown.length === 0 ? filter.query.trim() : "";
+    setRows((current) => [...current, { key, term, translation: "", forms: [], note: "", matchCase: false, ...row, category }]);
     chooseOnly(entryId(key));
   };
+
+  // A term added by its button is typed at once: its name, or its
+  // translation when the search named it.
+  const focusAdded = useRef<string | null>(null);
+  const addTerm = () => {
+    focusAdded.current = shown.length === 0 && filter.query.trim() !== "" ? "[data-glossary-edit]" : "[data-glossary-headword]";
+    add();
+  };
+  useEffect(() => {
+    const field = focusAdded.current;
+    if (field === null) return;
+    focusAdded.current = null;
+    detailRef.current?.querySelector<HTMLElement>(field)?.focus();
+  });
 
   const remove = (keys: readonly number[]) => {
     if (keys.length === 0) return;
@@ -345,7 +377,7 @@ export const GlossaryView = forwardRef<GlossaryViewHandle, GlossaryViewProps>(fu
     void saveKnowledgeSheets(saved.sheetsText, next)
       .then((knowledge) => {
         setSaved((current) => current && { ...current, sheetsText: knowledge.sheetsText, sheets: knowledge.sheets, sheetTerms: knowledge.sheetTerms, redundant: knowledge.redundant, replaced: knowledge.replaced });
-        setUsage(null);
+        setUsageStale(true);
         loadedRevision.current = revision + 1;
         onSaved();
       })
@@ -452,7 +484,7 @@ export const GlossaryView = forwardRef<GlossaryViewHandle, GlossaryViewProps>(fu
       <section className="glossary-detail glossary-detail-empty">
         <UiIcon icon="bookMarked" size="xl" />
         {items.length === 0 ? <span>{t("glossary.empty")}</span> : null}
-        <button className="button button-secondary" type="button" disabled={busy} onClick={() => add()}><UiIcon icon="plus" size="sm" />{t("glossary.add")}</button>
+        <button className="button button-secondary" type="button" disabled={busy} onClick={addTerm}><UiIcon icon="plus" size="sm" />{t("glossary.add")}</button>
       </section>
     );
   })();
@@ -515,7 +547,7 @@ export const GlossaryView = forwardRef<GlossaryViewHandle, GlossaryViewProps>(fu
                 onOpenSettings={onOpenSettings}
               />
             ) : null}
-            <button className="button button-ghost glossary-add" type="button" disabled={busy} onClick={() => add()}><UiIcon icon="plus" size="sm" />{t("glossary.add")}</button>
+            <button className="button button-ghost glossary-add" type="button" disabled={busy} onClick={addTerm}><UiIcon icon="plus" size="sm" />{t("glossary.add")}</button>
           </div>
           <GlossaryTable
             ref={tableRef}

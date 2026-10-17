@@ -36,11 +36,11 @@ export function EntryDetail({ item, sheetsGive, fix, categories, senses, disable
     <section className="glossary-detail" aria-label={row.term || t("glossary.untitled")}>
       <div className="glossary-field">
         <label htmlFor={`${id}-term`}>{t("glossary.field.term")}</label>
-        <input id={`${id}-term`} className="input glossary-detail-headword" value={row.term} disabled={disabled} autoFocus={!row.term} onChange={(event) => onChange({ term: event.target.value })} />
+        <input id={`${id}-term`} data-glossary-headword className="input glossary-detail-headword" value={row.term} readOnly={disabled} autoFocus={!row.term} onChange={(event) => onChange({ term: event.target.value })} />
       </div>
       <div className="glossary-field">
         <label htmlFor={`${id}-translation`}>{t("glossary.field.translation")}</label>
-        <input id={`${id}-translation`} data-glossary-edit className="input" value={row.translation} disabled={disabled} onChange={(event) => onChange({ translation: event.target.value })} />
+        <input id={`${id}-translation`} data-glossary-edit className="input" value={row.translation} readOnly={disabled} onChange={(event) => onChange({ translation: event.target.value })} />
       </div>
       <div className="glossary-field">
         <label htmlFor={`${id}-category`}>{t("glossary.field.category")}</label>
@@ -52,7 +52,7 @@ export function EntryDetail({ item, sheetsGive, fix, categories, senses, disable
       </div>
       <div className="glossary-field glossary-field-grow">
         <label htmlFor={`${id}-note`}>{t("glossary.field.note")}</label>
-        <textarea id={`${id}-note`} className="input glossary-note" value={row.note} spellCheck disabled={disabled} onChange={(event) => onChange({ note: event.target.value })} />
+        <textarea id={`${id}-note`} className="input glossary-note" value={row.note} spellCheck readOnly={disabled} onChange={(event) => onChange({ note: event.target.value })} />
       </div>
       <label className="glossary-check" title={t("glossary.field.matchCaseTitle")}>
         <input type="checkbox" checked={row.matchCase} disabled={disabled} onChange={(event) => onChange({ matchCase: event.target.checked })} />
@@ -126,7 +126,7 @@ export function SheetTermDetail({ term, fix, senses, disabled, onSettle, onOpen,
           data-glossary-edit
           className="input"
           value={translation}
-          disabled={disabled}
+          readOnly={disabled}
           onChange={(event) => setTranslation(event.target.value)}
           onBlur={settle}
           onKeyDown={(event) => {
@@ -288,7 +288,7 @@ function SheetColumn({ sheet, titled, categories, disabled, onChange }: { sheet:
       </div>
       <div className="glossary-field glossary-field-grow">
         <label htmlFor={`${id}-note`}>{t("glossary.sheets.note")}</label>
-        <textarea id={`${id}-note`} className="input glossary-note" value={note} spellCheck title={t("glossary.sheets.noteTitle")} disabled={disabled} onChange={(event) => setNote(event.target.value)} onBlur={() => { if (note.trim() !== savedNote) onChange({ ...sheet, note: note.trim() || null }); }} />
+        <textarea id={`${id}-note`} className="input glossary-note" value={note} spellCheck title={t("glossary.sheets.noteTitle")} readOnly={disabled} onChange={(event) => setNote(event.target.value)} onBlur={() => { if (note.trim() !== savedNote) onChange({ ...sheet, note: note.trim() || null }); }} />
       </div>
     </>
   );
