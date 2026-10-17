@@ -271,8 +271,9 @@ meaning) and the rule a translation follows for it:
 
 A malformed source has no constructs and cannot be translated.
 `aeria_se::authoring_reference()` is a short reference of condition syntax,
-the known globals, and the player insertions a translation may add, for the
-machine translation instructions.
+the known globals, the parameters the official localizations' conditions
+test (to be chosen by in place of a global such as `$gn4`), and the player
+insertions a translation may add, for the machine translation instructions.
 
 ### Structure policy
 
@@ -302,10 +303,14 @@ machine translation instructions.
   formatting is the translation's own, since the official localizations
   format about four in five formatted strings differently from the English
   (italics above all), so it may be added, dropped, or moved;
-- tests, in conditions it has, only parameters the source uses or globals
+- tests, in conditions it has, only parameters the source uses, globals
   whose meaning is established (see [Known global
-  parameters](#known-global-parameters)); constants and game values such as
-  `$hour` are always allowed;
+  parameters](#known-global-parameters)), or parameters a condition of a
+  well-formed official localization of the same string tests; the game
+  passes every client language the same parameters, so where the English
+  `Wanderer` has no condition and the German and French choose by `<if ($n1
+  == 1)>`, a translation may choose by `$n1` as well. Constants and game
+  values such as `$hour` are always allowed;
 - starts with a speaker name exactly when the source does, and does not
   leave a name the source gives empty (see [Speaker names](#speaker-names)).
 
