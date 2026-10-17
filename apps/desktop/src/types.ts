@@ -25,6 +25,12 @@ export type OtherLanguageTextDto = {
   text: string | null;
 };
 
+/** A sheet's column names by column index from EXDSchema, and the game version of the schema's branch. */
+export type SheetColumnNamesDto = {
+  schemaVersion: string;
+  names: string[];
+};
+
 /** The dialogue structure of a quest or cutscene sheet, read from its row keys. */
 export type SheetDialogueDto = {
   kind: "quest" | "cutscene";

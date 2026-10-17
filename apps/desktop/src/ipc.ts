@@ -35,6 +35,7 @@ import type {
   ProjectOpenResultDto,
   ProjectSummaryDto,
   RecentProjectDto,
+  SheetColumnNamesDto,
   SheetProgressDto,
   SourceBinding,
   TermSheetDto,
@@ -255,6 +256,11 @@ export function pageTranslationRows(
 /** One source cell in the game's other client languages, for comparison. */
 export function sourceInOtherLanguages(sourceBinding: SourceBinding): Promise<OtherLanguageTextDto[]> {
   return call<OtherLanguageTextDto[]>("source_in_other_languages", { sourceBinding });
+}
+
+/** The names of a sheet's columns from EXDSchema; `null` when no schema of the game's version names them. */
+export function sheetColumnNames(sheetName: string): Promise<SheetColumnNamesDto | null> {
+  return call<SheetColumnNamesDto | null>("sheet_column_names", { sheetName });
 }
 
 /** The scene structure of a quest or cutscene sheet; `null` for other sheets. */

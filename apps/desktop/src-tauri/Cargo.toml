@@ -27,6 +27,7 @@ aeria-git = { path = "../../../crates/aeria-git" }
 aeria-knowledge = { path = "../../../crates/aeria-knowledge" }
 aeria-projects = { path = "../../../crates/aeria-projects" }
 aeria-publish = { path = "../../../crates/aeria-publish" }
+aeria-schema = { path = "../../../crates/aeria-schema" }
 aeria-se = { path = "../../../crates/aeria-se" }
 aeria-po = { path = "../../../crates/aeria-po" }
 aeria-model = { path = "../../../crates/aeria-model" }

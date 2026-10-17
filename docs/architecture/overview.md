@@ -51,7 +51,7 @@ Three places hold data, with distinct roles:
 
 - **Installed game**: the source, read directly and never written; see [`source.md`](./source.md).
 - **The project's files**, usually a Git repository: canonical project state, the PO files of [`po-project.md`](./po-project.md) and the project settings and knowledge.
-- **Local cache and preferences**: rebuildable indexes, the sheet catalog, search data, and machine-local preferences and credentials.
+- **Local cache and preferences**: rebuildable indexes, the sheet catalog, search data, downloaded EXDSchema files, and machine-local preferences and credentials.
 
 Deleting local cache must never delete a user's translation work.
 
@@ -60,6 +60,7 @@ Deleting local cache must never delete a user's translation work.
 - `aeria-core`: domain types shared by the game source, the project, and export: game versions, sheet layout hashes, and language tags. It knows nothing of Tauri, Git, or persistence.
 - `aeria-sqpack`: read-only access to an installed game's SqPack archives and Excel sheets: the sheet list, sheet headers, and the rows and String cell bytes of a sheet in one language. It never writes to the installation. Its `testing` feature writes synthetic installations for tests.
 - `aeria-source`: the installed game as the translation source: sheets in the source language, String cell text, sheet layouts, translation permission, row keys, the dialogue flow traced from quest scripts, and the sheet catalog.
+- `aeria-schema`: column names of the game's sheets from EXDSchema, downloaded from GitHub into the cache directory and checked against the sheet headers, for display only (see [`source.md`](./source.md#column-names)).
 - `aeria-se`: structured FFXIV string parsing, syntax tree, validation, and rendering model.
 - `aeria-po`: the project as PO files: the format, entry identity, where each string's file is, files made from the game, the join of a game update, the checks of a translation, and the session the desktop reads and writes through (see [`po-project.md`](./po-project.md)).
 - `aeria-knowledge`: the project knowledge in `aeria-knowledge/` (style and terms): reading and checking it, and the rules every translation follows (see [`knowledge.md`](./knowledge.md)).

@@ -24,6 +24,8 @@ export const en = {
   "common.unsaved": "Unsaved",
   "common.edited": "edited",
   "common.column": "col {column}",
+  "common.columnNamed": "col {column} · {name}",
+  "common.columnSchema": "Column name from EXDSchema {version}",
   "common.cellLocation": "{sheet} {row}:{subrow} · col {column}",
   "common.themeWithFamily": "{name} ({family})",
   "common.themesFamily": "Themes",

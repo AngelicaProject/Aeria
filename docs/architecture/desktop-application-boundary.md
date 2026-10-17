@@ -185,6 +185,13 @@ language, from `GameSource::cell_in_other_languages` (see
 [`source.md`](./source.md#additional-source-languages)); a language without
 the cell has `null` text. It is display context and is never recorded.
 
+`sheet_column_names(sheetName)` returns the names of a sheet's columns by
+column index and the game version of the EXDSchema branch that named them,
+or `null` when no schema of the game's version names the sheet (see
+[`source.md`](./source.md#column-names)). It reads the schema through the
+cache directory and GitHub and fails with `columnNames` when GitHub cannot
+be reached for a schema not in the cache. The names are display only.
+
 `sheet_dialogue(sheetName)` returns the dialogue structure of a quest or
 cutscene sheet for the scene view, from `GameSource::dialogue` and
 `GameSource::quest_row` (see [`source.md`](./source.md#dialogue)): each row

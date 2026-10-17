@@ -60,6 +60,12 @@ codes the catalog does not name, so run it after a game patch to see which
 new macros need a catalog entry. Run it manually with `AERIA_GAME_PATH` set;
 it is not part of CI, which has no game installation.
 
+The column order of EXDSchema is checked the same way by the ignored test
+`crates/aeria-schema/tests/game_schema.rs`, with `AERIA_GAME_PATH` and
+`AERIA_EXDSCHEMA_PATH` (a local clone of an EXDSchema `ver/…` branch): it
+names the columns of every root sheet and prints the sheets whose schema
+has another column count.
+
 ## Harmonia pack interop
 
 `aeria-export` compares its output with the committed fixtures
