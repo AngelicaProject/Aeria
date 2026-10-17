@@ -321,6 +321,43 @@ fn game_data_an_official_localization_uses_may_stand_in() {
 }
 
 #[test]
+fn a_condition_may_test_what_an_official_localization_tests() {
+    let source = "Wanderer";
+    let target = "<if ($n1 == 1)>Скиталица<else>Скиталец</if>";
+    let localizations = [
+        "Wanderer",
+        "<if ($n1 == 1)>Wanderin<else>Wanderer</if>",
+        "<if ($n1 == 1)>Baroudeuse<else>Baroudeur</if>",
+    ];
+    assert!(
+        check_assisted_structure_with(source, target, &localizations).is_ok(),
+        "the gender the German and French choose by"
+    );
+    assert!(
+        refused(source, target).contains("whose meaning is not known"),
+        "without the localizations $n1 is unknown"
+    );
+    assert!(
+        check_assisted_structure_with(
+            source,
+            "<if ($n2 == 1)>Скиталица<else>Скиталец</if>",
+            &localizations
+        )
+        .is_err(),
+        "a parameter no localization tests stays refused"
+    );
+    assert!(
+        check_assisted_structure_with(source, target, &["Wanderer <num $n1>"]).is_err(),
+        "a parameter a localization only prints is not a condition's evidence"
+    );
+    assert!(
+        check_assisted_structure_with(source, target, &["<if ($n1 == 1)>Wanderin"]).is_err(),
+        "a malformed localization is not evidence"
+    );
+    assert!(authoring_reference().contains("<if ($n1 == 1)>"));
+}
+
+#[test]
 fn missing_game_data_names_each_piece_the_target_lacks_once() {
     let source = "<sheet Item $n1 0> ×<num $n2>, <sheet Item $n1 0> again for <string $gs1>.";
     assert_eq!(

@@ -19,7 +19,8 @@
 //!   does, so no color or style runs past the string;
 //! - conditions such as `<if>`, `<switch>`, and `<if-gender>` may be added,
 //!   dropped, and restructured, as long as they test only values the source
-//!   uses or globals whose meaning is established (`catalog::GLOBALS`);
+//!   uses, globals whose meaning is established (`catalog::GLOBALS`), or
+//!   values a condition of an official localization of the string tests;
 //! - line breaks and spaces are free;
 //! - letter case transforms such as `<capitalize>` may be added or dropped,
 //!   and the model is told that game data inside one shows in that case
@@ -201,7 +202,10 @@ Values a condition may test besides those the source uses:",
     }
     reference.pop();
     reference.push_str(
-        ". Game data a translation may add although the source lacks it, written exactly so:",
+        ". A condition may also test what a condition of the string's other client languages \
+tests: when they choose by a value of the string, such as <if ($n1 == 1)>, choose by the same \
+value, which the game sets for this string, rather than by a global such as $gn4. Game data a translation may add although the source lacks it, \
+written exactly so:",
     );
     for insertion in player_insertions() {
         let _ = write!(
@@ -451,6 +455,27 @@ fn localized_data(localizations: &[&str]) -> Vec<Vec<Shape>> {
         .collect()
 }
 
+/// The parameters the conditions of the well-formed localizations test. The
+/// game passes every client language the same parameters, so a value an
+/// official localization chooses by, such as the gender of the character a
+/// string names (`<if ($n1 == 1)>`), is one a translation may choose by too.
+fn localized_tests(localizations: &[&str]) -> HashSet<(u8, u32)> {
+    localizations
+        .iter()
+        .map(|text| parse(text))
+        .filter(MacroString::is_well_formed)
+        .flat_map(|document| {
+            let mut facts = Facts::default();
+            collect(&document, document.nodes(), &mut facts);
+            facts
+                .conditions
+                .into_iter()
+                .flat_map(|(_, tested)| tested)
+                .collect::<Vec<_>>()
+        })
+        .collect()
+}
+
 /// The game data of the source a target lacks, each piece once by its first
 /// spelling, but for what an official localization does without.
 fn missing_data<'a>(
@@ -628,13 +653,15 @@ pub fn check_assisted_structure_with(
         &target_facts.formatting,
         &mut errors,
     );
+    let localized_tested = localized_tests(localizations);
     for (spelling, tested) in &target_facts.conditions {
         for (kind, index) in tested {
             if !source_facts.parameters.contains(&(*kind, *index))
                 && !is_known_global(*kind, *index)
+                && !localized_tested.contains(&(*kind, *index))
             {
                 errors.push(StructureError::new(format!(
-                    "{spelling} tests {}, which the source does not use and whose meaning is not known; a condition may test the source's values or the known globals",
+                    "{spelling} tests {}, which the source does not use and whose meaning is not known; a condition may test the source's values, the known globals, or what a condition of an official localization tests",
                     parameter_text(*kind, *index)
                 )));
             }
