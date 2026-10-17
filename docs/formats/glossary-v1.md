@@ -120,7 +120,12 @@ the checks of a translation; it never changes a translation.
   letters the stem left off (`чародея` of `чародей`, `ночью` of `ночь`),
   then a declension ending of at most four letters in all: `а`, `ом`, `ами`,
   `ого`, `ых`, and the other endings of nouns and adjectives (`ENDINGS` in
-  `aeria-knowledge`). An ending takes the place of a final vowel and never
+  `aeria-knowledge`). A noun in `-а` or `-я` takes only the endings of its
+  declension, and an adjective in `-ая`, `-яя`, or `-ый` only those of an
+  adjective: `Носке` is a form of `Носка` and `Носкее` is not, `Западной`
+  is a form of `Западная` and `Западна` is not. A word that ends another
+  way, where the ending does not tell a noun from an adjective (`гений`,
+  `знание`), takes any of the endings. An ending takes the place of a final vowel and never
   follows all of it: `Ализея` is not a form of `Ализе`. Any other letters
   make another word: `Этерис` is not a form of `этер`, nor `эфироита` of
   `эфирит`. A stem keeps at least two
@@ -134,6 +139,10 @@ the checks of a translation; it never changes a translation.
 - An apostrophe between letters is part of its word, whichever apostrophe
   the text writes: `Уль'ды` is one word, a form of `Уль'да`, and `Ульды` is
   another spelling.
+- A hyphen between letters is part of its word too, and such a word
+  declines part by part: `Лимсу-Ломинсу` is a form of `Лимса-Ломинса`, while
+  `Ла-Носке` is not a form of `Ла Носка`, nor `Лимсу Ломинсу` of
+  `Лимса-Ломинса`.
 - A vowel that comes and goes when a word is declined is part of its
   inflection. A stem that ends with `о`, `е`, or `ё` and one of `ц`, `к`,
   `н`, `л`, `р`, `т`, `в` also declines without the vowel, when at least
