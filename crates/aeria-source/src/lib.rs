@@ -19,7 +19,7 @@ use std::str::FromStr;
 use std::sync::{Arc, Mutex, PoisonError};
 
 pub use aeria_sqpack::excel::Variant as SheetVariant;
-use aeria_sqpack::excel::{self, Language};
+use aeria_sqpack::excel::{self, Language, SheetError};
 use aeria_sqpack::{GameData, SqPackError};
 use thiserror::Error;
 
@@ -654,6 +654,21 @@ impl GameSource {
             Ok(sheet) => SheetLookup::Present(Arc::new(sheet)),
             Err(unavailable) => SheetLookup::Unavailable(unavailable),
         })
+    }
+
+    /// The columns of a sheet's header in column order, each as its type
+    /// code and its byte offset in the row, or `None` when the sheet has no
+    /// header.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when a game file cannot be read.
+    pub fn sheet_columns(&self, name: &str) -> Result<Option<Vec<(u16, u16)>>, SourceError> {
+        match excel::sheet_header(&self.game, name) {
+            Ok(header) => Ok(header.map(|header| header.columns)),
+            Err(SheetError::Game(error)) => Err(SourceError::Game(error)),
+            Err(_) => Ok(None),
+        }
     }
 
     /// The dialogue of a quest or cutscene sheet (see [`Dialogue::of`]);

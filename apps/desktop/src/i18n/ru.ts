@@ -24,6 +24,8 @@ export const ru: Catalog = {
   "common.unsaved": "Не сохранено",
   "common.edited": "изменено",
   "common.column": "кол. {column}",
+  "common.columnNamed": "кол. {column} · {name}",
+  "common.columnSchema": "Имя столбца из EXDSchema {version}",
   "common.cellLocation": "{sheet} {row}:{subrow} · кол. {column}",
   "common.themeWithFamily": "{name} ({family})",
   "common.themesFamily": "Темы",

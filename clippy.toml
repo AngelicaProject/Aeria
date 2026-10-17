@@ -1,2 +1,2 @@
 # Product names that are not code identifiers in documentation.
-doc-valid-idents = ["ChatGPT", "OpenAI", ".."]
+doc-valid-idents = ["ChatGPT", "EXDSchema", "OpenAI", ".."]

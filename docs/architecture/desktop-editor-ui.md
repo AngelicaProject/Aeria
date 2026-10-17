@@ -316,6 +316,13 @@ the string's state and coordinate, field tabs for multi-cell rows, a *Source
 changed* mark on a fuzzy string, and Revert. The source and target panes each have
 their own Text / Code switch (see below).
 
+A column is labelled by its index and, when EXDSchema names the sheet's
+columns, its name: `col 2 · NameNoArticle` on the field tabs, the single
+field, and the source's context lines, with the schema version as the hint
+(see [`source.md`](./source.md#column-names)). The strings list keeps the
+index alone and shows the name as the hint. Until the names load, or
+without them, a column shows its index.
+
 Source and target sit side by side, with the translator note beside them (or
 below them in a narrow document). Source is read-only; target is a CodeMirror
 editor. The document of both is always the exact macro text; how tags are

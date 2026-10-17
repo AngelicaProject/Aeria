@@ -1,3 +1,4 @@
+mod column_names;
 mod commands;
 mod dto;
 mod error;
@@ -25,6 +26,7 @@ mod updates;
 use serde::Serialize;
 use tauri::Manager;
 
+pub use column_names::{ColumnNames, SheetColumnNamesDto, sheet_column_names};
 pub use commands::{
     close_project, current_project, default_projects_directory_path, forget_recent_project,
     incoming_project_update, initialize_project_from_game, list_recent_projects,
@@ -120,6 +122,7 @@ pub fn run() {
         .manage(Updates::default())
         .manage(Translation::default())
         .manage(SearchState::default())
+        .manage(ColumnNames::default())
         .setup(|app| {
             paths::migrate_legacy_directories(app.handle());
             app.state::<DesktopState>()
@@ -151,6 +154,7 @@ pub fn run() {
             forget_recent_project,
             page_translation_rows,
             source_in_other_languages,
+            sheet_column_names,
             sheet_dialogue,
             set_translation_target,
             set_translation_review,

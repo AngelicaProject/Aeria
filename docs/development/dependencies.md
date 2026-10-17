@@ -99,6 +99,12 @@ their license texts; the OFL allows bundling them with software.
 `aeria-knowledge` uses `aho-corasick` to find a string's glossary terms in
 one pass.
 
+`aeria-schema` uses `yaml-rust2` (MIT OR Apache-2.0) without default
+features to read EXDSchema's YAML sheet schemas; it brings `arraydeque` (MIT
+OR Apache-2.0) and `hashlink`, already in the graph. It reads the schemas
+from GitHub with `reqwest` and `rustls` as `aeria-publish` does, and `serde`
+and `serde_json` for the GitHub refs and its cache.
+
 `aeria-model` uses `reqwest`, `rustls`, and `keyring` as `aeria-publish`
 does, for the Codex Responses API and the ChatGPT sign-in, whose refresh token
 is kept in the OS credential store; `base64` (MIT OR Apache-2.0) to read the

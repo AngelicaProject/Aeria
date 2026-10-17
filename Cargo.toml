@@ -15,6 +15,7 @@ members = [
   "crates/aeria-guard",
   "crates/aeria-po",
   "crates/aeria-model",
+  "crates/aeria-schema",
   "apps/desktop/src-tauri",
 ]
 

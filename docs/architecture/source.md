@@ -64,6 +64,46 @@ written as 16 lowercase hexadecimal characters. Non-String columns do not
 take part: a patch that adds or moves a number column leaves the layout, and
 every translation of the sheet, unchanged.
 
+### Column names
+
+The game keeps no column names; a column is its index. For display, the
+editor names columns from [EXDSchema](https://github.com/xivdev/EXDSchema),
+the community schema of the game's sheets (`aeria-schema`), so `PlaceName`
+column 2 reads `NameNoArticle`. The names are presentation only: identity,
+the PO files, checks, and export never use them, and without them a column
+shows its index.
+
+- **Branch.** EXDSchema has a branch `ver/<game version>` for each game
+  version that changed sheet headers. A game uses the newest branch not
+  newer than its own version, resolved to a commit through the GitHub API
+  once per run of Aeria.
+- **Files.** A sheet's schema is `<Sheet>.yml` of that commit, read from
+  `raw.githubusercontent.com` when the sheet is first shown. Only root
+  sheets have one; quest and cutscene sheets such as
+  `quest/000/ClsArc001_00001` are not asked for.
+- **Fields.** A schema lists the fields of every column, an array expanded
+  element by element (`Item[0]`, `Reward[0].Count`). The fields follow the
+  order of the columns' byte offsets in the row, the bits of one byte of
+  packed booleans in bit order, not the order of column indexes:
+  `PlaceName` lists `Name`, `NameNoArticle`, and `NamePrepositional`, the
+  columns 0, 2, and 8 at offsets 0, 4, and 8.
+- **Checked against the game.** A schema names a sheet's columns only when
+  it lists exactly as many fields as `GameSource::sheet_columns` reads
+  columns from the sheet's header. A sheet the game changed after the
+  branch was made usually has another column count and is left unnamed
+  rather than named wrongly. At game version `2026.10.06.0000.0000` with
+  the branch `2026.09.01.0000.0000`, 1,197 of 1,198 root sheets are named;
+  `XBMPet` is not.
+- **Cache.** The resolved commit is kept as `exdschema/resolved/<game
+  version>.json` and each file as `exdschema/<commit>/<Sheet>.yml` in the
+  cache directory, a sheet the commit has no file for as `<Sheet>.missing`.
+  A commit's files never change. Without network, Aeria uses the commit
+  resolved in an earlier run and the files cached under it; with neither,
+  columns show their indexes.
+
+EXDSchema has no license, so Aeria downloads it on the user's computer and
+never bundles it.
+
 ### String text
 
 `SourceSheet::text(row, subrow, column)` prints the String cell with

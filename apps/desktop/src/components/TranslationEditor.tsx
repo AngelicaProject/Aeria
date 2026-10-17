@@ -14,6 +14,8 @@ import { ReviewDot, stateLabel, stringState } from "./ReviewDot";
 import { OtherLanguages } from "./OtherLanguages";
 import { StringHistory } from "./StringHistory";
 import { useI18n } from "../ui/i18n";
+import { useSheetColumnNames } from "../ui/useSheetColumnNames";
+import { columnLabel } from "../columnNames";
 import { usePreferences } from "../ui/preferences";
 import type { PaneMode, SidePaneTab } from "../ui/preferencesModel";
 import type { MessageKey } from "../i18n/translate";
@@ -168,6 +170,7 @@ const TranslationEditorImpl = forwardRef<TranslationEditorHandle, TranslationEdi
   historyRevision = 0,
 }, ref) {
   const { t } = useI18n();
+  const columnNames = useSheetColumnNames(row?.sheetName ?? null);
   const [showDiff, setShowDiff] = useState(true);
   const [drafts, setDrafts] = useState<Record<string, CellDraft>>({});
   const draftsRef = useRef(drafts);
@@ -334,6 +337,7 @@ const TranslationEditorImpl = forwardRef<TranslationEditorHandle, TranslationEdi
 
   const translation = selectedCell.translation;
   const domId = domKey(bindingKey(selectedCell.sourceBinding));
+  const selectedColumn = columnLabel(t, selectedCell.sourceBinding.columnIndex, columnNames);
 
   return (
     <section className="editor" aria-label={t("editor.label")} aria-busy={cellBusy}>
@@ -347,16 +351,17 @@ const TranslationEditorImpl = forwardRef<TranslationEditorHandle, TranslationEdi
                 const key = bindingKey(cell.sourceBinding);
                 const active = key === selectedKey;
                 const dirty = cellIsDirty(cell, draftForCell(cell, drafts));
+                const column = columnLabel(t, cell.sourceBinding.columnIndex, columnNames);
                 return (
-                  <button className={active ? "field-tab active" : "field-tab"} type="button" role="tab" aria-selected={active} key={key} onClick={() => onSelectCell(cell.sourceBinding)}>
+                  <button className={active ? "field-tab active" : "field-tab"} type="button" role="tab" aria-selected={active} key={key} title={column.hint} onClick={() => onSelectCell(cell.sourceBinding)}>
                     <ReviewDot state={stringState(cell.translation)} />
-                    {t("common.column", { column: String(cell.sourceBinding.columnIndex) })}
+                    {column.label}
                     {dirty ? <span className="dirty-mark" aria-label={t("common.edited")} /> : null}
                   </button>
                 );
               })}
             </div>
-          ) : <span className="editor-field mono">{t("common.column", { column: String(selectedCell.sourceBinding.columnIndex) })}</span>}
+          ) : <span className="editor-field mono" title={selectedColumn.hint}>{selectedColumn.label}</span>}
         </div>
         <div className="editor-bar-end">
           {rowDirty ? <span className="pill pill-warn">{t("common.unsaved")}</span> : null}
@@ -393,7 +398,10 @@ const TranslationEditorImpl = forwardRef<TranslationEditorHandle, TranslationEdi
           {row.context.length > 0 ? (
             <details className="context-block">
               <summary><UiIcon icon="chevronRight" size="xs" />{t("editor.context")} <span className="count">{row.context.length}</span></summary>
-              <ul>{row.context.map((cell) => <li key={`${cell.columnIndex}:${cell.sourceMacro}`}><span className="mono">{t("common.column", { column: String(cell.columnIndex) })}</span><span>{cell.sourceMacro}</span></li>)}</ul>
+              <ul>{row.context.map((cell) => {
+                const column = columnLabel(t, cell.columnIndex, columnNames);
+                return <li key={`${cell.columnIndex}:${cell.sourceMacro}`}><span className="mono" title={column.hint}>{column.label}</span><span>{cell.sourceMacro}</span></li>;
+              })}</ul>
             </details>
           ) : null}
         </div>

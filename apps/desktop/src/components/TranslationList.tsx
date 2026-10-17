@@ -13,6 +13,8 @@ import { MacroPreview } from "./MacroPreview";
 import { DialogueScene } from "./DialogueScene";
 import { usePreferences } from "../ui/preferences";
 import { useI18n } from "../ui/i18n";
+import { useSheetColumnNames } from "../ui/useSheetColumnNames";
+import { columnLabel } from "../columnNames";
 import type { MessageKey } from "../i18n/translate";
 import type { LoadProgress } from "../loadProgress";
 
@@ -141,6 +143,7 @@ export const TranslationList = memo(function TranslationList({
   const { preferences, setPreference } = usePreferences();
   const rowHeight = ROW_HEIGHT[preferences.listDensity];
   const dialogue = useSheetDialogue(selectedSheetName);
+  const columnNames = useSheetColumnNames(loadedSheetName);
   const selectedKey = selectedBinding ? bindingKey(selectedBinding) : null;
   const showingPreviousSheet = loading && loadedOccurrenceCount > 0 && selectedSheetName !== loadedSheetName;
   // The scene view never falls back to strings while a scene loads: it keeps
@@ -339,7 +342,7 @@ export const TranslationList = memo(function TranslationList({
                   >
                     <span className="lens-status"><ReviewDot state={occurrence.state} /></span>
                     <span className="lens-coord mono">{continuation ? "" : `${occurrence.binding.rowId}:${occurrence.binding.subrowId}`}</span>
-                    <span className="lens-field mono">{t("common.column", { column: String(occurrence.binding.columnIndex) })}</span>
+                    <span className="lens-field mono" title={columnLabel(t, occurrence.binding.columnIndex, occurrence.binding.sheetName === loadedSheetName ? columnNames : null).label}>{t("common.column", { column: String(occurrence.binding.columnIndex) })}</span>
                     <span className="lens-text lens-source" title={occurrence.sourceMacro}>{occurrence.formattingOnly ? <span className="lens-tag" title={t("list.formattingHint")}>{t("list.formattingTag")}</span> : null}<MacroPreview text={occurrence.sourceMacro} empty="" /></span>
                     <span className="lens-text lens-target" title={occurrence.targetMacro ?? t("review.untranslated")}><MacroPreview text={occurrence.targetMacro} empty={t("review.untranslated")} /></span>
                   </div>
