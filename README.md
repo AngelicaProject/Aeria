@@ -31,4 +31,4 @@ Windows is the first supported desktop target. Linux support follows after the W
 
 ## License
 
-Aeria is licensed under the [GNU Affero General Public License v3.0](./LICENSE).
+Copyright (C) 2026 pokeda. Aeria is licensed under the [GNU Affero General Public License v3.0](./LICENSE), with the author attribution term in [NOTICE](./NOTICE).
