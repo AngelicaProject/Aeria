@@ -10,13 +10,13 @@ mod git;
 mod guard_workflow;
 mod guide;
 mod hints;
-mod instructions;
 mod macros;
 mod paths;
 mod project_changes;
 mod report;
 mod scene;
 mod search;
+mod skills;
 mod source;
 mod state;
 mod sync;
@@ -76,13 +76,13 @@ pub use guide::{
     save_knowledge_terms, string_binding, term_outdated, term_outdated_strings, term_strings,
     term_usage,
 };
-pub use instructions::{delete_instruction, instructions, save_instruction};
 pub use report::{run_report, run_reports, translation_continue};
 pub use search::{
     SearchState, project_edit_undo, project_replace_apply, project_replace_preview,
     project_retranslate, project_search, project_search_cancel, project_search_entries,
     project_search_prepare, project_term_exception,
 };
+pub use skills::{delete_skill, run_skill, save_skill, skill_count, skills};
 pub use state::{Activity, DesktopState};
 pub use translate::{
     ModelAccountDto, ModelSignInDto, Translation, model_account, model_list,
@@ -246,9 +246,11 @@ pub fn run() {
             run_reports,
             run_report,
             translation_continue,
-            instructions,
-            save_instruction,
-            delete_instruction,
+            skills,
+            save_skill,
+            delete_skill,
+            skill_count,
+            run_skill,
             translation_retry,
             translation_fix,
             translation_fix_string,

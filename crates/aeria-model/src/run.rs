@@ -87,13 +87,88 @@ pub struct Fix {
     pub adapt: bool,
     /// What a translator asks of every translation of the run.
     pub request: Option<String>,
-    /// The name of the project's instruction `request` is the text of (see
-    /// `aeria_knowledge::instructions`), to name the run by.
-    pub instruction: Option<String>,
+    /// The name of the project's skill `request` is the text of (see
+    /// `aeria_knowledge::skills`), to name the run by.
+    pub skill: Option<String>,
+    /// Sheets and folders left out of the run's paths.
+    pub exclude: Vec<String>,
+    /// Regular expressions the strings the run takes match.
+    pub filter: Filter,
     /// Bring the translations written with an older version of these
     /// terms, by headword, or of any term when empty, to the terms as they
     /// are (see [`Entry::outdated_terms`]); `None` for none.
     pub terms: Option<Vec<String>>,
+}
+
+/// Regular expressions, each ignoring case, that the strings a correction
+/// takes match, all those given: of its source and translation as macro
+/// text, and of one of its lines in the other client languages.
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct Filter {
+    pub source: Option<String>,
+    pub translation: Option<String>,
+    pub other: Option<String>,
+}
+
+/// A [`Filter`] with its expressions compiled.
+#[derive(Clone, Debug, Default)]
+pub struct Matcher {
+    source: Option<regex::Regex>,
+    translation: Option<regex::Regex>,
+    other: Option<regex::Regex>,
+}
+
+impl Matcher {
+    /// Compiles `filter`.
+    ///
+    /// # Errors
+    ///
+    /// Returns the expression that does not compile, with why.
+    pub fn new(filter: &Filter) -> Result<Self, String> {
+        let compile = |field: &str, pattern: &Option<String>| {
+            pattern
+                .as_deref()
+                .map(|pattern| {
+                    regex::RegexBuilder::new(pattern)
+                        .case_insensitive(true)
+                        .build()
+                        .map_err(|error| format!("{field}: {error}"))
+                })
+                .transpose()
+        };
+        Ok(Self {
+            source: compile("source", &filter.source)?,
+            translation: compile("translation", &filter.translation)?,
+            other: compile("other", &filter.other)?,
+        })
+    }
+
+    /// Whether `entry` matches every expression given.
+    #[must_use]
+    pub fn matches(&self, entry: &Entry) -> bool {
+        self.source
+            .as_ref()
+            .is_none_or(|regex| regex.is_match(&entry.source))
+            && self
+                .translation
+                .as_ref()
+                .is_none_or(|regex| regex.is_match(&entry.translation))
+            && self.other.as_ref().is_none_or(|regex| {
+                entry.extracted.iter().any(|line| {
+                    ["ja: ", "de: ", "fr: "]
+                        .iter()
+                        .find_map(|prefix| line.strip_prefix(prefix))
+                        .is_some_and(|text| regex.is_match(text))
+                })
+            })
+    }
+}
+
+/// Whether `path`, relative to `po/`, is one of `exclude`; none when it is
+/// empty.
+fn excluded(path: &str, exclude: &[String]) -> bool {
+    !exclude.is_empty() && selected(path, exclude)
 }
 
 /// The issues of a translation a correction is asked to fix: what the
@@ -477,20 +552,26 @@ pub fn plan(
     fuzzy: bool,
     contexts: &[String],
 ) -> Result<Vec<Batch>, String> {
-    plan_of(root, paths, contexts, &|entry| needs_work(entry, fuzzy))
+    plan_of(root, paths, &[], contexts, &|entry| {
+        needs_work(entry, fuzzy)
+    })
 }
 
 /// The batches of the strings of the chosen files that `wanted` takes.
 fn plan_of(
     root: &std::path::Path,
     paths: &[String],
+    exclude: &[String],
     contexts: &[String],
     wanted: &dyn Fn(&Entry) -> bool,
 ) -> Result<Vec<Batch>, String> {
     let only: std::collections::HashSet<&str> = contexts.iter().map(String::as_str).collect();
     let files = aeria_po::list(root).map_err(|error| error.to_string())?;
     let mut batches = Vec::new();
-    for path in files.into_iter().filter(|path| selected(path, paths)) {
+    for path in files
+        .into_iter()
+        .filter(|path| selected(path, paths) && !excluded(path, exclude))
+    {
         let full = root.join(PO_DIR).join(&path);
         let text = std::fs::read_to_string(&full).map_err(|error| format!("po/{path}: {error}"))?;
         let file = PoFile::parse(&text).0;
@@ -539,13 +620,17 @@ struct Shared {
     cache_key: String,
     options: Options,
     run: Arc<Run>,
+    /// The filter of a correction, compiled.
+    matcher: Matcher,
 }
 
 impl Shared {
     /// Whether the run takes a string, as its file is now.
     fn wants(&self, entry: &Entry) -> bool {
         match &self.options.fix {
-            Some(fix) => needs_fix(fix, &self.knowledge, &self.target, entry),
+            Some(fix) => {
+                needs_fix(fix, &self.knowledge, &self.target, entry) && self.matcher.matches(entry)
+            }
             None => needs_work(entry, self.options.fuzzy),
         }
     }
@@ -1329,7 +1414,7 @@ pub async fn run(session: Arc<Session>, codex: Arc<Codex>, options: Options, han
             .as_ref()
             .and_then(|fix| fix.terms.clone())
             .unwrap_or_default(),
-        instruction: options.fix.as_ref().and_then(|fix| fix.instruction.clone()),
+        skill: options.fix.as_ref().and_then(|fix| fix.skill.clone()),
         started_at: handle.status().started_at,
     });
     handle.report(&Record::Options {
@@ -1361,8 +1446,8 @@ pub async fn run(session: Arc<Session>, codex: Arc<Codex>, options: Options, han
                 (true, groups) => format!("{groups} kinds of issues"),
             },
             if fix.adapt { ", adapting fuzzy" } else { "" },
-            match (&fix.instruction, &fix.request) {
-                (Some(name), _) => format!(", with the instruction {name:?}"),
+            match (&fix.skill, &fix.request) {
+                (Some(name), _) => format!(", with the skill {name:?}"),
                 (None, Some(_)) => ", with a request".to_owned(),
                 (None, None) => String::new(),
             },
@@ -1400,19 +1485,23 @@ async fn prepare(
                 Some(fix) => {
                     let knowledge = session.knowledge();
                     let target = session.settings().target_language;
+                    let matcher = Matcher::new(&fix.filter)?;
                     plan_of(
                         session.root(),
                         &options.paths,
+                        &fix.exclude,
                         &options.contexts,
                         &|entry| {
                             !run.settled(&entry.context)
                                 && needs_fix(fix, &knowledge, &target, entry)
+                                && matcher.matches(entry)
                         },
                     )?
                 }
                 None => plan_of(
                     session.root(),
                     &options.paths,
+                    &[],
                     &options.contexts,
                     &|entry| !run.settled(&entry.context) && needs_work(entry, options.fuzzy),
                 )?,
@@ -1446,7 +1535,15 @@ async fn prepare(
             knowledge.style.as_deref(),
         ),
     };
+    let matcher = options
+        .fix
+        .as_ref()
+        .map(|fix| Matcher::new(&fix.filter))
+        .transpose()
+        .map_err(|message| Stop::Failed { message })?
+        .unwrap_or_default();
     let shared = Arc::new(Shared {
+        matcher,
         instructions,
         target: settings.target_language,
         knowledge,
@@ -1768,6 +1865,45 @@ async fn drive(
         return stop;
     }
     Stop::Finished
+}
+
+/// Counts the strings a correction `fix` of `paths` takes, by the first of
+/// `paths` that chooses each one's file, as the run plans them: one count
+/// when `paths` is empty, for every string of the project.
+///
+/// # Errors
+///
+/// Returns a description when the filter does not compile or `po/` cannot
+/// be read.
+pub fn count_fix(session: &Session, fix: &Fix, paths: &[String]) -> Result<Vec<usize>, String> {
+    let knowledge = session.knowledge();
+    let target = session.settings().target_language;
+    let matcher = Matcher::new(&fix.filter)?;
+    let root = session.root();
+    let mut counts = vec![0; paths.len().max(1)];
+    for path in aeria_po::list(root).map_err(|error| error.to_string())? {
+        if excluded(&path, &fix.exclude) {
+            continue;
+        }
+        let Some(at) = (if paths.is_empty() {
+            Some(0)
+        } else {
+            paths
+                .iter()
+                .position(|chosen| selected(&path, std::slice::from_ref(chosen)))
+        }) else {
+            continue;
+        };
+        let full = root.join(PO_DIR).join(&path);
+        let text = std::fs::read_to_string(&full).map_err(|error| format!("po/{path}: {error}"))?;
+        counts[at] += PoFile::parse(&text)
+            .0
+            .entries
+            .iter()
+            .filter(|entry| needs_fix(fix, &knowledge, &target, entry) && matcher.matches(entry))
+            .count();
+    }
+    Ok(counts)
 }
 
 /// Counts what a run of `paths` would translate: strings by file, relative

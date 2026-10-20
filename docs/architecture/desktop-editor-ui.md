@@ -635,10 +635,11 @@ there are any, the notice of a bulk edit and the strings chosen.
 - Fixing (the same strings as translating again) opens a dialog with the
   count of strings, **Adapt to the changed source** with the count of
   fuzzy strings among them (shown and chosen when there are any),
-  **Instruction**, one of the project's instructions or none, the last one
-  chosen kept while the window lives, and, when the search has a checks
-  filter, that the issues found (of the chosen kind, when it keeps one) are
-  fixed too; **Fix** needs an instruction, the issues, or the adaptation,
+  **Skill**, one of the project's readable skills or none, the last one
+  chosen kept while the window lives (its text goes, not its scope: the
+  search chose the strings), and, when the search has a checks filter, that
+  the issues found (of the chosen kind, when it keeps one) are fixed too;
+  **Fix** needs a skill, the issues, or the adaptation,
   and starts a correction run of those strings
   (see [`translate.md`](./translate.md#correcting-translations)), whose
   progress the AI translation dialog shows.
@@ -887,26 +888,30 @@ loaded.
 ## Editing tab
 
 **Editing** (in the Translation menu and the command palette) opens a tab of
-its own, kept while it is open, of the project's instructions for AI runs
-(see [`../formats/knowledge-v1.md`](../formats/knowledge-v1.md#instructions))
-and a run of one over the translations of chosen sheets.
+its own, kept while it is open, of the project's skills for AI runs (see
+[`../formats/knowledge-v1.md`](../formats/knowledge-v1.md#skills)) and a run
+of one over the translations of its scope.
 
-- **Instructions** lists them by name; a click opens one, and **New
-  instruction** starts an empty one. Leaving an instruction with unsaved
-  changes, or closing the tab, asks first.
-- The instruction is its **Name** and its text, edited as plain Markdown.
-  **Save** writes it, renaming the file when the name changed, and is
-  refused when the file changed meanwhile or another instruction has the
-  name; **Discard changes** and **Delete** (which asks first) act on it.
-- **Where to apply** chooses sheets and folders of sheets as the AI
-  translation dialog does, each with its translated strings, with **All
-  sheets**, and gives how many sheets and translated strings are chosen.
-- **Run** starts a correction run of the chosen sheets that follows the
-  saved instruction (see
+- **Skills** lists them by name, an unreadable one marked with why; a click
+  opens one, and **New skill** starts an empty one. Leaving a skill with
+  unsaved changes, or closing the tab, asks first.
+- The skill is its **Name** and its text, edited as plain Markdown.
+  **Save** writes it, with its scope, renaming the file when the name
+  changed, and is refused when the file changed meanwhile, another skill
+  has the name, or the scope cannot be saved; **Discard changes** and
+  **Delete** (which asks first) act on it.
+- **Where to apply** is the skill's scope as a form: sheets and folders, one
+  per line, each with the strings it takes; **Choose in the tree**, which
+  adds the sheets and folders chosen as the AI translation dialog chooses
+  them; **Except**; and the expressions the source, the translation, and
+  the lines of the other client languages contain. The strings the run
+  takes, translated and not reviewed, are counted again a moment after the
+  scope changes.
+- **Run** starts a correction run of the saved skill over its scope (see
   [`translate.md`](./translate.md#correcting-translations)); it needs a
-  model chosen in Settings, the instruction saved, and no other run going.
-  Reviewed translations are never taken. The progress, **Stop**,
-  **Continue**, and **Open report** show under it, as for any run.
+  model chosen in Settings, the skill saved and readable, strings to take,
+  and no other run going. The progress, **Stop**, **Continue**, and **Open
+  report** show under it, as for any run.
 
 ## Machine translation
 

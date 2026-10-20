@@ -529,10 +529,10 @@ pub struct FixDto {
     /// What the translator asks of each translation.
     #[serde(default)]
     pub request: Option<String>,
-    /// The name of the project's instruction to follow; its saved text is
-    /// asked of each translation, after `request`.
+    /// The name of the project's skill to follow; its saved text, not its
+    /// scope, is asked of each translation, after `request`.
     #[serde(default)]
-    pub instruction: Option<String>,
+    pub skill: Option<String>,
     /// Bring the translations written with an older version of these terms,
     /// by headword, or of any term when empty, to the terms as they are.
     #[serde(default)]
@@ -548,23 +548,25 @@ fn start_fix(
     model: String,
     effort: Option<String>,
 ) -> CommandResult<()> {
-    let instruction = match fix.instruction.as_deref() {
+    let skill_text = match fix.skill.as_deref() {
         Some(name) => {
             let root = app.state::<DesktopState>().session()?.root().to_owned();
-            let text = aeria_knowledge::read_instruction(&root, name)
+            let text = aeria_knowledge::read_skill(&root, name)
                 .map_err(|message| CommandError::new("projectKnowledgeRead", message))?
                 .ok_or_else(|| {
                     CommandError::new(
-                        "instructionNotFound",
-                        format!("the project has no instruction {name:?}"),
+                        "skillNotFound",
+                        format!("the project has no skill {name:?}"),
                     )
                 })?;
-            Some(text)
+            let (_, body) = aeria_knowledge::parse_skill(&text)
+                .map_err(|message| CommandError::new("projectKnowledgeInvalid", message))?;
+            Some(body)
         }
         None => None,
     };
-    // The translator's words, then the instruction's.
-    let request = [fix.request.as_deref(), instruction.as_deref()]
+    // The translator's words, then the skill's.
+    let request = [fix.request.as_deref(), skill_text.as_deref()]
         .into_iter()
         .flatten()
         .map(str::trim)
@@ -575,7 +577,7 @@ fn start_fix(
     if !fix.issues && !fix.adapt && request.is_none() && fix.terms.is_none() {
         return Err(CommandError::new(
             "fixEmpty",
-            "choose an instruction, the issues to fix, adapting, or terms",
+            "choose a skill, the issues to fix, adapting, or terms",
         ));
     }
     start_run(
@@ -591,8 +593,9 @@ fn start_fix(
                 groups: fix.groups,
                 adapt: fix.adapt,
                 request,
-                instruction: fix.instruction,
+                skill: fix.skill,
                 terms: fix.terms,
+                ..Fix::default()
             }),
         },
     )

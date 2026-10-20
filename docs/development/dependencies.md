@@ -48,7 +48,9 @@ project's terms, and `serde` and `thiserror`, matching `aeria-projects`.
 ## Source, search, and export dependencies
 
 `aeria-po` uses `regex` (MIT OR Apache-2.0), already in the graph, for the
-patterns of project search and replace.
+patterns of project search and replace; `aeria-knowledge` and `aeria-model`
+use it for the expressions of a skill's scope, and `aeria-knowledge` reads a
+skill's front matter with `yaml-rust2`, as `aeria-schema` does (below).
 
 `aeria-sqpack` uses `crc32fast` (MIT OR Apache-2.0) for the CRC-32 path
 hashes of SqPack indexes and `flate2` (MIT OR Apache-2.0) to inflate SqPack

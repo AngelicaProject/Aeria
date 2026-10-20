@@ -605,13 +605,19 @@ export type TranslationActive = {
  * version the translations written with an older one are brought to (any
  * term when empty).
  */
-export type FixRequest = { issues: boolean; groups: string[]; adapt: boolean; request: string | null; instruction?: string | null; terms?: string[] | null };
+export type FixRequest = { issues: boolean; groups: string[]; adapt: boolean; request: string | null; skill?: string | null; terms?: string[] | null };
 
-/** One of the project's instructions for AI runs: `aeria-knowledge/instructions/<name>.md`. */
-export type InstructionDto = { name: string; text: string };
+/** Where a skill applies: sheets and folders (`quest/`), those left out, and regular expressions the strings match. */
+export type ScopeDto = { paths: string[]; exclude: string[]; source: string | null; translation: string | null; other: string | null };
 
-/** The project's instructions, by name, and the files that cannot be read. */
-export type InstructionsDto = { instructions: InstructionDto[]; problems: string[] };
+/** One of the project's skills: `aeria-knowledge/skills/<name>.md`, its whole file, and its scope and body, or why its front matter cannot be read. */
+export type SkillDto = { name: string; text: string; scope: ScopeDto; body: string; problem: string | null };
+
+/** The project's skills, by name, and the files that cannot be read. */
+export type SkillsDto = { skills: SkillDto[]; problems: string[] };
+
+/** How many translations a run of a scope takes, and by each of its paths. */
+export type ScopeCountDto = { total: number; paths: number[] };
 
 /** A translation a correction run changed. */
 export type TranslationCorrected = {
@@ -658,7 +664,7 @@ export type TranslationStatus = {
 export type RunKind = "translating" | "fixing";
 
 /** The first record of a run's report. */
-export type ReportRun = { record: "run"; version: number; kind: RunKind; model: string; effort: string | null; terms: string[]; instruction?: string | null; startedAt: number };
+export type ReportRun = { record: "run"; version: number; kind: RunKind; model: string; effort: string | null; terms: string[]; skill?: string | null; startedAt: number };
 
 /** What a report lists an item as: `string:<outcome>`, or `left`. */
 export type ReportView = string;

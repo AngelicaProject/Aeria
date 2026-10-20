@@ -194,7 +194,7 @@ untranslated, so any later run takes them.
 
 Found translations can be corrected by machine translation instead of
 translated again: every translation found, the chosen strings, or one
-string, with one of the project's instructions, the issues of the checks
+string, with one of the project's skills, the issues of the checks
 when the search filters by them (only the chosen group's, when a group is
 chosen), and the adaptation of fuzzy ones (see
 [`translate.md`](./translate.md#correcting-translations)). Nothing is

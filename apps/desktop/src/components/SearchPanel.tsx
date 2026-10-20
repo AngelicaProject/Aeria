@@ -302,7 +302,7 @@ export function SearchPanel({ onRevealBinding, onWorkspaceChanged, onOpenTransla
     });
   };
 
-  const startFix = (entries: EntryRefDto[], instruction: string | null, adapt: boolean) => {
+  const startFix = (entries: EntryRefDto[], skill: string | null, adapt: boolean) => {
     setFixing(null);
     void act("fix", async () => {
       if (!preferences.translationModel) {
@@ -310,7 +310,7 @@ export function SearchPanel({ onRevealBinding, onWorkspaceChanged, onOpenTransla
         return;
       }
       const paths = [...new Set(entries.map((entry) => entry.path))];
-      await translationFix(paths, entries.map((entry) => entry.context), { issues: check !== "any", groups: query.issue ? [query.issue] : [], adapt, request: null, instruction }, preferences.translationModel, preferences.translationEffort || null);
+      await translationFix(paths, entries.map((entry) => entry.context), { issues: check !== "any", groups: query.issue ? [query.issue] : [], adapt, request: null, skill }, preferences.translationModel, preferences.translationEffort || null);
       setNotice({ text: t("search.fixing", { count: entries.length }), edit: null });
       onOpenTranslate?.();
     });
@@ -682,7 +682,7 @@ export function SearchPanel({ onRevealBinding, onWorkspaceChanged, onOpenTransla
         issue={chosenIssue ? issueLabel(chosenIssue, t) : null}
         withIssues={check !== "any"}
         onCancel={() => setFixing(null)}
-        onFix={(instruction, adapt) => { if (fixing) startFix(fixing, instruction, adapt); }}
+        onFix={(skill, adapt) => { if (fixing) startFix(fixing, skill, adapt); }}
       />
       <ReplacePreviewDialog changes={preview} onCancel={() => setPreview(null)} onApply={applyChanges} onRevealBinding={onRevealBinding} />
       <ConfirmDialog

@@ -27,29 +27,63 @@ Aeria writes LF.
 | `style.md` | Markdown, free text | How the translation reads: how formal it is, how the player and other characters are addressed, how names are rendered, the tone of each kind of text |
 | `terms.csv` | [Glossary Format v1](./glossary-v1.md) | The terms: lore words and the names the project agreed on, with their other forms and categories |
 | `term-sheets.csv` | [Declared sheets](#declared-sheets) | The sheets of the game that are part of the glossary |
-| `instructions/<name>.md` | [Instructions](#instructions) | What a person asks machine translation to do to the translations of a run |
+| `skills/<name>.md` | [Skills](#skills) | What a person asks machine translation to do to the translations of a run, and where |
 
 `style.md` is written by a person and used as a whole. A file that cannot be
 read is reported and left out. Rows of `terms.csv` that its format excludes
 are reported with their line; the rest are used.
 
-## Instructions
+## Skills
 
-An instruction is one Markdown file of `instructions/`, free text a person
-writes, such as how to fix the agreement with the player character's gender
-or what officialese to remove. Its name is the file's name without `.md`,
-as written: it is not empty, begins with no dot, has no space at either end,
-and holds no control character and none of `/ \ : * ? " < > |`. A file of
-another name or extension in the directory is not an instruction. A file is
-at most 256 KiB, UTF-8 with an optional leading BOM that is ignored; one that
-cannot be read is reported and left out.
+A skill is one Markdown file of `skills/`: what a person asks machine
+translation to do to the translations of a run, such as how to fix the
+agreement with the player character's gender or what officialese to remove,
+and where. Its name is the file's name without `.md`, as written: it is not
+empty, begins with no dot, has no space at either end, and holds no control
+character and none of `/ \ : * ? " < > |`. A file of another name or
+extension in the directory is not a skill. A file is at most 256 KiB, UTF-8
+with an optional leading BOM that is ignored; one that cannot be read is
+reported and left out.
 
-A correction run that follows an instruction sends its text, as saved, as
-the request of every translation of the run (see
-[`../architecture/translate.md`](../architecture/translate.md#correcting-translations)),
-and its report names it. Aeria writes an instruction only while its file
-still has the text the editor loaded, so a change made meanwhile by hand or
-by Git is never overwritten.
+A skill may begin with a front matter of YAML between two `---` lines that
+says where it applies; without one it applies to every translation of the
+project. The rest of the file is what the model is asked.
+
+```md
+---
+scope:
+  - 'quest/'
+  - 'DefaultTalk'
+exclude:
+  - 'quest/000/'
+match:
+  other: '\$gn4'
+---
+
+Fix only the agreement with the player character's gender.
+```
+
+| Key | Value |
+| --- | --- |
+| `scope` | Sheets, and folders of sheets ending with `/`, relative to `po/`; absent or empty for every one |
+| `exclude` | Sheets and folders left out of `scope` |
+| `match.source` | A regular expression the source matches, as macro text |
+| `match.translation` | A regular expression the translation matches |
+| `match.other` | A regular expression one of the string's lines in the other client languages (`ja`, `de`, `fr`) matches, as macro text |
+
+Every expression ignores case unless it says otherwise (`(?-i)`), and a
+string matches all those given. A key the format does not have, a value of
+another kind, or an expression that does not compile makes the skill
+unreadable: it is listed with why, and cannot run. Aeria writes the front
+matter with each value in single quotes, where only a quote is doubled, so a
+regular expression keeps its backslashes.
+
+A run of a skill takes the translations of its scope that are not reviewed
+(see
+[`../architecture/translate.md`](../architecture/translate.md#correcting-translations))
+and sends its text, as saved, as the request of every one; its report names
+it. Aeria writes a skill only while its file still has the text the editor
+loaded, so a change made meanwhile by hand or by Git is never overwritten.
 
 ## Declared sheets
 

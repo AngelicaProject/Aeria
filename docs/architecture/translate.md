@@ -244,13 +244,14 @@ are not reviewed, and sends each translation with what is wrong with it, so
 the model changes what is wrong and keeps what is right. A person asks for
 any of:
 
-- **an instruction** of the project (`Fix::request`, named by
-  `Fix::instruction`): the saved text of one of
-  `aeria-knowledge/instructions/` (see
-  [`../formats/knowledge-v1.md`](../formats/knowledge-v1.md#instructions)),
-  the same for every translation of the run, such as how to fix the
-  agreement with the player character's gender. Every kind of review is an
-  instruction a person writes: Aeria has no review of its own;
+- **a skill** of the project (`Fix::request`, named by `Fix::skill`): the
+  saved text of one of `aeria-knowledge/skills/` (see
+  [`../formats/knowledge-v1.md`](../formats/knowledge-v1.md#skills)), the
+  same for every translation of the run, such as how to fix the agreement
+  with the player character's gender. A run of the skill itself takes the
+  strings of its scope: its paths but those of `Fix::exclude`, matching the
+  expressions of `Fix::filter`. Every kind of review is a skill a person
+  writes: Aeria has no review of its own;
 - **the issues of the checks**: what the checks find in the translation,
   problems and advice, every kind or only the kinds chosen (`Fix::groups`,
   by `Issue::group`, as project search groups them). A problem always goes,
@@ -270,7 +271,7 @@ any of:
 - **a request** in the translator's words, the same for every translation
   of the run, for a run that follows changed terms.
 
-With an instruction or a request every chosen translation is taken; with
+With a skill or a request every chosen translation is taken; with
 adapting, every fuzzy one; with the issues or the terms alone, a string
 without any is not. This is the one place advice reaches a model, and only
 the advice a person chose.
@@ -388,11 +389,12 @@ what it settled and a report can be read while its run goes:
 
 - `run`, first: `version` (1), the run's `kind` (`translating` or
   `fixing`), `model`, `effort`, the `terms` a correction follows, by
-  headword (empty for every term or none), the name of the `instruction`
+  headword (empty for every term or none), the name of the `skill`
   it follows, or null, and `startedAt` (Unix milliseconds).
 - `options`, second: what the run was asked, as `aeria_model::Options`
   (`paths`, `contexts`, `fuzzy`, `model`, `effort`, and `fix` with its
-  issues, groups, adaptation, request, instruction, and terms), and
+  issues, groups, adaptation, request, skill, excluded paths, filter, and
+  terms), and
   `continues`, the id of the report of the run it continues, or null.
 - `string`: its `path` and `context`, its `source`, its translation
   `before` the run, each `attempt` with the model's `translation` and the

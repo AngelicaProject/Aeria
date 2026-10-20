@@ -70,10 +70,10 @@ The knowledge is the `aeria-knowledge` directory at the project root:
 - `terms.csv`: the terms, with their translation, category, note, other
   wordings in the source (`the Scions` beside `Scions of the Seventh
   Dawn`);
-- `instructions/`: what a person asks machine translation to do to the
-  translations of a run, one Markdown file each, such as how to fix the
-  agreement with the player character's gender. Every review of the
-  corpus is such an instruction, not a mode of Aeria.
+- `skills/`: what a person asks machine translation to do to the
+  translations of a run, and where, one Markdown file each, such as how to
+  fix the agreement with the player character's gender in the dialogue.
+  Every review of the corpus is such a skill, not a mode of Aeria.
 
 The format is [Project Knowledge Format v1](../formats/knowledge-v1.md);
 `aeria-knowledge` owns reading and checking it. The knowledge is committed with the translations (see
@@ -81,7 +81,7 @@ The format is [Project Knowledge Format v1](../formats/knowledge-v1.md);
 entries.
 
 The desktop edits the terms in the glossary tab, the style in the style
-dialog, and the instructions in the editing tab (see
+dialog, and the skills in the editing tab (see
 [`desktop-editor-ui.md`](./desktop-editor-ui.md#glossary-tab) and
 [`desktop-editor-ui.md`](./desktop-editor-ui.md#editing-tab)).
 A file that cannot be read,

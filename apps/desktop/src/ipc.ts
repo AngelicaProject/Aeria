@@ -63,7 +63,9 @@ import type {
   ProtectionDto,
   TermKey,
   TermStringsDto,
-  InstructionsDto,
+  ScopeCountDto,
+  ScopeDto,
+  SkillsDto,
   ReportInfo,
   ReportPage,
   OutdatedStringDto,
@@ -601,23 +603,33 @@ export function translationContinue(id: string): Promise<void> {
   return call<void>("translation_continue", { id });
 }
 
-/** The project's instructions for AI runs. */
-export function instructions(): Promise<InstructionsDto> {
-  return call<InstructionsDto>("instructions");
+/** The project's skills for AI runs. */
+export function skills(): Promise<SkillsDto> {
+  return call<SkillsDto>("skills");
 }
 
 /**
- * Saves an instruction: `previous` is the name it was loaded under (null for
- * a new one) and `expected` its text as loaded; a file changed meanwhile is
- * not overwritten.
+ * Saves a skill from its scope and body: `previous` is the name it was
+ * loaded under (null for a new one) and `expected` its file as loaded; a
+ * file changed meanwhile is not overwritten.
  */
-export function saveInstruction(name: string, previous: string | null, expected: string | null, text: string): Promise<InstructionsDto> {
-  return call<InstructionsDto>("save_instruction", { name, previous, expected, text });
+export function saveSkill(name: string, previous: string | null, expected: string | null, scope: ScopeDto, body: string): Promise<SkillsDto> {
+  return call<SkillsDto>("save_skill", { name, previous, expected, scope, body });
 }
 
-/** Removes an instruction if it still has the text it was loaded with. */
-export function deleteInstruction(name: string, expected: string): Promise<InstructionsDto> {
-  return call<InstructionsDto>("delete_instruction", { name, expected });
+/** Removes a skill if its file still has the text it was loaded with. */
+export function deleteSkill(name: string, expected: string): Promise<SkillsDto> {
+  return call<SkillsDto>("delete_skill", { name, expected });
+}
+
+/** How many translations a run of `scope` takes. */
+export function skillCount(scope: ScopeDto): Promise<ScopeCountDto> {
+  return call<ScopeCountDto>("skill_count", { scope });
+}
+
+/** Runs a saved skill over the translations of its scope. */
+export function runSkill(name: string, model: string, effort: string | null): Promise<void> {
+  return call<void>("run_skill", { name, model, effort });
 }
 
 /** The run reports of the data folder, newest first. */

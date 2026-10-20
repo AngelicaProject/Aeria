@@ -219,7 +219,7 @@ fn text_files(root: &Path) -> Vec<PathBuf> {
             .map(|path| project_path(root, path)),
     );
     files.extend(KnowledgeFile::ALL.iter().map(|file| file.path(root)));
-    if let Ok(entries) = std::fs::read_dir(aeria_knowledge::instructions_dir(root)) {
+    if let Ok(entries) = std::fs::read_dir(aeria_knowledge::skills_dir(root)) {
         files.extend(
             entries
                 .filter_map(Result::ok)

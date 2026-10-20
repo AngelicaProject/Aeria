@@ -177,3 +177,6 @@ textarea.glossary-note { flex: 1; min-height: 72px; resize: none; font-size: var
 .editing-run .translate-picker { flex: 1; min-height: 240px; }
 .editing-new { padding: 8px 4px 4px; }
 .editing-empty { margin: 0; padding: 4px 8px; font-size: var(--text-sm); }
+.editing-paths { resize: vertical; font-family: var(--font-mono); font-size: var(--text-sm); }
+.editing-path-counts { display: flex; flex-direction: column; gap: 2px; margin: 0; padding: 0 2px; list-style: none; font-size: var(--text-xs); }
+.editing-path-counts li { display: flex; justify-content: space-between; gap: 8px; }

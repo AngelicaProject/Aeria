@@ -11,8 +11,10 @@ description = "Project knowledge: style, terms, characters, story, and lessons, 
 [dependencies]
 aho-corasick = "1.1.5"
 csv = "1.4.0"
+regex = "1.13.1"
 serde = { version = "1.0.229", features = ["derive"] }
 thiserror = "2.0.20"
+yaml-rust2 = { version = "0.13.0", default-features = false }
 
 [lints]
 workspace = true
