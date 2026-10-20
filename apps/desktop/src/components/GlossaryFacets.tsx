@@ -20,7 +20,7 @@ const SOURCES: readonly { view: GlossaryView; label: MessageKey; icon: UiIconNam
 
 const ATTENTION: readonly { view: GlossaryView; label: MessageKey; icon: UiIconName }[] = [
   { view: "problems", label: "glossary.view.problems", icon: "circleAlert" },
-  { view: "unapplied", label: "glossary.view.unapplied", icon: "sparkles" },
+  { view: "outdated", label: "glossary.view.outdated", icon: "sparkles" },
   { view: "redundant", label: "glossary.view.redundant", icon: "copy" },
 ];
 

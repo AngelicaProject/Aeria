@@ -92,6 +92,21 @@ impl GlossaryEntry {
         self.term.to_lowercase() == other.term.to_lowercase()
     }
 
+    /// Whether the strings of `exceptions`, a string's term exceptions, name
+    /// the term by any of its forms, ignoring case.
+    #[must_use]
+    pub fn is_excepted(&self, exceptions: &[String]) -> bool {
+        exceptions.iter().any(|exception| self.is_named(exception))
+    }
+
+    /// Whether `name` is one of the term's forms, its headword included,
+    /// ignoring case.
+    #[must_use]
+    pub fn is_named(&self, name: &str) -> bool {
+        let name = name.to_lowercase();
+        self.all_forms().any(|form| form.to_lowercase() == name)
+    }
+
     /// Whether this meaning and `other` have one category, ignoring case.
     #[must_use]
     pub fn same_category(&self, other: &Self) -> bool {
@@ -630,349 +645,10 @@ fn count_term(text: &str, entry: &GlossaryEntry) -> usize {
     count_spans(&entry_spans(&Folded::new(text), entry))
 }
 
-/// A translation as the terms of a source are looked for in it: its text,
-/// folded, and its words, each made once for all the terms.
-struct Target<'a> {
-    folded: Folded<'a>,
-    words: Vec<String>,
-}
-
-impl<'a> Target<'a> {
-    fn new(text: &'a str) -> Self {
-        Self {
-            folded: Folded::new(text),
-            words: words(text),
-        }
-    }
-
-    /// Whether the translation uses the term of `entry` found `count` times
-    /// in the source: keeps it as written, or has the words of its
-    /// translation or of one of `rendered`.
-    fn uses(&self, entry: &GlossaryEntry, count: usize, rendered: &[&str]) -> bool {
-        kept_as_written(&self.folded, entry, count)
-            || contains_inflected(&self.words, &entry.translation, rendered)
-    }
-}
-
-/// Whether `folded` keeps the term as the source writes it wherever the
-/// source has it (`count` times): part of a name left untranslated. A term
-/// whose translation only spells it another way (`FATE` as `F.A.T.E.`) is
-/// never kept, since the terms say how to write it.
-fn kept_as_written(folded: &Folded<'_>, entry: &GlossaryEntry, count: usize) -> bool {
-    let letters = |text: &str| -> String {
-        text.chars()
-            .filter(|letter| letter.is_alphanumeric())
-            .flat_map(char::to_lowercase)
-            .collect()
-    };
-    let respelled =
-        entry.translation != entry.term && letters(&entry.translation) == letters(&entry.term);
-    !respelled && count_spans(&entry_spans(folded, entry)) >= count
-}
-
 /// Whether the strings of `exceptions` name `entry`'s term, by any of its
 /// forms, ignoring case.
 fn is_exception(entry: &GlossaryEntry, exceptions: &[String]) -> bool {
-    exceptions.iter().any(|exception| {
-        let exception = exception.to_lowercase();
-        entry
-            .all_forms()
-            .any(|form| form.to_lowercase() == exception)
-    })
-}
-
-/// Letters an inflected ending replaces at the end of a word: vowels and
-/// the soft and short signs, so the stem of `заклинатель` is `заклинател`,
-/// of `первобытный` `первобытн`, and of `эфирит` the word itself.
-const ENDING_LETTERS: &str = "аеёиоуыэюяйьіїєaeiouy";
-
-/// Endings of declension that follow a stem after its trimmed letters:
-/// `заклинател` + `ями`, `первобытн` + `ого`, `чарод` + `е` + `я`. Any other
-/// letters make another word: `этер` + `ис` is `Этерис`, not a form of `этер`.
-const ENDINGS: [&str; 52] = [
-    "", "а", "е", "ё", "и", "о", "у", "ы", "ю", "я", "й", "ь", "і", "ї", "є", "м", "х", "в", "ом",
-    "ем", "ём", "ой", "ей", "ою", "ею", "ам", "ям", "ах", "ях", "ов", "ев", "ми", "ий", "ый", "ая",
-    "яя", "ое", "ее", "ые", "ие", "их", "ых", "им", "ым", "ую", "юю", "ого", "его", "ому", "ему",
-    "ами", "ями",
-];
-
-/// Endings of a noun in `-а` or `-я` (`Носка`, `Эорзея`, `гильдия`): its
-/// cases in both numbers, so `Носке` is a form of `Носка` and `Носкее`,
-/// with an ending of an adjective, is not.
-const NOUN_A_ENDINGS: [&str; 20] = [
-    "", "а", "я", "ы", "и", "е", "у", "ю", "й", "ь", "ой", "ей", "ою", "ею", "ам", "ям", "ами",
-    "ями", "ах", "ях",
-];
-
-/// Endings of an adjective in `-ая`, `-яя`, or `-ый` (`Западная`,
-/// `первобытный`): its genders, cases, and numbers, so `Западной` is a form
-/// of `Западная` and `Западна`, with an ending of a noun, is not.
-const ADJECTIVE_ENDINGS: [&str; 26] = [
-    "ая", "яя", "ой", "ей", "ую", "юю", "ою", "ею", "ый", "ий", "ого", "его", "ому", "ему", "ым",
-    "им", "ом", "ем", "ое", "ее", "ые", "ие", "ых", "их", "ыми", "ими",
-];
-
-/// The endings a word declines with, by the letters its stem leaves off:
-/// a noun in `-а` or `-я` and an adjective in `-ая`, `-яя`, or `-ый` take
-/// only their own; any other word, whose ending does not tell a noun from an
-/// adjective (`гений`, `знание`), takes any of [`ENDINGS`].
-fn endings_after(trimmed: &str) -> &'static [&'static str] {
-    match trimmed {
-        "ая" | "яя" | "ый" => &ADJECTIVE_ENDINGS,
-        _ if trimmed.ends_with(['а', 'я']) => &NOUN_A_ENDINGS,
-        _ => &ENDINGS,
-    }
-}
-
-/// Most letters an inflected form adds to a stem.
-const MAX_ENDING: usize = 4;
-
-/// The stem of a lowercase word: without its final vowels and signs, but at
-/// least two letters of a word of three or more (`эра`, `эр`; `око`, `ок`;
-/// `Гея`, `ге`), so a short word declines too.
-fn stem(word: &str) -> &str {
-    let trimmed = word.trim_end_matches(|c| ENDING_LETTERS.contains(c));
-    let (kept, length) = (trimmed.chars().count(), word.chars().count());
-    if kept >= 2 && length >= 3 || kept >= 3 {
-        trimmed
-    } else if length >= 3 {
-        word.char_indices()
-            .nth(length - 1)
-            .map_or(word, |(index, _)| &word[..index])
-    } else {
-        word
-    }
-}
-
-/// Endings of the nouns in `-мя` after their stem: `пламя`, `пламени`;
-/// `племя`, `племён` (written here with `е`, as [`is_form`] compares).
-const MYA_ENDINGS: [&str; 7] = ["ени", "енем", "ена", "ен", "енам", "енами", "енах"];
-
-/// Whether `candidate` is `word` as written or inflected, both lowercase.
-/// `ё` and `е` are one letter, since a text may write either. A word in
-/// `-ся` declines before it (`клубящиеся`, `клубящихся`), and a noun in
-/// `-мя` takes `-ен-` (`пламя`, `пламени`).
-fn is_form(candidate: &str, word: &str) -> bool {
-    let without_yo = |text: &str| {
-        text.chars()
-            .next()
-            .map(|first| if first == 'ё' { 'е' } else { first })
-    };
-    // Every form begins as its word does: most words of a text are not
-    // compared further.
-    if without_yo(candidate) != without_yo(word) {
-        return false;
-    }
-    let (candidate, word) = (yo_as_e(candidate), yo_as_e(word));
-    // A word as written is its own form, whatever letter it ends with
-    // (`Сигурэ`, `XII`).
-    if candidate == word {
-        return true;
-    }
-    // A word written with hyphens declines part by part (`Лимса-Ломинса`,
-    // `Лимсу-Ломинсу`) and has as many parts in each of its forms.
-    if candidate.contains('-') || word.contains('-') {
-        let (candidates, parts) = (candidate.split('-'), word.split('-'));
-        return candidate.matches('-').count() == word.matches('-').count()
-            && candidates
-                .zip(parts)
-                .all(|(candidate, part)| is_form(candidate, part));
-    }
-    if let (Some(candidate), Some(word)) = (candidate.strip_suffix("ся"), word.strip_suffix("ся"))
-        && word.chars().count() >= 3
-    {
-        let stem = stem(word);
-        return inflects(candidate, stem, &word[stem.len()..]);
-    }
-    let stem = stem(&word);
-    inflects(&candidate, stem, &word[stem.len()..])
-        || (word.ends_with("мя")
-            && candidate
-                .strip_prefix(stem)
-                .is_some_and(|ending| MYA_ENDINGS.contains(&ending)))
-}
-
-/// `text` with `ё` written as `е`, copied only when it has one.
-fn yo_as_e(text: &str) -> std::borrow::Cow<'_, str> {
-    if text.contains('ё') {
-        std::borrow::Cow::Owned(text.replace('ё', "е"))
-    } else {
-        std::borrow::Cow::Borrowed(text)
-    }
-}
-
-/// The lowercase words of a text, in order. An apostrophe or a hyphen
-/// between letters is part of its word, so `Уль'ды` is one word, a form of
-/// `Уль'да`, and `Ла-Носке` is one word, not a form of `Ла Носка`.
-fn words(text: &str) -> Vec<String> {
-    written_words(&text.to_lowercase())
-        .into_iter()
-        .map(|(word, _)| word)
-        .collect()
-}
-
-/// What a word may follow to begin with a capital letter: the end of a
-/// sentence, a line break, which [`cased_text`] writes for each tag, or a
-/// quotation mark, which opens a title.
-const CAPITAL_AFTER: [char; 9] = ['.', '!', '?', '…', '\n', '«', '„', '“', '"'];
-
-/// The words of a text as it writes them, in order, each with whether a
-/// sentence or a title may begin at it: it is the first word, or what stands
-/// between it and the word before has a mark of [`CAPITAL_AFTER`].
-fn written_words(text: &str) -> Vec<(String, bool)> {
-    let letters: Vec<char> = text.chars().collect();
-    let in_word = |at: usize| {
-        is_word(letters[at])
-            || ((APOSTROPHES.contains(&letters[at]) || HYPHENS.contains(&letters[at]))
-                && at > 0
-                && is_word(letters[at - 1])
-                && letters.get(at + 1).copied().is_some_and(is_word))
-    };
-    let mut words = Vec::new();
-    let mut word = String::new();
-    let mut begins = true;
-    for (at, letter) in letters.iter().enumerate() {
-        if in_word(at) {
-            // One spelling of the apostrophe and of the hyphen, whichever
-            // the text writes.
-            word.push(if is_word(*letter) {
-                *letter
-            } else if HYPHENS.contains(letter) {
-                '-'
-            } else {
-                '\''
-            });
-            continue;
-        }
-        if !word.is_empty() {
-            words.push((std::mem::take(&mut word), begins));
-            begins = false;
-        }
-        begins |= CAPITAL_AFTER.contains(letter);
-    }
-    if !word.is_empty() {
-        words.push((word, begins));
-    }
-    words
-}
-
-/// Apostrophes a name is written with.
-const APOSTROPHES: [char; 3] = ['\'', '’', 'ʼ'];
-
-/// Hyphens a word is written with: `Ла-Носка`.
-const HYPHENS: [char; 3] = ['-', '\u{2010}', '\u{2011}'];
-
-/// Whether `word` is an inflected form of a word with this stem, which
-/// leaves `trimmed` off the word: the stem with an ending, or the stem with
-/// or without a vowel that comes and goes when the word is declined
-/// (`боец`, `бойца`; `девушка`, `девушек`).
-fn inflects(word: &str, stem: &str, trimmed: &str) -> bool {
-    declines(word, stem, trimmed)
-        || fleeting_stems(stem)
-            .iter()
-            .any(|stem| declines(word, stem, trimmed))
-        || inserts_vowel(word, stem)
-}
-
-/// Whether `word` is `stem` with an ending of declension, one of those
-/// [`endings_after`] gives for `trimmed`. Before the ending it may take back
-/// part of what the stem left off the word (`чарод` + `е` + `я` of
-/// `чародей`) or `ь` and `й` (`ноч` + `ь` + `ю`), but not all of a final
-/// vowel: an ending takes the vowel's place, so `Ализея` is not a form of
-/// `Ализе`.
-fn declines(word: &str, stem: &str, trimmed: &str) -> bool {
-    let Some(ending) = word.strip_prefix(stem) else {
-        return false;
-    };
-    let endings = endings_after(trimmed);
-    ending.chars().count() <= MAX_ENDING
-        && ending
-            .char_indices()
-            .map(|(index, _)| index)
-            .chain([ending.len()])
-            .any(|split| {
-                let taken = &ending[..split];
-                let signs = taken.chars().all(|c| "ьй".contains(c));
-                let part = taken.len() < trimmed.len() && trimmed.starts_with(taken);
-                (signs || part) && endings.contains(&&ending[split..])
-            })
-}
-
-/// Vowels of Russian.
-const VOWELS: &str = "аеёиоуыэюя";
-
-/// Vowels that come and go before a word's last consonant when it is
-/// declined.
-const FLEETING: [char; 3] = ['о', 'е', 'ё'];
-
-/// The stems a word may decline from when the vowel before its last
-/// consonant drops: `мореглядец` gives `мореглядц`, `замок` `замк`, `камен`
-/// `камн`, `хребет` `хребт`, `церков` `церкв`. The vowel may leave `й` after
-/// a vowel (`боец`, `бойц`) and `ь` after a consonant (`владелец`,
-/// `владельц`; `огонек`, `огоньк`), so both stems are given. None for a
-/// stem that ends another way, or would be shorter than three letters.
-fn fleeting_stems(stem: &str) -> Vec<String> {
-    let letters: Vec<char> = stem.chars().collect();
-    let [head @ .., before, vowel, last] = letters.as_slice() else {
-        return Vec::new();
-    };
-    if !FLEETING.contains(vowel) || !"цкнлртв".contains(*last) {
-        return Vec::new();
-    }
-    let with = |left: Option<char>| -> String {
-        head.iter()
-            .chain([before])
-            .chain(left.iter())
-            .chain([last])
-            .collect()
-    };
-    let stems = if VOWELS.contains(*before) {
-        vec![with(Some('й'))]
-    } else {
-        vec![with(None), with(Some('ь'))]
-    };
-    stems
-        .into_iter()
-        .filter(|stem| stem.chars().count() >= 3)
-        .collect()
-}
-
-/// Whether `word` is `stem` with a vowel between its last two consonants
-/// and no ending, as a genitive plural is: `девушк` gives `девушек`, `сестр`
-/// `сестёр`, `земл` `земель`; the vowel takes the place of `ь` or `й`
-/// (`кольц`, `колец`).
-fn inserts_vowel(word: &str, stem: &str) -> bool {
-    let word = word.strip_suffix('ь').unwrap_or(word);
-    let letters: Vec<char> = stem.chars().collect();
-    let [head @ .., before, last] = letters.as_slice() else {
-        return false;
-    };
-    if head.is_empty() || ENDING_LETTERS.contains(*last) || VOWELS.contains(*before) {
-        return false;
-    }
-    let kept = (!"ьй".contains(*before)).then_some(before);
-    FLEETING.iter().any(|vowel| {
-        word.chars()
-            .eq(head.iter().chain(kept).chain([vowel, last]).copied())
-    })
-}
-
-/// Whether the words of `translation` appear in `target`, the words of a
-/// text, one after another, in order, allowing for inflected endings: each
-/// is the word's stem with an ending, so `эфирита` uses `эфирит` and
-/// `эфироита` does not, and `списке целей ... задания` does not use
-/// `список заданий`. A word of `rendered` stands for the whole translation
-/// while the target has it, as written or inflected.
-fn contains_inflected(target: &[String], translation: &str, rendered: &[&str]) -> bool {
-    let has = |phrase: &[String]| {
-        !phrase.is_empty()
-            && target.windows(phrase.len()).any(|run| {
-                run.iter()
-                    .zip(phrase)
-                    .all(|(candidate, word)| is_form(candidate, word))
-            })
-    };
-    has(&words(translation)) || rendered.iter().any(|form| has(&words(form)))
+    entry.is_excepted(exceptions)
 }
 
 impl Glossary {
@@ -1012,7 +688,7 @@ impl Glossary {
     }
 
     /// Whether the term of the entry at `index` occurs in `text`, as
-    /// [`Self::count_uses`] counts it: not inside a longer term.
+    /// [`Self::used_in`] finds it: not inside a longer term.
     #[must_use]
     pub fn uses(&self, text: &str, index: usize) -> bool {
         let Some(entry) = self.entries.get(index) else {
@@ -1029,15 +705,15 @@ impl Glossary {
             .any(|(found, _)| *found == index)
     }
 
-    /// Adds to `strings`, by the index of each entry, one for every entry
-    /// whose term occurs in `text`: counted over all the strings of a
-    /// project, how many strings use each term.
-    pub fn count_uses(&self, text: &str, strings: &mut [usize]) {
-        for (index, _) in self.occurring(text) {
-            if let Some(count) = strings.get_mut(index) {
-                *count += 1;
-            }
-        }
+    /// The indexes of the entries whose term occurs in `text`, in order:
+    /// counted over all the strings of a project, how many strings use each
+    /// term.
+    #[must_use]
+    pub fn used_in(&self, text: &str) -> Vec<usize> {
+        self.occurring(text)
+            .into_iter()
+            .map(|(index, _)| index)
+            .collect()
     }
 
     /// Entries whose term occurs in `text` (see [`Self::occurrences`]).
@@ -1088,209 +764,11 @@ impl Glossary {
             .get(&term)
             .and_then(|&index| self.entries.get(index))
     }
-
-    /// What the glossary finds in a translation of `source`, but for the
-    /// terms of `exceptions`, with the terms of the source found once: see
-    /// [`Self::unused_terms`] and [`Self::stale_exceptions`]. `rendered`
-    /// names, by a term's headword, words that render the term in this
-    /// string: a term counts as used while the translation has one.
-    #[must_use]
-    pub fn review<'a, 'e>(
-        &'a self,
-        source: &str,
-        target: &str,
-        exceptions: &'e [String],
-        rendered: &[(&str, &str)],
-    ) -> TermReview<'a, 'e> {
-        let found = self.occurrences(source);
-        let target = text_of(target);
-        let target = Target::new(&target);
-        // A name is used when the translation of one of its meanings is.
-        let used: Vec<bool> = found
-            .iter()
-            .map(|(entry, count)| {
-                let rendered: Vec<&str> = rendered
-                    .iter()
-                    .filter(|(term, _)| term.to_lowercase() == entry.term.to_lowercase())
-                    .map(|(_, word)| *word)
-                    .collect();
-                target.uses(entry, *count, &rendered)
-            })
-            .collect();
-        let mut review = TermReview::default();
-        for (index, (entry, _)) in found.iter().enumerate() {
-            if is_exception(entry, exceptions) {
-                continue;
-            }
-            let meanings: Vec<usize> = (0..found.len())
-                .filter(|other| found[*other].0.same_name(entry))
-                .collect();
-            if meanings.first() == Some(&index) && meanings.iter().all(|other| !used[*other]) {
-                review.unused.push(entry);
-            }
-        }
-        review.stale = exceptions
-            .iter()
-            .filter(|exception| {
-                !found
-                    .iter()
-                    .any(|(entry, _)| is_exception(entry, std::slice::from_ref(*exception)))
-            })
-            .map(String::as_str)
-            .collect();
-        review
-    }
-
-    /// Entries of terms of the source whose translation does not seem to be
-    /// used, but for the terms of `exceptions`. Only advice: inflected
-    /// languages rarely keep the dictionary form, and a line may render a
-    /// term another way on purpose. A term the translation keeps as written
-    /// wherever the source has it is part of a name left untranslated
-    /// (`Scions & Sinners`), not a term to translate.
-    #[must_use]
-    pub fn unused_terms(
-        &self,
-        source: &str,
-        target: &str,
-        exceptions: &[String],
-    ) -> Vec<&GlossaryEntry> {
-        let target = text_of(target);
-        let target = Target::new(&target);
-        let found = self.occurrences(source);
-        let used: Vec<bool> = found
-            .iter()
-            .map(|(entry, count)| target.uses(entry, *count, &[]))
-            .collect();
-        // A name is used when one of its meanings is; it is told once.
-        found
-            .iter()
-            .enumerate()
-            .filter(|(index, (entry, _))| {
-                let meanings: Vec<usize> = (0..found.len())
-                    .filter(|other| found[*other].0.same_name(entry))
-                    .collect();
-                !is_exception(entry, exceptions)
-                    && meanings.first() == Some(index)
-                    && meanings.iter().all(|other| !used[*other])
-            })
-            .map(|(_, (entry, _))| *entry)
-            .collect()
-    }
-
-    /// The translations of the meanings of the name of `entry`, each once,
-    /// joined with ` / `: what a translation of the name may use.
-    #[must_use]
-    pub fn translations_of(&self, entry: &GlossaryEntry) -> String {
-        let mut translations: Vec<&str> = Vec::new();
-        for sense in self.senses(entry) {
-            if !translations.contains(&sense.translation.as_str()) {
-                translations.push(&sense.translation);
-            }
-        }
-        if translations.is_empty() {
-            entry.translation.clone()
-        } else {
-            translations.join(" / ")
-        }
-    }
-
-    /// Terms of the source whose translation does not seem to be used, as
-    /// messages.
-    #[must_use]
-    pub fn missing_in(&self, source: &str, target: &str) -> Vec<String> {
-        self.unused_terms(source, target, &[])
-            .into_iter()
-            .map(|entry| {
-                format!(
-                    "the terms translate {:?} as {:?}, which does not seem to be used",
-                    entry.term,
-                    self.translations_of(entry)
-                )
-            })
-            .collect()
-    }
-}
-
-/// What [`Glossary::review`] finds in a translation.
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub struct TermReview<'a, 'e> {
-    /// Terms of the source whose translation does not seem to be used.
-    pub unused: Vec<&'a GlossaryEntry>,
-    /// Exceptions that name no term of the source.
-    pub stale: Vec<&'e str>,
-}
-
-/// The message of a term whose translation does not seem to be used.
-#[must_use]
-pub fn unused_message(entry: &GlossaryEntry) -> String {
-    format!(
-        "the terms translate {:?} as {:?}, which does not seem to be used",
-        entry.term, entry.translation
-    )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn a_translation_is_used_as_written_or_inflected() {
-        let glossary = Glossary::new(vec![
-            entry("Minfilia", "Минфилия"),
-            entry("Scions of the Seventh Dawn", "Потомки Седьмой Зари"),
-        ]);
-        assert!(
-            glossary
-                .missing_in("Ask Minfilia.", "Спросите <i>Минфилию</i>.")
-                .is_empty()
-        );
-        assert!(
-            glossary
-                .missing_in("The Scions of the Seventh Dawn", "у Потомков Седьмой Зари")
-                .is_empty()
-        );
-        assert_eq!(
-            glossary.missing_in("Ask Minfilia.", "Спросите Крил.").len(),
-            1
-        );
-    }
-
-    #[test]
-    fn a_word_declines_only_with_endings_of_its_kind() {
-        let glossary = Glossary::new(vec![entry("Western La Noscea", "Западная Ла Носка")]);
-        let source = "Visit western La Noscea.";
-        for used in [
-            "в Западной Ла Носке",
-            "Западную Ла Носку",
-            "над Западными Ла Носками",
-        ] {
-            assert!(glossary.missing_in(source, used).is_empty(), "{used}");
-        }
-        for unused in [
-            "в Западной Ла Носкее",
-            "в Западной Ла-Носке",
-            "в Западной Ла-Носкее",
-            "в Западна Ла Носке",
-        ] {
-            assert_eq!(glossary.missing_in(source, unused).len(), 1, "{unused}");
-        }
-        assert!(is_form("эорзее", "эорзея"));
-        assert!(is_form("гильдией", "гильдия"));
-        assert!(is_form("гильдий", "гильдия"));
-        assert!(!is_form("носком", "носка"));
-        assert!(is_form("первобытных", "первобытный"));
-        assert!(!is_form("первобытна", "первобытный"));
-    }
-
-    #[test]
-    fn a_hyphenated_word_is_one_word() {
-        let glossary = Glossary::new(vec![entry("Limsa Lominsa", "Лимса-Ломинса")]);
-        let source = "Return to Limsa Lominsa.";
-        assert!(glossary.missing_in(source, "в Лимсу-Ломинсу").is_empty());
-        assert_eq!(glossary.missing_in(source, "в Лимсу Ломинсу").len(), 1);
-        assert_eq!(words("Ла‑Носка и Ла-Носка"), ["ла-носка", "и", "ла-носка"]);
-        assert_eq!(words("слово - другое"), ["слово", "другое"]);
-    }
 
     #[test]
     fn a_term_is_found_by_name_after_entries_are_added() {
@@ -1314,37 +792,6 @@ mod tests {
             .map(|sense| sense.translation.as_str())
             .collect();
         assert_eq!(senses, ["Гея", "Гайя"]);
-    }
-
-    #[test]
-    fn the_words_of_a_translation_are_used_together() {
-        let glossary = Glossary::new(vec![entry("Duty List", "Список заданий")]);
-        let source = "Open the journal or duty list.";
-        assert_eq!(
-            glossary
-                .missing_in(
-                    source,
-                    "Чтобы принять задания, откройте журнал или списке целей.",
-                )
-                .len(),
-            1
-        );
-        assert_eq!(
-            glossary
-                .missing_in(source, "Заданий список откройте.")
-                .len(),
-            1
-        );
-        assert!(
-            glossary
-                .missing_in(source, "Откройте журнал или список заданий.")
-                .is_empty()
-        );
-        assert!(
-            glossary
-                .missing_in(source, "Откройте журнал или <i>списке заданий</i>.")
-                .is_empty()
-        );
     }
 
     fn entry(term: &str, translation: &str) -> GlossaryEntry {
@@ -1392,35 +839,6 @@ mod tests {
     }
 
     #[test]
-    fn a_translation_of_any_meaning_uses_the_name() {
-        let glossary = Glossary::new(vec![
-            sense("Mist", "Туман", "место"),
-            sense("Mist", "туман", "существо"),
-            sense("Maelstrom", "Мальстрём", "организация"),
-            sense("Maelstrom", "водоворот", "существо"),
-        ]);
-        assert!(
-            glossary
-                .missing_in("Into the maelstrom", "В водоворот")
-                .is_empty()
-        );
-        assert!(glossary.missing_in("The Maelstrom", "Мальстрём").is_empty());
-        let missing = glossary.missing_in("The Maelstrom", "Буря");
-        assert_eq!(missing.len(), 1);
-        assert!(missing[0].contains("Мальстрём / водоворот"), "{missing:?}");
-        // The case of one meaning is enough: «туман» is the creature.
-        let review = glossary.review("A mist rises", "Встаёт туман", &[], &[]);
-        assert!(review.unused.is_empty(), "{review:?}");
-        // An exception names every meaning of the name.
-        let exceptions = ["Maelstrom".to_owned()];
-        assert!(
-            glossary
-                .unused_terms("The Maelstrom", "Буря", &exceptions)
-                .is_empty()
-        );
-    }
-
-    #[test]
     fn a_term_matches_its_english_plural() {
         assert_eq!(plural("gladiator").as_deref(), Some("gladiators"));
         assert_eq!(plural("Black Mage").as_deref(), Some("Black Mages"));
@@ -1459,7 +877,9 @@ mod tests {
             "Aether, aether everywhere",
             "Nothing",
         ] {
-            glossary.count_uses(text, &mut strings);
+            for index in glossary.used_in(text) {
+                strings[index] += 1;
+            }
         }
         // A string counts once for a term, and not for a shorter term inside
         // a longer one.
@@ -1565,214 +985,7 @@ mod tests {
             1,
             "text inside a condition is text"
         );
-        assert!(
-            glossary
-                .unused_terms(
-                    "Attune to the aetheryte.",
-                    "<sheet Aetheryte 1 0> эфирит",
-                    &[]
-                )
-                .is_empty()
-        );
         assert_eq!(text_of(r"a \<b> c"), "a <b> c");
-    }
-
-    #[test]
-    fn checks_accept_inflections_and_tell_a_term_from_a_similar_word() {
-        let glossary = Glossary::new(vec![
-            entry("Aether", "Эфир"),
-            entry("aetheryte", "эфирит"),
-            entry("conjurer", "чародей"),
-        ]);
-        assert!(
-            glossary
-                .missing_in("The aether flows", "Эфиром полон мир")
-                .is_empty()
-        );
-        assert_eq!(
-            glossary.missing_in("The aether flows", "Этер течёт").len(),
-            1
-        );
-        let source = "Limsa Lominsa Aetheryte Plaza";
-        // «эфироита» shares «эфир» with «эфирит», but is another word.
-        assert_eq!(glossary.missing_in(source, "Площадь эфироита").len(), 1);
-        assert!(glossary.missing_in(source, "Площадь эфирита").is_empty());
-        assert!(
-            glossary
-                .missing_in("The conjurer waits", "Чародея ждут")
-                .is_empty()
-        );
-        let glossary = Glossary::new(vec![
-            entry("Alisaie", "Ализе"),
-            entry("night", "ночь"),
-            entry("Eorzea", "Эорзея"),
-            entry("thicket", "чаща"),
-        ]);
-        // An ending takes the place of a final vowel, never follows it.
-        assert_eq!(glossary.missing_in("Alisaie", "Ализея").len(), 1);
-        assert!(glossary.missing_in("Alisaie", "Ализе").is_empty());
-        // A word as written is used, whatever it ends with.
-        let names = Glossary::new(vec![
-            entry("Shigure", "Сигурэ"),
-            entry("12th Legion laquearius", "лаквеарий XII легиона"),
-        ]);
-        assert!(names.missing_in("Shigure", "Сигурэ").is_empty());
-        assert!(
-            names
-                .missing_in("12th Legion laquearius", "лаквеарий XII легиона")
-                .is_empty()
-        );
-        for (source, target) in [
-            ("At night", "Ночью"),
-            ("All of Eorzea", "По всей Эорзее"),
-            ("Thickets", "За чащами"),
-        ] {
-            assert!(glossary.missing_in(source, target).is_empty(), "{target}");
-        }
-    }
-
-    #[test]
-    fn checks_accept_a_vowel_that_comes_and_goes() {
-        let glossary = Glossary::new(vec![
-            entry("Seagazer", "Мореглядец"),
-            entry("fighter", "боец"),
-            entry("owner", "владелец"),
-            entry("spark", "огонёк"),
-            entry("stone", "камень"),
-            entry("castle", "замок"),
-            entry("girl", "девушка"),
-            entry("ring", "кольцо"),
-            entry("land", "земля"),
-            entry("city", "город"),
-        ]);
-        for (source, target) in [
-            ("Seagazer Shoals", "Отмели Мореглядца"),
-            ("A fighter", "Бойцу"),
-            ("The owner", "Владельцем"),
-            ("A spark", "Огоньки"),
-            ("The stone", "Камнями"),
-            ("The castle", "В замке"),
-            ("A girl", "Пять девушек"),
-            ("A ring", "Семь колец"),
-            ("The land", "Много земель"),
-        ] {
-            assert!(glossary.missing_in(source, target).is_empty(), "{target}");
-        }
-        // Another word, not a form: no vowel drops before «д».
-        assert_eq!(glossary.missing_in("The city", "Гордый").len(), 1);
-        assert_eq!(glossary.missing_in("The castle", "Замкнут").len(), 1);
-        let glossary = Glossary::new(vec![
-            entry("Immortal Flames", "Бессмертное пламя"),
-            entry("beast tribes", "племена зверолюдов"),
-            entry("the Churning Mists", "Клубящиеся туманы"),
-            entry("Astral Era", "Астральная эра"),
-            entry("the Howling Eye", "Воющее око"),
-            entry("Gaia", "Гея"),
-            entry("Abalathia's Spine", "Хребет Абалатии"),
-            entry("the Church", "Церковь"),
-            entry("spark", "огонёк"),
-        ]);
-        for (source, target) in [
-            ("Immortal Flames Standard", "Знамя Бессмертного пламени"),
-            ("The beast tribes", "На пути племён зверолюдов"),
-            ("In the Churning Mists", "В Клубящихся туманах"),
-            ("The Sixth Astral Era", "Шестой Астральной эры"),
-            ("In the Howling Eye", "В Воющем оке"),
-            ("With Gaia", "С Геей и о Гее"),
-            ("Abalathia's Spine", "У Хребта Абалатии"),
-            ("At the Church", "У Церкви"),
-            ("A spark", "Два огонька"),
-        ] {
-            assert!(glossary.missing_in(source, target).is_empty(), "{target}");
-        }
-        assert_eq!(glossary.missing_in("The Astral Era", "Эрцгерцог").len(), 1);
-    }
-
-    #[test]
-    fn a_term_spelled_another_way_is_not_kept_as_written() {
-        let glossary = Glossary::new(vec![entry("FATE", "F.A.T.E.")]);
-        let source = "Complete the FATE \"A Finale Most Formidable\".";
-        assert_eq!(
-            glossary.missing_in(source, "Завершить FATE «Финал».").len(),
-            1
-        );
-        assert!(
-            glossary
-                .missing_in(source, "Завершить F.A.T.E. «Финал».")
-                .is_empty()
-        );
-    }
-
-    #[test]
-    fn a_word_made_from_a_translation_renders_its_term_where_named() {
-        let glossary = Glossary::new(vec![
-            entry("aether", "эфир"),
-            entry("Scions of the Seventh Dawn", "Потомки Седьмой Зари"),
-        ]);
-        let unused = |target: &str, rendered: &[(&str, &str)]| {
-            glossary
-                .review("Aether Compressor", target, &[], rendered)
-                .unused
-                .len()
-        };
-        assert_eq!(unused("Эфирный компрессор", &[]), 1);
-        assert_eq!(unused("Эфирный компрессор", &[("Aether", "Эфирный")]), 0);
-        // The named word declines with the translation.
-        assert_eq!(unused("Эфирного компрессора", &[("aether", "эфирный")]), 0);
-        // A word the translation lost, or of another term, renders nothing.
-        assert_eq!(unused("Сжиматель", &[("aether", "эфирный")]), 1);
-        assert_eq!(unused("Эфирный компрессор", &[("mount", "эфирный")]), 1);
-        // One word renders a term of several.
-        let review = glossary.review(
-            "The Scions of the Seventh Dawn",
-            "Потомковый дом",
-            &[],
-            &[("Scions of the Seventh Dawn", "потомковый")],
-        );
-        assert!(review.unused.is_empty());
-    }
-
-    #[test]
-    fn a_translation_is_used_in_any_case() {
-        let glossary = Glossary::new(vec![
-            entry("malm", "мальм"),
-            entry("Dawn Throne", "Трон Рассвета"),
-        ]);
-        // The terms give a name as it stands alone; the sentence writes its
-        // capitals.
-        assert!(
-            glossary
-                .missing_in("One malm away.", "В одном Мальме отсюда.")
-                .is_empty()
-        );
-        assert!(
-            glossary
-                .missing_in("The Dawn Throne", "Это трон рассвета")
-                .is_empty()
-        );
-    }
-
-    #[test]
-    fn an_apostrophe_between_letters_is_part_of_its_word() {
-        let glossary = Glossary::new(vec![entry("Ul'dah", "Уль'да"), entry("mi'qote", "ми’коте")]);
-        let source = "Ul'dah Aetheryte Plaza";
-        assert!(
-            glossary
-                .missing_in(source, "Площадь эфирита Уль'ды")
-                .is_empty()
-        );
-        assert!(
-            glossary
-                .missing_in(source, "Площадь эфирита Уль’ды")
-                .is_empty()
-        );
-        // Without the apostrophe it is another spelling of the name.
-        assert_eq!(
-            glossary.missing_in(source, "Площадь эфирита Ульды").len(),
-            1
-        );
-        assert!(glossary.missing_in("A mi'qote", "'Ми'коте'").is_empty());
-        assert_eq!(words("'да' и Уль'ды’"), ["да", "и", "уль'ды"]);
     }
 
     #[test]
@@ -1801,51 +1014,18 @@ mod tests {
         let scions = &glossary.entries[1];
         assert_eq!(count_term("The Scions of the Seventh Dawn", scions), 1);
         assert_eq!(count_term("Scions and the Scions", scions), 2);
-        assert!(
-            glossary
-                .missing_in("Join the Scions", "Вступите к Потомкам Седьмой Зари")
-                .is_empty()
-        );
-        assert_eq!(
-            glossary.missing_in("Your linkshells", "Ваши каналы").len(),
-            1
-        );
         assert!(glossary.find("LINKSHELLS").is_some());
         // An exception may name the term by any of its forms.
         let exceptions = vec!["linkshells".to_owned()];
         assert!(
             glossary
-                .unused_terms("A linkshell", "Связь", &exceptions)
+                .matches_except("A linkshell", &exceptions)
                 .is_empty()
         );
         assert!(
             glossary
                 .stale_exceptions("A linkshell", &exceptions)
                 .is_empty()
-        );
-    }
-
-    #[test]
-    fn a_term_kept_as_written_is_part_of_an_untranslated_name() {
-        let glossary = Glossary {
-            entries: vec![entry("Scions", "Потомки")],
-            ..Glossary::default()
-        };
-        let source = "Orchestrion Roll (Scions & Sinners: Band)";
-        assert!(
-            glossary
-                .missing_in(source, "Свиток оркестриона (Scions & Sinners: Band)")
-                .is_empty()
-        );
-        // Kept once, but the source has the term twice.
-        assert_eq!(
-            glossary
-                .missing_in(
-                    "The Scions hum Scions & Sinners",
-                    "Напевают «Scions & Sinners»"
-                )
-                .len(),
-            1
         );
     }
 
@@ -1890,24 +1070,15 @@ mod tests {
             ..Glossary::default()
         };
         let source = "Maelstrom of Despair";
-        let target = "Водоворот отчаяния";
-        assert_eq!(glossary.unused_terms(source, target, &[]).len(), 1);
+        assert_eq!(glossary.matches_except(source, &[]).len(), 1);
         let exceptions = vec!["maelstrom".to_owned()];
-        assert!(
-            glossary
-                .unused_terms(source, target, &exceptions)
-                .is_empty()
-        );
+        assert!(glossary.matches_except(source, &exceptions).is_empty());
         assert!(glossary.stale_exceptions(source, &exceptions).is_empty());
         let stale = vec!["Maelstrom".to_owned(), "Ishgard".to_owned()];
         assert_eq!(
             glossary.stale_exceptions("Nothing", &stale),
             ["Maelstrom", "Ishgard"]
         );
-        let review = glossary.review(source, target, &stale, &[]);
-        assert!(review.unused.is_empty());
-        assert_eq!(review.stale, ["Ishgard"]);
-        let review = glossary.review(source, target, &[], &[]);
-        assert_eq!(review.unused.len(), 1);
+        assert_eq!(glossary.stale_exceptions(source, &stale), ["Ishgard"]);
     }
 }

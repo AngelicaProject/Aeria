@@ -33,21 +33,21 @@ means.
 
 The terms say how a name is translated, not how a sentence writes it: the
 translation is the name as it stands alone, and a sentence puts it in the
-number, case, and capitalization it needs. The checks find a term used in
-any of those forms (see
-[`glossary-v1.md`](../formats/glossary-v1.md#matching)). A string whose
-translation does not use a term of its source gets the advice of the checks,
-whatever the string is, a row of the term's own sheet included; a correction
-run then corrects the string or decides that the name means another thing
-there (see [`translate.md`](./translate.md#deciding-terms)). So a term
-changed in the glossary reaches every string that names it through the
-checks and the corrections, and the glossary never writes a string itself.
+number, case, and capitalization it needs. Whether a translation does so is
+the model's and the person's judgment: no check reads a term in a
+translation. Each translation records the version of each term of its
+source it was written with, so a term changed in the glossary reaches
+exactly the strings written with its old version: the glossary counts them
+and a correction run brings them to the term (see
+[`translate.md`](./translate.md#following-changed-terms)), whatever the
+string is, a row of the term's own sheet included. The glossary never
+writes a string itself.
 `aeria_po::project_knowledge` reads the terms of the declared sheets, and a
 project's session reads them again when a file of a declared sheet changes.
 
 The other strings of the game that are names (items, actions, characters)
-are strings like any other: they follow the terms, and the checks hold them
-to the terms as they hold a line of dialogue. A name that is neither a term
+are strings like any other: they follow the terms as a line of dialogue
+does. A name that is neither a term
 of the file nor of a declared sheet is translated where it occurs, and
 nothing ties its occurrences together.
 
@@ -102,10 +102,8 @@ out; the rest of the knowledge is used.
   `\<sigh>` and `\<click>` are sounds of the English localization, said in
   the line itself as the Japanese does (Эх…, Бип!), and a gesture by the
   line's own words (Хе-хе), never dropped, unless the style says otherwise;
-- for Russian, notes on living language and `machine_phrasing`, a word-level
-  check for officialese and calques: only words that are almost never right
-  in a game's text, since what a line's punctuation and links should be
-  depends on its source and its kind, which one line does not show. It is
-  reported as advice.
+- for Russian, notes on living language: officialese, calques, and the
+  other marks of machine-written text, which the model weighs; no check
+  looks for them.
 
 `style.md` takes precedence over the style defaults of these rules.

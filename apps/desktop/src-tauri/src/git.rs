@@ -248,11 +248,6 @@ pub struct EntryVersionDto {
     pub reviewed: bool,
     /// Terms a person decided do not apply to the string.
     pub term_exceptions: Vec<String>,
-    /// Terms a correction run's model decided do not apply to the string.
-    pub model_exceptions: Vec<String>,
-    /// Terms a correction run's model decided a word of the translation
-    /// renders, each as `term = word`.
-    pub model_renderings: Vec<String>,
 }
 
 impl From<&EntryState> for EntryVersionDto {
@@ -263,8 +258,6 @@ impl From<&EntryState> for EntryVersionDto {
             translator_note: state.note.clone(),
             reviewed: state.reviewed,
             term_exceptions: state.term_exceptions.clone(),
-            model_exceptions: state.model_exceptions.clone(),
-            model_renderings: state.model_renderings.clone(),
         }
     }
 }

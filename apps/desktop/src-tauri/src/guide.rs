@@ -5,7 +5,6 @@
 //! never overwritten.
 
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 
 use aeria_knowledge::knowledge::read_file;
 use aeria_knowledge::{
@@ -437,10 +436,10 @@ pub async fn term_usage(app: tauri::AppHandle) -> CommandResult<Vec<TermUsageDto
             .entries
             .iter()
             .zip(usage)
-            .map(|(entry, strings)| TermUsageDto {
+            .map(|(entry, usage)| TermUsageDto {
                 term: entry.term.clone(),
                 category: entry.category.clone(),
-                strings,
+                strings: usage.strings,
             })
             .collect())
     })
@@ -468,14 +467,11 @@ pub struct TermStringDto {
 /// Most strings of a term sent at once.
 const TERM_STRINGS: usize = 300;
 
-/// The issue group of the strings whose translation does not use a term, by
-/// the term's name (see [`aeria_po::Issue::group`]).
-const TERM_NOT_USED: &str = "termNotUsed";
-
-/// A meaning of a term some translations do not use, and how many.
+/// A meaning of a term some translations were written with another version
+/// of, or with no record of, and how many.
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct UnappliedTermDto {
+pub struct OutdatedTermDto {
     pub term: String,
     pub category: String,
     pub strings: usize,
@@ -489,10 +485,10 @@ pub struct TermKeyInput {
     pub category: String,
 }
 
-/// A translated string whose translation does not use a term it should.
+/// A translated string written with another version of a term it uses.
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct UnappliedStringDto {
+pub struct OutdatedStringDto {
     /// The file, relative to `po/`.
     pub path: String,
     pub context: String,
@@ -501,92 +497,38 @@ pub struct UnappliedStringDto {
     pub fuzzy: bool,
 }
 
-/// The knowledge the checks used, and every translated string with a term
-/// not used with the meanings, by their place in the glossary, it leaves
-/// unused.
-type Unapplied = (
-    Arc<aeria_knowledge::Knowledge>,
-    Vec<(aeria_po::Hit, Vec<usize>)>,
-);
-
-/// Every translated string with a term not used, and the meanings, by their
-/// place in the glossary, each leaves unused: a finding names its term by
-/// the headword of the meaning found, so the meanings of that headword the
-/// source uses, as the uses of terms are counted, are the ones not applied.
-fn unapplied(session: &aeria_po::Session) -> CommandResult<Unapplied> {
-    let knowledge = session.knowledge();
-    let query = aeria_po::Query {
-        check: aeria_po::CheckFilter::Advice,
-        issue: Some(TERM_NOT_USED.to_owned()),
-        ..aeria_po::Query::default()
-    };
-    let hits = session
-        .corpus()
-        .search_all(
-            session.root(),
-            &query,
-            &knowledge,
-            &session.settings().target_language,
-        )
-        .map_err(|error| CommandError::new("projectKnowledgeRead", error.to_string()))?;
-    let glossary = &knowledge.terms;
-    let mut by_headword: std::collections::HashMap<&str, Vec<usize>> =
-        std::collections::HashMap::new();
-    for (index, entry) in glossary.entries.iter().enumerate() {
-        by_headword
-            .entry(entry.term.as_str())
-            .or_default()
-            .push(index);
-    }
-    let found = hits
-        .into_iter()
-        .map(|hit| {
-            let mut meanings: Vec<usize> = Vec::new();
-            for finding in &hit.findings {
-                let aeria_po::Issue::TermNotUsed { term, .. } = finding else {
-                    continue;
-                };
-                for &index in by_headword.get(term.as_str()).into_iter().flatten() {
-                    if !meanings.contains(&index) && glossary.uses(&hit.source, index) {
-                        meanings.push(index);
-                    }
-                }
-            }
-            (hit, meanings)
-        })
-        .collect();
-    Ok((knowledge, found))
-}
-
 #[tauri::command(rename_all = "camelCase")]
-/// For each meaning of a term of the saved glossary, how many translated
-/// strings do not use it, as the checks find: the strings a correction run
-/// decides. Unlike a project search it never cancels one.
+/// For each meaning of a term of the saved glossary, how many translations
+/// that are not reviewed were written with another version of it, or with
+/// no record of it: the strings a correction run of the term takes. Unlike
+/// a project search it never cancels one.
 ///
 /// # Errors
 ///
 /// Returns a typed command error when no project is open or `po/` cannot be
 /// read.
-pub async fn term_unapplied(app: tauri::AppHandle) -> CommandResult<Vec<UnappliedTermDto>> {
+pub async fn term_outdated(app: tauri::AppHandle) -> CommandResult<Vec<OutdatedTermDto>> {
     run_blocking(move || {
         let session = app.state::<DesktopState>().session()?;
-        let (knowledge, found) = unapplied(&session)?;
-        let mut counts: std::collections::BTreeMap<usize, usize> =
-            std::collections::BTreeMap::new();
-        for (_, meanings) in &found {
-            for index in meanings {
-                *counts.entry(*index).or_default() += 1;
-            }
-        }
-        Ok(counts
-            .into_iter()
-            .map(|(index, strings)| {
-                let entry = &knowledge.terms.entries[index];
-                UnappliedTermDto {
-                    term: entry.term.clone(),
-                    category: entry.category.clone(),
-                    strings,
-                }
+        let knowledge = session.knowledge();
+        let usage = session
+            .corpus()
+            .term_usage(
+                session.root(),
+                &knowledge.terms,
+                &std::sync::atomic::AtomicBool::new(false),
+            )
+            .map_err(|error| CommandError::new("projectKnowledgeRead", error.to_string()))?;
+        Ok(knowledge
+            .terms
+            .entries
+            .iter()
+            .zip(usage)
+            .filter(|(_, usage)| usage.outdated > 0)
+            .map(|(entry, usage)| OutdatedTermDto {
+                term: entry.term.clone(),
+                category: entry.category.clone(),
+                strings: usage.outdated,
             })
             .collect())
     })
@@ -594,21 +536,22 @@ pub async fn term_unapplied(app: tauri::AppHandle) -> CommandResult<Vec<Unapplie
 }
 
 #[tauri::command(rename_all = "camelCase")]
-/// Every translated string that does not use one of the meanings `terms`
-/// of the saved glossary, or any term when `terms` is empty, in file order:
-/// what a correction run of those terms takes.
+/// Every translated string, not reviewed, written with another version of
+/// one of the meanings `terms` of the saved glossary, or of any term when
+/// `terms` is empty, in file order: what a correction run of those terms
+/// takes.
 ///
 /// # Errors
 ///
 /// Returns a typed command error when no project is open or `po/` cannot be
 /// read.
-pub async fn term_unapplied_strings(
+pub async fn term_outdated_strings(
     app: tauri::AppHandle,
     terms: Vec<TermKeyInput>,
-) -> CommandResult<Vec<UnappliedStringDto>> {
+) -> CommandResult<Vec<OutdatedStringDto>> {
     run_blocking(move || {
         let session = app.state::<DesktopState>().session()?;
-        let (knowledge, found) = unapplied(&session)?;
+        let knowledge = session.knowledge();
         let wanted: Vec<usize> = knowledge
             .terms
             .entries
@@ -622,18 +565,21 @@ pub async fn term_unapplied_strings(
             })
             .map(|(index, _)| index)
             .collect();
-        Ok(found
+        if !terms.is_empty() && wanted.is_empty() {
+            return Ok(Vec::new());
+        }
+        let strings = session
+            .corpus()
+            .outdated_strings(session.root(), &knowledge.terms, &wanted)
+            .map_err(|error| CommandError::new("projectKnowledgeRead", error.to_string()))?;
+        Ok(strings
             .into_iter()
-            .filter(|(_, meanings)| {
-                !meanings.is_empty()
-                    && (terms.is_empty() || meanings.iter().any(|index| wanted.contains(index)))
-            })
-            .map(|(hit, _)| UnappliedStringDto {
-                path: hit.path,
-                context: hit.context,
-                source: hit.source,
-                translation: hit.translation,
-                fuzzy: hit.fuzzy,
+            .map(|string| OutdatedStringDto {
+                path: string.path,
+                context: string.context,
+                source: string.source,
+                translation: string.translation,
+                fuzzy: string.fuzzy,
             })
             .collect())
     })

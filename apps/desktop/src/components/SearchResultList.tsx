@@ -1,6 +1,6 @@
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useReducer, useRef, type KeyboardEvent, type MouseEvent, type ReactNode } from "react";
 import { defaultRangeExtractor, useVirtualizer, type Range } from "@tanstack/react-virtual";
-import { describeIssue, exceptionTerm } from "../issueText";
+import { describeIssue } from "../issueText";
 import { nextRow, type Chosen, type ResultRow, type SheetGroup } from "../searchResults";
 import type { SearchHitDto } from "../types";
 import { useI18n } from "../ui/i18n";
@@ -62,7 +62,6 @@ type SearchResultListProps = {
   onChooseGroup: (group: SheetGroup, on: boolean) => void;
   onReplaceOne: (hit: SearchHitDto) => void;
   onReplaceGroup: (group: SheetGroup) => void;
-  onExcept: (hit: SearchHitDto, term: string) => void;
   onRetranslate: (hit: SearchHitDto) => void;
   onFix: (hit: SearchHitDto) => void;
   /** Leaves the list for the search field. */
@@ -305,14 +304,12 @@ export const SearchResultList = forwardRef<SearchResultListHandle, SearchResultL
             const other = hit.matches.find((found) => found.field === "note" || found.field === "context");
             const findings = hit.findings.map((issue) => describeIssue(issue, t));
             const advice = hit.findings[0]?.advice ?? false;
-            const term = hit.findings.map(exceptionTerm).find((found) => found !== null) ?? null;
             const isChosen = chosen.has(row.key);
             const hitMenu = (): MenuEntry[] => [
               { id: "open", icon: "arrowRight", label: t("common.open"), run: () => props.onReveal(hit) },
               { id: "choose", icon: isChosen ? "circleCheck" : "circle", label: t(isChosen ? "search.unchoose" : "search.choose"), run: () => { anchorKey.current = row.key; props.onChoose([hit], !isChosen); } },
               { id: "separator-actions", separator: true },
               ...(replacing && translationRanges.length > 0 ? [{ id: "replace", icon: "replace" as const, label: t("search.replaceOne"), disabled, run: () => props.onReplaceOne(hit) }] : []),
-              ...(term !== null ? [{ id: "except", icon: "bookX" as const, label: t("search.exceptOne", { term }), disabled, run: () => props.onExcept(hit, term) }] : []),
               ...(hit.translation ? [
                 { id: "fix", icon: "wand" as const, label: t("search.fixOne"), disabled, run: () => props.onFix(hit) },
                 { id: "retranslate", icon: "sparkles" as const, label: t("search.retranslateOne"), disabled, run: () => props.onRetranslate(hit) },
@@ -363,7 +360,6 @@ export const SearchResultList = forwardRef<SearchResultListHandle, SearchResultL
                       onClick={() => { anchorKey.current = row.key; props.onChoose([hit], !isChosen); }}
                     />
                     {replacing && translationRanges.length > 0 ? <IconButton icon="replace" size="xs" tabIndex={-1} label={t("search.replaceOne")} disabled={disabled} onClick={() => props.onReplaceOne(hit)} /> : null}
-                    {term !== null ? <IconButton icon="bookX" size="xs" tabIndex={-1} label={t("search.exceptOne", { term })} disabled={disabled} onClick={() => props.onExcept(hit, term)} /> : null}
                     {hit.translation ? <IconButton icon="wand" size="xs" tabIndex={-1} label={t("search.fixOne")} disabled={disabled} onClick={() => props.onFix(hit)} /> : null}
                     {hit.translation ? <IconButton icon="sparkles" size="xs" tabIndex={-1} label={t("search.retranslateOne")} disabled={disabled} onClick={() => props.onRetranslate(hit)} /> : null}
                   </span>

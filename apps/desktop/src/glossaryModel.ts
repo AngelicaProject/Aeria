@@ -143,12 +143,12 @@ export function itemSheet(item: GlossaryItem): string | null {
   return item.kind === "sheet" ? item.term.sheet : item.replaced[0]?.sheet ?? null;
 }
 
-/** How many translations do not use each meaning of a term, by [`usageKey`]. */
-export type Unapplied = ReadonlyMap<string, number>;
+/** How many translations were written with another version of each meaning of a term, by [`usageKey`]. */
+export type Outdated = ReadonlyMap<string, number>;
 
-/** How many translations do not use the item's term in its meaning. */
-export function unappliedOf(item: GlossaryItem, unapplied: Unapplied | null): number {
-  return unapplied?.get(usageKey(itemTerm(item), itemCategory(item))) ?? 0;
+/** How many translations were written with another version of the item's term in its meaning. */
+export function outdatedOf(item: GlossaryItem, outdated: Outdated | null): number {
+  return outdated?.get(usageKey(itemTerm(item), itemCategory(item))) ?? 0;
 }
 
 /**
@@ -195,17 +195,17 @@ export function sheetItems(sheetTerms: readonly SheetTermDto[]): GlossaryItem[] 
 }
 
 /** What the list shows besides a category and a sheet. */
-export type GlossaryView = "all" | "entries" | "sheets" | "problems" | "unapplied" | "redundant";
+export type GlossaryView = "all" | "entries" | "sheets" | "problems" | "outdated" | "redundant";
 
-export const GLOSSARY_VIEWS: readonly GlossaryView[] = ["all", "entries", "sheets", "problems", "unapplied", "redundant"];
+export const GLOSSARY_VIEWS: readonly GlossaryView[] = ["all", "entries", "sheets", "problems", "outdated", "redundant"];
 
-export function inView(item: GlossaryItem, view: GlossaryView, unapplied: Unapplied | null): boolean {
+export function inView(item: GlossaryItem, view: GlossaryView, outdated: Outdated | null): boolean {
   switch (view) {
     case "all": return true;
     case "entries": return item.kind === "entry";
     case "sheets": return item.kind === "sheet";
     case "problems": return item.kind === "entry" && item.problem !== null;
-    case "unapplied": return unappliedOf(item, unapplied) > 0;
+    case "outdated": return outdatedOf(item, outdated) > 0;
     case "redundant": return item.kind === "entry" && item.redundant;
   }
 }
@@ -219,10 +219,10 @@ export const emptyGlossaryFilter: GlossaryFilter = { view: "all", category: null
  * The items the filter shows. The item `keep` is shown whatever the filter,
  * so a term being edited does not leave the list.
  */
-export function filterItems(items: readonly GlossaryItem[], filter: GlossaryFilter, unapplied: Unapplied | null = null, keep: string | null = null): GlossaryItem[] {
+export function filterItems(items: readonly GlossaryItem[], filter: GlossaryFilter, outdated: Outdated | null = null, keep: string | null = null): GlossaryItem[] {
   const needle = filter.query.trim().toLocaleLowerCase();
   return items.filter((item) => item.id === keep || (
-    inView(item, filter.view, unapplied)
+    inView(item, filter.view, outdated)
     && (filter.category === null || categoryKey(itemCategory(item)) === filter.category)
     && (filter.sheet === null || (item.kind === "sheet" ? item.term.sheet === filter.sheet : item.replaced.some((term) => term.sheet === filter.sheet)))
     && (needle === "" || item.search.includes(needle))));
@@ -231,12 +231,12 @@ export function filterItems(items: readonly GlossaryItem[], filter: GlossaryFilt
 export type CategoryCount = { key: string; label: string; count: number };
 
 /** How many terms each view, category, and sheet holds, over every term. */
-export function facetCounts(items: readonly GlossaryItem[], unapplied: Unapplied | null = null): { views: Record<GlossaryView, number>; categories: CategoryCount[]; sheets: ReadonlyMap<string, number> } {
+export function facetCounts(items: readonly GlossaryItem[], outdated: Outdated | null = null): { views: Record<GlossaryView, number>; categories: CategoryCount[]; sheets: ReadonlyMap<string, number> } {
   const views = Object.fromEntries(GLOSSARY_VIEWS.map((view) => [view, 0])) as Record<GlossaryView, number>;
   const categories = new Map<string, CategoryCount>();
   const sheets = new Map<string, number>();
   for (const item of items) {
-    for (const view of GLOSSARY_VIEWS) if (inView(item, view, unapplied)) views[view] += 1;
+    for (const view of GLOSSARY_VIEWS) if (inView(item, view, outdated)) views[view] += 1;
     const label = itemCategory(item);
     const key = categoryKey(label);
     if (key) {

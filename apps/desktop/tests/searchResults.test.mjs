@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { choose, chosenByPath, commonTerm, groupBySheet, nextRow, reconcileChosen, resultRows, sheetOpen, unchooseFiles } from "../src/searchResults.ts";
+import { choose, chosenByPath, groupBySheet, nextRow, reconcileChosen, resultRows, sheetOpen, unchooseFiles } from "../src/searchResults.ts";
 
 test("files of one sheet make one group", () => {
   const groups = groupBySheet([
@@ -15,15 +15,6 @@ test("files of one sheet make one group", () => {
     ["Item", 2, 7],
     ["quest/000/A.po", 1, 1],
   ]);
-});
-
-test("chosen strings take an exception for a term they all have", () => {
-  const issue = (kind, term) => ({ kind, term, advice: kind === "termNotUsed", group: "", message: "", translation: null, text: null, phrases: [] });
-  const hit = (...findings) => ({ path: "a.po", context: "a", findings });
-  assert.equal(commonTerm([hit(issue("termNotUsed", "primal")), hit(issue("termNotUsed", "Scions"), issue("termNotUsed", "primal"))]), "primal");
-  assert.equal(commonTerm([hit(issue("termNotUsed", "Scions")), hit(issue("termNotUsed", "primal"))]), null);
-  assert.equal(commonTerm([hit(issue("termNotUsed", "Sage, elder"))]), null, "a term with a comma cannot be a flag");
-  assert.equal(commonTerm([]), null);
 });
 
 test("chosen strings follow the result read again", () => {

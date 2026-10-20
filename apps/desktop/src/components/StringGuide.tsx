@@ -6,7 +6,7 @@ import { describeIssue, errorText } from "../issueText";
 import type { MessageKey } from "../i18n/translate";
 import { useMacroIdioms } from "../macroIdioms";
 import { guideMacros, macroState, ruleOrder, type GuideMacro } from "../stringGuide";
-import type { CommandError, DraftCheckDto, FixRequest, HintTermDto, IssueDto, MacroInsertionDto, MacroRule, SourceBinding, StringHintsDto } from "../types";
+import type { CommandError, DraftCheckDto, FixRequest, IssueDto, MacroInsertionDto, MacroRule, SourceBinding, StringHintsDto } from "../types";
 import { useEditorFocus } from "../ui/editorFocus";
 import { loadIcon } from "../ui/gameGlyphs";
 import { useI18n } from "../ui/i18n";
@@ -162,7 +162,7 @@ export const StringGuide = memo(function StringGuide({ revision, onOpenTerms, on
           count={shown.terms.length}
           action={<button className="string-guide-link" type="button" onClick={() => onOpenTerms()}>{t("hints.openTerms")}</button>}
         >
-          <Words hints={shown} verdict={verdict} onPick={focus.busy ? undefined : pick} onException={onException} onOpenTerm={onOpenTerms} />
+          <Words hints={shown} onPick={focus.busy ? undefined : pick} onException={onException} onOpenTerm={onOpenTerms} />
         </GuideColumn>
       ) : null}
       {hasMacros ? (
@@ -240,9 +240,9 @@ function StringFacts({ hints, draft, verdict, onPick }: { hints: StringHintsDto;
   const kind = hints.kind ? KINDS[hints.kind] : undefined;
   const length = verdict?.length ?? null;
   const budget = hints.maxLength;
-  const over = budget !== null && length !== null && length > budget.max;
   const bytes = budget?.unit === "bytes";
-  const varies = draft.includes("$gn4");
+  // Only a name the game cuts is too long; a label's length is the model's guidance.
+  const over = bytes && budget !== null && length !== null && length > budget.max;
   return (
     <div className="string-guide-facts" role="group" aria-label={t("hints.string")}>
       {hints.speaker ? (
@@ -260,7 +260,7 @@ function StringFacts({ hints, draft, verdict, onPick }: { hints: StringHintsDto;
       ) : null}
       {budget !== null ? (
         <span className={over ? "string-guide-fact is-todo" : "string-guide-fact"} title={bytes ? t("hints.nameLengthTitle", { max: String(budget.max) }) : t("hints.lengthTitle")}>
-          <StateMark state={!drafted || length === null ? null : over ? "todo" : "ok"} />
+          <StateMark state={!drafted || length === null || !bytes ? null : over ? "todo" : "ok"} />
           <span className="string-guide-label">{t(bytes ? "hints.nameLength" : "hints.length")}</span>
           <span className="string-guide-value mono">{drafted && length !== null
             ? t(bytes ? "hints.bytesOf" : "hints.lengthOf", { length: String(length), max: String(budget.max) })
@@ -268,8 +268,8 @@ function StringFacts({ hints, draft, verdict, onPick }: { hints: StringHintsDto;
         </span>
       ) : null}
       {gendered ? (
-        <span className={drafted && !varies ? "string-guide-fact is-todo" : "string-guide-fact"} title={t("hints.genderTitle")}>
-          <StateMark state={!drafted ? null : varies ? "ok" : "todo"} />
+        <span className="string-guide-fact" title={t("hints.genderTitle")}>
+          <StateMark state={null} />
           <span className="string-guide-value">
             {t("hints.gender")}
             <span className="muted"> · {hints.gendered.map((text) => text === "source" ? t("hints.gender.source") : text.toUpperCase()).join(", ")}</span>
@@ -281,56 +281,24 @@ function StringFacts({ hints, draft, verdict, onPick }: { hints: StringHintsDto;
   );
 }
 
-function termState(term: HintTermDto, verdict: DraftCheckDto | null): "ok" | "todo" | null {
-  if (term.excepted || verdict === null) return null;
-  return verdict.issues.some((issue) => issue.kind === "termNotUsed" && issue.term === term.term) ? "todo" : "ok";
-}
-
 /** Adds or removes a term exception of the string; absent while one is being written. */
 type ExceptionHandler = ((term: string, add: boolean) => void) | undefined;
 
-function Words({ hints, verdict, onPick, onException, onOpenTerm }: { hints: StringHintsDto; verdict: DraftCheckDto | null; onPick: ((pick: ChipPick) => void) | undefined; onException: ExceptionHandler; onOpenTerm: (term: { term: string; category: string }) => void }) {
+function Words({ hints, onPick, onException, onOpenTerm }: { hints: StringHintsDto; onPick: ((pick: ChipPick) => void) | undefined; onException: ExceptionHandler; onOpenTerm: (term: { term: string; category: string }) => void }) {
   const { t } = useI18n();
   const insert = (text: string) => onPick?.({ insert: text });
   return (
     <ul className="string-guide-list">
       {hints.terms.map((term) => {
-        const state = termState(term, verdict);
-        const stateTitle = state === "todo" ? t("hints.term.unused") : state === "ok" ? t("hints.term.used") : undefined;
         return (
           <li className={`string-guide-row is-term${term.excepted ? " is-excepted" : ""}`} key={`term:${term.term}:${term.category}:${term.translation}`}>
-            <StateMark state={state} {...(stateTitle ? { title: stateTitle } : {})} />
+            <StateMark state={null} />
             <div className="string-guide-entry">
               <div className="string-guide-pair">
                 <button className="string-guide-source string-guide-open" type="button" title={t("hints.term.openTitle", { term: term.term })} onClick={() => onOpenTerm({ term: term.term, category: term.category })}>{term.term}</button>
                 <UiIcon icon="arrowRight" size="xs" className="string-guide-arrow" />
                 <button className="string-guide-insert" type="button" disabled={!onPick} title={t("hints.insertTitle", { text: term.translation })} onClick={() => insert(term.translation)}>{term.translation}</button>
-                <span className="string-guide-tag" {...(term.byModel ? { title: t("hints.term.byModelTitle", { term: term.term }) } : {})}>{term.byModel ? t("hints.term.byModel") : term.excepted ? t("hints.term.excepted") : term.category}</span>
-                {term.rendered.length > 0 ? (
-                  <>
-                    <span className="string-guide-tag" title={t("hints.term.renderedTitle", { term: term.term, words: term.rendered.join(", ") })}>{t("hints.term.rendered", { words: term.rendered.join(", ") })}</span>
-                    <button
-                      className="string-guide-link string-guide-except"
-                      type="button"
-                      disabled={!onException}
-                      title={t("hints.term.unrenderTitle", { term: term.term, words: term.rendered.join(", ") })}
-                      onClick={() => onException?.(term.term, false)}
-                    >
-                      {t("hints.term.restore")}
-                    </button>
-                  </>
-                ) : null}
-                {term.byModel ? (
-                  <button
-                    className="string-guide-link string-guide-except"
-                    type="button"
-                    disabled={!onException}
-                    title={t("hints.term.confirmTitle", { term: term.term })}
-                    onClick={() => onException?.(term.term, true)}
-                  >
-                    {t("hints.term.confirm")}
-                  </button>
-                ) : null}
+                <span className="string-guide-tag">{term.excepted ? t("hints.term.excepted") : term.category}</span>
                 <button
                   className="string-guide-link string-guide-except"
                   type="button"

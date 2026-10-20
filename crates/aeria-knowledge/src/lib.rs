@@ -14,8 +14,8 @@ pub mod rules;
 pub mod sheets;
 
 pub use glossary::{
-    Glossary, GlossaryDiagnostic, GlossaryEntry, GlossaryError, TermReview, contains_term,
-    parse_glossary, text_of, write_glossary,
+    Glossary, GlossaryDiagnostic, GlossaryEntry, GlossaryError, contains_term, parse_glossary,
+    text_of, write_glossary,
 };
 pub use knowledge::{
     KNOWLEDGE_DIR, Knowledge, KnowledgeFile, KnowledgeTexts, MAX_KNOWLEDGE_BYTES, create_empty,

@@ -31,8 +31,6 @@ const Correction = memo(function Correction({ corrected, onReveal }: CorrectionP
         {binding ? `${binding.sheetName} ${binding.rowId}:${binding.subrowId} · ${binding.columnIndex}` : corrected.context}
       </button>
       {corrected.reason ? <p className="translate-correction-reason">{corrected.reason}</p> : null}
-      {corrected.otherMeaning && corrected.otherMeaning.length > 0 ? <p className="translate-correction-reason">{t("translate.otherMeaning", { terms: corrected.otherMeaning.join(", ") })}</p> : null}
-      {corrected.rendered && corrected.rendered.length > 0 ? <p className="translate-correction-reason">{t("translate.rendered", { terms: corrected.rendered.join(", ") })}</p> : null}
       <div className="git-diff">
         {diffWords(corrected.before, corrected.after).map((part, index) => part.kind === "same"
           ? <span key={index}>{part.text}</span>
@@ -45,8 +43,6 @@ const Correction = memo(function Correction({ corrected, onReveal }: CorrectionP
   && previous.corrected.before === next.corrected.before
   && previous.corrected.after === next.corrected.after
   && previous.corrected.reason === next.corrected.reason
-  && (previous.corrected.otherMeaning ?? []).join("\n") === (next.corrected.otherMeaning ?? []).join("\n")
-  && (previous.corrected.rendered ?? []).join("\n") === (next.corrected.rendered ?? []).join("\n")
   && sameBinding(previous.corrected.binding, next.corrected.binding));
 
 /** The translations a correction run wrote: each before and after with the changed words marked, and why it changed. */

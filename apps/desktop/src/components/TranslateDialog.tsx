@@ -1,6 +1,6 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Dialog } from "radix-ui";
-import { normalizeCommandError, translationRetry, translationStart, translationStatus, translationStop } from "../ipc";
+import { normalizeCommandError, translationContinue, translationRetry, translationStart, translationStatus, translationStop } from "../ipc";
 import type { CommandError, ProjectSheetDto, SheetProgressDto, SourceBinding, TranslationStatus, TranslationStop } from "../types";
 import type { MessageKey } from "../i18n/translate";
 import { buildSheetTree, findSheetMatches, type SheetTreeEntry, type SheetTreeFolder } from "../sheetExplorer";
@@ -10,6 +10,7 @@ import { TranslationRejections } from "./TranslationRejections";
 import { UiIcon } from "../ui/primitives/UiIcon";
 import { useI18n, type Translate } from "../ui/i18n";
 import { usePreferences } from "../ui/preferences";
+import { reportLabel, runKind } from "../reportLabel";
 
 type TranslateDialogProps = {
   open: boolean;
@@ -23,6 +24,8 @@ type TranslateDialogProps = {
   onFilesChanged: () => void;
   /** Opens a string in the editor. */
   onRevealBinding?: ((binding: SourceBinding) => void) | undefined;
+  /** Opens a run's report in a tab of its own. */
+  onOpenReport: (reportId: string, label: string) => void;
 };
 
 /** How often a running translation's progress is read. */
@@ -47,6 +50,71 @@ const stopLabels: Readonly<Record<TranslationStop["reason"], MessageKey>> = {
   signInRequired: "translate.stop.signInRequired",
   failed: "translate.stop.failed",
 };
+
+/**
+ * How far a run is: the strings it settled of those it set out to take, as
+ * the meter shows them, then what became of them.
+ */
+export function RunProgress({ status }: { status: TranslationStatus }) {
+  const { t, locale, formatNumber } = useI18n();
+  const done = status.written + status.unchanged + status.rejected;
+  const running = status.running;
+  return (
+    <>
+      <div className="meter" aria-hidden="true">
+        <span className="meter-translated" style={{ width: `${status.strings > 0 ? Math.min(1, done / status.strings) * 100 : running ? 0 : 100}%` }} />
+      </div>
+      {status.waitingUntil !== null && running ? (
+        <p className="field-hint"><strong>{t("translate.waitingLimit", { time: new Date(status.waitingUntil * 1000).toLocaleString(locale, { dateStyle: "short", timeStyle: "short" }) })}</strong></p>
+      ) : null}
+      <p className="export-facts">
+        <span><strong>{t("translate.progressDone", { done: formatNumber(done), strings: formatNumber(status.strings) })}</strong></span>
+        {status.written > 0 ? <span>{t(status.fixing ? "translate.corrected" : "translate.translated", { count: status.written })}</span> : null}
+        {status.unchanged > 0 ? <span>{t("translate.unchanged", { count: status.unchanged })}</span> : null}
+        {status.rejected > 0 ? <span>{t("translate.rejected", { count: status.rejected })}</span> : null}
+      </p>
+    </>
+  );
+}
+
+/**
+ * A button that continues a run that stopped before it settled every string
+ * it planned; `onContinued` follows the run that continues it.
+ */
+export function ContinueButton({ status, onContinued }: { status: TranslationStatus; onContinued?: () => void }) {
+  const { t } = useI18n();
+  const [error, setError] = useState<CommandError | null>(null);
+  const [starting, setStarting] = useState(false);
+  const report = status.report;
+  if (!report || status.running || !status.stop || status.stop.reason === "finished") return null;
+  return (
+    <>
+      <button className="button button-primary" type="button" disabled={starting} title={t("report.continueTitle")} onClick={() => {
+        setStarting(true);
+        setError(null);
+        void translationContinue(report)
+          .then(() => onContinued?.())
+          .catch((reason: unknown) => setError(normalizeCommandError(reason)))
+          .finally(() => setStarting(false));
+      }}>
+        <UiIcon icon="sparkles" size="sm" />{t("report.continue")}
+      </button>
+      {error ? <span className="glossary-problem">{error.message}</span> : null}
+    </>
+  );
+}
+
+/** A button that opens the report of a run, when it has one. */
+export function ReportButton({ status, onOpenReport }: { status: TranslationStatus; onOpenReport: (reportId: string, label: string) => void }) {
+  const { t, locale } = useI18n();
+  const report = status.report;
+  if (!report) return null;
+  return (
+    <button className="button button-secondary" type="button" onClick={() => onOpenReport(report, reportLabel(runKind(status), status.startedAt, t, locale))}>
+      <UiIcon icon="clipboard" size="sm" />{t("report.open")}
+    </button>
+  );
+}
 
 export function describeStop(stop: TranslationStop, t: Translate, locale: string): string {
   if (stop.reason === "usageLimit" && stop.resetsAt !== null) {
@@ -100,7 +168,7 @@ function Check({ checked, mixed, label, onChange }: { checked: boolean; mixed: b
 }
 
 /** Machine translation of chosen sheets and folders of sheets, and its progress. */
-export const TranslateDialog = memo(function TranslateDialog({ open, onOpenChange, sheets, progress, sheetName, onOpenSettings, onFilesChanged, onRevealBinding }: TranslateDialogProps) {
+export const TranslateDialog = memo(function TranslateDialog({ open, onOpenChange, sheets, progress, sheetName, onOpenSettings, onFilesChanged, onRevealBinding, onOpenReport }: TranslateDialogProps) {
   const { t, locale, formatNumber } = useI18n();
   const { preferences } = usePreferences();
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set());
@@ -297,14 +365,8 @@ export const TranslateDialog = memo(function TranslateDialog({ open, onOpenChang
 
               {status && (running || status.stop) ? (
                 <div className="translate-progress" aria-live="polite">
-                  <div className="meter" aria-hidden="true">
-                    <span className="meter-translated" style={{ width: `${status.strings > 0 ? Math.min(1, (status.written + status.unchanged + status.rejected) / status.strings) * 100 : 0}%` }} />
-                  </div>
+                  <RunProgress status={status} />
                   <p className="export-facts">
-                    <span>{t(status.fixing ? "translate.progressFix" : "translate.progress", { written: formatNumber(status.written), strings: formatNumber(status.strings) })}</span>
-                    {status.unchanged > 0 ? <span>{t("translate.unchanged", { count: status.unchanged })}</span> : null}
-                    {status.decided > 0 ? <span>{t("translate.decided", { count: status.decided })}</span> : null}
-                    {status.rejected > 0 ? <span>{t("translate.rejected", { count: status.rejected })}</span> : null}
                     <span>{t("translate.tokens", { input: formatNumber(status.inputTokens), output: formatNumber(status.outputTokens) })}</span>
                     {cachedShare !== null ? <span>{t("translate.cached", { percent: Math.round(cachedShare * 100) })}</span> : null}
                     {running ? <span>{t("translate.pace", { pace: status.pace })}</span> : null}
@@ -323,6 +385,7 @@ export const TranslateDialog = memo(function TranslateDialog({ open, onOpenChang
                   {running && status.active.some((active) => Date.now() - active.startedAt > SLOW_MS) ? <p className="field-hint">{t("translate.slow")}</p> : null}
                   {status.message ? <p className="field-hint">{status.message}</p> : null}
                   {status.stop ? <p className="field-hint"><strong>{describeStop(status.stop, t, locale)}</strong></p> : null}
+                  {status.report ? <p className="glossary-run-actions"><ContinueButton status={status} onContinued={() => void readStatus()} /><ReportButton status={status} onOpenReport={onOpenReport} /></p> : null}
                   {status.corrections.length > 0 ? (
                     <TranslationCorrections corrections={status.corrections} total={status.written} onReveal={onRevealBinding ? (binding) => { onOpenChange(false); onRevealBinding(binding); } : undefined} />
                   ) : null}

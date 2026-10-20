@@ -15,7 +15,7 @@ import {
   sheetItems,
   sortItems,
   splitForms,
-  unappliedOf,
+  outdatedOf,
   usageKey,
 } from "../src/glossaryModel.ts";
 
@@ -109,15 +109,15 @@ test("the list holds the project's terms, then the sheets', with what each entry
   ];
   assert.deepEqual(items.map((item) => item.kind), ["entry", "entry", "entry", "sheet", "sheet"]);
   // Each meaning of a name has what the strings do not apply of its own.
-  const unapplied = new Map([[usageKey("Mist", "место"), 4], [usageKey("gil", "валюта"), 1]]);
-  assert.equal(unappliedOf(items[3], unapplied), 4);
-  assert.equal(unappliedOf(items[4], unapplied), 0);
-  assert.equal(unappliedOf(items[0], unapplied), 0);
-  const counts = facetCounts(items, unapplied);
+  const outdated = new Map([[usageKey("Mist", "место"), 4], [usageKey("gil", "валюта"), 1]]);
+  assert.equal(outdatedOf(items[3], outdated), 4);
+  assert.equal(outdatedOf(items[4], outdated), 0);
+  assert.equal(outdatedOf(items[0], outdated), 0);
+  const counts = facetCounts(items, outdated);
   assert.equal(counts.views.all, 5);
   assert.equal(counts.views.entries, 3);
   assert.equal(counts.views.sheets, 2);
-  assert.equal(counts.views.unapplied, 2);
+  assert.equal(counts.views.outdated, 2);
   assert.equal(counts.views.redundant, 1);
   assert.deepEqual(counts.categories.map((category) => [category.key, category.count]), [["место", 3], ["валюта", 1], ["существо", 1]]);
   assert.equal(counts.sheets.get("PlaceName"), 1);
@@ -129,7 +129,7 @@ test("the list holds the project's terms, then the sheets', with what each entry
   // A query finds forms, translations, and the translations of the sheets' strings.
   assert.deepEqual(shown({ query: "МГЛА" }), ["sheet:PlaceName:1:0:0"]);
   assert.deepEqual(shown({ query: "колтун" }), ["entry:0"]);
-  assert.deepEqual(filterItems(items, { ...emptyGlossaryFilter, view: "unapplied" }, unapplied).map((item) => item.id), ["entry:1", "sheet:PlaceName:1:0:0"]);
+  assert.deepEqual(filterItems(items, { ...emptyGlossaryFilter, view: "outdated" }, outdated).map((item) => item.id), ["entry:1", "sheet:PlaceName:1:0:0"]);
 });
 
 test("a column orders the list, equals keeping their order", () => {

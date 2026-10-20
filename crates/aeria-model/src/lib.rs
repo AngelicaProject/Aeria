@@ -11,14 +11,13 @@
 //! examples ([`prompt`]). The editor shows a person what a request tells
 //! the model about one string ([`hints`]).
 
-pub mod agree;
 pub mod auth;
 pub mod codex;
 pub mod fit;
 pub mod hints;
 pub mod prompt;
+pub mod report;
 pub mod run;
-pub mod sounds;
 
 use std::time::Duration;
 

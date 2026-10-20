@@ -63,8 +63,10 @@ import type {
   ProtectionDto,
   TermKey,
   TermStringsDto,
-  UnappliedStringDto,
-  UnappliedTermDto,
+  ReportInfo,
+  ReportPage,
+  OutdatedStringDto,
+  OutdatedTermDto,
 } from "./types";
 
 export function normalizeCommandError(error: unknown): CommandError {
@@ -583,14 +585,29 @@ export function termStrings(term: string, category: string): Promise<TermStrings
   return call<TermStringsDto | null>("term_strings", { term, category });
 }
 
-/** For each meaning of a term of the saved glossary, how many translations do not use it. */
-export function termUnapplied(): Promise<UnappliedTermDto[]> {
-  return call<UnappliedTermDto[]>("term_unapplied");
+/** For each meaning of a term of the saved glossary, how many translations were written with another version of it. */
+export function termOutdated(): Promise<OutdatedTermDto[]> {
+  return call<OutdatedTermDto[]>("term_outdated");
 }
 
-/** Every translated string that does not use one of the meanings named, or any term when none is named. */
-export function termUnappliedStrings(terms: TermKey[]): Promise<UnappliedStringDto[]> {
-  return call<UnappliedStringDto[]>("term_unapplied_strings", { terms });
+/** Every translated string written with another version of one of the meanings named, or of any term when none is named. */
+export function termOutdatedStrings(terms: TermKey[]): Promise<OutdatedStringDto[]> {
+  return call<OutdatedStringDto[]>("term_outdated_strings", { terms });
+}
+
+/** Continues the run of the report `id`: the same options, for the strings its runs did not settle. */
+export function translationContinue(id: string): Promise<void> {
+  return call<void>("translation_continue", { id });
+}
+
+/** The run reports of the data folder, newest first. */
+export function runReports(): Promise<ReportInfo[]> {
+  return call<ReportInfo[]>("run_reports");
+}
+
+/** A page of the report `id`: the items of `view`, or of every view when empty, that have `query`. */
+export function runReport(id: string, view: string, query: string, offset: number, limit: number): Promise<ReportPage> {
+  return call<ReportPage>("run_report", { id, view, query, offset, limit });
 }
 
 /** Where the string with `context` is in the game; null when the game has no such string. */
@@ -697,11 +714,6 @@ export function projectEditUndo(): Promise<BulkEditDto> {
 /** Adds or removes a term exception of strings found by a search; an undo reverts it. */
 export function projectTermException(entries: EntryRefDto[], term: string, add: boolean): Promise<BulkEditDto> {
   return call<BulkEditDto>("project_term_exception", { entries, term, add });
-}
-
-/** Drops the model's decisions on the terms of a category, for the next correction run to decide them anew; an undo reverts it. */
-export function projectForgetModelDecisions(category: string): Promise<BulkEditDto> {
-  return call<BulkEditDto>("project_forget_model_decisions", { category });
 }
 
 export function projectRetranslate(entries: EntryRefDto[], model: string, effort: string | null): Promise<BulkEditDto> {

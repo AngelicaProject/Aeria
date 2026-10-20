@@ -385,10 +385,6 @@ export type EntryVersionDto = {
   reviewed?: boolean;
   /** Terms a person decided do not apply to the string. */
   termExceptions?: string[];
-  /** Terms a correction with AI decided do not apply to the string. */
-  modelExceptions?: string[];
-  /** Terms a correction with AI decided a word of the translation renders, each as `term = word`. */
-  modelRenderings?: string[];
 };
 
 export type EntryChangeKind = "translated" | "changed" | "cleared" | "marked";
@@ -578,8 +574,6 @@ export type TranslationRejected = {
   binding: SourceBinding | null;
   /** The model's last translation, which was not written. */
   translation: string;
-  /** What the model's last answer decided of the terms it was asked about, as it wrote it. */
-  decisions: string[];
   problems: IssueDto[];
 };
 
@@ -606,9 +600,11 @@ export type TranslationActive = {
 /**
  * What a correction with AI asks of each translation: the issues of the
  * checks (only of `groups` when not empty), a proofreading, the adaptation of
- * a fuzzy translation to its changed source, and a translator's request.
+ * a fuzzy translation to its changed source, a translator's request, and
+ * the terms, by headword, whose current version the translations written
+ * with an older one are brought to (any term when empty).
  */
-export type FixRequest = { issues: boolean; groups: string[]; proofread: boolean; adapt: boolean; request: string | null };
+export type FixRequest = { issues: boolean; groups: string[]; proofread: boolean; adapt: boolean; request: string | null; terms?: string[] | null };
 
 /** A translation a correction run changed. */
 export type TranslationCorrected = {
@@ -618,10 +614,6 @@ export type TranslationCorrected = {
   before: string;
   after: string;
   reason: string | null;
-  /** The terms the correction decided do not apply to the string. */
-  otherMeaning?: string[];
-  /** The terms the correction decided a word of the translation renders, each as `term = word`. */
-  rendered?: string[];
 };
 
 export type TranslationStatus = {
@@ -633,8 +625,6 @@ export type TranslationStatus = {
   written: number;
   /** Translations a correction answered unchanged. */
   unchanged: number;
-  /** Strings a correction decided a term does not apply to. */
-  decided: number;
   rejected: number;
   rejections: TranslationRejected[];
   /** The first translations a correction wrote, with why each changed. */
@@ -651,7 +641,56 @@ export type TranslationStatus = {
   message: string | null;
   /** Unix milliseconds. */
   startedAt: number;
+  /** The id of the run's report, when it has one. */
+  report: string | null;
+  /** While the run waits for the plan's usage limit to reset: when it asks again, in Unix seconds. */
+  waitingUntil: number | null;
 };
+
+/** What a run does: translates, or corrects translations. */
+export type RunKind = "translating" | "fixing";
+
+/** The first record of a run's report. */
+export type ReportRun = { record: "run"; version: number; kind: RunKind; model: string; effort: string | null; terms: string[]; startedAt: number };
+
+/** What a report lists an item as: `string:<outcome>`, or `left`. */
+export type ReportView = string;
+
+/** What became of one string of a run, with each answer for it. */
+export type ReportString = {
+  record: "string";
+  view: ReportView;
+  path: string;
+  context: string;
+  source: string;
+  before: string;
+  attempts: { translation: string; problems: IssueDto[] }[];
+  outcome: "written" | "unchanged" | "stale" | "refused";
+  after?: string;
+  reason?: string;
+  binding: SourceBinding | null;
+};
+
+/** A request the service refused; its strings are left for the next run. */
+export type ReportLeft = { record: "left"; view: ReportView; paths: string[]; strings: number; error: string };
+
+export type ReportItem = ReportString | ReportLeft;
+
+/** A page of a run's report: the items of a view that have the search. */
+export type ReportPage = {
+  run: ReportRun | null;
+  stop: { record: "stop"; stop: TranslationStop } | null;
+  /** The items of each view, before the search. */
+  counts: Record<ReportView, number>;
+  total: number;
+  items: ReportItem[];
+  /** Its run goes now. */
+  running: boolean;
+  /** Its run stopped before it settled every string it planned, and can be continued. */
+  continuable: boolean;
+};
+
+export type ReportInfo = { id: string; run: ReportRun };
 
 /** A term of `aeria-knowledge/terms.csv`: one meaning of its name; `category` says what it names. */
 export type GlossaryEntry = { term: string; translation: string; forms?: string[]; note?: string; matchCase?: boolean; category: string };
@@ -681,14 +720,14 @@ export type SheetTermDto = {
   variants: { translation: string; strings: number }[];
 };
 
-/** A meaning of a term some translations do not use, and how many. */
-export type UnappliedTermDto = { term: string; category: string; strings: number };
+/** A meaning of a term some translations were written with another version of, and how many. */
+export type OutdatedTermDto = { term: string; category: string; strings: number };
 
 /** A meaning of a term, by its headword and category. */
 export type TermKey = { term: string; category: string };
 
-/** A translated string whose translation does not use a term it should; `path` is relative to `po/`. */
-export type UnappliedStringDto = { path: string; context: string; source: string; translation: string; fuzzy: boolean };
+/** A translated string written with another version of a term it uses; `path` is relative to `po/`. */
+export type OutdatedStringDto = { path: string; context: string; source: string; translation: string; fuzzy: boolean };
 
 /** The strings whose source uses a term: the first few hundred, and how many there are. */
 export type TermStringsDto = { strings: { context: string; source: string; translation: string; fuzzy: boolean }[]; total: number };
@@ -966,26 +1005,23 @@ export type SearchQueryDto = {
 
 /** One finding of the checks, as data; `message` is the English text for unknown kinds. */
 export type IssueDto = {
-  kind: "lineBreak" | "structure" | "mark" | "mixedAlphabets" | "bothGenders" | "repeatedWord" | "termNotUsed" | "genderNotVaried" | "genderInOtherLanguages" | "machinePhrasing" | "staleTermException" | "labelTooLong" | "nameTooLong" | "other";
+  kind: "lineBreak" | "structure" | "staleTermException" | "nameTooLong" | "other";
   /** What may be wrong rather than a problem: it does not keep the translation from being saved or exported. */
   advice: boolean;
   /** Groups issues in the summary and filters by them. */
   group: string;
   message: string;
+  /** The term of a stale term exception. */
   term: string | null;
-  translation: string | null;
-  text: string | null;
-  phrases: string[];
-  /** The length of a translation longer than its budget, and the budget: characters for a label, bytes for a name. */
+  /** The bytes of a name longer than the game shows, and the most it shows. */
   length: number | null;
   max: number | null;
 };
 
 /** What the checks find in a string's saved translation, and its term exceptions. */
 
-/** A glossary term of the source; `excepted` when a person or a correction's model decided it does not apply to the string, `byModel` when the model did; `rendered` holds the words of the translation a correction's model decided render it. */
-/** A term of the string, one item per meaning of its name: `category` says what it names in this meaning. */
-export type HintTermDto = { term: string; translation: string; note: string | null; category: string; excepted: boolean; byModel: boolean; rendered: string[] };
+/** A term of the string, one item per meaning of its name: `category` says what it names in this meaning; `excepted` when a person decided it does not apply to the string. */
+export type HintTermDto = { term: string; translation: string; note: string | null; category: string; excepted: boolean };
 /** What a machine translation request tells the model about one string. */
 export type StringHintsDto = {
   terms: HintTermDto[];

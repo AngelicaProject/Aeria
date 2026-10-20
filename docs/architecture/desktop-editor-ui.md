@@ -486,23 +486,15 @@ not re-render the workbench.
   ([`translate.md`](./translate.md#names-in-the-world)) with the
   translation's length against it, and that the line varies with the player
   character's gender in the source or in the French or German text, with
-  **Insert a choice**, the gender choice of the insertion menu. A label or
-  name longer than its length is advice, amber, as is a gendered line whose
-  translation has no condition on `$gn4`.
+  **Insert a choice**, the gender choice of the insertion menu. A name
+  longer than the game shows is advice, amber; a label's length is
+  guidance and is not marked.
 - **Terms** lists the glossary terms of the source, each with its
-  translation, note, and whether a term exception keeps
-  it out (a model exception shows as *AI: another meaning*, a model
-  rendering as *AI: as «эфирный»*), with a link to the glossary; a term's
-  name opens it there. Each is marked once there is a
-  translation: used or not used yet (amber). A term's **Not this term**
+  translation, note, and whether a term exception keeps it out, with a link
+  to the glossary; a term's name opens it there. A term's **Not this term**
   (on hover) adds a term exception to the string, and **Restore** on an
-  excepted term removes it; a term a correction decided does not apply also
-  has **Confirm**, which makes the decision the person's exception, while
-  **Restore** gives the term back to the string; **Restore** beside a
-  model rendering removes the decision that the word renders the term (see
-  [`po-project.md`](./po-project.md#term-exceptions),
-  [`po-project.md`](./po-project.md#model-exceptions), and
-  [`po-project.md`](./po-project.md#model-renderings)).
+  excepted term removes it (see
+  [`po-project.md`](./po-project.md#term-exceptions)).
 - **Macros** lists the parts of the source the editor draws as chips or
   formatting markers, once each with a count, grouped by what a translation
   may do with them: keep (game data), conditions, letter case, formatting,
@@ -585,20 +577,13 @@ there are any, the notice of a bulk edit and the strings chosen.
 - **The line of the result** gives the strings and sheets found (or that
   nothing was; when the filters narrow the search, a link clears them),
   **Collapse all** or **Expand all**, and an actions menu for the whole
-  result: choose every string found, **Fix all found with AI…**,
-  **Translate all found again…**, and, with a term's issue chosen,
-  **Exception … for all**.
+  result: choose every string found, **Fix all found with AI…**, and
+  **Translate all found again…**.
 - **Issue.** With a checks filter, one more chip in the scope keeps only
-  the strings with one group of issues (`pugilist → кулачный боец` for a
-  term not used, *Macros*, *Extra line break*). A project has hundreds of
-  groups, one per term, so the chip opens a list rather than laying them
-  out: a filter field (Enter takes the first match), *Any issue*, then the
-  other kinds and the terms in sections, each with its strings, most
-  first; the terms begin with *Every term*, which keeps the strings with
-  any term not used, the start of a correction that decides every term of
-  the project (see [`translate.md`](./translate.md#deciding-terms)). The
-  list is of the result without an issue chosen, so choosing one does not
-  narrow it.
+  the strings with one group of issues (*Macros*, *Extra line break*). The
+  chip opens a list: a filter field (Enter takes the first match), *Any
+  issue*, then each kind with its strings, most first. The list is of the
+  result without an issue chosen, so choosing one does not narrow it.
 - **The result** is one virtualized list grouped by sheet, the files of a
   sheet (`Item/10000.po`, `Item/12000.po`) together, with each sheet's
   count, and its files listed on hover when there are several. While an
@@ -795,10 +780,10 @@ again when the project changed while no term is being edited.
 - The facets choose what the table shows, with the count of each over the
   whole glossary: **All terms**, **Project terms** (`terms.csv`), or **From
   sheets**; under **Needs attention**, **Errors** (project terms that block
-  saving), **Not applied in strings** (terms some translations do not use
-  in their meaning, as the checks find: the advice `termNotUsed`, which
-  names the meaning found in the source by its headword, so a string counts
-  for the meanings of that headword its source uses, as **Uses** counts
+  saving), **Strings on an old version** (terms some translations not
+  reviewed were written with another version of, or before they were terms
+  (see [`po-project.md`](./po-project.md#terms-written-with)), a string
+  counting for each meaning of a name its source uses, as **Uses** counts
   them; counted over the project when the terms are read and after each
   correction run), and
   **Same as the sheet** (project terms the sheets give alike); one category, the most
@@ -813,11 +798,11 @@ again when the project changed while no term is being edited.
 - The table is virtualized, one line per term: its headword with its other
   forms, its translation, its category, its source (the sheet, or the
   project with the sheet it replaces), and how many strings of the project
-  use it. A term some translations do not use shows how many (*not applied
-  in 12 strings*). Each header orders the
+  use it. A term with strings on an old version shows how many (*12 strings
+  on an old version*). Each header orders the
   table by its column, then the other way, then back to the order of the
-  files; **Uses** counts the strings that use each term, as the checks find
-  a term, when it is first chosen and again after the terms are read again.
+  files; **Uses** counts the strings whose source uses each term when it is
+  first chosen and again after the terms are read again.
   The search finds headwords, forms, translations, categories, notes, and
   the translations of the sheets' strings; the chosen category and sheet
   show as chips beside it. Arrow keys, Page Up and Down, Home, and End move
@@ -852,24 +837,24 @@ again when the project changed while no term is being edited.
   have with how many, the term's first. Another translation typed, **Use
   this translation** on another of the strings', or **Edit as a project
   term** makes it a term of `terms.csv`, saved with the other project terms:
-  the glossary never writes a string, and the checks and corrections bring
-  the strings that name the term to it. **Open the string** opens its first
+  the glossary never writes a string, and a correction run brings the
+  strings that name the term to it. **Open the string** opens its first
   string in the editor without closing the tab.
-- A term some translations do not use lists them under **Not applied in
-  strings**, each with its sheet, source, and translation and opened in the
-  editor by a click, with **Fix with AI**: a correction run of those
-  translations that fixes the term's advice and decides, for each, whether
-  the term applies (see
-  [`translate.md`](./translate.md#deciding-terms)), with an optional
-  **Request** for every translation. Several chosen terms are fixed at once,
-  and **Not applied in strings** fixes every term it shows: by name when a
-  category, sheet, or search narrows it, else every term at once. The run
+- A term with strings on an old version lists them under **Strings on an
+  old version of the term**, each with its sheet, source, and translation
+  and opened in the editor by a click, with **Fix with AI**: a correction
+  run of exactly those translations that makes each follow the term as it
+  is and changes nothing else (see
+  [`translate.md`](./translate.md#following-changed-terms)), with an
+  optional **Request** for every translation. Reviewed translations are
+  never taken. Several chosen terms are fixed at once, and **Strings on an
+  old version** fixes every term it shows: by name when a category, sheet,
+  or search narrows it, else every term at once. The run
   needs a model chosen in Settings, saved terms, and no other run going;
   while it goes and after it ends, the top of the fields shows its progress,
   **Stop**, and what it wrote (each before and after with the changed words
-  marked and why it changed, and the terms it decided do not apply or a word
-  renders) and refused, each opened in the editor. When it ends, the editor
-  and the counts are read again.
+  marked and why it changed) and refused, each opened in the editor. When it
+  ends, the editor and the counts are read again.
 - Both kinds of term list **Strings**: the strings of the project whose
   source uses the term as the saved glossary has it, as **Uses** counts
   them, each with its sheet, source, and translation (or that it has none,
@@ -882,11 +867,7 @@ again when the project changed while no term is being edited.
   chosen and no sheet or term, the fields are the category's: its note,
   kept by its declared sheets and saved to every one of them when changed
   (marked when they have different notes; a category no sheet declares has
-  none), its sheets, each chosen by a click, and **Decide again with AI**,
-  which asks first and then drops the model's decisions on every term of
-  the category (see
-  [`po-project.md`](./po-project.md#model-exceptions)), saying how many
-  strings it changed. With several terms
+  none), and its sheets, each chosen by a click. With several terms
   chosen, **Set category** and **Remove** act on the project terms among
   them; the context menu of a term offers the same, and a sheet term's
   **Open the string** and **Edit as a project term**.
@@ -930,6 +911,36 @@ translation, **Translate the refused again** starts a run of the listed
 strings (a correction's refused strings keep their translation). The dialog can be hidden
 while the run goes; **Stop** stops it, and a stopped run offers
 **Continue**. See [`translate.md`](./translate.md).
+
+## Run reports
+
+A run's report (see [`translate.md`](./translate.md#report)) opens in a tab
+of its own from **Open report** of the run's progress in the glossary or the
+translation dialog. A report has one tab, named by its run's kind and time,
+and is read again every three seconds until its run stops. The tab shows:
+
+- a header with the run's kind, time, model, reasoning, and terms, why it
+  stopped, that it goes, or that it was interrupted, **Continue** for a run
+  that can be continued (see
+  [`translate.md`](./translate.md#continuing)), and the other reports of
+  the data folder to open instead;
+- what to list, each with its count, only those with items: of strings,
+  **Failed**, **Translated**, **Corrected**, **Accepted as it was** (an
+  adaptation that kept its text and cleared the fuzzy mark), **Answered
+  unchanged**, **Changed during the run**, and **Failed requests**; a
+  failure is chosen first when the run has one;
+- a search over the contexts, sources, and translations of what is listed;
+- the items chosen, 100 at a time with **Show more**: a string with its
+  context, source, translation before and after, and the model's reason,
+  and, when an answer failed the checks, each answer with its problems,
+  worded as the editor's. A string's context opens it in the editor.
+
+A run's progress, in the glossary and in the translation dialog, gives the
+strings it settled of those it set out to take (**N of M done**), which the
+meter shows, and then how many it wrote, left as they were, and refused;
+while the run waits for the plan's usage limit, when it asks again. A run
+that stopped before it settled its strings has **Continue** beside **Open
+report**.
 
 ## Export
 

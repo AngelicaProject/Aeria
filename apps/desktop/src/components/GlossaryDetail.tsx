@@ -15,7 +15,7 @@ type EntryDetailProps = {
   item: Extract<GlossaryItem, { kind: "entry" }>;
   /** The terms of the sheets the term takes the place of, or will once saved. */
   sheetsGive: readonly SheetTermDto[];
-  /** The translations that do not use the term, and their correction. */
+  /** The translations written with another version of the term, and their correction. */
   fix: ReactNode;
   categories: readonly string[];
   senses: readonly Sense[];
@@ -92,7 +92,7 @@ export function EntryDetail({ item, sheetsGive, fix, categories, senses, disable
 
 type SheetTermDetailProps = {
   term: SheetTermDto;
-  /** The translations that do not use the term, and their correction. */
+  /** The translations written with another version of the term, and their correction. */
   fix: ReactNode;
   senses: readonly Sense[];
   disabled: boolean;
@@ -323,7 +323,7 @@ type BulkDetailProps = {
   entries: number;
   categories: readonly string[];
   disabled: boolean;
-  /** The correction of the chosen terms' translations, when some do not use them. */
+  /** The correction of the chosen terms' translations, when some were written with another version of them. */
   fix: ReactNode;
   onCategory: (category: string) => void;
   onRemove: () => void;
@@ -358,20 +358,12 @@ type CategorySettingsProps = {
   /** The declared sheets of the category, which keep its note. */
   sheets: readonly TermSheetDto[];
   disabled: boolean;
-  /** Why the model's decisions cannot be dropped now, or null. */
-  forgetBlock: string | null;
-  /** What the last drop of the model's decisions did, or null. */
-  forgotten: string | null;
   onNote: (note: string | null) => void;
-  onForget: () => void;
   onOpenSheet: (sheet: string) => void;
 };
 
-/**
- * A category: the note its sheets keep, saved to all of them at once, the
- * sheets themselves, and a way to have the model decide its terms again.
- */
-export function CategorySettings({ category, count, sheets, disabled, forgetBlock, forgotten, onNote, onForget, onOpenSheet }: CategorySettingsProps) {
+/** A category: the note its sheets keep, saved to all of them at once, and the sheets themselves. */
+export function CategorySettings({ category, count, sheets, disabled, onNote, onOpenSheet }: CategorySettingsProps) {
   const { t } = useI18n();
   const notes = [...new Set(sheets.map((sheet) => (sheet.note ?? "").trim()))];
   const differ = notes.length > 1;
@@ -415,12 +407,6 @@ export function CategorySettings({ category, count, sheets, disabled, forgetBloc
           </ul>
         </div>
       ) : null}
-      <div className="glossary-detail-actions">
-        <button className="button button-secondary" type="button" disabled={disabled || forgetBlock !== null} title={forgetBlock ?? t("glossary.category.forgetTitle")} onClick={onForget}>
-          <UiIcon icon="sparkles" size="sm" />{t("glossary.category.forget")}
-        </button>
-      </div>
-      {forgotten ? <p className="muted">{forgotten}</p> : null}
     </section>
   );
 }

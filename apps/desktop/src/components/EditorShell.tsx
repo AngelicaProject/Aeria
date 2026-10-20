@@ -47,6 +47,7 @@ import { StatusBar } from "./StatusBar";
 import { TranslationEditor, type CellDraft, type CellMutation, type TranslationEditorHandle } from "./TranslationEditor";
 import { TranslationList } from "./TranslationList";
 import { WindowChrome } from "./WindowChrome";
+import { ReportView } from "./ReportView";
 import type { ApplicationMenuDefinition } from "./ApplicationMenu";
 import { ExportDialog } from "./ExportDialog";
 import { TranslateDialog } from "./TranslateDialog";
@@ -281,6 +282,10 @@ export function EditorShell({
     setDocumentTabs((current) => reduceDocumentTabs(current, { type: "openGlossary", label: t("glossary.tab") }));
     if (term) setGlossaryFocus((current) => ({ ...term, nonce: (current?.nonce ?? 0) + 1 }));
   }, [t]);
+  // A run's report is a tab of its own.
+  const openReport = useCallback((reportId: string, label: string) => {
+    setDocumentTabs((current) => reduceDocumentTabs(current, { type: "openReport", reportId, label }));
+  }, []);
   const glossaryRef = useRef<GlossaryViewHandle>(null);
   const glossaryDirtyRef = useRef(false);
   const handleGlossaryDirty = useCallback((next: boolean) => {
@@ -1185,7 +1190,7 @@ export function EditorShell({
     pinned: document.pinned,
     preview: document.preview,
     dirty: document.dirty,
-    icon: document.kind === "commit" ? "gitCommit" : document.kind === "glossary" ? "bookMarked" : "table2",
+    icon: document.kind === "commit" ? "gitCommit" : document.kind === "glossary" ? "bookMarked" : document.kind === "report" ? "clipboard" : "table2",
   }));
   const documentMenu = (documentId: string): MenuEntry[] => {
     const document = documentTabs.tabs.find((tab) => tab.id === documentId);
@@ -1193,7 +1198,7 @@ export function EditorShell({
       const commitId = document.commitId;
       return [{ id: "copyId", icon: "copy", label: t("commit.action.copyId"), run: () => copyText(commitId) }];
     }
-    if (!document || document.kind === "glossary") return [];
+    if (!document || document.kind === "glossary" || document.kind === "report") return [];
     return [
       { id: "reveal", icon: "locateFixed", label: t("tabs.menu.reveal"), disabled: document.id !== documentTabs.activeId, run: () => { showPanel("sheets", "left", false); setRevealSheetSignal((current) => current + 1); } },
       { id: "copyName", icon: "copy", label: t("tabs.menu.copyName"), run: () => copyText(document.sheetName) },
@@ -1202,7 +1207,8 @@ export function EditorShell({
   const activeCommitId = documentTabs.tabs.find((document) => document.id === documentTabs.activeId)?.commitId ?? null;
   const glossaryOpen = documentTabs.tabs.some((document) => document.id === GLOSSARY_DOCUMENT_ID);
   const glossaryActive = documentTabs.activeId === GLOSSARY_DOCUMENT_ID;
-  sheetShown.current = activeCommitId === null && !glossaryActive;
+  const activeReportId = documentTabs.tabs.find((document) => document.id === documentTabs.activeId)?.reportId ?? null;
+  sheetShown.current = activeCommitId === null && !glossaryActive && activeReportId === null;
 
   const sheetHeaderActions = <>
     <IconButton icon={hideEmptySheets ? "eyeOff" : "eye"} label={t(hideEmptySheets ? "workbench.showEmptySheets" : "workbench.hideEmptySheets")} pressed={hideEmptySheets} disabled={closing} onClick={() => setHideEmptySheets((current) => !current)} />
@@ -1423,14 +1429,15 @@ export function EditorShell({
               onReorder={(documentId, beforeDocumentId) => setDocumentTabs((current) => reduceDocumentTabs(current, { type: "reorder", id: documentId, beforeId: beforeDocumentId }))}
             />
             {activeCommitId ? <CommitView commitId={activeCommitId} onRevealBinding={stableRevealBinding} onWorkspaceChanged={stableWorkspaceChanged} /> : null}
+            {activeReportId ? <ReportView key={activeReportId} reportId={activeReportId} onRevealBinding={stableRevealBinding} onOpenReport={openReport} /> : null}
             {/* Kept mounted while its tab is open, so its edits stay when another tab is shown. */}
             {glossaryOpen ? (
               <div className="document-glossary" hidden={!glossaryActive}>
-                <GlossaryView ref={glossaryRef} active={glossaryActive} revision={workspaceRevision + projectRevision} sheetNames={sheetNames} onRevealBinding={stableRevealBinding} onDirtyChange={handleGlossaryDirty} onSaved={bumpProjectRevision} onFilesChanged={stableWorkspaceChanged} onOpenSettings={openTranslationSettings} focus={glossaryFocus} />
+                <GlossaryView ref={glossaryRef} active={glossaryActive} revision={workspaceRevision + projectRevision} sheetNames={sheetNames} onRevealBinding={stableRevealBinding} onDirtyChange={handleGlossaryDirty} onSaved={bumpProjectRevision} onFilesChanged={stableWorkspaceChanged} onOpenSettings={openTranslationSettings} onOpenReport={openReport} focus={glossaryFocus} />
               </div>
             ) : null}
-            {/* Kept mounted under a commit or glossary tab, so the sheet returns as it was left. */}
-            <div className="document-sheet" hidden={activeCommitId !== null || glossaryActive}>
+            {/* Kept mounted under a commit, glossary, or report tab, so the sheet returns as it was left. */}
+            <div className="document-sheet" hidden={activeCommitId !== null || glossaryActive || activeReportId !== null}>
               {!selectedSheetName ? (
                 <div className="document-empty empty-state">
                   <strong>{t("workbench.noSheetOpen")}</strong>
@@ -1537,7 +1544,7 @@ export function EditorShell({
       <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} initialSection={settingsSection} projectOpen project={project} onProjectChanged={onProjectChanged} />
       <StyleDialog open={styleOpen} onOpenChange={setStyleOpen} />
       <ExportDialog open={exportOpen} onOpenChange={setExportOpen} onOpenChanges={() => { setExportOpen(false); showPanel("git", "right", false); }} />
-      <TranslateDialog open={translateOpen} onOpenChange={setTranslateOpen} sheets={project.sheets} progress={progressBySheet} sheetName={selectedSheetName} onOpenSettings={() => { setTranslateOpen(false); openSettings("translation"); }} onFilesChanged={handleWorkspaceChanged} onRevealBinding={stableRevealBinding} />
+      <TranslateDialog open={translateOpen} onOpenChange={setTranslateOpen} sheets={project.sheets} progress={progressBySheet} sheetName={selectedSheetName} onOpenSettings={() => { setTranslateOpen(false); openSettings("translation"); }} onFilesChanged={handleWorkspaceChanged} onRevealBinding={stableRevealBinding} onOpenReport={(reportId, label) => { setTranslateOpen(false); openReport(reportId, label); }} />
       {palette.open ? (
         <CommandPalette
           key={palette.key}

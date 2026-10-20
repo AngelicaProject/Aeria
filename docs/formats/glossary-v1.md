@@ -107,70 +107,11 @@ their terms out of matching for that string; an exception names a term by
 its headword, every meaning of the name included, and one that names
 another of its forms takes the term out too (see
 [`../architecture/po-project.md`](../architecture/po-project.md#term-exceptions)).
-A model exception does the same while the term's meanings are the ones it
-was decided for: a change of the headword, translation, forms, note, or
-case of a meaning, a meaning added or removed, or a change of the category
-of a name with several meanings ends it (see
-[`../architecture/po-project.md`](../architecture/po-project.md#model-exceptions)).
-Matching selects the terms a batch of machine translation needs and drives
-the checks of a translation; it never changes a translation.
+Matching selects the terms a batch of machine translation needs, counts the
+strings that use each term, and records the terms a translation was written
+with (see
+[`../architecture/po-project.md`](../architecture/po-project.md#terms-written-with)).
+Terms are matched in sources only: whether a translation renders a term is
+the model's and the person's judgment, never read from the translation's
+words. Matching never changes a translation.
 
-- An **inflected form** of a word of a translation is its stem (the word
-  without its final vowels, `й`, and `ь`), then `ь` and `й` or part of the
-  letters the stem left off (`чародея` of `чародей`, `ночью` of `ночь`),
-  then a declension ending of at most four letters in all: `а`, `ом`, `ами`,
-  `ого`, `ых`, and the other endings of nouns and adjectives (`ENDINGS` in
-  `aeria-knowledge`). A noun in `-а` or `-я` takes only the endings of its
-  declension, and an adjective in `-ая`, `-яя`, or `-ый` only those of an
-  adjective: `Носке` is a form of `Носка` and `Носкее` is not, `Западной`
-  is a form of `Западная` and `Западна` is not. A word that ends another
-  way, where the ending does not tell a noun from an adjective (`гений`,
-  `знание`), takes any of the endings. An ending takes the place of a final vowel and never
-  follows all of it: `Ализея` is not a form of `Ализе`. Any other letters
-  make another word: `Этерис` is not a form of `этер`, nor `эфироита` of
-  `эфирит`. A stem keeps at least two
-  letters of a word of three or more, so a short word declines too: `эра`,
-  `эры`; `око`, `оке`; `Гея`, `Геи`.
-- `ё` and `е` are one letter: a text may write either (`племён`,
-  `племен`).
-- A noun in `-мя` takes `-ен-` when declined: `пламя`, `пламени`; `племя`,
-  `племён`.
-- A word in `-ся` declines before it: `Клубящиеся`, `Клубящихся`.
-- An apostrophe between letters is part of its word, whichever apostrophe
-  the text writes: `Уль'ды` is one word, a form of `Уль'да`, and `Ульды` is
-  another spelling.
-- A hyphen between letters is part of its word too, and such a word
-  declines part by part: `Лимсу-Ломинсу` is a form of `Лимса-Ломинса`, while
-  `Ла-Носке` is not a form of `Ла Носка`, nor `Лимсу Ломинсу` of
-  `Лимса-Ломинса`.
-- A vowel that comes and goes when a word is declined is part of its
-  inflection. A stem that ends with `о`, `е`, or `ё` and one of `ц`, `к`,
-  `н`, `л`, `р`, `т`, `в` also declines without the vowel, when at least
-  three letters are left: `Мореглядец`, `Мореглядца`; `замок`, `замка`;
-  `камень`, `камня`; `хребет`, `хребта`; `церковь`, `церкви`. The vowel
-  leaves `й` after a vowel (`боец`, `бойца`) and may leave `ь` after a
-  consonant (`владелец`, `владельца`; `огонёк`, `огонька`). A stem
-  that ends with two consonants is also its form with `о`, `е`, or `ё`
-  between them and no ending, the vowel in place of a `ь` or `й` before the
-  last consonant: `девушка`, `девушек`; `земля`, `земель`; `кольцо`,
-  `колец`.
-- A term whose translation does not seem to be used is reported as advice,
-  once for its name: a name is used when the translation of one of its
-  meanings is, and the advice gives the translations of all of them. The
-  words of a translation must appear in the target one after another and
-  in their order, each as written or inflected, and in any case, so
-  `эфирита` and `Эфирита` use `эфирит` and `эфироита` does not, and
-  `списке целей` with `задания` elsewhere does not use `список заданий`: the terms give a name as it stands alone, and a
-  sentence writes it in the number, case, and capitals it needs. A word made
-  from the translation, such as the adjective `эфирный` of `эфир`, is
-  another word and not read as the term, but for a string where a
-  correction run decided it renders the term (see
-  [`../architecture/po-project.md`](../architecture/po-project.md#model-renderings)).
-  A term the
-  translation keeps as written at least as many times as the source has it
-  is part of a name left untranslated, such as the song title in
-  `Scions & Sinners`, and gives no advice. The source's occurrences are
-  counted over all forms of the term, and so are the forms the translation
-  keeps. A term whose translation has the same letters and digits as its
-  headword, ignoring case, but is written another way (`FATE` as
-  `F.A.T.E.`) is never kept as written: the terms say how to write it.

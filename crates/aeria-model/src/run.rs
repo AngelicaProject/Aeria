@@ -11,20 +11,18 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use aeria_knowledge::GlossaryEntry;
 use aeria_knowledge::Knowledge;
-use aeria_po::length::{Unit, length_budget};
+use aeria_po::length::length_budget;
 use aeria_po::{
-    EditKind, Entry, EntryEdit, Issue, ModelException, ModelRendering, PO_DIR, PoFile, Session,
-    TermDecision, check_translation, is_scene,
+    EditKind, Entry, EntryEdit, Issue, PO_DIR, PoFile, Session, check_translation, is_scene,
 };
 use serde::Serialize;
 use tokio::task::JoinSet;
 
 use crate::ModelError;
-use crate::agree::agreement_problems;
 use crate::codex::{Codex, Reply, Request};
 use crate::fit;
 use crate::prompt::{self, Answer, FileTask, Item, Term};
-use crate::sounds::sound_problems;
+use crate::report::{Record, Report, RunKind, StringAttempt, StringOutcome, StringRecord};
 
 /// Strings of a scene file that are one request; a longer scene is split.
 const SCENE_BATCH: usize = 150;
@@ -56,8 +54,10 @@ const FAILURES: u32 = 3;
 /// Wait after a failure, times the failures in a row.
 const BACKOFF: Duration = Duration::from_secs(20);
 
-/// What a run translates, with which model.
-#[derive(Clone, Debug, Eq, PartialEq)]
+/// What a run translates, with which model. A report keeps it, so a run
+/// that stopped can be continued.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Options {
     /// Files and folders relative to `po/`; empty for all of `po/`.
     pub paths: Vec<String>,
@@ -74,7 +74,8 @@ pub struct Options {
 /// What a run that corrects translations asks: it takes the translated
 /// strings that are not reviewed, and sends each translation with what is
 /// wrong with it.
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase", default)]
 pub struct Fix {
     /// Send the issues the checks find in a translation.
     pub issues: bool,
@@ -89,6 +90,10 @@ pub struct Fix {
     pub adapt: bool,
     /// What a translator asks of every translation of the run.
     pub request: Option<String>,
+    /// Bring the translations written with an older version of these
+    /// terms, by headword, or of any term when empty, to the terms as they
+    /// are (see [`Entry::outdated_terms`]); `None` for none.
+    pub terms: Option<Vec<String>>,
 }
 
 /// The issues of a translation a correction is asked to fix: what the
@@ -112,16 +117,57 @@ pub fn fix_issues(fix: &Fix, knowledge: &Knowledge, target: &str, entry: &Entry)
         .collect()
 }
 
+/// The terms of `fix` a translation was written with an older version of,
+/// or without (see [`Entry::outdated_terms`]).
+#[must_use]
+pub fn fix_terms<'a>(fix: &Fix, knowledge: &'a Knowledge, entry: &Entry) -> Vec<&'a GlossaryEntry> {
+    let Some(wanted) = &fix.terms else {
+        return Vec::new();
+    };
+    entry
+        .outdated_terms(&knowledge.terms)
+        .into_iter()
+        .filter(|term| {
+            wanted.is_empty()
+                || wanted
+                    .iter()
+                    .any(|name| name.to_lowercase() == term.term.to_lowercase())
+        })
+        .collect()
+}
+
 /// Whether a correction takes a string: a translation that is not
-/// reviewed, with an issue to fix, or every one when proofreading or with a
-/// translator's request.
+/// reviewed, with an issue to fix or a term to follow, or every one when
+/// proofreading or with a translator's request.
 fn needs_fix(fix: &Fix, knowledge: &Knowledge, target: &str, entry: &Entry) -> bool {
     !entry.is_reviewed()
         && !entry.translation.is_empty()
         && (fix.proofread
             || fix.request.is_some()
             || (fix.adapt && entry.fuzzy)
-            || !fix_issues(fix, knowledge, target, entry).is_empty())
+            || !fix_issues(fix, knowledge, target, entry).is_empty()
+            || !fix_terms(fix, knowledge, entry).is_empty())
+}
+
+/// What a correction of `entry` is asked to fix, as the model is told: the
+/// issues of [`fix_issues`], and the terms of [`fix_terms`] to follow.
+fn fix_items(fix: &Fix, knowledge: &Knowledge, target: &str, entry: &Entry) -> Vec<String> {
+    let mut items: Vec<String> = fix_issues(fix, knowledge, target, entry)
+        .iter()
+        .map(ToString::to_string)
+        .collect();
+    let terms: Vec<String> = fix_terms(fix, knowledge, entry)
+        .iter()
+        .map(|term| format!("{:?}", term.term))
+        .collect();
+    if !terms.is_empty() {
+        items.push(format!(
+            "the terms {} may have changed since this translation was written: make it \
+             follow them as `terms` give them now, and change nothing else",
+            terms.join(", ")
+        ));
+    }
+    items
 }
 
 /// A translation a correction changed, with why, as the model says.
@@ -134,13 +180,6 @@ pub struct Corrected {
     pub before: String,
     pub after: String,
     pub reason: Option<String>,
-    /// The terms the correction decided do not apply to the string.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub other_meaning: Vec<String>,
-    /// The terms the correction decided a word of the translation renders,
-    /// each as `term = word`.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub rendered: Vec<String>,
 }
 
 /// A string whose translation still failed the checks after the retries; it
@@ -153,9 +192,6 @@ pub struct Rejected {
     pub context: String,
     /// The model's last translation, which was not written.
     pub translation: String,
-    /// What the model's last answer decided of the terms a correction asked
-    /// about, as it wrote it.
-    pub decisions: Vec<String>,
     /// Every problem in English, as the model was told.
     pub problems: Vec<String>,
     /// The issues the translation checks found among `problems`, as data;
@@ -216,8 +252,6 @@ pub struct Status {
     pub written: usize,
     /// Translations a correction answered unchanged.
     pub unchanged: usize,
-    /// Strings a correction decided a term does not apply to.
-    pub decided: usize,
     pub rejected: usize,
     /// The run corrects translations rather than translating.
     pub fixing: bool,
@@ -239,8 +273,25 @@ pub struct Status {
     pub stop: Option<Stop>,
     /// The last failure of the service, while the run waits and retries.
     pub message: Option<String>,
+    /// While the run waits for the plan's usage limit to reset: when it
+    /// asks again, in Unix seconds.
+    pub waiting_until: Option<u64>,
     /// Unix milliseconds.
     pub started_at: u64,
+}
+
+/// Where a run writes its report, when it has one.
+#[derive(Default)]
+struct Sink(Option<Box<dyn Report>>);
+
+impl std::fmt::Debug for Sink {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(if self.0.is_some() {
+            "Sink(..)"
+        } else {
+            "Sink(None)"
+        })
+    }
 }
 
 /// A run in progress: its status and a way to stop it.
@@ -251,6 +302,11 @@ pub struct Run {
     cancelled: tokio::sync::Notify,
     /// The journal; dropped when it cannot be written.
     log: Mutex<Option<std::fs::File>>,
+    /// The report; dropped when it cannot be written.
+    report: Mutex<Sink>,
+    /// What this run continues: the report of the run it continues, and
+    /// the strings, by `msgctxt`, that run and the ones it continued settled.
+    continues: Option<(String, HashSet<String>)>,
     requests: AtomicU64,
 }
 
@@ -269,6 +325,48 @@ impl Run {
         Self {
             log: Mutex::new(Some(file)),
             ..Self::default()
+        }
+    }
+
+    /// The run that also writes its report to `report`: what became of
+    /// every string it asked (see [`crate::report`]).
+    #[must_use]
+    pub fn with_report(self, report: Box<dyn Report>) -> Self {
+        Self {
+            report: Mutex::new(Sink(Some(report))),
+            ..self
+        }
+    }
+
+    /// The run that continues the run of the report `report`: the same
+    /// options, but for the strings of `settled`, which the runs before
+    /// settled.
+    #[must_use]
+    pub fn continuing(self, report: String, settled: HashSet<String>) -> Self {
+        Self {
+            continues: Some((report, settled)),
+            ..self
+        }
+    }
+
+    /// Whether the strings planned leave out `context`: one a run this
+    /// continues settled.
+    fn settled(&self, context: &str) -> bool {
+        self.continues
+            .as_ref()
+            .is_some_and(|(_, settled)| settled.contains(context))
+    }
+
+    /// Writes a record of the report.
+    fn report(&self, record: &Record) {
+        let mut sink = self.report.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(report) = sink.0.as_mut()
+            && let Err(error) = report.write(record)
+        {
+            // A report that cannot be written does not stop the run.
+            sink.0 = None;
+            drop(sink);
+            self.log(format_args!("report not written: {error}"));
         }
     }
 
@@ -458,7 +556,6 @@ impl Shared {
 struct Done {
     written: usize,
     unchanged: usize,
-    decided: usize,
     rejected: Vec<Rejected>,
     corrected: Vec<Corrected>,
 }
@@ -577,17 +674,14 @@ fn file_task(
                 })
                 .flatten(),
             max_length: length_budget(entry),
-            term_exceptions: aeria_po::applied_exceptions(entry, &shared.knowledge.terms),
+            term_exceptions: entry.term_exceptions.clone(),
             translation: shared
                 .options
                 .fix
                 .is_some()
                 .then(|| entry.translation.clone()),
             fix: shared.options.fix.as_ref().map_or_else(Vec::new, |fix| {
-                fix_issues(fix, &shared.knowledge, &shared.target, entry)
-                    .iter()
-                    .map(ToString::to_string)
-                    .collect()
+                fix_items(fix, &shared.knowledge, &shared.target, entry)
             }),
         })
         .collect();
@@ -615,14 +709,14 @@ fn build(shared: &Shared, pack: &[Batch]) -> Result<Option<Built>, String> {
         return Ok(None);
     }
     // A term goes with the batch when it applies to one of its strings: a
-    // string's term exceptions, a person's or a model's that holds, keep its
-    // term out.
+    // string's term exceptions keep its term out.
     let mut terms: Vec<Term> = Vec::new();
     for (_, _, string) in &strings {
-        for entry in shared.knowledge.terms.matches_except(
-            &string.source,
-            &aeria_po::applied_exceptions(string, &shared.knowledge.terms),
-        ) {
+        for entry in shared
+            .knowledge
+            .terms
+            .matches_except(&string.source, &string.term_exceptions)
+        {
             // Each meaning of a name goes once.
             let known = terms.iter().any(|term| {
                 term.term == entry.term
@@ -655,8 +749,8 @@ fn request(shared: &Shared, input: String) -> Request {
 }
 
 /// The problems of an answer for the string `id` of a batch: that it
-/// belongs to another string, that an interface label is too long, and what
-/// the translation checks find.
+/// belongs to another string, what the translation checks find, and a name
+/// longer than the game shows.
 fn problems(shared: &Shared, strings: &Strings, id: &str, answer: &Answer) -> Vec<String> {
     let Some((_, _, entry)) = strings.iter().find(|(candidate, _, _)| candidate == id) else {
         return vec!["not a string of the batch".to_owned()];
@@ -678,33 +772,24 @@ fn problems(shared: &Shared, strings: &Strings, id: &str, answer: &Answer) -> Ve
     if let Some(debris) = answer_debris(&entry.source, &answer.text) {
         return vec![debris];
     }
-    if let Some(fix) = &shared.options.fix {
-        return correction_problems(shared, fix, entry, answer);
-    }
-    let mut found = Vec::new();
-    if let Some(budget) = length_budget(entry) {
-        let length = budget.length_of(&answer.text);
-        let max = budget.max;
-        if length > max {
-            found.push(match budget.unit {
-                Unit::Characters => format!(
-                    "the translation shows {length} characters and the interface fits {max}: \
-                     shorten it, with the usual abbreviations when needed"
-                ),
-                Unit::Bytes => format!(
-                    "the name is {length} bytes and the game shows at most {max} over the \
-                     character or object: shorten it, with the usual abbreviations when needed"
-                ),
-            });
-        }
-    }
-    found
-        .extend(check_translation(&shared.knowledge, &shared.target, entry, &answer.text).problems);
-    // Asked of machine translation only: a person can keep one form where
-    // it agrees with both.
-    found.extend(agreement_problems(&entry.source, &answer.text));
-    found.extend(sound_problems(&entry.source, &answer.text));
-    found
+    machine_problems(shared, entry, &answer.text)
+}
+
+/// What refuses a machine translation or correction of `entry`: the
+/// problems of the checks, and a name longer than the game shows, which is
+/// only advice for a person.
+fn machine_problems(shared: &Shared, entry: &Entry, text: &str) -> Vec<String> {
+    check_translation(&shared.knowledge, &shared.target, entry, text)
+        .issues
+        .into_iter()
+        .filter_map(|issue| match issue {
+            Issue::NameTooLong { .. } => Some(format!(
+                "{issue}: shorten it, with the usual abbreviations when needed"
+            )),
+            _ if issue.is_problem() => Some(issue.to_string()),
+            _ => None,
+        })
+        .collect()
 }
 
 /// The separators of the answer's JSON (`", "`, `","`, `", [`) inside a
@@ -721,185 +806,6 @@ fn answer_debris(source: &str, text: &str) -> Option<String> {
              alone as its own string, and the reason and terms as their own elements"
                 .to_owned()
         })
-}
-
-/// The terms a correction of `entry` decides, as the glossary has them:
-/// those of its `fix` whose translation the checks find unused, and those
-/// the checks find unused in the corrected `text`. A correction that brings
-/// one term or name into a translation can take the word of another out of
-/// it (`the Flood` beside `Jadeite Flood`), and that term is then decided
-/// too, or the correction could never pass.
-fn asked_terms<'a>(
-    fix: &Fix,
-    knowledge: &'a Knowledge,
-    target: &str,
-    entry: &Entry,
-    text: &str,
-) -> Vec<&'a GlossaryEntry> {
-    let mut terms: Vec<&GlossaryEntry> = Vec::new();
-    let corrected = check_translation(knowledge, target, entry, text).issues;
-    for issue in fix_issues(fix, knowledge, target, entry)
-        .into_iter()
-        .chain(corrected)
-    {
-        if let Issue::TermNotUsed { term, .. } = issue
-            && let Some(found) = knowledge.terms.find(&term)
-            && !terms.iter().any(|known| known.term == found.term)
-        {
-            terms.push(found);
-        }
-    }
-    terms
-}
-
-/// What an answer decided of the terms a correction asked about.
-#[derive(Default)]
-struct Decisions<'a> {
-    /// The terms that do not apply to the string.
-    other: Vec<&'a GlossaryEntry>,
-    /// The terms that apply, each with a word the answer says renders it.
-    rendered: Vec<(&'a GlossaryEntry, String)>,
-}
-
-impl Decisions<'_> {
-    /// The words the answer says render `term`.
-    fn words(&self, term: &GlossaryEntry) -> Vec<String> {
-        self.rendered
-            .iter()
-            .filter(|(known, _)| known.term == term.term)
-            .map(|(_, word)| word.clone())
-            .collect()
-    }
-}
-
-/// The decisions of an answer on the terms of `asked`, named by any of
-/// their forms: a term alone does not apply, and `term = word` is rendered
-/// by that word. A model often names a term by the words of the source that
-/// hold it (`Neo-Ishgardian` for `Ishgardian`), so a name that is no term
-/// names the one asked term found in it. A term it names that was not asked
-/// is not a decision, and a term named as not applying is not also rendered.
-fn decisions<'a>(
-    asked: &[&'a GlossaryEntry],
-    knowledge: &Knowledge,
-    answer: &Answer,
-) -> Decisions<'a> {
-    let asked_as = |named: &str| {
-        let named = named.trim();
-        if let Some(found) = knowledge.terms.find(named) {
-            return asked.iter().copied().find(|term| term.term == found.term);
-        }
-        let within = knowledge.terms.matches(named);
-        let mut held = asked
-            .iter()
-            .copied()
-            .filter(|term| within.iter().any(|found| found.term == term.term));
-        held.next().filter(|_| held.next().is_none())
-    };
-    let mut decided = Decisions::default();
-    // `term = word` names a word, unless the whole of it is a term.
-    let renders = |named: &str| named.contains('=') && knowledge.terms.find(named.trim()).is_none();
-    for named in &answer.decisions {
-        if !renders(named)
-            && let Some(term) = asked_as(named)
-            && !decided.other.iter().any(|known| known.term == term.term)
-        {
-            decided.other.push(term);
-        }
-    }
-    for named in &answer.decisions {
-        if renders(named)
-            && let Some((name, word)) = named.rsplit_once('=')
-            && let Some(term) = asked_as(name)
-            && !decided.other.iter().any(|known| known.term == term.term)
-        {
-            // A model often names the words of a whole name. A decision is
-            // kept word by word, so each word is one.
-            for word in word
-                .split(|character: char| character.is_whitespace() || character == ',')
-                .filter(|word| !word.is_empty())
-            {
-                decided.rendered.push((term, word.to_owned()));
-            }
-        }
-    }
-    decided
-}
-
-/// `entry` as a correction's decisions write it: with the model exceptions
-/// of the terms that do not apply, and the words that render the others.
-fn with_decisions(entry: &Entry, decisions: &Decisions<'_>, knowledge: &Knowledge) -> Entry {
-    let mut decided = entry.clone();
-    for term in &decisions.other {
-        let lower = term.term.to_lowercase();
-        decided
-            .model_exceptions
-            .retain(|known| known.term.to_lowercase() != lower);
-        decided
-            .model_exceptions
-            .push(ModelException::of_name(&knowledge.terms, term));
-    }
-    for (term, word) in &decisions.rendered {
-        decided
-            .model_renderings
-            .push(ModelRendering::of_name(&knowledge.terms, term, word));
-    }
-    decided
-}
-
-/// The problems of a correction of `entry`'s translation, which may not
-/// make it worse: a problem of the checks, an issue of a kind the
-/// translation did not have (a length too long, machine phrasing, or what
-/// machine translation alone is held to), and, unless the answer left the
-/// translation as it was, the advice it was asked to fix. An unchanged
-/// answer says that advice does not apply. A term the checks find unused is
-/// decided: the answer names it among the terms that do not apply, or the
-/// corrected translation uses it, in its translation or in a word made from
-/// it that the answer names.
-fn correction_problems(shared: &Shared, fix: &Fix, entry: &Entry, answer: &Answer) -> Vec<String> {
-    let (knowledge, target) = (&*shared.knowledge, shared.target.as_str());
-    let text = answer.text.as_str();
-    let terms = asked_terms(fix, knowledge, target, entry, text);
-    let decided = with_decisions(entry, &decisions(&terms, knowledge, answer), knowledge);
-    let before = check_translation(knowledge, target, entry, &entry.translation);
-    let after = check_translation(knowledge, target, &decided, text);
-    let asked: HashSet<String> = fix_issues(fix, knowledge, target, entry)
-        .iter()
-        .map(Issue::group)
-        .collect();
-    let changed = text != entry.translation;
-    let mut found = after.problems;
-    for issue in after.issues.iter().filter(|issue| !issue.is_problem()) {
-        let group = issue.group();
-        let new = !before.issues.iter().any(|old| old.group() == group);
-        if let Issue::TermNotUsed { term, .. } = issue
-            && terms
-                .iter()
-                .any(|asked| asked.term.eq_ignore_ascii_case(term))
-        {
-            found.push(format!(
-                "{issue}: where the term applies to this string, use its translation, or, \
-                 when one word of the corrected translation made from the term's \
-                 translation renders it, list the term, ` = `, and that word as the \
-                 translation writes it in the fourth element; where the word means \
-                 something else here, list {term:?} in the fourth element"
-            ));
-        } else if new || (changed && asked.contains(&group)) {
-            found.push(issue.to_string());
-        }
-    }
-    let had_agreement = agreement_problems(&entry.source, &entry.translation);
-    let had_sounds = sound_problems(&entry.source, &entry.translation);
-    found.extend(
-        agreement_problems(&entry.source, text)
-            .into_iter()
-            .filter(|problem| !had_agreement.contains(problem)),
-    );
-    found.extend(
-        sound_problems(&entry.source, text)
-            .into_iter()
-            .filter(|problem| !had_sounds.contains(problem)),
-    );
-    found
 }
 
 /// A request listed as in flight until it answers, fails, or is dropped
@@ -1024,20 +930,114 @@ fn journal_failing(shared: &Shared, asked: usize, failing: &[(String, Answer, Ve
     ));
 }
 
+/// Whether a problem told to the model is `issue`: its message, or its
+/// message with what to do about it after a colon.
+#[must_use]
+pub fn names(problem: &str, issue: &Issue) -> bool {
+    let message = issue.to_string();
+    problem
+        .strip_prefix(message.as_str())
+        .is_some_and(|rest| rest.is_empty() || rest.starts_with(": "))
+}
+
+/// Each answer for each string of a request, by the string's id.
+type Attempts = HashMap<String, Vec<StringAttempt>>;
+
+/// Keeps an answer for the string `id` among its attempts, with the issues
+/// of the checks among its problems as data.
+fn note(
+    attempts: &mut Attempts,
+    shared: &Shared,
+    strings: &Strings,
+    id: &str,
+    answer: &Answer,
+    problems: &[String],
+) {
+    let issues = strings
+        .iter()
+        .find(|(candidate, _, _)| candidate == id)
+        .filter(|_| !problems.is_empty() && !answer.text.is_empty())
+        .map(|(_, _, entry)| {
+            check_translation(&shared.knowledge, &shared.target, entry, &answer.text)
+                .issues
+                .into_iter()
+                .filter(|issue| problems.iter().any(|problem| names(problem, issue)))
+                .collect()
+        })
+        .unwrap_or_default();
+    attempts
+        .entry(id.to_owned())
+        .or_default()
+        .push(StringAttempt {
+            translation: answer.text.clone(),
+            problems: problems.to_vec(),
+            issues,
+        });
+}
+
+/// What became of a string, as its report record says.
+struct Fate {
+    outcome: StringOutcome,
+    after: Option<String>,
+    reason: Option<String>,
+}
+
+impl Fate {
+    fn bare(outcome: StringOutcome) -> Self {
+        Self {
+            outcome,
+            after: None,
+            reason: None,
+        }
+    }
+}
+
+/// Reports what became of each string of a request, by `msgctxt`; the
+/// refused ones are those of `rejected`.
+fn report_strings(
+    shared: &Shared,
+    built: &Built,
+    mut attempts: Attempts,
+    rejected: &[Rejected],
+    mut fates: HashMap<String, Fate>,
+) {
+    for found in rejected {
+        fates.insert(found.context.clone(), Fate::bare(StringOutcome::Refused));
+    }
+    for (id, path, entry) in &built.strings {
+        let Some(fate) = fates.remove(&entry.context) else {
+            continue;
+        };
+        shared.run.report(&Record::String(StringRecord {
+            path: path.clone(),
+            context: entry.context.clone(),
+            source: entry.source.clone(),
+            before: entry.translation.clone(),
+            attempts: attempts.remove(id).unwrap_or_default(),
+            outcome: fate.outcome,
+            after: fate.after,
+            reason: fate.reason,
+        }));
+    }
+}
+
 /// Sends the translations that fail the checks back with their problems,
 /// up to [`RETRIES`] times; what still fails is rejected and stays as it was.
+/// Every answer is kept in `attempts`.
 async fn settle(
     shared: &Shared,
     built: &Built,
     answers: &mut HashMap<String, Answer>,
+    attempts: &mut Attempts,
 ) -> Result<Vec<Rejected>, ModelError> {
-    let mut failing: Vec<(String, Answer, Vec<String>)> = answers
-        .iter()
-        .filter_map(|(id, answer)| {
-            let found = problems(shared, &built.strings, id, answer);
-            (!found.is_empty()).then(|| (id.clone(), answer.clone(), found))
-        })
-        .collect();
+    let mut failing: Vec<(String, Answer, Vec<String>)> = Vec::new();
+    for (id, answer) in answers.iter() {
+        let found = problems(shared, &built.strings, id, answer);
+        note(attempts, shared, &built.strings, id, answer, &found);
+        if !found.is_empty() {
+            failing.push((id.clone(), answer.clone(), found));
+        }
+    }
     // A string the answer has no translation of, or whose entry could not be
     // read, is asked for again like a failing one.
     failing.extend(
@@ -1077,10 +1077,11 @@ async fn settle(
         let mut still = Vec::new();
         for (id, last, last_problems) in failing {
             let (answer, found) = match fixed.get(&id) {
-                Some(answer) => (
-                    answer.clone(),
-                    problems(shared, &built.strings, &id, answer),
-                ),
+                Some(answer) => {
+                    let found = problems(shared, &built.strings, &id, answer);
+                    note(attempts, shared, &built.strings, &id, answer, &found);
+                    (answer.clone(), found)
+                }
                 None => (last, last_problems),
             };
             if found.is_empty() {
@@ -1102,12 +1103,11 @@ async fn settle(
             let issues = check_translation(&shared.knowledge, &shared.target, entry, &answer.text)
                 .issues
                 .into_iter()
-                .filter(|issue| found.contains(&issue.to_string()))
+                .filter(|issue| found.iter().any(|problem| names(problem, issue)))
                 .collect();
             Some(Rejected {
                 path: path.clone(),
                 context: entry.context.clone(),
-                decisions: answer.decisions,
                 translation: answer.text,
                 problems: found,
                 issues,
@@ -1130,16 +1130,16 @@ async fn translate(shared: Arc<Shared>, pack: Pack) -> Result<Done, ModelError> 
         return Ok(Done {
             written: 0,
             unchanged: 0,
-            decided: 0,
             rejected: Vec::new(),
             corrected: Vec::new(),
         });
     };
     let reply = ask(&shared, &built, 0, built.strings.len(), built.input.clone()).await?;
     let mut answers = prompt::parse_lenient(&reply.text, shared.options.fix.is_some());
-    let rejected = settle(&shared, &built, &mut answers).await?;
+    let mut attempts = Attempts::new();
+    let rejected = settle(&shared, &built, &mut answers, &mut attempts).await?;
     if shared.options.fix.is_some() {
-        return correct(&shared, &built, &answers, rejected).await;
+        return correct(&shared, &built, &answers, rejected, attempts).await;
     }
     let mut by_file: BTreeMap<String, Vec<(String, String)>> = BTreeMap::new();
     for (id, path, entry) in &built.strings {
@@ -1153,113 +1153,70 @@ async fn translate(shared: Arc<Shared>, pack: Pack) -> Result<Done, ModelError> 
     let written = {
         let session = Arc::clone(&shared.session);
         let fuzzy = shared.options.fuzzy;
+        let knowledge = Arc::clone(&shared.knowledge);
         tokio::task::spawn_blocking(move || {
-            by_file.iter().try_fold(0, |written, (path, translations)| {
-                session
-                    .fill(path, translations, fuzzy)
-                    .map(|done| written + done.len())
-            })
+            by_file
+                .iter()
+                .try_fold(HashSet::new(), |mut written, (path, translations)| {
+                    written.extend(session.fill(path, translations, fuzzy, &knowledge.terms)?);
+                    Ok::<_, aeria_po::EditError>(written)
+                })
         })
         .await
         .map_err(|error| ModelError::Invalid(error.to_string()))?
         .map_err(|error| ModelError::Invalid(error.to_string()))?
     };
+    let fates = built
+        .strings
+        .iter()
+        .filter_map(|(id, _, entry)| {
+            let answer = answers.get(id).filter(|answer| !answer.text.is_empty())?;
+            let fate = if written.contains(&entry.context) {
+                Fate {
+                    after: Some(answer.text.clone()),
+                    ..Fate::bare(StringOutcome::Written)
+                }
+            } else {
+                Fate::bare(StringOutcome::Stale)
+            };
+            Some((entry.context.clone(), fate))
+        })
+        .collect();
+    report_strings(&shared, &built, attempts, &rejected, fates);
     Ok(Done {
-        written,
+        written: written.len(),
         unchanged: 0,
-        decided: 0,
         rejected,
         corrected: Vec::new(),
     })
 }
 
 /// What a correction that passed the checks writes to `entry`: its
-/// adaptation, its correction, or its decisions on the terms it was asked
-/// about with the correction when it made one; the terms it decided do not
-/// apply; and the terms it decided a word renders, each as `term = word`.
-/// `None` when it left the translation as it was and decided no term.
-fn correction_edit(
-    fix: &Fix,
-    knowledge: &Knowledge,
-    target: &str,
-    entry: &Entry,
-    answer: &Answer,
-) -> Option<(EditKind, Vec<String>, Vec<String>)> {
-    let changed = answer.text != entry.translation;
+/// adaptation, or its correction. A correction answered unchanged is
+/// written too: it records that the translation follows the terms as they
+/// are (see [`Entry::record_terms`]).
+fn correction_edit(fix: &Fix, entry: &Entry, answer: &Answer) -> EditKind {
     // An adapted translation answered unchanged still fits the new source:
     // it is written to clear the fuzzy mark.
     if fix.adapt && entry.fuzzy {
-        return Some((EditKind::Adapt(answer.text.clone()), Vec::new(), Vec::new()));
+        EditKind::Adapt(answer.text.clone())
+    } else {
+        EditKind::Correct(answer.text.clone())
     }
-    let asked = asked_terms(fix, knowledge, target, entry, &answer.text);
-    if asked.is_empty() {
-        return changed.then(|| {
-            (
-                EditKind::Correct(answer.text.clone()),
-                Vec::new(),
-                Vec::new(),
-            )
-        });
-    }
-    let mut decided = decisions(&asked, knowledge, answer);
-    // A model names a word for a term its translation uses as the terms
-    // write it too. Only a word the checks need is a decision to keep: the
-    // term is unused in the answer without it.
-    let needed = std::mem::take(&mut decided.rendered);
-    let mut bare = with_decisions(entry, &decided, knowledge);
-    bare.model_renderings.clear();
-    let unused: Vec<String> = check_translation(knowledge, target, &bare, &answer.text)
-        .issues
-        .into_iter()
-        .filter_map(|issue| match issue {
-            Issue::TermNotUsed { term, .. } => Some(term),
-            _ => None,
-        })
-        .collect();
-    decided.rendered = needed
-        .into_iter()
-        .filter(|(term, _)| {
-            unused
-                .iter()
-                .any(|known| known.eq_ignore_ascii_case(&term.term))
-        })
-        .collect();
-    let kind = EditKind::Decide {
-        correction: changed.then(|| answer.text.clone()),
-        terms: asked
-            .iter()
-            .map(|term| TermDecision {
-                exception: ModelException::of_name(&knowledge.terms, term),
-                applies: !decided.other.iter().any(|known| known.term == term.term),
-                rendered: decided.words(term),
-            })
-            .collect(),
-    };
-    Some((
-        kind,
-        decided.other.iter().map(|term| term.term.clone()).collect(),
-        decided
-            .rendered
-            .iter()
-            .map(|(term, word)| format!("{} = {word}", term.term))
-            .collect(),
-    ))
 }
 
 /// Writes the corrections of a pack that passed the checks, each only while
 /// its translation is still the one the request was built from and not
-/// reviewed, so work saved meanwhile is kept, with the decisions on the
-/// terms it was asked about. An answer that left the translation as it was
-/// and decided no term is counted, not written.
+/// reviewed, so work saved meanwhile is kept. An answer that left the
+/// translation as it was is counted unchanged.
 async fn correct(
     shared: &Shared,
     built: &Built,
     answers: &HashMap<String, Answer>,
     rejected: Vec<Rejected>,
+    attempts: Attempts,
 ) -> Result<Done, ModelError> {
-    let mut unchanged = 0;
     let mut edits = Vec::new();
-    let mut decided: HashMap<&str, (Vec<String>, Vec<String>)> = HashMap::new();
     for (id, path, entry) in &built.strings {
         let Some(answer) = answers.get(id).filter(|answer| !answer.text.is_empty()) else {
             continue;
@@ -1267,27 +1224,19 @@ async fn correct(
         let Some(fix) = &shared.options.fix else {
             continue;
         };
-        let Some((kind, other, rendered)) =
-            correction_edit(fix, &shared.knowledge, &shared.target, entry, answer)
-        else {
-            unchanged += 1;
-            continue;
-        };
-        if !other.is_empty() || !rendered.is_empty() {
-            decided.insert(entry.context.as_str(), (other, rendered));
-        }
         edits.push(EntryEdit {
             path: path.clone(),
             context: entry.context.clone(),
             expected_text: entry.translation.clone(),
             expected_fuzzy: entry.fuzzy,
-            kind,
+            kind: correction_edit(fix, entry, answer),
         });
     }
     let asked = edits.len();
     let applied = {
         let session = Arc::clone(&shared.session);
-        tokio::task::spawn_blocking(move || session.apply_edits(&edits))
+        let knowledge = Arc::clone(&shared.knowledge);
+        tokio::task::spawn_blocking(move || session.apply_edits_with(&edits, &knowledge))
             .await
             .map_err(|error| ModelError::Invalid(error.to_string()))?
             .map_err(|error| ModelError::Invalid(error.to_string()))?
@@ -1298,9 +1247,6 @@ async fn correct(
             applied.skipped.len()
         ));
     }
-    // Every string of the run is counted once: an answer that changed
-    // nothing of its entry, or was not written, left it as it was.
-    unchanged += asked.saturating_sub(applied.done.len());
     let reasons: HashMap<&str, Option<String>> = built
         .strings
         .iter()
@@ -1309,49 +1255,49 @@ async fn correct(
             Some((entry.context.as_str(), answer.reason.clone()))
         })
         .collect();
-    let corrected = applied
+    // A changed text, or an adaptation that clears the fuzzy mark, is a
+    // correction; a record of the terms alone leaves the translation as it
+    // was.
+    let corrected: Vec<Corrected> = applied
         .done
         .iter()
-        .map(|done| {
-            let (other_meaning, rendered) = decided
-                .get(done.context.as_str())
-                .cloned()
-                .unwrap_or_default();
-            Corrected {
-                path: done.path.clone(),
-                context: done.context.clone(),
-                before: done.before.text.clone(),
-                after: done.after.text.clone(),
-                reason: reasons.get(done.context.as_str()).cloned().flatten(),
-                other_meaning,
-                // Only the words the entry keeps: one that cannot be
-                // written as a flag is not a decision.
-                rendered: rendered
-                    .into_iter()
-                    .filter(|named| {
-                        done.after
-                            .model_renderings
-                            .iter()
-                            .any(|kept| *named == format!("{} = {}", kept.term, kept.word))
-                    })
-                    .collect(),
-            }
+        .filter(|done| done.before.text != done.after.text || done.before.fuzzy != done.after.fuzzy)
+        .map(|done| Corrected {
+            path: done.path.clone(),
+            context: done.context.clone(),
+            before: done.before.text.clone(),
+            after: done.after.text.clone(),
+            reason: reasons.get(done.context.as_str()).cloned().flatten(),
         })
         .collect();
-    let decided = applied
-        .done
-        .iter()
-        .filter(|done| {
-            done.after
-                .model_exceptions
-                .iter()
-                .any(|exception| !done.before.model_exceptions.contains(exception))
-        })
-        .count();
+    let mut fates: HashMap<String, Fate> = HashMap::new();
+    for (id, _, entry) in &built.strings {
+        if answers
+            .get(id)
+            .is_some_and(|answer| !answer.text.is_empty())
+        {
+            fates.insert(entry.context.clone(), Fate::bare(StringOutcome::Unchanged));
+        }
+    }
+    for skipped in &applied.skipped {
+        fates.insert(skipped.context.clone(), Fate::bare(StringOutcome::Stale));
+    }
+    for done in &corrected {
+        fates.insert(
+            done.context.clone(),
+            Fate {
+                outcome: StringOutcome::Written,
+                after: Some(done.after.clone()),
+                reason: done.reason.clone(),
+            },
+        );
+    }
+    report_strings(shared, built, attempts, &rejected, fates);
+    // Every string of the run is counted once: an answer that changed
+    // nothing of its text, or was not written, left it as it was.
     Ok(Done {
-        written: applied.done.len(),
-        unchanged,
-        decided,
+        written: corrected.len(),
+        unchanged: asked.saturating_sub(corrected.len()),
         rejected,
         corrected,
     })
@@ -1369,6 +1315,26 @@ pub async fn run(session: Arc<Session>, codex: Arc<Codex>, options: Options, han
             started_at: now_millis(),
             ..Status::default()
         };
+    });
+    handle.report(&Record::Run {
+        version: crate::report::VERSION,
+        kind: if options.fix.is_some() {
+            RunKind::Fixing
+        } else {
+            RunKind::Translating
+        },
+        model: options.model.clone(),
+        effort: options.effort.clone(),
+        terms: options
+            .fix
+            .as_ref()
+            .and_then(|fix| fix.terms.clone())
+            .unwrap_or_default(),
+        started_at: handle.status().started_at,
+    });
+    handle.report(&Record::Options {
+        options: options.clone(),
+        continues: handle.continues.as_ref().map(|(report, _)| report.clone()),
     });
     handle.log(format_args!(
         "run: model {}, reasoning {}, {} paths{}{}",
@@ -1388,7 +1354,7 @@ pub async fn run(session: Arc<Session>, codex: Arc<Codex>, options: Options, han
     ));
     if let Some(fix) = &options.fix {
         handle.log(format_args!(
-            "correcting: {}{}{}{}",
+            "correcting: {}{}{}{}{}",
             match (fix.issues, fix.groups.len()) {
                 (false, _) => "problems only".to_owned(),
                 (true, 0) => "every issue".to_owned(),
@@ -1400,11 +1366,17 @@ pub async fn run(session: Arc<Session>, codex: Arc<Codex>, options: Options, han
                 ", with a request"
             } else {
                 ""
+            },
+            match &fix.terms {
+                None => String::new(),
+                Some(terms) if terms.is_empty() => ", following every term".to_owned(),
+                Some(terms) => format!(", following {} terms", terms.len()),
             }
         ));
     }
     let stop = drive(session, codex, options, &handle).await;
     handle.log(format_args!("stopped: {stop:?}"));
+    handle.report(&Record::Stop { stop: stop.clone() });
     handle.update(|status| {
         status.running = false;
         status.pace = 0;
@@ -1423,6 +1395,7 @@ async fn prepare(
     let prepared = {
         let session = Arc::clone(&session);
         let options = options.clone();
+        let run = Arc::clone(&run);
         tokio::task::spawn_blocking(move || {
             let batches = match &options.fix {
                 Some(fix) => {
@@ -1432,14 +1405,17 @@ async fn prepare(
                         session.root(),
                         &options.paths,
                         &options.contexts,
-                        &|entry| needs_fix(fix, &knowledge, &target, entry),
+                        &|entry| {
+                            !run.settled(&entry.context)
+                                && needs_fix(fix, &knowledge, &target, entry)
+                        },
                     )?
                 }
-                None => plan(
+                None => plan_of(
                     session.root(),
                     &options.paths,
-                    options.fuzzy,
                     &options.contexts,
+                    &|entry| !run.settled(&entry.context) && needs_work(entry, options.fuzzy),
                 )?,
             };
             Ok::<_, String>(batches)
@@ -1489,6 +1465,9 @@ async fn prepare(
 enum Next {
     Continue,
     Wait(Duration),
+    /// The plan's usage limit: the batch goes back, and the run waits until
+    /// the limit resets, at these Unix seconds when the service said.
+    Limit(Option<u64>),
     Stop(Stop),
 }
 
@@ -1499,7 +1478,7 @@ enum Next {
 /// next run.
 fn failed(error: ModelError, failures: &mut u32, pace: &mut usize, handle: &Run) -> Next {
     match error {
-        ModelError::UsageLimit { resets_at, .. } => Next::Stop(Stop::UsageLimit { resets_at }),
+        ModelError::UsageLimit { resets_at, .. } => Next::Limit(resets_at),
         ModelError::SignInRequired => Next::Stop(Stop::SignInRequired),
         error @ (ModelError::RateLimited { .. } | ModelError::Network(_) | ModelError::Timeout) => {
             *failures += 1;
@@ -1577,6 +1556,8 @@ fn pack(batches: VecDeque<Batch>) -> VecDeque<Pack> {
 struct Pace {
     now: usize,
     failures: u32,
+    /// When the last wait for the usage limit ended.
+    limit_waited: Option<std::time::Instant>,
 }
 
 /// The first pack of `queue` none of whose files has a batch in flight.
@@ -1644,32 +1625,20 @@ async fn drain(
                 } else {
                     (pace.now + 1).min(CEILING)
                 };
-                let now = pace.now;
-                handle.update(|status| {
-                    status.batches_done += 1;
-                    status.written += done.written;
-                    status.unchanged += done.unchanged;
-                    status.decided += done.decided;
-                    status.rejected += done.rejected.len();
-                    let room = LISTED_REJECTIONS.saturating_sub(status.rejections.len());
-                    status
-                        .rejections
-                        .extend(done.rejected.into_iter().take(room));
-                    let room = LISTED_CORRECTIONS.saturating_sub(status.corrections.len());
-                    status
-                        .corrections
-                        .extend(done.corrected.into_iter().take(room));
-                    status.pace = now;
-                    status.message = None;
-                });
+                count_done(handle, done, pace.now);
             }
             Err(error) => {
                 let retry = matches!(
                     error,
                     ModelError::RateLimited { .. } | ModelError::Network(_) | ModelError::Timeout
                 );
+                let message = error.to_string();
                 match failed(error, &mut pace.failures, &mut pace.now, handle) {
-                    Next::Continue => {}
+                    Next::Continue => handle.report(&Record::Left {
+                        paths: sent.iter().map(|batch| batch.path.clone()).collect(),
+                        strings: sent.iter().map(|batch| batch.contexts.len()).sum(),
+                        error: message,
+                    }),
                     Next::Wait(wait) => {
                         if retry {
                             queue.push_front(sent);
@@ -1682,6 +1651,13 @@ async fn drain(
                             }
                         }
                     }
+                    Next::Limit(resets_at) => {
+                        queue.push_front(sent);
+                        if !wait_for_limit(pace, handle, resets_at).await {
+                            running.abort_all();
+                            return Some(Stop::Cancelled);
+                        }
+                    }
                     Next::Stop(stop) => {
                         running.abort_all();
                         return Some(stop);
@@ -1689,6 +1665,75 @@ async fn drain(
                 }
             }
         }
+    }
+}
+
+/// Counts what a batch did in the run's status, at the pace `now`.
+fn count_done(handle: &Run, done: Done, now: usize) {
+    handle.update(|status| {
+        status.batches_done += 1;
+        status.written += done.written;
+        status.unchanged += done.unchanged;
+        status.rejected += done.rejected.len();
+        let room = LISTED_REJECTIONS.saturating_sub(status.rejections.len());
+        status
+            .rejections
+            .extend(done.rejected.into_iter().take(room));
+        let room = LISTED_CORRECTIONS.saturating_sub(status.corrections.len());
+        status
+            .corrections
+            .extend(done.corrected.into_iter().take(room));
+        status.pace = now;
+        status.message = None;
+    });
+}
+
+/// Waits for the plan's usage limit to reset, at `resets_at` when the
+/// service said, and goes on at the pace of one request; `false` when the
+/// run is cancelled meanwhile. The other requests in flight meet the same
+/// limit: one that fails just after a wait goes back without waiting again.
+async fn wait_for_limit(pace: &mut Pace, handle: &Run, resets_at: Option<u64>) -> bool {
+    if pace
+        .limit_waited
+        .is_some_and(|at| at.elapsed() < LIMIT_SETTLE)
+    {
+        return true;
+    }
+    pace.now = 1;
+    let wait = limit_wait(resets_at);
+    handle.log(format_args!(
+        "usage limit: waiting {} s for it to reset",
+        wait.as_secs()
+    ));
+    let until = now_millis() / 1000 + wait.as_secs();
+    handle.update(|status| {
+        status.pace = 1;
+        status.waiting_until = Some(until);
+    });
+    let waited = tokio::select! {
+        () = tokio::time::sleep(wait) => true,
+        () = handle.until_cancelled() => false,
+    };
+    handle.update(|status| status.waiting_until = None);
+    pace.limit_waited = Some(std::time::Instant::now());
+    waited
+}
+
+/// How long a usage-limit failure that follows a wait for the limit counts
+/// as one met before the wait ended.
+const LIMIT_SETTLE: Duration = Duration::from_secs(10);
+/// How long a run waits for a usage limit whose reset the service did not
+/// say, before it asks again.
+const LIMIT_RETRY: Duration = Duration::from_mins(15);
+/// What a run waits past the reset the service said.
+const LIMIT_MARGIN: Duration = Duration::from_secs(60);
+
+/// How long to wait for a usage limit that resets at `resets_at`, Unix
+/// seconds, when the service said.
+fn limit_wait(resets_at: Option<u64>) -> Duration {
+    match resets_at {
+        Some(at) => Duration::from_secs(at.saturating_sub(now_millis() / 1000)) + LIMIT_MARGIN,
+        None => LIMIT_RETRY,
     }
 }
 
@@ -1719,6 +1764,7 @@ async fn drive(
     let mut pace = Pace {
         now: 1,
         failures: 0,
+        limit_waited: None,
     };
     if let Some(stop) = drain(&shared, pack(batches.into()), &mut pace, handle).await {
         return stop;
@@ -1766,82 +1812,61 @@ mod tests {
     }
 
     #[test]
-    fn an_answer_decides_the_terms_it_was_asked_about() {
+    fn a_correction_of_terms_takes_the_strings_written_with_an_older_version() {
         let term = |term: &str, translation: &str| GlossaryEntry {
             term: term.to_owned(),
             translation: translation.to_owned(),
             ..GlossaryEntry::default()
         };
-        let knowledge = Knowledge {
+        let knowledge = |moghome: &str| Knowledge {
             terms: aeria_knowledge::Glossary::new(vec![
-                term("Astral Era", "Астральная эра"),
-                term("mount", "маунт"),
-                term("aether", "эфир"),
+                term("Moghome", moghome),
+                term("Kupo", "Купо"),
             ]),
             ..Knowledge::default()
         };
-        let asked: Vec<&GlossaryEntry> = knowledge.terms.entries.iter().take(2).collect();
-        let answer = Answer {
-            decisions: vec![
-                "the Sixth Astral Era = Астральной эры".to_owned(),
-                "Mount".to_owned(),
-                "mount = маунтовый".to_owned(),
-                "aether = эфирный".to_owned(),
-            ],
-            ..Answer::bare(None, String::new())
+        let before = knowledge("Моглин");
+        let mut entry = Entry {
+            source: "Kupo! Welcome to the Moghome.".to_owned(),
+            translation: "Купо! Добро пожаловать в Моглин.".to_owned(),
+            ..Entry::default()
         };
-        let decided = decisions(&asked, &knowledge, &answer);
-        assert_eq!(decided.other.len(), 1);
-        assert_eq!(decided.other[0].term, "mount");
-        // A name of several words is kept word by word, as a flag holds one;
-        // a term named as not applying is not rendered, and neither is one
-        // that was not asked about.
-        assert_eq!(
-            decided.words(asked[0]),
-            ["Астральной".to_owned(), "эры".to_owned()]
-        );
-        assert_eq!(decided.rendered.len(), 2);
+        entry.record_terms(&before.terms);
+        let fix = Fix {
+            terms: Some(Vec::new()),
+            ..Fix::default()
+        };
+        assert!(!needs_fix(&fix, &before, "ru", &entry));
+        let after = knowledge("Моглодом");
+        assert!(needs_fix(&fix, &after, "ru", &entry));
+        let items = fix_items(&fix, &after, "ru", &entry);
+        assert_eq!(items.len(), 1);
+        assert!(items[0].contains("\"Moghome\""), "{}", items[0]);
+        assert!(!items[0].contains("Kupo"), "{}", items[0]);
+        // Only the terms asked for; a reviewed translation is a person's.
+        let other = Fix {
+            terms: Some(vec!["kupo".to_owned()]),
+            ..Fix::default()
+        };
+        assert!(!needs_fix(&other, &after, "ru", &entry));
+        entry.set_reviewed(true);
+        assert!(!needs_fix(&fix, &after, "ru", &entry));
+        // A run that is not about terms does not take it.
+        entry.set_reviewed(false);
+        assert!(!needs_fix(&Fix::default(), &after, "ru", &entry));
     }
 
     #[test]
-    fn a_term_a_correction_takes_out_of_the_translation_is_decided_too() {
-        let term = |term: &str, translation: &str| GlossaryEntry {
-            term: term.to_owned(),
-            translation: translation.to_owned(),
-            ..GlossaryEntry::default()
-        };
-        let knowledge = Knowledge {
-            terms: aeria_knowledge::Glossary::new(vec![
-                term("Jadeite Flood", "Нефритовый разлив"),
-                term("Flood", "Потоп"),
-            ]),
-            ..Knowledge::default()
-        };
-        let entry = Entry {
-            source: "At the Jadeite Flood, on the shores of the Flood.".to_owned(),
-            translation: "У Нефритового потопа, на берегу.".to_owned(),
-            ..Entry::default()
-        };
-        let fix = Fix {
-            issues: true,
-            groups: vec!["termNotUsed".to_owned()],
-            proofread: false,
-            adapt: false,
-            request: None,
-        };
-        let asked = |text: &str| -> Vec<String> {
-            asked_terms(&fix, &knowledge, "ru", &entry, text)
-                .iter()
-                .map(|term| term.term.clone())
-                .collect()
-        };
-        assert_eq!(asked(&entry.translation), ["Jadeite Flood"]);
-        // The place's own name takes «потоп» out, which the other term was
-        // read in: the answer may now say that term means something else.
-        assert_eq!(
-            asked("У Нефритового разлива, на берегу."),
-            ["Jadeite Flood", "Flood"]
+    fn a_usage_limit_is_waited_for_until_it_resets() {
+        let now = now_millis() / 1000;
+        let wait = limit_wait(Some(now + 600));
+        assert!(
+            wait >= Duration::from_secs(600) && wait <= Duration::from_secs(661),
+            "{wait:?}"
         );
+        // A reset already past is asked again after the margin.
+        assert_eq!(limit_wait(Some(now.saturating_sub(10))), LIMIT_MARGIN);
+        assert_eq!(limit_wait(None), LIMIT_RETRY);
     }
 
     #[test]

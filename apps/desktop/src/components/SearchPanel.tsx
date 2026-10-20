@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { DropdownMenu } from "radix-ui";
-import { normalizeCommandError, projectEditUndo, projectReplaceApply, projectReplacePreview, projectRetranslate, projectSearch, projectSearchEntries, projectSearchPrepare, projectTermException, translationFix } from "../ipc";
+import { normalizeCommandError, projectEditUndo, projectReplaceApply, projectReplacePreview, projectRetranslate, projectSearch, projectSearchEntries, projectSearchPrepare, translationFix } from "../ipc";
 import type { BulkEditDto, CommandError, EntryRefDto, ReplaceChangeDto, SearchCheck, SearchEntryDto, SearchField, SearchFileDto, SearchHitDto, SearchQueryDto, SearchResultDto, SearchState, SourceBinding } from "../types";
-import { describeIssue, errorText, exceptionTerm, issueLabel } from "../issueText";
-import { choose, chosenByPath, commonTerm, groupBySheet, reconcileChosen, resultRows, sheetOpen, unchooseFiles, type Chosen, type GroupHits, type SheetGroup } from "../searchResults";
+import { describeIssue, errorText, issueLabel } from "../issueText";
+import { choose, chosenByPath, groupBySheet, reconcileChosen, resultRows, sheetOpen, unchooseFiles, type Chosen, type GroupHits, type SheetGroup } from "../searchResults";
 import type { MessageKey } from "../i18n/translate";
 import { useI18n } from "../ui/i18n";
 import { usePreferences } from "../ui/preferences";
@@ -15,7 +15,7 @@ import { FixDialog } from "./FixDialog";
 import { ReplacePreviewDialog } from "./ReplacePreviewDialog";
 import { useStickyState } from "./GitShared";
 import { SearchResultList, chooseKey, type SearchResultListHandle } from "./SearchResultList";
-import { ALL_TERMS, SearchIssuePicker } from "./SearchIssuePicker";
+import { SearchIssuePicker } from "./SearchIssuePicker";
 import { SearchScope, defaultFields, scopeNarrowed, type Scope } from "./SearchScope";
 import { throttled } from "../throttle";
 
@@ -316,13 +316,6 @@ export function SearchPanel({ onRevealBinding, onWorkspaceChanged, onOpenTransla
     });
   };
 
-  const exceptTermNow = async (entries: EntryRefDto[], term: string) => {
-    const edit = await projectTermException(entries, term, true);
-    describeEdit(edit, "search.excepted");
-    refresh();
-  };
-  const exceptTerm = (entries: EntryRefDto[], term: string) => void act("exception", () => exceptTermNow(entries, term));
-
   const undo = () => void act("undo", async () => {
     const edit = await projectEditUndo();
     describeEdit(edit, "search.undone");
@@ -447,17 +440,10 @@ export function SearchPanel({ onRevealBinding, onWorkspaceChanged, onOpenTransla
   };
 
   const translatedHits = useMemo(() => (result?.hits ?? []).filter((hit) => hit.translation !== ""), [result]);
-  // The chosen group is a term's: every string found can take an exception for it.
-  const groupTerm = useMemo(() => {
-    if (issueGroup === null) return null;
-    const issue = result?.issues.find((count) => count.issue.group === issueGroup)?.issue;
-    return issue ? exceptionTerm(issue) : null;
-  }, [issueGroup, result]);
   const chosen = useMemo(() => [...selected.values()], [selected]);
   const chosenCounts = useMemo(() => chosenByPath(selected), [selected]);
   const chosenOf = useCallback((paths: readonly string[]) => paths.reduce((sum, path) => sum + (chosenCounts.get(path) ?? 0), 0), [chosenCounts]);
   const chosenTranslated = chosen.filter((hit) => hit.translation !== "");
-  const chosenTerm = groupTerm ?? commonTerm(chosen);
   const disabled = busy !== null;
   // A cut result may have translations past the strings listed.
   const mayHaveTranslated = translatedHits.length > 0 || (result !== null && !complete);
@@ -478,11 +464,6 @@ export function SearchPanel({ onRevealBinding, onWorkspaceChanged, onOpenTransla
   const fixAll = () => void act("choose", async () => {
     const translated = await translatedOfResult();
     if (translated) setFixing(translated);
-  });
-
-  const exceptAll = (term: string) => void act("exception", async () => {
-    const translated = await translatedOfResult();
-    if (translated) await exceptTermNow(translated, term);
   });
 
   // The issues to choose from are those of the result without an issue
@@ -615,11 +596,6 @@ export function SearchPanel({ onRevealBinding, onWorkspaceChanged, onOpenTransla
                         <span className="menu-item-label">{t("search.fixAll")}</span>
                       </DropdownMenu.Item>
                     ) : null}
-                    {groupTerm !== null && mayHaveTranslated ? (
-                      <DropdownMenu.Item className="menu-item" disabled={result.cancelled} title={t("search.exceptAllTitle", { term: groupTerm })} onSelect={() => exceptAll(groupTerm)}>
-                        <span className="menu-item-label">{t("search.exceptAll", { term: groupTerm })}</span>
-                      </DropdownMenu.Item>
-                    ) : null}
                   </DropdownMenu.Content>
                 </DropdownMenu.Portal>
               </DropdownMenu.Root>
@@ -649,7 +625,6 @@ export function SearchPanel({ onRevealBinding, onWorkspaceChanged, onOpenTransla
               onChooseGroup={chooseGroup}
               onReplaceOne={replaceOne}
               onReplaceGroup={(group) => openPreview({ paths: group.files.map((file) => file.path) })}
-              onExcept={(hit, term) => exceptTerm([entryRef(hit)], term)}
               onRetranslate={(hit) => setRetranslate([entryRef(hit)])}
               onFix={(hit) => setFixing([entryRef(hit)])}
               onExit={() => inputRef.current?.focus()}
@@ -692,9 +667,6 @@ export function SearchPanel({ onRevealBinding, onWorkspaceChanged, onOpenTransla
           <button className="button button-ghost" type="button" disabled={disabled || chosenTranslated.length === 0} onClick={() => setRetranslate(chosenTranslated.map(entryRef))}>
             <UiIcon icon="sparkles" size="sm" />{t("search.retranslateChosen")}
           </button>
-          <button className="button button-ghost" type="button" disabled={disabled || chosenTerm === null} title={chosenTerm === null ? t("search.exceptChosenNoTerm") : t("search.exceptAllTitle", { term: chosenTerm })} onClick={() => { if (chosenTerm !== null) exceptTerm(chosen.map(entryRef), chosenTerm); }}>
-            <UiIcon icon="bookX" size="sm" />{chosenTerm === null ? t("search.exceptChosenNone") : t("search.exceptChosen", { term: chosenTerm })}
-          </button>
           {learned ? null : (
             <span className="search-footer-keys">
               <span><kbd>{chooseKey}</kbd>{t("search.keys.add")}</span>
@@ -707,7 +679,7 @@ export function SearchPanel({ onRevealBinding, onWorkspaceChanged, onOpenTransla
       <FixDialog
         count={fixing?.length ?? null}
         fuzzy={fixing?.filter((entry) => entry.expectedFuzzy).length ?? 0}
-        issue={query.issue === ALL_TERMS ? t("search.issue.allTerms") : chosenIssue ? issueLabel(chosenIssue, t) : null}
+        issue={chosenIssue ? issueLabel(chosenIssue, t) : null}
         issuesFirst={check !== "any"}
         onCancel={() => setFixing(null)}
         onFix={(issues, proofread, adapt, request) => { if (fixing) startFix(fixing, issues, proofread, adapt, request); }}

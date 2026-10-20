@@ -109,9 +109,8 @@ msgstr "Ателина из Гильдии лучников хочет убед�
 | `#.` lines | the other client languages, the speaker or kind of line, the row's other cells, what the macros do | Aeria, from the game; never edited by hand |
 | `# ` lines | translator notes | people |
 | `#, fuzzy` and `#\| msgid` | a game update changed the source; `#\| msgid` is the source the translation was written for | Aeria, in a game update |
+| `# aeria-terms: {…}` | the terms the translation was written with, each with its fingerprint; see [Terms written with](#terms-written-with) | Aeria, whenever a translation is written |
 | `#, aeria-term-exception: <term>` | a term of the glossary does not apply to this string; see [Term exceptions](#term-exceptions) | people, through Aeria |
-| `#, aeria-term-model-exception: <term> <fingerprint>` | a correction run's model decided a term of the glossary does not apply to this string; see [Model exceptions](#model-exceptions) | machine translation, when correcting |
-| `#, aeria-term-model-rendering: <term> <fingerprint> <word>` | a correction run's model decided that this word of the translation renders a term of the glossary; see [Model renderings](#model-renderings) | machine translation, when correcting |
 | `#, aeria-reviewed: <fingerprint>` | a person reviewed the translation whose fingerprint this is; see [Reviews](#reviews) | people, through Aeria |
 | `msgctxt` | the entry's identity; see [Identity](#identity) | Aeria |
 | `msgid` | the source text as macro text ([`strings.md`](./strings.md#macro-text)) | Aeria |
@@ -119,13 +118,10 @@ msgstr "Ателина из Гильдии лучников хочет убед�
 
 `fuzzy` states a fact of the game, not an opinion of a translator: the
 source changed after the translation was written. Term exceptions and the
-review mark are the decisions of a person that Aeria reads, and model
-exceptions and model renderings the decisions of a correction run: all are
-flags of the same `#,` line, `fuzzy` first, then one `aeria-term-exception`
-flag per term in the order they were added, then one
-`aeria-term-model-exception` flag per term, then one
-`aeria-term-model-rendering` flag per word, then the review mark
-(`#, fuzzy, aeria-term-exception: the Maelstrom, aeria-term-model-exception: mount 1d4e0f7a9c2b, aeria-term-model-rendering: aether 7c1e44a0b9d3 эфирный, aeria-reviewed: 3f9a1c0b7d2e`).
+review mark are the decisions of a person that Aeria reads: all are flags of
+the same `#,` line, `fuzzy` first, then one `aeria-term-exception` flag per
+term in the order they were added, then the review mark
+(`#, fuzzy, aeria-term-exception: the Maelstrom, aeria-reviewed: 3f9a1c0b7d2e`).
 Aeria keeps no other flag; a file written by another tool loses its other
 flags when Aeria writes it.
 
@@ -133,13 +129,12 @@ flags when Aeria writes it.
 
 A glossary term can mean something else in a string: `maelstrom` is the
 Grand Company in one string and a whirlpool in another. A person marks such a
-string with an exception for the term. In that string the checks do not ask
-for the term's translation, and machine translation
+string with an exception for the term. In that string machine translation
 is told the term does not apply (see
-[`translate.md`](./translate.md#the-request)). Only a person adds or removes
-an exception, from the editor or from search; machine translation records
-its own decisions apart, as [model exceptions](#model-exceptions), and a
-person's exception always comes first.
+[`translate.md`](./translate.md#the-request)), and the string is not asked to
+follow it when the term changes (see [Terms written with](#terms-written-with)).
+Only a person adds or removes an exception, in the string guide or from
+search.
 
 The flag holds the term's headword as the glossary writes it and is
 compared ignoring case; a flag naming another form of the term counts for
@@ -150,82 +145,52 @@ source (see [Game updates](#game-updates)). An exception that names no term
 of the source, because the term left the glossary or matches no longer, is
 advice.
 
-### Model exceptions
+### Terms written with
 
-A correction run decides, for each term the checks find unused in a
-translation, whether the term applies to the string (see
-[`translate.md`](./translate.md#deciding-terms)). A term it decides does not
-apply gets a model exception: the flag holds the term's headword and the
-fingerprint of the term's glossary entry it was decided for, the first twelve
-hexadecimal digits of the SHA-256 of the entry's headword, translation,
-forms, note, and case (`aeria_po::term_fingerprint`); the note is the
-entry's own, without the note of its category, so a change of a category's
-note does not end the decisions on the project's terms of it (see
-[`../formats/knowledge-v1.md`](../formats/knowledge-v1.md#the-terms-of-the-sheets)). A name with several meanings has the fingerprint of the fingerprints
-and categories of all its meanings in order (`aeria_po::name_fingerprint`):
-the category of a name's one meaning does not change it. A model exception
-works as a term exception while it holds: the glossary still has the term
-and its meanings have that fingerprint. Another translation, form, note, or
-case of the term, a meaning added or removed, or another category of a name
-with several meanings ends every decision made for the old one: the checks ask for the term again, and the next correction run
-decides again, so a better note reaches every string it concerns.
+Each translated entry records the terms its translation was written with:
+one `# aeria-terms:` comment line after the translator notes, a JSON object
+of every glossary term of its source, but for the terms a person made an
+exception for, by headword, each name once, with the fingerprint of the
+name as the glossary had it then:
 
-The model's decisions on chosen terms can also be dropped on request, for
-a category whose note changed in meaning (**Decide again with AI** in the
-glossary, `Session::forget_model_decisions`): every string's model
-exceptions and renderings of those terms, by headword, ignoring case, are
-removed, so the checks ask for the terms again and the next correction run
-decides them anew. A person's exceptions stay, and a reviewed translation's
-decisions are a person's and stay too. The drop is a bulk edit like a
-search's replacement: it becomes the edit **Undo** of the search reverts.
+```po
+# aeria-terms: {"Kupo":"7c1e44a0b9d3","Moghome":"1d4e0f7a9c2b"}
+```
 
-A person's decision comes first. The model adds no exception for a term the
-person made one for; a person who adds or removes an exception for a term
-removes its model exception, so **Restore** in the string guide gives the
-term back to the string, and **Confirm** makes the model's decision the
-person's. A decision that a term applies removes the string's model
-exception for it. A model exception stays when the translation changes and
-is dropped when a game update changes the source, as a term exception is;
-one that no longer holds or names no term of the source is not advice, since
-a later run replaces it. No identity, game update, merge, or export depends
-on a model exception: only the checks, machine translation, and the string
-guide read it.
+A term's fingerprint is the first twelve hexadecimal digits of the SHA-256
+of what a translation takes from it: its translation and note
+(`aeria_po::term_fingerprint`). Its headword, forms, and case say where the
+term is found, not how it is written, so a project term removed for a term
+the sheets give alike leaves its strings current. The note is the term's
+own, without the note of its category, so a change of a category's note
+leaves the record as it is (see
+[`../formats/knowledge-v1.md`](../formats/knowledge-v1.md#the-terms-of-the-sheets)).
+A name with several meanings has the fingerprint of the fingerprints and
+categories of all its meanings in order (`aeria_po::name_fingerprint`). The
+keys are in byte order, so the same record is the same line.
 
-### Model renderings
+The record is written whenever a translation is: by machine translation, by
+a correction or an adaptation, also one that answers the translation
+unchanged (it already follows the terms), when a person saves a translation
+or marks it reviewed, and by a bulk replacement. Clearing a translation
+removes it. A term exception added or removed leaves it as it is. It stays
+when a game update keeps the source and is dropped when the update changes
+the source, as term exceptions are; Git's per-string merge takes it with the
+translation it belongs to (see [`git.md`](./git.md#per-string-merge)).
 
-A sentence can need another word made from a term's translation, as the
-adjective of a noun: *Aether Compressor* is «Эфирный компрессор» where
-`aether` is «эфир». The term applies and the translation follows the
-glossary, but the checks read a term's translation only as written or
-inflected (see
-[`../formats/glossary-v1.md`](../formats/glossary-v1.md#matching)). A
-correction run that decides such a word renders the term (see
-[`translate.md`](./translate.md#deciding-terms)) records it as a model
-rendering: the flag holds the term's headword, the fingerprint of the term's
-glossary entry it was decided for, as a model exception does, and the word,
-one word without spaces.
-
-A model rendering holds while the glossary still has the term and its entry
-has that fingerprint. While it holds and the translation has the word, as
-written or inflected, the checks count the term's translation as used. A
-translation that loses the word gets the advice again.
-
-Whether the word renders the term is the model's judgment, as whether a
-term applies is: the instructions ask for a word of the same root as the
-term's translation («эфирный» for «эфир», «гарлеанский» for «гарлеанец»)
-and never a synonym, and no check compares the two. What is checked is that
-the translation has the word. A wrong decision hides only advice; a person
-reads each one in the run's corrections and in Git.
-
-The model writes renderings only for a term that applies: a decision that a
-term does not apply removes the string's renderings of it, and each decision
-on a term replaces the ones before. A person who adds or removes an
-exception for a term removes its model renderings, so **Restore** beside a
-rendering in the string guide takes the decision back. A model rendering
-stays when the translation changes and is dropped when a game update changes
-the source; one that no longer holds is not advice. No identity, game
-update, merge, or export depends on a model rendering: only the checks,
-machine translation, and the string guide read it.
+A term is *current* in a string when the record names it by any of its
+forms, its headword included, ignoring case, with the fingerprint the term
+has now (`Entry::outdated_terms`). A string where a term is found that its
+record does not name, because the term or a form of it is new, was written
+before it was that term. A translation not reviewed that uses a term that
+is not current was written with an older version of it, or before it was a
+term: the glossary counts such strings per term and brings them to the term
+with a correction run (see
+[`translate.md`](./translate.md#following-changed-terms)). A term that left
+the glossary asks for nothing. The record is bookkeeping, not a judgment of
+the translation: no check reads it, and no identity, game update, merge
+decision, or export depends on it. A comment that reads as `aeria-terms:`
+but is not such an object is a translator note.
 
 Entries are ordered as the game orders them: play order in a scene, row and
 column order elsewhere. The `#.` lines are derived only from the game, so
@@ -353,33 +318,25 @@ when it:
 - breaks the assisted structure policy of [`strings.md`](./strings.md): the
   source's macros, as game data, must stay;
 - has a line break its source does not have (the game breaks lines with
-  `<br>`);
-- for Russian, writes both genders at once (`готов(а)`);
-- for a language written in Cyrillic, has a slip of letters the source does
-  not have: a stress or other combining mark (`эле́зен`), a word that mixes
-  Cyrillic with Latin or Greek letters (`Танalanе`), or letters of another
-  writing system (`цели无属性`). A letter the source spells with, such as the
-  æ of Pandæmonium, is not a slip.
+  `<br>`).
+
+The checks refuse only what is broken whatever the translation says. Whether
+a translation renders its terms, follows the style, agrees with the player
+character, or reads naturally is not checked: no deterministic rule tells
+it, and the model and the person judge it (see
+[`translate.md`](./translate.md)).
 
 Each problem and piece of advice is an `Issue` with its data and its English
 message, so an interface can word it in its own language (see
 [`search.md`](./search.md#project-search)).
 
-Advice does not make a translation wrong: a term whose translation does not
-seem to be used, or is used in another case than the terms write it (see
-[`../formats/glossary-v1.md`](../formats/glossary-v1.md#matching)), a word written twice in a row with only spaces between in
-either reading of the conditions (each condition's first branch, or each
-one's last; not a word the source repeats, nor a name written twice with
-capitals, as a Lalafell's: Гун Гун), a condition on the player character's gender that may be
-missing, machine phrasing, a term exception that names no term of the
-source, an interface label or a name of a world object longer than its
-budget (see [`translate.md`](./translate.md#interface-labels) and
-[names in the world](./translate.md#names-in-the-world)). Advice is for the
-person who reviews a translation: saving, export, `aeria-guard`, and the
-checks of machine translation ignore it, and it is sent to a model only
-when a person asks machine translation to correct a translation with it (see
-[`translate.md`](./translate.md#correcting-translations)); machine
-translation holds its own answers to the length budget. A file has
+Advice does not make a translation wrong: a term exception that names no
+term of the source, and a name of a world object longer than the game shows
+(see [names in the world](./translate.md#names-in-the-world)). Advice is for
+the person who reviews a translation: saving, export, and `aeria-guard`
+ignore it. Machine translation is refused for a name longer than the game
+shows; the length of an interface label is guidance for it, not a check
+(see [`translate.md`](./translate.md#interface-labels)). A file has
 a problem when a line breaks the PO
 format or is a Git conflict marker, or a `msgctxt` is not an identity or
 appears twice.
@@ -404,7 +361,7 @@ reverted. The desktop offers it when it opens a project for an older version.
    | Previous entry | New entry with the same `msgctxt` | Result |
    | --- | --- | --- |
    | same `msgid` | exists | translation, notes, and marks are kept |
-   | other `msgid` | exists | translation, notes, and review mark are kept; `#, fuzzy` and `#\| msgid` with the previous source; term exceptions, model exceptions, and model renderings are dropped |
+   | other `msgid` | exists | translation, notes, and review mark are kept; `#, fuzzy` and `#\| msgid` with the previous source; term exceptions and the record of the terms written with are dropped |
    | any | none | the entry becomes obsolete (`#~`) at the end of its file, with its translation and notes |
    | none | exists | a new entry with an empty `msgstr` |
 

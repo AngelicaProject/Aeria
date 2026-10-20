@@ -70,9 +70,11 @@ category give one term:
   spellings of the name are its forms; a name matches as a sheet writes
   it, with its case but for a capital first letter, so `In the Mist` is not
   the words of a sentence;
-- its category is the sheets' category, and its note the sheets' note, then
-  the translator notes of its strings (their `# ` lines), each once, each
-  on its own line.
+- its category is the sheets' category; the sheets' note is the note of
+  its category, said before its own, and its own note is the translator
+  notes of its strings (their `# ` lines), each once, each on its own line.
+  A change of a sheet's note, like a change of a category's note, leaves
+  the translations written with the term current.
 
 A name translated alike in several categories, ignoring case, is one term,
 of the category where it first appears: a character and the same character
@@ -84,9 +86,9 @@ category's declared sheets, each once, in the order they are declared,
 then the lines of its own note the category does not already say, each on
 its own line. The category's note is said wherever the term is explained,
 to machine translation and in the string guide, but is not part of the
-record as written: `terms.csv` keeps its own note, and a model's decision
-on the term holds while its own note is unchanged (see
-[`../architecture/po-project.md`](../architecture/po-project.md#model-exceptions)).
+record as written: `terms.csv` keeps its own note, and a translation
+written with the term stays current while its own note is unchanged (see
+[`../architecture/po-project.md`](../architecture/po-project.md#terms-written-with)).
 
 A record of `terms.csv` with the name as its headword or a form, ignoring
 case, takes the place of the sheets' term of that name in its own category,
@@ -95,6 +97,9 @@ meaning of the name. The terms of the
 sheets come after those of `terms.csv`, in the order their names first
 appear. A record that takes a name's place with the same translation, no
 note, and no other forms than the sheets' spellings of the name says no
-more than the sheets: taking it out of `terms.csv` changes nothing. As for any term, the note goes to machine translation and to the
-string guide, and a change of a term's translation, form, note, or category
-asks a correction run to decide its strings again.
+more than the sheets: taking it out of `terms.csv` changes nothing, and the
+strings written with it stay current. As for any term, the note goes to
+machine translation and to the string guide, and a change of a term's
+translation or own note makes the strings written with it be on an old
+version (see
+[`../architecture/po-project.md`](../architecture/po-project.md#terms-written-with)).

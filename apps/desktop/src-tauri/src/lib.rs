@@ -13,6 +13,7 @@ mod hints;
 mod macros;
 mod paths;
 mod project_changes;
+mod report;
 mod scene;
 mod search;
 mod source;
@@ -71,13 +72,14 @@ pub use guard_workflow::{
 };
 pub use guide::{
     ProjectKnowledgeDto, TermInput, project_knowledge, save_knowledge_sheets, save_knowledge_style,
-    save_knowledge_terms, string_binding, term_strings, term_unapplied, term_unapplied_strings,
+    save_knowledge_terms, string_binding, term_outdated, term_outdated_strings, term_strings,
     term_usage,
 };
+pub use report::{run_report, run_reports, translation_continue};
 pub use search::{
-    SearchState, project_edit_undo, project_forget_model_decisions, project_replace_apply,
-    project_replace_preview, project_retranslate, project_search, project_search_cancel,
-    project_search_entries, project_search_prepare, project_term_exception,
+    SearchState, project_edit_undo, project_replace_apply, project_replace_preview,
+    project_retranslate, project_search, project_search_cancel, project_search_entries,
+    project_search_prepare, project_term_exception,
 };
 pub use state::{Activity, DesktopState};
 pub use translate::{
@@ -213,8 +215,8 @@ pub fn run() {
             save_knowledge_sheets,
             term_usage,
             term_strings,
-            term_unapplied,
-            term_unapplied_strings,
+            term_outdated,
+            term_outdated_strings,
             string_binding,
             export_overview,
             export_save_settings,
@@ -239,6 +241,9 @@ pub fn run() {
             model_list,
             translation_start,
             translation_status,
+            run_reports,
+            run_report,
+            translation_continue,
             translation_retry,
             translation_fix,
             translation_fix_string,
@@ -252,7 +257,6 @@ pub fn run() {
             project_edit_undo,
             project_retranslate,
             project_term_exception,
-            project_forget_model_decisions
         ])
         .run(tauri::generate_context!())
         .expect("failed to run Aeria desktop application");

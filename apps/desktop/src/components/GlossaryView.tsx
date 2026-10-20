@@ -21,10 +21,10 @@ import {
   rowsFromEntries,
   sheetItems,
   sortItems,
-  unappliedOf,
+  outdatedOf,
   usageKey,
 } from "../glossaryModel";
-import { normalizeCommandError, projectForgetModelDecisions, projectKnowledge, saveKnowledgeSheets, saveKnowledgeTerms, stringBinding, termUnapplied, termUnappliedStrings, termUsage, translationFix, translationStatus } from "../ipc";
+import { normalizeCommandError, projectKnowledge, saveKnowledgeSheets, saveKnowledgeTerms, stringBinding, termOutdated, termOutdatedStrings, termUsage, translationFix, translationStatus } from "../ipc";
 import type { CommandError, ProjectKnowledgeDto, SourceBinding, TermKey, TermSheetDto, TranslationStatus } from "../types";
 import { useI18n } from "../ui/i18n";
 import { usePreferences } from "../ui/preferences";
@@ -34,7 +34,7 @@ import { ConfirmDialog } from "./ConfirmDialog";
 import { ErrorBanner } from "./ErrorBanner";
 import { BulkDetail, CategorySettings, EntryDetail, SheetSettings, SheetTermDetail, type Sense } from "./GlossaryDetail";
 import { GlossaryFacets } from "./GlossaryFacets";
-import { FixControls, type FixBlock, RunPanel, UnappliedStrings } from "./GlossaryFix";
+import { FixControls, type FixBlock, RunPanel, OutdatedStrings } from "./GlossaryFix";
 import { GlossaryTable, type GlossaryTableHandle } from "./GlossaryTable";
 
 export type GlossaryViewHandle = {
@@ -59,6 +59,8 @@ type GlossaryViewProps = {
   onFilesChanged: () => void;
   /** Opens the settings of machine translation, to choose a model. */
   onOpenSettings: () => void;
+  /** Opens a run's report in a tab of its own. */
+  onOpenReport: (reportId: string, label: string) => void;
   focus: GlossaryFocus | null;
 };
 
@@ -75,7 +77,7 @@ const noSelection: Selection = { ids: new Set(), active: null };
  * fields beside it. Edits to the project's terms are saved together;
  * declared sheets are saved at once.
  */
-export const GlossaryView = forwardRef<GlossaryViewHandle, GlossaryViewProps>(function GlossaryView({ active, revision, sheetNames, onRevealBinding, onDirtyChange, onSaved, onFilesChanged, onOpenSettings, focus }, ref) {
+export const GlossaryView = forwardRef<GlossaryViewHandle, GlossaryViewProps>(function GlossaryView({ active, revision, sheetNames, onRevealBinding, onDirtyChange, onSaved, onFilesChanged, onOpenSettings, onOpenReport, focus }, ref) {
   const { t } = useI18n();
   const { preferences } = usePreferences();
   const [saved, setSaved] = useState<ProjectKnowledgeDto | null>(null);
@@ -88,22 +90,20 @@ export const GlossaryView = forwardRef<GlossaryViewHandle, GlossaryViewProps>(fu
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<{ title: string; error: CommandError } | null>(null);
   const [confirm, setConfirm] = useState<{ message: string; label?: string; run: () => void } | null>(null);
-  // What the last drop of the model's decisions on a category did.
-  const [forgotten, setForgotten] = useState<{ category: string; message: string } | null>(null);
   const [filter, setFilter] = useState<GlossaryFilter>(emptyGlossaryFilter);
   const [sort, setSort] = useState<GlossarySort>({ key: "order", descending: false });
   const [selection, setSelection] = useState<Selection>(noSelection);
   const [usage, setUsage] = useState<ReadonlyMap<string, number> | null>(null);
   const [counting, setCounting] = useState(false);
-  // How many translations do not use each term, by name; null until counted.
-  const [unapplied, setUnapplied] = useState<ReadonlyMap<string, number> | null>(null);
+  // How many translations were written with another version of each term, by name; null until counted.
+  const [outdated, setOutdated] = useState<ReadonlyMap<string, number> | null>(null);
   const [checking, setChecking] = useState(false);
   // Counts read before the terms changed stay shown until counted again, so
   // a save neither empties a view of them nor reorders the list twice.
   const [usageStale, setUsageStale] = useState(false);
-  const [unappliedStale, setUnappliedStale] = useState(false);
-  const recount = useCallback(() => { setUsageStale(true); setUnappliedStale(true); }, []);
-  // A correction run the glossary started, with the terms it decides, and
+  const [outdatedStale, setOutdatedStale] = useState(false);
+  const recount = useCallback(() => { setUsageStale(true); setOutdatedStale(true); }, []);
+  // A correction run the glossary started, with the terms it follows, and
   // whether another run goes.
   const [run, setRun] = useState<{ terms: string[]; status: TranslationStatus | null } | null>(null);
   const [otherRun, setOtherRun] = useState(false);
@@ -142,7 +142,7 @@ export const GlossaryView = forwardRef<GlossaryViewHandle, GlossaryViewProps>(fu
   const entries = useMemo(() => entryItems(rows, problems, saved?.replaced ?? [], saved?.redundant ?? [], savedKeys), [problems, rows, saved, savedKeys]);
   const items = useMemo(() => [...entries, ...fromSheets], [entries, fromSheets]);
   const byId = useMemo(() => new Map(items.map((item) => [item.id, item])), [items]);
-  const counts = useMemo(() => facetCounts(items, unapplied), [items, unapplied]);
+  const counts = useMemo(() => facetCounts(items, outdated), [items, outdated]);
   const query = useDeferredValue(filter.query);
   // The active term stays in the list while it is edited and saved, though
   // it no longer matches; choosing another term or changing the filter
@@ -150,7 +150,7 @@ export const GlossaryView = forwardRef<GlossaryViewHandle, GlossaryViewProps>(fu
   const [kept, setKept] = useState<{ id: string | null; filter: GlossaryFilter }>({ id: selection.active, filter });
   if (kept.id !== selection.active) setKept({ id: selection.active, filter });
   const keep = kept.filter === filter ? kept.id : null;
-  const shown = useMemo(() => sortItems(filterItems(items, { ...filter, query }, unapplied, keep), sort, usage), [filter, items, keep, query, sort, unapplied, usage]);
+  const shown = useMemo(() => sortItems(filterItems(items, { ...filter, query }, outdated, keep), sort, usage), [filter, items, keep, query, sort, outdated, usage]);
   const categoryNames = useMemo(() => counts.categories.map((category) => category.label), [counts]);
   const sheets = useMemo(() => saved?.sheets ?? [], [saved]);
 
@@ -170,19 +170,19 @@ export const GlossaryView = forwardRef<GlossaryViewHandle, GlossaryViewProps>(fu
     if (active && saved && (usage === null || usageStale) && !counting) countUsage();
   }, [active, countUsage, counting, saved, usage, usageStale]);
 
-  // The translations that do not use a term are found by the checks, once
-  // the terms are read and again after a run.
-  const checkUnapplied = useCallback(() => {
+  // The translations written with another version of a term are counted
+  // once the terms are read, and again after a run.
+  const checkOutdated = useCallback(() => {
     setChecking(true);
-    setUnappliedStale(false);
-    void termUnapplied()
-      .then((found) => setUnapplied(new Map(found.map((term) => [usageKey(term.term, term.category), term.strings]))))
-      .catch((reason: unknown) => { setUnapplied(new Map()); setError({ title: t("glossary.loadError"), error: normalizeCommandError(reason) }); })
+    setOutdatedStale(false);
+    void termOutdated()
+      .then((found) => setOutdated(new Map(found.map((term) => [usageKey(term.term, term.category), term.strings]))))
+      .catch((reason: unknown) => { setOutdated(new Map()); setError({ title: t("glossary.loadError"), error: normalizeCommandError(reason) }); })
       .finally(() => setChecking(false));
   }, [t]);
   useEffect(() => {
-    if (active && saved && (unapplied === null || unappliedStale) && !checking) checkUnapplied();
-  }, [active, checkUnapplied, checking, saved, unapplied, unappliedStale]);
+    if (active && saved && (outdated === null || outdatedStale) && !checking) checkOutdated();
+  }, [active, checkOutdated, checking, saved, outdated, outdatedStale]);
 
   // A run of the glossary is read every second until it ends; then what it
   // wrote reaches the editor and the counts.
@@ -219,20 +219,18 @@ export const GlossaryView = forwardRef<GlossaryViewHandle, GlossaryViewProps>(fu
 
   const block: FixBlock = !preferences.translationModel ? "noModel" : otherRun || runGoing ? "running" : dirty ? "unsaved" : null;
 
-  /** Corrects the translations that do not use the meanings `terms`, or any term when empty. */
+  /** Brings the translations written with another version of the meanings `terms`, or of any term when empty, to the terms as they are. */
   const fix = (terms: TermKey[], request: string | null) => {
     if (block !== null || starting) return;
     setStarting(true);
     setError(null);
     void (async () => {
       try {
-        const strings = await termUnappliedStrings(terms);
-        if (strings.length === 0) { checkUnapplied(); return; }
+        const strings = await termOutdatedStrings(terms);
+        if (strings.length === 0) { checkOutdated(); return; }
         const paths = [...new Set(strings.map((string) => string.path))];
-        // The checks group a term's advice by its name.
-        const names = [...new Set(terms.map((term) => term.term.toLowerCase()))];
-        const groups = names.length > 0 ? names.map((name) => `termNotUsed:${name}`) : ["termNotUsed"];
-        await translationFix(paths, strings.map((string) => string.context), { issues: true, groups, proofread: false, adapt: false, request }, preferences.translationModel, preferences.translationEffort || null);
+        const names = [...new Set(terms.map((term) => term.term))];
+        await translationFix(paths, strings.map((string) => string.context), { issues: false, groups: [], proofread: false, adapt: false, request, terms: names }, preferences.translationModel, preferences.translationEffort || null);
         setRun({ terms: [...new Set(terms.map((term) => term.term))], status: null });
       } catch (reason) {
         setError({ title: t("glossary.fix.error"), error: normalizeCommandError(reason) });
@@ -397,30 +395,6 @@ export const GlossaryView = forwardRef<GlossaryViewHandle, GlossaryViewProps>(fu
       .finally(() => setBusy(false));
   };
 
-  // The model's decisions on a category's terms are dropped, for the next
-  // correction run to decide them anew.
-  const forget = (key: string, label: string) => {
-    setConfirm({
-      message: t("glossary.category.forgetConfirm", { category: label }),
-      label: t("glossary.category.forgetRun"),
-      run: () => {
-        setBusy(true);
-        setError(null);
-        setForgotten(null);
-        void projectForgetModelDecisions(label)
-          .then((result) => {
-            const skipped = result.skipped.length > 0 ? ` ${t("glossary.category.forgottenSkipped", { count: result.skipped.length })}` : "";
-            setForgotten({ category: key, message: t("glossary.category.forgotten", { count: result.done }) + skipped });
-            onFilesChanged();
-            recount();
-            setStringsRevision((value) => value + 1);
-          })
-          .catch((reason: unknown) => setError({ title: t("glossary.category.forgetError"), error: normalizeCommandError(reason) }))
-          .finally(() => setBusy(false));
-      },
-    });
-  };
-
   const openString = (context: string) => {
     void stringBinding(context)
       .then((binding) => { if (binding) onRevealBinding(binding); })
@@ -493,12 +467,12 @@ export const GlossaryView = forwardRef<GlossaryViewHandle, GlossaryViewProps>(fu
     ...(filter.sheet === null ? [] : [{ key: "sheet", label: filter.sheet, clear: () => setFilter((current) => ({ ...current, sheet: null })) }]),
   ];
 
-  const unappliedFor = (item: GlossaryItem) => {
-    const count = unappliedOf(item, unapplied);
+  const outdatedFor = (item: GlossaryItem) => {
+    const count = outdatedOf(item, outdated);
     const key = { term: itemTerm(item), category: itemCategory(item) };
-    return <UnappliedStrings term={key} count={count} revision={stringsRevision} block={block} busy={starting} onFix={(request) => fix([key], request)} onOpen={openString} onOpenSettings={onOpenSettings} />;
+    return <OutdatedStrings term={key} count={count} revision={stringsRevision} block={block} busy={starting} onFix={(request) => fix([key], request)} onOpen={openString} onOpenSettings={onOpenSettings} />;
   };
-  const keysOf = (list: readonly GlossaryItem[]): TermKey[] => list.filter((item) => unappliedOf(item, unapplied) > 0).map((item) => ({ term: itemTerm(item), category: itemCategory(item) }));
+  const keysOf = (list: readonly GlossaryItem[]): TermKey[] => list.filter((item) => outdatedOf(item, outdated) > 0).map((item) => ({ term: itemTerm(item), category: itemCategory(item) }));
   const chosenKeys = keysOf(chosen);
 
   const detail = (() => {
@@ -508,11 +482,11 @@ export const GlossaryView = forwardRef<GlossaryViewHandle, GlossaryViewProps>(fu
     }
     if (activeItem?.kind === "entry") {
       const category = activeItem.row.category;
-      return <EntryDetail key={activeItem.id} item={activeItem} sheetsGive={sheetsGive(activeItem)} fix={unappliedFor(activeItem)} categories={categoryNames} senses={sensesOf(activeItem)} disabled={busy} categoryNote={categoryNote(sheets, category)} onChange={(patch) => change(activeItem.row.key, patch)} onRemove={() => remove([activeItem.row.key])} onOpen={openString} onChoose={chooseOnly} onOpenCategory={() => openCategory(category)} />;
+      return <EntryDetail key={activeItem.id} item={activeItem} sheetsGive={sheetsGive(activeItem)} fix={outdatedFor(activeItem)} categories={categoryNames} senses={sensesOf(activeItem)} disabled={busy} categoryNote={categoryNote(sheets, category)} onChange={(patch) => change(activeItem.row.key, patch)} onRemove={() => remove([activeItem.row.key])} onOpen={openString} onChoose={chooseOnly} onOpenCategory={() => openCategory(category)} />;
     }
     if (activeItem?.kind === "sheet") {
       const category = activeItem.term.category;
-      return <SheetTermDetail key={activeItem.id} term={activeItem.term} fix={unappliedFor(activeItem)} senses={sensesOf(activeItem)} disabled={busy} categoryNote={categoryNote(sheets, category)} onSettle={(translation) => settle(activeItem.term, translation)} onOpen={openString} onChoose={chooseOnly} onOpenCategory={() => openCategory(category)} />;
+      return <SheetTermDetail key={activeItem.id} term={activeItem.term} fix={outdatedFor(activeItem)} senses={sensesOf(activeItem)} disabled={busy} categoryNote={categoryNote(sheets, category)} onSettle={(translation) => settle(activeItem.term, translation)} onOpen={openString} onChoose={chooseOnly} onOpenCategory={() => openCategory(category)} />;
     }
     if (filterSheets.length > 0) {
       const name = filterSheets[0]!.sheet;
@@ -528,10 +502,7 @@ export const GlossaryView = forwardRef<GlossaryViewHandle, GlossaryViewProps>(fu
           count={category.count}
           sheets={categorySheets(sheets, key)}
           disabled={busy}
-          forgetBlock={runGoing || otherRun ? t("glossary.fix.busy") : null}
-          forgotten={forgotten?.category === key ? forgotten.message : null}
           onNote={(note) => saveSheets(sheets.map((sheet) => categoryKey(sheet.category) === key ? { ...sheet, note } : sheet))}
-          onForget={() => forget(key, category.label)}
           onOpenSheet={(sheet) => changeFilter({ ...filter, sheet })}
         />
       );
@@ -560,7 +531,7 @@ export const GlossaryView = forwardRef<GlossaryViewHandle, GlossaryViewProps>(fu
           filter={filter}
           onFilter={changeFilter}
           views={counts.views}
-          pending={unapplied === null ? new Set(["unapplied"]) : new Set()}
+          pending={outdated === null ? new Set(["outdated"]) : new Set()}
           categories={counts.categories}
           sheets={sheets}
           sheetCounts={counts.sheets}
@@ -593,7 +564,7 @@ export const GlossaryView = forwardRef<GlossaryViewHandle, GlossaryViewProps>(fu
                 <span>{chip.label}</span><UiIcon icon="x" size="xs" />
               </button>
             ))}
-            {filter.view === "unapplied" && shown.length > 0 ? (
+            {filter.view === "outdated" && shown.length > 0 ? (
               // Every term of the view: by meaning when the view is narrowed, else every term at once.
               <FixControls
                 label={t("glossary.fix.runAll", { count: shown.length })}
@@ -614,7 +585,7 @@ export const GlossaryView = forwardRef<GlossaryViewHandle, GlossaryViewProps>(fu
             onSort={sortBy}
             usage={usage}
             counting={counting}
-            unapplied={unapplied}
+            outdated={outdated}
             onChoose={choose}
             onSelectAll={() => setSelection((current) => ({ ids: new Set(shown.map((item) => item.id)), active: current.active ?? shown[0]?.id ?? null }))}
             onRemove={() => remove(chosenEntries.map((item) => item.row.key))}
@@ -636,7 +607,7 @@ export const GlossaryView = forwardRef<GlossaryViewHandle, GlossaryViewProps>(fu
           </footer>
         </section>
         <div ref={detailRef} className="glossary-detail-pane">
-          {run?.status ? <RunPanel status={run.status} terms={run.terms} onReveal={onRevealBinding} onClose={() => setRun(null)} /> : null}
+          {run?.status ? <RunPanel status={run.status} terms={run.terms} onReveal={onRevealBinding} onClose={() => setRun(null)} onOpenReport={onOpenReport} onContinued={() => setRun((value) => value && { ...value, status: null })} /> : null}
           {detail}
         </div>
       </div>
