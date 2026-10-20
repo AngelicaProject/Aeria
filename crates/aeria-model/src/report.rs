@@ -79,6 +79,8 @@ pub enum Record {
         /// The terms a correction follows, by headword; empty for every
         /// term or none.
         terms: Vec<String>,
+        /// The name of the project's instruction a correction follows.
+        instruction: Option<String>,
         /// Unix milliseconds.
         started_at: u64,
     },

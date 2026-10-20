@@ -1,8 +1,8 @@
 export type SheetDocumentTab = {
   id: string;
-  /** `commit` shows one commit of the project history; `glossary` the project's terms; `report` the report of a run. */
-  kind: "sheet" | "commit" | "glossary" | "report";
-  /** Empty for a commit, the glossary, and a report. */
+  /** `commit` shows one commit of the project history; `glossary` the project's terms; `editing` the AI runs over translations; `report` the report of a run. */
+  kind: "sheet" | "commit" | "glossary" | "editing" | "report";
+  /** Empty for a commit, the glossary, editing, and a report. */
   sheetName: string;
   /** The commit id of a commit tab. */
   commitId?: string;
@@ -27,6 +27,8 @@ export type DocumentTabsAction =
   | { type: "openCommit"; commitId: string; label: string }
   /** The glossary has one tab of its own, never a preview. */
   | { type: "openGlossary"; label: string }
+  /** Editing has one tab of its own, never a preview. */
+  | { type: "openEditing"; label: string }
   /** A report has one tab of its own, never a preview. */
   | { type: "openReport"; reportId: string; label: string }
   | { type: "activate"; id: string }
@@ -52,6 +54,7 @@ export function documentIdForReport(reportId: string): string {
 }
 
 export const GLOSSARY_DOCUMENT_ID = "glossary";
+export const EDITING_DOCUMENT_ID = "editing";
 
 /** Pinned tabs come first, each group in its own order. */
 function pinnedFirst(tabs: readonly SheetDocumentTab[]): SheetDocumentTab[] {
@@ -114,6 +117,11 @@ export function reduceDocumentTabs(
       const tab: SheetDocumentTab = { id: GLOSSARY_DOCUMENT_ID, kind: "glossary", sheetName: "", label: action.label, pinned: false, preview: false, dirty: false };
       return { tabs: [...state.tabs, tab], activeId: GLOSSARY_DOCUMENT_ID };
     }
+    case "openEditing": {
+      if (state.tabs.some((tab) => tab.id === EDITING_DOCUMENT_ID)) return { ...state, activeId: EDITING_DOCUMENT_ID };
+      const tab: SheetDocumentTab = { id: EDITING_DOCUMENT_ID, kind: "editing", sheetName: "", label: action.label, pinned: false, preview: false, dirty: false };
+      return { tabs: [...state.tabs, tab], activeId: EDITING_DOCUMENT_ID };
+    }
     case "openReport": {
       const id = documentIdForReport(action.reportId);
       if (state.tabs.some((tab) => tab.id === id)) return { ...state, activeId: id };
@@ -161,7 +169,7 @@ export function reduceDocumentTabs(
  * Closes tabs and says what becomes of the open sheet: when the next active
  * tab is another sheet it opens (`open`); when the open sheet's tab closed
  * and no sheet tab is active, no sheet stays open (`clear`). A commit,
- * glossary, or report tab leaves the sheet under it as it is.
+ * glossary, editing, or report tab leaves the sheet under it as it is.
  */
 export function closeDocumentTabs(
   state: DocumentTabsState,

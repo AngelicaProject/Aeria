@@ -63,6 +63,7 @@ import type {
   ProtectionDto,
   TermKey,
   TermStringsDto,
+  InstructionsDto,
   ReportInfo,
   ReportPage,
   OutdatedStringDto,
@@ -598,6 +599,25 @@ export function termOutdatedStrings(terms: TermKey[]): Promise<OutdatedStringDto
 /** Continues the run of the report `id`: the same options, for the strings its runs did not settle. */
 export function translationContinue(id: string): Promise<void> {
   return call<void>("translation_continue", { id });
+}
+
+/** The project's instructions for AI runs. */
+export function instructions(): Promise<InstructionsDto> {
+  return call<InstructionsDto>("instructions");
+}
+
+/**
+ * Saves an instruction: `previous` is the name it was loaded under (null for
+ * a new one) and `expected` its text as loaded; a file changed meanwhile is
+ * not overwritten.
+ */
+export function saveInstruction(name: string, previous: string | null, expected: string | null, text: string): Promise<InstructionsDto> {
+  return call<InstructionsDto>("save_instruction", { name, previous, expected, text });
+}
+
+/** Removes an instruction if it still has the text it was loaded with. */
+export function deleteInstruction(name: string, expected: string): Promise<InstructionsDto> {
+  return call<InstructionsDto>("delete_instruction", { name, expected });
 }
 
 /** The run reports of the data folder, newest first. */

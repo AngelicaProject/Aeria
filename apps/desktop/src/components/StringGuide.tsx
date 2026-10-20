@@ -181,7 +181,7 @@ export const StringGuide = memo(function StringGuide({ revision, onOpenTerms, on
         title={t("hints.check")}
         count={findings > 0 ? findings : undefined}
         action={focus.fuzzy ? (
-          <button className="string-guide-link" type="button" disabled={!onFix} title={t("hints.fix.adaptTitle")} onClick={() => onFix?.({ issues: false, groups: [], proofread: false, adapt: true, request: null })}>
+          <button className="string-guide-link" type="button" disabled={!onFix} title={t("hints.fix.adaptTitle")} onClick={() => onFix?.({ issues: false, groups: [], adapt: true, request: null })}>
             {t("hints.fix.adapt")}
           </button>
         ) : null}
@@ -405,7 +405,7 @@ function DraftIssues({ drafted, verdict, onException, onFix }: { drafted: boolea
             </button>
           ) : null}
           {canFix(issue) ? (
-            <button className="string-guide-link" type="button" disabled={!onFix} title={t("hints.fix.issueTitle")} onClick={() => onFix?.({ issues: true, groups: [issue.group], proofread: false, adapt: false, request: null })}>
+            <button className="string-guide-link" type="button" disabled={!onFix} title={t("hints.fix.issueTitle")} onClick={() => onFix?.({ issues: true, groups: [issue.group], adapt: false, request: null })}>
               {t("hints.fix.issue")}
             </button>
           ) : null}

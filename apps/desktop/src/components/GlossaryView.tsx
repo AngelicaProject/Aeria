@@ -230,7 +230,7 @@ export const GlossaryView = forwardRef<GlossaryViewHandle, GlossaryViewProps>(fu
         if (strings.length === 0) { checkOutdated(); return; }
         const paths = [...new Set(strings.map((string) => string.path))];
         const names = [...new Set(terms.map((term) => term.term))];
-        await translationFix(paths, strings.map((string) => string.context), { issues: false, groups: [], proofread: false, adapt: false, request, terms: names }, preferences.translationModel, preferences.translationEffort || null);
+        await translationFix(paths, strings.map((string) => string.context), { issues: false, groups: [], adapt: false, request, terms: names }, preferences.translationModel, preferences.translationEffort || null);
         setRun({ terms: [...new Set(terms.map((term) => term.term))], status: null });
       } catch (reason) {
         setError({ title: t("glossary.fix.error"), error: normalizeCommandError(reason) });

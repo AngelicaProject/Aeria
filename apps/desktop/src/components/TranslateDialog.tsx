@@ -1,10 +1,10 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Dialog } from "radix-ui";
 import { normalizeCommandError, translationContinue, translationRetry, translationStart, translationStatus, translationStop } from "../ipc";
 import type { CommandError, ProjectSheetDto, SheetProgressDto, SourceBinding, TranslationStatus, TranslationStop } from "../types";
 import type { MessageKey } from "../i18n/translate";
-import { buildSheetTree, findSheetMatches, type SheetTreeEntry, type SheetTreeFolder } from "../sheetExplorer";
 import { ErrorBanner } from "./ErrorBanner";
+import { SheetChooser, useSheetTree } from "./SheetChooser";
 import { TranslationCorrections } from "./TranslationCorrections";
 import { TranslationRejections } from "./TranslationRejections";
 import { UiIcon } from "../ui/primitives/UiIcon";
@@ -40,8 +40,6 @@ function formatElapsed(milliseconds: number): string {
   const seconds = Math.max(0, Math.floor(milliseconds / 1000));
   return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
 }
-/** Most sheets a search lists. */
-const SEARCH_LIMIT = 300;
 
 const stopLabels: Readonly<Record<TranslationStop["reason"], MessageKey>> = {
   finished: "translate.stop.finished",
@@ -124,76 +122,17 @@ export function describeStop(stop: TranslationStop, t: Translate, locale: string
   return t(stopLabels[stop.reason]);
 }
 
-/** The sheet names under a folder of the tree. */
-function leavesOf(folder: SheetTreeFolder): string[] {
-  const names: string[] = [];
-  const visit = (entries: readonly SheetTreeEntry[]) => {
-    for (const entry of entries) {
-      if (entry.kind === "leaf") names.push(entry.sheet.name);
-      else visit(entry.children);
-    }
-  };
-  visit(folder.children);
-  return names;
-}
-
-/**
- * The scope of a run: whole folders as `folder/`, other chosen sheets by
- * name, and an empty scope when every sheet is chosen.
- */
-function scopeOf(entries: readonly SheetTreeEntry[], selected: ReadonlySet<string>, leaves: ReadonlyMap<string, string[]>, total: number): string[] {
-  if (selected.size === total) return [];
-  const scope: string[] = [];
-  const visit = (children: readonly SheetTreeEntry[]) => {
-    for (const entry of children) {
-      if (entry.kind === "leaf") {
-        if (selected.has(entry.sheet.name)) scope.push(entry.sheet.name);
-        continue;
-      }
-      const names = leaves.get(entry.path) ?? [];
-      if (names.length > 0 && names.every((name) => selected.has(name))) scope.push(`${entry.path}/`);
-      else if (names.some((name) => selected.has(name))) visit(entry.children);
-    }
-  };
-  visit(entries);
-  return scope;
-}
-
-function Check({ checked, mixed, label, onChange }: { checked: boolean; mixed: boolean; label: string; onChange: (checked: boolean) => void }) {
-  const ref = useRef<HTMLInputElement>(null);
-  useEffect(() => {
-    if (ref.current) ref.current.indeterminate = mixed;
-  }, [mixed]);
-  return <input ref={ref} type="checkbox" aria-label={label} checked={checked} onChange={(event) => onChange(event.target.checked)} />;
-}
-
 /** Machine translation of chosen sheets and folders of sheets, and its progress. */
 export const TranslateDialog = memo(function TranslateDialog({ open, onOpenChange, sheets, progress, sheetName, onOpenSettings, onFilesChanged, onRevealBinding, onOpenReport }: TranslateDialogProps) {
   const { t, locale, formatNumber } = useI18n();
   const { preferences } = usePreferences();
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set());
-  const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
-  const [query, setQuery] = useState("");
   const [fuzzy, setFuzzy] = useState(false);
   const [status, setStatus] = useState<TranslationStatus | null>(null);
   const [error, setError] = useState<CommandError | null>(null);
   const wasRunning = useRef(false);
 
-  const translatable = useMemo(() => sheets.filter((sheet) => sheet.translatableCellCount > 0 && !sheet.unavailable), [sheets]);
-  const tree = useMemo(() => buildSheetTree(translatable), [translatable]);
-  const leaves = useMemo(() => {
-    const byFolder = new Map<string, string[]>();
-    const visit = (entries: readonly SheetTreeEntry[]) => {
-      for (const entry of entries) {
-        if (entry.kind === "folder") {
-          byFolder.set(entry.path, leavesOf(entry));
-          visit(entry.children);
-        }
-      }
-    };
-    visit(tree.children);
-    return byFolder;
-  }, [tree]);
+  const { allNames, scopeOf } = useSheetTree(sheets);
 
   /** Strings of a sheet a run would translate; null while its progress is unknown. */
   const remainingOf = useCallback((name: string): number | null => {
@@ -238,16 +177,6 @@ export const TranslateDialog = memo(function TranslateDialog({ open, onOpenChang
     });
   }, []);
   const choose = useCallback((names: readonly string[]) => toggle(names.filter((name) => (remainingOf(name) ?? 1) > 0), true), [remainingOf, toggle]);
-  const toggleFolder = useCallback((path: string) => {
-    setExpanded((current) => {
-      const next = new Set(current);
-      if (next.has(path)) next.delete(path);
-      else next.add(path);
-      return next;
-    });
-  }, []);
-
-  const allNames = useMemo(() => translatable.map((sheet) => sheet.name), [translatable]);
   const selectedNames = useMemo(() => allNames.filter((name) => selected.has(name)), [allNames, selected]);
   const strings = remainingOfAll(selectedNames);
   const noModel = preferences.translationModel === "";
@@ -256,7 +185,7 @@ export const TranslateDialog = memo(function TranslateDialog({ open, onOpenChang
   async function start() {
     setError(null);
     try {
-      await translationStart(scopeOf(tree.children, selected, leaves, allNames.length), fuzzy, preferences.translationModel, preferences.translationEffort || null);
+      await translationStart(scopeOf(selected), fuzzy, preferences.translationModel, preferences.translationEffort || null);
       await readStatus();
     } catch (reason) {
       setError(normalizeCommandError(reason));
@@ -279,42 +208,6 @@ export const TranslateDialog = memo(function TranslateDialog({ open, onOpenChang
     return <span className="translate-remaining">{formatNumber(count)}</span>;
   }
 
-  function renderEntries(entries: readonly SheetTreeEntry[], depth: number): ReactNode[] {
-    const rows: ReactNode[] = [];
-    for (const entry of entries) {
-      const indent = { paddingInlineStart: `${depth * 16 + 6}px` };
-      if (entry.kind === "leaf") {
-        const name = entry.sheet.name;
-        rows.push(
-          <label key={name} className="translate-row" style={indent}>
-            <span className="translate-twisty" />
-            <Check checked={selected.has(name)} mixed={false} label={name} onChange={(on) => toggle([name], on)} />
-            <span className="translate-name">{entry.name}</span>
-            {remainingLabel(remainingOf(name))}
-          </label>,
-        );
-        continue;
-      }
-      const names = leaves.get(entry.path) ?? [];
-      const chosen = names.filter((name) => selected.has(name)).length;
-      const isOpen = expanded.has(entry.path);
-      rows.push(
-        <div key={`folder:${entry.path}`} className="translate-row" style={indent}>
-          <button className="translate-twisty" type="button" aria-label={entry.path} aria-expanded={isOpen} onClick={() => toggleFolder(entry.path)}>
-            <UiIcon icon={isOpen ? "chevronDown" : "chevronRight"} size="xs" />
-          </button>
-          <Check checked={chosen > 0 && chosen === names.length} mixed={chosen > 0 && chosen < names.length} label={entry.path} onChange={(on) => toggle(names, on)} />
-          <button className="translate-name translate-folder" type="button" onClick={() => toggleFolder(entry.path)}>{entry.name}</button>
-          {remainingLabel(names.some((name) => !progress.has(name)) ? null : remainingOfAll(names))}
-        </div>,
-      );
-      if (isOpen) rows.push(...renderEntries(entry.children, depth + 1));
-    }
-    return rows;
-  }
-
-  const matches = useMemo(() => query.trim() ? findSheetMatches(translatable, query) : null, [query, translatable]);
-
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
       <Dialog.Portal>
@@ -325,28 +218,20 @@ export const TranslateDialog = memo(function TranslateDialog({ open, onOpenChang
           {error ? <ErrorBanner title={t("translate.error")} error={error} onDismiss={() => setError(null)} /> : null}
 
           <div className="translate-layout">
-            <div className="translate-picker">
-              <input className="input" type="search" placeholder={t("translate.search")} aria-label={t("translate.search")} value={query} disabled={running} onChange={(event) => setQuery(event.target.value)} />
-              <div className="translate-presets">
+            <SheetChooser
+              sheets={sheets}
+              selected={selected}
+              onToggle={toggle}
+              countOf={remainingOf}
+              renderCount={remainingLabel}
+              disabled={running}
+              label={t("translate.sheets")}
+              presets={<>
                 <button className="button button-ghost translate-preset" type="button" disabled={running} onClick={() => choose(allNames.filter((name) => name.startsWith("quest/")))}>{t("translate.preset.quests")}</button>
                 <button className="button button-ghost translate-preset" type="button" disabled={running} onClick={() => choose(allNames)}>{t("translate.preset.untranslated")}</button>
                 <button className="button button-ghost translate-preset" type="button" disabled={running || selected.size === 0} onClick={() => setSelected(new Set())}>{t("translate.preset.none")}</button>
-              </div>
-              <fieldset className="translate-tree" disabled={running} aria-label={t("translate.sheets")}>
-                {matches
-                  ? matches.slice(0, SEARCH_LIMIT).map((match) => (
-                      <label key={match.sheet.name} className="translate-row">
-                        <span className="translate-twisty" />
-                        <Check checked={selected.has(match.sheet.name)} mixed={false} label={match.sheet.name} onChange={(on) => toggle([match.sheet.name], on)} />
-                        <span className="translate-name">{match.basename}{match.breadcrumb ? <span className="muted"> · {match.breadcrumb}</span> : null}</span>
-                        {remainingLabel(remainingOf(match.sheet.name))}
-                      </label>
-                    ))
-                  : renderEntries(tree.children, 0)}
-                {matches && matches.length > SEARCH_LIMIT ? <p className="field-hint">{t("translate.moreMatches", { shown: SEARCH_LIMIT, count: matches.length })}</p> : null}
-                {matches && matches.length === 0 ? <p className="field-hint">{t("translate.noMatches")}</p> : null}
-              </fieldset>
-            </div>
+              </>}
+            />
 
             <div className="translate-side">
               <p className="translate-summary">{t("translate.selection", { sheets: formatNumber(selectedNames.length), strings: formatNumber(strings) })}</p>

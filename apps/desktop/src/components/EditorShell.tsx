@@ -48,6 +48,7 @@ import { TranslationEditor, type CellDraft, type CellMutation, type TranslationE
 import { TranslationList } from "./TranslationList";
 import { WindowChrome } from "./WindowChrome";
 import { ReportView } from "./ReportView";
+import { EditingView } from "./EditingView";
 import type { ApplicationMenuDefinition } from "./ApplicationMenu";
 import { ExportDialog } from "./ExportDialog";
 import { TranslateDialog } from "./TranslateDialog";
@@ -68,7 +69,7 @@ import {
   type OccurrenceFilter,
   type TranslationOccurrenceView,
 } from "../translationOccurrences";
-import { GLOSSARY_DOCUMENT_ID, closeDocumentTabs, documentIdForSheet, initialDocumentTabsState, reduceDocumentTabs, type DocumentTabsState } from "../documentTabs";
+import { EDITING_DOCUMENT_ID, GLOSSARY_DOCUMENT_ID, closeDocumentTabs, documentIdForSheet, initialDocumentTabsState, reduceDocumentTabs, type DocumentTabsState } from "../documentTabs";
 import { initialDockLayout, reduceDockLayout, type DockRegion } from "../dockLayout";
 import { createLoadProgress } from "../loadProgress";
 import { hasWindowsBackdrop } from "../ui/theme/windowBackdrop";
@@ -282,6 +283,15 @@ export function EditorShell({
     setDocumentTabs((current) => reduceDocumentTabs(current, { type: "openGlossary", label: t("glossary.tab") }));
     if (term) setGlossaryFocus((current) => ({ ...term, nonce: (current?.nonce ?? 0) + 1 }));
   }, [t]);
+  // Editing is a tab of its own, kept mounted while it is open.
+  const openEditing = useCallback(() => {
+    setDocumentTabs((current) => reduceDocumentTabs(current, { type: "openEditing", label: t("editing.tab") }));
+  }, [t]);
+  const editingDirtyRef = useRef(false);
+  const handleEditingDirty = useCallback((next: boolean) => {
+    editingDirtyRef.current = next;
+    setDocumentTabs((current) => current.tabs.some((tab) => tab.id === EDITING_DOCUMENT_ID) ? reduceDocumentTabs(current, { type: "setDirty", id: EDITING_DOCUMENT_ID, dirty: next }) : current);
+  }, []);
   // A run's report is a tab of its own.
   const openReport = useCallback((reportId: string, label: string) => {
     setDocumentTabs((current) => reduceDocumentTabs(current, { type: "openReport", reportId, label }));
@@ -588,7 +598,7 @@ export function EditorShell({
 
   // `glossary` also asks for unsaved terms, when the whole project goes away.
   const requestDiscardConfirmation = useCallback((message: string, glossary = false): Promise<boolean> => {
-    if (!hasDirtyDraft.current && !(glossary && glossaryDirtyRef.current)) return Promise.resolve(true);
+    if (!hasDirtyDraft.current && !(glossary && (glossaryDirtyRef.current || editingDirtyRef.current))) return Promise.resolve(true);
     if (discardRequestRef.current) return Promise.resolve(false);
     return new Promise((resolve) => {
       const request = { message, resolve };
@@ -613,7 +623,7 @@ export function EditorShell({
           allowWindowClose.current = false;
           return;
         }
-        if (!hasDirtyDraft.current && !glossaryDirtyRef.current) return;
+        if (!hasDirtyDraft.current && !glossaryDirtyRef.current && !editingDirtyRef.current) return;
         event.preventDefault();
         void (async () => {
           if (!(await requestDiscardConfirmation(t("workbench.discard.closeApp"), true))) return;
@@ -672,11 +682,17 @@ export function EditorShell({
       setDiscardRequest(request);
     }))) return;
     if (documentIds.includes(GLOSSARY_DOCUMENT_ID)) handleGlossaryDirty(false);
+    if (documentIds.includes(EDITING_DOCUMENT_ID) && editingDirtyRef.current && !(await new Promise<boolean>((resolve) => {
+      const request = { message: t("editing.discard"), resolve };
+      discardRequestRef.current = request;
+      setDiscardRequest(request);
+    }))) return;
+    if (documentIds.includes(EDITING_DOCUMENT_ID)) handleEditingDirty(false);
     const next = closeDocumentTabs(documentTabs, documentIds, selectedSheetName);
     setDocumentTabs(next.state);
     if (next.open) void beginSheetLoad(next.open);
     else if (next.clear) clearSheet();
-  }, [beginSheetLoad, clearSheet, documentTabs, handleGlossaryDirty, requestDiscardConfirmation, selectedSheetName, t]);
+  }, [beginSheetLoad, clearSheet, documentTabs, handleEditingDirty, handleGlossaryDirty, requestDiscardConfirmation, selectedSheetName, t]);
   const handleDocumentClose = useCallback((documentId: string) => handleDocumentsClose([documentId]), [handleDocumentsClose]);
 
   const openCommit = useCallback((commit: GitCommitDto) => {
@@ -1190,7 +1206,7 @@ export function EditorShell({
     pinned: document.pinned,
     preview: document.preview,
     dirty: document.dirty,
-    icon: document.kind === "commit" ? "gitCommit" : document.kind === "glossary" ? "bookMarked" : document.kind === "report" ? "clipboard" : "table2",
+    icon: document.kind === "commit" ? "gitCommit" : document.kind === "glossary" ? "bookMarked" : document.kind === "editing" ? "wand" : document.kind === "report" ? "clipboard" : "table2",
   }));
   const documentMenu = (documentId: string): MenuEntry[] => {
     const document = documentTabs.tabs.find((tab) => tab.id === documentId);
@@ -1198,7 +1214,7 @@ export function EditorShell({
       const commitId = document.commitId;
       return [{ id: "copyId", icon: "copy", label: t("commit.action.copyId"), run: () => copyText(commitId) }];
     }
-    if (!document || document.kind === "glossary" || document.kind === "report") return [];
+    if (!document || document.kind === "glossary" || document.kind === "editing" || document.kind === "report") return [];
     return [
       { id: "reveal", icon: "locateFixed", label: t("tabs.menu.reveal"), disabled: document.id !== documentTabs.activeId, run: () => { showPanel("sheets", "left", false); setRevealSheetSignal((current) => current + 1); } },
       { id: "copyName", icon: "copy", label: t("tabs.menu.copyName"), run: () => copyText(document.sheetName) },
@@ -1207,8 +1223,10 @@ export function EditorShell({
   const activeCommitId = documentTabs.tabs.find((document) => document.id === documentTabs.activeId)?.commitId ?? null;
   const glossaryOpen = documentTabs.tabs.some((document) => document.id === GLOSSARY_DOCUMENT_ID);
   const glossaryActive = documentTabs.activeId === GLOSSARY_DOCUMENT_ID;
+  const editingOpen = documentTabs.tabs.some((document) => document.id === EDITING_DOCUMENT_ID);
+  const editingActive = documentTabs.activeId === EDITING_DOCUMENT_ID;
   const activeReportId = documentTabs.tabs.find((document) => document.id === documentTabs.activeId)?.reportId ?? null;
-  sheetShown.current = activeCommitId === null && !glossaryActive && activeReportId === null;
+  sheetShown.current = activeCommitId === null && !glossaryActive && !editingActive && activeReportId === null;
 
   const sheetHeaderActions = <>
     <IconButton icon={hideEmptySheets ? "eyeOff" : "eye"} label={t(hideEmptySheets ? "workbench.showEmptySheets" : "workbench.hideEmptySheets")} pressed={hideEmptySheets} disabled={closing} onClick={() => setHideEmptySheets((current) => !current)} />
@@ -1289,6 +1307,7 @@ export function EditorShell({
         { kind: "separator", id: "translation-sep-1" },
         { kind: "command", id: "terms", label: t("menu.terms"), onSelect: () => openTerms() },
         { kind: "command", id: "style", label: t("menu.style"), onSelect: () => setStyleOpen(true) },
+        { kind: "command", id: "editing", label: t("menu.editing"), onSelect: openEditing },
         { kind: "separator", id: "translation-sep-2" },
         { kind: "command", id: "machine-translation", label: t("menu.machineTranslation"), onSelect: () => setTranslateOpen(true) },
       ],
@@ -1358,6 +1377,7 @@ export function EditorShell({
     { id: "view-reveal-sheet", category: category.view, title: t("workbench.revealSheet"), icon: "locateFixed", enabled: selectedSheetName !== null, run: () => { showPanel("sheets", "left", false); setRevealSheetSignal((current) => current + 1); } },
     { id: "project-terms", category: category.translation, title: t("menu.terms"), icon: "languages", run: () => openTerms() },
     { id: "project-style", category: category.translation, title: t("menu.style"), icon: "messageSquare", run: () => setStyleOpen(true) },
+    { id: "project-editing", category: category.translation, title: t("menu.editing"), icon: "wand", run: openEditing },
     { id: "git-open", category: category.git, title: t("command.showChanges"), icon: "gitBranch", run: () => showPanel("git", "right", false) },
     { id: "prefs-settings", category: category.preferences, title: t("command.openSettings"), shortcut: "Ctrl+,", icon: "settings", run: () => openSettings() },
     { id: "prefs-theme", category: category.preferences, title: t("settings.theme.title"), icon: "palette", run: () => openSettings("appearance") },
@@ -1436,8 +1456,13 @@ export function EditorShell({
                 <GlossaryView ref={glossaryRef} active={glossaryActive} revision={workspaceRevision + projectRevision} sheetNames={sheetNames} onRevealBinding={stableRevealBinding} onDirtyChange={handleGlossaryDirty} onSaved={bumpProjectRevision} onFilesChanged={stableWorkspaceChanged} onOpenSettings={openTranslationSettings} onOpenReport={openReport} focus={glossaryFocus} />
               </div>
             ) : null}
-            {/* Kept mounted under a commit, glossary, or report tab, so the sheet returns as it was left. */}
-            <div className="document-sheet" hidden={activeCommitId !== null || glossaryActive || activeReportId !== null}>
+            {editingOpen ? (
+              <div className="document-glossary" hidden={!editingActive}>
+                <EditingView active={editingActive} sheets={project.sheets} progress={progressBySheet} onDirtyChange={handleEditingDirty} onFilesChanged={stableWorkspaceChanged} onOpenSettings={openTranslationSettings} onOpenReport={openReport} />
+              </div>
+            ) : null}
+            {/* Kept mounted under a commit, glossary, editing, or report tab, so the sheet returns as it was left. */}
+            <div className="document-sheet" hidden={activeCommitId !== null || glossaryActive || editingActive || activeReportId !== null}>
               {!selectedSheetName ? (
                 <div className="document-empty empty-state">
                   <strong>{t("workbench.noSheetOpen")}</strong>

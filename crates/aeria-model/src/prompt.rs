@@ -28,14 +28,13 @@ pub fn instructions(source_language: &str, target_language: &str, style: Option<
 
 /// The instructions of every request of a run that corrects translations:
 /// the rules and the style as for translating, what a correction may
-/// change, a proofreading of every translation when asked, a translator's
-/// request for every translation of the run, and the answer's form.
+/// change, a translator's request for every translation of the run, and
+/// the answer's form.
 #[must_use]
 pub fn fix_instructions(
     source_language: &str,
     target_language: &str,
     style: Option<&str>,
-    proofread: bool,
     adapt: bool,
     request: Option<&str>,
 ) -> String {
@@ -43,18 +42,15 @@ pub fn fix_instructions(
     text.push_str(
         "This run corrects translations rather than translating: each string has \
          `translation`, its current translation, and may have `fix`: what is wrong with it, \
-         or the terms it is to follow. Change a translation only as far as its `fix`, the \
-         proofreading below when this run asks for it, and the translator's request below \
-         need, and keep every other word, its macros, and its wording as they are. A term \
+         or the terms it is to follow. Change a translation only as far as its `fix` and \
+         the translator's request below need, and keep every other word, its macros, and \
+         its wording as they are. A term \
          to follow is used where the word of the source is the thing the term names, as \
          its `translation` and `note` describe it, declined as the sentence needs; where \
          the word means something else there, or the translation already follows the term, \
          that word stays. When nothing needs to change, answer the translation \
          unchanged.\n\n",
     );
-    if proofread {
-        text.push_str(PROOFREADING);
-    }
     if adapt {
         text.push_str(ADAPTING);
     }
@@ -85,24 +81,6 @@ const ADAPTING: &str = "A string with `previous` changed its source since it was
      source changes, such as a number, a name, a word, or a sentence added or removed, and \
      keep every other word of the translation as it is. When the change of the source does \
      not touch what the translation says, answer it unchanged: it still fits.\n\n";
-
-/// What proofreading asks of every translation of a correction run.
-const PROOFREADING: &str = "Proofread every translation of this run as the editor of the \
-     localization, reading it against its source, the other client languages of its \
-     context, and the strings around it in the scene. Fix what is wrong: a meaning the \
-     source does not have, or one of its details lost; the form of address the project's \
-     style asks for in this line, which when the style follows another client language is \
-     read from that language's line of this string, not from the lines around it, since \
-     characters address each other differently; agreement with the player character's \
-     gender; a name or term; and phrasing a native speaker would not write: word order or \
-     constructions copied from the source language, officialese, filler, explanations the \
-     source does not give. The source's meaning comes first: never trade a detail of it \
-     for smoothness, never add what it does not say, and keep the register and the voice \
-     of the speaker. Keep what is right as it is: a translation that already reads well \
-     answers unchanged, and a sound change is the smallest one that fixes it. A name of a \
-     thing of the game (an action, a status, an item, a place, a duty, a menu, a tab, a \
-     button) keeps the form the translation gives it unless `terms` give \
-     another: the game shows it under that name, and a player looks for it there.\n\n";
 
 /// What the instructions of a translation and of a correction share: the
 /// rules of a translation, the project's style, and what a request holds.
@@ -636,21 +614,17 @@ mod tests {
             "ru",
             Some("К герою на «вы»."),
             true,
-            true,
             Some(" На «ты». "),
         );
         assert!(text.contains("FINAL FANTASY XIV is written in Japanese"));
         assert!(text.contains("К герою на «вы»."));
         assert!(text.contains("`fix`"));
         assert!(text.contains("of this run:\n\nНа «ты».\n\n"));
-        assert!(text.contains("Proofread every translation"));
         assert!(text.contains("Adapt the translation to the new source"));
-        let plain = fix_instructions("en", "ru", None, false, false, None);
-        assert!(!plain.contains("Proofread every") && !plain.contains("Adapt the translation"));
+        let plain = fix_instructions("en", "ru", None, false, None);
+        assert!(!plain.contains("Adapt the translation"));
         assert!(!text.contains("Translate every string."));
-        assert!(
-            !fix_instructions("en", "ru", None, false, false, Some("  ")).contains("of this run")
-        );
+        assert!(!fix_instructions("en", "ru", None, false, Some("  ")).contains("of this run"));
     }
 
     #[test]

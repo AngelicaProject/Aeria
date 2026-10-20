@@ -162,6 +162,7 @@ export function ReportView({ reportId, onRevealBinding, onOpenReport }: ReportVi
         <UiIcon icon="clipboard" size="sm" />
         <strong>{run ? runKindLabel(run.kind, t) : t("report.title")}</strong>
         {run ? <span className="muted">{formatRunTime(run.startedAt, locale)} · {run.model}{run.effort ? ` · ${run.effort}` : ""}</span> : null}
+        {run?.instruction ? <span className="report-head-terms" title={run.instruction}>{run.instruction}</span> : null}
         {run && run.terms.length > 0 ? <span className="muted report-head-terms" title={termsText(run.terms)}>{termsText(run.terms)}</span> : null}
         <span className="report-head-stop">{page?.running ? t("report.going") : page?.stop ? describeStop(page.stop.stop, t, locale) : page ? t("report.interrupted") : null}</span>
         {page?.continuable ? (

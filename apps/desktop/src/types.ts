@@ -599,12 +599,19 @@ export type TranslationActive = {
 /** Where a machine translation run is. */
 /**
  * What a correction with AI asks of each translation: the issues of the
- * checks (only of `groups` when not empty), a proofreading, the adaptation of
- * a fuzzy translation to its changed source, a translator's request, and
- * the terms, by headword, whose current version the translations written
- * with an older one are brought to (any term when empty).
+ * checks (only of `groups` when not empty), the adaptation of a fuzzy
+ * translation to its changed source, a translator's request, the project's
+ * instruction to follow, by name, and the terms, by headword, whose current
+ * version the translations written with an older one are brought to (any
+ * term when empty).
  */
-export type FixRequest = { issues: boolean; groups: string[]; proofread: boolean; adapt: boolean; request: string | null; terms?: string[] | null };
+export type FixRequest = { issues: boolean; groups: string[]; adapt: boolean; request: string | null; instruction?: string | null; terms?: string[] | null };
+
+/** One of the project's instructions for AI runs: `aeria-knowledge/instructions/<name>.md`. */
+export type InstructionDto = { name: string; text: string };
+
+/** The project's instructions, by name, and the files that cannot be read. */
+export type InstructionsDto = { instructions: InstructionDto[]; problems: string[] };
 
 /** A translation a correction run changed. */
 export type TranslationCorrected = {
@@ -651,7 +658,7 @@ export type TranslationStatus = {
 export type RunKind = "translating" | "fixing";
 
 /** The first record of a run's report. */
-export type ReportRun = { record: "run"; version: number; kind: RunKind; model: string; effort: string | null; terms: string[]; startedAt: number };
+export type ReportRun = { record: "run"; version: number; kind: RunKind; model: string; effort: string | null; terms: string[]; instruction?: string | null; startedAt: number };
 
 /** What a report lists an item as: `string:<outcome>`, or `left`. */
 export type ReportView = string;

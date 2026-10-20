@@ -9,6 +9,7 @@ import {
   keepPreviewTab,
   documentIdForCommit,
   documentIdForReport,
+  EDITING_DOCUMENT_ID,
   GLOSSARY_DOCUMENT_ID,
   reduceDocumentTabs,
 } from "../src/documentTabs.ts";
@@ -68,6 +69,18 @@ test("the glossary has one tab, never a preview, and keeps the sheet under it", 
   state = openPreviewTab(state, "B");
   assert.deepEqual(state.tabs.map((tab) => tab.kind), ["sheet", "glossary"]);
   const closed = closeDocumentTabs(state, [GLOSSARY_DOCUMENT_ID], "B");
+  assert.equal(closed.clear, false);
+  assert.equal(closed.open, null);
+});
+
+test("editing has one tab, never a preview, and keeps the sheet under it", () => {
+  let state = openPreviewTab(initialDocumentTabsState, "A");
+  state = reduceDocumentTabs(state, { type: "openEditing", label: "Editing" });
+  state = reduceDocumentTabs(state, { type: "openEditing", label: "Editing" });
+  assert.deepEqual(state.tabs.map((tab) => tab.kind), ["sheet", "editing"]);
+  assert.equal(state.activeId, EDITING_DOCUMENT_ID);
+  assert.equal(state.tabs[1].preview, false);
+  const closed = closeDocumentTabs(state, [EDITING_DOCUMENT_ID], "A");
   assert.equal(closed.clear, false);
   assert.equal(closed.open, null);
 });

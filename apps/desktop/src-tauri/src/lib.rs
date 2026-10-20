@@ -10,6 +10,7 @@ mod git;
 mod guard_workflow;
 mod guide;
 mod hints;
+mod instructions;
 mod macros;
 mod paths;
 mod project_changes;
@@ -75,6 +76,7 @@ pub use guide::{
     save_knowledge_terms, string_binding, term_outdated, term_outdated_strings, term_strings,
     term_usage,
 };
+pub use instructions::{delete_instruction, instructions, save_instruction};
 pub use report::{run_report, run_reports, translation_continue};
 pub use search::{
     SearchState, project_edit_undo, project_replace_apply, project_replace_preview,
@@ -244,6 +246,9 @@ pub fn run() {
             run_reports,
             run_report,
             translation_continue,
+            instructions,
+            save_instruction,
+            delete_instruction,
             translation_retry,
             translation_fix,
             translation_fix_string,

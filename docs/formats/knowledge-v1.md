@@ -27,10 +27,29 @@ Aeria writes LF.
 | `style.md` | Markdown, free text | How the translation reads: how formal it is, how the player and other characters are addressed, how names are rendered, the tone of each kind of text |
 | `terms.csv` | [Glossary Format v1](./glossary-v1.md) | The terms: lore words and the names the project agreed on, with their other forms and categories |
 | `term-sheets.csv` | [Declared sheets](#declared-sheets) | The sheets of the game that are part of the glossary |
+| `instructions/<name>.md` | [Instructions](#instructions) | What a person asks machine translation to do to the translations of a run |
 
 `style.md` is written by a person and used as a whole. A file that cannot be
 read is reported and left out. Rows of `terms.csv` that its format excludes
 are reported with their line; the rest are used.
+
+## Instructions
+
+An instruction is one Markdown file of `instructions/`, free text a person
+writes, such as how to fix the agreement with the player character's gender
+or what officialese to remove. Its name is the file's name without `.md`,
+as written: it is not empty, begins with no dot, has no space at either end,
+and holds no control character and none of `/ \ : * ? " < > |`. A file of
+another name or extension in the directory is not an instruction. A file is
+at most 256 KiB, UTF-8 with an optional leading BOM that is ignored; one that
+cannot be read is reported and left out.
+
+A correction run that follows an instruction sends its text, as saved, as
+the request of every translation of the run (see
+[`../architecture/translate.md`](../architecture/translate.md#correcting-translations)),
+and its report names it. Aeria writes an instruction only while its file
+still has the text the editor loaded, so a change made meanwhile by hand or
+by Git is never overwritten.
 
 ## Declared sheets
 

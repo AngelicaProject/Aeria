@@ -82,14 +82,14 @@ pub struct Fix {
     /// Only the issues of these groups ([`Issue::group`]); empty for every
     /// issue. A problem always goes: a correction must pass the checks.
     pub groups: Vec<String>,
-    /// Proofread every translation: its meaning against the source, the
-    /// form of address, and phrasing a native speaker would not write.
-    pub proofread: bool,
     /// Adapt the translation of a fuzzy string to its changed source; what
     /// passes is written with the fuzzy mark cleared.
     pub adapt: bool,
     /// What a translator asks of every translation of the run.
     pub request: Option<String>,
+    /// The name of the project's instruction `request` is the text of (see
+    /// `aeria_knowledge::instructions`), to name the run by.
+    pub instruction: Option<String>,
     /// Bring the translations written with an older version of these
     /// terms, by headword, or of any term when empty, to the terms as they
     /// are (see [`Entry::outdated_terms`]); `None` for none.
@@ -137,13 +137,12 @@ pub fn fix_terms<'a>(fix: &Fix, knowledge: &'a Knowledge, entry: &Entry) -> Vec<
 }
 
 /// Whether a correction takes a string: a translation that is not
-/// reviewed, with an issue to fix or a term to follow, or every one when
-/// proofreading or with a translator's request.
+/// reviewed, with an issue to fix or a term to follow, or every one with a
+/// translator's request.
 fn needs_fix(fix: &Fix, knowledge: &Knowledge, target: &str, entry: &Entry) -> bool {
     !entry.is_reviewed()
         && !entry.translation.is_empty()
-        && (fix.proofread
-            || fix.request.is_some()
+        && (fix.request.is_some()
             || (fix.adapt && entry.fuzzy)
             || !fix_issues(fix, knowledge, target, entry).is_empty()
             || !fix_terms(fix, knowledge, entry).is_empty())
@@ -1330,6 +1329,7 @@ pub async fn run(session: Arc<Session>, codex: Arc<Codex>, options: Options, han
             .as_ref()
             .and_then(|fix| fix.terms.clone())
             .unwrap_or_default(),
+        instruction: options.fix.as_ref().and_then(|fix| fix.instruction.clone()),
         started_at: handle.status().started_at,
     });
     handle.report(&Record::Options {
@@ -1354,18 +1354,17 @@ pub async fn run(session: Arc<Session>, codex: Arc<Codex>, options: Options, han
     ));
     if let Some(fix) = &options.fix {
         handle.log(format_args!(
-            "correcting: {}{}{}{}{}",
+            "correcting: {}{}{}{}",
             match (fix.issues, fix.groups.len()) {
                 (false, _) => "problems only".to_owned(),
                 (true, 0) => "every issue".to_owned(),
                 (true, groups) => format!("{groups} kinds of issues"),
             },
-            if fix.proofread { ", proofreading" } else { "" },
             if fix.adapt { ", adapting fuzzy" } else { "" },
-            if fix.request.is_some() {
-                ", with a request"
-            } else {
-                ""
+            match (&fix.instruction, &fix.request) {
+                (Some(name), _) => format!(", with the instruction {name:?}"),
+                (None, Some(_)) => ", with a request".to_owned(),
+                (None, None) => String::new(),
             },
             match &fix.terms {
                 None => String::new(),
@@ -1438,7 +1437,6 @@ async fn prepare(
             &settings.source_language,
             &settings.target_language,
             knowledge.style.as_deref(),
-            fix.proofread,
             fix.adapt,
             fix.request.as_deref(),
         ),

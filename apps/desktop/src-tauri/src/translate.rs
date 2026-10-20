@@ -523,14 +523,16 @@ pub struct FixDto {
     pub issues: bool,
     #[serde(default)]
     pub groups: Vec<String>,
-    /// Proofread each translation.
-    #[serde(default)]
-    pub proofread: bool,
     /// Adapt a fuzzy translation to its changed source and clear the mark.
     #[serde(default)]
     pub adapt: bool,
     /// What the translator asks of each translation.
+    #[serde(default)]
     pub request: Option<String>,
+    /// The name of the project's instruction to follow; its saved text is
+    /// asked of each translation, after `request`.
+    #[serde(default)]
+    pub instruction: Option<String>,
     /// Bring the translations written with an older version of these terms,
     /// by headword, or of any term when empty, to the terms as they are.
     #[serde(default)]
@@ -546,14 +548,34 @@ fn start_fix(
     model: String,
     effort: Option<String>,
 ) -> CommandResult<()> {
-    let request = fix
-        .request
-        .map(|request| request.trim().to_owned())
-        .filter(|request| !request.is_empty());
-    if !fix.issues && !fix.proofread && !fix.adapt && request.is_none() && fix.terms.is_none() {
+    let instruction = match fix.instruction.as_deref() {
+        Some(name) => {
+            let root = app.state::<DesktopState>().session()?.root().to_owned();
+            let text = aeria_knowledge::read_instruction(&root, name)
+                .map_err(|message| CommandError::new("projectKnowledgeRead", message))?
+                .ok_or_else(|| {
+                    CommandError::new(
+                        "instructionNotFound",
+                        format!("the project has no instruction {name:?}"),
+                    )
+                })?;
+            Some(text)
+        }
+        None => None,
+    };
+    // The translator's words, then the instruction's.
+    let request = [fix.request.as_deref(), instruction.as_deref()]
+        .into_iter()
+        .flatten()
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    let request = (!request.is_empty()).then_some(request);
+    if !fix.issues && !fix.adapt && request.is_none() && fix.terms.is_none() {
         return Err(CommandError::new(
             "fixEmpty",
-            "choose the issues to fix, proofreading, adapting, terms, or write a request",
+            "choose an instruction, the issues to fix, adapting, or terms",
         ));
     }
     start_run(
@@ -567,9 +589,9 @@ fn start_fix(
             fix: Some(Fix {
                 issues: fix.issues,
                 groups: fix.groups,
-                proofread: fix.proofread,
                 adapt: fix.adapt,
                 request,
+                instruction: fix.instruction,
                 terms: fix.terms,
             }),
         },

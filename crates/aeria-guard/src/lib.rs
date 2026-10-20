@@ -219,6 +219,14 @@ fn text_files(root: &Path) -> Vec<PathBuf> {
             .map(|path| project_path(root, path)),
     );
     files.extend(KnowledgeFile::ALL.iter().map(|file| file.path(root)));
+    if let Ok(entries) = std::fs::read_dir(aeria_knowledge::instructions_dir(root)) {
+        files.extend(
+            entries
+                .filter_map(Result::ok)
+                .map(|entry| entry.path())
+                .filter(|path| path.extension().is_some_and(|extension| extension == "md")),
+        );
+    }
     files.retain(|path| path.is_file());
     files
 }

@@ -244,24 +244,13 @@ are not reviewed, and sends each translation with what is wrong with it, so
 the model changes what is wrong and keeps what is right. A person asks for
 any of:
 
-- **proofreading** (`Fix::proofread`): every translation is read as the
-  localization's editor reads it, against its source, the other client
-  languages of its context, and the strings around it in the scene; it is
-  fixed where it loses or adds meaning, misses the form of address the
-  style asks for in this line (read from the line of this string in the
-  language the style follows, not from its neighbours), the agreement with
-  the player character's gender, a name or a term, or reads as a
-  translation (constructions copied from the source, officialese, filler).
-  The source's meaning comes before smoothness, and what reads well stays
-  unchanged. The name of a thing of the game (an action, a status, a menu)
-  keeps the form the translation gives it unless the request's names or
-  terms give another: many such names, such as those of the interface, are
-  not among the request's names, and the game shows them under the name the
-  project gave them. Research on refining translations with a model found that one
-  general request of this kind improves fluency and style more reliably
-  than asking for each kind of error or having the model find errors
-  first, and that it can move a translation's meaning, which the reasons
-  below and the review in Git are for;
+- **an instruction** of the project (`Fix::request`, named by
+  `Fix::instruction`): the saved text of one of
+  `aeria-knowledge/instructions/` (see
+  [`../formats/knowledge-v1.md`](../formats/knowledge-v1.md#instructions)),
+  the same for every translation of the run, such as how to fix the
+  agreement with the player character's gender. Every kind of review is an
+  instruction a person writes: Aeria has no review of its own;
 - **the issues of the checks**: what the checks find in the translation,
   problems and advice, every kind or only the kinds chosen (`Fix::groups`,
   by `Issue::group`, as project search groups them). A problem always goes,
@@ -279,9 +268,9 @@ any of:
   it is unchanged, since it is now a translation of the source. A string
   that is not fuzzy is not adapted;
 - **a request** in the translator's words, the same for every translation
-  of the run, such as a form of address the style changed.
+  of the run, for a run that follows changed terms.
 
-With proofreading or a request every chosen translation is taken; with
+With an instruction or a request every chosen translation is taken; with
 adapting, every fuzzy one; with the issues or the terms alone, a string
 without any is not. This is the one place advice reaches a model, and only
 the advice a person chose.
@@ -399,11 +388,11 @@ what it settled and a report can be read while its run goes:
 
 - `run`, first: `version` (1), the run's `kind` (`translating` or
   `fixing`), `model`, `effort`, the `terms` a correction follows, by
-  headword (empty for every term or none), and `startedAt` (Unix
-  milliseconds).
+  headword (empty for every term or none), the name of the `instruction`
+  it follows, or null, and `startedAt` (Unix milliseconds).
 - `options`, second: what the run was asked, as `aeria_model::Options`
   (`paths`, `contexts`, `fuzzy`, `model`, `effort`, and `fix` with its
-  issues, groups, proofreading, adaptation, request, and terms), and
+  issues, groups, adaptation, request, instruction, and terms), and
   `continues`, the id of the report of the run it continues, or null.
 - `string`: its `path` and `context`, its `source`, its translation
   `before` the run, each `attempt` with the model's `translation` and the
