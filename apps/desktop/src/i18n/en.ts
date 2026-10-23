@@ -1441,6 +1441,8 @@ export const en = {
   "git.checkpointCreated": "Commit {id}: {subject}",
   "git.checkpointMessage": "Commit message",
   "git.checkpointPlaceholder": "Commit message (optional, generated from the changes)",
+  "git.writeMessage": "Write the message from the changes",
+  "git.writeMessageNoModel": "Choose a model in the settings to write the message",
   "git.changeIdentity": "Change the commit author",
   "git.setName": "Set user.name",
   "git.setNameFirst": "Set your Git user.name first",

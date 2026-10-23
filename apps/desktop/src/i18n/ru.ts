@@ -1476,6 +1476,8 @@ export const ru: Catalog = {
   "git.checkpointCreated": "Коммит {id}: {subject}",
   "git.checkpointMessage": "Сообщение коммита",
   "git.checkpointPlaceholder": "Сообщение коммита (необязательно, создаётся по изменениям)",
+  "git.writeMessage": "Написать сообщение по изменениям",
+  "git.writeMessageNoModel": "Выберите модель в настройках, чтобы писать сообщения",
   "git.changeIdentity": "Изменить автора коммитов",
   "git.setName": "Укажите user.name",
   "git.setNameFirst": "Сначала укажите user.name в Git",

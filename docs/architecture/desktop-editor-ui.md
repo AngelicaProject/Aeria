@@ -700,7 +700,10 @@ and has no refresh button.
   and **History**; the dock remembers the tab while the window lives.
 - **Changes** starts with the composer: the message (Ctrl+Enter commits),
   an **Amend last commit** checkbox, the translator name and optional
-  email, and **Commit**; the placeholder and the button's tooltip say
+  email, **Write the message** (fills the message by the project's
+  convention, its summary by the machine translation model; see
+  [`git.md`](./git.md#commit-messages); disabled without a model, while
+  amending, or with nothing to commit), and **Commit**; the placeholder and the button's tooltip say
   whether the commit takes the staged changes or every translation and
   project file change. With the checkbox the button reads **Commit
   (Amend)** and also commits a new message alone; the checkbox is disabled

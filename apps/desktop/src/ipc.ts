@@ -353,6 +353,11 @@ export function gitCommit(message: string | null, amend = false): Promise<GitCom
   return call<GitCommitChangesDto>("git_commit", { message, amend });
 }
 
+/** A message by the project's convention for what a commit would take now, its summary written by `model`. */
+export function gitCommitMessageSuggest(model: string): Promise<string> {
+  return call<string>("git_commit_message_suggest", { model });
+}
+
 export function gitStage(paths: string[]): Promise<void> {
   return call<void>("git_stage", { paths });
 }

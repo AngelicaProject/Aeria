@@ -1,5 +1,6 @@
 mod column_names;
 mod commands;
+mod commit_message;
 mod dto;
 mod error;
 mod export;
@@ -60,12 +61,12 @@ pub use games::{
 };
 pub use git::{
     git_branches, git_changed_files, git_clone_repository, git_commit, git_commit_changes,
-    git_create_branch, git_create_branch_at, git_delete_branch, git_delete_remote_branch,
-    git_discard, git_fetch, git_initialize, git_log, git_open_commit, git_overview,
-    git_pending_changes, git_pending_file_changes, git_pending_sheet_changes, git_pull, git_push,
-    git_remote_branches, git_remove_remote, git_revert, git_set_identity, git_set_remote,
-    git_set_upstream, git_stage, git_state_stamp, git_string_history, git_switch_branch,
-    git_undo_last_commit, git_unstage,
+    git_commit_message_suggest, git_create_branch, git_create_branch_at, git_delete_branch,
+    git_delete_remote_branch, git_discard, git_fetch, git_initialize, git_log, git_open_commit,
+    git_overview, git_pending_changes, git_pending_file_changes, git_pending_sheet_changes,
+    git_pull, git_push, git_remote_branches, git_remove_remote, git_revert, git_set_identity,
+    git_set_remote, git_set_upstream, git_stage, git_state_stamp, git_string_history,
+    git_switch_branch, git_undo_last_commit, git_unstage,
 };
 pub use guard_workflow::{
     GuardWorkflowDto, git_guard_workflow, git_install_guard_workflow, git_open_pull_request,
@@ -180,6 +181,7 @@ pub fn run() {
             git_pending_changes,
             git_pending_sheet_changes,
             git_commit,
+            git_commit_message_suggest,
             git_stage,
             git_unstage,
             git_discard,

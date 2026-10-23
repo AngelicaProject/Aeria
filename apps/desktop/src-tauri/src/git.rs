@@ -5,20 +5,21 @@
 //! (checkpoint, integration, branch switches) hold the project lock; network
 //! operations do not.
 
-use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::path::{Path, PathBuf};
 
 use aeria_git::{
     BranchInfo, CheckpointOutcome, CommitSummary, ConfigScope, ConflictResolution, EntryChange,
     EntryChangeKind, EntryConflict, EntryHistory, EntryRevision, EntryState, FileChangeKind,
     FileStatus, GitError, GitExecutable, GitOrigin, GitRepository, IntegrateOutcome, RemoteInfo,
-    RepositoryStatus, TranslatorIdentity, summarize_changes,
+    RepositoryStatus, TranslatorIdentity,
 };
 use aeria_po::Session;
 use serde::{Deserialize, Serialize};
 use tauri::Manager;
 
 use crate::commands::run_blocking;
+use crate::commit_message;
 use crate::dto::SourceBindingDto;
 use crate::error::CommandError;
 use crate::file_changes::{self, FileChangeDto, WorkingChangesDto};
@@ -645,21 +646,121 @@ pub(crate) fn git_overview_with_state(state: &DesktopState) -> CommandResult<Git
 pub(crate) fn git_checkpoint_with_state(
     state: &DesktopState,
     message: Option<&str>,
+    reports: Option<&Path>,
 ) -> CommandResult<GitCommitChangesDto> {
     let session = state.session()?;
     let _writes = session.hold_writes();
     let repository = GitRepository::open(session.root(), state.git())?;
-    let project_files = project_changes::pending(&repository, session.root())?;
     let message = if let Some(message) = message.map(str::trim).filter(|text| !text.is_empty()) {
         Some(message.to_owned())
     } else {
-        let changes = repository.pending_changes()?;
-        let translations = (!changes.is_empty()).then(|| summarize_changes(&changes));
-        project_changes::checkpoint_message(translations.as_deref(), &project_files)
+        let digest = commit_digest(&repository, &session, false, reports)?;
+        commit_message::message(&digest, &session.settings().target_language, None)
     };
     let outcome =
         GitCommitChangesDto::new(repository.checkpoint(message.as_deref())?, Some(&session));
     Ok(outcome)
+}
+
+/// The digest of what a commit takes: the staged changes, or with `staged`
+/// false every change a checkpoint takes; with the runs of the reports in
+/// `reports` that wrote its strings since the last commit.
+fn commit_digest(
+    repository: &GitRepository,
+    session: &Session,
+    staged: bool,
+    reports: Option<&Path>,
+) -> CommandResult<commit_message::Digest> {
+    let changes = if staged {
+        repository.staged_changes()?
+    } else {
+        repository.pending_changes()?
+    };
+    let mut project = project_changes::pending(repository, session.root())?;
+    if staged {
+        let status = repository.status()?;
+        let paths: HashSet<&str> = status
+            .files
+            .iter()
+            .filter(|file| file.staged)
+            .map(|file| file.path.as_str())
+            .collect();
+        project.retain(|change| paths.contains(change.path.as_str()));
+    }
+    let written = match reports {
+        Some(folder) => {
+            let since = match repository.head()? {
+                Some(_) => repository.commit("HEAD")?.authored_at,
+                None => 0,
+            };
+            let contexts: HashSet<&str> = changes
+                .iter()
+                .map(|change| change.context.as_str())
+                .collect();
+            commit_message::written_by(folder, since, &contexts)
+        }
+        None => HashMap::new(),
+    };
+    Ok(commit_message::digest(&changes, &project, &written))
+}
+
+#[tauri::command(rename_all = "camelCase")]
+/// A message for what a commit would take now, by the project's
+/// convention, with its summary written by `model` from a short digest of
+/// the changes: no diff is sent.
+///
+/// # Errors
+///
+/// Returns `nothingToCommit` when nothing would be committed, a model
+/// error, or an error when Git fails.
+pub async fn git_commit_message_suggest(
+    app: tauri::AppHandle,
+    model: String,
+) -> CommandResult<String> {
+    let reports = crate::report::folder(&app);
+    let (digest, language) = run_blocking({
+        let app = app.clone();
+        move || {
+            let state = app.state::<DesktopState>();
+            let session = state.session()?;
+            let repository = GitRepository::open(session.root(), state.git())?;
+            let staged = repository.has_staged_changes()?;
+            let digest = commit_digest(&repository, &session, staged, reports.as_deref())?;
+            Ok((digest, session.settings().target_language))
+        }
+    })
+    .await?;
+    if commit_message::message(&digest, &language, None).is_none() {
+        return Err(CommandError::new(
+            "nothingToCommit",
+            "there are no changes to commit",
+        ));
+    }
+    let codex = app.state::<crate::translate::Translation>().codex()?;
+    // The least reasoning the model takes: a summary needs little.
+    let effort = codex
+        .models()
+        .await
+        .ok()
+        .and_then(|models| models.into_iter().find(|info| info.id == model))
+        .and_then(|info| {
+            ["none", "minimal", "low", "medium"]
+                .into_iter()
+                .find(|effort| info.efforts.iter().any(|known| known == effort))
+                .map(str::to_owned)
+        });
+    let (instructions, input) = commit_message::summary_request(&digest, &language);
+    let reply = codex
+        .respond(&aeria_model::Request {
+            model,
+            effort,
+            instructions,
+            input,
+            cache_key: "aeria-commit-message".to_owned(),
+        })
+        .await?;
+    let summary = commit_message::read_summary(&reply.text);
+    Ok(commit_message::message(&digest, &language, summary.as_deref()).unwrap_or_default())
 }
 
 /// Fetches and integrates the upstream, with the per-string merge of PO files
@@ -883,6 +984,7 @@ pub async fn git_commit(
     message: Option<String>,
     amend: bool,
 ) -> CommandResult<GitCommitChangesDto> {
+    let reports = crate::report::folder(&app);
     run_sync(app, move |state| {
         let session = state.session()?;
         let repository = GitRepository::open(session.root(), state.git())?;
@@ -894,12 +996,22 @@ pub async fn git_commit(
             ));
         }
         if repository.has_staged_changes()? {
+            let message = if let Some(message) = message
+                .as_deref()
+                .map(str::trim)
+                .filter(|text| !text.is_empty())
+            {
+                Some(message.to_owned())
+            } else {
+                let digest = commit_digest(&repository, &session, true, reports.as_deref())?;
+                commit_message::message(&digest, &session.settings().target_language, None)
+            };
             return Ok(GitCommitChangesDto::new(
                 repository.commit_staged(message.as_deref())?,
                 Some(&session),
             ));
         }
-        git_checkpoint_with_state(state, message.as_deref())
+        git_checkpoint_with_state(state, message.as_deref(), reports.as_deref())
     })
     .await
 }
@@ -1596,7 +1708,7 @@ mod tests {
         ada_repository
             .set_remote("origin", &remote_url)
             .expect("remote");
-        git_checkpoint_with_state(&ada, None).expect("initial checkpoint");
+        git_checkpoint_with_state(&ada, None, None).expect("initial checkpoint");
         ada_repository.push().expect("publish");
         let grace = DesktopState::new();
         grace.set_git(git.clone());
@@ -1689,7 +1801,7 @@ mod tests {
         ada_repository
             .set_remote("origin", &remote_url)
             .expect("remote");
-        git_checkpoint_with_state(&ada, None).expect("initial checkpoint");
+        git_checkpoint_with_state(&ada, None, None).expect("initial checkpoint");
         ada_repository.push().expect("publish");
 
         // Grace clones it and opens it with the same game.
@@ -1718,7 +1830,7 @@ mod tests {
         assert_eq!(pending.len(), 1);
         assert_eq!(pending[0].source_binding.as_ref(), Some(&binding()));
         // Ada commits on main and pushes it.
-        let outcome = git_checkpoint_with_state(&ada, None).expect("checkpoint");
+        let outcome = git_checkpoint_with_state(&ada, None, None).expect("checkpoint");
         assert_eq!(outcome.changes.len(), 1);
         assert!(ada_repository.push().expect("push main"));
 

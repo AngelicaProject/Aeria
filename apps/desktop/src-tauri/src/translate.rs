@@ -33,7 +33,7 @@ pub struct Translation {
 }
 
 impl Translation {
-    fn codex(&self) -> CommandResult<Arc<Codex>> {
+    pub(crate) fn codex(&self) -> CommandResult<Arc<Codex>> {
         if let Some(codex) = self.codex.get() {
             return Ok(Arc::clone(codex));
         }

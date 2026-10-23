@@ -144,11 +144,48 @@ A checkpoint stages and commits only Aeria-managed paths (`git commit
 `.github/workflows/harmonia-feed.yml` and `.github/workflows/aeria-guard.yml`
 (`PROJECT_PATHS`); a path without a file is left out, since Git has no empty
 folders. Unrelated staged or modified files are left untouched and listed as
-other files. A blank message is replaced by a
-deterministic summary: the string changes, for example `Translate 3 strings,
-update 1 translation (Addon, Quest)`, followed by the changed project areas
-(`; update terms, game fonts`), or `Update glossary, pack settings` when no
-string changed.
+other files. A blank message is replaced by a message by the project's
+convention (see [Commit messages](#commit-messages)).
+
+### Commit messages
+
+A message Aeria writes follows one convention, in the project's target
+language (Russian for a Russian project, English otherwise):
+
+```
+kind(area): summary
+
+facts, a line each
+```
+
+- **kind** is what most of the commit does: `fix` (translations a run of
+  corrections wrote, by the run reports), `translate`, `edit` (other changed
+  translations), `remove`, `mark` (notes, fuzzy marks, reviews, term
+  exceptions only); without string changes `terms`, `knowledge`,
+  `settings`, or `ci`;
+- **area** is the first part of the strings' `msgctxt`, a sheet
+  (`DefaultTalk`) or a folder of sheets (`quest`, `cut_scene`), when all or
+  at least two in three of the strings are in it; otherwise the header has
+  no area;
+- **summary** says what the commit holds: by a template, for example
+  `fix(cut_scene): Согласование по полу игрока, 2449 строк`, or a line a
+  model writes;
+- **facts** are counts by kind, the areas with their counts (five at most),
+  each run that wrote strings of the commit since the last commit (from the
+  run reports of the data folder: its kind, skill, model, and strings), the
+  terms added, changed, or removed, the knowledge files, and the settings.
+
+A blank message gets the template's summary. **Write the message** in the
+composer asks the model chosen for machine translation for the summary
+alone, with the least reasoning it accepts: a verb first, in the form a
+commit summary takes in the language (the infinitive in Russian,
+`исправить`, the imperative in English, `fix`). It sends no diff: only a digest
+of the facts above and ten changed strings at most, from different areas,
+each text shortened to 80 characters; the model's first line, without
+surrounding quotes, a `kind(area): ` prefix, or a final period, is the
+summary. Kind, area, and facts are Aeria's, so a model cannot break the
+convention. The message is filled into the composer to edit before the
+commit.
 
 A file `aeria-collaboration.json` left by an earlier Aeria is not a project
 file: Aeria neither reads nor commits it, and it can be deleted with Git.
@@ -189,7 +226,7 @@ are project-relative and read literally (`--literal-pathspecs`):
   file is not discarded. The editor's writes wait while files change, and
   its views read them again.
 - **Commit** takes what is staged when anything is (`git commit`), with a
-  blank message replaced by a summary of the staged string changes;
+  blank message replaced by a message by the convention for what is staged;
   otherwise it is a checkpoint.
 - **Commit (Amend)** replaces the last commit with one that also holds the
   new changes, what is staged or else what a checkpoint would take; a blank

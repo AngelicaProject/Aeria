@@ -3,6 +3,7 @@ import {
   gitBranches,
   gitChangedFiles,
   gitCommit,
+  gitCommitMessageSuggest,
   gitCreateBranch,
   gitDiscard,
   gitFetch,
@@ -39,6 +40,7 @@ import { IconButton } from "../ui/primitives/IconButton";
 import { Segmented } from "../ui/primitives/Segmented";
 import { UiIcon } from "../ui/primitives/UiIcon";
 import { useI18n } from "../ui/i18n";
+import { usePreferences } from "../ui/preferences";
 import type { MessageKey } from "../i18n/translate";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { GitBranchDelete } from "./GitBranchDelete";
@@ -109,6 +111,7 @@ export function GitPanel({ selectedKey, workspaceRevision, projectRevision, onWo
   // The next commit replaces the last one (`git commit --amend`).
   const [amend, setAmend] = useState(false);
   const [message, setMessage] = useState("");
+  const { preferences } = usePreferences();
   const [identityDraft, setIdentityDraft] = useState<{ name: string; email: string; global: boolean } | null>(null);
   const [conflicts, setConflicts] = useState<EntryConflictDto[]>([]);
   const [choices, setChoices] = useState<Record<string, ConflictResolution>>({});
@@ -411,6 +414,21 @@ export function GitPanel({ selectedKey, workspaceRevision, projectRevision, onWo
                 </button>
               )}
               <span className="spacer" />
+              <IconButton
+                icon="sparkles"
+                label={t(preferences.translationModel === "" ? "git.writeMessageNoModel" : "git.writeMessage")}
+                disabled={busy !== null || amend || !committable || preferences.translationModel === ""}
+                onClick={() => {
+                  setBusy("message");
+                  setError(null);
+                  void gitCommitMessageSuggest(preferences.translationModel)
+                    .then(setMessage)
+                    .catch((caught: unknown) => setError(normalizeCommandError(caught)))
+                    .finally(() => setBusy(null));
+                }}
+              >
+                {busy === "message" ? <span className="spinner" /> : null}
+              </IconButton>
               <button
                 className="button button-primary"
                 type="submit"
