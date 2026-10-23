@@ -72,9 +72,9 @@ fn a_session_reads_writes_and_checks_strings() {
 
     // A translation with a problem is refused and nothing is written.
     let before = std::fs::read(root.join("po/Addon/0.po")).expect("before");
-    let refused = session.set_translation("Addon", 2, 0, 0, "Отмена(а)\n");
+    let refused = session.set_translation("Addon", 2, 0, 0, "Отмена\n");
     assert!(
-        matches!(refused, Err(EditError::Invalid(ref problems)) if problems.len() == 2),
+        matches!(refused, Err(EditError::Invalid(ref problems)) if problems.len() == 1),
         "{refused:?}"
     );
     assert_eq!(
@@ -199,6 +199,7 @@ fn a_reviewed_translation_is_left_to_people() {
             "Addon/0.po",
             &[("Addon:1:0:0".to_owned(), "Хорошо".to_owned())],
             true,
+            &aeria_knowledge::Glossary::default(),
         )
         .expect("fill");
     assert!(filled.is_empty());
@@ -255,6 +256,7 @@ fn a_reviewed_translation_is_left_to_people() {
             "Addon/0.po",
             &[("Addon:2:0:0".to_owned(), "Отказ".to_owned())],
             false,
+            &aeria_knowledge::Glossary::default(),
         )
         .expect("fill");
     assert!(filled.is_empty(), "a translated string is not filled");

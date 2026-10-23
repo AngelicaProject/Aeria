@@ -38,27 +38,12 @@ pub struct EntryState {
     pub reviewed: bool,
     /// The terms of the string's term exceptions, a person's decisions.
     pub term_exceptions: Vec<String>,
-    /// The terms of its model exceptions, a correction run's decisions.
-    pub model_exceptions: Vec<String>,
-    /// Its model renderings, a correction run's decisions, each as
-    /// `term = word`.
-    pub model_renderings: Vec<String>,
 }
 
 impl EntryState {
     fn of(entry: &Entry) -> Self {
         Self {
             term_exceptions: entry.term_exceptions.clone(),
-            model_exceptions: entry
-                .model_exceptions
-                .iter()
-                .map(|exception| exception.term.clone())
-                .collect(),
-            model_renderings: entry
-                .model_renderings
-                .iter()
-                .map(|rendering| format!("{} = {}", rendering.term, rendering.word))
-                .collect(),
             ..Self::joined(entry)
         }
     }
@@ -72,8 +57,6 @@ impl EntryState {
             note: (!entry.notes.is_empty()).then(|| entry.notes.join("\n")),
             reviewed: entry.is_reviewed(),
             term_exceptions: Vec::new(),
-            model_exceptions: Vec::new(),
-            model_renderings: Vec::new(),
         }
     }
 }
@@ -87,8 +70,8 @@ pub enum EntryChangeKind {
     Changed,
     /// Its translation was removed.
     Cleared,
-    /// Only its note, its fuzzy mark, its review, or its term or model
-    /// exceptions changed.
+    /// Only its note, its fuzzy mark, its review, or its term exceptions
+    /// changed.
     Marked,
 }
 
@@ -720,25 +703,16 @@ fn same_strings(ours: &PoFile, theirs: &PoFile) -> bool {
             .all(|(ours, theirs)| key(ours) == key(theirs))
 }
 
-/// Takes the other branch's term exceptions, model exceptions, and model
-/// renderings of a string when only that branch changed them; when both
-/// did, ours stay. They
-/// are decisions about the source, apart from the translation, so a branch
-/// that only decided terms and one that only translated both keep their
-/// work.
+/// Takes the other branch's term exceptions of a string when only that
+/// branch changed them; when both did, ours stay. They are decisions about
+/// the source, apart from the translation, so a branch that only decided
+/// terms and one that only translated both keep their work.
 fn merge_exceptions(entry: &mut Entry, other: &Entry, base: Option<&Entry>) {
-    let exceptions = |entry: &Entry| {
-        (
-            entry.term_exceptions.clone(),
-            entry.model_exceptions.clone(),
-            entry.model_renderings.clone(),
-        )
-    };
-    let base = base.map(exceptions).unwrap_or_default();
-    if exceptions(entry) == base {
+    let base = base
+        .map(|base| base.term_exceptions.clone())
+        .unwrap_or_default();
+    if entry.term_exceptions == base {
         entry.term_exceptions.clone_from(&other.term_exceptions);
-        entry.model_exceptions.clone_from(&other.model_exceptions);
-        entry.model_renderings.clone_from(&other.model_renderings);
     }
 }
 
@@ -862,13 +836,17 @@ pub fn merge_file(
                 let mut kept = other.clone();
                 merge_exceptions(&mut kept, entry, base.as_ref());
                 entry.term_exceptions = kept.term_exceptions;
-                entry.model_exceptions = kept.model_exceptions;
-                entry.model_renderings = kept.model_renderings;
             }
         }
         let state = EntryState::joined(entry);
         let other_state = EntryState::joined(&other);
         if state == other_state {
+            // The record of the terms goes with the translation: the same
+            // translation keeps the record a branch made anew.
+            let base_record = base.as_ref().map(|base| &base.written_with);
+            if base_record.is_none_or(|record| *record == entry.written_with) {
+                entry.written_with = other.written_with;
+            }
             continue;
         }
         let base_state = base.as_ref().map(EntryState::joined).unwrap_or_default();
@@ -903,6 +881,7 @@ pub fn merge_file(
             entry.previous = other.previous;
             entry.notes = other.notes;
             entry.reviewed = other.reviewed;
+            entry.written_with = other.written_with;
         }
     }
     keep_left_strings(&mut merged, &other, &base, &joined);
@@ -1154,16 +1133,20 @@ mod tests {
     }
 
     #[test]
-    fn decisions_on_terms_merge_apart_from_the_translation() {
+    fn the_terms_a_translation_was_written_with_go_with_it() {
         let base = file(&[("A:1:0:0", "первый"), ("A:2:0:0", "второй")]);
-        // One branch decides a term of the first string; the other
-        // translates the second again.
-        let decided = format!(
-            "#, aeria-term-model-exception: mount 3f9a1c0b7d2e\n{}",
+        // One branch brings the first string to its terms without changing
+        // it; the other translates the second again with the terms of now.
+        let recorded = format!(
+            "# aeria-terms: {{\"mount\":\"3f9a1c0b7d2e\"}}\n{}",
             file(&[("A:1:0:0", "первый"), ("A:2:0:0", "второй")])
         );
-        let translated = file(&[("A:1:0:0", "первый"), ("A:2:0:0", "другой")]);
-        for (ours, theirs) in [(&decided, &translated), (&translated, &decided)] {
+        let translated = format!(
+            "{}# aeria-terms: {{\"aether\":\"1d4e0f7a9c2b\"}}\n{}",
+            file(&[("A:1:0:0", "первый")]),
+            file(&[("A:2:0:0", "другой")])
+        );
+        for (ours, theirs) in [(&recorded, &translated), (&translated, &recorded)] {
             let (merged, conflicts) = merge_file(
                 "po/A.po",
                 Some(base.as_bytes()),
@@ -1174,35 +1157,18 @@ mod tests {
             .expect("mergeable");
             assert!(conflicts.is_empty());
             let merged = PoFile::parse(&merged).0;
-            assert_eq!(merged.entries[0].model_exceptions.len(), 1, "{merged:?}");
+            assert_eq!(
+                merged.entries[0].written_with.keys().collect::<Vec<_>>(),
+                ["mount"],
+                "{merged:?}"
+            );
             assert_eq!(merged.entries[1].translation, "другой");
+            assert_eq!(
+                merged.entries[1].written_with.keys().collect::<Vec<_>>(),
+                ["aether"]
+            );
         }
-        // A diff reports a decision alone as a mark with its term.
-        let changes = diff_file("po/A.po", Some(base.as_bytes()), Some(decided.as_bytes()));
-        assert_eq!(changes.len(), 1);
-        assert_eq!(changes[0].kind, EntryChangeKind::Marked);
-        assert_eq!(changes[0].after.model_exceptions, ["mount"]);
-        assert!(changes[0].before.model_exceptions.is_empty());
-        // So is a decision that a word renders a term.
-        let rendered = format!(
-            "#, aeria-term-model-rendering: aether 3f9a1c0b7d2e эфирный\n{}",
-            file(&[("A:1:0:0", "первый"), ("A:2:0:0", "второй")])
-        );
-        let (merged, conflicts) = merge_file(
-            "po/A.po",
-            Some(base.as_bytes()),
-            translated.as_bytes(),
-            rendered.as_bytes(),
-            &BTreeMap::new(),
-        )
-        .expect("mergeable");
-        assert!(conflicts.is_empty());
-        assert_eq!(
-            PoFile::parse(&merged).0.entries[0].model_renderings.len(),
-            1
-        );
-        let changes = diff_file("po/A.po", Some(base.as_bytes()), Some(rendered.as_bytes()));
-        assert_eq!(changes[0].kind, EntryChangeKind::Marked);
-        assert_eq!(changes[0].after.model_renderings, ["aether = эфирный"]);
+        // A record alone is no change a person made.
+        assert!(diff_file("po/A.po", Some(base.as_bytes()), Some(recorded.as_bytes())).is_empty());
     }
 }

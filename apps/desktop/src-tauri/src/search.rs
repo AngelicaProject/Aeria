@@ -669,37 +669,6 @@ pub async fn project_term_exception(
 }
 
 #[tauri::command(rename_all = "camelCase")]
-/// Drops the model's decisions on the terms of `category`, ignoring case,
-/// from every string, so the checks ask for those terms again and the next
-/// correction run decides them anew. A person's exceptions and reviewed
-/// translations keep theirs. The edit becomes the one an undo reverts.
-///
-/// # Errors
-///
-/// Returns `noProjectOpen` or `translationPersistence` when a file cannot
-/// be read or written.
-pub async fn project_forget_model_decisions(
-    app: tauri::AppHandle,
-    category: String,
-) -> CommandResult<BulkEditDto> {
-    run_blocking(move || {
-        let session = app.state::<DesktopState>().session()?;
-        let category = category.to_lowercase();
-        let mut terms: Vec<String> = Vec::new();
-        for entry in &session.knowledge().terms.entries {
-            if entry.category.to_lowercase() == category && !terms.contains(&entry.term) {
-                terms.push(entry.term.clone());
-            }
-        }
-        let applied = session.forget_model_decisions(&terms)?;
-        let state = app.state::<SearchState>();
-        state.set_undo(&applied);
-        Ok(bulk_dto(&session, &applied, &state))
-    })
-    .await
-}
-
-#[tauri::command(rename_all = "camelCase")]
 /// Clears the translations of the given strings and starts machine
 /// translation of exactly those strings. The clear is the edit an undo
 /// reverts. A stopped run leaves the rest untranslated, so any later run

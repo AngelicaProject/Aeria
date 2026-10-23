@@ -18,15 +18,8 @@ pub struct HintTerm {
     pub note: Option<String>,
     /// What the term names in this meaning.
     pub category: String,
-    /// A person, or a correction run's model, decided the term does not
-    /// apply to this string.
+    /// A person decided the term does not apply to this string.
     pub excepted: bool,
-    /// The decision is the model's: its model exception holds and the
-    /// person made none.
-    pub by_model: bool,
-    /// The words a correction run's model decided render the term in this
-    /// string's translation, while the decisions hold and the term applies.
-    pub rendered: Vec<String>,
 }
 
 /// What one string's translation goes by besides its source.
@@ -55,33 +48,17 @@ pub fn hints(glossary: &Glossary, entry: &Entry) -> StringHints {
             .find_map(|line| line.strip_prefix(prefix))
             .map(str::to_owned)
     };
-    let excepted = glossary.matches(&entry.source);
-    let exceptions = aeria_po::applied_exceptions(entry, glossary);
-    let applying = glossary.matches_except(&entry.source, &exceptions);
-    let by_person = glossary.matches_except(&entry.source, &entry.term_exceptions);
+    let found = glossary.matches(&entry.source);
+    let applying = glossary.matches_except(&entry.source, &entry.term_exceptions);
     StringHints {
-        terms: excepted
+        terms: found
             .into_iter()
-            .map(|term| {
-                let excepted = !applying.iter().any(|entry| entry.term == term.term);
-                HintTerm {
-                    term: term.term.clone(),
-                    translation: term.translation.clone(),
-                    note: term.full_note(),
-                    category: term.category.clone(),
-                    excepted,
-                    by_model: excepted && by_person.iter().any(|entry| entry.term == term.term),
-                    rendered: entry
-                        .model_renderings
-                        .iter()
-                        .filter(|rendering| {
-                            !excepted
-                                && rendering.term.to_lowercase() == term.term.to_lowercase()
-                                && rendering.holds(glossary)
-                        })
-                        .map(|rendering| rendering.word.clone())
-                        .collect(),
-                }
+            .map(|term| HintTerm {
+                term: term.term.clone(),
+                translation: term.translation.clone(),
+                note: term.full_note(),
+                category: term.category.clone(),
+                excepted: !applying.iter().any(|entry| entry.term == term.term),
             })
             .collect(),
         speaker: line("speaker: "),
@@ -164,44 +141,6 @@ mod tests {
         assert_eq!(found.speaker.as_deref(), Some("ALPHINAUD"));
         assert_eq!(found.gendered, vec!["source", "fr"]);
         assert_eq!(found.max_length, None);
-    }
-
-    #[test]
-    fn a_model_decision_shows_as_the_models_while_it_holds() {
-        let mount = term("mount", "маунт");
-        let glossary = Glossary::new(vec![mount.clone()]);
-        let decided = Entry {
-            model_exceptions: vec![aeria_po::ModelException::of(&mount)],
-            ..entry("Mount an attack.", &[], &[])
-        };
-        let found = hints(&glossary, &decided);
-        assert!(found.terms[0].excepted && found.terms[0].by_model);
-        // A word the model decided renders the term shows while the term
-        // applies.
-        let rendered = Entry {
-            model_renderings: vec![aeria_po::ModelRendering::of(&mount, "маунтовый")],
-            ..entry("Mount an attack.", &[], &[])
-        };
-        let found = hints(&glossary, &rendered);
-        assert_eq!(found.terms[0].rendered, ["маунтовый"]);
-        assert!(!found.terms[0].excepted);
-        let excepted = Entry {
-            term_exceptions: vec!["mount".to_owned()],
-            ..rendered
-        };
-        let found = hints(&glossary, &excepted);
-        assert!(found.terms[0].rendered.is_empty());
-        // A person's exception is the person's.
-        let both = Entry {
-            term_exceptions: vec!["mount".to_owned()],
-            ..decided.clone()
-        };
-        let found = hints(&glossary, &both);
-        assert!(found.terms[0].excepted && !found.terms[0].by_model);
-        // Another translation of the term asks for a new decision.
-        let changed = Glossary::new(vec![term("mount", "ездовое животное")]);
-        let found = hints(&changed, &decided);
-        assert!(!found.terms[0].excepted && !found.terms[0].by_model);
     }
 
     #[test]

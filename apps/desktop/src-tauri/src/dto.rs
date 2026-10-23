@@ -380,8 +380,6 @@ mod tests {
                             note: Some("check later".to_owned()),
                             previous: None,
                             term_exceptions: Vec::new(),
-                            model_exceptions: Vec::new(),
-                            model_renderings: Vec::new(),
                             reviewed: false,
                             review_stale: false,
                         }),
@@ -441,10 +439,9 @@ mod tests {
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct IssueDto {
-    /// `lineBreak`, `structure`, `mark`, `mixedAlphabets`,
-    /// `bothGenders`, `repeatedWord`, `termNotUsed`, `genderNotVaried`,
-    /// `genderInOtherLanguages`, `machinePhrasing`, `staleTermException`,
-    /// `labelTooLong`, `nameTooLong`, or `other`.
+    /// `lineBreak`, `structure`, `staleTermException`, `nameTooLong`,
+    /// `missing` (the model's answer had no readable entry for the string),
+    /// or `other`.
     pub kind: String,
     /// What may be wrong rather than a problem: it does not keep the
     /// translation from being saved or exported.
@@ -453,15 +450,10 @@ pub struct IssueDto {
     /// What groups issues in the summary, and filters by them.
     pub group: String,
     pub message: String,
+    /// The term of a stale term exception.
     pub term: Option<String>,
-    pub translation: Option<String>,
-    /// The word with mixed alphabets, the form with both genders, the word
-    /// written twice, the word in another case than its term, or the mark
-    /// as `U+0301`.
-    pub text: Option<String>,
-    pub phrases: Vec<String>,
-    /// The length of a translation longer than its budget, and the budget:
-    /// characters for a label, bytes for a name.
+    /// The bytes of a name longer than the game shows, and the most it
+    /// shows.
     pub length: Option<usize>,
     pub max: Option<usize>,
 }
@@ -483,54 +475,9 @@ impl From<&aeria_po::Issue> for IssueDto {
                 kind: "structure".to_owned(),
                 ..base
             },
-            aeria_po::Issue::Mark(mark) => Self {
-                kind: "mark".to_owned(),
-                text: Some(format!("U+{:04X}", u32::from(*mark))),
-                ..base
-            },
-            aeria_po::Issue::MixedAlphabets(word) => Self {
-                kind: "mixedAlphabets".to_owned(),
-                text: Some(word.clone()),
-                ..base
-            },
-            aeria_po::Issue::BothGenders(form) => Self {
-                kind: "bothGenders".to_owned(),
-                text: Some(form.clone()),
-                ..base
-            },
-            aeria_po::Issue::RepeatedWord(word) => Self {
-                kind: "repeatedWord".to_owned(),
-                text: Some(word.clone()),
-                ..base
-            },
-            aeria_po::Issue::TermNotUsed { term, translation } => Self {
-                kind: "termNotUsed".to_owned(),
-                term: Some(term.clone()),
-                translation: Some(translation.clone()),
-                ..base
-            },
-            aeria_po::Issue::GenderNotVaried => Self {
-                kind: "genderNotVaried".to_owned(),
-                ..base
-            },
-            aeria_po::Issue::GenderInOtherLanguages => Self {
-                kind: "genderInOtherLanguages".to_owned(),
-                ..base
-            },
-            aeria_po::Issue::MachinePhrasing(phrases) => Self {
-                kind: "machinePhrasing".to_owned(),
-                phrases: phrases.clone(),
-                ..base
-            },
             aeria_po::Issue::StaleTermException(term) => Self {
                 kind: "staleTermException".to_owned(),
                 term: Some(term.clone()),
-                ..base
-            },
-            aeria_po::Issue::LabelTooLong { length, max } => Self {
-                kind: "labelTooLong".to_owned(),
-                length: Some(*length),
-                max: Some(*max),
                 ..base
             },
             aeria_po::Issue::NameTooLong { length, max } => Self {

@@ -181,18 +181,21 @@ fn term_of(strings: &[&Named], sheets: &[TermSheet]) -> Option<(GlossaryEntry, S
             forms.push(string.source.clone());
         }
     }
-    // The sheets' notes say what their names are; the translator notes of
-    // the strings say more of this one.
-    let mut notes: Vec<&str> = Vec::new();
+    // The sheets' notes say what their names are, as a category's note
+    // does; the translator notes of the strings say more of this one, and
+    // are the term's own.
+    let mut kind: Vec<&str> = Vec::new();
+    let mut own: Vec<&str> = Vec::new();
     for string in &counted {
-        let sheet_note = sheets[string.sheet].note.as_deref();
-        for note in sheet_note
-            .into_iter()
-            .chain(string.notes.iter().map(String::as_str))
+        let sheet_note = sheets[string.sheet].note.as_deref().map(str::trim);
+        if let Some(note) = sheet_note.filter(|note| !note.is_empty())
+            && !kind.contains(&note)
         {
-            let note = note.trim();
-            if !note.is_empty() && !notes.contains(&note) {
-                notes.push(note);
+            kind.push(note);
+        }
+        for note in string.notes.iter().map(|note| note.trim()) {
+            if !note.is_empty() && !own.contains(&note) && !kind.contains(&note) {
+                own.push(note);
             }
         }
     }
@@ -201,10 +204,10 @@ fn term_of(strings: &[&Named], sheets: &[TermSheet]) -> Option<(GlossaryEntry, S
         term: first.source.clone(),
         translation: translation.to_owned(),
         forms: forms.clone(),
-        note: (!notes.is_empty()).then(|| notes.join("\n")),
+        note: (!own.is_empty()).then(|| own.join("\n")),
+        category_note: (!kind.is_empty()).then(|| kind.join("\n")),
         // A name is found as the game writes it: `In the Mist` is not the
         // words of a sentence.
-        category_note: None,
         match_case: true,
         category: sheet.category.clone(),
     };
@@ -467,7 +470,13 @@ mod tests {
         assert_eq!(loaded.sheet_terms[0].variants[0].strings, 2);
         let crier = &loaded.knowledge.terms.entries[0];
         assert_eq!(crier.category, "персонаж");
-        assert_eq!(crier.note.as_deref(), Some("Имена.\nЗазывала у ворот."));
+        // The sheet's note is the category's; the strings' notes are the
+        // term's own.
+        assert_eq!(crier.note.as_deref(), Some("Зазывала у ворот."));
+        assert_eq!(
+            crier.full_note().as_deref(),
+            Some("Имена.\nЗазывала у ворот.")
+        );
         assert!(crier.match_case);
         // The file and its folder are what the terms were read from.
         assert_eq!(loaded.read.len(), 2);
@@ -579,12 +588,13 @@ mod tests {
             replaced,
             [(0, "Танкред"), (1, "зазывала праздника"), (3, "Сильфы")]
         );
-        assert_eq!(
-            loaded
-                .knowledge
-                .terms
-                .missing_in("A mist rises", "Встаёт туман"),
-            Vec::<String>::new()
-        );
+        let found: Vec<&str> = loaded
+            .knowledge
+            .terms
+            .matches("A mist rises")
+            .iter()
+            .map(|term| term.translation.as_str())
+            .collect();
+        assert_eq!(found, ["Туман", "туман"], "a meaning each");
     }
 }

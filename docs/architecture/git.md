@@ -144,11 +144,48 @@ A checkpoint stages and commits only Aeria-managed paths (`git commit
 `.github/workflows/harmonia-feed.yml` and `.github/workflows/aeria-guard.yml`
 (`PROJECT_PATHS`); a path without a file is left out, since Git has no empty
 folders. Unrelated staged or modified files are left untouched and listed as
-other files. A blank message is replaced by a
-deterministic summary: the string changes, for example `Translate 3 strings,
-update 1 translation (Addon, Quest)`, followed by the changed project areas
-(`; update terms, game fonts`), or `Update glossary, pack settings` when no
-string changed.
+other files. A blank message is replaced by a message by the project's
+convention (see [Commit messages](#commit-messages)).
+
+### Commit messages
+
+A message Aeria writes follows one convention, in the project's target
+language (Russian for a Russian project, English otherwise):
+
+```
+kind(area): summary
+
+facts, a line each
+```
+
+- **kind** is what most of the commit does: `fix` (translations a run of
+  corrections wrote, by the run reports), `translate`, `edit` (other changed
+  translations), `remove`, `mark` (notes, fuzzy marks, reviews, term
+  exceptions only); without string changes `terms`, `knowledge`,
+  `settings`, or `ci`;
+- **area** is the first part of the strings' `msgctxt`, a sheet
+  (`DefaultTalk`) or a folder of sheets (`quest`, `cut_scene`), when all or
+  at least two in three of the strings are in it; otherwise the header has
+  no area;
+- **summary** says what the commit holds: by a template, for example
+  `fix(cut_scene): Согласование по полу игрока, 2449 строк`, or a line a
+  model writes;
+- **facts** are counts by kind, the areas with their counts (five at most),
+  each run that wrote strings of the commit since the last commit (from the
+  run reports of the data folder: its kind, skill, model, and strings), the
+  terms added, changed, or removed, the knowledge files, and the settings.
+
+A blank message gets the template's summary. **Write the message** in the
+composer asks the model chosen for machine translation for the summary
+alone, with the least reasoning it accepts: a verb first, in the form a
+commit summary takes in the language (the infinitive in Russian,
+`исправить`, the imperative in English, `fix`). It sends no diff: only a digest
+of the facts above and ten changed strings at most, from different areas,
+each text shortened to 80 characters; the model's first line, without
+surrounding quotes, a `kind(area): ` prefix, or a final period, is the
+summary. Kind, area, and facts are Aeria's, so a model cannot break the
+convention. The message is filled into the composer to edit before the
+commit.
 
 A file `aeria-collaboration.json` left by an earlier Aeria is not a project
 file: Aeria neither reads nor commits it, and it can be deleted with Git.
@@ -189,7 +226,7 @@ are project-relative and read literally (`--literal-pathspecs`):
   file is not discarded. The editor's writes wait while files change, and
   its views read them again.
 - **Commit** takes what is staged when anything is (`git commit`), with a
-  blank message replaced by a summary of the staged string changes;
+  blank message replaced by a message by the convention for what is staged;
   otherwise it is a checkpoint.
 - **Commit (Amend)** replaces the last commit with one that also holds the
   new changes, what is staged or else what a checkpoint would take; a blank
@@ -244,13 +281,11 @@ views are derived directly from Git data (`aeria-git::entries`):
 
 - **Pending changes** compare each changed PO file in the working tree with
   `HEAD` entry by entry and report each string whose translation, fuzzy mark,
-  note, review, term and model exceptions, or model renderings changed:
-  translated (it had none), changed, cleared, or marked (only a mark, the
-  note, an exception, or a rendering changed), with the before and after
-  state; a mark names the terms an exception or a rendering added or
-  removed, so the decisions of a correction run (*AI: another meaning:
-  mount*, *AI: rendered by a word: aether = эфирный*) are read string by
-  string.
+  note, review, or term exceptions changed: translated (it had none),
+  changed, cleared, or marked (only a mark, the note, or an exception
+  changed), with the before and after state; a mark names the terms an
+  exception added or removed. The record of the terms a translation was
+  written with is bookkeeping and no change of its own.
 - **Commit changes** compare a commit with its first parent the same way.
 - **String history** reads the last 200 commits of the string's file (`git
   log -- <file>`, merges left out, so a change is attributed to the commit
@@ -313,8 +348,8 @@ joins them entry by entry (`aeria-git::merge_file`):
   the updated version's entries, header, and obsolete entries, and each
   string the other side changed is first carried to it by the rule of the
   update: with the same `msgid` as it is; with another, its translation is
-  fuzzy with the source it was written for, and its term exceptions, model
-  exceptions, and model renderings are dropped; a string the update no
+  fuzzy with the source it was written for, and its term exceptions and the
+  record of the terms it was written with are dropped; a string the update no
   longer has is kept as obsolete with what that side made of it. Work made
   for the previous game version therefore joins an update, whichever side
   made which.
@@ -330,10 +365,15 @@ joins them entry by entry (`aeria-git::merge_file`):
   branch and another text on the other are a conflict of the string. Git's
   own merge, which joins them without one, leaves a review mark whose
   fingerprint no longer matches, so the string is not reviewed.
-- A string's term exceptions, model exceptions, and model renderings are
-  joined apart from its state: a side whose decisions equal the base takes
-  the other side's, and when both changed them the local ones stay. A branch that only decided
-  terms and one that only translated both keep their work.
+- A string's term exceptions are joined apart from its state: a side whose
+  exceptions equal the base takes the other side's, and when both changed
+  them the local ones stay. A branch that only decided terms and one that
+  only translated both keep their work.
+- The record of the terms a translation was written with (see
+  [`po-project.md`](./po-project.md#terms-written-with)) goes with the
+  translation: a string that takes the other side's translation takes its
+  record, and two sides with the same translation take the side whose
+  record differs from the base, else the local one.
 
 Joined files are written in the canonical format and committed as the merge
 commit. Conflicting strings are reported with their base, local, and incoming

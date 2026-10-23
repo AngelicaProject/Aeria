@@ -127,7 +127,10 @@ fn problems_are_found_by_the_checks_a_translation_is_saved_with() {
     // A change made by hand, which the checks refuse.
     let file = session.root().join("po/Addon.po");
     let text = std::fs::read_to_string(&file).expect("read");
-    std::fs::write(&file, text.replace("Спроси повара", "Спросил(а) повара")).expect("write");
+    std::fs::write(&file, text.replace("Спроси повара", "Спроси\\nповара")).expect("write");
+    session
+        .set_term_exception("Addon", 1, 0, 0, "knife", true)
+        .expect("exception");
     let knowledge = session.knowledge();
     let problems = session
         .corpus()
@@ -143,14 +146,13 @@ fn problems_are_found_by_the_checks_a_translation_is_saved_with() {
         )
         .expect("search");
     assert_eq!(problems.total, 1);
-    assert_eq!(
-        problems.hits[0].findings[0],
-        Issue::BothGenders("(а)".to_owned())
-    );
+    assert_eq!(problems.hits[0].findings[0], Issue::LineBreak);
     assert_eq!(problems.issues.len(), 1);
-    assert_eq!(problems.issues[0].group, "bothGenders");
+    assert_eq!(problems.issues[0].group, "lineBreak");
     assert_eq!(problems.issues[0].count, 1);
-    let unused = session
+    // What a translation says is no advice: an exception for a term the
+    // source does not have is.
+    let advice = session
         .corpus()
         .search(
             session.root(),
@@ -163,9 +165,9 @@ fn problems_are_found_by_the_checks_a_translation_is_saved_with() {
             &AtomicBool::new(false),
         )
         .expect("search");
-    assert_eq!(unused.total, 3);
-    assert_eq!(unused.issues[0].group, "termNotUsed:cook");
-    assert_eq!(unused.issues[0].count, 3);
+    assert_eq!(advice.total, 1);
+    assert_eq!(advice.issues[0].group, "staleTermException");
+    assert_eq!(advice.issues[0].count, 1);
     // One group of the summary narrows the search to it.
     let narrowed = session
         .corpus()
@@ -173,7 +175,7 @@ fn problems_are_found_by_the_checks_a_translation_is_saved_with() {
             session.root(),
             &Query {
                 check: CheckFilter::Advice,
-                issue: Some("termNotUsed:nothing".to_owned()),
+                issue: Some("nameTooLong".to_owned()),
                 ..Query::default()
             },
             &knowledge,
@@ -230,7 +232,7 @@ fn a_replacement_is_previewed_applied_to_unchanged_entries_and_undone() {
         context: "Item:1:0:0".to_owned(),
         expected_text: "Поварской нож".to_owned(),
         expected_fuzzy: false,
-        kind: EditKind::Replace("Нож(а)".to_owned()),
+        kind: EditKind::Replace("Нож\nповара".to_owned()),
     });
     let applied = session.apply_edits(&edits).expect("apply");
     assert_eq!(applied.done.len(), 1);
@@ -326,15 +328,8 @@ fn a_term_exception_lifts_the_term_and_undo_takes_it_back() {
     let terms = "term,translation,category\ncook,кулинар,профессия\n";
     std::fs::create_dir_all(session.root().join("aeria-knowledge")).expect("dir");
     std::fs::write(session.root().join("aeria-knowledge/terms.csv"), terms).expect("terms");
-    let unused = |session: &aeria_po::Session, row| {
-        session
-            .findings("Addon", row, 0, 0)
-            .expect("findings")
-            .0
-            .iter()
-            .filter(|issue| matches!(issue, Issue::TermNotUsed { .. }))
-            .count()
-    };
+    // The translations were written before the term was.
+    let unused = |session: &aeria_po::Session, row| outdated(session, row).len();
     assert_eq!(unused(&session, 1), 1);
 
     let edit = EntryEdit {
@@ -370,162 +365,111 @@ fn a_term_exception_lifts_the_term_and_undo_takes_it_back() {
 }
 
 #[test]
-fn a_model_rendering_is_kept_with_its_word_until_the_term_does_not_apply() {
+fn a_translation_is_written_with_the_terms_of_its_save() {
     let (_directory, session) = project();
-    std::fs::create_dir_all(session.root().join("aeria-knowledge")).expect("dir");
+    let knowledge = session.root().join("aeria-knowledge");
+    std::fs::create_dir_all(&knowledge).expect("dir");
     std::fs::write(
-        session.root().join("aeria-knowledge/terms.csv"),
+        knowledge.join("terms.csv"),
         "term,translation,category\ncook,кулинар,профессия\n",
     )
     .expect("terms");
-    let cook = session.knowledge().terms.entries[0].clone();
-    let decide = |applies: bool, words: &[&str]| EntryEdit {
-        path: "Addon.po".to_owned(),
-        context: "Addon:2:0:0".to_owned(),
-        expected_text: session
-            .translation("Addon", 2, 0, 0)
-            .expect("read")
-            .expect("translated")
-            .text,
-        expected_fuzzy: false,
-        kind: EditKind::Decide {
-            correction: None,
-            terms: vec![aeria_po::TermDecision {
-                exception: aeria_po::ModelException::of(&cook),
-                applies,
-                rendered: words.iter().map(|word| (*word).to_owned()).collect(),
-            }],
-        },
-    };
-    // Each word once, and only a single word.
-    let applied = session
-        .apply_edits(&[decide(true, &["кулинарный", "два слова", "кулинарный"])])
-        .expect("decide");
-    assert_eq!(
-        applied.done[0].after.model_renderings,
-        [aeria_po::ModelRendering::of(&cook, "кулинарный")]
-    );
-    // A decision that the term does not apply takes the words away.
-    let applied = session
-        .apply_edits(&[decide(false, &["кулинарный"])])
-        .expect("decide");
-    assert!(applied.done[0].after.model_renderings.is_empty());
-    assert_eq!(applied.done[0].after.model_exceptions.len(), 1);
-    // Undo gives the words back, and a decision without words removes them.
-    let undo: Vec<EntryEdit> = applied.done.iter().map(aeria_po::EditDone::undo).collect();
-    let undone = session.apply_edits(&undo).expect("undo");
-    assert_eq!(undone.done[0].after.model_renderings.len(), 1);
-    let applied = session.apply_edits(&[decide(true, &[])]).expect("decide");
-    assert!(applied.done[0].after.model_renderings.is_empty());
-}
-
-#[test]
-fn a_model_decision_lifts_a_term_until_the_term_changes_or_a_person_decides() {
-    let (_directory, session) = project();
-    let write_terms = |terms: &str| {
-        std::fs::create_dir_all(session.root().join("aeria-knowledge")).expect("dir");
-        std::fs::write(session.root().join("aeria-knowledge/terms.csv"), terms).expect("terms");
-    };
-    write_terms("term,translation,category\ncook,кулинар,профессия\n");
-    let unused = |session: &aeria_po::Session, row| {
-        session
-            .findings("Addon", row, 0, 0)
-            .expect("findings")
-            .0
-            .iter()
-            .filter(|issue| matches!(issue, Issue::TermNotUsed { .. }))
-            .count()
-    };
-    let cook = session.knowledge().terms.entries[0].clone();
-    let decide =
-        |context: &str, expected: &str, correction: Option<&str>, applies: bool| EntryEdit {
-            path: "Addon.po".to_owned(),
-            context: context.to_owned(),
-            expected_text: expected.to_owned(),
-            expected_fuzzy: false,
-            kind: EditKind::Decide {
-                correction: correction.map(str::to_owned),
-                terms: vec![aeria_po::TermDecision {
-                    exception: aeria_po::ModelException::of(&cook),
-                    applies,
-                    rendered: Vec::new(),
-                }],
-            },
-        };
-    let applied = session
-        .apply_edits(&[decide("Addon:1:0:0", "Повар пришёл", None, false)])
-        .expect("decide");
-    assert_eq!(applied.done.len(), 1, "a decision alone is written");
-    let text = std::fs::read_to_string(session.root().join("po/Addon.po")).expect("file");
-    assert!(
-        text.contains(&format!(
-            "#, aeria-term-model-exception: cook {}\nmsgctxt \"Addon:1:0:0\"",
-            aeria_po::term_fingerprint(&cook)
-        )),
-        "{text}"
-    );
-    assert_eq!(unused(&session, 1), 0);
-    assert_eq!(unused(&session, 2), 1, "the decision is the string's alone");
-
-    // A new note of the term asks for the decision again.
-    write_terms("term,translation,forms,note,category\ncook,кулинар,,Профессия.,профессия\n");
-    assert_eq!(unused(&session, 1), 1);
-    write_terms("term,translation,category\ncook,кулинар,профессия\n");
-    assert_eq!(unused(&session, 1), 0);
-
-    // A decision that the term applies, with its correction, removes it.
-    let applied = session
-        .apply_edits(&[decide(
-            "Addon:1:0:0",
-            "Повар пришёл",
-            Some("Кулинар пришёл"),
-            true,
-        )])
-        .expect("decide");
-    assert_eq!(applied.done.len(), 1);
-    assert!(applied.done[0].after.model_exceptions.is_empty());
-    assert_eq!(unused(&session, 1), 0);
-
-    // A person's exception comes first: the model does not add its own.
+    assert_eq!(outdated(&session, 1), ["cook"]);
     session
-        .set_term_exception("Addon", 2, 0, 0, "cook", true)
-        .expect("exception");
-    let applied = session
-        .apply_edits(&[decide("Addon:2:0:0", "Спроси повара", None, false)])
-        .expect("decide");
-    assert!(applied.done.is_empty(), "{applied:?}");
-}
-
-#[test]
-fn a_kind_of_term_issues_finds_every_term() {
-    let (_directory, session) = project();
-    std::fs::create_dir_all(session.root().join("aeria-knowledge")).expect("dir");
+        .set_translation("Addon", 1, 0, 0, "Кулинар пришёл")
+        .expect("save");
+    assert!(outdated(&session, 1).is_empty());
+    // A note of the term's category is not the term's: the strings stay
+    // current.
     std::fs::write(
-        session.root().join("aeria-knowledge/terms.csv"),
-        "term,translation,category\ncook,кулинар,профессия\nknife,клинок,оружие\n",
+        knowledge.join("term-sheets.csv"),
+        "sheet,column,category,note\nClassJob,0,профессия,Профессии ремесленников.\n",
+    )
+    .expect("sheets");
+    assert!(outdated(&session, 1).is_empty());
+    // Another translation of the term is another version.
+    std::fs::write(
+        knowledge.join("terms.csv"),
+        "term,translation,category\ncook,повар,профессия\n",
     )
     .expect("terms");
-    let found = |issue: &str| {
-        session
-            .corpus()
-            .search(
-                session.root(),
-                &Query {
-                    check: CheckFilter::Advice,
-                    issue: Some(issue.to_owned()),
-                    ..Query::default()
-                },
-                &session.knowledge(),
-                "ru",
-                &AtomicBool::new(false),
-            )
-            .expect("search")
-            .total
+    assert_eq!(outdated(&session, 1), ["cook"]);
+    let usage = session
+        .corpus()
+        .term_usage(
+            session.root(),
+            &session.knowledge().terms,
+            &AtomicBool::new(false),
+        )
+        .expect("usage");
+    assert_eq!(
+        usage[0],
+        aeria_po::TermUsage {
+            strings: 3,
+            outdated: 3
+        },
+        "the cook's knife has the cook too"
+    );
+    // A correction answered unchanged records the terms too.
+    let correct = |context: &str, text: &str| EntryEdit {
+        path: "Addon.po".to_owned(),
+        context: context.to_owned(),
+        expected_text: text.to_owned(),
+        expected_fuzzy: false,
+        kind: EditKind::Correct(text.to_owned()),
     };
-    assert_eq!(found("termNotUsed:knife"), 1);
-    assert_eq!(found("termNotUsed:cook"), 3);
-    assert_eq!(found("termNotUsed"), 3, "the cook's knife counts once");
-    assert_eq!(found("termNot"), 0, "a kind is named whole");
+    let applied = session
+        .apply_edits(&[correct("Addon:1:0:0", "Кулинар пришёл")])
+        .expect("correct");
+    assert_eq!(applied.done.len(), 1);
+    assert_eq!(applied.done[0].before.text, applied.done[0].after.text);
+    assert!(outdated(&session, 1).is_empty());
+    // A review records them; a reviewed string is not counted.
+    session
+        .set_reviewed("Addon", 2, 0, 0, true)
+        .expect("review");
+    assert!(outdated(&session, 2).is_empty());
+    let strings = session
+        .corpus()
+        .outdated_strings(session.root(), &session.knowledge().terms, &[])
+        .expect("strings");
+    assert_eq!(
+        strings
+            .iter()
+            .map(|string| string.context.as_str())
+            .collect::<Vec<_>>(),
+        ["Item:1:0:0"]
+    );
+    // Undo takes the record back with the text.
+    let undo: Vec<EntryEdit> = applied.done.iter().map(aeria_po::EditDone::undo).collect();
+    assert_eq!(session.apply_edits(&undo).expect("undo").done.len(), 1);
+    assert_eq!(outdated(&session, 1), ["cook"]);
+    let strings = session
+        .corpus()
+        .outdated_strings(session.root(), &session.knowledge().terms, &[0])
+        .expect("strings");
+    assert_eq!(
+        strings
+            .iter()
+            .map(|string| string.context.as_str())
+            .collect::<Vec<_>>(),
+        ["Addon:1:0:0", "Item:1:0:0"]
+    );
+}
+
+/// The terms of a string of `Addon` whose translation was written with
+/// another version of them, or with no record of them.
+fn outdated(session: &aeria_po::Session, row: u32) -> Vec<String> {
+    let knowledge = session.knowledge();
+    session
+        .entry("Addon", row, 0, 0)
+        .expect("entry")
+        .1
+        .expect("translated")
+        .outdated_terms(&knowledge.terms)
+        .iter()
+        .map(|term| term.term.clone())
+        .collect()
 }
 
 #[test]
@@ -567,14 +511,17 @@ fn search_all_returns_every_entry_past_the_hit_limit() {
 #[test]
 fn a_search_sees_every_change_of_the_files_and_the_knowledge() {
     let (_directory, session) = project();
-    let unused = |session: &aeria_po::Session| {
+    session
+        .set_term_exception("Addon", 1, 0, 0, "cook", true)
+        .expect("exception");
+    let stale = |session: &aeria_po::Session| {
         session
             .corpus()
             .search(
                 session.root(),
                 &Query {
                     check: CheckFilter::Advice,
-                    issue: Some("termNotUsed:cook".to_owned()),
+                    issue: Some("staleTermException".to_owned()),
                     ..Query::default()
                 },
                 &session.knowledge(),
@@ -585,7 +532,7 @@ fn a_search_sees_every_change_of_the_files_and_the_knowledge() {
             .total
     };
     assert_eq!(find(&session, &query("кулинар", MatchKind::Text)).total, 0);
-    assert_eq!(unused(&session), 0);
+    assert_eq!(stale(&session), 1);
 
     // A save of the session.
     session
@@ -605,7 +552,7 @@ fn a_search_sees_every_change_of_the_files_and_the_knowledge() {
     let terms = "term,translation,category\ncook,кулинар,профессия\n";
     std::fs::create_dir_all(session.root().join("aeria-knowledge")).expect("dir");
     std::fs::write(session.root().join("aeria-knowledge/terms.csv"), terms).expect("terms");
-    assert_eq!(unused(&session), 3);
+    assert_eq!(stale(&session), 0);
 
     // A file removed is no longer found.
     std::fs::remove_file(&file).expect("remove");
@@ -659,87 +606,10 @@ fn the_strings_of_a_term_are_those_its_use_counts() {
         .corpus()
         .term_usage(session.root(), &knowledge.terms, &AtomicBool::new(false))
         .expect("usage");
-    assert_eq!(usage[0], total);
+    assert_eq!(usage[0].strings, total);
     // The first strings are kept, the rest counted.
     let (found, total) = strings(0, 1);
     assert_eq!((found.len(), total), (1, 2));
     assert_eq!(found[0].context, "Addon:1:0:0");
     assert_eq!(strings(1, 10).1, 1);
-}
-
-#[test]
-fn a_categorys_note_keeps_the_models_decisions_until_they_are_forgotten() {
-    let (_directory, session) = project();
-    let knowledge = session.root().join("aeria-knowledge");
-    std::fs::create_dir_all(&knowledge).expect("dir");
-    std::fs::write(
-        knowledge.join("terms.csv"),
-        "term,translation,category\ncook,кулинар,профессия\n",
-    )
-    .expect("terms");
-    let unused = |session: &aeria_po::Session, row| {
-        session
-            .findings("Addon", row, 0, 0)
-            .expect("findings")
-            .0
-            .iter()
-            .filter(|issue| matches!(issue, Issue::TermNotUsed { .. }))
-            .count()
-    };
-    let cook = session.knowledge().terms.entries[0].clone();
-    let decide = |context: &str, expected: &str| EntryEdit {
-        path: "Addon.po".to_owned(),
-        context: context.to_owned(),
-        expected_text: expected.to_owned(),
-        expected_fuzzy: false,
-        kind: EditKind::Decide {
-            correction: None,
-            terms: vec![aeria_po::TermDecision {
-                exception: aeria_po::ModelException::of(&cook),
-                applies: false,
-                rendered: Vec::new(),
-            }],
-        },
-    };
-    session
-        .apply_edits(&[decide("Addon:1:0:0", "Повар пришёл")])
-        .expect("decide");
-    session
-        .set_term_exception("Addon", 2, 0, 0, "cook", true)
-        .expect("exception");
-    assert_eq!((unused(&session, 1), unused(&session, 2)), (0, 0));
-
-    // A note of the term's category reaches the term but does not end the
-    // model's decision.
-    std::fs::write(
-        knowledge.join("term-sheets.csv"),
-        "sheet,column,category,note\nClassJob,0,профессия,Профессии ремесленников.\n",
-    )
-    .expect("sheets");
-    let noted = session.knowledge();
-    let entry = noted.terms.find("cook").expect("cook");
-    assert_eq!(entry.note, None);
-    assert_eq!(
-        entry.full_note().as_deref(),
-        Some("Профессии ремесленников.")
-    );
-    assert_eq!(unused(&session, 1), 0);
-
-    // Forgetting the model's decisions asks for the term again; a person's
-    // exception stays.
-    let forgotten = session
-        .forget_model_decisions(&["Cook".to_owned()])
-        .expect("forget");
-    assert_eq!(forgotten.done.len(), 1);
-    assert!(forgotten.done[0].after.model_exceptions.is_empty());
-    assert_eq!((unused(&session, 1), unused(&session, 2)), (1, 0));
-
-    // Undo gives the decision back.
-    let undo: Vec<EntryEdit> = forgotten
-        .done
-        .iter()
-        .map(aeria_po::EditDone::undo)
-        .collect();
-    session.apply_edits(&undo).expect("undo");
-    assert_eq!(unused(&session, 1), 0);
 }

@@ -23,14 +23,8 @@ pub struct HintTermDto {
     pub note: Option<String>,
     /// What the term names in this meaning.
     pub category: String,
-    /// A person, or a correction run's model, decided the term does not
-    /// apply to this string.
+    /// A person decided the term does not apply to this string.
     pub excepted: bool,
-    /// The decision is the model's.
-    pub by_model: bool,
-    /// The words a correction run's model decided render the term in this
-    /// string's translation.
-    pub rendered: Vec<String>,
 }
 
 impl From<HintTerm> for HintTermDto {
@@ -41,8 +35,6 @@ impl From<HintTerm> for HintTermDto {
             note: term.note,
             category: term.category,
             excepted: term.excepted,
-            by_model: term.by_model,
-            rendered: term.rendered,
         }
     }
 }
@@ -261,11 +253,7 @@ mod tests {
         assert_eq!(found.max_length, None);
 
         let draft = check_draft_with(&state, &hello, "Salut <i>là</i>").expect("check");
-        assert!(
-            draft.issues.iter().any(|issue| issue.kind == "termNotUsed"),
-            "{:?}",
-            draft.issues
-        );
+        assert!(draft.issues.is_empty(), "{:?}", draft.issues);
         assert_eq!(draft.length, "Salut là".chars().count());
         assert!(draft.missing.is_empty());
         let empty = check_draft_with(&state, &hello, "").expect("empty");

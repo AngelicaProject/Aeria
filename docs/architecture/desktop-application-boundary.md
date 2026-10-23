@@ -308,7 +308,14 @@ subscription and list its models;
 sheets, and folders of sheets ending with `/`; empty is the whole project. One
 run goes at a time (`translationRunning`); it runs on the async runtime and
 its status is read while it goes. Model failures map to `model*` codes such as
-`modelSignInRequired` and `modelUsageLimit`.
+`modelSignInRequired` and `modelUsageLimit`. `translation_fix(paths,
+contexts, fix, model, effort)` starts a correction run; `fix.skill` names
+a skill of the project, whose saved text it asks (`skillNotFound` when
+there is none). `run_reports` and
+`run_report(id, view, query, offset, limit)` list and read the reports of
+runs (see [`translate.md`](./translate.md#report)), and
+`translation_continue(id)` continues the run of a report
+(`reportNotContinuable` for one that does not keep what it was asked).
 
 `project_knowledge`, `save_knowledge_style`, `save_knowledge_terms`, and
 `save_knowledge_sheets` read
@@ -321,7 +328,14 @@ where a string is in the game, so the dialog opens it in the editor. A save repl
 only if it still has the content the dialog loaded, so a file changed since,
 by hand or by Git, is reported as `projectKnowledgeConflict` and not
 overwritten; an invalid entry or a file over the size limit is
-`projectKnowledgeInvalid`.
+`projectKnowledgeInvalid`. `skills`, `save_skill(name, previous, expected,
+scope, body)`, and `delete_skill(name, expected)` read and write the
+[skills](../formats/knowledge-v1.md#skills) the same way: a save writes the
+file in canonical form, renames it when `previous` differs, and refuses a
+name another skill has (`skillExists`). `skill_count(scope)` counts the
+translations a run of a scope takes, by each of its paths
+(`skillScopeInvalid` for an expression that does not compile), and
+`run_skill(name, model, effort)` runs a saved skill over its scope.
 
 A background thread started at setup asks the session every 1.5 seconds which
 of the sheets the editor has shown changed on disk, by Git, by hand, or by a

@@ -28,31 +28,30 @@ pub fn instructions(source_language: &str, target_language: &str, style: Option<
 
 /// The instructions of every request of a run that corrects translations:
 /// the rules and the style as for translating, what a correction may
-/// change, a proofreading of every translation when asked, a translator's
-/// request for every translation of the run, and the answer's form.
+/// change, a translator's request for every translation of the run, and
+/// the answer's form. With `omit`, the answer leaves out the strings it does
+/// not change.
 #[must_use]
 pub fn fix_instructions(
     source_language: &str,
     target_language: &str,
     style: Option<&str>,
-    proofread: bool,
     adapt: bool,
+    omit: bool,
     request: Option<&str>,
 ) -> String {
     let mut text = rules(source_language, target_language, style);
     text.push_str(
         "This run corrects translations rather than translating: each string has \
-         `translation`, its current translation, and may have `fix`: what the project's \
-         checks find wrong with it. Change a translation only as far as its `fix`, the \
-         proofreading below when this run asks for it, and the translator's request below \
-         need, and keep every other word, its macros, and its wording as they are. Advice \
-         of the checks can be wrong for a string: when an item of `fix` does not apply, or \
-         nothing needs to change, answer the translation unchanged.\n\n",
+         `translation`, its current translation, and may have `fix`: what is wrong with it, \
+         or the terms it is to follow. Change a translation only as far as its `fix` and \
+         the translator's request below need, and keep every other word, its macros, and \
+         its wording as they are. A term \
+         to follow is used where the word of the source is the thing the term names, as \
+         its `translation` and `note` describe it, declined as the sentence needs; where \
+         the word means something else there, or the translation already follows the term, \
+         that word stays.\n\n",
     );
-    text.push_str(TERM_DECISIONS);
-    if proofread {
-        text.push_str(PROOFREADING);
-    }
     if adapt {
         text.push_str(ADAPTING);
     }
@@ -69,40 +68,18 @@ pub fn fix_instructions(
          to three, copied as they are (macros may be left out); then its corrected \
          translation as macro text; then why it changed, in a few words of \
          {target_language} without quotes (обращение по французской строке, канцелярит, \
-         калька, потерян смысл источника), or an empty string when it did not; and, only \
-         when you decide so of a term of its `fix`, a fourth element: the array of the \
-         terms that do not apply to the string, as `terms` writes them, and of the terms a \
-         word of the translation renders, each as the term, ` = `, and that word \
-         ([\"Go\", \"Иди\", \"\", [\"mount\", \"aether = эфирный\"]]). The \
-         first words show which string a translation belongs to; give every string its own \
-         translation. Answer every string."
+         калька, потерян смысл источника), or an empty string when it did not. The first \
+         words show which string a translation belongs to; give every string its own \
+         translation. "
     );
+    text.push_str(if omit {
+        "Answer only the strings whose translation changes: a string the answer leaves out \
+         keeps its translation as it is, and an answer that changes nothing is `{}`."
+    } else {
+        "When nothing needs to change, answer the translation unchanged. Answer every string."
+    });
     text
 }
-
-/// What a correction run asks of a term the checks find unused: a decision
-/// whether it applies, which the project keeps.
-const TERM_DECISIONS: &str = "An item of `fix` that says the terms translate a term in a way \
-     that does not seem to be used asks you to decide whether the term applies to this \
-     string. It applies where the word of the source is the thing the term names, as its \
-     `translation` and `note` describe it; then the corrected translation uses the term's \
-     translation, declined as the sentence needs, and the rest of the sentence agrees with \
-     it. Where the sentence needs another word made from the term's translation, as the \
-     adjective of a noun (эфирный компрессор for an aether compressor when aether is \
-     эфир), the term applies and that word renders it: keep the word and list the term \
-     with it in the answer's fourth element, as `aether = эфирный`, the word as the \
-     corrected translation writes it. Only one word of the same root as the term's \
-     translation renders a term: a synonym, a pronoun, or a paraphrase does not, and the \
-     project trusts you to name no such word. It does not apply where the word means something else here: an everyday word or \
-     another part of speech (mount up, mount an attack beside a mount the player rides), \
-     part of a name of something else (Mount Gulg, a place), or a sense the note rules out; \
-     then translate the word by its meaning and list the term in the answer's fourth \
-     element. The other client languages of the context show how the official \
-     localizations read the word: where they use their own word for the thing the term \
-     names, the term applies. Decide by meaning alone: a term that applies is used even \
-     when its translation is longer or harder to fit, and a term is never listed to keep \
-     the translation unchanged. The project keeps each decision, so later runs and the \
-     checks follow it.\n\n";
 
 /// What a correction run asks of a translation whose source changed.
 const ADAPTING: &str = "A string with `previous` changed its source since it was translated: \
@@ -111,24 +88,6 @@ const ADAPTING: &str = "A string with `previous` changed its source since it was
      source changes, such as a number, a name, a word, or a sentence added or removed, and \
      keep every other word of the translation as it is. When the change of the source does \
      not touch what the translation says, answer it unchanged: it still fits.\n\n";
-
-/// What proofreading asks of every translation of a correction run.
-const PROOFREADING: &str = "Proofread every translation of this run as the editor of the \
-     localization, reading it against its source, the other client languages of its \
-     context, and the strings around it in the scene. Fix what is wrong: a meaning the \
-     source does not have, or one of its details lost; the form of address the project's \
-     style asks for in this line, which when the style follows another client language is \
-     read from that language's line of this string, not from the lines around it, since \
-     characters address each other differently; agreement with the player character's \
-     gender; a name or term; and phrasing a native speaker would not write: word order or \
-     constructions copied from the source language, officialese, filler, explanations the \
-     source does not give. The source's meaning comes first: never trade a detail of it \
-     for smoothness, never add what it does not say, and keep the register and the voice \
-     of the speaker. Keep what is right as it is: a translation that already reads well \
-     answers unchanged, and a sound change is the smallest one that fixes it. A name of a \
-     thing of the game (an action, a status, an item, a place, a duty, a menu, a tab, a \
-     button) keeps the form the translation gives it unless `terms` give \
-     another: the game shows it under that name, and a player looks for it there.\n\n";
 
 /// What the instructions of a translation and of a correction share: the
 /// rules of a translation, the project's style, and what a request holds.
@@ -183,12 +142,12 @@ fn rules(source_language: &str, target_language: &str, style: Option<&str>) -> S
          nothing does. A string with `previous` was translated before its \
          source changed: `previous.source` is the old source and `previous.translation` its \
          translation; keep what still fits. A string with `termExceptions` names terms of \
-         `terms` that do not apply to it, as a person or an earlier correction decided: there the \
-         word means something else, so you translate it by its meaning. A string \
-         with `maxLength` is an interface label: \
-         its translation shows at most that many characters (macros not counted), as the \
-         official localizations fit the game's layout; shorten it, with the usual \
-         abbreviations of the language when needed (Шанс прям. удара). A string with \
+         `terms` that do not apply to it, as a person decided: there the word means \
+         something else, so you translate it by its meaning. A string with `maxLength` is \
+         an interface label: the longest official localization of it shows that many \
+         characters (macros not counted), which is about what the game's layout fits; keep \
+         the translation near it, with the usual abbreviations of the language when needed \
+         (Шанс прям. удара). A string with \
          `maxBytes` is the name of a character or object the game shows over it in the \
          world: the game cuts a name longer than that many bytes of UTF-8, where a Latin \
          letter, digit, or space takes one and a Cyrillic letter or « » two; keep the name \
@@ -209,12 +168,12 @@ pub struct Item {
     /// The longest an interface label's translation may show, or a world
     /// object's name may be.
     pub max_length: Option<Budget>,
-    /// Terms a person or a correction run's model decided do not apply to
-    /// the string.
+    /// Terms a person decided do not apply to the string.
     pub term_exceptions: Vec<String>,
     /// The translation a correction starts from.
     pub translation: Option<String>,
-    /// What the checks find wrong with `translation`, as the model is told.
+    /// What is wrong with `translation`, and the terms it is to follow, as
+    /// the model is told.
     pub fix: Vec<String>,
 }
 
@@ -226,10 +185,6 @@ pub struct Answer {
     pub text: String,
     /// Why a correction changed the translation, as the model says.
     pub reason: Option<String>,
-    /// What a correction decided of the terms of its `fix`, as the model
-    /// writes it: a term that does not apply to the string by its name, a
-    /// term a word of the translation renders as `term = word`.
-    pub decisions: Vec<String>,
 }
 
 impl Answer {
@@ -240,7 +195,6 @@ impl Answer {
             start,
             text,
             reason: None,
-            decisions: Vec::new(),
         }
     }
 }
@@ -391,13 +345,8 @@ pub fn parse(text: &str) -> Result<HashMap<String, Answer>, String> {
                         Value::String(start),
                         Value::String(text),
                         Value::String(reason),
-                        rest @ ..,
-                    ] if rest.len() <= 1 => Answer {
+                    ] => Answer {
                         reason: Some(reason.trim().to_owned()).filter(|reason| !reason.is_empty()),
-                        decisions: match rest.first() {
-                            None => Vec::new(),
-                            Some(terms) => terms_of(terms)?,
-                        },
                         ..Answer::bare(Some(start.clone()), text.clone())
                     },
                     _ => return None,
@@ -407,17 +356,6 @@ pub fn parse(text: &str) -> Result<HashMap<String, Answer>, String> {
             Some((id.clone(), answer))
         })
         .collect())
-}
-
-/// The terms of an answer's fourth element: an array of strings, trimmed,
-/// without empty ones; `None` for any other value.
-fn terms_of(value: &Value) -> Option<Vec<String>> {
-    value
-        .as_array()?
-        .iter()
-        .map(|term| term.as_str().map(|term| term.trim().to_owned()))
-        .filter(|term| term.as_deref() != Some(""))
-        .collect()
 }
 
 /// Reads an answer as [`parse`] does, and when it is not valid JSON, takes
@@ -430,7 +368,30 @@ fn terms_of(value: &Value) -> Option<Vec<String>> {
 /// out, and the caller asks for them again.
 #[must_use]
 pub fn parse_lenient(text: &str, reasons: bool) -> HashMap<String, Answer> {
-    parse(text).unwrap_or_else(|_| salvage(text, reasons))
+    read_answer(text, reasons).0
+}
+
+/// Reads an answer as [`parse_lenient`] does, and says whether it was read
+/// whole: every entry it starts was read, as valid JSON or entry by entry,
+/// so that a string it leaves out was left out by the model rather than
+/// lost in an entry that could not be read.
+#[must_use]
+pub fn read_answer(text: &str, reasons: bool) -> (HashMap<String, Answer>, bool) {
+    if let Ok(answers) = parse(text) {
+        let entries = text
+            .find('{')
+            .zip(text.rfind('}'))
+            .and_then(|(start, end)| serde_json::from_str::<Value>(&text[start..=end]).ok())
+            .and_then(|value| value.as_object().map(serde_json::Map::len));
+        let whole = entries == Some(answers.len());
+        (answers, whole)
+    } else {
+        // Read entry by entry, it is whole when every entry it starts was
+        // read and the object is closed, so none was cut or lost.
+        let answers = salvage(text, reasons);
+        let whole = answers.len() == entry_starts(text).len() && text.trim_end().ends_with('}');
+        (answers, whole)
+    }
 }
 
 /// Where each entry `"id": [` of an answer starts: its id and the byte
@@ -540,27 +501,9 @@ fn salvage(text: &str, reasons: bool) -> HashMap<String, Answer> {
             continue;
         };
         let after = body[first_end + 1..].trim_start()[1..].trim_start();
-        let Some(mut second) = after.strip_prefix('"') else {
+        let Some(second) = after.strip_prefix('"') else {
             continue;
         };
-        // A correction's decisions on terms end the entry as an array of
-        // plain words: `"reason", ["mount"]]`, with or without spaces.
-        let mut decisions = Vec::new();
-        let trimmed: String;
-        if reasons
-            && let Some((split, terms)) = separators(second, '[').find_map(|(split, open)| {
-                let close = open + second[open..].find(']')?;
-                if !followed_by(&second[close + 1..], ']') {
-                    return None;
-                }
-                let terms = serde_json::from_str::<Value>(&second[open..=close]).ok()?;
-                Some((split, terms_of(&terms)?))
-            })
-        {
-            decisions = terms;
-            trimmed = format!("{}]", &second[..=split]);
-            second = &trimmed;
-        }
         // The translation ends at the last quote followed by `]`.
         let Some(second_end) = second
             .rmatch_indices('"')
@@ -589,7 +532,6 @@ fn salvage(text: &str, reasons: bool) -> HashMap<String, Answer> {
                     start: Some(start),
                     text: translation,
                     reason,
-                    decisions,
                 },
             );
         }
@@ -650,35 +592,6 @@ mod tests {
     }
 
     #[test]
-    fn a_correction_names_the_terms_that_do_not_apply() {
-        let valid = r#"{"1": ["Mount up", "По коням", "", ["mount", " "]], "2": ["Ride", "Маунт", "термин"], "3": ["x", "y", "", "mount"]}"#;
-        let parsed = parse_lenient(valid, true);
-        assert_eq!(parsed["1"].decisions, ["mount"]);
-        assert_eq!(parsed["1"].text, "По коням");
-        assert!(parsed["2"].decisions.is_empty());
-        assert!(!parsed.contains_key("3"), "terms are an array");
-        let broken = r#"{"1": ["Mount up", "По <sheet Item "x" 1> коням", "", ["mount", "Mount Gulg"]], "2": ["Hi", "Привет, "друг"", "калька"]}"#;
-        let salvaged = parse_lenient(broken, true);
-        assert_eq!(salvaged["1"].text, r#"По <sheet Item "x" 1> коням"#);
-        assert_eq!(salvaged["1"].decisions, ["mount", "Mount Gulg"]);
-        assert_eq!(salvaged["2"].text, r#"Привет, "друг""#);
-        assert_eq!(salvaged["2"].reason.as_deref(), Some("калька"));
-        assert!(salvaged["2"].decisions.is_empty());
-        // Without spaces between the elements, as models often write.
-        let tight = r#"{"1":["Mount Yorn","Гора Йорн","",["mount","aether = эфирный"]],"2":["Hi","Привет, "друг"","калька"],"3":["x","<sheet Item "y" 1>",""]}"#;
-        let salvaged = parse_lenient(tight, true);
-        assert_eq!(salvaged["1"].text, "Гора Йорн");
-        assert_eq!(salvaged["1"].decisions, ["mount", "aether = эфирный"]);
-        assert_eq!(salvaged["2"].text, r#"Привет, "друг""#);
-        assert_eq!(salvaged["2"].reason.as_deref(), Some("калька"));
-        assert_eq!(salvaged["3"].text, r#"<sheet Item "y" 1>"#);
-        assert_eq!(salvaged["3"].reason, None);
-        let text = fix_instructions("en", "ru", None, false, false, None);
-        assert!(text.contains("fourth element"));
-        assert!(text.contains("aether = эфирный"));
-    }
-
-    #[test]
     fn instructions_carry_the_rules_and_the_style() {
         let text = instructions("en", "ru", Some("К герою на «вы»."));
         assert!(text.contains("FINAL FANTASY XIV is written in Japanese"));
@@ -731,21 +644,40 @@ mod tests {
             "ru",
             Some("К герою на «вы»."),
             true,
-            true,
+            false,
             Some(" На «ты». "),
         );
         assert!(text.contains("FINAL FANTASY XIV is written in Japanese"));
         assert!(text.contains("К герою на «вы»."));
         assert!(text.contains("`fix`"));
         assert!(text.contains("of this run:\n\nНа «ты».\n\n"));
-        assert!(text.contains("Proofread every translation"));
         assert!(text.contains("Adapt the translation to the new source"));
-        let plain = fix_instructions("en", "ru", None, false, false, None);
-        assert!(!plain.contains("Proofread every") && !plain.contains("Adapt the translation"));
+        assert!(text.contains("Answer every string."));
+        let plain = fix_instructions("en", "ru", None, false, true, None);
+        assert!(!plain.contains("Adapt the translation"));
+        assert!(plain.contains("Answer only the strings whose translation changes"));
+        assert!(!plain.contains("Answer every string."));
         assert!(!text.contains("Translate every string."));
         assert!(
-            !fix_instructions("en", "ru", None, false, false, Some("  ")).contains("of this run")
+            !fix_instructions("en", "ru", None, false, true, Some("  ")).contains("of this run")
         );
+    }
+
+    #[test]
+    fn an_answer_is_read_whole_only_when_every_entry_is_read() {
+        let (answers, whole) = read_answer(r#"{"1": ["Hi", "Привет", ""]}"#, true);
+        assert_eq!(answers.len(), 1);
+        assert!(whole);
+        assert!(read_answer("{}", true).1);
+        let (answers, whole) = read_answer(r#"{"1": ["Hi", "Привет", ""], "2": 7}"#, true);
+        assert_eq!(answers.len(), 1);
+        assert!(!whole);
+        // A quote the model did not escape is read entry by entry, whole.
+        let (answers, whole) = read_answer(r#"{"1": ["Hi", "При"вет", ""]}"#, true);
+        assert_eq!(answers["1"].text, "При\"вет");
+        assert!(whole);
+        // An answer cut inside an entry is not whole.
+        assert!(!read_answer(r#"{"1": ["Hi", "При"вет", ""], "2": ["Bye", "Пок"#, true).1);
     }
 
     #[test]

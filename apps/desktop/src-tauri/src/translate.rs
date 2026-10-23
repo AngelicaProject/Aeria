@@ -14,7 +14,6 @@ use tauri::Manager;
 use crate::commands::run_blocking;
 use crate::dto::SourceBindingDto;
 use crate::error::CommandError;
-use crate::paths::AeriaPaths;
 use crate::state::DesktopState;
 
 type CommandResult<T> = Result<T, CommandError>;
@@ -29,10 +28,12 @@ pub struct Translation {
     /// the status is read every second and finding a string can read its
     /// sheet from the game.
     bindings: Mutex<HashMap<String, Option<SourceBindingDto>>>,
+    /// The report of the run, by its id.
+    report: Mutex<Option<String>>,
 }
 
 impl Translation {
-    fn codex(&self) -> CommandResult<Arc<Codex>> {
+    pub(crate) fn codex(&self) -> CommandResult<Arc<Codex>> {
         if let Some(codex) = self.codex.get() {
             return Ok(Arc::clone(codex));
         }
@@ -246,6 +247,19 @@ pub async fn translation_start(
     )
 }
 
+/// The id of the report of the run going, if one goes.
+pub(crate) fn running_report(app: &tauri::AppHandle) -> Option<String> {
+    let translation = app.state::<Translation>();
+    if !translation.run().is_some_and(|run| run.status().running) {
+        return None;
+    }
+    translation
+        .report
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone()
+}
+
 /// Whether a run is going.
 pub(crate) fn is_running(app: &tauri::AppHandle) -> bool {
     app.state::<Translation>()
@@ -260,6 +274,16 @@ pub(crate) fn is_running(app: &tauri::AppHandle) -> bool {
 /// Returns `translationRunning` while a run goes, `noProjectOpen`, or an
 /// error of the credential store.
 pub(crate) fn start_run(app: &tauri::AppHandle, options: Options) -> CommandResult<()> {
+    start_run_with(app, options, None)
+}
+
+/// Starts a run as [`start_run`] does; with `continues`, the run continues
+/// the run of that report, leaving out the strings settled before.
+pub(crate) fn start_run_with(
+    app: &tauri::AppHandle,
+    options: Options,
+    continues: Option<(String, std::collections::HashSet<String>)>,
+) -> CommandResult<()> {
     let translation = app.state::<Translation>();
     let codex = translation.codex()?;
     let session = app.state::<DesktopState>().session()?;
@@ -271,9 +295,22 @@ pub(crate) fn start_run(app: &tauri::AppHandle, options: Options) -> CommandResu
         if current.as_ref().is_some_and(|run| run.status().running) {
             return Err(running());
         }
-        let run = Arc::new(match journal(app) {
+        let (id, log, report) = journal(app);
+        *translation
+            .report
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = report.is_some().then_some(id);
+        let run = match log {
             Some(file) => Run::with_log(file),
             None => Run::new(),
+        };
+        let run = match continues {
+            Some((report, settled)) => run.continuing(report, settled),
+            None => run,
+        };
+        let run = Arc::new(match report {
+            Some(file) => run.with_report(Box::new(crate::report::ReportFile::new(file))),
+            None => run,
         });
         *current = Some(Arc::clone(&run));
         translation
@@ -290,40 +327,53 @@ pub(crate) fn start_run(app: &tauri::AppHandle, options: Options) -> CommandResu
 /// Journals of runs kept in the data folder; older ones are deleted.
 const JOURNALS: usize = 20;
 
-/// A new journal for a run in `logs/` of the data folder, named by the time
-/// it starts, after deleting the oldest beyond [`JOURNALS`]. A run goes on
-/// without one when the folder cannot be written.
-fn journal(app: &tauri::AppHandle) -> Option<std::fs::File> {
-    let folder = app.aeria_data_dir().ok()?.join("logs");
-    std::fs::create_dir_all(&folder).ok()?;
-    prune_journals(&folder, JOURNALS - 1);
+/// A new journal and report for a run in `logs/` of the data folder, named
+/// by the time it starts, after deleting the oldest beyond [`JOURNALS`]. A
+/// run goes on without them when the folder cannot be written.
+fn journal(app: &tauri::AppHandle) -> (String, Option<std::fs::File>, Option<std::fs::File>) {
     let millis = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |since| since.as_millis());
-    std::fs::File::create(folder.join(format!("translation-{millis}.log"))).ok()
+        .map_or(0, |since| since.as_millis())
+        .to_string();
+    let Some(folder) = crate::report::folder(app) else {
+        return (millis, None, None);
+    };
+    if std::fs::create_dir_all(&folder).is_err() {
+        return (millis, None, None);
+    }
+    prune_journals(&folder, JOURNALS - 1);
+    let create = |extension: &str| {
+        std::fs::File::create(folder.join(format!("translation-{millis}.{extension}"))).ok()
+    };
+    let (log, report) = (create("log"), create("jsonl"));
+    (millis, log, report)
 }
 
-/// Deletes the oldest run journals of `folder` so that at most `keep` stay.
-/// Their names hold the start time, so name order is age order.
+/// Deletes the oldest run journals and reports of `folder` so that at most
+/// `keep` of each stay. Their names hold the start time, so age order is the
+/// order of the times.
 fn prune_journals(folder: &Path, keep: usize) {
     let Ok(entries) = std::fs::read_dir(folder) else {
         return;
     };
-    let mut journals: Vec<PathBuf> = entries
+    let paths: Vec<PathBuf> = entries
         .filter_map(Result::ok)
         .map(|entry| entry.path())
-        .filter(|path| {
-            path.extension().is_some_and(|extension| extension == "log")
-                && path
-                    .file_stem()
-                    .and_then(|stem| stem.to_str())
-                    .is_some_and(|stem| stem.starts_with("translation-"))
-        })
         .collect();
-    journals.sort();
-    let excess = journals.len().saturating_sub(keep);
-    for old in &journals[..excess] {
-        let _ = std::fs::remove_file(old);
+    for extension in ["log", "jsonl"] {
+        let mut runs: Vec<(u128, &PathBuf)> = paths
+            .iter()
+            .filter(|path| path.extension().is_some_and(|found| found == extension))
+            .filter_map(|path| {
+                let stem = path.file_stem()?.to_str()?;
+                Some((stem.strip_prefix("translation-")?.parse().ok()?, path))
+            })
+            .collect();
+        runs.sort();
+        let excess = runs.len().saturating_sub(keep);
+        for (_, old) in &runs[..excess] {
+            let _ = std::fs::remove_file(old);
+        }
     }
 }
 
@@ -345,9 +395,6 @@ pub struct RejectionDto {
     pub binding: Option<SourceBindingDto>,
     /// The model's last translation, which was not written.
     pub translation: String,
-    /// What the model's last answer decided of the terms it was asked
-    /// about, as it wrote it.
-    pub decisions: Vec<String>,
     pub problems: Vec<crate::dto::IssueDto>,
 }
 
@@ -369,35 +416,20 @@ pub struct StatusDto {
     pub status: Status,
     pub rejections: Vec<RejectionDto>,
     pub corrections: Vec<CorrectionDto>,
+    /// The id of the run's report, when it has one.
+    pub report: Option<String>,
 }
 
 fn rejection_dto(
     rejected: &aeria_model::Rejected,
     binding: Option<SourceBindingDto>,
 ) -> RejectionDto {
-    let mut problems: Vec<crate::dto::IssueDto> = rejected
-        .problems
-        .iter()
-        .filter(|message| {
-            !rejected
-                .issues
-                .iter()
-                .any(|issue| issue.to_string() == **message)
-        })
-        .map(|message| crate::dto::IssueDto {
-            kind: "other".to_owned(),
-            group: "other".to_owned(),
-            message: message.clone(),
-            ..crate::dto::IssueDto::default()
-        })
-        .collect();
-    problems.extend(rejected.issues.iter().map(crate::dto::IssueDto::from));
+    let problems = crate::report::problem_dtos(&rejected.problems, &rejected.issues);
     RejectionDto {
         path: rejected.path.clone(),
         context: rejected.context.clone(),
         binding,
         translation: rejected.translation.clone(),
-        decisions: rejected.decisions.clone(),
         problems,
     }
 }
@@ -443,10 +475,16 @@ fn status_with_state(app: &tauri::AppHandle) -> Option<StatusDto> {
             corrected: corrected.clone(),
         })
         .collect();
+    let report = translation
+        .report
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone();
     Some(StatusDto {
         status,
         rejections,
         corrections,
+        report,
     })
 }
 
@@ -485,14 +523,20 @@ pub struct FixDto {
     pub issues: bool,
     #[serde(default)]
     pub groups: Vec<String>,
-    /// Proofread each translation.
-    #[serde(default)]
-    pub proofread: bool,
     /// Adapt a fuzzy translation to its changed source and clear the mark.
     #[serde(default)]
     pub adapt: bool,
     /// What the translator asks of each translation.
+    #[serde(default)]
     pub request: Option<String>,
+    /// The name of the project's skill to follow; its saved text, not its
+    /// scope, is asked of each translation, after `request`.
+    #[serde(default)]
+    pub skill: Option<String>,
+    /// Bring the translations written with an older version of these terms,
+    /// by headword, or of any term when empty, to the terms as they are.
+    #[serde(default)]
+    pub terms: Option<Vec<String>>,
 }
 
 /// Starts a correction run of the strings `contexts` of the files `paths`.
@@ -504,14 +548,36 @@ fn start_fix(
     model: String,
     effort: Option<String>,
 ) -> CommandResult<()> {
-    let request = fix
-        .request
-        .map(|request| request.trim().to_owned())
-        .filter(|request| !request.is_empty());
-    if !fix.issues && !fix.proofread && !fix.adapt && request.is_none() {
+    let skill_text = match fix.skill.as_deref() {
+        Some(name) => {
+            let root = app.state::<DesktopState>().session()?.root().to_owned();
+            let text = aeria_knowledge::read_skill(&root, name)
+                .map_err(|message| CommandError::new("projectKnowledgeRead", message))?
+                .ok_or_else(|| {
+                    CommandError::new(
+                        "skillNotFound",
+                        format!("the project has no skill {name:?}"),
+                    )
+                })?;
+            let (_, body) = aeria_knowledge::parse_skill(&text)
+                .map_err(|message| CommandError::new("projectKnowledgeInvalid", message))?;
+            Some(body)
+        }
+        None => None,
+    };
+    // The translator's words, then the skill's.
+    let request = [fix.request.as_deref(), skill_text.as_deref()]
+        .into_iter()
+        .flatten()
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    let request = (!request.is_empty()).then_some(request);
+    if !fix.issues && !fix.adapt && request.is_none() && fix.terms.is_none() {
         return Err(CommandError::new(
             "fixEmpty",
-            "choose the issues to fix, proofreading, adapting, or write a request",
+            "choose a skill, the issues to fix, adapting, or terms",
         ));
     }
     start_run(
@@ -525,9 +591,11 @@ fn start_fix(
             fix: Some(Fix {
                 issues: fix.issues,
                 groups: fix.groups,
-                proofread: fix.proofread,
                 adapt: fix.adapt,
                 request,
+                skill: fix.skill,
+                terms: fix.terms,
+                ..Fix::default()
             }),
         },
     )
@@ -596,10 +664,11 @@ mod tests {
     #[test]
     fn the_oldest_journals_are_deleted() {
         let folder = tempfile::tempdir().expect("folder");
-        for millis in [1_000, 3_000, 2_000] {
+        for millis in [1_000, 3_000, 2_000, 500] {
             std::fs::write(folder.path().join(format!("translation-{millis}.log")), "")
                 .expect("journal");
         }
+        std::fs::write(folder.path().join("translation-500.jsonl"), "").expect("report");
         std::fs::write(folder.path().join("other.log"), "").expect("other");
         prune_journals(folder.path(), 2);
         let mut left: Vec<String> = std::fs::read_dir(folder.path())
@@ -613,9 +682,15 @@ mod tests {
             })
             .collect();
         left.sort();
+        // 500 is older than 1000, though its name sorts after it.
         assert_eq!(
             left,
-            ["other.log", "translation-2000.log", "translation-3000.log"]
+            [
+                "other.log",
+                "translation-2000.log",
+                "translation-3000.log",
+                "translation-500.jsonl"
+            ]
         );
     }
 }

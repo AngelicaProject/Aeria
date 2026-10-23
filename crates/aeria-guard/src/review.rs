@@ -217,39 +217,25 @@ fn change_label(change: &EntryChange) -> String {
             .to_owned(),
         );
     }
-    for (what, before, after) in [
-        (
-            "term exception",
-            &change.before.term_exceptions,
-            &change.after.term_exceptions,
-        ),
-        (
-            "AI: another meaning",
-            &change.before.model_exceptions,
-            &change.after.model_exceptions,
-        ),
-        (
-            "AI: rendered by a word",
-            &change.before.model_renderings,
-            &change.after.model_renderings,
-        ),
-    ] {
-        let added: Vec<&str> = after
-            .iter()
-            .filter(|term| !before.contains(term))
-            .map(String::as_str)
-            .collect();
-        let removed: Vec<&str> = before
-            .iter()
-            .filter(|term| !after.contains(term))
-            .map(String::as_str)
-            .collect();
-        if !added.is_empty() {
-            parts.push(format!("{what}: {}", added.join(", ")));
-        }
-        if !removed.is_empty() {
-            parts.push(format!("{what} removed: {}", removed.join(", ")));
-        }
+    let (before, after) = (
+        &change.before.term_exceptions,
+        &change.after.term_exceptions,
+    );
+    let added: Vec<&str> = after
+        .iter()
+        .filter(|term| !before.contains(term))
+        .map(String::as_str)
+        .collect();
+    let removed: Vec<&str> = before
+        .iter()
+        .filter(|term| !after.contains(term))
+        .map(String::as_str)
+        .collect();
+    if !added.is_empty() {
+        parts.push(format!("term exception: {}", added.join(", ")));
+    }
+    if !removed.is_empty() {
+        parts.push(format!("term exception removed: {}", removed.join(", ")));
     }
     parts.join(", ")
 }

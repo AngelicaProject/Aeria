@@ -1,9 +1,9 @@
 import { useEffect, useState } from "react";
-import { normalizeCommandError, termUnappliedStrings, translationStop } from "../ipc";
-import type { SourceBinding, TermKey, TranslationStatus, UnappliedStringDto } from "../types";
+import { normalizeCommandError, termOutdatedStrings, translationStop } from "../ipc";
+import type { SourceBinding, TermKey, TranslationStatus, OutdatedStringDto } from "../types";
 import { useI18n } from "../ui/i18n";
 import { UiIcon } from "../ui/primitives/UiIcon";
-import { describeStop } from "./TranslateDialog";
+import { ContinueButton, ReportButton, RunProgress, describeStop } from "./TranslateDialog";
 import { TranslationCorrections } from "./TranslationCorrections";
 import { TranslationRejections } from "./TranslationRejections";
 
@@ -44,7 +44,7 @@ export function FixControls({ label, block, busy, onFix, onOpenSettings }: FixCo
   );
 }
 
-type UnappliedProps = {
+type OutdatedProps = {
   /** The meaning of the term. */
   term: TermKey;
   count: number;
@@ -58,19 +58,20 @@ type UnappliedProps = {
 };
 
 /**
- * The translations that do not use a term, as the checks find: each opens
- * in the editor, and a correction run with AI decides them all.
+ * The translations written with another version of a term, or before it
+ * was a term: each opens in the editor, and a correction run with AI brings
+ * them all to the term as it is.
  */
-export function UnappliedStrings({ term, count, revision, block, busy, onFix, onOpen, onOpenSettings }: UnappliedProps) {
+export function OutdatedStrings({ term, count, revision, block, busy, onFix, onOpen, onOpenSettings }: OutdatedProps) {
   const { t } = useI18n();
-  const [strings, setStrings] = useState<UnappliedStringDto[] | null>(null);
+  const [strings, setStrings] = useState<OutdatedStringDto[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
     setStrings(null);
     setError(null);
     if (count === 0) return;
     let current = true;
-    void termUnappliedStrings([term])
+    void termOutdatedStrings([term])
       .then((found) => { if (current) setStrings(found); })
       .catch((reason: unknown) => { if (current) setError(normalizeCommandError(reason).message); });
     return () => { current = false; };
@@ -78,7 +79,7 @@ export function UnappliedStrings({ term, count, revision, block, busy, onFix, on
   }, [count, revision, term.term, term.category]);
   if (count === 0) return null;
   return (
-    <div className="glossary-field glossary-unapplied">
+    <div className="glossary-field glossary-outdated">
       <span className="glossary-field-label">
         {t("glossary.fix.title")}
         <span className="glossary-strings-count warning">{count.toLocaleString()}</span>
@@ -105,17 +106,20 @@ export function UnappliedStrings({ term, count, revision, block, busy, onFix, on
 
 type RunPanelProps = {
   status: TranslationStatus;
-  /** The terms the run decides, by name. */
+  /** The terms the run brings the translations to, by name. */
   terms: readonly string[];
   onReveal: (binding: SourceBinding) => void;
   onClose: () => void;
+  /** Opens the run's report in a tab of its own. */
+  onOpenReport: (reportId: string, label: string) => void;
+  /** The run was continued: its progress is read again. */
+  onContinued: () => void;
 };
 
-/** A correction run the glossary started: its progress, then what it wrote, decided, and refused. */
-export function RunPanel({ status, terms, onReveal, onClose }: RunPanelProps) {
-  const { t, locale, formatNumber } = useI18n();
+/** A correction run the glossary started: its progress, then what it wrote and refused. */
+export function RunPanel({ status, terms, onReveal, onClose, onOpenReport, onContinued }: RunPanelProps) {
+  const { t, locale } = useI18n();
   const running = status.running;
-  const done = status.written + status.unchanged + status.rejected;
   return (
     <section className="glossary-run" aria-live="polite" aria-label={t("glossary.fix.panel")}>
       <div className="glossary-run-head">
@@ -126,17 +130,10 @@ export function RunPanel({ status, terms, onReveal, onClose }: RunPanelProps) {
           ? <button className="button button-secondary" type="button" onClick={() => void translationStop()}>{t("translate.stopRun")}</button>
           : <button className="button button-ghost" type="button" onClick={onClose}>{t("glossary.fix.close")}</button>}
       </div>
-      <div className="meter" aria-hidden="true">
-        <span className="meter-translated" style={{ width: `${status.strings > 0 ? Math.min(1, done / status.strings) * 100 : running ? 0 : 100}%` }} />
-      </div>
-      <p className="export-facts">
-        <span>{t("translate.progressFix", { written: formatNumber(status.written), strings: formatNumber(status.strings) })}</span>
-        {status.unchanged > 0 ? <span>{t("translate.unchanged", { count: status.unchanged })}</span> : null}
-        {status.decided > 0 ? <span>{t("translate.decided", { count: status.decided })}</span> : null}
-        {status.rejected > 0 ? <span>{t("translate.rejected", { count: status.rejected })}</span> : null}
-      </p>
+      <RunProgress status={status} />
       {status.message ? <p className="field-hint">{status.message}</p> : null}
       {status.stop ? <p className="field-hint"><strong>{describeStop(status.stop, t, locale)}</strong></p> : null}
+      {status.report ? <p className="glossary-run-report glossary-run-actions"><ContinueButton status={status} onContinued={onContinued} /><ReportButton status={status} onOpenReport={onOpenReport} /></p> : null}
       {status.corrections.length > 0 ? <TranslationCorrections corrections={status.corrections} total={status.written} onReveal={onReveal} /> : null}
       {status.rejections.length > 0 ? <TranslationRejections rejections={status.rejections} total={status.rejected} running={running} onReveal={onReveal} onRetry={undefined} /> : null}
     </section>

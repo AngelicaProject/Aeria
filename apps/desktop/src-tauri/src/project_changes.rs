@@ -391,42 +391,6 @@ pub fn of_commit(
     Ok(changes)
 }
 
-/// A checkpoint message for changes without a user message: the translation
-/// summary Git computed, followed by the changed project areas.
-#[must_use]
-pub fn checkpoint_message(
-    translations: Option<&str>,
-    changes: &[ProjectChangeDto],
-) -> Option<String> {
-    let mut areas: Vec<&str> = Vec::new();
-    for change in changes {
-        let name = match change.area {
-            ProjectAreaDto::Terms => "terms",
-            ProjectAreaDto::Knowledge => "knowledge",
-            ProjectAreaDto::ProjectSettings => "project settings",
-            ProjectAreaDto::PackSettings => "pack settings",
-            ProjectAreaDto::FontSettings | ProjectAreaDto::FontFile => "game fonts",
-            ProjectAreaDto::GitAttributes => "Git attributes",
-            ProjectAreaDto::FeedWorkflow => "feed workflow",
-            ProjectAreaDto::GuardWorkflow => "Aeria Guard workflow",
-        };
-        if !areas.contains(&name) {
-            areas.push(name);
-        }
-    }
-    let project = (!areas.is_empty()).then(|| format!("update {}", areas.join(", ")));
-    match (translations, project) {
-        (Some(translations), Some(project)) => Some(format!("{translations}; {project}")),
-        (Some(translations), None) => Some(translations.to_owned()),
-        (None, Some(project)) => {
-            let mut text = project;
-            text[..1].make_ascii_uppercase();
-            Some(text)
-        }
-        (None, None) => None,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -546,24 +510,5 @@ mod tests {
             (added.area, added.kind, added.size),
             (ProjectAreaDto::FontFile, ChangeKindDto::Added, 3)
         );
-    }
-
-    #[test]
-    fn default_messages_name_the_changed_areas() {
-        let change = |path: &str| compare(path, None, Some(b"x")).expect("change");
-        let changes = [
-            change(TERMS_PATH),
-            change("fonts/a.ttf"),
-            change(FONT_SETTINGS_FILE),
-        ];
-        assert_eq!(
-            checkpoint_message(None, &changes).as_deref(),
-            Some("Update terms, game fonts")
-        );
-        assert_eq!(
-            checkpoint_message(Some("Translate 3 strings"), &changes[..1]).as_deref(),
-            Some("Translate 3 strings; update terms")
-        );
-        assert_eq!(checkpoint_message(None, &[]), None);
     }
 }

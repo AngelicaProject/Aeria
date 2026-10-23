@@ -67,7 +67,7 @@ details.glossary-file-problem ul { margin: 4px 0 0; padding-left: 18px; }
 .glossary-cell-source svg { flex: none; color: var(--fg-faint); }
 .glossary-cell-uses { justify-content: flex-end; color: var(--fg-muted); font-family: var(--font-mono); font-size: var(--text-2xs); }
 .glossary-badge { flex: none; padding: 0 6px; border-radius: var(--radius-xs); background: var(--panel-sunken); color: var(--fg-muted); font-size: var(--text-2xs); line-height: 18px; white-space: nowrap; }
-.glossary-badge-unapplied { background: color-mix(in srgb, var(--warn) 14%, transparent); color: var(--warn); }
+.glossary-badge-outdated { background: color-mix(in srgb, var(--warn) 14%, transparent); color: var(--warn); }
 .glossary-empty-list { margin: 0; padding: 24px 12px; color: var(--fg-faint); font-size: var(--text-sm); text-align: center; }
 .glossary-footer { display: flex; flex: none; align-items: center; gap: 12px; height: 40px; padding: 0 8px 0 12px; border-top: 1px solid var(--line); font-size: var(--text-xs); }
 .glossary-problems, .glossary-problems:not(:disabled) { color: var(--bad); }
@@ -114,7 +114,7 @@ textarea.glossary-note { flex: 1; min-height: 72px; resize: none; font-size: var
 .glossary-string-translation.empty { color: var(--fg-faint); font-style: italic; }
 .glossary-string-translation .glossary-badge { margin-left: 6px; }
 .glossary-strings-count.warning { color: var(--warn); }
-.glossary-unapplied .glossary-strings { max-height: 240px; }
+.glossary-outdated .glossary-strings { max-height: 240px; }
 .glossary-fix-controls { display: flex; flex-direction: column; gap: 6px; }
 .glossary-fix-request { min-height: 44px; resize: vertical; font-size: var(--text-sm); }
 .glossary-fix-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px; }
@@ -139,3 +139,44 @@ textarea.glossary-note { flex: 1; min-height: 72px; resize: none; font-size: var
 /* A term of the string guide opens in the glossary. */
 .string-guide-open { padding: 0; border: 0; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; }
 .string-guide-open:hover { color: var(--accent); text-decoration: underline; }
+
+.glossary-run-report { margin: 0; }
+
+/* A run's report: the views beside what they list. */
+.report-head { display: flex; flex: none; align-items: center; gap: 8px; min-height: 40px; padding: 0 12px; border-bottom: 1px solid var(--line); font-size: var(--text-sm); }
+.report-head svg { flex: none; color: var(--accent); }
+.report-head-terms { overflow: hidden; min-width: 0; text-overflow: ellipsis; white-space: nowrap; }
+.report-head-stop { margin-left: auto; color: var(--fg-muted); white-space: nowrap; }
+.report-picker { max-width: 280px; font-size: var(--text-xs); }
+.report-panes { grid-template-columns: 220px minmax(0, 1fr); }
+.report-list { border-right: 0; }
+.report-body { flex: 1; min-height: 0; overflow-y: auto; }
+.report-empty { margin: 0; padding: 12px; font-size: var(--text-sm); }
+.report-items { display: flex; flex-direction: column; margin: 0; padding: 0; list-style: none; }
+.report-item { display: flex; flex-direction: column; gap: 6px; padding: 10px 14px; border-bottom: 1px solid var(--line); font-size: var(--text-sm); }
+.report-item.refused { box-shadow: inset 2px 0 0 var(--bad); }
+.report-item-head { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
+.report-context { overflow: hidden; font-family: var(--font-mono); font-size: var(--text-xs); text-overflow: ellipsis; white-space: nowrap; }
+.report-texts { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 2px 12px; margin: 0; }
+.report-texts dt { color: var(--fg-faint); font-size: var(--text-xs); }
+.report-texts dd { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.report-attempts { display: flex; flex-direction: column; gap: 6px; margin: 0; padding: 8px 10px; border-radius: var(--radius-sm); background: var(--panel-sunken); list-style: none; }
+.report-attempts > li { display: flex; flex-direction: column; gap: 2px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.report-attempt-label { color: var(--fg-faint); font-size: var(--text-2xs); font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; }
+.report-problem { display: flex; align-items: flex-start; gap: 6px; margin: 0; color: var(--bad); font-size: var(--text-xs); }
+.report-problem svg { flex: none; margin-top: 2px; }
+.report-more { margin: 8px 14px 12px; }
+
+/* Editing: the instructions, the one being edited, and where to run it. */
+.editing-panes { grid-template-columns: 220px minmax(0, 1fr) minmax(300px, 380px); }
+.editing-editor { display: flex; flex-direction: column; gap: 10px; min-width: 0; min-height: 0; padding: 12px 14px; border-right: 1px solid var(--line); }
+.editing-text { flex: 1; min-height: 200px; resize: none; font-family: var(--font-mono); font-size: var(--text-md); line-height: 1.5; }
+.editing-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.editing-actions .spacer { flex: 1; }
+.editing-run { display: flex; flex-direction: column; gap: 8px; min-height: 0; overflow-y: auto; padding: 8px 12px 12px; }
+.editing-run .translate-picker { flex: 1; min-height: 240px; }
+.editing-new { padding: 8px 4px 4px; }
+.editing-empty { margin: 0; padding: 4px 8px; font-size: var(--text-sm); }
+.editing-paths { resize: vertical; font-family: var(--font-mono); font-size: var(--text-sm); }
+.editing-path-counts { display: flex; flex-direction: column; gap: 2px; margin: 0; padding: 0 2px; list-style: none; font-size: var(--text-xs); }
+.editing-path-counts li { display: flex; justify-content: space-between; gap: 8px; }

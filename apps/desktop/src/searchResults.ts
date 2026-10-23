@@ -1,4 +1,3 @@
-import { exceptionTerm } from "./issueText.ts";
 import type { SearchEntryDto, SearchFileDto, SearchHitDto } from "./types";
 
 /** A string of a search result, by file and `msgctxt`. */
@@ -48,14 +47,6 @@ export function groupBySheet(files: readonly SearchFileDto[]): SheetGroup[] {
     }
   }
   return groups;
-}
-
-/** The term every hit has a term finding for, or null. */
-export function commonTerm(hits: readonly SearchEntryDto[]): string | null {
-  const [first, ...rest] = hits;
-  if (!first) return null;
-  const termsOf = (hit: SearchEntryDto) => new Set(hit.findings.map(exceptionTerm).filter((term): term is string => term !== null));
-  return [...termsOf(first)].find((term) => rest.every((hit) => termsOf(hit).has(term))) ?? null;
 }
 
 /**

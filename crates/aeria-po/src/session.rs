@@ -53,14 +53,6 @@ pub struct Translation {
     pub previous: Option<String>,
     /// Terms a person decided do not apply to the string.
     pub term_exceptions: Vec<String>,
-    /// Terms a correction run's model decided do not apply to the string,
-    /// whether or not the decision still holds (see
-    /// [`crate::po::ModelException::holds`]).
-    pub model_exceptions: Vec<crate::po::ModelException>,
-    /// Words of the translation a correction run's model decided render a
-    /// term, whether or not the decision still holds (see
-    /// [`crate::po::ModelRendering::holds`]).
-    pub model_renderings: Vec<crate::po::ModelRendering>,
     /// A person reviewed the translation as it is (see
     /// [`crate::po::Entry::is_reviewed`]); machine translation leaves it.
     pub reviewed: bool,
@@ -76,8 +68,6 @@ impl Translation {
             || entry.fuzzy
             || note.is_some()
             || !entry.term_exceptions.is_empty()
-            || !entry.model_exceptions.is_empty()
-            || !entry.model_renderings.is_empty()
             || entry.reviewed.is_some())
         .then(|| Self {
             text: entry.translation.clone(),
@@ -85,8 +75,6 @@ impl Translation {
             note,
             previous: entry.previous.clone().filter(|_| entry.fuzzy),
             term_exceptions: entry.term_exceptions.clone(),
-            model_exceptions: entry.model_exceptions.clone(),
-            model_renderings: entry.model_renderings.clone(),
             reviewed: entry.is_reviewed(),
             review_stale: entry.review_is_stale(),
         })
@@ -102,8 +90,9 @@ pub struct EntryState {
     /// The source the translation was written for, while it is fuzzy.
     pub previous: Option<String>,
     pub term_exceptions: Vec<String>,
-    pub model_exceptions: Vec<crate::po::ModelException>,
-    pub model_renderings: Vec<crate::po::ModelRendering>,
+    /// The terms the translation was written with, as its comment holds
+    /// them.
+    pub written_with: std::collections::BTreeMap<String, String>,
     /// The review mark, as its flag holds it.
     pub reviewed: Option<String>,
 }
@@ -115,8 +104,7 @@ impl EntryState {
             fuzzy: entry.fuzzy,
             previous: entry.previous.clone(),
             term_exceptions: entry.term_exceptions.clone(),
-            model_exceptions: entry.model_exceptions.clone(),
-            model_renderings: entry.model_renderings.clone(),
+            written_with: entry.written_with.clone(),
             reviewed: entry.reviewed.clone(),
         }
     }
@@ -126,10 +114,13 @@ impl EntryState {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum EditKind {
     /// A new translation, checked as a saved one; the fuzzy mark stays, so a
-    /// replacement never passes for a review.
+    /// replacement never passes for a review. It is written with the terms
+    /// as they are (see [`crate::po::Entry::record_terms`]).
     Replace(String),
     /// A machine translation's correction: written as a replacement, but a
-    /// reviewed translation is not changed: only a person changes it.
+    /// reviewed translation is not changed: only a person changes it. A
+    /// correction that leaves the text as it is still records the terms: the
+    /// translation follows them as they are.
     Correct(String),
     /// A machine translation's adaptation of a fuzzy translation to its
     /// changed source: written as a correction, with the fuzzy mark and the
@@ -144,34 +135,6 @@ pub enum EditKind {
     /// A term exception is added or removed: the glossary term does not
     /// apply to the string (see [`set_term_exception`]).
     TermException { term: String, add: bool },
-    /// A correction run's decisions on terms of the source, with its
-    /// correction when it changed the translation: a term decided not to
-    /// apply gets a model exception for the entry it was decided for, and a
-    /// term decided to apply loses its model exception and keeps the words
-    /// of the translation decided to render it. A term a person decided
-    /// keeps the person's decision. A reviewed translation is a
-    /// person's: neither its text nor its decisions are written.
-    Decide {
-        correction: Option<String>,
-        terms: Vec<TermDecision>,
-    },
-    /// The model's decisions on these terms, by headword, compared ignoring
-    /// case, are dropped, so the checks ask for the terms again and the next
-    /// correction run decides them anew. A person's term exceptions stay,
-    /// and a reviewed translation's decisions are a person's: they are not
-    /// dropped.
-    ForgetModel(Vec<String>),
-}
-
-/// A model's decision on a term of a string's source.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct TermDecision {
-    /// The term, with the fingerprint of the glossary entry decided for.
-    pub exception: crate::po::ModelException,
-    pub applies: bool,
-    /// The words of the translation that render a term that applies, where
-    /// the checks do not read its translation in them.
-    pub rendered: Vec<String>,
 }
 
 /// An edit of one entry, made only while the entry still has the
@@ -796,7 +759,8 @@ impl Session {
     /// Sets the translation of a string; an empty text leaves it
     /// untranslated. A translation with a problem (see
     /// [`crate::check::check_translation`]) is refused and nothing is
-    /// written. Saving a translation clears `fuzzy`. A translation that was
+    /// written. Saving a translation clears `fuzzy` and records the terms
+    /// it is written with (see [`crate::po::Entry::record_terms`]). A translation that was
     /// reviewed stays so, since a person wrote it; saving does not mark one
     /// that was not (see [`Session::set_translation_reviewed`]).
     ///
@@ -867,14 +831,16 @@ impl Session {
             if entry.translation.is_empty() {
                 entry.reviewed = None;
             }
+            entry.record_terms(&knowledge.terms);
             Ok(())
         })
     }
 
     /// Marks the translation of a string as reviewed by a person, or
     /// removes the mark. A review confirms the translation for the source
-    /// as it is, so it also clears `fuzzy`. An untranslated string has
-    /// nothing to review and is left as it is.
+    /// and the terms as they are, so it also clears `fuzzy` and records the
+    /// terms. An untranslated string has nothing to review and is left as
+    /// it is.
     ///
     /// # Errors
     ///
@@ -888,6 +854,7 @@ impl Session {
         column: u32,
         reviewed: bool,
     ) -> Result<Option<Translation>, EditError> {
+        let knowledge = self.knowledge();
         self.edit(sheet_name, row, subrow, column, |entry| {
             if entry.translation.is_empty() {
                 return Ok(());
@@ -895,6 +862,7 @@ impl Session {
             if reviewed {
                 entry.fuzzy = false;
                 entry.previous = None;
+                entry.record_terms(&knowledge.terms);
             }
             entry.set_reviewed(reviewed);
             Ok(())
@@ -916,10 +884,8 @@ impl Session {
     }
 
     /// Adds or removes a term exception of a string: the glossary term does
-    /// not apply to it, so the checks neither ask for its translation nor
-    /// forbid its variants there, and machine translation is told so. The
-    /// person's decision either way takes the place of a model's: removing
-    /// an exception removes the model exception of the term too.
+    /// not apply to it, so machine translation is not given it there and
+    /// the string is not asked to follow it.
     ///
     /// # Errors
     ///
@@ -1040,10 +1006,11 @@ impl Session {
     }
 
     /// Writes translations of entries of one file, by `msgctxt`, in one
-    /// write. Only an entry that is still untranslated (or still fuzzy, with
+    /// write, each recorded as written with the terms of `terms`. Only an
+    /// entry that is still untranslated (or still fuzzy, with
     /// `replace_fuzzy`) and not reviewed takes its translation, so work
-    /// saved meanwhile is kept; the caller checked the translations. Returns the `msgctxt` of
-    /// every entry written.
+    /// saved meanwhile is kept; the caller checked the translations. Returns
+    /// the `msgctxt` of every entry written.
     ///
     /// # Errors
     ///
@@ -1054,6 +1021,7 @@ impl Session {
         path: &str,
         translations: &[(String, String)],
         replace_fuzzy: bool,
+        terms: &aeria_knowledge::Glossary,
     ) -> Result<Vec<String>, EditError> {
         let _writing = lock(&self.writing);
         let full = self.root.join(PO_DIR).join(path);
@@ -1093,6 +1061,7 @@ impl Session {
                 entry.fuzzy = false;
                 entry.previous = None;
                 entry.reviewed = None;
+                entry.record_terms(terms);
                 written.push(entry.context.clone());
             }
         }
@@ -1121,7 +1090,21 @@ impl Session {
     ///
     /// Returns an error when a file cannot be read or written.
     pub fn apply_edits(&self, edits: &[EntryEdit]) -> Result<EditsApplied, EditError> {
-        let knowledge = self.knowledge();
+        self.apply_edits_with(edits, &self.knowledge())
+    }
+
+    /// Applies edits as [`Session::apply_edits`] does, checked against
+    /// `knowledge` and recorded as written with its terms: the knowledge a
+    /// machine translation run made them with.
+    ///
+    /// # Errors
+    ///
+    /// As [`Session::apply_edits`].
+    pub fn apply_edits_with(
+        &self,
+        edits: &[EntryEdit],
+        knowledge: &Knowledge,
+    ) -> Result<EditsApplied, EditError> {
         let target = self.settings().target_language;
         let _writing = lock(&self.writing);
         let mut by_file: std::collections::BTreeMap<&str, Vec<&EntryEdit>> =
@@ -1169,7 +1152,7 @@ impl Session {
                     });
                     continue;
                 };
-                match apply_edit(entry, edit, &knowledge, &target) {
+                match apply_edit(entry, edit, knowledge, &target) {
                     Ok(Some(done)) => {
                         written += 1;
                         applied.done.push(done);
@@ -1195,46 +1178,6 @@ impl Session {
             lock(&self.files).insert(path.to_owned(), (now, Arc::new(FileState::of(&file))));
         }
         Ok(applied)
-    }
-
-    /// Drops the model's decisions on `terms`, by headword, from every
-    /// string that has one (see [`EditKind::ForgetModel`]): the strings come
-    /// back to the checks, for the next correction run to decide. Strings
-    /// with a reviewed translation keep theirs and are reported skipped.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when `po/` cannot be listed or a file cannot be read
-    /// or written.
-    pub fn forget_model_decisions(&self, terms: &[String]) -> Result<EditsApplied, EditError> {
-        let wanted: Vec<String> = terms.iter().map(|term| term.to_lowercase()).collect();
-        let decided = |term: &str| wanted.contains(&term.to_lowercase());
-        let mut edits = Vec::new();
-        for path in list(&self.root)? {
-            let full = self.root.join(PO_DIR).join(&path);
-            let text = std::fs::read_to_string(&full)
-                .map_err(|source| ProjectError::Io { path: full, source })?;
-            for entry in PoFile::parse(&text).0.entries {
-                if entry
-                    .model_exceptions
-                    .iter()
-                    .any(|known| decided(&known.term))
-                    || entry
-                        .model_renderings
-                        .iter()
-                        .any(|known| decided(&known.term))
-                {
-                    edits.push(EntryEdit {
-                        path: path.clone(),
-                        context: entry.context,
-                        expected_text: entry.translation,
-                        expected_fuzzy: entry.fuzzy,
-                        kind: EditKind::ForgetModel(terms.to_vec()),
-                    });
-                }
-            }
-        }
-        self.apply_edits(&edits)
     }
 
     /// How much of each sheet with entries is translated, by sheet name.
@@ -1279,20 +1222,11 @@ fn apply_edit(
     }
     let before = EntryState::of(entry);
     let reviewed = entry.is_reviewed();
-    if reviewed
-        && matches!(
-            edit.kind,
-            EditKind::Correct(_)
-                | EditKind::Adapt(_)
-                | EditKind::Decide { .. }
-                | EditKind::ForgetModel(_)
-        )
-    {
+    if reviewed && matches!(edit.kind, EditKind::Correct(_) | EditKind::Adapt(_)) {
         return Err(SkipReason::Reviewed);
     }
     let text = match &edit.kind {
         EditKind::Replace(new) | EditKind::Correct(new) | EditKind::Adapt(new) => Some(new),
-        EditKind::Decide { correction, .. } => correction.as_ref(),
         _ => None,
     };
     if let Some(new) = text {
@@ -1317,15 +1251,10 @@ fn apply_edit(
             entry.fuzzy = false;
             entry.previous = None;
         }
+        entry.record_terms(&knowledge.terms);
     }
     match &edit.kind {
         EditKind::Replace(_) | EditKind::Correct(_) | EditKind::Adapt(_) => {}
-        EditKind::Decide { terms, .. } => {
-            for decision in terms {
-                set_model_exception(entry, &decision.exception, !decision.applies);
-                set_model_renderings(entry, decision);
-            }
-        }
         EditKind::Clear => {
             if reviewed {
                 return Err(SkipReason::Reviewed);
@@ -1334,25 +1263,17 @@ fn apply_edit(
             entry.fuzzy = false;
             entry.previous = None;
             entry.reviewed = None;
+            entry.written_with.clear();
         }
         EditKind::Restore(state) => {
             state.text.clone_into(&mut entry.translation);
             entry.fuzzy = state.fuzzy;
             entry.previous.clone_from(&state.previous);
             entry.term_exceptions.clone_from(&state.term_exceptions);
-            entry.model_exceptions.clone_from(&state.model_exceptions);
-            entry.model_renderings.clone_from(&state.model_renderings);
+            entry.written_with.clone_from(&state.written_with);
             entry.reviewed.clone_from(&state.reviewed);
         }
         EditKind::TermException { term, add } => set_term_exception(entry, term, *add),
-        EditKind::ForgetModel(terms) => {
-            let decided = |term: &str| {
-                let term = term.to_lowercase();
-                terms.iter().any(|known| known.to_lowercase() == term)
-            };
-            entry.model_exceptions.retain(|known| !decided(&known.term));
-            entry.model_renderings.retain(|known| !decided(&known.term));
-        }
     }
     let after = EntryState::of(entry);
     Ok((after != before).then(|| EditDone {
@@ -1363,72 +1284,15 @@ fn apply_edit(
     }))
 }
 
-/// Adds or removes the model exception of a term, compared ignoring case. A
-/// term a person made an exception for keeps the person's decision, and a
-/// term that cannot be written as a flag is not added.
-fn set_model_exception(
-    entry: &mut crate::po::Entry,
-    exception: &crate::po::ModelException,
-    add: bool,
-) {
-    let lower = exception.term.trim().to_lowercase();
-    entry
-        .model_exceptions
-        .retain(|known| known.term.to_lowercase() != lower);
-    let person = entry
-        .term_exceptions
-        .iter()
-        .any(|known| known.to_lowercase() == lower);
-    if add && !person && crate::po::can_be_exception(&exception.term) {
-        entry.model_exceptions.push(exception.clone());
-    }
-}
-
-/// Replaces the words a model decided render a term with those of
-/// `decision`: none for a term that does not apply, or that a person made an
-/// exception for.
-fn set_model_renderings(entry: &mut crate::po::Entry, decision: &TermDecision) {
-    let lower = decision.exception.term.trim().to_lowercase();
-    entry
-        .model_renderings
-        .retain(|known| known.term.to_lowercase() != lower);
-    let person = entry
-        .term_exceptions
-        .iter()
-        .any(|known| known.to_lowercase() == lower);
-    if !decision.applies || person || !crate::po::can_be_exception(&decision.exception.term) {
-        return;
-    }
-    for word in &decision.rendered {
-        let rendering = crate::po::ModelRendering {
-            term: decision.exception.term.clone(),
-            fingerprint: decision.exception.fingerprint.clone(),
-            word: word.trim().to_owned(),
-        };
-        if !rendering.word.is_empty()
-            && !rendering.word.contains([' ', ',', '\n', '\r'])
-            && !entry.model_renderings.contains(&rendering)
-        {
-            entry.model_renderings.push(rendering);
-        }
-    }
-}
-
 /// Adds or removes the exception of `term`, compared ignoring case. A term
 /// that cannot be written as a flag (see [`crate::po::can_be_exception`]) is
-/// not added. A person's decision either way replaces the model's.
+/// not added.
 pub fn set_term_exception(entry: &mut crate::po::Entry, term: &str, add: bool) {
     let term = term.trim();
     let lower = term.to_lowercase();
     entry
         .term_exceptions
         .retain(|known| known.to_lowercase() != lower);
-    entry
-        .model_exceptions
-        .retain(|known| known.term.to_lowercase() != lower);
-    entry
-        .model_renderings
-        .retain(|known| known.term.to_lowercase() != lower);
     if add && crate::po::can_be_exception(term) {
         entry.term_exceptions.push(term.to_owned());
     }

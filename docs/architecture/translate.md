@@ -107,7 +107,7 @@ The task is JSON built from the files as they are when the request is sent:
   per meaning, and the model uses the meaning the string means, and none
   where the word of the source is not the thing the category names. A term
   goes only when it applies to a string of the request, not counting the
-  strings with an exception for it, a person's or a model's that holds. A
+  strings with an exception for it. A
   term's translation is the name as it stands alone: a sentence writes it
   in the number, case, and capitals it needs, declined like any word where
   the language declines names (Поговорите с Ко Рабнтой), with a capital
@@ -133,7 +133,7 @@ The task is JSON built from the files as they are when the request is sent:
     label and `maxBytes` for a name in the world (below), the previous
     source and translation of a fuzzy one, and
     `termExceptions`: the terms of `terms` that do not apply to it, by a
-    person's exception or a model's that holds (see
+    person's exception (see
     [`po-project.md`](./po-project.md#term-exceptions)), which the
     instructions say to translate by their meaning.
 
@@ -181,11 +181,11 @@ string (at most 40 characters shown, no line break) of an interface sheet
 characters shown by the longest of its English source and the German and
 French lines of its context, macros not counted, `<nbsp>` as one, `<shy>` as
 none (`aeria_po::length`; the sheet comes from the `msgctxt`). The request
-asks for a translation within that length, with the language's usual
-abbreviations when needed, and a longer one is refused. For a person a longer
-label is advice of the checks (see
-[`po-project.md`](./po-project.md#checking)). Names of items and places get no
-length: their tooltips show them whole.
+asks to keep the translation near that length, with the language's usual
+abbreviations when needed. It is guidance: the official lengths only
+approximate what the layout fits, so a longer label is neither refused nor
+advice. Names of items and places get no length: their tooltips show them
+whole.
 
 ## Names in the world
 
@@ -200,7 +200,7 @@ sheets the game names objects by through `ObjStr`: `Aetheryte`, `BNpcName`,
 it). Such a string gets `maxBytes`, 63: the bytes of its encoded
 `SeString`, which for text without macros are its UTF-8 bytes (a Cyrillic
 letter takes two). The request asks for a name within it, and a longer one
-is refused; for a person it is advice of the checks, as for a label. `Item`
+is refused; for a person it is advice of the checks. `Item`
 names are copied too, for housing furniture, but the editor and requests do
 not hold them to it: most items are never placed, and their other views show
 the name whole.
@@ -209,17 +209,8 @@ the name whole.
 
 Every translation is checked like a save in the editor
 ([`po-project.md`](./po-project.md#checking)), after the answer's first
-words and the length of an interface label or a name in the world. One more
-check is machine translation's alone: when the source chooses a word by whether a person of a
-log message is the player (`<if ($gs1 == $gs2)>scan<else>scans</if>`), the
-translation needs a comparison with that person whose branches both have
-words, so that a word agreeing with the person is chosen with it, rather
-than one form after the name that agrees with only "you" or someone else
-(«Вы … осматривают»). Repeating a whole phrase in each branch always
-satisfies it; a person's save is not held to it. Likewise a machine
-translation may not keep a sound of the English localization as it is, such
-as `\<sigh>` or `\<click>` (in macro text `\<` is a literal `<`): it renders
-it in its language. An answer that is not valid JSON,
+words, and refused for a name longer than the game shows. An answer that is
+not valid JSON,
 most often for a quote the model did not escape inside macro text, is read
 entry by entry (`"id": ["first words", "translation"]`, a bare quote read as
 part of its string, the elements separated with or without spaces); what is
@@ -227,11 +218,20 @@ read this way is checked like any answer, so a wrong reading is refused,
 never written: a translation that holds the answer's separators (`","`,
 `",[`) its source does not have is what a reading left of the elements after
 it, and is refused. A string the answer has no
-readable translation of is asked for again with the failing ones. A batch's
-failing translations go back up to twice, each time in one request with each problem stated; what
+readable translation of is asked for again with the failing ones, and its
+report records the attempt with that problem; a correction is told to
+answer it unchanged when nothing needs to change. A correction that neither
+adapts nor brings translations to their terms answers only the strings it
+changes: a string its answer leaves out is unchanged and not asked for
+again, but only when every entry the answer starts was read (as JSON, or
+entry by entry when a quote is not escaped), the object is closed, and the
+service did not cut it short; otherwise a left-out string is missing as
+above. A retry follows the same rule for a string asked only for being
+left out. Adapting and terms corrections answer every string, since an answer
+unchanged is what clears the fuzzy mark or records the terms. A batch's
+failing translations go back up to three times, each time in one request with each problem stated; what
 still fails stays as it was and is listed in the run's status with its
-problems, the model's last translation, which is never written, and what
-that answer decided of the terms a correction asked about. Advice
+problems and the model's last translation, which is never written. Advice
 does not reject a translation. The listed strings can be translated again
 in one run of exactly those strings (`translation_retry`), after a person
 fixed what refused them, such as a term that does not apply (see
@@ -254,30 +254,22 @@ are not reviewed, and sends each translation with what is wrong with it, so
 the model changes what is wrong and keeps what is right. A person asks for
 any of:
 
-- **proofreading** (`Fix::proofread`): every translation is read as the
-  localization's editor reads it, against its source, the other client
-  languages of its context, and the strings around it in the scene; it is
-  fixed where it loses or adds meaning, misses the form of address the
-  style asks for in this line (read from the line of this string in the
-  language the style follows, not from its neighbours), the agreement with
-  the player character's gender, a name or a term, or reads as a
-  translation (constructions copied from the source, officialese, filler).
-  The source's meaning comes before smoothness, and what reads well stays
-  unchanged. The name of a thing of the game (an action, a status, a menu)
-  keeps the form the translation gives it unless the request's names or
-  terms give another: many such names, such as those of the interface, are
-  not among the request's names, and the game shows them under the name the
-  project gave them. Research on refining translations with a model found that one
-  general request of this kind improves fluency and style more reliably
-  than asking for each kind of error or having the model find errors
-  first, and that it can move a translation's meaning, which the reasons
-  below and the review in Git are for;
+- **a skill** of the project (`Fix::request`, named by `Fix::skill`): the
+  saved text of one of `aeria-knowledge/skills/` (see
+  [`../formats/knowledge-v1.md`](../formats/knowledge-v1.md#skills)), the
+  same for every translation of the run, such as how to fix the agreement
+  with the player character's gender. A run of the skill itself takes the
+  strings of its scope: its paths but those of `Fix::exclude`, matching the
+  expressions of `Fix::filter`. Every kind of review is a skill a person
+  writes: Aeria has no review of its own;
 - **the issues of the checks**: what the checks find in the translation,
   problems and advice, every kind or only the kinds chosen (`Fix::groups`,
-  by `Issue::group`, as project search groups them; a kind alone, such as
-  `termNotUsed`, takes every group of the kind, every term). A problem always goes,
+  by `Issue::group`, as project search groups them). A problem always goes,
   since a corrected translation must pass the checks; a term exception
   that names no term of the source does not, since a person removes it;
+- **following changed terms** (`Fix::terms`): the translations written with
+  an older version of the chosen terms are brought to the terms as they
+  are (see [Following changed terms](#following-changed-terms));
 - **adapting** (`Fix::adapt`): a fuzzy translation, whose source changed
   since it was written, is adapted to the new source. The request gives the
   previous source and the translation of it, and the model changes what the
@@ -287,111 +279,62 @@ any of:
   it is unchanged, since it is now a translation of the source. A string
   that is not fuzzy is not adapted;
 - **a request** in the translator's words, the same for every translation
-  of the run, such as a form of address the style changed.
+  of the run, for a run that follows changed terms.
 
-With proofreading or a request every chosen translation is taken; with
-adapting, every fuzzy one; with the issues alone, a string without any is
-not. This is the one place advice reaches a
-model, and only the advice a person chose.
+With a skill or a request every chosen translation is taken; with
+adapting, every fuzzy one; with the issues or the terms alone, a string
+without any is not. This is the one place advice reaches a model, and only
+the advice a person chose.
 
 The request is built as for translating, with the same terms, examples, and
 hints of each string, and two more fields:
 `translation`, the current translation, and `fix`, the messages of its
-issues. The instructions are those of translating with what a correction
+issues and the terms it is to follow. The instructions are those of translating with what a correction
 may change in place of "translate every string", and the request after the
 style; they are the same for every request of the run, so the prompt cache
 holds them. The answer has the same form, first words included, and a third
 string: why the translation changed, in a few words of the target language
 (`обращение по французской строке`, `калька`), empty when it did not. A
-reason is not checked and never written to the project. A fourth element,
-only when the answer decides a term, lists the terms that do not apply and,
-as `term = word`, the terms a word of the translation renders (see
-[Deciding terms](#deciding-terms)).
+reason is not checked and never written to the project.
 
-### Deciding terms
+### Following changed terms
 
-A term the checks find unused in a translation asks the correction for a
-decision: does the term apply to this string? The instructions say it
-applies where the word of the source is the thing the term names, as its
-translation and note describe it, and does not where the word means
-something else there: an everyday word or another part of speech (`mount
-up` beside a mount the player rides), part of the name of something else
-(`Mount Gulg`), or a sense the note rules out. The other client languages of
-the string's context show how the official localizations read the word. A
-term that applies is used, declined as the sentence needs, with the rest of
-the sentence agreeing with it; a term that does not is translated by its
-meaning and named in the answer's fourth element. The decision is by meaning
-alone: a term is never named to keep a translation unchanged.
+Each translation records the version of each term it was written with (see
+[`po-project.md`](./po-project.md#terms-written-with)). When a term
+changes, only the translations written with its old version, or before it
+was a term, need another look; a run with `Fix::terms` takes exactly those
+of its terms (every term when the list is empty) that are not reviewed. Each
+string's `fix` names its terms that changed and asks the model to make the
+translation follow them as `terms` give them now and change nothing else:
+the term is used where the word of the source is the thing it names, as its
+translation and note describe it, declined as the sentence needs, and a word
+that means something else there stays. Whether the term applies, and how
+the sentence takes it, is the model's judgment; no check compares the
+translation with the term.
 
-A term that applies can be rendered by another word made from its
-translation, as the adjective of a noun («эфирный компрессор» for an aether
-compressor where `aether` is «эфир»), which the checks do not read as the
-term. The answer then keeps the word and names the term with it in the
-fourth element, as `aether = эфирный`; a name of several words is kept word
-by word. The instructions allow only one word
-of the same root as the term's translation, and no synonym, pronoun, or
-paraphrase; which word that is, is the model's judgment (see
-[`po-project.md`](./po-project.md#model-renderings)). A word the corrected
-translation does not have renders nothing.
-
-A correction that brings one term or name into a translation can take the
-word of another term out of it: «Нефритовый разлив» for the Jadeite Flood
-no longer has «потоп», which `the Flood` of the same string was read in.
-Such a term, unused only in the corrected translation, is asked about with
-the others.
-
-Every such term is decided: a corrected translation that leaves an unused
-term unnamed is refused, changed or not, with a problem that asks to use the
-term, name the word that renders it, or name it as one that does not apply.
-A term is named by any of its forms; a name that is no term, such as the
-words of the source that hold one (`Neo-Ishgardian` for `Ishgardian`), names
-the one asked term found in it. A named term that was not asked about is no
-decision, and a term named as not applying is not also rendered. The decisions are written with the
-correction as one edit (`EditKind::Decide`), under the same conditions as a
-correction: a term that does not apply gets a
-[model exception](./po-project.md#model-exceptions) for the glossary entry
-it was decided for, and a term that applies loses its model exception and
-keeps the words named for it as
-[model renderings](./po-project.md#model-renderings), but only the words
-the checks need: a word named for a term whose translation the corrected
-text uses as the terms write it is not kept. An answer that leaves
-the translation as it was and names a term is written for its decision
-alone. Every string of a run is counted once: as written, as left as it
-was (an answer that changed nothing of its entry, or was not written
-because the entry changed meanwhile), or as refused. Since a model exception holds only while the term's
-entry is unchanged, a run after a term's note or translation changed
-decides every string of that term again, and a run after a game update
-decides the strings whose source changed; the strings decided before are
-not sent again.
-
-A run over every term (search with the checks filter **Every term**, then
-**Fix with AI**) brings the corpus to the glossary: each string either uses
-the term, keeps the word that renders it, or keeps a decision that the term
-means something else there. The glossary tab starts the same run for one term, the
-terms chosen, or every term not applied in strings (see
+Every answer that passes the checks is written, also one that leaves the
+translation as it was: it records that the translation follows the terms as
+they are, so the string is not taken again until a term of it changes. A
+refused answer leaves the old record, and the next run takes the string
+again. The glossary tab starts such a run for one term, the terms chosen, or
+every term with strings on an old version (see
 [`desktop-editor-ui.md`](./desktop-editor-ui.md#glossary-tab)).
 
-A correction may not make a translation worse. It is refused when it has a
-problem of the checks, an issue of a kind the translation did not have
-(advice such as a length or machine phrasing, and what machine translation
-alone is held to), or, when it changed the translation, advice it was asked
-to fix. An answer that leaves the translation as it was says that the
-advice does not apply to the string: it is counted as unchanged and not
-written, but for the terms it decides. Refused corrections go back with their problems like refused
-translations, and what still fails is listed and not written.
+A correction is refused only for what refuses a machine translation: a
+problem of the checks, or a name longer than the game shows. Refused
+corrections go back with their problems like refused translations, and what
+still fails is listed and not written.
 
 A correction is written as a bulk edit of the session
-(`EditKind::Correct`, or `EditKind::Decide` with decisions on terms): only
-while the entry still has the translation the
+(`EditKind::Correct`): only while the entry still has the translation the
 request was built from, and never over a review, so work saved meanwhile and
-a review made meanwhile are kept. The fuzzy mark stays. The run's status
-lists the first 1,000 corrections it wrote, each before and after with its
-reason, the terms it decided do not apply, and the terms it decided a word
-renders, so a person reads them as an
-editor's notes before reading the diff, and counts the strings where it
-decided a term does not apply. Like any run, a
-correction does not commit, and its changes are reviewed and reverted
-through Git.
+a review made meanwhile are kept. The fuzzy mark stays. Every string of a
+run is counted once: as written when its text changed or an adaptation
+cleared its fuzzy mark, as left as it was otherwise, or as refused. The
+run's status lists the first 1,000 corrections it wrote, each before and
+after with its reason, so a person reads them as an editor's notes before
+reading the diff. Like any run, a correction does not commit, and its
+changes are reviewed and reverted through Git.
 
 ## Pace and limits
 
@@ -406,25 +349,33 @@ for as long as it thinks. A connection is given 30 seconds to open and is checke
 connection that died without closing fails its requests instead of holding
 the run. Any other refusal leaves the batch's strings for the next run.
 
-A usage-limit answer of the plan stops the run: what was written stays, and
-the run reports the time the limit resets when the service says. Starting it
-again later continues. A lost sign-in stops the run and asks to sign in
-again.
+A usage-limit answer of the plan does not stop the run: its batch goes back
+to the queue, and the run waits until the time the service says the limit
+resets, and a minute more, or 15 minutes when it says none, then goes on at
+the pace of one request; the other requests in flight that meet the same
+limit go back without waiting again. The progress says when the run asks
+again, and **Stop** ends the wait. A lost sign-in stops the run and asks to
+sign in again.
+
+A run that stopped before it settled every string it planned, by **Stop**,
+a failure, or Aeria closed, one the service refused requests of, or one
+whose strings the checks refused, can be continued from its report
+([Continuing](#continuing)).
 
 ## Progress
 
 The dialog chooses what to translate in a tree of the project's sheets,
 with a search and each sheet's and folder's untranslated strings, and with
-quick choices: the quests and every sheet with untranslated strings. It shows, every second while it is open: strings
-written of the
-run's strings, strings a correction left as they were, strings refused by
-the checks, tokens used, the share of
+quick choices: the quests and every sheet with untranslated strings. It shows, every second while it is open: the
+strings settled of the run's strings, as the meter shows them, then those
+written, those a correction left as they were, and those refused by the
+checks; tokens used, the share of
 prompt tokens served from the cache, the current pace, the requests the
 service is answering with their file, strings, retry, and how long each has
 waited, a hint about the reasoning depth when an answer takes over five
 minutes, the last failure of the service while the run waits, and why the
 run stopped. Tokens count as each response answers, so a batch's retries
-show as they happen.
+show as they happen. **Open report** opens the run's [report](#report).
 
 Each run writes a journal to `logs/translation-<start>.log` in the data
 folder (`%APPDATA%\Aeria` on Windows), and the last 20 are kept: what the
@@ -435,3 +386,50 @@ sent and received are not written: a problem is named only up to its first
 quote or colon. The run goes on
 when the dialog is hidden, and Stop drops the batches in flight at once,
 without waiting for the service to answer them.
+
+## Report
+
+Each run also writes a report to `logs/translation-<start>.jsonl` beside its
+journal, kept and deleted with it: what became of every string the run
+asked, so a person finds why a string was refused and an error of the model
+or of the checks can be told apart. The report holds the project's texts,
+so it stays in the data folder of the computer that ran it, never in the
+project or its repository. It is JSON Lines, one object per line, each named
+by `record`, written as each string is settled, so a run that stops keeps
+what it settled and a report can be read while its run goes:
+
+- `run`, first: `version` (1), the run's `kind` (`translating` or
+  `fixing`), `model`, `effort`, the `terms` a correction follows, by
+  headword (empty for every term or none), the name of the `skill`
+  it follows, or null, and `startedAt` (Unix milliseconds).
+- `options`, second: what the run was asked, as `aeria_model::Options`
+  (`paths`, `contexts`, `fuzzy`, `model`, `effort`, and `fix` with its
+  issues, groups, adaptation, request, skill, excluded paths, filter, and
+  terms), and
+  `continues`, the id of the report of the run it continues, or null.
+- `string`: its `path` and `context`, its `source`, its translation
+  `before` the run, each `attempt` with the model's `translation` and the
+  `problems` it was refused for, as the issues of the editor, and the
+  `outcome`: `written` (with `after` and the model's `reason`), `unchanged`
+  (the answer kept the translation), `stale` (the translation changed or was
+  reviewed while the run asked, so the answer was not written), or
+  `refused` (the last attempt still failed the checks).
+- `left`: a request the service refused, with its `paths`, its `strings`,
+  and the `error`; what it asked is left for the next run.
+- `stop`, last: why the run stopped, as its status says.
+
+A reader skips a record or a field it does not know. A report that cannot be
+written does not stop its run. The desktop lists and reads only the reports
+of the kinds and version it writes.
+
+### Continuing
+
+Continuing a run (`translation_continue`) starts a run with the options of
+its report, leaving out every string its report, and the reports of the runs
+it continues, have a `string` record of (`Run::continuing`) but those the
+checks refused: what was written, left unchanged, or changed meanwhile is
+not asked again, and a string the checks refused and a request the service
+refused are. The new run writes its own report,
+whose `continues` names the one it continues, so a run can be continued
+again and after Aeria restarts. A report deleted with the oldest journals
+ends the chain: the strings only it settled are asked again.

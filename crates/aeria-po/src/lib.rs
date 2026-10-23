@@ -15,14 +15,14 @@ pub mod search;
 pub mod session;
 pub mod sheet_terms;
 
-pub use check::{Finding, Issue, Verdict, applied_exceptions, check_file, check_translation};
+pub use check::{Finding, Issue, Verdict, check_file, check_translation};
 pub use generate::{GenerateError, Languages, identity_keys, identity_of, is_entry, sheet_files};
 pub use identity::{Identity, ROWS_PER_FILE, RowName, SheetPaths, is_scene, splits};
 pub use merge::{merge, merge_files};
 pub use po::{
-    Entry, Header, MODEL_EXCEPTION_FLAG, MODEL_RENDERING_FLAG, ModelException, ModelRendering,
-    PoFile, Problem, REVIEWED_FLAG, TERM_EXCEPTION_FLAG, can_be_exception, fingerprint,
-    name_fingerprint, quote, term_fingerprint, unquote,
+    Entry, Header, PoFile, Problem, REVIEWED_FLAG, TERM_EXCEPTION_FLAG, TERMS_COMMENT,
+    can_be_exception, fingerprint, name_fingerprint, quote, term_fingerprint, terms_written_with,
+    unquote,
 };
 pub use project::{
     FORMAT, FileProblems, GAME_VERSION_FIELD, PO_DIR, ProjectError, READ_FORMATS, README_PATH,
@@ -32,11 +32,11 @@ pub use project::{
 pub use search::{
     Change, CheckFilter, Corpus, Field, FieldMatch, Fields, FileHits, Found, Hit, IssueCount,
     MAX_HITS, MatchKind, Matcher, Pattern, Query, Replacement, SearchError, State, TermString,
-    path_selected, replace_in_text, text_ranges,
+    TermUsage, path_selected, replace_in_text, text_ranges,
 };
 pub use session::{
     CellView, EditDone, EditError, EditKind, EditSkipped, EditsApplied, EntryEdit, EntryState,
-    OpenError, Page, RowView, Session, SheetProgress, SkipReason, TermDecision, Translation,
-    set_term_exception, write_atomically,
+    OpenError, Page, RowView, Session, SheetProgress, SkipReason, Translation, set_term_exception,
+    write_atomically,
 };
 pub use sheet_terms::{ProjectKnowledge, ReplacedTerm, SheetTerm, Variant, project_knowledge};

@@ -1,15 +1,16 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Dialog } from "radix-ui";
-import { normalizeCommandError, translationRetry, translationStart, translationStatus, translationStop } from "../ipc";
-import type { CommandError, ProjectSheetDto, SheetProgressDto, SourceBinding, TranslationStatus, TranslationStop } from "../types";
+import { normalizeCommandError, runReports, translationContinue, translationRetry, translationStart, translationStatus, translationStop } from "../ipc";
+import type { CommandError, ProjectSheetDto, ReportInfo, RunKind, SheetProgressDto, SourceBinding, TranslationStatus, TranslationStop } from "../types";
 import type { MessageKey } from "../i18n/translate";
-import { buildSheetTree, findSheetMatches, type SheetTreeEntry, type SheetTreeFolder } from "../sheetExplorer";
 import { ErrorBanner } from "./ErrorBanner";
+import { SheetChooser, useSheetTree } from "./SheetChooser";
 import { TranslationCorrections } from "./TranslationCorrections";
 import { TranslationRejections } from "./TranslationRejections";
 import { UiIcon } from "../ui/primitives/UiIcon";
 import { useI18n, type Translate } from "../ui/i18n";
 import { usePreferences } from "../ui/preferences";
+import { reportLabel, runKind } from "../reportLabel";
 
 type TranslateDialogProps = {
   open: boolean;
@@ -23,6 +24,8 @@ type TranslateDialogProps = {
   onFilesChanged: () => void;
   /** Opens a string in the editor. */
   onRevealBinding?: ((binding: SourceBinding) => void) | undefined;
+  /** Opens a run's report in a tab of its own. */
+  onOpenReport: (reportId: string, label: string) => void;
 };
 
 /** How often a running translation's progress is read. */
@@ -37,8 +40,6 @@ function formatElapsed(milliseconds: number): string {
   const seconds = Math.max(0, Math.floor(milliseconds / 1000));
   return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
 }
-/** Most sheets a search lists. */
-const SEARCH_LIMIT = 300;
 
 const stopLabels: Readonly<Record<TranslationStop["reason"], MessageKey>> = {
   finished: "translate.stop.finished",
@@ -48,6 +49,96 @@ const stopLabels: Readonly<Record<TranslationStop["reason"], MessageKey>> = {
   failed: "translate.stop.failed",
 };
 
+/**
+ * How far a run is: the strings it settled of those it set out to take, as
+ * the meter shows them, then what became of them.
+ */
+export function RunProgress({ status }: { status: TranslationStatus }) {
+  const { t, locale, formatNumber } = useI18n();
+  const done = status.written + status.unchanged + status.rejected;
+  const running = status.running;
+  return (
+    <>
+      <div className="meter" aria-hidden="true">
+        <span className="meter-translated" style={{ width: `${status.strings > 0 ? Math.min(1, done / status.strings) * 100 : running ? 0 : 100}%` }} />
+      </div>
+      {status.waitingUntil !== null && running ? (
+        <p className="field-hint"><strong>{t("translate.waitingLimit", { time: new Date(status.waitingUntil * 1000).toLocaleString(locale, { dateStyle: "short", timeStyle: "short" }) })}</strong></p>
+      ) : null}
+      <p className="export-facts">
+        <span><strong>{t("translate.progressDone", { done: formatNumber(done), strings: formatNumber(status.strings) })}</strong></span>
+        {status.written > 0 ? <span>{t(status.fixing ? "translate.corrected" : "translate.translated", { count: status.written })}</span> : null}
+        {status.unchanged > 0 ? <span>{t("translate.unchanged", { count: status.unchanged })}</span> : null}
+        {status.rejected > 0 ? <span>{t("translate.rejected", { count: status.rejected })}</span> : null}
+      </p>
+    </>
+  );
+}
+
+/**
+ * A button that continues a run that stopped before it settled every string
+ * it planned, or whose strings the checks refused; `onContinued` follows the
+ * run that continues it.
+ */
+export function ContinueButton({ status, onContinued }: { status: TranslationStatus; onContinued?: () => void }) {
+  const { t } = useI18n();
+  const [error, setError] = useState<CommandError | null>(null);
+  const [starting, setStarting] = useState(false);
+  const report = status.report;
+  if (!report || status.running || !status.stop || (status.stop.reason === "finished" && status.rejected === 0)) return null;
+  return (
+    <>
+      <button className="button button-primary" type="button" disabled={starting} title={t("report.continueTitle")} onClick={() => {
+        setStarting(true);
+        setError(null);
+        void translationContinue(report)
+          .then(() => onContinued?.())
+          .catch((reason: unknown) => setError(normalizeCommandError(reason)))
+          .finally(() => setStarting(false));
+      }}>
+        <UiIcon icon="sparkles" size="sm" />{t("report.continue")}
+      </button>
+      {error ? <span className="glossary-problem">{error.message}</span> : null}
+    </>
+  );
+}
+
+/** A button that opens the report of a run, when it has one. */
+export function ReportButton({ status, onOpenReport }: { status: TranslationStatus; onOpenReport: (reportId: string, label: string) => void }) {
+  const { t, locale } = useI18n();
+  const report = status.report;
+  if (!report) return null;
+  return (
+    <button className="button button-secondary" type="button" onClick={() => onOpenReport(report, reportLabel(runKind(status), status.startedAt, t, locale))}>
+      <UiIcon icon="clipboard" size="sm" />{t("report.open")}
+    </button>
+  );
+}
+
+/**
+ * A button that opens the newest report of a run of `kind` in the data
+ * folder, for when no run of this session has one.
+ */
+export function LastReportButton({ kind, onOpenReport }: { kind: RunKind; onOpenReport: (reportId: string, label: string) => void }) {
+  const { t, locale } = useI18n();
+  const [last, setLast] = useState<ReportInfo | null>(null);
+  useEffect(() => {
+    let live = true;
+    void runReports()
+      .then((reports) => { if (live) setLast(reports.find((report) => report.run.kind === kind) ?? null); })
+      .catch(() => { if (live) setLast(null); });
+    return () => { live = false; };
+  }, [kind]);
+  if (!last) return null;
+  return (
+    <p className="glossary-run-actions">
+      <button className="button button-secondary" type="button" onClick={() => onOpenReport(last.id, reportLabel(last.run.kind, last.run.startedAt, t, locale))}>
+        <UiIcon icon="clipboard" size="sm" />{t("report.last")}
+      </button>
+    </p>
+  );
+}
+
 export function describeStop(stop: TranslationStop, t: Translate, locale: string): string {
   if (stop.reason === "usageLimit" && stop.resetsAt !== null) {
     return t("translate.stop.usageLimitUntil", { time: new Date(stop.resetsAt * 1000).toLocaleString(locale) });
@@ -56,76 +147,17 @@ export function describeStop(stop: TranslationStop, t: Translate, locale: string
   return t(stopLabels[stop.reason]);
 }
 
-/** The sheet names under a folder of the tree. */
-function leavesOf(folder: SheetTreeFolder): string[] {
-  const names: string[] = [];
-  const visit = (entries: readonly SheetTreeEntry[]) => {
-    for (const entry of entries) {
-      if (entry.kind === "leaf") names.push(entry.sheet.name);
-      else visit(entry.children);
-    }
-  };
-  visit(folder.children);
-  return names;
-}
-
-/**
- * The scope of a run: whole folders as `folder/`, other chosen sheets by
- * name, and an empty scope when every sheet is chosen.
- */
-function scopeOf(entries: readonly SheetTreeEntry[], selected: ReadonlySet<string>, leaves: ReadonlyMap<string, string[]>, total: number): string[] {
-  if (selected.size === total) return [];
-  const scope: string[] = [];
-  const visit = (children: readonly SheetTreeEntry[]) => {
-    for (const entry of children) {
-      if (entry.kind === "leaf") {
-        if (selected.has(entry.sheet.name)) scope.push(entry.sheet.name);
-        continue;
-      }
-      const names = leaves.get(entry.path) ?? [];
-      if (names.length > 0 && names.every((name) => selected.has(name))) scope.push(`${entry.path}/`);
-      else if (names.some((name) => selected.has(name))) visit(entry.children);
-    }
-  };
-  visit(entries);
-  return scope;
-}
-
-function Check({ checked, mixed, label, onChange }: { checked: boolean; mixed: boolean; label: string; onChange: (checked: boolean) => void }) {
-  const ref = useRef<HTMLInputElement>(null);
-  useEffect(() => {
-    if (ref.current) ref.current.indeterminate = mixed;
-  }, [mixed]);
-  return <input ref={ref} type="checkbox" aria-label={label} checked={checked} onChange={(event) => onChange(event.target.checked)} />;
-}
-
 /** Machine translation of chosen sheets and folders of sheets, and its progress. */
-export const TranslateDialog = memo(function TranslateDialog({ open, onOpenChange, sheets, progress, sheetName, onOpenSettings, onFilesChanged, onRevealBinding }: TranslateDialogProps) {
+export const TranslateDialog = memo(function TranslateDialog({ open, onOpenChange, sheets, progress, sheetName, onOpenSettings, onFilesChanged, onRevealBinding, onOpenReport }: TranslateDialogProps) {
   const { t, locale, formatNumber } = useI18n();
   const { preferences } = usePreferences();
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set());
-  const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
-  const [query, setQuery] = useState("");
   const [fuzzy, setFuzzy] = useState(false);
   const [status, setStatus] = useState<TranslationStatus | null>(null);
   const [error, setError] = useState<CommandError | null>(null);
   const wasRunning = useRef(false);
 
-  const translatable = useMemo(() => sheets.filter((sheet) => sheet.translatableCellCount > 0 && !sheet.unavailable), [sheets]);
-  const tree = useMemo(() => buildSheetTree(translatable), [translatable]);
-  const leaves = useMemo(() => {
-    const byFolder = new Map<string, string[]>();
-    const visit = (entries: readonly SheetTreeEntry[]) => {
-      for (const entry of entries) {
-        if (entry.kind === "folder") {
-          byFolder.set(entry.path, leavesOf(entry));
-          visit(entry.children);
-        }
-      }
-    };
-    visit(tree.children);
-    return byFolder;
-  }, [tree]);
+  const { allNames, scopeOf } = useSheetTree(sheets);
 
   /** Strings of a sheet a run would translate; null while its progress is unknown. */
   const remainingOf = useCallback((name: string): number | null => {
@@ -170,16 +202,6 @@ export const TranslateDialog = memo(function TranslateDialog({ open, onOpenChang
     });
   }, []);
   const choose = useCallback((names: readonly string[]) => toggle(names.filter((name) => (remainingOf(name) ?? 1) > 0), true), [remainingOf, toggle]);
-  const toggleFolder = useCallback((path: string) => {
-    setExpanded((current) => {
-      const next = new Set(current);
-      if (next.has(path)) next.delete(path);
-      else next.add(path);
-      return next;
-    });
-  }, []);
-
-  const allNames = useMemo(() => translatable.map((sheet) => sheet.name), [translatable]);
   const selectedNames = useMemo(() => allNames.filter((name) => selected.has(name)), [allNames, selected]);
   const strings = remainingOfAll(selectedNames);
   const noModel = preferences.translationModel === "";
@@ -188,7 +210,7 @@ export const TranslateDialog = memo(function TranslateDialog({ open, onOpenChang
   async function start() {
     setError(null);
     try {
-      await translationStart(scopeOf(tree.children, selected, leaves, allNames.length), fuzzy, preferences.translationModel, preferences.translationEffort || null);
+      await translationStart(scopeOf(selected), fuzzy, preferences.translationModel, preferences.translationEffort || null);
       await readStatus();
     } catch (reason) {
       setError(normalizeCommandError(reason));
@@ -211,42 +233,6 @@ export const TranslateDialog = memo(function TranslateDialog({ open, onOpenChang
     return <span className="translate-remaining">{formatNumber(count)}</span>;
   }
 
-  function renderEntries(entries: readonly SheetTreeEntry[], depth: number): ReactNode[] {
-    const rows: ReactNode[] = [];
-    for (const entry of entries) {
-      const indent = { paddingInlineStart: `${depth * 16 + 6}px` };
-      if (entry.kind === "leaf") {
-        const name = entry.sheet.name;
-        rows.push(
-          <label key={name} className="translate-row" style={indent}>
-            <span className="translate-twisty" />
-            <Check checked={selected.has(name)} mixed={false} label={name} onChange={(on) => toggle([name], on)} />
-            <span className="translate-name">{entry.name}</span>
-            {remainingLabel(remainingOf(name))}
-          </label>,
-        );
-        continue;
-      }
-      const names = leaves.get(entry.path) ?? [];
-      const chosen = names.filter((name) => selected.has(name)).length;
-      const isOpen = expanded.has(entry.path);
-      rows.push(
-        <div key={`folder:${entry.path}`} className="translate-row" style={indent}>
-          <button className="translate-twisty" type="button" aria-label={entry.path} aria-expanded={isOpen} onClick={() => toggleFolder(entry.path)}>
-            <UiIcon icon={isOpen ? "chevronDown" : "chevronRight"} size="xs" />
-          </button>
-          <Check checked={chosen > 0 && chosen === names.length} mixed={chosen > 0 && chosen < names.length} label={entry.path} onChange={(on) => toggle(names, on)} />
-          <button className="translate-name translate-folder" type="button" onClick={() => toggleFolder(entry.path)}>{entry.name}</button>
-          {remainingLabel(names.some((name) => !progress.has(name)) ? null : remainingOfAll(names))}
-        </div>,
-      );
-      if (isOpen) rows.push(...renderEntries(entry.children, depth + 1));
-    }
-    return rows;
-  }
-
-  const matches = useMemo(() => query.trim() ? findSheetMatches(translatable, query) : null, [query, translatable]);
-
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
       <Dialog.Portal>
@@ -257,28 +243,20 @@ export const TranslateDialog = memo(function TranslateDialog({ open, onOpenChang
           {error ? <ErrorBanner title={t("translate.error")} error={error} onDismiss={() => setError(null)} /> : null}
 
           <div className="translate-layout">
-            <div className="translate-picker">
-              <input className="input" type="search" placeholder={t("translate.search")} aria-label={t("translate.search")} value={query} disabled={running} onChange={(event) => setQuery(event.target.value)} />
-              <div className="translate-presets">
+            <SheetChooser
+              sheets={sheets}
+              selected={selected}
+              onToggle={toggle}
+              countOf={remainingOf}
+              renderCount={remainingLabel}
+              disabled={running}
+              label={t("translate.sheets")}
+              presets={<>
                 <button className="button button-ghost translate-preset" type="button" disabled={running} onClick={() => choose(allNames.filter((name) => name.startsWith("quest/")))}>{t("translate.preset.quests")}</button>
                 <button className="button button-ghost translate-preset" type="button" disabled={running} onClick={() => choose(allNames)}>{t("translate.preset.untranslated")}</button>
                 <button className="button button-ghost translate-preset" type="button" disabled={running || selected.size === 0} onClick={() => setSelected(new Set())}>{t("translate.preset.none")}</button>
-              </div>
-              <fieldset className="translate-tree" disabled={running} aria-label={t("translate.sheets")}>
-                {matches
-                  ? matches.slice(0, SEARCH_LIMIT).map((match) => (
-                      <label key={match.sheet.name} className="translate-row">
-                        <span className="translate-twisty" />
-                        <Check checked={selected.has(match.sheet.name)} mixed={false} label={match.sheet.name} onChange={(on) => toggle([match.sheet.name], on)} />
-                        <span className="translate-name">{match.basename}{match.breadcrumb ? <span className="muted"> · {match.breadcrumb}</span> : null}</span>
-                        {remainingLabel(remainingOf(match.sheet.name))}
-                      </label>
-                    ))
-                  : renderEntries(tree.children, 0)}
-                {matches && matches.length > SEARCH_LIMIT ? <p className="field-hint">{t("translate.moreMatches", { shown: SEARCH_LIMIT, count: matches.length })}</p> : null}
-                {matches && matches.length === 0 ? <p className="field-hint">{t("translate.noMatches")}</p> : null}
-              </fieldset>
-            </div>
+              </>}
+            />
 
             <div className="translate-side">
               <p className="translate-summary">{t("translate.selection", { sheets: formatNumber(selectedNames.length), strings: formatNumber(strings) })}</p>
@@ -297,14 +275,8 @@ export const TranslateDialog = memo(function TranslateDialog({ open, onOpenChang
 
               {status && (running || status.stop) ? (
                 <div className="translate-progress" aria-live="polite">
-                  <div className="meter" aria-hidden="true">
-                    <span className="meter-translated" style={{ width: `${status.strings > 0 ? Math.min(1, (status.written + status.unchanged + status.rejected) / status.strings) * 100 : 0}%` }} />
-                  </div>
+                  <RunProgress status={status} />
                   <p className="export-facts">
-                    <span>{t(status.fixing ? "translate.progressFix" : "translate.progress", { written: formatNumber(status.written), strings: formatNumber(status.strings) })}</span>
-                    {status.unchanged > 0 ? <span>{t("translate.unchanged", { count: status.unchanged })}</span> : null}
-                    {status.decided > 0 ? <span>{t("translate.decided", { count: status.decided })}</span> : null}
-                    {status.rejected > 0 ? <span>{t("translate.rejected", { count: status.rejected })}</span> : null}
                     <span>{t("translate.tokens", { input: formatNumber(status.inputTokens), output: formatNumber(status.outputTokens) })}</span>
                     {cachedShare !== null ? <span>{t("translate.cached", { percent: Math.round(cachedShare * 100) })}</span> : null}
                     {running ? <span>{t("translate.pace", { pace: status.pace })}</span> : null}
@@ -323,6 +295,7 @@ export const TranslateDialog = memo(function TranslateDialog({ open, onOpenChang
                   {running && status.active.some((active) => Date.now() - active.startedAt > SLOW_MS) ? <p className="field-hint">{t("translate.slow")}</p> : null}
                   {status.message ? <p className="field-hint">{status.message}</p> : null}
                   {status.stop ? <p className="field-hint"><strong>{describeStop(status.stop, t, locale)}</strong></p> : null}
+                  {status.report ? <p className="glossary-run-actions"><ContinueButton status={status} onContinued={() => void readStatus()} /><ReportButton status={status} onOpenReport={onOpenReport} /></p> : null}
                   {status.corrections.length > 0 ? (
                     <TranslationCorrections corrections={status.corrections} total={status.written} onReveal={onRevealBinding ? (binding) => { onOpenChange(false); onRevealBinding(binding); } : undefined} />
                   ) : null}
@@ -331,6 +304,7 @@ export const TranslateDialog = memo(function TranslateDialog({ open, onOpenChang
                   ) : null}
                 </div>
               ) : null}
+              {status?.report ? null : <LastReportButton kind="translating" onOpenReport={onOpenReport} />}
             </div>
           </div>
 

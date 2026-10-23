@@ -1,5 +1,6 @@
 mod column_names;
 mod commands;
+mod commit_message;
 mod dto;
 mod error;
 mod export;
@@ -13,8 +14,10 @@ mod hints;
 mod macros;
 mod paths;
 mod project_changes;
+mod report;
 mod scene;
 mod search;
+mod skills;
 mod source;
 mod state;
 mod sync;
@@ -58,12 +61,12 @@ pub use games::{
 };
 pub use git::{
     git_branches, git_changed_files, git_clone_repository, git_commit, git_commit_changes,
-    git_create_branch, git_create_branch_at, git_delete_branch, git_delete_remote_branch,
-    git_discard, git_fetch, git_initialize, git_log, git_open_commit, git_overview,
-    git_pending_changes, git_pending_file_changes, git_pending_sheet_changes, git_pull, git_push,
-    git_remote_branches, git_remove_remote, git_revert, git_set_identity, git_set_remote,
-    git_set_upstream, git_stage, git_state_stamp, git_string_history, git_switch_branch,
-    git_undo_last_commit, git_unstage,
+    git_commit_message_suggest, git_create_branch, git_create_branch_at, git_delete_branch,
+    git_delete_remote_branch, git_discard, git_fetch, git_initialize, git_log, git_open_commit,
+    git_overview, git_pending_changes, git_pending_file_changes, git_pending_sheet_changes,
+    git_pull, git_push, git_remote_branches, git_remove_remote, git_revert, git_set_identity,
+    git_set_remote, git_set_upstream, git_stage, git_state_stamp, git_string_history,
+    git_switch_branch, git_undo_last_commit, git_unstage,
 };
 pub use guard_workflow::{
     GuardWorkflowDto, git_guard_workflow, git_install_guard_workflow, git_open_pull_request,
@@ -71,14 +74,16 @@ pub use guard_workflow::{
 };
 pub use guide::{
     ProjectKnowledgeDto, TermInput, project_knowledge, save_knowledge_sheets, save_knowledge_style,
-    save_knowledge_terms, string_binding, term_strings, term_unapplied, term_unapplied_strings,
+    save_knowledge_terms, string_binding, term_outdated, term_outdated_strings, term_strings,
     term_usage,
 };
+pub use report::{run_report, run_reports, translation_continue};
 pub use search::{
-    SearchState, project_edit_undo, project_forget_model_decisions, project_replace_apply,
-    project_replace_preview, project_retranslate, project_search, project_search_cancel,
-    project_search_entries, project_search_prepare, project_term_exception,
+    SearchState, project_edit_undo, project_replace_apply, project_replace_preview,
+    project_retranslate, project_search, project_search_cancel, project_search_entries,
+    project_search_prepare, project_term_exception,
 };
+pub use skills::{delete_skill, run_skill, save_skill, skill_count, skills};
 pub use state::{Activity, DesktopState};
 pub use translate::{
     ModelAccountDto, ModelSignInDto, Translation, model_account, model_list,
@@ -176,6 +181,7 @@ pub fn run() {
             git_pending_changes,
             git_pending_sheet_changes,
             git_commit,
+            git_commit_message_suggest,
             git_stage,
             git_unstage,
             git_discard,
@@ -213,8 +219,8 @@ pub fn run() {
             save_knowledge_sheets,
             term_usage,
             term_strings,
-            term_unapplied,
-            term_unapplied_strings,
+            term_outdated,
+            term_outdated_strings,
             string_binding,
             export_overview,
             export_save_settings,
@@ -239,6 +245,14 @@ pub fn run() {
             model_list,
             translation_start,
             translation_status,
+            run_reports,
+            run_report,
+            translation_continue,
+            skills,
+            save_skill,
+            delete_skill,
+            skill_count,
+            run_skill,
             translation_retry,
             translation_fix,
             translation_fix_string,
@@ -252,7 +266,6 @@ pub fn run() {
             project_edit_undo,
             project_retranslate,
             project_term_exception,
-            project_forget_model_decisions
         ])
         .run(tauri::generate_context!())
         .expect("failed to run Aeria desktop application");

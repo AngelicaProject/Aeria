@@ -152,6 +152,16 @@ pub struct TermString {
     pub fuzzy: bool,
 }
 
+/// How many strings of a project use one term, and how many of their
+/// translations a correction brings to the term as it is: those not
+/// reviewed and written with another version of the term, or with no
+/// record of it (see [`crate::po::Entry::outdated_terms`]).
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct TermUsage {
+    pub strings: usize,
+    pub outdated: usize,
+}
+
 /// The entries a search found in one file.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct FileHits {
@@ -383,7 +393,13 @@ struct TextEntry {
     translation_ranges: Option<Span>,
     /// The translator's notes, a line each; empty without notes.
     note: Span,
+    /// The term exceptions, a line each.
+    exceptions: Span,
+    /// The record of the terms the translation was written with, a line
+    /// each: the headword, a tab, and the fingerprint.
+    written_with: Span,
     fuzzy: bool,
+    reviewed: bool,
 }
 
 /// The entries of one file with their texts in one buffer: a project of the
@@ -414,7 +430,32 @@ struct View<'a> {
     source: Text<'a>,
     translation: Text<'a>,
     note: &'a str,
+    exceptions: &'a str,
+    written_with: &'a str,
     fuzzy: bool,
+    reviewed: bool,
+}
+
+impl View<'_> {
+    /// The translation is not reviewed and was written with another
+    /// version of the term of `entry`, whose name has the fingerprint
+    /// `print`, or with no record of it; a term excepted for the string is
+    /// not its own. As [`crate::po::Entry::outdated_terms`] finds it.
+    fn is_outdated(&self, entry: &aeria_knowledge::GlossaryEntry, print: &str) -> bool {
+        if self.translation.text.is_empty() || self.reviewed {
+            return false;
+        }
+        if !self.exceptions.is_empty() {
+            let exceptions: Vec<String> = self.exceptions.lines().map(str::to_owned).collect();
+            if entry.is_excepted(&exceptions) {
+                return false;
+            }
+        }
+        !self.written_with.lines().any(|line| {
+            line.split_once('\t')
+                .is_some_and(|(name, known)| known == print && entry.is_named(name))
+        })
+    }
 }
 
 impl View<'_> {
@@ -477,6 +518,13 @@ impl FileText {
             let source = push(&entry.source)?;
             let translation = push(&entry.translation)?;
             let note = push(&entry.notes.join("\n"))?;
+            let exceptions = push(&entry.term_exceptions.join("\n"))?;
+            let record: Vec<String> = entry
+                .written_with
+                .iter()
+                .map(|(name, print)| format!("{name}\t{print}"))
+                .collect();
+            let written_with = push(&record.join("\n"))?;
             let mut ranges_of = |macro_text: &str| -> Option<Option<Span>> {
                 if !has_syntax(macro_text) {
                     return Some(None);
@@ -497,7 +545,11 @@ impl FileText {
                 translation,
                 translation_ranges: ranges_of(&entry.translation)?,
                 note,
+                exceptions,
+                written_with,
                 fuzzy: entry.fuzzy,
+                // Most entries have no mark: only a mark is fingerprinted.
+                reviewed: entry.reviewed.is_some() && entry.is_reviewed(),
             });
         }
         Some(Self {
@@ -532,7 +584,10 @@ impl FileText {
             source: self.text(entry.source, entry.source_ranges),
             translation: self.text(entry.translation, entry.translation_ranges),
             note: self.get(entry.note),
+            exceptions: self.get(entry.exceptions),
+            written_with: self.get(entry.written_with),
             fuzzy: entry.fuzzy,
+            reviewed: entry.reviewed,
         }
     }
 
@@ -1000,8 +1055,9 @@ impl Corpus {
     }
 
     /// How many strings of the project use each term of `glossary`, by the
-    /// index of its entry: the strings whose source has the term, as the
-    /// checks find it, over the whole game.
+    /// index of its entry: the strings whose source has the term over the
+    /// whole game, and those of them a correction brings to the term as it
+    /// is (see [`TermUsage`]).
     ///
     /// A cancelled count stops early: the caller drops what it returns.
     ///
@@ -1013,31 +1069,96 @@ impl Corpus {
         root: &Path,
         glossary: &aeria_knowledge::Glossary,
         cancel: &AtomicBool,
-    ) -> Result<Vec<usize>, SearchError> {
+    ) -> Result<Vec<TermUsage>, SearchError> {
         let files = self.files(root, &[], cancel)?;
+        let prints: Vec<String> = glossary
+            .entries
+            .iter()
+            .map(|entry| crate::po::name_fingerprint(glossary, entry))
+            .collect();
         // One count per worker, each over every `workers`-th file.
         let workers = std::thread::available_parallelism()
             .map_or(4, std::num::NonZero::get)
             .min(files.len().max(1));
         let parts = parallel(workers, cancel, |worker| {
-            let mut strings = vec![0; glossary.entries.len()];
+            let mut usage = vec![TermUsage::default(); glossary.entries.len()];
             for (_, file) in files.iter().skip(worker).step_by(workers) {
                 if cancel.load(Ordering::Relaxed) {
                     break;
                 }
                 for entry in &file.entries {
-                    glossary.count_uses(file.view(entry).source.text, &mut strings);
+                    let view = file.view(entry);
+                    for index in glossary.used_in(view.source.text) {
+                        let (Some(count), Some(term)) =
+                            (usage.get_mut(index), glossary.entries.get(index))
+                        else {
+                            continue;
+                        };
+                        count.strings += 1;
+                        if view.is_outdated(term, &prints[index]) {
+                            count.outdated += 1;
+                        }
+                    }
                 }
             }
-            Ok(strings)
+            Ok(usage)
         })?;
-        let mut total = vec![0; glossary.entries.len()];
+        let mut total = vec![TermUsage::default(); glossary.entries.len()];
         for (_, part) in parts {
             for (sum, count) in total.iter_mut().zip(part) {
-                *sum += count;
+                sum.strings += count.strings;
+                sum.outdated += count.outdated;
             }
         }
         Ok(total)
+    }
+
+    /// Every string whose translation a correction brings to one of the
+    /// terms at `entries`, the indexes of their glossary entries, or to any
+    /// term when `entries` is empty, as [`Self::term_usage`] counts them, in
+    /// file order.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when `po/` or a file cannot be read.
+    pub fn outdated_strings(
+        &self,
+        root: &Path,
+        glossary: &aeria_knowledge::Glossary,
+        entries: &[usize],
+    ) -> Result<Vec<TermString>, SearchError> {
+        let files = self.files(root, &[], &AtomicBool::new(false))?;
+        let prints: Vec<String> = glossary
+            .entries
+            .iter()
+            .map(|entry| crate::po::name_fingerprint(glossary, entry))
+            .collect();
+        let mut strings = Vec::new();
+        for (path, file) in &files {
+            for text in &file.entries {
+                let view = file.view(text);
+                if view.translation.text.is_empty() || view.reviewed {
+                    continue;
+                }
+                let outdated = glossary.used_in(view.source.text).into_iter().any(|index| {
+                    (entries.is_empty() || entries.contains(&index))
+                        && glossary
+                            .entries
+                            .get(index)
+                            .is_some_and(|term| view.is_outdated(term, &prints[index]))
+                });
+                if outdated {
+                    strings.push(TermString {
+                        path: path.clone(),
+                        context: view.context.to_owned(),
+                        source: view.source.text.to_owned(),
+                        translation: view.translation.text.to_owned(),
+                        fuzzy: view.fuzzy,
+                    });
+                }
+            }
+        }
+        Ok(strings)
     }
 
     /// The strings whose source uses the term of the glossary entry at

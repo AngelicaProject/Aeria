@@ -5,7 +5,6 @@
 use std::collections::BTreeSet;
 
 use aeria_knowledge::Knowledge;
-use aeria_knowledge::rules::machine_phrasing;
 
 use crate::identity::Identity;
 use crate::length::{Unit, length_budget};
@@ -35,7 +34,9 @@ impl Verdict {
     }
 }
 
-/// One finding of the checks of a translation.
+/// One finding of the checks of a translation: what is broken whatever the
+/// translation says. Whether it renders its terms and follows the style is
+/// not a check.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Issue {
     /// A line break the source does not have.
@@ -43,61 +44,30 @@ pub enum Issue {
     /// The structure policy refused the macros (`aeria_se`); the message is
     /// written for the model that produced the translation.
     Structure(String),
-    /// A stress or other combining mark the source does not have.
-    Mark(char),
-    /// A word that mixes alphabets, or has letters of another writing system.
-    MixedAlphabets(String),
-    /// A Russian form that writes both genders at once, such as `(а)`.
-    BothGenders(String),
-    /// Advice: a word written twice in a row, in a reading of the
-    /// translation's conditions (see [`aeria_se::MacroString::readings`]).
-    RepeatedWord(String),
-    /// Advice: the translation of a term of the source does not seem used.
-    TermNotUsed { term: String, translation: String },
-    /// Advice: the source varies with the player character's gender and the
-    /// translation does not.
-    GenderNotVaried,
-    /// Advice: the French or German line varies with the player character's
-    /// gender and the translation does not.
-    GenderInOtherLanguages,
-    /// Advice: phrasing that reads machine-written.
-    MachinePhrasing(Vec<String>),
     /// Advice: a term exception names no term of the source: the term left
     /// the glossary, or the source changed.
     StaleTermException(String),
-    /// Advice: an interface label shows more characters than the longest
-    /// official localization of it (see [`crate::length`]).
-    LabelTooLong { length: usize, max: usize },
     /// Advice: the name of a world object has more bytes than the game
-    /// shows; the game cuts it (see [`crate::length`]).
+    /// shows; the game cuts it (see [`crate::length`]). Machine translation
+    /// is refused for it.
     NameTooLong { length: usize, max: usize },
 }
 
 impl Issue {
-    /// What groups issues for a summary: the kind, with the term for term
-    /// issues (`termNotUsed:pugilist`).
+    /// What groups issues for a summary: the kind.
     #[must_use]
     pub fn group(&self) -> String {
         match self {
-            Self::LineBreak => "lineBreak".to_owned(),
-            Self::Structure(_) => "structure".to_owned(),
-            Self::Mark(_) => "mark".to_owned(),
-            Self::MixedAlphabets(_) => "mixedAlphabets".to_owned(),
-            Self::BothGenders(_) => "bothGenders".to_owned(),
-            Self::RepeatedWord(_) => "repeatedWord".to_owned(),
-            Self::TermNotUsed { term, .. } => format!("termNotUsed:{}", term.to_lowercase()),
-            Self::GenderNotVaried => "genderNotVaried".to_owned(),
-            Self::GenderInOtherLanguages => "genderInOtherLanguages".to_owned(),
-            Self::MachinePhrasing(_) => "machinePhrasing".to_owned(),
-            Self::StaleTermException(_) => "staleTermException".to_owned(),
-            Self::LabelTooLong { .. } => "labelTooLong".to_owned(),
-            Self::NameTooLong { .. } => "nameTooLong".to_owned(),
+            Self::LineBreak => "lineBreak",
+            Self::Structure(_) => "structure",
+            Self::StaleTermException(_) => "staleTermException",
+            Self::NameTooLong { .. } => "nameTooLong",
         }
+        .to_owned()
     }
 
     /// Whether the issue is of `group`, or of its kind when `group` names
-    /// the kind alone: `termNotUsed` takes `termNotUsed:pugilist` and every
-    /// other term.
+    /// the kind alone.
     #[must_use]
     pub fn is_of(&self, group: &str) -> bool {
         let own = self.group();
@@ -108,17 +78,7 @@ impl Issue {
     /// is advice.
     #[must_use]
     pub fn is_problem(&self) -> bool {
-        !matches!(
-            self,
-            Self::TermNotUsed { .. }
-                | Self::RepeatedWord(_)
-                | Self::GenderNotVaried
-                | Self::GenderInOtherLanguages
-                | Self::MachinePhrasing(_)
-                | Self::StaleTermException(_)
-                | Self::LabelTooLong { .. }
-                | Self::NameTooLong { .. }
-        )
+        matches!(self, Self::LineBreak | Self::Structure(_))
     }
 }
 
@@ -129,43 +89,9 @@ impl std::fmt::Display for Issue {
                 "the translation has a line break the source does not; the game breaks lines with <br>",
             ),
             Self::Structure(message) => f.write_str(message),
-            Self::Mark(mark) => write!(
-                f,
-                "the translation has the mark U+{:04X} (a stress or accent); write the word without it",
-                u32::from(*mark)
-            ),
-            Self::MixedAlphabets(word) => write!(
-                f,
-                "«{word}» mixes letters of different alphabets; write it in Cyrillic only"
-            ),
-            Self::BothGenders(form) => write!(
-                f,
-                "{form} writes both genders at once; use a condition on $gn4 with the feminine form first, or a phrasing that shows no gender"
-            ),
-            Self::RepeatedWord(word) => write!(
-                f,
-                "«{word}» is written twice in a row; remove one, or check the branches of a condition"
-            ),
-            Self::TermNotUsed { term, translation } => write!(
-                f,
-                "the terms translate {term:?} as {translation:?}, which does not seem to be used"
-            ),
-            Self::GenderNotVaried => f.write_str(
-                "the source varies with the player character's gender and the translation does not; make sure nothing in it agrees with the player character's gender",
-            ),
-            Self::GenderInOtherLanguages => f.write_str(
-                "the French or German line varies with the player character's gender; check whether a word about the player character needs a condition on $gn4",
-            ),
-            Self::MachinePhrasing(phrases) => {
-                write!(f, "reads machine-written: {}", phrases.join(", "))
-            }
             Self::StaleTermException(term) => write!(
                 f,
                 "the string has an exception for the term {term:?}, which its source does not have; remove the exception"
-            ),
-            Self::LabelTooLong { length, max } => write!(
-                f,
-                "the translation shows {length} characters and the interface fits {max}"
             ),
             Self::NameTooLong { length, max } => write!(
                 f,
@@ -175,187 +101,25 @@ impl std::fmt::Display for Issue {
     }
 }
 
-/// Languages written in Cyrillic, by their primary language subtag.
-const CYRILLIC_LANGUAGES: [&str; 10] = ["ru", "uk", "be", "bg", "sr", "mk", "kk", "ky", "tg", "mn"];
-
-fn is_cyrillic(letter: char) -> bool {
-    matches!(letter, '\u{0400}'..='\u{052F}')
-}
-
-fn is_latin(letter: char) -> bool {
-    letter.is_ascii_alphabetic()
-        || matches!(letter, '\u{00C0}'..='\u{024F}' | '\u{1E00}'..='\u{1EFF}')
-}
-
-fn is_greek(letter: char) -> bool {
-    matches!(letter, '\u{0370}'..='\u{03FF}')
-}
-
-/// The text of a string with each tag as a space, where only words are read.
-fn words_of(text: &str) -> String {
-    let mut plain = String::with_capacity(text.len());
-    let mut depth = 0_usize;
-    let mut escaped = false;
-    for character in text.chars() {
-        match character {
-            '\\' if !escaped => escaped = true,
-            '<' if !escaped => {
-                depth += 1;
-                plain.push(' ');
-            }
-            '>' if !escaped && depth > 0 => depth -= 1,
-            _ => {
-                escaped = false;
-                if depth == 0 {
-                    plain.push(character);
-                }
-            }
-        }
-    }
-    plain
-}
-
-/// Slips of letters in a translation into a language written in Cyrillic:
-/// stress and other combining marks, a word that mixes Cyrillic with Latin
-/// or Greek letters, and letters of another writing system. What the source
-/// has itself, such as the æ of Pandæmonium or a line of Japanese, is not a
-/// slip.
-fn letter_slips(target_language: &str, source: &str, text: &str) -> Vec<Issue> {
-    let primary = target_language.split('-').next().unwrap_or_default();
-    if !CYRILLIC_LANGUAGES
-        .iter()
-        .any(|language| language.eq_ignore_ascii_case(primary))
-    {
-        return Vec::new();
-    }
-    let plain = words_of(text);
-    let mut slips = Vec::new();
-    if let Some(mark) = plain
-        .chars()
-        .find(|c| matches!(c, '\u{0300}'..='\u{036F}') && !source.contains(*c))
-    {
-        slips.push(Issue::Mark(mark));
-    }
-    for word in plain.split(|c: char| !c.is_alphanumeric() && !matches!(c, '\u{0300}'..='\u{036F}'))
-    {
-        // A plain Latin letter never belongs in a Cyrillic word; a letter
-        // such as æ does when the source spells the name with it.
-        let mixed = word.chars().any(is_cyrillic)
-            && word.chars().any(|c| {
-                c.is_ascii_alphabetic() || ((is_latin(c) || is_greek(c)) && !source.contains(c))
-            });
-        let other = word.chars().any(|c| {
-            c.is_alphabetic()
-                && !is_cyrillic(c)
-                && !is_latin(c)
-                && !is_greek(c)
-                && !source.contains(c)
-        });
-        if (mixed || other) && !source.contains(word) {
-            slips.push(Issue::MixedAlphabets(word.to_owned()));
-            break;
-        }
-    }
-    slips
-}
-
-/// A word the translation writes twice in a row, with only spaces between,
-/// in either reading of its conditions; `None` when there is none or the
-/// source repeats a word itself, as a stutter or a call does. A word
-/// repeated with a capital letter both times is a name, such as a
-/// Lalafell's (Гун Гун), and a line break or a value filled in at runtime
-/// parts the words around it.
-fn repeated_word(source: &str, text: &str) -> Option<String> {
-    let repeated = |text: &str| {
-        aeria_se::parse(text)
-            .readings()
-            .into_iter()
-            .find_map(|reading| {
-                let mut previous: Option<(String, bool)> = None;
-                let mut gap_is_space = false;
-                let mut word = String::new();
-                let mut found = None;
-                for character in reading.chars().chain(std::iter::once('.')) {
-                    if character.is_alphabetic() || character == '-' || character == '\'' {
-                        word.push(character);
-                        continue;
-                    }
-                    if !word.is_empty() && word.chars().any(char::is_alphabetic) {
-                        let capital = word.chars().next().is_some_and(char::is_uppercase);
-                        let lower = word.to_lowercase();
-                        if gap_is_space
-                            && previous.as_ref().is_some_and(|(seen, was_capital)| {
-                                *seen == lower && !(capital && *was_capital)
-                            })
-                        {
-                            found = Some(word.clone());
-                            break;
-                        }
-                        previous = Some((lower, capital));
-                        gap_is_space = true;
-                    }
-                    word.clear();
-                    if character == '\n' {
-                        gap_is_space = false;
-                        previous = None;
-                    } else if !character.is_whitespace() {
-                        gap_is_space = false;
-                        if !character.is_alphanumeric() {
-                            previous = None;
-                        }
-                    }
-                }
-                found
-            })
-    };
-    // Most translations repeat no word: the source is read only for one
-    // that does.
-    let found = repeated(text)?;
-    repeated(source).is_none().then_some(found)
-}
-
-/// Russian forms that write both genders at once, such as `готов(а)`.
-const BOTH_GENDERS: [&str; 6] = ["(а)", "(ла)", "(ая)", "(на)", "(ен)", "(ой)"];
-
-/// The terms that do not apply to a string: the exceptions a person made,
-/// then the model exceptions that still hold for the glossary as it is (see
-/// [`crate::po::ModelException::holds`]).
-#[must_use]
-pub fn applied_exceptions(entry: &Entry, terms: &aeria_knowledge::Glossary) -> Vec<String> {
-    entry
-        .term_exceptions
-        .iter()
-        .cloned()
-        .chain(
-            entry
-                .model_exceptions
-                .iter()
-                .filter(|exception| exception.holds(terms))
-                .map(|exception| exception.term.clone()),
-        )
-        .collect()
-}
-
 /// Checks `text` as the translation of `entry` against its source, its `#.`
-/// lines (with the other client languages), the terms a person or a model
-/// decided do not apply to it, its length budget, and the project knowledge.
+/// lines (with the other client languages), the terms a person decided do
+/// not apply to it, and the length the game shows of a name.
 #[must_use]
 pub fn check_translation(
     knowledge: &Knowledge,
-    target_language: &str,
+    _target_language: &str,
     entry: &Entry,
     text: &str,
 ) -> Verdict {
     let source = entry.source.as_str();
-    let extracted = entry.extracted.as_slice();
-    let exceptions = applied_exceptions(entry, &knowledge.terms);
     let mut issues = Vec::new();
     if text.contains('\n') && !source.contains('\n') {
         issues.push(Issue::LineBreak);
     }
     // The same string in the other client languages: game data they use
     // in place of the source's may stand in the translation.
-    let localizations: Vec<&str> = extracted
+    let localizations: Vec<&str> = entry
+        .extracted
         .iter()
         .filter_map(|line| {
             ["ja: ", "de: ", "fr: "]
@@ -370,63 +134,23 @@ pub fn check_translation(
                 .map(|error| Issue::Structure(error.message)),
         );
     }
-    let rendered: Vec<(&str, &str)> = entry
-        .model_renderings
-        .iter()
-        .filter(|rendering| rendering.holds(&knowledge.terms))
-        .map(|rendering| (rendering.term.as_str(), rendering.word.as_str()))
-        .collect();
-    let terms = knowledge.terms.review(source, text, &exceptions, &rendered);
-    issues.extend(letter_slips(target_language, source, text));
-    let russian = target_language.eq_ignore_ascii_case("ru");
-    if russian
-        && let Some(form) = BOTH_GENDERS
-            .iter()
-            .find(|form| text.contains(*form) && !source.contains(*form))
-    {
-        issues.push(Issue::BothGenders((*form).to_owned()));
-    }
-    issues.extend(repeated_word(source, text).map(Issue::RepeatedWord));
-    issues.extend(terms.unused.iter().map(|entry| Issue::TermNotUsed {
-        term: entry.term.clone(),
-        // Every meaning of the name, any of which would do.
-        translation: knowledge.terms.translations_of(entry),
-    }));
     issues.extend(
-        // Only a person's exception is theirs to remove; a model exception
-        // that names no term of the source is decided again by a later run.
-        terms
-            .stale
-            .iter()
-            .filter(|term| entry.term_exceptions.iter().any(|known| known == *term))
-            .map(|term| Issue::StaleTermException((*term).to_owned())),
+        knowledge
+            .terms
+            .stale_exceptions(source, &entry.term_exceptions)
+            .into_iter()
+            .map(|term| Issue::StaleTermException(term.to_owned())),
     );
-    if source.contains("$gn4") && !text.contains("$gn4") {
-        issues.push(Issue::GenderNotVaried);
-    } else if russian
-        && !source.contains("$gn4")
-        && !text.contains("$gn4")
-        && extracted.iter().any(|line| {
-            (line.starts_with("fr: ") || line.starts_with("de: ")) && line.contains("$gn4")
-        })
+    if let Some(budget) = length_budget(entry)
+        && budget.unit == Unit::Bytes
     {
-        issues.push(Issue::GenderInOtherLanguages);
-    }
-    if let Some(budget) = length_budget(entry) {
         let length = budget.length_of(text);
-        let max = budget.max;
-        if length > max {
-            issues.push(match budget.unit {
-                Unit::Characters => Issue::LabelTooLong { length, max },
-                Unit::Bytes => Issue::NameTooLong { length, max },
+        if length > budget.max {
+            issues.push(Issue::NameTooLong {
+                length,
+                max: budget.max,
             });
         }
-    }
-    let phrasing = machine_phrasing(target_language, text);
-    if !phrasing.is_empty() {
-        issues.push(Issue::MachinePhrasing(
-            phrasing.into_iter().map(ToString::to_string).collect(),
-        ));
     }
     Verdict::of(issues)
 }
@@ -523,97 +247,29 @@ mod tests {
     }
 
     #[test]
-    fn slips_of_letters_are_problems_unless_the_source_has_them() {
-        let knowledge = Knowledge::default();
-        let problems =
-            |source: &str, text: &str| check(&knowledge, "ru", source, text, &[]).problems;
-        for (source, text) in [
-            ("Elezen boy", "юный эле\u{301}зен"),
-            ("deep palace sarcosuchus", "сарcosух Дворца мёртвых"),
-            ("Thancred", "Тан\u{915}\u{94D}ред"),
-            ("Pharmakon", "Фарма\u{3BA}он"),
-            ("Mauto", "Маут\u{14D}"),
-        ] {
-            assert!(!problems(source, text).is_empty(), "{text}");
-        }
-        for (source, text) in [
-            ("Pand\u{e6}monium: Abyssos", "Панд\u{e6}мониум: Абиссос"),
-            ("Seed of Magic Alpha", "Зёрна магии \u{3B1}"),
-            (
-                "Use <ui-color 500>Fast Blade</ui-color>.",
-                "Используйте <ui-color 500>Быстрый клинок</ui-color>.",
-            ),
-            ("Hingan andon lamp", "Хинганский фонарь «andon»"),
-            ("A 4K display", "Монитор 4K"),
-            (
-                "ALIASES:<br>/qchat<br>USAGE:",
-                "ПСЕВДОНИМЫ:<br>/qchat<br>ИСПОЛЬЗОВАНИЕ:",
-            ),
-        ] {
-            assert!(
-                problems(source, text).is_empty(),
-                "{text}: {:?}",
-                problems(source, text)
-            );
-        }
-        assert!(
-            check(&knowledge, "de", "Hello", "Hall\u{f6}", &[])
-                .problems
-                .is_empty()
-        );
-    }
-
-    #[test]
-    fn broken_macros_and_both_genders_are_problems() {
+    fn a_line_break_the_source_does_not_have_is_a_problem() {
         let knowledge = Knowledge::default();
         assert!(
             check(&knowledge, "ru", "Hello.", "Привет.", &[])
                 .problems
                 .is_empty()
         );
-        let verdict = check(&knowledge, "ru", "You are ready.", "Ты готов(а).", &[]);
-        assert_eq!(verdict.problems.len(), 1, "{verdict:?}");
+        // What a translation says is not checked.
+        for text in ["Ты готов(а).", "Я в в городе.", "Это является ошибкой."]
+        {
+            assert!(
+                check(&knowledge, "ru", "You are ready.", text, &[])
+                    .issues
+                    .is_empty(),
+                "{text}"
+            );
+        }
         let verdict = check(&knowledge, "ru", "Hello.", "При\nвет.", &[]);
         assert_eq!(verdict.problems.len(), 1, "{verdict:?}");
     }
 
     #[test]
-    fn a_word_written_twice_in_a_row_is_advice() {
-        let knowledge = Knowledge::default();
-        let repeated = |source: &str, text: &str| {
-            check(&knowledge, "ru", source, text, &[])
-                .issues
-                .into_iter()
-                .find_map(|issue| match issue {
-                    Issue::RepeatedWord(word) => Some(word),
-                    _ => None,
-                })
-        };
-        let source = "Or should I call you the hero of the Scions?";
-        assert_eq!(
-            repeated(
-                source,
-                "Или назвать тебя героем <if $gn4>героиней<else>героем</if> Потомков?"
-            )
-            .as_deref(),
-            Some("героем")
-        );
-        assert_eq!(repeated(source, "Я в в городе.").as_deref(), Some("в"));
-        for text in [
-            "Да, да, конечно.",
-            "Ну-ну, посмотрим.",
-            "Ты <if $gn4>сказала<else>сказал</if>, сказал<if $gn4>а</if> же.",
-            "Нет... нет!",
-            "Мой сын Гун Гун очень меня радует.",
-            "3. Активное<br>Активное овоо можно захватить.",
-        ] {
-            assert_eq!(repeated(source, text), None, "{text}");
-        }
-        assert_eq!(repeated("No no no!", "Нет нет нет!"), None);
-    }
-
-    #[test]
-    fn a_translation_longer_than_its_budget_is_advice() {
+    fn a_name_longer_than_the_game_shows_is_advice() {
         let knowledge = Knowledge::default();
         let entry = |context: &str, source: &str, extracted: &[&str]| Entry {
             context: context.to_owned(),
@@ -645,14 +301,12 @@ mod tests {
                 .issues
                 .is_empty()
         );
+        // An interface label's length is guidance for machine translation.
         let loot = entry("Addon:1:0:0", "Loot", &["de: Beutegut", "fr: Butin"]);
-        assert_eq!(
-            check_translation(&knowledge, "ru", &loot, "Военные трофеи").issues,
-            vec![Issue::LabelTooLong { length: 14, max: 8 }]
-        );
-        assert_eq!(
-            Issue::LabelTooLong { length: 14, max: 8 }.group(),
-            "labelTooLong"
+        assert!(
+            check_translation(&knowledge, "ru", &loot, "Военные трофеи")
+                .issues
+                .is_empty()
         );
     }
 

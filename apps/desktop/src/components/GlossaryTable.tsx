@@ -1,6 +1,6 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef, type KeyboardEvent, type MouseEvent } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { type GlossaryItem, type GlossarySort, type SortKey, type Unapplied, itemCategory, itemTerm, itemTranslation, unappliedOf, usageKey } from "../glossaryModel";
+import { type GlossaryItem, type GlossarySort, type SortKey, type Outdated, itemCategory, itemTerm, itemTranslation, outdatedOf, usageKey } from "../glossaryModel";
 import type { MessageKey } from "../i18n/translate";
 import { useI18n } from "../ui/i18n";
 import { RightClickMenu, type MenuEntry } from "../ui/primitives/RightClickMenu";
@@ -35,8 +35,8 @@ type GlossaryTableProps = {
   /** How many strings use each term; null until counted. */
   usage: ReadonlyMap<string, number> | null;
   counting: boolean;
-  /** How many translations do not use each term; null until counted. */
-  unapplied: Unapplied | null;
+  /** How many translations were written with another version of each term; null until counted. */
+  outdated: Outdated | null;
   /** Chooses `id`; `extend` adds a range from the active term, `toggle` adds or removes one. */
   onChoose: (id: string, how: "only" | "toggle" | "extend") => void;
   onSelectAll: () => void;
@@ -51,7 +51,7 @@ type GlossaryTableProps = {
  * The glossary as one dense, virtualized table: a term per row with its
  * translation, category, source, and use, each column ordered by its header.
  */
-export const GlossaryTable = forwardRef<GlossaryTableHandle, GlossaryTableProps>(function GlossaryTable({ items, selected, active, sort, onSort, usage, counting, unapplied, onChoose, onSelectAll, onRemove, onEdit, menuFor, empty }, ref) {
+export const GlossaryTable = forwardRef<GlossaryTableHandle, GlossaryTableProps>(function GlossaryTable({ items, selected, active, sort, onSort, usage, counting, outdated, onChoose, onSelectAll, onRemove, onEdit, menuFor, empty }, ref) {
   const { t } = useI18n();
   const scrollRef = useRef<HTMLDivElement>(null);
   useImperativeHandle(ref, () => ({ focus: () => scrollRef.current?.focus() }), []);
@@ -143,7 +143,7 @@ export const GlossaryTable = forwardRef<GlossaryTableHandle, GlossaryTableProps>
                   onMouseDown={(event) => press(event, item)}
                   onDoubleClick={onEdit}
                 >
-                  <Cells item={item} usage={usage} unapplied={unapplied} />
+                  <Cells item={item} usage={usage} outdated={outdated} />
                 </div>
               </RightClickMenu>
             );
@@ -156,13 +156,13 @@ export const GlossaryTable = forwardRef<GlossaryTableHandle, GlossaryTableProps>
 });
 
 /** The cells of one term. */
-function Cells({ item, usage, unapplied }: { item: GlossaryItem; usage: ReadonlyMap<string, number> | null; unapplied: Unapplied | null }) {
+function Cells({ item, usage, outdated }: { item: GlossaryItem; usage: ReadonlyMap<string, number> | null; outdated: Outdated | null }) {
   const { t } = useI18n();
   const term = itemTerm(item);
   const translation = itemTranslation(item);
   const uses = usage?.get(usageKey(term, itemCategory(item)));
   const forms = item.kind === "entry" ? item.row.forms : item.term.forms;
-  const notApplied = unappliedOf(item, unapplied);
+  const old = outdatedOf(item, outdated);
   return (
     <>
       <span role="gridcell" className="glossary-cell glossary-cell-term">
@@ -172,7 +172,7 @@ function Cells({ item, usage, unapplied }: { item: GlossaryItem; usage: Readonly
       </span>
       <span role="gridcell" className="glossary-cell glossary-cell-translation">
         <span className="glossary-translation">{translation || "—"}</span>
-        {notApplied > 0 ? <span className="glossary-badge glossary-badge-unapplied">{t("glossary.badge.unapplied", { count: notApplied })}</span> : null}
+        {old > 0 ? <span className="glossary-badge glossary-badge-outdated">{t("glossary.badge.outdated", { count: old })}</span> : null}
         {item.kind === "entry" && item.redundant ? <span className="glossary-badge">{t("glossary.badge.same")}</span> : null}
       </span>
       <span role="gridcell" className="glossary-cell glossary-cell-category">{itemCategory(item) || "—"}</span>

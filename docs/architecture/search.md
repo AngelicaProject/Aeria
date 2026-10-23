@@ -98,19 +98,16 @@ project, and lists the entries found in file order (files sorted by path):
   entry state (untranslated, translated, fuzzy), and the checks a translation
   is saved with (see [`po-project.md`](./po-project.md#checking)): only
   translations with a problem, which are not exported, or only translations
-  with advice, such as a term of the source whose translation does not seem
-  to be used. A search may have no pattern and only filters. The result names
+  with advice, such as a term exception that names no term of the source. A
+  search may have no pattern and only filters. The result names
   the files and folders of the filter that choose no file of `po/`.
 
-Findings of the checks are data (`aeria_po::Issue`: the kind with its
-term, variant, or word), so an interface words them in its own language; each
-has the English message Aeria has always written, and a group (the kind, with
-the term for a term whose translation is not used; the case of terms,
-`termCase`, is one group of every term). With a checks filter a search also counts, over
-every entry found, the entries with an issue of each group, most first, and
-can keep only the entries with an issue of one group, or of one kind of
-grouped issues: `termNotUsed` keeps the entries with any term whose
-translation does not seem to be used (`Issue::is_of`).
+Findings of the checks are data (`aeria_po::Issue`: the kind with its term
+or lengths), so an interface words them in its own language; each has the
+English message Aeria writes, and a group, its kind. With a checks filter a
+search also counts, over every entry found, the entries with an issue of
+each group, most first, and can keep only the entries with an issue of one
+group (`Issue::is_of`).
 
 A search returns at most 2,000 entries with the byte ranges of their matches,
 every file with an entry found and its count, and counts the rest; a new search in the desktop cancels the one in
@@ -197,8 +194,9 @@ untranslated, so any later run takes them.
 
 Found translations can be corrected by machine translation instead of
 translated again: every translation found, the chosen strings, or one
-string, with a proofreading, the issues of the checks (only the chosen
-group's, when a group is chosen), and a request in the translator's words (see
+string, with one of the project's skills, the issues of the checks
+when the search filters by them (only the chosen group's, when a group is
+chosen), and the adaptation of fuzzy ones (see
 [`translate.md`](./translate.md#correcting-translations)). Nothing is
 cleared: a translation stays as it is until its correction passes the
 checks, and a reviewed one stays as it is.
