@@ -699,7 +699,7 @@ export type ReportPage = {
   items: ReportItem[];
   /** Its run goes now. */
   running: boolean;
-  /** Its run stopped before it settled every string it planned, and can be continued. */
+  /** Its run stopped before it settled every string it planned, or strings of it were refused, and can be continued. */
   continuable: boolean;
 };
 
@@ -1018,7 +1018,7 @@ export type SearchQueryDto = {
 
 /** One finding of the checks, as data; `message` is the English text for unknown kinds. */
 export type IssueDto = {
-  kind: "lineBreak" | "structure" | "staleTermException" | "nameTooLong" | "other";
+  kind: "lineBreak" | "structure" | "staleTermException" | "nameTooLong" | "missing" | "other";
   /** What may be wrong rather than a problem: it does not keep the translation from being saved or exported. */
   advice: boolean;
   /** Groups issues in the summary and filters by them. */

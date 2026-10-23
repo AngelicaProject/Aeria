@@ -45,10 +45,15 @@ const LISTED_REJECTIONS: usize = 200;
 const LISTED_CORRECTIONS: usize = 1000;
 /// Times the translations that fail the checks go back to the model, with
 /// what is wrong, before they are rejected.
-const RETRIES: usize = 2;
+const RETRIES: usize = 3;
 /// The problem of a string the answer did not translate readably.
 const MISSING: &str = "the answer has no readable translation of this string: answer it as \
      [\"first words\", \"translation\"], with every quote inside a string escaped as \\\"";
+/// The problem of a string the answer of a correction did not answer
+/// readably.
+const MISSING_CORRECTION: &str = "the answer has no readable entry for this string: answer it \
+     as [\"first words\", \"translation\", \"reason\"], the translation unchanged and the reason \
+     empty when nothing needs to change, with every quote inside a string escaped as \\\"";
 /// Failures of the service in a row that stop a run.
 const FAILURES: u32 = 3;
 /// Wait after a failure, times the failures in a row.
@@ -98,6 +103,17 @@ pub struct Fix {
     /// terms, by headword, or of any term when empty, to the terms as they
     /// are (see [`Entry::outdated_terms`]); `None` for none.
     pub terms: Option<Vec<String>>,
+}
+
+impl Fix {
+    /// Whether the answer of a request may leave out the strings it does not
+    /// change. An adaptation answered unchanged clears the fuzzy mark, and a
+    /// correction to terms answered unchanged records that the translation
+    /// follows them, so those runs answer every string.
+    #[must_use]
+    pub fn omits_unchanged(&self) -> bool {
+        !self.adapt && self.terms.is_none()
+    }
 }
 
 /// Regular expressions, each ignoring case, that the strings a correction
@@ -1014,6 +1030,13 @@ fn journal_failing(shared: &Shared, asked: usize, failing: &[(String, Answer, Ve
     ));
 }
 
+/// Whether a problem told to the model is that its answer had no readable
+/// entry for the string.
+#[must_use]
+pub fn is_missing(problem: &str) -> bool {
+    problem == MISSING || problem == MISSING_CORRECTION
+}
+
 /// Whether a problem told to the model is `issue`: its message, or its
 /// message with what to do about it after a colon.
 #[must_use]
@@ -1105,6 +1128,18 @@ fn report_strings(
     }
 }
 
+/// Whether the strings an answer left out are unchanged: a correction that
+/// may leave them out, in an answer read whole and not cut short.
+fn leaves_out_unchanged(shared: &Shared, whole: bool, reply: &crate::codex::Reply) -> bool {
+    whole
+        && !reply.incomplete
+        && shared
+            .options
+            .fix
+            .as_ref()
+            .is_some_and(Fix::omits_unchanged)
+}
+
 /// Sends the translations that fail the checks back with their problems,
 /// up to [`RETRIES`] times; what still fails is rejected and stays as it was.
 /// Every answer is kept in `attempts`.
@@ -1113,6 +1148,8 @@ async fn settle(
     built: &Built,
     answers: &mut HashMap<String, Answer>,
     attempts: &mut Attempts,
+    omitted: bool,
+    untouched: &mut HashSet<String>,
 ) -> Result<Vec<Rejected>, ModelError> {
     let mut failing: Vec<(String, Answer, Vec<String>)> = Vec::new();
     for (id, answer) in answers.iter() {
@@ -1123,20 +1160,25 @@ async fn settle(
         }
     }
     // A string the answer has no translation of, or whose entry could not be
-    // read, is asked for again like a failing one.
-    failing.extend(
-        built
-            .strings
-            .iter()
-            .filter(|(id, _, _)| !answers.contains_key(id))
-            .map(|(id, _, _)| {
-                (
-                    id.clone(),
-                    Answer::bare(None, String::new()),
-                    vec![MISSING.to_owned()],
-                )
-            }),
-    );
+    // read, is asked for again like a failing one, and its report says so;
+    // with `omitted`, a correction read whole left it out as unchanged.
+    let missing = if shared.options.fix.is_some() {
+        MISSING_CORRECTION
+    } else {
+        MISSING
+    };
+    for (id, _, _) in &built.strings {
+        if !answers.contains_key(id) {
+            if omitted {
+                untouched.insert(id.clone());
+                continue;
+            }
+            let answer = Answer::bare(None, String::new());
+            let found = vec![missing.to_owned()];
+            note(attempts, shared, &built.strings, id, &answer, &found);
+            failing.push((id.clone(), answer, found));
+        }
+    }
     for (id, _, _) in &failing {
         answers.remove(id);
     }
@@ -1157,16 +1199,28 @@ async fn settle(
             prompt::retry_input(&built.input, &sent),
         )
         .await?;
-        let fixed = prompt::parse_lenient(&reply.text, shared.options.fix.is_some());
+        let (fixed, whole) = prompt::read_answer(&reply.text, shared.options.fix.is_some());
+        // As for the first answer: a retry read whole that leaves out a
+        // string asked only for being left out leaves it unchanged.
+        let omits = leaves_out_unchanged(shared, whole, &reply);
         let mut still = Vec::new();
-        for (id, last, last_problems) in failing {
-            let (answer, found) = match fixed.get(&id) {
-                Some(answer) => {
-                    let found = problems(shared, &built.strings, &id, answer);
-                    note(attempts, shared, &built.strings, &id, answer, &found);
-                    (answer.clone(), found)
-                }
-                None => (last, last_problems),
+        for (id, last, asked) in failing {
+            if omits && !fixed.contains_key(&id) && asked.iter().all(|problem| is_missing(problem))
+            {
+                untouched.insert(id);
+                continue;
+            }
+            // A string this answer left out keeps its last translation and
+            // is noted as missing from it.
+            let (answer, found) = if let Some(answer) = fixed.get(&id) {
+                let found = problems(shared, &built.strings, &id, answer);
+                note(attempts, shared, &built.strings, &id, answer, &found);
+                (answer.clone(), found)
+            } else {
+                let found = vec![missing.to_owned()];
+                let empty = Answer::bare(None, String::new());
+                note(attempts, shared, &built.strings, &id, &empty, &found);
+                (last, found)
             };
             if found.is_empty() {
                 answers.insert(id, answer);
@@ -1219,11 +1273,23 @@ async fn translate(shared: Arc<Shared>, pack: Pack) -> Result<Done, ModelError> 
         });
     };
     let reply = ask(&shared, &built, 0, built.strings.len(), built.input.clone()).await?;
-    let mut answers = prompt::parse_lenient(&reply.text, shared.options.fix.is_some());
+    let (mut answers, whole) = prompt::read_answer(&reply.text, shared.options.fix.is_some());
+    // A correction that may leave out what it does not change leaves it out
+    // only in an answer read whole and not cut short.
+    let omitted = leaves_out_unchanged(&shared, whole, &reply);
     let mut attempts = Attempts::new();
-    let rejected = settle(&shared, &built, &mut answers, &mut attempts).await?;
+    let mut untouched = HashSet::new();
+    let rejected = settle(
+        &shared,
+        &built,
+        &mut answers,
+        &mut attempts,
+        omitted,
+        &mut untouched,
+    )
+    .await?;
     if shared.options.fix.is_some() {
-        return correct(&shared, &built, &answers, rejected, attempts).await;
+        return correct(&shared, &built, &answers, &untouched, rejected, attempts).await;
     }
     let mut by_file: BTreeMap<String, Vec<(String, String)>> = BTreeMap::new();
     for (id, path, entry) in &built.strings {
@@ -1292,11 +1358,13 @@ fn correction_edit(fix: &Fix, entry: &Entry, answer: &Answer) -> EditKind {
 /// Writes the corrections of a pack that passed the checks, each only while
 /// its translation is still the one the request was built from and not
 /// reviewed, so work saved meanwhile is kept. An answer that left the
-/// translation as it was is counted unchanged.
+/// translation as it was, or left out a string of `untouched`, is counted
+/// unchanged.
 async fn correct(
     shared: &Shared,
     built: &Built,
     answers: &HashMap<String, Answer>,
+    untouched: &HashSet<String>,
     rejected: Vec<Rejected>,
     attempts: Attempts,
 ) -> Result<Done, ModelError> {
@@ -1356,9 +1424,10 @@ async fn correct(
         .collect();
     let mut fates: HashMap<String, Fate> = HashMap::new();
     for (id, _, entry) in &built.strings {
-        if answers
-            .get(id)
-            .is_some_and(|answer| !answer.text.is_empty())
+        if untouched.contains(id)
+            || answers
+                .get(id)
+                .is_some_and(|answer| !answer.text.is_empty())
         {
             fates.insert(entry.context.clone(), Fate::bare(StringOutcome::Unchanged));
         }
@@ -1381,7 +1450,7 @@ async fn correct(
     // nothing of its text, or was not written, left it as it was.
     Ok(Done {
         written: corrected.len(),
-        unchanged: asked.saturating_sub(corrected.len()),
+        unchanged: asked.saturating_sub(corrected.len()) + untouched.len(),
         rejected,
         corrected,
     })
@@ -1527,6 +1596,7 @@ async fn prepare(
             &settings.target_language,
             knowledge.style.as_deref(),
             fix.adapt,
+            fix.omits_unchanged(),
             fix.request.as_deref(),
         ),
         None => prompt::instructions(

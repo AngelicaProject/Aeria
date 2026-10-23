@@ -54,7 +54,12 @@ pub(crate) fn problem_dtos(problems: &[String], issues: &[aeria_po::Issue]) -> V
                 .any(|issue| aeria_model::run::names(message, issue))
         })
         .map(|message| IssueDto {
-            kind: "other".to_owned(),
+            kind: if aeria_model::run::is_missing(message) {
+                "missing"
+            } else {
+                "other"
+            }
+            .to_owned(),
             group: "other".to_owned(),
             message: message.clone(),
             ..IssueDto::default()
@@ -230,8 +235,8 @@ pub struct ReportPageDto {
     /// Its run goes now.
     pub running: bool,
     /// Its run can be continued: it stopped before it settled every string
-    /// it planned, or the service refused requests of it, and the report
-    /// keeps what it was asked.
+    /// it planned, the service refused requests of it, or the checks refused
+    /// strings of it, and the report keeps what it was asked.
     pub continuable: bool,
 }
 
@@ -295,9 +300,9 @@ pub async fn run_report(
             .stop
             .as_ref()
             .is_some_and(|stop| stop["stop"]["reason"] == "finished");
-        page.continuable = options
-            && !page.running
-            && (!finished || page.counts.get("left").is_some_and(|count| *count > 0));
+        let some = |view: &str| page.counts.get(view).is_some_and(|count| *count > 0);
+        page.continuable =
+            options && !page.running && (!finished || some("left") || some("string:refused"));
         let session = app.state::<DesktopState>().session().ok();
         if let Some(session) = session {
             for item in &mut page.items {
@@ -314,7 +319,7 @@ pub async fn run_report(
 }
 
 /// What the run of the report `id` was asked, and every string it and the
-/// runs it continues settled, by `msgctxt`.
+/// runs it continues settled, by `msgctxt`, but those the checks refused.
 fn continuation(
     app: &tauri::AppHandle,
     id: &str,
@@ -349,7 +354,7 @@ fn continuation(
                     }
                     next = record["continues"].as_str().map(str::to_owned);
                 }
-                Some("string") => {
+                Some("string") if settles(&record) => {
                     if let Some(context) = record["context"].as_str() {
                         settled.insert(context.to_owned());
                     }
@@ -359,6 +364,12 @@ fn continuation(
         }
     }
     Ok((options.ok_or_else(not_continuable)?, settled))
+}
+
+/// Whether a `string` record settles its string for a run that continues
+/// the report: one the checks refused is asked again.
+fn settles(record: &Value) -> bool {
+    record["outcome"] != "refused"
 }
 
 fn not_continuable() -> CommandError {
@@ -412,6 +423,20 @@ mod tests {
         assert!(has(&refused, "moogle"));
         assert!(!has(&refused, "refused"));
         assert_eq!(view_of(&serde_json::json!({"record": "run"})), None);
+    }
+
+    #[test]
+    fn a_continued_run_asks_the_refused_strings_again() {
+        let string = |outcome: &str| serde_json::json!({"record": "string", "outcome": outcome});
+        assert!(settles(&string("written")));
+        assert!(settles(&string("unchanged")));
+        assert!(settles(&string("stale")));
+        assert!(!settles(&string("refused")));
+        let missing = problem_dtos(
+            &["the answer has no readable translation of this string: answer it as [\"first words\", \"translation\"], with every quote inside a string escaped as \\\"".to_owned()],
+            &[],
+        );
+        assert_eq!(missing[0].kind, "missing");
     }
 
     #[test]

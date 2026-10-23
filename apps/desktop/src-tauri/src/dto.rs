@@ -439,8 +439,9 @@ mod tests {
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct IssueDto {
-    /// `lineBreak`, `structure`, `staleTermException`, `nameTooLong`, or
-    /// `other`.
+    /// `lineBreak`, `structure`, `staleTermException`, `nameTooLong`,
+    /// `missing` (the model's answer had no readable entry for the string),
+    /// or `other`.
     pub kind: String,
     /// What may be wrong rather than a problem: it does not keep the
     /// translation from being saved or exported.

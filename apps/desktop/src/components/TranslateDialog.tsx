@@ -1,7 +1,7 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Dialog } from "radix-ui";
-import { normalizeCommandError, translationContinue, translationRetry, translationStart, translationStatus, translationStop } from "../ipc";
-import type { CommandError, ProjectSheetDto, SheetProgressDto, SourceBinding, TranslationStatus, TranslationStop } from "../types";
+import { normalizeCommandError, runReports, translationContinue, translationRetry, translationStart, translationStatus, translationStop } from "../ipc";
+import type { CommandError, ProjectSheetDto, ReportInfo, RunKind, SheetProgressDto, SourceBinding, TranslationStatus, TranslationStop } from "../types";
 import type { MessageKey } from "../i18n/translate";
 import { ErrorBanner } from "./ErrorBanner";
 import { SheetChooser, useSheetTree } from "./SheetChooser";
@@ -77,14 +77,15 @@ export function RunProgress({ status }: { status: TranslationStatus }) {
 
 /**
  * A button that continues a run that stopped before it settled every string
- * it planned; `onContinued` follows the run that continues it.
+ * it planned, or whose strings the checks refused; `onContinued` follows the
+ * run that continues it.
  */
 export function ContinueButton({ status, onContinued }: { status: TranslationStatus; onContinued?: () => void }) {
   const { t } = useI18n();
   const [error, setError] = useState<CommandError | null>(null);
   const [starting, setStarting] = useState(false);
   const report = status.report;
-  if (!report || status.running || !status.stop || status.stop.reason === "finished") return null;
+  if (!report || status.running || !status.stop || (status.stop.reason === "finished" && status.rejected === 0)) return null;
   return (
     <>
       <button className="button button-primary" type="button" disabled={starting} title={t("report.continueTitle")} onClick={() => {
@@ -111,6 +112,30 @@ export function ReportButton({ status, onOpenReport }: { status: TranslationStat
     <button className="button button-secondary" type="button" onClick={() => onOpenReport(report, reportLabel(runKind(status), status.startedAt, t, locale))}>
       <UiIcon icon="clipboard" size="sm" />{t("report.open")}
     </button>
+  );
+}
+
+/**
+ * A button that opens the newest report of a run of `kind` in the data
+ * folder, for when no run of this session has one.
+ */
+export function LastReportButton({ kind, onOpenReport }: { kind: RunKind; onOpenReport: (reportId: string, label: string) => void }) {
+  const { t, locale } = useI18n();
+  const [last, setLast] = useState<ReportInfo | null>(null);
+  useEffect(() => {
+    let live = true;
+    void runReports()
+      .then((reports) => { if (live) setLast(reports.find((report) => report.run.kind === kind) ?? null); })
+      .catch(() => { if (live) setLast(null); });
+    return () => { live = false; };
+  }, [kind]);
+  if (!last) return null;
+  return (
+    <p className="glossary-run-actions">
+      <button className="button button-secondary" type="button" onClick={() => onOpenReport(last.id, reportLabel(last.run.kind, last.run.startedAt, t, locale))}>
+        <UiIcon icon="clipboard" size="sm" />{t("report.last")}
+      </button>
+    </p>
   );
 }
 
@@ -279,6 +304,7 @@ export const TranslateDialog = memo(function TranslateDialog({ open, onOpenChang
                   ) : null}
                 </div>
               ) : null}
+              {status?.report ? null : <LastReportButton kind="translating" onOpenReport={onOpenReport} />}
             </div>
           </div>
 

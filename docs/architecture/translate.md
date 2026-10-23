@@ -218,8 +218,18 @@ read this way is checked like any answer, so a wrong reading is refused,
 never written: a translation that holds the answer's separators (`","`,
 `",[`) its source does not have is what a reading left of the elements after
 it, and is refused. A string the answer has no
-readable translation of is asked for again with the failing ones. A batch's
-failing translations go back up to twice, each time in one request with each problem stated; what
+readable translation of is asked for again with the failing ones, and its
+report records the attempt with that problem; a correction is told to
+answer it unchanged when nothing needs to change. A correction that neither
+adapts nor brings translations to their terms answers only the strings it
+changes: a string its answer leaves out is unchanged and not asked for
+again, but only when every entry the answer starts was read (as JSON, or
+entry by entry when a quote is not escaped), the object is closed, and the
+service did not cut it short; otherwise a left-out string is missing as
+above. A retry follows the same rule for a string asked only for being
+left out. Adapting and terms corrections answer every string, since an answer
+unchanged is what clears the fuzzy mark or records the terms. A batch's
+failing translations go back up to three times, each time in one request with each problem stated; what
 still fails stays as it was and is listed in the run's status with its
 problems and the model's last translation, which is never written. Advice
 does not reject a translation. The listed strings can be translated again
@@ -348,8 +358,9 @@ again, and **Stop** ends the wait. A lost sign-in stops the run and asks to
 sign in again.
 
 A run that stopped before it settled every string it planned, by **Stop**,
-a failure, or Aeria closed, or one the service refused requests of, can be
-continued from its report ([Continuing](#continuing)).
+a failure, or Aeria closed, one the service refused requests of, or one
+whose strings the checks refused, can be continued from its report
+([Continuing](#continuing)).
 
 ## Progress
 
@@ -415,9 +426,10 @@ of the kinds and version it writes.
 
 Continuing a run (`translation_continue`) starts a run with the options of
 its report, leaving out every string its report, and the reports of the runs
-it continues, have a `string` record of (`Run::continuing`): what was
-written, left unchanged, refused, or changed meanwhile is not asked again,
-and a request the service refused is. The new run writes its own report,
+it continues, have a `string` record of (`Run::continuing`) but those the
+checks refused: what was written, left unchanged, or changed meanwhile is
+not asked again, and a string the checks refused and a request the service
+refused are. The new run writes its own report,
 whose `continues` names the one it continues, so a run can be continued
 again and after Aeria restarts. A report deleted with the oldest journals
 ends the chain: the strings only it settled are asked again.

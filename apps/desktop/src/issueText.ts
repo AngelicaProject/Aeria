@@ -6,6 +6,7 @@ const full: Partial<Record<IssueDto["kind"], MessageKey>> = {
   structure: "issue.structure",
   staleTermException: "issue.staleTermException",
   nameTooLong: "issue.nameTooLong",
+  missing: "issue.missing",
 };
 
 const short: Partial<Record<IssueDto["kind"], MessageKey>> = {
@@ -13,6 +14,7 @@ const short: Partial<Record<IssueDto["kind"], MessageKey>> = {
   structure: "issue.short.structure",
   staleTermException: "issue.short.staleTermException",
   nameTooLong: "issue.short.nameTooLong",
+  missing: "issue.short.missing",
 };
 
 function params(issue: IssueDto): Record<string, string> {

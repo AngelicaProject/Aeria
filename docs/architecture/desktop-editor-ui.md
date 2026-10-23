@@ -942,7 +942,10 @@ while the run goes; **Stop** stops it, and a stopped run offers
 
 A run's report (see [`translate.md`](./translate.md#report)) opens in a tab
 of its own from **Open report** of the run's progress in the glossary or the
-translation dialog. A report has one tab, named by its run's kind and time,
+translation dialog. Without a run of this session that has a report, the
+translation dialog and the editing tab offer **Last report** instead, which
+opens the data folder's newest report of a translation or of an editing run
+respectively. A report has one tab, named by its run's kind and time,
 and is read again every three seconds until its run stops. The tab shows:
 
 - a header with the run's kind, time, model, reasoning, and terms, why it
@@ -965,8 +968,9 @@ A run's progress, in the glossary and in the translation dialog, gives the
 strings it settled of those it set out to take (**N of M done**), which the
 meter shows, and then how many it wrote, left as they were, and refused;
 while the run waits for the plan's usage limit, when it asks again. A run
-that stopped before it settled its strings has **Continue** beside **Open
-report**.
+that stopped before it settled its strings, or one with strings the checks
+refused, has **Continue** beside **Open report**, which asks those strings
+again. A string the model's answer left out is listed as not answered.
 
 ## Export
 

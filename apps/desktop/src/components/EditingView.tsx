@@ -7,7 +7,7 @@ import { UiIcon } from "../ui/primitives/UiIcon";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { ErrorBanner } from "./ErrorBanner";
 import { SheetChooser, useSheetTree } from "./SheetChooser";
-import { ContinueButton, ReportButton, RunProgress, describeStop } from "./TranslateDialog";
+import { ContinueButton, LastReportButton, ReportButton, RunProgress, describeStop } from "./TranslateDialog";
 
 /** How often the run is read while one goes. */
 const POLL_MS = 1000;
@@ -298,6 +298,7 @@ export function EditingView({ active, sheets, progress, onDirtyChange, onFilesCh
               {status.report ? <p className="glossary-run-actions"><ContinueButton status={status} onContinued={readStatus} /><ReportButton status={status} onOpenReport={onOpenReport} /></p> : null}
             </div>
           ) : null}
+          {status?.report ? null : <LastReportButton kind="fixing" onOpenReport={onOpenReport} />}
         </aside>
       </div>
       <ConfirmDialog

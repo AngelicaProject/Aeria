@@ -29,13 +29,15 @@ pub fn instructions(source_language: &str, target_language: &str, style: Option<
 /// The instructions of every request of a run that corrects translations:
 /// the rules and the style as for translating, what a correction may
 /// change, a translator's request for every translation of the run, and
-/// the answer's form.
+/// the answer's form. With `omit`, the answer leaves out the strings it does
+/// not change.
 #[must_use]
 pub fn fix_instructions(
     source_language: &str,
     target_language: &str,
     style: Option<&str>,
     adapt: bool,
+    omit: bool,
     request: Option<&str>,
 ) -> String {
     let mut text = rules(source_language, target_language, style);
@@ -48,8 +50,7 @@ pub fn fix_instructions(
          to follow is used where the word of the source is the thing the term names, as \
          its `translation` and `note` describe it, declined as the sentence needs; where \
          the word means something else there, or the translation already follows the term, \
-         that word stays. When nothing needs to change, answer the translation \
-         unchanged.\n\n",
+         that word stays.\n\n",
     );
     if adapt {
         text.push_str(ADAPTING);
@@ -69,8 +70,14 @@ pub fn fix_instructions(
          {target_language} without quotes (обращение по французской строке, канцелярит, \
          калька, потерян смысл источника), or an empty string when it did not. The first \
          words show which string a translation belongs to; give every string its own \
-         translation. Answer every string."
+         translation. "
     );
+    text.push_str(if omit {
+        "Answer only the strings whose translation changes: a string the answer leaves out \
+         keeps its translation as it is, and an answer that changes nothing is `{}`."
+    } else {
+        "When nothing needs to change, answer the translation unchanged. Answer every string."
+    });
     text
 }
 
@@ -361,7 +368,30 @@ pub fn parse(text: &str) -> Result<HashMap<String, Answer>, String> {
 /// out, and the caller asks for them again.
 #[must_use]
 pub fn parse_lenient(text: &str, reasons: bool) -> HashMap<String, Answer> {
-    parse(text).unwrap_or_else(|_| salvage(text, reasons))
+    read_answer(text, reasons).0
+}
+
+/// Reads an answer as [`parse_lenient`] does, and says whether it was read
+/// whole: every entry it starts was read, as valid JSON or entry by entry,
+/// so that a string it leaves out was left out by the model rather than
+/// lost in an entry that could not be read.
+#[must_use]
+pub fn read_answer(text: &str, reasons: bool) -> (HashMap<String, Answer>, bool) {
+    if let Ok(answers) = parse(text) {
+        let entries = text
+            .find('{')
+            .zip(text.rfind('}'))
+            .and_then(|(start, end)| serde_json::from_str::<Value>(&text[start..=end]).ok())
+            .and_then(|value| value.as_object().map(serde_json::Map::len));
+        let whole = entries == Some(answers.len());
+        (answers, whole)
+    } else {
+        // Read entry by entry, it is whole when every entry it starts was
+        // read and the object is closed, so none was cut or lost.
+        let answers = salvage(text, reasons);
+        let whole = answers.len() == entry_starts(text).len() && text.trim_end().ends_with('}');
+        (answers, whole)
+    }
 }
 
 /// Where each entry `"id": [` of an answer starts: its id and the byte
@@ -614,6 +644,7 @@ mod tests {
             "ru",
             Some("К герою на «вы»."),
             true,
+            false,
             Some(" На «ты». "),
         );
         assert!(text.contains("FINAL FANTASY XIV is written in Japanese"));
@@ -621,10 +652,32 @@ mod tests {
         assert!(text.contains("`fix`"));
         assert!(text.contains("of this run:\n\nНа «ты».\n\n"));
         assert!(text.contains("Adapt the translation to the new source"));
-        let plain = fix_instructions("en", "ru", None, false, None);
+        assert!(text.contains("Answer every string."));
+        let plain = fix_instructions("en", "ru", None, false, true, None);
         assert!(!plain.contains("Adapt the translation"));
+        assert!(plain.contains("Answer only the strings whose translation changes"));
+        assert!(!plain.contains("Answer every string."));
         assert!(!text.contains("Translate every string."));
-        assert!(!fix_instructions("en", "ru", None, false, Some("  ")).contains("of this run"));
+        assert!(
+            !fix_instructions("en", "ru", None, false, true, Some("  ")).contains("of this run")
+        );
+    }
+
+    #[test]
+    fn an_answer_is_read_whole_only_when_every_entry_is_read() {
+        let (answers, whole) = read_answer(r#"{"1": ["Hi", "Привет", ""]}"#, true);
+        assert_eq!(answers.len(), 1);
+        assert!(whole);
+        assert!(read_answer("{}", true).1);
+        let (answers, whole) = read_answer(r#"{"1": ["Hi", "Привет", ""], "2": 7}"#, true);
+        assert_eq!(answers.len(), 1);
+        assert!(!whole);
+        // A quote the model did not escape is read entry by entry, whole.
+        let (answers, whole) = read_answer(r#"{"1": ["Hi", "При"вет", ""]}"#, true);
+        assert_eq!(answers["1"].text, "При\"вет");
+        assert!(whole);
+        // An answer cut inside an entry is not whole.
+        assert!(!read_answer(r#"{"1": ["Hi", "При"вет", ""], "2": ["Bye", "Пок"#, true).1);
     }
 
     #[test]
