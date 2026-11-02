@@ -18,6 +18,7 @@ pub mod hints;
 pub mod prompt;
 pub mod report;
 pub mod run;
+mod throttle;
 
 use std::time::Duration;
 

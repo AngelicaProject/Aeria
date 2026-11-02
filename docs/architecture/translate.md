@@ -226,8 +226,12 @@ changes: a string its answer leaves out is unchanged and not asked for
 again, but only when every entry the answer starts was read (as JSON, or
 entry by entry when a quote is not escaped), the object is closed, and the
 service did not cut it short; otherwise a left-out string is missing as
-above. A retry follows the same rule for a string asked only for being
-left out. Adapting and terms corrections answer every string, since an answer
+above. An entry that explicitly answers with an empty translation is refused
+and retried, also in a correction: an empty string does not mean unchanged.
+If the retries still answer empty, the original translation stays and the
+report records the refusal and its attempts for that string. A retry follows
+the same rule for a string asked only for being left out. Adapting and terms
+corrections answer every string, since an answer
 unchanged is what clears the fuzzy mark or records the terms. A batch's
 failing translations go back up to three times, each time in one request with each problem stated; what
 still fails stays as it was and is listed in the run's status with its
@@ -338,16 +342,30 @@ changes are reviewed and reverted through Git.
 
 ## Pace and limits
 
-The run sets its own pace. After the first answer it keeps up to 16 requests
-in flight. A rate-limit answer halves that, to no fewer than two, and every
-finished batch adds one back. A rate limit, network error, or timeout returns
-the batch to the queue after the wait the service asked for, or 20 seconds
-times the failures in a row; the third in a row stops the run. A response
-that sends nothing for 180 seconds, its headers included, is given up, and so
-is one not finished in 20 minutes: a reasoning model keeps its stream alive
-for as long as it thinks. A connection is given 30 seconds to open and is checked every 20 seconds, so a
-connection that died without closing fails its requests instead of holding
-the run. Any other refusal leaves the batch's strings for the next run.
+The run starts requests at least 500 ms apart, including validation retries,
+and keeps up to 16 in flight after the first answer warms the prompt cache.
+A rate-limit answer halves concurrency, down to one, and holds it there for
+at least 60 seconds without another rate limit. Recovery then adds
+at most one concurrent request every 60 seconds, even when many requests
+already in flight finish successfully.
+
+Rate limits also slow the actual dispatch of requests, including retries of
+translations refused by the checks. A shared gate immediately blocks new
+sends for the service's `Retry-After`, or 20 seconds when absent. It starts
+doubling the interval between sends (500 ms initially, up to 30 seconds)
+when a newly sent request is rate-limited, and retains the learned spacing
+for the rest of the run. Responses from the same earlier
+burst can extend the shared wait but do not each double the interval. The
+journal records the wait, spacing, and reduced concurrency.
+
+A rate-limited batch returns to the queue and does not count toward the
+three-failure stop. Network errors and timeouts retry after 20 seconds times
+the consecutive failures; the third stops the run. Stop cancels pending
+requests and dispatch waits. A response that sends nothing for 180 seconds,
+its headers included, is given up, and so is one not finished in 20 minutes:
+a reasoning model keeps its stream alive for as long as it thinks. A
+connection is given 30 seconds to open and is checked every 20 seconds. Any
+other refusal leaves the batch's strings for the next run.
 
 A usage-limit answer of the plan does not stop the run: its batch goes back
 to the queue, and the run waits until the time the service says the limit

@@ -33,6 +33,8 @@ const PACK_FILES: usize = 12;
 const BATCH: usize = 100;
 /// Most requests in flight.
 const CEILING: usize = 16;
+/// Minimum stable time between increases after a rate limit.
+const PACE_RECOVERY: Duration = Duration::from_secs(60);
 /// Translated strings of the same file sent as examples.
 const EXAMPLES: usize = 40;
 /// Most terms sent with one request: every term a pack of files of up to
@@ -638,6 +640,8 @@ struct Shared {
     run: Arc<Run>,
     /// The filter of a correction, compiled.
     matcher: Matcher,
+    /// Dispatch spacing shared by batches and their validation retries.
+    throttle: Arc<crate::throttle::Throttle>,
 }
 
 impl Shared {
@@ -869,6 +873,13 @@ fn problems(shared: &Shared, strings: &Strings, id: &str, answer: &Answer) -> Ve
         }
         Some(_) => {}
     }
+    if answer.text.is_empty() {
+        return vec![
+            "the answer has an empty translation: give this string a nonempty translation; \
+             if a correction needs no change, repeat its current translation"
+                .to_owned(),
+        ];
+    }
     if let Some(debris) = answer_debris(&entry.source, &answer.text) {
         return vec![debris];
     }
@@ -931,6 +942,7 @@ async fn ask(
     strings: usize,
     input: String,
 ) -> Result<Reply, ModelError> {
+    let generation = shared.throttle.acquire().await;
     let mut paths: Vec<&str> = built
         .strings
         .iter()
@@ -961,6 +973,14 @@ async fn ask(
     let listed = Listed { run, id };
     let started = std::time::Instant::now();
     let reply = shared.codex.respond(&request(shared, input)).await;
+    if let Err(ModelError::RateLimited { retry_after, .. }) = &reply {
+        let (wait, interval) = shared.throttle.limited(generation, *retry_after);
+        run.log(format_args!(
+            "rate limit: all new requests wait at least {} ms, then at least {} ms between sends",
+            wait.as_millis(),
+            interval.as_millis()
+        ));
+    }
     let seconds = started.elapsed().as_secs();
     match &reply {
         Ok(reply) => {
@@ -1613,6 +1633,7 @@ async fn prepare(
         .map_err(|message| Stop::Failed { message })?
         .unwrap_or_default();
     let shared = Arc::new(Shared {
+        throttle: Arc::new(crate::throttle::Throttle::default()),
         matcher,
         instructions,
         target: settings.target_language,
@@ -1636,33 +1657,21 @@ enum Next {
     Stop(Stop),
 }
 
-/// Handles a failed batch: the service's limit and a lost sign-in stop the
-/// run; a rate limit, network error, or timeout returns the batch to the
-/// queue after a wait (a rate limit also halves the pace), and the third in
-/// a row stops the run; anything else leaves the batch's strings for the
-/// next run.
-fn failed(error: ModelError, failures: &mut u32, pace: &mut usize, handle: &Run) -> Next {
+/// Network errors and timeouts retry after a wait, stopping after three
+/// consecutive failures. Rate limits are handled by the shared throttle.
+fn failed(error: ModelError, failures: &mut u32, handle: &Run) -> Next {
     match error {
         ModelError::UsageLimit { resets_at, .. } => Next::Limit(resets_at),
         ModelError::SignInRequired => Next::Stop(Stop::SignInRequired),
-        error @ (ModelError::RateLimited { .. } | ModelError::Network(_) | ModelError::Timeout) => {
+        error @ (ModelError::Network(_) | ModelError::Timeout) => {
             *failures += 1;
             if *failures >= FAILURES {
                 return Next::Stop(Stop::Failed {
                     message: error.to_string(),
                 });
             }
-            let wait = match &error {
-                ModelError::RateLimited { retry_after, .. } => {
-                    *pace = (*pace / 2).max(2);
-                    retry_after.unwrap_or(BACKOFF * *failures)
-                }
-                _ => BACKOFF * *failures,
-            };
-            handle.update(|status| {
-                status.pace = *pace;
-                status.message = Some(error.to_string());
-            });
+            let wait = BACKOFF * *failures;
+            handle.update(|status| status.message = Some(error.to_string()));
             handle.log(format_args!(
                 "waiting {} s after failure {} in a row: {error}",
                 wait.as_secs(),
@@ -1723,6 +1732,33 @@ struct Pace {
     failures: u32,
     /// When the last wait for the usage limit ended.
     limit_waited: Option<std::time::Instant>,
+    /// When a rate-limited run may next add one concurrent request.
+    recover_at: Option<std::time::Instant>,
+}
+
+impl Pace {
+    fn limited(&mut self, now: std::time::Instant) {
+        self.now = (self.now / 2).max(1);
+        self.recover_at = Some(now + PACE_RECOVERY);
+    }
+
+    fn succeeded(&mut self, now: std::time::Instant) {
+        self.failures = 0;
+        match self.recover_at {
+            Some(at) if now >= at => {
+                self.now = (self.now + 1).min(CEILING);
+                self.recover_at = Some(now + PACE_RECOVERY);
+            }
+            Some(_) => {}
+            None => {
+                self.now = if self.now == 1 {
+                    CEILING
+                } else {
+                    (self.now + 1).min(CEILING)
+                }
+            }
+        }
+    }
 }
 
 /// The first pack of `queue` none of whose files has a batch in flight.
@@ -1784,21 +1820,26 @@ async fn drain(
         };
         match result {
             Ok(done) => {
-                pace.failures = 0;
-                pace.now = if pace.now == 1 {
-                    CEILING
-                } else {
-                    (pace.now + 1).min(CEILING)
-                };
+                pace.succeeded(std::time::Instant::now());
                 count_done(handle, done, pace.now);
             }
+            Err(error @ ModelError::RateLimited { .. }) => {
+                pace.limited(std::time::Instant::now());
+                handle.update(|status| {
+                    status.pace = pace.now;
+                    status.message = Some(error.to_string());
+                });
+                handle.log(format_args!(
+                    "rate limit: concurrency reduced to {}; recovery adds at most one every {} s",
+                    pace.now,
+                    PACE_RECOVERY.as_secs()
+                ));
+                queue.push_front(sent);
+            }
             Err(error) => {
-                let retry = matches!(
-                    error,
-                    ModelError::RateLimited { .. } | ModelError::Network(_) | ModelError::Timeout
-                );
+                let retry = matches!(error, ModelError::Network(_) | ModelError::Timeout);
                 let message = error.to_string();
-                match failed(error, &mut pace.failures, &mut pace.now, handle) {
+                match failed(error, &mut pace.failures, handle) {
                     Next::Continue => handle.report(&Record::Left {
                         paths: sent.iter().map(|batch| batch.path.clone()).collect(),
                         strings: sent.iter().map(|batch| batch.contexts.len()).sum(),
@@ -1930,6 +1971,7 @@ async fn drive(
         now: 1,
         failures: 0,
         limit_waited: None,
+        recover_at: None,
     };
     if let Some(stop) = drain(&shared, pack(batches.into()), &mut pace, handle).await {
         return stop;
@@ -2128,6 +2170,56 @@ mod tests {
         assert!(take_next(&mut queue, &busy).is_none());
         let next = take_next(&mut queue, &HashSet::new()).expect("the scene goes on");
         assert_eq!(next[0].first, 100);
+    }
+
+    #[test]
+    fn successful_batches_do_not_immediately_undo_a_rate_limit() {
+        let now = std::time::Instant::now();
+        let mut pace = Pace {
+            now: 16,
+            failures: 2,
+            limit_waited: None,
+            recover_at: None,
+        };
+        pace.limited(now);
+        for _ in 0..100 {
+            pace.succeeded(now + Duration::from_secs(1));
+        }
+        assert_eq!(
+            pace.now, 8,
+            "old successful responses cannot immediately restore concurrency"
+        );
+        pace.succeeded(now + PACE_RECOVERY);
+        assert_eq!(pace.now, 9);
+        for _ in 0..100 {
+            pace.succeeded(now + PACE_RECOVERY);
+        }
+        assert_eq!(pace.now, 9, "only one increase per recovery period");
+        pace.limited(now + PACE_RECOVERY);
+        pace.succeeded(now + PACE_RECOVERY + Duration::from_secs(1));
+        assert_eq!(pace.now, 4, "a repeated limit restarts the recovery wait");
+    }
+
+    #[test]
+    fn a_limited_run_can_reach_one_without_triggering_the_initial_burst() {
+        let now = std::time::Instant::now();
+        let mut pace = Pace {
+            now: 16,
+            failures: 0,
+            limit_waited: None,
+            recover_at: None,
+        };
+        for _ in 0..6 {
+            pace.limited(now);
+        }
+        assert_eq!(pace.now, 1);
+        pace.succeeded(now);
+        assert_eq!(pace.now, 1);
+        pace.succeeded(now + PACE_RECOVERY);
+        assert_eq!(
+            pace.now, 2,
+            "recovery from one is not the initial cache warmup"
+        );
     }
 
     #[test]
