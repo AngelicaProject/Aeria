@@ -133,7 +133,7 @@ jobs:
           # The Aeria Guard workflow names the Aeria Guard action by the
           # commit this build is made from.
           AERIA_COMMIT: ${{ env.COMMIT }}
-        run: pnpm tauri build --no-bundle -- --locked
+        run: node node_modules/@tauri-apps/cli/tauri.js build --no-bundle -- --locked
 
       # Packaged before the installer so the executable carries no installer
       # bundle type: a portable copy announces updates but never installs them.
