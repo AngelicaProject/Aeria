@@ -38,6 +38,11 @@ CI enforces part of this policy with `cargo deny` (`deny.toml`) and
 - Vite: frontend build/dev tooling
 - SQLite: local disposable indexes
 
+The desktop dialog plugin uses the same minor version in Rust and JavaScript.
+The Rust requirement allows patch updates within that minor (`~2.7.3`), so the
+nightly workspace update cannot move it beyond the pinned JavaScript plugin;
+Tauri checks their compatibility before packaging.
+
 Likely UI-level dependencies such as Tailwind, Radix primitives, CodeMirror, docking/layout libraries, and Git/SQLite Rust crates should be added when the first feature that needs them is implemented, after checking their current stable versions and licenses.
 
 ## Knowledge dependencies

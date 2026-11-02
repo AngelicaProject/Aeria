@@ -131,6 +131,10 @@ permissions and calls the `update_*` commands.
 4. It writes `latest.json` and `SHA256SUMS.txt` and publishes the stable
    release with generated notes, or replaces the `nightly` pre-release.
 
+The build step invokes Tauri's installed JavaScript CLI directly. This keeps
+the `--` separator that forwards `--locked` to Cargo; pnpm's command runner
+consumes that separator.
+
 ## Cutting a stable release
 
 1. On a branch, set the new version in `Cargo.toml` and both `package.json`
