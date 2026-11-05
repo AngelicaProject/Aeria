@@ -1,5 +1,5 @@
-//! A check of an answer that only a run can make: that a translation
-//! belongs to its string.
+//! Checks specific to machine answers: that a translation belongs to its
+//! string and does not introduce unexpected letters for its language.
 //!
 //! A request numbers its strings, and in a long run of short, similar strings
 //! the model can slip and answer one string with the next one's translation.
@@ -7,6 +7,41 @@
 //! whose words are not the start of its own source is refused.
 
 use aeria_po::length::scan;
+
+/// Letters a Russian machine translation introduced outside the Russian
+/// alphabet and Latin script. Symbols and letters already in the source
+/// may be preserved; macro names and game data are not prose.
+pub(crate) fn unexpected_letters(target: &str, source: &str, text: &str) -> Vec<String> {
+    use std::collections::BTreeSet;
+    use std::sync::LazyLock;
+
+    static LATIN: LazyLock<regex::Regex> =
+        LazyLock::new(|| regex::Regex::new(r"^\p{Latin}$").expect("Latin script regex"));
+
+    if !target
+        .split(['-', '_'])
+        .next()
+        .is_some_and(|language| language.eq_ignore_ascii_case("ru"))
+    {
+        return Vec::new();
+    }
+    let source = aeria_se::parse(source).plain_text();
+    let text = aeria_se::parse(text).plain_text();
+    text.chars()
+        .filter(|&c| {
+            c.is_alphabetic()
+                && !matches!(c, 'А'..='Я' | 'а'..='я' | 'Ё' | 'ё')
+                && !LATIN.is_match(c.encode_utf8(&mut [0; 4]))
+                && !source.contains(c)
+        })
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .map(|c| format!(
+            "the Russian translation introduces the letter {c:?} (U+{:04X}) outside the Russian alphabet and Latin script; rewrite the affected word with the intended Russian letters",
+            u32::from(c)
+        ))
+        .collect()
+}
 
 /// Whether `start`, the words an answer repeats, are words of the string's
 /// source, comparing letters and digits only, case ignored. The words may
@@ -65,6 +100,40 @@ fn letters(text: &str, with_macros: bool) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn russian_answers_refuse_unexpected_letters() {
+        for target in ["ru", "ru-RU", "RU_ru"] {
+            let problems = unexpected_letters(target, "Azurite Demi-atma", "Деми ატма азурита");
+            assert!(!problems.is_empty());
+            assert!(problems.iter().any(|problem| problem.contains("U+10D0")));
+            assert!(!unexpected_letters(target, "Name", "Імя").is_empty());
+        }
+    }
+
+    #[test]
+    fn russian_answers_allow_latin_symbols_and_source_letters() {
+        for text in [
+            "Деми-атма азурита",
+            "Ёж, HP +10, café™ ★ → α",
+            "<if $gn4>Готова<else>Готов</if> <sheet Item $n1 0>",
+        ] {
+            assert!(
+                unexpected_letters("ru", "Name α", text).is_empty(),
+                "{text}"
+            );
+        }
+        assert!(unexpected_letters("uk", "Name", "Ім'я").is_empty());
+    }
+
+    #[test]
+    fn unexpected_letters_in_macro_branches_and_text_arguments_are_checked() {
+        for text in ["<if $gn4>ატма<else>Атма</if>", "<lower>ატма</lower>"] {
+            assert!(!unexpected_letters("ru", "Atma", text).is_empty(), "{text}");
+        }
+        // A sheet name is protected game data, not translated text.
+        assert!(unexpected_letters("ru", "<sheet ატმა 1 0>", "<sheet ატმა 1 0> Атма").is_empty());
+    }
 
     #[test]
     fn an_answer_must_repeat_the_start_of_its_own_source() {

@@ -50,7 +50,8 @@ pub fn fix_instructions(
          to follow is used where the word of the source is the thing the term names, as \
          its `translation` and `note` describe it, declined as the sentence needs; where \
          the word means something else there, or the translation already follows the term, \
-         that word stays.\n\n",
+         that word stays. The general translation rules guide these corrections; they are not \
+         additional reasons to change unrelated wording or style.\n\n",
     );
     if adapt {
         text.push_str(ADAPTING);
@@ -61,14 +62,15 @@ pub fn fix_instructions(
             "The translator asks of every translation of this run:\n\n{request}\n\n"
         );
     }
+    let target_name = language_name(target_language);
     let _ = write!(
         text,
         "Answer with one JSON object and nothing else: each key is the `id` of a string and \
          each value an array of three strings: the first words of that string's source, up \
          to three, copied as they are (macros may be left out); then its corrected \
          translation as macro text; then why it changed, in a few words of \
-         {target_language} without quotes (обращение по французской строке, канцелярит, \
-         калька, потерян смысл источника), or an empty string when it did not. The first \
+         {target_name}, with no quotation marks or macro tags inside the reason, \
+         or an empty string when it did not. The first \
          words show which string a translation belongs to; give every string its own \
          translation. "
     );
@@ -89,12 +91,52 @@ const ADAPTING: &str = "A string with `previous` changed its source since it was
      keep every other word of the translation as it is. When the change of the source does \
      not touch what the translation says, answer it unchanged: it still fits.\n\n";
 
+/// Name the language explicitly while retaining regional and script variants.
+fn language_name(tag: &str) -> String {
+    let base = tag
+        .split(['-', '_'])
+        .next()
+        .unwrap_or(tag)
+        .to_ascii_lowercase();
+    let name = match base.as_str() {
+        "en" => "English",
+        "ru" => "Russian",
+        "ja" => "Japanese",
+        "de" => "German",
+        "fr" => "French",
+        "be" => "Belarusian",
+        "kk" => "Kazakh",
+        "pl" => "Polish",
+        "cs" => "Czech",
+        "tr" => "Turkish",
+        "es" => "Spanish",
+        "pt" => "Portuguese",
+        "it" => "Italian",
+        "nl" => "Dutch",
+        "sv" => "Swedish",
+        "uk" => "Ukrainian",
+        "ko" => "Korean",
+        "th" => "Thai",
+        "vi" => "Vietnamese",
+        "id" => "Indonesian",
+        "zh" => "Chinese",
+        _ => return format!("the language identified by BCP 47 tag `{tag}`"),
+    };
+    if tag.contains(['-', '_']) {
+        format!("{name} ({tag})")
+    } else {
+        name.to_owned()
+    }
+}
+
 /// What the instructions of a translation and of a correction share: the
 /// rules of a translation, the project's style, and what a request holds.
 fn rules(source_language: &str, target_language: &str, style: Option<&str>) -> String {
+    let source_name = language_name(source_language);
+    let target_name = language_name(target_language);
     let mut text = format!(
-        "You translate the text of FINAL FANTASY XIV from {source_language} into \
-         {target_language} for a fan localization. Each request is a batch of strings of one \
+        "You translate the text of FINAL FANTASY XIV from {source_name} into \
+         {target_name} for a fan localization. Each request is a batch of strings of one \
          or more files of the game, each file's strings in its order; strings of a scene are \
          lines of one dialogue, and files never share a dialogue.\n\n"
     );
@@ -595,6 +637,11 @@ mod tests {
     fn instructions_carry_the_rules_and_the_style() {
         let text = instructions("en", "ru", Some("К герою на «вы»."));
         assert!(text.contains("FINAL FANTASY XIV is written in Japanese"));
+        assert!(text.contains("from English into Russian"));
+        assert!(
+            instructions("ja", "pt-BR", None).contains("from Japanese into Portuguese (pt-BR)")
+        );
+        assert!(instructions("en", "xyz", None).contains("BCP 47 tag `xyz`"));
         assert!(text.contains("Living Russian"));
         assert!(text.contains("К герою на «вы»."));
         assert!(!instructions("en", "fr", None).contains("Living Russian"));
@@ -650,6 +697,10 @@ mod tests {
         assert!(text.contains("FINAL FANTASY XIV is written in Japanese"));
         assert!(text.contains("К герою на «вы»."));
         assert!(text.contains("`fix`"));
+        assert!(text.contains("not additional reasons to change unrelated wording or style"));
+        assert!(text.contains(
+            "in a few words of Russian, with no quotation marks or macro tags inside the reason"
+        ));
         assert!(text.contains("of this run:\n\nНа «ты».\n\n"));
         assert!(text.contains("Adapt the translation to the new source"));
         assert!(text.contains("Answer every string."));

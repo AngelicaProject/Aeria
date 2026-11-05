@@ -95,7 +95,12 @@ The instructions, identical for every request of a run, come first so the
 provider serves them from its prompt cache: the
 [translation rules](./knowledge.md#translation-rules) for the target language,
 the macro authoring reference of [`strings.md`](./strings.md),
-`aeria-knowledge/style.md`, and the form of the answer.
+`aeria-knowledge/style.md`, and the form of the answer. Instructions name
+common source and target languages in full, preserving variant tags such as
+Portuguese (pt-BR); other languages are identified by their BCP 47 tag.
+Correction reasons use the target language, briefly and without quotation
+marks or macro tags. General translation rules guide requested corrections
+but do not authorize changes to unrelated wording or style.
 
 The task is JSON built from the files as they are when the request is sent:
 
@@ -209,7 +214,16 @@ the name whole.
 
 Every translation is checked like a save in the editor
 ([`po-project.md`](./po-project.md#checking)), after the answer's first
-words, and refused for a name longer than the game shows. An answer that is
+words, and refused for a name longer than the game shows. For Russian targets
+(`ru`, including regional tags), a machine translation or correction is also
+refused when its readable text introduces an alphabetic character outside
+the Russian alphabet and Latin script that is absent from the source's
+readable text. All conditional branches and readable macro arguments are
+checked; macro names and protected game data are not prose. Digits,
+punctuation, symbols, and letters preserved from the source are allowed.
+The retry names each unexpected letter and its Unicode code point; no
+characters are replaced automatically. This machine-answer check does not
+restrict manual saves or export. An answer that is
 not valid JSON,
 most often for a quote the model did not escape inside macro text, is read
 entry by entry (`"id": ["first words", "translation"]`, a bare quote read as
@@ -325,7 +339,8 @@ every term with strings on an old version (see
 [`desktop-editor-ui.md`](./desktop-editor-ui.md#glossary-tab)).
 
 A correction is refused only for what refuses a machine translation: a
-problem of the checks, or a name longer than the game shows. Refused
+problem of the checks, a name longer than the game shows, or unexpected
+letters in a Russian answer as described above. Refused
 corrections go back with their problems like refused translations, and what
 still fails is listed and not written.
 
