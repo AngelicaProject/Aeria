@@ -888,19 +888,22 @@ fn problems(shared: &Shared, strings: &Strings, id: &str, answer: &Answer) -> Ve
 
 /// What refuses a machine translation or correction of `entry`: the
 /// problems of the checks, and a name longer than the game shows, which is
-/// only advice for a person.
+/// only advice for a person, and unexpected letters for the target language.
 fn machine_problems(shared: &Shared, entry: &Entry, text: &str) -> Vec<String> {
-    check_translation(&shared.knowledge, &shared.target, entry, text)
-        .issues
-        .into_iter()
-        .filter_map(|issue| match issue {
-            Issue::NameTooLong { .. } => Some(format!(
-                "{issue}: shorten it, with the usual abbreviations when needed"
-            )),
-            _ if issue.is_problem() => Some(issue.to_string()),
-            _ => None,
-        })
-        .collect()
+    let mut problems: Vec<String> =
+        check_translation(&shared.knowledge, &shared.target, entry, text)
+            .issues
+            .into_iter()
+            .filter_map(|issue| match issue {
+                Issue::NameTooLong { .. } => Some(format!(
+                    "{issue}: shorten it, with the usual abbreviations when needed"
+                )),
+                _ if issue.is_problem() => Some(issue.to_string()),
+                _ => None,
+            })
+            .collect();
+    problems.extend(fit::unexpected_letters(&shared.target, &entry.source, text));
+    problems
 }
 
 /// The separators of the answer's JSON (`", "`, `","`, `", [`) inside a
