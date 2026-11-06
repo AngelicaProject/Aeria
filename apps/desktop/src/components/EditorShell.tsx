@@ -1513,6 +1513,7 @@ export function EditorShell({
                     onReview={review}
                     onSaveNote={saveNote}
                     onNavigate={stableNavigateFromEditor}
+                    onOpenTranslate={openTranslate}
                     takeFocusRequest={takeFocusRequest}
                     checkpoint={selectedCheckpoint}
                     historyRevision={workspaceRevision + projectRevision}

@@ -1,7 +1,10 @@
 import { shortcutKey } from "../shortcuts";
 import { forwardRef, memo, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
 import { bindingKey, domKey, rowKey } from "../binding";
-import type { EntryChangeKind, SourceBinding, TranslationCellDto, TranslationRowDto } from "../types";
+import type { CommandError, EntryChangeKind, SourceBinding, TranslationCellDto, TranslationRowDto } from "../types";
+import { normalizeCommandError, translationFixString } from "../ipc";
+import { ErrorBanner } from "./ErrorBanner";
+import { FixDialog } from "./FixDialog";
 import { diffWords } from "../textDiff";
 import { IconButton } from "../ui/primitives/IconButton";
 import { Segmented } from "../ui/primitives/Segmented";
@@ -94,6 +97,8 @@ type TranslationEditorProps = {
   onReview: ReviewHandler;
   onSaveNote: (cell: TranslationCellDto, draft: CellDraft, otherDirty: boolean, discardOtherDrafts: () => void) => void;
   onNavigate: (direction: 1 | -1) => void;
+  /** Shows progress after starting a correction of the selected string. */
+  onOpenTranslate: () => void;
   /** Returns true once when the target should take focus after navigation. */
   takeFocusRequest: () => boolean;
   checkpoint: CheckpointBaseline | null;
@@ -165,6 +170,7 @@ const TranslationEditorImpl = forwardRef<TranslationEditorHandle, TranslationEdi
   onReview,
   onSaveNote,
   onNavigate,
+  onOpenTranslate,
   takeFocusRequest,
   checkpoint,
   historyRevision = 0,
@@ -172,6 +178,9 @@ const TranslationEditorImpl = forwardRef<TranslationEditorHandle, TranslationEdi
   const { t } = useI18n();
   const columnNames = useSheetColumnNames(row?.sheetName ?? null);
   const [showDiff, setShowDiff] = useState(true);
+  const [fixingKey, setFixingKey] = useState<string | null>(null);
+  const [startingFix, setStartingFix] = useState(false);
+  const [fixError, setFixError] = useState<CommandError | null>(null);
   const [drafts, setDrafts] = useState<Record<string, CellDraft>>({});
   const draftsRef = useRef(drafts);
   const rowRef = useRef(row);
@@ -208,6 +217,33 @@ const TranslationEditorImpl = forwardRef<TranslationEditorHandle, TranslationEdi
   const targetCanSave = selectedCell !== null && !cellBusy && !targetIsBlank && (selectedCell.translation === null || targetDirty);
   const noteCanSave = selectedCell?.translation != null && !cellBusy && noteDirty;
   const { preferences, setPreference } = usePreferences();
+  // Corrections work on the saved translation, never on an unsaved draft.
+  const canFix = !cellBusy && !startingFix && !targetDirty &&
+    !!selectedCell?.translation?.targetMacro.trim() && !selectedCell.translation.reviewed;
+  useEffect(() => {
+    setFixingKey(null);
+    setFixError(null);
+  }, [selectedKey]);
+  const startFix = async (skill: string | null, adapt: boolean) => {
+    if (!selectedCell || fixingKey !== selectedKey || !canFix) return;
+    setFixingKey(null);
+    setFixError(null);
+    if (!preferences.translationModel) {
+      setFixError({ code: "modelNotChosen", message: t("search.chooseModel") });
+      return;
+    }
+    setStartingFix(true);
+    try {
+      await translationFixString(selectedCell.sourceBinding, {
+        issues: false, groups: [], adapt, request: null, skill,
+      }, preferences.translationModel, preferences.translationEffort || null);
+      onOpenTranslate();
+    } catch (caught) {
+      setFixError(normalizeCommandError(caught));
+    } finally {
+      setStartingFix(false);
+    }
+  };
   const sourceMode = preferences.sourcePaneMode;
   const targetMode = preferences.targetPaneMode;
   // Kept across rows: the editor is created anew for every row.
@@ -378,6 +414,16 @@ const TranslationEditorImpl = forwardRef<TranslationEditorHandle, TranslationEdi
         </div>
       </header>
 
+      {fixError ? <ErrorBanner title={t("fix.title")} error={fixError} onDismiss={() => setFixError(null)} /> : null}
+      <FixDialog
+        count={fixingKey === selectedKey && fixingKey !== null && canFix ? 1 : null}
+        issue={null}
+        withIssues={false}
+        fuzzy={translation?.fuzzy ? 1 : 0}
+        onCancel={() => setFixingKey(null)}
+        onFix={(skill, adapt) => void startFix(skill, adapt)}
+      />
+
       <div className="editor-grid">
         <div className="editor-pane editor-source">
           <div className="editor-pane-head">
@@ -412,6 +458,15 @@ const TranslationEditorImpl = forwardRef<TranslationEditorHandle, TranslationEdi
             {targetDirty ? <span className="edited-label">{t("common.edited")}</span> : null}
             {mutation === "target" ? <span className="saving-label"><span className="spinner spinner-xs" />{t("editor.savingInline")}</span> : null}
             <span className="spacer" />
+            <button
+              className="button button-ghost"
+              type="button"
+              disabled={!canFix}
+              title={t(targetDirty ? "editor.fixUnsaved" : translation?.reviewed ? "editor.fixReviewed" : "editor.fix")}
+              onClick={() => { setFixError(null); setFixingKey(selectedKey); }}
+            >
+              <UiIcon icon="wand" size="sm" />{t("editor.fix")}
+            </button>
             <InsertMacroButton editor={targetApi} disabled={cellBusy} />
             {checkpoint ? <IconButton icon="gitCompareArrows" label={t(showDiff ? "editor.hideDiff" : "editor.showDiff")} pressed={showDiff} onClick={() => setShowDiff((current) => !current)} className={`git-mark git-mark-${checkpoint.kind === "translated" ? "added" : "modified"}`} /> : null}
             <PaneModeSwitch value={targetMode} onChange={(mode) => setPreference("targetPaneMode", mode)} />

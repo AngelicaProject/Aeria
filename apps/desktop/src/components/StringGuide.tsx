@@ -241,8 +241,8 @@ function StringFacts({ hints, draft, verdict, onPick }: { hints: StringHintsDto;
   const length = verdict?.length ?? null;
   const budget = hints.maxLength;
   const bytes = budget?.unit === "bytes";
-  // Only a name the game cuts is too long; a label's length is the model's guidance.
-  const over = bytes && budget !== null && length !== null && length > budget.max;
+  // The same budget is enforced on machine answers; manual saves remain possible.
+  const over = budget !== null && length !== null && length > budget.max;
   return (
     <div className="string-guide-facts" role="group" aria-label={t("hints.string")}>
       {hints.speaker ? (
@@ -260,7 +260,7 @@ function StringFacts({ hints, draft, verdict, onPick }: { hints: StringHintsDto;
       ) : null}
       {budget !== null ? (
         <span className={over ? "string-guide-fact is-todo" : "string-guide-fact"} title={bytes ? t("hints.nameLengthTitle", { max: String(budget.max) }) : t("hints.lengthTitle")}>
-          <StateMark state={!drafted || length === null || !bytes ? null : over ? "todo" : "ok"} />
+          <StateMark state={!drafted || length === null ? null : over ? "todo" : "ok"} />
           <span className="string-guide-label">{t(bytes ? "hints.nameLength" : "hints.length")}</span>
           <span className="string-guide-value mono">{drafted && length !== null
             ? t(bytes ? "hints.bytesOf" : "hints.lengthOf", { length: String(length), max: String(budget.max) })
