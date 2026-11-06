@@ -187,9 +187,10 @@ fn rules(source_language: &str, target_language: &str, style: Option<&str>) -> S
          `terms` that do not apply to it, as a person decided: there the word means \
          something else, so you translate it by its meaning. A string with `maxLength` is \
          an interface label: the longest official localization of it shows that many \
-         characters (macros not counted), which is about what the game's layout fits; keep \
-         the translation near it, with the usual abbreviations of the language when needed \
-         (Шанс прям. удара). A string with \
+         characters (macros not counted). Keep the translation within `maxLength`: a \
+         longer answer is refused and sent back for shortening. Preserve the meaning \
+         and tone in a more compact wording; use customary abbreviations only where \
+         appropriate for the text (Шанс прям. удара). A string with \
          `maxBytes` is the name of a character or object the game shows over it in the \
          world: the game cuts a name longer than that many bytes of UTF-8, where a Latin \
          letter, digit, or space takes one and a Cyrillic letter or « » two; keep the name \

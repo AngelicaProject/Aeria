@@ -186,10 +186,14 @@ string (at most 40 characters shown, no line break) of an interface sheet
 characters shown by the longest of its English source and the German and
 French lines of its context, macros not counted, `<nbsp>` as one, `<shy>` as
 none (`aeria_po::length`; the sheet comes from the `msgctxt`). The request
-asks to keep the translation near that length, with the language's usual
-abbreviations when needed. It is guidance: the official lengths only
-approximate what the layout fits, so a longer label is neither refused nor
-advice. Names of items and places get no length: their tooltips show them
+requires the translation to stay within that length, preserving meaning
+and tone with more compact wording and customary abbreviations where
+appropriate. A longer machine answer, including a correction requested by
+a skill, is refused and sent back with its measured length and maximum;
+one still too long after the retries is not written. The string guide shows
+the same budget and marks an overlong draft. Manual saves and export remain
+available: character counts approximate the rendered width and do not prove
+whether a translation fits in the game. Names of items and places get no length: their tooltips show them
 whole.
 
 ## Names in the world

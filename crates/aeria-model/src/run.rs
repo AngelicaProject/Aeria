@@ -11,7 +11,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use aeria_knowledge::GlossaryEntry;
 use aeria_knowledge::Knowledge;
-use aeria_po::length::length_budget;
+use aeria_po::length::{Unit, length_budget};
 use aeria_po::{
     EditKind, Entry, EntryEdit, Issue, PO_DIR, PoFile, Session, check_translation, is_scene,
 };
@@ -853,8 +853,8 @@ fn request(shared: &Shared, input: String) -> Request {
 }
 
 /// The problems of an answer for the string `id` of a batch: that it
-/// belongs to another string, what the translation checks find, and a name
-/// longer than the game shows.
+/// belongs to another string, what the translation checks find, and a
+/// translation longer than its interface or world-name budget.
 fn problems(shared: &Shared, strings: &Strings, id: &str, answer: &Answer) -> Vec<String> {
     let Some((_, _, entry)) = strings.iter().find(|(candidate, _, _)| candidate == id) else {
         return vec!["not a string of the batch".to_owned()];
@@ -888,7 +888,8 @@ fn problems(shared: &Shared, strings: &Strings, id: &str, answer: &Answer) -> Ve
 
 /// What refuses a machine translation or correction of `entry`: the
 /// problems of the checks, and a name longer than the game shows, which is
-/// only advice for a person, and unexpected letters for the target language.
+/// only advice for a person, an interface label longer than its budget,
+/// and unexpected letters for the target language.
 fn machine_problems(shared: &Shared, entry: &Entry, text: &str) -> Vec<String> {
     let mut problems: Vec<String> =
         check_translation(&shared.knowledge, &shared.target, entry, text)
@@ -902,6 +903,19 @@ fn machine_problems(shared: &Shared, entry: &Entry, text: &str) -> Vec<String> {
                 _ => None,
             })
             .collect();
+    if let Some(budget) = length_budget(entry)
+        && budget.unit == Unit::Characters
+    {
+        let length = budget.length_of(text);
+        if length > budget.max {
+            problems.push(format!(
+                "the translation shows {length} characters and maxLength is {}: \
+                 shorten it without losing its meaning or tone; use customary abbreviations \
+                 only where appropriate for this text",
+                budget.max
+            ));
+        }
+    }
     problems.extend(fit::unexpected_letters(&shared.target, &entry.source, text));
     problems
 }

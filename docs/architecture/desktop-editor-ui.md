@@ -423,6 +423,15 @@ error lists its problems. Saving a fuzzy string's translation accepts it and
 removes the mark. A row is dirty when any contained cell has a dirty target or
 note.
 
+The target pane's **Apply skill…** button opens the same correction dialog
+as project search, for the selected string only. The person chooses a saved
+project skill and, for a fuzzy string, whether to adapt it to the changed
+source. The action uses `translation_fix_string` and opens the run's progress
+after starting. It requires a nonempty saved translation with no target
+edits, no save in progress, and no reviewed mark; disabled-button hints
+explain when the target must be saved or its reviewed mark removed. Switching
+strings closes the dialog. A failed start is shown in the editor.
+
 A person marks a translation reviewed (see
 [`po-project.md`](./po-project.md#reviews)) with the button beside Save:
 **Save & mark reviewed** saves the draft and marks it at once, and without
@@ -465,6 +474,11 @@ distinguishes an absent translation overlay from an overlay whose target is
 explicitly empty.
 
 ## String guide
+
+The length counter marks a draft above its interface character budget as
+well as a world name above its byte budget. Its tooltip explains that
+machine answers over the character budget are retried, while a person can
+still save a longer translation.
 
 The string guide sits in the bottom panel under the document (Ctrl+J shows
 or hides it) and can move to the right dock. It is for the person
