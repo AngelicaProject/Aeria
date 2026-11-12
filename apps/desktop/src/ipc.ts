@@ -566,16 +566,16 @@ export function translationStop(): Promise<void> {
 }
 
 
-export function projectKnowledge(): Promise<ProjectKnowledgeDto> {
-  return call<ProjectKnowledgeDto>("project_knowledge");
+export function projectKnowledge(migrate = false): Promise<ProjectKnowledgeDto> {
+  return call<ProjectKnowledgeDto>("project_knowledge", { migrate });
 }
 
 export function saveKnowledgeStyle(expected: string | null, text: string): Promise<ProjectKnowledgeDto> {
   return call<ProjectKnowledgeDto>("save_knowledge_style", { expected, text });
 }
 
-export function saveKnowledgeTerms(expected: string | null, entries: TermInput[]): Promise<ProjectKnowledgeDto> {
-  return call<ProjectKnowledgeDto>("save_knowledge_terms", { expected, entries });
+export function saveKnowledgeTerms(expected: string | null, entries: TermInput[], categories?: import("./types").GlossaryCategory[], merges?: { from: string; into: string }[], sheets?: TermSheetDto[]): Promise<ProjectKnowledgeDto> {
+  return call<ProjectKnowledgeDto>("save_knowledge_terms", { expected, entries, categories: categories ?? null, merges: merges ?? null, sheets: sheets ?? null });
 }
 
 /** Declares the sheets that are part of the glossary, if the file still has the `expected` content. */

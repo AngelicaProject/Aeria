@@ -708,7 +708,10 @@ export type ReportInfo = { id: string; run: ReportRun };
 /** A term of `aeria-knowledge/terms.csv`: one meaning of its name; `category` says what it names. */
 export type GlossaryEntry = { term: string; translation: string; forms?: string[]; note?: string; matchCase?: boolean; category: string };
 
-export type TermInput = { term: string; translation: string; forms: string[]; note: string | null; matchCase: boolean; category: string };
+export type TermInput = { id?: string; term: string; translation: string; forms: string[]; note: string | null; matchCase: boolean; category: string };
+
+export type GlossaryCategory = { id: string; name: string; note: string };
+export type GlossaryCatalog = { formatVersion: number; categories: GlossaryCategory[] };
 
 /** A sheet of the game declared part of the glossary: the strings of its column are terms. */
 /** How many strings of the game use one term. */
@@ -752,6 +755,9 @@ export type ReplacedTermDto = { entry: number; term: SheetTermDto };
 
 /** The project's style and terms in `aeria-knowledge/`. */
 export type ProjectKnowledgeDto = {
+  migrated: boolean;
+  catalog: GlossaryCatalog | null;
+  termIds: string[];
   /** `style.md`; null when the file does not exist. */
   style: string | null;
   /** `terms.csv` exactly as read, sent back when saving. */

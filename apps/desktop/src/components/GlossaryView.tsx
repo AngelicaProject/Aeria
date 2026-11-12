@@ -6,8 +6,8 @@ import {
   type GlossarySort,
   type SortKey,
   categoryKey,
-  categoryNote,
-  categorySheets,
+  duplicateOf,
+  originsForRows,
   emptyGlossaryFilter,
   entryId,
   entryItems,
@@ -25,11 +25,12 @@ import {
   usageKey,
 } from "../glossaryModel";
 import { normalizeCommandError, projectKnowledge, saveKnowledgeSheets, saveKnowledgeTerms, stringBinding, termOutdated, termOutdatedStrings, termUsage, translationFix, translationStatus } from "../ipc";
-import type { CommandError, ProjectKnowledgeDto, SourceBinding, TermKey, TermSheetDto, TranslationStatus } from "../types";
+import type { CommandError, GlossaryCategory, ProjectKnowledgeDto, SourceBinding, TermKey, TermSheetDto, TranslationStatus } from "../types";
 import { useI18n } from "../ui/i18n";
 import { usePreferences } from "../ui/preferences";
 import type { MenuEntry } from "../ui/primitives/RightClickMenu";
 import { UiIcon } from "../ui/primitives/UiIcon";
+import { NewCategoryDialog, MergeCategoriesDialog, type CategoryMergeDraft } from "./GlossaryCategoryDialog";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { ErrorBanner } from "./ErrorBanner";
 import { BulkDetail, CategorySettings, EntryDetail, SheetSettings, SheetTermDetail, type Sense } from "./GlossaryDetail";
@@ -72,20 +73,22 @@ type Selection = { ids: ReadonlySet<string>; active: string | null };
 const noSelection: Selection = { ids: new Set(), active: null };
 
 /**
- * The project's glossary as a document: the terms of `terms.csv` and of the
- * declared sheets in one table, filtered by facets, with the chosen term's
- * fields beside it. Edits to the project's terms are saved together;
- * declared sheets are saved at once.
+ * One editable glossary, with standalone and sheet-backed terms in one
+ * table. Terms, independent categories and sheet defaults are saved together.
  */
 export const GlossaryView = forwardRef<GlossaryViewHandle, GlossaryViewProps>(function GlossaryView({ active, revision, sheetNames, onRevealBinding, onDirtyChange, onSaved, onFilesChanged, onOpenSettings, onOpenReport, focus }, ref) {
   const { t } = useI18n();
   const { preferences } = usePreferences();
   const [saved, setSaved] = useState<ProjectKnowledgeDto | null>(null);
   const [rows, setRows] = useState<GlossaryRow[]>([]);
+  const [categories, setCategories] = useState<GlossaryCategory[]>([]);
+  const [sheets, setSheets] = useState<TermSheetDto[]>([]);
+  const [merges, setMerges] = useState<{ from: string; into: string }[]>([]);
+  const [addingCategory, setAddingCategory] = useState(false);
+  const [categoryMerge, setCategoryMerge] = useState<CategoryMergeDraft | null>(null);
   const rowsRef = useRef(rows);
   rowsRef.current = rows;
   // The key of the row read from each entry of the saved file.
-  const [savedKeys, setSavedKeys] = useState<readonly number[]>([]);
   const nextKey = useRef(0);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<{ title: string; error: CommandError } | null>(null);
@@ -119,13 +122,20 @@ export const GlossaryView = forwardRef<GlossaryViewHandle, GlossaryViewProps>(fu
   const show = useCallback((knowledge: ProjectKnowledgeDto) => {
     setSaved(knowledge);
     recount();
-    const next = rowsFromEntries(knowledge.entries, rowsRef.current);
+    const next = rowsFromEntries(knowledge.entries, rowsRef.current, knowledge.termIds);
+    setCategories(knowledge.catalog?.categories ?? []);
+    setSheets(knowledge.sheets);
+    setMerges([]);
     nextKey.current = Math.max(nextKey.current, ...next.map((row) => row.key + 1));
-    setSavedKeys(next.map((row) => row.key));
     setRows(next);
   }, [recount]);
 
-  const dirty = saved !== null && rowsChanged(rows, saved.entries);
+  const receive = useCallback((knowledge: ProjectKnowledgeDto) => {
+    show(knowledge);
+    if (knowledge.migrated) { loadedRevision.current = revision + 1; onSaved(); }
+  }, [show, revision, onSaved]);
+
+  const dirty = saved !== null && rowsChanged(rows, saved.entries, saved.termIds) || saved !== null && (JSON.stringify(categories) !== JSON.stringify(saved.catalog?.categories ?? []) || JSON.stringify(sheets) !== JSON.stringify(saved.sheets) || merges.length > 0);
   useEffect(() => onDirtyChange(dirty), [dirty, onDirtyChange]);
   useEffect(() => () => onDirtyChange(false), [onDirtyChange]);
 
@@ -134,15 +144,19 @@ export const GlossaryView = forwardRef<GlossaryViewHandle, GlossaryViewProps>(fu
   useEffect(() => {
     if (!active || loadedRevision.current === revision || dirty) return;
     loadedRevision.current = revision;
-    void projectKnowledge().then(show).catch((reason: unknown) => setError({ title: t("glossary.loadError"), error: normalizeCommandError(reason) }));
-  }, [active, dirty, revision, show, t]);
+    void projectKnowledge(true).then(receive).catch((reason: unknown) => setError({ title: t("glossary.loadError"), error: normalizeCommandError(reason) }));
+  }, [active, dirty, revision, receive, t]);
 
   const problems = useMemo(() => rowProblems(rows), [rows]);
   const fromSheets = useMemo(() => sheetItems(saved?.sheetTerms ?? []), [saved]);
-  const entries = useMemo(() => entryItems(rows, problems, saved?.replaced ?? [], saved?.redundant ?? [], savedKeys), [problems, rows, saved, savedKeys]);
+  const origins = useMemo(() => originsForRows(rows, saved?.termIds ?? [], saved?.replaced ?? [], merges), [rows, saved, merges]);
+  const entries = useMemo(() => entryItems(rows, problems, origins, [], rows.map((row) => row.key)), [problems, rows, origins]);
   const items = useMemo(() => [...entries, ...fromSheets], [entries, fromSheets]);
   const byId = useMemo(() => new Map(items.map((item) => [item.id, item])), [items]);
-  const counts = useMemo(() => facetCounts(items, outdated), [items, outdated]);
+  const counted = useMemo(() => facetCounts(items, outdated), [items, outdated]);
+  const counts = useMemo(() => {
+    return { ...counted, categories: categories.map((category) => ({ key: categoryKey(category.name), label: category.name, count: counted.categories.find((c) => c.key === categoryKey(category.name))?.count ?? 0 })).sort((a, b) => b.count - a.count || a.label.localeCompare(b.label)) };
+  }, [counted, categories]);
   const query = useDeferredValue(filter.query);
   // The active term stays in the list while it is edited and saved, though
   // it no longer matches; choosing another term or changing the filter
@@ -151,8 +165,8 @@ export const GlossaryView = forwardRef<GlossaryViewHandle, GlossaryViewProps>(fu
   if (kept.id !== selection.active) setKept({ id: selection.active, filter });
   const keep = kept.filter === filter ? kept.id : null;
   const shown = useMemo(() => sortItems(filterItems(items, { ...filter, query }, outdated, keep), sort, usage), [filter, items, keep, query, sort, outdated, usage]);
-  const categoryNames = useMemo(() => counts.categories.map((category) => category.label), [counts]);
-  const sheets = useMemo(() => saved?.sheets ?? [], [saved]);
+  const categoryNames = useMemo(() => categories.map((category) => category.name), [categories]);
+  const noteFor = (name: string) => categories.find((category) => categoryKey(category.name) === categoryKey(name))?.note ?? "";
 
   const countUsage = useCallback(() => {
     if (counting) return;
@@ -301,8 +315,22 @@ export const GlossaryView = forwardRef<GlossaryViewHandle, GlossaryViewProps>(fu
 
   // Editing --------------------------------------------------------------
 
+  const ensureCategory = (name: string) => {
+    const trimmed = name.trim();
+    if (trimmed && !categories.some((c) => categoryKey(c.name) === categoryKey(trimmed))) setCategories((current) => [...current, { id: `c-${crypto.randomUUID()}`, name: trimmed, note: "" }]);
+  };
   const change = (key: number, patch: Partial<GlossaryRow>) => {
+    if (patch.category) ensureCategory(patch.category);
+    const row = rows.find((candidate) => candidate.key === key);
+    const existing = row && !row.id && patch.category !== undefined ? duplicateOf(rows, { ...row, ...patch }) : undefined;
+    if (existing) { setRows((current) => current.filter((candidate) => candidate.key !== key)); chooseOnly(entryId(existing.key)); return; }
     setRows((current) => current.map((row) => row.key === key ? { ...row, ...patch } : row));
+  };
+
+  const openExistingTerm = (key: number) => {
+    const candidate = rows.find((row) => row.key === key);
+    const existing = candidate && !candidate.id ? duplicateOf(rows, candidate) : undefined;
+    if (existing) { setRows((current) => current.filter((row) => row.key !== key)); chooseOnly(entryId(existing.key)); }
   };
 
   // The new term stays in the list as the chosen one, under the filter as it
@@ -334,35 +362,23 @@ export const GlossaryView = forwardRef<GlossaryViewHandle, GlossaryViewProps>(fu
     const gone = new Set(keys.map(entryId));
     const at = shown.findIndex((item) => gone.has(item.id));
     const next = shown.slice(at + 1).find((item) => !gone.has(item.id)) ?? shown.slice(0, Math.max(0, at)).reverse().find((item) => !gone.has(item.id)) ?? null;
-    const removing = new Set(keys);
+    const removing = new Set(keys.filter((key) => { const item = byId.get(entryId(key)); return item?.kind === "entry" && item.replaced.length === 0; }));
     setRows((current) => current.filter((row) => !removing.has(row.key)));
     setSelection(next ? { ids: new Set([next.id]), active: next.id } : noSelection);
   };
 
   const setCategory = (keys: readonly number[], category: string) => {
+    ensureCategory(category);
     const changing = new Set(keys);
     setRows((current) => current.map((row) => changing.has(row.key) ? { ...row, category } : row));
   };
 
-  // A sheet's term given another translation becomes a term of the project:
-  // the row of its name and category takes it, or a new one.
-  const settle = (term: { term: string; category: string; forms: readonly string[] }, translation: string) => {
-    const name = term.term.toLowerCase();
-    const known = rows.find((row) => row.term.trim().toLowerCase() === name && categoryKey(row.category) === categoryKey(term.category));
-    if (known) {
-      change(known.key, { translation });
-      chooseOnly(entryId(known.key));
-      return;
-    }
-    add({ term: term.term, translation, category: term.category });
-  };
-
   const saveTerms = () => {
-    if (!saved || !dirty || problems.size > 0 || busy) return;
+    if (!saved || !dirty || problems.size > 0 || busy || runGoing || otherRun) return;
     const write = () => {
       setBusy(true);
       setError(null);
-      void saveKnowledgeTerms(saved.termsText, inputsFromRows(rows))
+      void saveKnowledgeTerms(saved.termsText, inputsFromRows(rows), categories, merges, sheets)
         // The save bumps the project's revision by one: what it wrote is shown already.
         .then((knowledge) => { show(knowledge); loadedRevision.current = revision + 1; onSaved(); })
         .catch((reason: unknown) => setError({ title: t("glossary.saveError"), error: normalizeCommandError(reason) }))
@@ -379,20 +395,54 @@ export const GlossaryView = forwardRef<GlossaryViewHandle, GlossaryViewProps>(fu
     setSelection(noSelection);
   };
 
-  // The declared sheets are saved at once and leave the terms being edited as they are.
   const saveSheets = (next: TermSheetDto[]) => {
-    if (!saved) return;
-    setBusy(true);
-    setError(null);
-    void saveKnowledgeSheets(saved.sheetsText, next)
-      .then((knowledge) => {
-        setSaved((current) => current && { ...current, sheetsText: knowledge.sheetsText, sheets: knowledge.sheets, sheetTerms: knowledge.sheetTerms, redundant: knowledge.redundant, replaced: knowledge.replaced });
-        setUsageStale(true);
-        loadedRevision.current = revision + 1;
-        onSaved();
-      })
-      .catch((reason: unknown) => setError({ title: t("glossary.saveError"), error: normalizeCommandError(reason) }))
-      .finally(() => setBusy(false));
+    const missing = [...new Set(next.map((sheet) => sheet.category))].filter((name) => !categories.some((c) => categoryKey(c.name) === categoryKey(name)));
+    if (missing.length) setCategories((current) => [...current, ...missing.map((name) => ({ id: `c-${crypto.randomUUID()}`, name, note: "" }))]);
+    setSheets(next);
+  };
+
+  const renameCategory = (id: string, name: string) => {
+    const existing = categories.find((c) => c.id !== id && categoryKey(c.name) === categoryKey(name));
+    if (existing || !name.trim()) return;
+    const old = categories.find((c) => c.id === id)!;
+    setCategories((current) => current.map((c) => c.id === id ? { ...c, name: name.trim() } : c));
+    setRows((current) => current.map((row) => categoryKey(row.category) === categoryKey(old.name) ? { ...row, category: name.trim() } : row));
+    setSheets((current) => current.map((sheet) => categoryKey(sheet.category) === categoryKey(old.name) ? { ...sheet, category: name.trim() } : sheet));
+    setFilter((current) => ({ ...current, category: categoryKey(name) }));
+  };
+
+  const beginMerge = (sourceId: string, targetId: string) => {
+    const source = categories.find((c) => c.id === sourceId)!;
+    const target = categories.find((c) => c.id === targetId)!;
+    const targetRows = new Map(rows.filter((row) => categoryKey(row.category) === categoryKey(target.name)).map((row) => [row.term.trim().toLowerCase(), row]));
+    const pairs = rows.filter((row) => categoryKey(row.category) === categoryKey(source.name)).flatMap((row) => {
+      const other = targetRows.get(row.term.trim().toLowerCase());
+      return other ? [{ source: row, target: other }] : [];
+    });
+    setCategoryMerge({ source, target, pairs });
+  };
+
+  const applyMerge = (choices: ReadonlyMap<number, number>) => {
+    if (!categoryMerge) return;
+    const { source, target, pairs } = categoryMerge;
+    const removed = new Set<number>();
+    const replacement = new Map<number, GlossaryRow>();
+    const operations: { from: string; into: string }[] = [];
+    for (const pair of pairs) {
+      const chosen = choices.get(pair.source.key) === pair.source.key ? pair.source : pair.target;
+      const base = pair.target.id ? pair.target : pair.source;
+      const other = base.key === pair.target.key ? pair.source : pair.target;
+      removed.add(other.key);
+      replacement.set(base.key, { ...chosen, key: base.key, ...(base.id ? { id: base.id } : {}), category: target.name });
+      if (other.id && base.id) operations.push({ from: other.id, into: base.id });
+    }
+    setRows((current) => current.filter((row) => !removed.has(row.key)).map((row) => replacement.get(row.key) ?? (categoryKey(row.category) === categoryKey(source.name) ? { ...row, category: target.name } : row)));
+    setMerges((current) => [...current, ...operations]);
+    setCategories((current) => current.filter((c) => c.id !== source.id).map((c) => c.id === target.id ? { ...c, note: [...new Set([target.note, source.note].filter(Boolean))].join("\n\n") } : c));
+    setSheets((current) => current.map((sheet) => categoryKey(sheet.category) === categoryKey(source.name) ? { ...sheet, category: target.name } : sheet));
+    setSelection(noSelection);
+    setFilter((current) => ({ ...current, category: categoryKey(target.name) }));
+    setCategoryMerge(null);
   };
 
   const openString = (context: string) => {
@@ -414,7 +464,7 @@ export const GlossaryView = forwardRef<GlossaryViewHandle, GlossaryViewProps>(fu
     const menu: MenuEntry[] = [];
     if (item.kind === "sheet") {
       menu.push({ id: "open", icon: "externalLink", label: t("glossary.detail.open"), run: () => openString(item.term.context) });
-      menu.push({ id: "edit", icon: "pencil", label: t("glossary.detail.edit"), disabled: busy, run: () => settle(item.term, item.term.translation) });
+      menu.push({ id: "edit", icon: "pencil", label: t("glossary.detail.edit"), disabled: busy, run: editActive });
     }
     if (keys.length > 0) {
       if (menu.length > 0) menu.push({ id: "separator-category", separator: true });
@@ -426,7 +476,7 @@ export const GlossaryView = forwardRef<GlossaryViewHandle, GlossaryViewProps>(fu
         items: categoryNames.map((category): MenuEntry => ({ id: `category:${category}`, label: category, run: () => setCategory(keys, category) })),
       });
       menu.push({ id: "separator-remove", separator: true });
-      menu.push({ id: "remove", icon: "trash", danger: true, disabled: busy, label: keys.length > 1 ? t("glossary.removeMany", { count: keys.length }) : t("glossary.remove"), run: () => remove(keys) });
+      menu.push({ id: "remove", icon: "trash", danger: true, disabled: busy || acting.some((candidate) => candidate.kind === "entry" && candidate.replaced.length > 0), label: keys.length > 1 ? t("glossary.removeMany", { count: keys.length }) : t("glossary.remove"), run: () => remove(keys) });
     }
     return menu;
   };
@@ -456,7 +506,7 @@ export const GlossaryView = forwardRef<GlossaryViewHandle, GlossaryViewProps>(fu
   if (!saved) {
     return (
       <div className="glossary-view">
-        {error ? <ErrorBanner title={error.title} error={error.error} onDismiss={() => setError(null)} /> : <p className="muted glossary-loading">{t("common.loading")}</p>}
+        {error ? <><ErrorBanner title={error.title} error={error.error} onDismiss={() => setError(null)} /><button className="button button-secondary" onClick={() => { setError(null); void projectKnowledge(true).then(receive).catch((reason: unknown) => setError({ title: t("glossary.loadError"), error: normalizeCommandError(reason) })); }}>{t("glossary.retry")}</button></> : <p className="muted glossary-loading">{t("common.loading")}</p>}
       </div>
     );
   }
@@ -478,15 +528,15 @@ export const GlossaryView = forwardRef<GlossaryViewHandle, GlossaryViewProps>(fu
   const detail = (() => {
     if (chosen.length > 1) {
       const bulkFix = chosenKeys.length > 0 ? <FixControls label={t("glossary.fix.runMany", { count: chosenKeys.length })} block={block} busy={starting} onFix={(request) => fix(chosenKeys, request)} onOpenSettings={onOpenSettings} /> : null;
-      return <BulkDetail count={chosen.length} entries={chosenEntries.length} categories={categoryNames} disabled={busy} fix={bulkFix} onCategory={(category) => setCategory(chosenEntries.map((item) => item.row.key), category)} onRemove={() => remove(chosenEntries.map((item) => item.row.key))} />;
+      return <BulkDetail count={chosen.length} entries={chosenEntries.filter((item) => item.replaced.length === 0).length} categories={categoryNames} disabled={busy} fix={bulkFix} onCategory={(category) => setCategory(chosenEntries.map((item) => item.row.key), category)} onRemove={() => remove(chosenEntries.map((item) => item.row.key))} />;
     }
     if (activeItem?.kind === "entry") {
       const category = activeItem.row.category;
-      return <EntryDetail key={activeItem.id} item={activeItem} sheetsGive={sheetsGive(activeItem)} fix={outdatedFor(activeItem)} categories={categoryNames} senses={sensesOf(activeItem)} disabled={busy} categoryNote={categoryNote(sheets, category)} onChange={(patch) => change(activeItem.row.key, patch)} onRemove={() => remove([activeItem.row.key])} onOpen={openString} onChoose={chooseOnly} onOpenCategory={() => openCategory(category)} />;
+      return <EntryDetail key={activeItem.id} item={activeItem} sheetsGive={sheetsGive(activeItem)} fix={outdatedFor(activeItem)} categories={categoryNames} senses={sensesOf(activeItem)} disabled={busy} categoryNote={noteFor(category)} onChange={(patch) => change(activeItem.row.key, patch)} onTermCommit={() => openExistingTerm(activeItem.row.key)} onRemove={() => remove([activeItem.row.key])} onOpen={openString} onChoose={chooseOnly} onOpenCategory={() => openCategory(category)} />;
     }
     if (activeItem?.kind === "sheet") {
       const category = activeItem.term.category;
-      return <SheetTermDetail key={activeItem.id} term={activeItem.term} fix={outdatedFor(activeItem)} senses={sensesOf(activeItem)} disabled={busy} categoryNote={categoryNote(sheets, category)} onSettle={(translation) => settle(activeItem.term, translation)} onOpen={openString} onChoose={chooseOnly} onOpenCategory={() => openCategory(category)} />;
+      return <SheetTermDetail key={activeItem.id} term={activeItem.term} fix={outdatedFor(activeItem)} senses={sensesOf(activeItem)} disabled={busy} categoryNote={noteFor(category)} onSettle={() => undefined} onOpen={openString} onChoose={chooseOnly} onOpenCategory={() => openCategory(category)} />;
     }
     if (filterSheets.length > 0) {
       const name = filterSheets[0]!.sheet;
@@ -498,12 +548,15 @@ export const GlossaryView = forwardRef<GlossaryViewHandle, GlossaryViewProps>(fu
       return (
         <CategorySettings
           key={key}
-          category={category.label}
+          category={categories.find((c) => categoryKey(c.name) === key)!}
           count={category.count}
-          sheets={categorySheets(sheets, key)}
+          categories={categories}
+          usedAsDefault={sheets.some((sheet) => categoryKey(sheet.category) === key)}
           disabled={busy}
-          onNote={(note) => saveSheets(sheets.map((sheet) => categoryKey(sheet.category) === key ? { ...sheet, note } : sheet))}
-          onOpenSheet={(sheet) => changeFilter({ ...filter, sheet })}
+          onRename={renameCategory}
+          onNote={(note) => setCategories((current) => current.map((c) => categoryKey(c.name) === key ? { ...c, note } : c))}
+          onDelete={() => { setCategories((current) => current.filter((c) => categoryKey(c.name) !== key)); setFilter((current) => ({ ...current, category: null })); }}
+          onMerge={(target) => beginMerge(categories.find((c) => categoryKey(c.name) === key)!.id, target)}
         />
       );
     }
@@ -518,6 +571,8 @@ export const GlossaryView = forwardRef<GlossaryViewHandle, GlossaryViewProps>(fu
 
   return (
     <div className="glossary-view">
+      <NewCategoryDialog open={addingCategory} categories={categories} onClose={() => setAddingCategory(false)} onCreate={(name) => { ensureCategory(name); setAddingCategory(false); setSelection(noSelection); setFilter({ ...emptyGlossaryFilter, category: categoryKey(name) }); }} />
+      <MergeCategoriesDialog draft={categoryMerge} onClose={() => setCategoryMerge(null)} onMerge={applyMerge} />
       {error ? <ErrorBanner title={error.title} error={error.error} onDismiss={() => setError(null)} /> : null}
       {saved.termsError ? <p className="glossary-file-problem"><UiIcon icon="circleAlert" size="xs" />{saved.termsError}</p> : null}
       {saved.diagnostics.length > 0 ? (
@@ -539,6 +594,7 @@ export const GlossaryView = forwardRef<GlossaryViewHandle, GlossaryViewProps>(fu
           categoryNames={categoryNames}
           disabled={busy}
           onSheetsChange={saveSheets}
+          onAddCategory={() => setAddingCategory(true)}
         />
         <section className="glossary-list" aria-label={t("glossary.tab")}>
           <div className="glossary-toolbar">
@@ -602,7 +658,7 @@ export const GlossaryView = forwardRef<GlossaryViewHandle, GlossaryViewProps>(fu
             ) : null}
             <span className="glossary-footer-actions">
               <button className="button button-ghost" type="button" disabled={busy || !dirty} onClick={revert}>{t("glossary.revert")}</button>
-              <button className="button button-primary" type="button" disabled={busy || !dirty || problems.size > 0} title="Ctrl+S" onClick={saveTerms}>{t("glossary.save")}</button>
+              <button className="button button-primary" type="button" disabled={busy || !dirty || problems.size > 0 || runGoing || otherRun} title={runGoing || otherRun ? t("glossary.fix.busy") : "Ctrl+S"} onClick={saveTerms}>{t("glossary.save")}</button>
             </span>
           </footer>
         </section>

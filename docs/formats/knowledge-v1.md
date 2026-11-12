@@ -11,6 +11,15 @@ The knowledge is the `aeria-knowledge` directory at the project root, next to
 file. How Aeria uses it is described in
 [`../architecture/knowledge.md`](../architecture/knowledge.md#project-knowledge).
 
+## Glossary catalog
+
+The desktop migrates the glossary to [`glossary-catalog-v1.md`](./glossary-catalog-v1.md)
+when opening the knowledge editor. The catalog is the sole authority for
+categories, term identities and sheet declarations. Sheet-backed translations
+live in their PO entries. The CSV definitions below remain the supported
+legacy input and are archived during the explicit, recoverable migration;
+they are never reinterpreted as catalog records.
+
 ## Files
 
 Creating a project writes every file: `style.md` with a starting style of the
@@ -25,6 +34,7 @@ Aeria writes LF.
 | File | Format | Holds |
 | --- | --- | --- |
 | `style.md` | Markdown, free text | How the translation reads: how formal it is, how the player and other characters are addressed, how names are rendered, the tone of each kind of text |
+| `glossary.json` | [Glossary Catalog v1](./glossary-catalog-v1.md) | Independent categories, one identity per term, and source bindings; authoritative after migration |
 | `terms.csv` | [Glossary Format v1](./glossary-v1.md) | The terms: lore words and the names the project agreed on, with their other forms and categories |
 | `term-sheets.csv` | [Declared sheets](#declared-sheets) | The sheets of the game that are part of the glossary |
 | `skills/<name>.md` | [Skills](#skills) | What a person asks machine translation to do to the translations of a run, and where |

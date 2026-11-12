@@ -14,6 +14,10 @@ const TERMS_FILE: &str = "aeria-knowledge/terms.csv";
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GlossaryEntry {
+    /// Stable category identity used by recorded term versions. Category
+    /// display names can change without invalidating translations.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub version_category: Option<String>,
     /// The term's headword, which names it: in term exceptions, and where
     /// it is shown.
     pub term: String,
@@ -353,6 +357,7 @@ pub fn parse_glossary(bytes: &[u8]) -> Result<Glossary, GlossaryError> {
             seen.entry(form).or_default().push(at);
         }
         glossary.entries.push(GlossaryEntry {
+            version_category: None,
             term: term.to_owned(),
             translation: translation.to_owned(),
             forms,

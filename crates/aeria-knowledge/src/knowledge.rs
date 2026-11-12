@@ -22,10 +22,11 @@ pub enum KnowledgeFile {
     Terms,
     /// The sheets of the game that are part of the glossary.
     Sheets,
+    Catalog,
 }
 
 impl KnowledgeFile {
-    pub const ALL: [Self; 3] = [Self::Style, Self::Terms, Self::Sheets];
+    pub const ALL: [Self; 4] = [Self::Style, Self::Terms, Self::Sheets, Self::Catalog];
 
     /// The file name inside [`KNOWLEDGE_DIR`].
     #[must_use]
@@ -34,6 +35,7 @@ impl KnowledgeFile {
             Self::Style => "style.md",
             Self::Terms => "terms.csv",
             Self::Sheets => "term-sheets.csv",
+            Self::Catalog => "glossary.json",
         }
     }
 
@@ -42,7 +44,7 @@ impl KnowledgeFile {
     pub const fn max_bytes(self) -> u64 {
         match self {
             Self::Style | Self::Sheets => MAX_KNOWLEDGE_BYTES,
-            Self::Terms => crate::glossary::MAX_GLOSSARY_BYTES,
+            Self::Terms | Self::Catalog => crate::glossary::MAX_GLOSSARY_BYTES,
         }
     }
 
@@ -66,6 +68,9 @@ impl KnowledgeFile {
             Self::Style => include_str!("default_style.md").to_owned(),
             Self::Terms => crate::glossary::write_glossary(&[]),
             Self::Sheets => crate::sheets::write_term_sheets(&[]),
+            Self::Catalog => {
+                "{\"formatVersion\":1,\"categories\":[],\"sheets\":[],\"terms\":[]}\n".to_owned()
+            }
         }
     }
 }
@@ -82,6 +87,16 @@ pub fn create_empty(root: &Path) -> Result<Vec<String>, String> {
         .map_err(|error| format!("{}: {error}", directory.display()))?;
     let mut written = Vec::new();
     for file in KnowledgeFile::ALL {
+        // The catalog is created by the PO layer's lossless migration,
+        // after it has collected sheet terms and their source bindings.
+        if file == KnowledgeFile::Catalog {
+            continue;
+        }
+        if matches!(file, KnowledgeFile::Terms | KnowledgeFile::Sheets)
+            && root.join(crate::catalog::CATALOG_PATH).exists()
+        {
+            continue;
+        }
         let path = file.path(root);
         if path.exists() {
             continue;

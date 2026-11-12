@@ -21,14 +21,12 @@ pub const PO_DIR: &str = "po";
 /// What agents read first, written by Aeria: `po/README.md`.
 pub const README_PATH: &str = "po/README.md";
 /// The value of `format` in [`SETTINGS_FILE`] this version writes.
-/// `aeria-po/2` adds the review mark of a translation (`#, aeria-reviewed`),
-/// which a version of Aeria that reads only `aeria-po/1` would drop from a
-/// file it writes; so a project takes it with its first review mark, and
-/// such a version refuses the project instead.
-pub const FORMAT: &str = "aeria-po/2";
-/// The formats this version reads: `aeria-po/1` is the same files without
-/// review marks.
-pub const READ_FORMATS: [&str; 2] = ["aeria-po/1", FORMAT];
+/// `aeria-po/3` supports the independent glossary catalog. Older readers
+/// must refuse migrated projects instead of treating archived CSVs as an
+/// empty glossary. `aeria-po/2` introduced persistent review marks.
+pub const FORMAT: &str = "aeria-po/3";
+/// Legacy PO and knowledge formats remain readable until explicit migration.
+pub const READ_FORMATS: [&str; 3] = ["aeria-po/1", "aeria-po/2", FORMAT];
 /// The header field with the game version a file was made for.
 pub const GAME_VERSION_FIELD: &str = "X-Game-Version";
 

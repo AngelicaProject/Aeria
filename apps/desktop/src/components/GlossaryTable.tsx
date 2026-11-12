@@ -173,13 +173,12 @@ function Cells({ item, usage, outdated }: { item: GlossaryItem; usage: ReadonlyM
       <span role="gridcell" className="glossary-cell glossary-cell-translation">
         <span className="glossary-translation">{translation || "—"}</span>
         {old > 0 ? <span className="glossary-badge glossary-badge-outdated">{t("glossary.badge.outdated", { count: old })}</span> : null}
-        {item.kind === "entry" && item.redundant ? <span className="glossary-badge">{t("glossary.badge.same")}</span> : null}
       </span>
       <span role="gridcell" className="glossary-cell glossary-cell-category">{itemCategory(item) || "—"}</span>
       <span role="gridcell" className="glossary-cell glossary-cell-source">
         {item.kind === "sheet"
           ? <><UiIcon icon="table2" size="xs" /><span>{item.term.sheet}</span></>
-          : <><UiIcon icon="bookMarked" size="xs" /><span>{item.replaced[0] ? item.replaced[0].sheet : t("glossary.source.project")}</span></>}
+          : <><UiIcon icon={item.replaced.length ? "table2" : "bookMarked"} size="xs" /><span>{item.replaced[0] ? item.replaced[0].sheet : t("glossary.source.project")}</span></>}
       </span>
       <span role="gridcell" className="glossary-cell glossary-cell-uses">{uses ?? ""}</span>
     </>

@@ -303,7 +303,6 @@ export function EditorShell({
     setGlossaryDirty(next);
     setDocumentTabs((current) => current.tabs.some((tab) => tab.id === GLOSSARY_DOCUMENT_ID) ? reduceDocumentTabs(current, { type: "setDirty", id: GLOSSARY_DOCUMENT_ID, dirty: next }) : current);
   }, []);
-  const bumpProjectRevision = useCallback(() => setProjectRevision((current) => current + 1), []);
   const [translateOpen, setTranslateOpen] = useState(false);
   const openTranslate = useCallback(() => setTranslateOpen(true), []);
   const [searchSeed, setSearchSeed] = useState<SearchSeed | undefined>(undefined);
@@ -1453,7 +1452,7 @@ export function EditorShell({
             {/* Kept mounted while its tab is open, so its edits stay when another tab is shown. */}
             {glossaryOpen ? (
               <div className="document-glossary" hidden={!glossaryActive}>
-                <GlossaryView ref={glossaryRef} active={glossaryActive} revision={workspaceRevision + projectRevision} sheetNames={sheetNames} onRevealBinding={stableRevealBinding} onDirtyChange={handleGlossaryDirty} onSaved={bumpProjectRevision} onFilesChanged={stableWorkspaceChanged} onOpenSettings={openTranslationSettings} onOpenReport={openReport} focus={glossaryFocus} />
+                <GlossaryView ref={glossaryRef} active={glossaryActive} revision={workspaceRevision + projectRevision} sheetNames={sheetNames} onRevealBinding={stableRevealBinding} onDirtyChange={handleGlossaryDirty} onSaved={stableWorkspaceChanged} onFilesChanged={stableWorkspaceChanged} onOpenSettings={openTranslationSettings} onOpenReport={openReport} focus={glossaryFocus} />
               </div>
             ) : null}
             {editingOpen ? (

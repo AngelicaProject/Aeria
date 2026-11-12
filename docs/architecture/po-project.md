@@ -37,7 +37,7 @@ files and Git. `aeria.json`:
 
 ```json
 {
-  "format": "aeria-po/2",
+  "format": "aeria-po/3",
   "sourceLanguage": "en",
   "targetLanguage": "ru",
   "gameVersion": "2026.09.15.0000.0000"
@@ -47,12 +47,13 @@ files and Git. `aeria.json`:
 `gameVersion` is the game version the files of `po/` are for; a project that
 does not record it takes the `X-Game-Version` of its first file.
 
-`format` is `aeria-po/2`, or `aeria-po/1` for a project without review
-marks (see [Reviews](#reviews)); Aeria reads both. A version of Aeria that
-reads only `aeria-po/1` would drop review marks from every file it writes,
-so a project takes `aeria-po/2` when Aeria writes its first review mark, and
-such a version then refuses to open it. New projects start as
-`aeria-po/2`. `aeria.json` is committed with the translations, so
+`format` is `aeria-po/3` for new projects and after glossary migration.
+It identifies support for the independent glossary catalog, so older Aeria
+versions refuse a migrated project instead of treating archived CSVs as an
+empty glossary. This version also reads `aeria-po/2` (review marks) and
+`aeria-po/1` (without review marks) before migration. A first review written
+by this version also takes the latest supported project format.
+`aeria.json` is committed with the translations, so
 collaborators receive the new format with the first marks.
 
 The repository holds the game's text in the source language and the other
@@ -166,7 +167,13 @@ own, without the note of its category, so a change of a category's note
 leaves the record as it is (see
 [`../formats/knowledge-v1.md`](../formats/knowledge-v1.md#the-terms-of-the-sheets)).
 A name with several meanings has the fingerprint of the fingerprints and
-categories of all its meanings in order (`aeria_po::name_fingerprint`). The
+version category identities of all its meanings in order
+(`aeria_po::name_fingerprint`). The catalog preserves the legacy category
+identity during migration and keeps it independent of the display name, so
+renaming or moving a category alone does not invalidate a translation. An
+explicit merge of equivalent meanings may rebase an exactly known current
+record to the resulting fingerprint only when the complete set of translations
+and own notes is unchanged; already-outdated records stay outdated. The
 keys are in byte order, so the same record is the same line.
 
 The record is written whenever a translation is: by machine translation, by

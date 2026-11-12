@@ -31,6 +31,12 @@ details.glossary-file-problem ul { margin: 4px 0 0; padding-left: 18px; }
 .glossary-add-sheet-field { display: flex; flex-direction: column; gap: 4px; color: var(--fg-muted); font-size: var(--text-xs); }
 
 /* The list */
+.glossary-merge-dialog { display: flex; flex-direction: column; gap: 12px; width: min(640px, calc(100vw - 32px)); max-height: calc(100vh - 48px); }
+.glossary-merge-conflicts { min-height: 0; overflow-y: auto; }
+.glossary-merge-conflicts fieldset { margin: 0 0 12px; padding: 12px; border: 1px solid var(--line); border-radius: var(--radius-sm); }
+.glossary-merge-choice { display: flex; align-items: flex-start; gap: 8px; padding: 8px 0; font-size: var(--text-sm); overflow-wrap: anywhere; }
+.glossary-merge-choice input { flex: none; margin-top: 3px; }
+
 .glossary-list { display: flex; flex-direction: column; min-width: 0; min-height: 0; border-right: 1px solid var(--line); }
 .glossary-toolbar { display: flex; align-items: center; gap: 6px; height: 40px; padding: 0 8px; border-bottom: 1px solid var(--line); }
 .glossary-search { position: relative; display: flex; flex: 1; align-items: center; min-width: 120px; }

@@ -781,126 +781,56 @@ puts a historical text into the editor as an unsaved draft.
 
 ## Glossary tab
 
-**Terms** in the Translation menu and the command palette, and the link and
-term names of the string guide, open the glossary as a document tab beside
-the sheets: one tab, never a preview, kept with its edits while another tab
-is shown, and the open sheet stays under it as it was. It holds the whole
-glossary (see
-[`knowledge.md`](./knowledge.md#the-terms-are-the-one-glossary)): the terms
-of `aeria-knowledge/terms.csv` and the terms of the declared sheets
-(`term-sheets.csv`), in three panes: facets, the table of terms, and the
-chosen term's fields. The files are read when the tab is first shown, and
-again when the project changed while no term is being edited.
+The glossary shows one term per name and category, across all sources. Its
+virtualized table lists the headword, forms, translation, category, source
+sheet (or project), and number of source strings using the term. Search,
+column sorting, keyboard selection, category and sheet filters, and the
+outdated-strings correction workflow remain available.
 
-- The facets choose what the table shows, with the count of each over the
-  whole glossary: **All terms**, **Project terms** (`terms.csv`), or **From
-  sheets**; under **Needs attention**, **Errors** (project terms that block
-  saving), **Strings on an old version** (terms some translations not
-  reviewed were written with another version of, or before they were terms
-  (see [`po-project.md`](./po-project.md#terms-written-with)), a string
-  counting for each meaning of a name its source uses, as **Uses** counts
-  them; counted over the project when the terms are read and after each
-  correction run), and
-  **Same as the sheet** (project terms the sheets give alike); one category, the most
-  used first, eight shown until more are asked for; and one declared sheet,
-  which shows its terms and the project terms that replace them. Choosing a
-  category or a sheet lets the chosen terms go, so the fields show its
-  settings. **Add a
-  sheet** takes a sheet by name, offering the matching sheets of the
-  project, its column, and the category of its terms, and saves it at once;
-  removing a sheet (its context menu or its settings) takes its terms out of
-  the glossary and leaves its strings as they are.
-- The table is virtualized, one line per term: its headword with its other
-  forms, its translation, its category, its source (the sheet, or the
-  project with the sheet it replaces), and how many strings of the project
-  use it. A term with strings on an old version shows how many (*12 strings
-  on an old version*). Each header orders the
-  table by its column, then the other way, then back to the order of the
-  files; **Uses** counts the strings whose source uses each term when it is
-  first chosen and again after the terms are read again.
-  The search finds headwords, forms, translations, categories, notes, and
-  the translations of the sheets' strings; the chosen category and sheet
-  show as chips beside it. Arrow keys, Page Up and Down, Home, and End move
-  the choice and Shift extends it; Ctrl-click adds or removes a term,
-  Shift-click takes a range, Ctrl+A takes every term shown, Delete removes
-  the chosen project terms, and Enter or a double click moves into the
-  translation. Ctrl+F finds and Ctrl+S saves while the tab is shown.
-  The chosen term stays in the table while it is edited and saved, though it
-  no longer matches the search or the view, until another term is chosen or
-  the filter changes. **Add** keeps the filter as it is: the new term is
-  chosen and shown, with the category the filter has, and a search that
-  found nothing gives it its headword; the field to type next takes the
-  focus. A save, or the files read again, keeps the chosen terms chosen,
-  the fields keep the focus while it writes, and the counts shown stay
-  until they are counted again.
-- A project term's fields are its headword, translation, category, other
-  forms, note, and **Match case**, with its problem; **The sheets give**
-  lists the sheet terms it replaces, marked where the translation differs,
-  each with **Open the string** (a new term shows the sheet term of its name
-  and category it will replace once saved); **Other meanings** lists the
-  other terms of its name, each chosen by a click. A term the sheets give alike is marked
-  **Same as the sheet**, and removing it changes nothing. A category is
-  typed or chosen from those in use, and offers to create the one typed;
-  every term and sheet has one, so clearing the field keeps the category it
-  had. Other forms are chips: Enter or `;` adds what is typed, a chip's ×
-  removes it, and a double click or Backspace in the empty field takes a
-  chip back to edit. Under its note, **From the category** shows the note of
-  its category, which machine translation gets before the term's own, with
-  **Edit**, which opens the category's settings.
-- A sheet term shows its headword, translation, category, other spellings,
-  the note of its category with **Edit**, sheet, and **Translations in the strings**: each translation its strings
-  have with how many, the term's first. Another translation typed, **Use
-  this translation** on another of the strings', or **Edit as a project
-  term** makes it a term of `terms.csv`, saved with the other project terms:
-  the glossary never writes a string, and a correction run brings the
-  strings that name the term to it. **Open the string** opens its first
-  string in the editor without closing the tab.
-- A term with strings on an old version lists them under **Strings on an
-  old version of the term**, each with its sheet, source, and translation
-  and opened in the editor by a click, with **Fix with AI**: a correction
-  run of exactly those translations that makes each follow the term as it
-  is and changes nothing else (see
-  [`translate.md`](./translate.md#following-changed-terms)), with an
-  optional **Request** for every translation. Reviewed translations are
-  never taken. Several chosen terms are fixed at once, and **Strings on an
-  old version** fixes every term it shows: by name when a category, sheet,
-  or search narrows it, else every term at once. The run
-  needs a model chosen in Settings, saved terms, and no other run going;
-  while it goes and after it ends, the top of the fields shows its progress,
-  **Stop**, and what it wrote (each before and after with the changed words
-  marked and why it changed) and refused, each opened in the editor. When it
-  ends, the editor and the counts are read again.
-- Both kinds of term list **Strings**: the strings of the project whose
-  source uses the term as the saved glossary has it, as **Uses** counts
-  them, each with its sheet, source, and translation (or that it has none,
-  and that its source changed), the first 300 shown with how many there
-  are; a click opens the string in the editor without closing the tab. A
-  term not saved yet has none to show.
-- With a sheet chosen and no term, the fields are the sheet's: the category
-  and note of the terms of each column declared, each saved when changed.
-  A sheet declared with several columns is one facet. With a category
-  chosen and no sheet or term, the fields are the category's: its note,
-  kept by its declared sheets and saved to every one of them when changed
-  (marked when they have different notes; a category no sheet declares has
-  none), and its sheets, each chosen by a click. With several terms
-  chosen, **Set category** and **Remove** act on the project terms among
-  them; the context menu of a term offers the same, and a sheet term's
-  **Open the string** and **Edit as a project term**.
+**Project terms** shows only standalone terms; **From sheets** shows terms
+with source bindings. There is no **Same as the sheet** view or separate
+project override. Editing a sheet term's translation writes all its eligible
+source entries on Save. Its source headword is read-only; category, forms,
+matching case and guidance belong to the term and can be edited independently
+of the sheet. Source entries are linked from the term card. Only standalone
+terms can be deleted from this view; removing a sheet declaration leaves its
+PO strings intact and removes that glossary scope.
 
-A project term with an empty headword, translation, or category, or a
-headword or form repeated case-insensitively in the same category or across
-names, is marked and blocks saving; the count of such terms in the footer
-shows them. Rows the file excludes are listed with their line numbers;
-saving removes them only after confirmation. **Revert** drops the edits; the
-tab shows a dot while they are unsaved, and closing it, the project, or the
-window asks first. A save fails, without writing, when the file changed since
-it was loaded, for example by Git.
+Creating a term whose name or alias already exists in its category opens the
+existing term; Rust also refuses duplicate identities on save. Another
+meaning of a name in a different category remains allowed. Category assignment
+works for individual terms and for selections of sheet-backed and standalone
+terms alike.
 
-**Style** in the Translation menu and the command palette opens the style
-dialog: a Markdown text area for `aeria-knowledge/style.md` with its size
-against the 8 MiB limit, **Revert**, and **Save**; closing it with unsaved
-changes asks first, and a save fails when the file changed since it was
-loaded.
+**Categories** has an Add button, including when the catalog is empty. A
+category's card edits its name and shared note, deletes an unused category,
+or merges it into another category. A category used as a sheet default must
+be reassigned before deletion. Rename keeps the category ID and term version
+records. Merge previews colliding names and requires an explicit choice of
+translation and settings when definitions differ. Category notes are combined
+without discarding either. Identical definitions are combined automatically.
+
+A sheet's card edits only its default category for newly discovered terms;
+it neither reclassifies existing terms nor owns category guidance. Declaring
+or removing a sheet, category management and term edits share the same draft
+and **Save**/**Revert** controls. Closing with unsaved changes asks first.
+Save refuses a changed catalog or source PO version, invalid identity or
+unsafe translation before publishing a recoverable multi-file transaction.
+
+Glossary publication is disabled while an AI run is active, and the backend
+serializes it with ordinary string writes and project synchronization. Saved
+source changes refresh open sheets, progress and Git views. Passive style
+reads do not migrate the glossary.
+
+When the legacy glossary is first opened, the desktop migrates it using the
+contract of [Glossary Catalog v1](../formats/glossary-catalog-v1.md). Migration
+preserves effective versions and matching instead of making copies vanish
+from a filter. Invalid legacy data and conflicts with reviewed source strings
+are shown as errors, without partially publishing a new catalog.
+
+**Style** in the Translation menu and command palette opens the existing
+Markdown editor for `aeria-knowledge/style.md`, with its 8 MiB limit, Revert,
+Save and protection against concurrent file changes.
 
 ## Editing tab
 

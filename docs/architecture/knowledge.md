@@ -12,24 +12,38 @@ What the project agreed to render one way is a term, whatever it is: a lore
 word, a name of a person, a place, or a thing, or a word that names are
 made of, such as a material or a kind of item. A term is a name of the
 source, its translation as it stands alone, a category saying what the name
-is (`место`, `существо`, `организация`), and a note. The terms come from two
-places:
+is (`место`, `существо`, `организация`), and a note. The terms have one identity per source name and category,
+regardless of where their translations come from. Names and aliases are
+compared ignoring case and surrounding whitespace within a category.
+Different categories can represent different meanings of a name, such as
+`Mist`, a district and a creature.
 
-- `terms.csv`, written by a person or an agent;
-- the sheets the project declared part of the glossary (`term-sheets.csv`):
-  sheets where a row is a name the rest of the game refers to, such as the
-  titles of quests or the names of characters. Each name of such a sheet is
-  a term with the sheet's category: its translation is the one its strings
-  have most often, so a name translated after a game update is a term at
-  once, and a row translated another way does not take the name.
+The independent category catalog has stable IDs, display names and general
+translator guidance. A term owns its category, forms, case matching and own
+note. A declared sheet supplies a default category for newly discovered
+names; changing that default never reclassifies existing terms. Renaming a
+category preserves its identity and term version records. Categories can be
+created, renamed, merged, and deleted when unused. Merging colliding names
+requires an explicit choice of the definition to retain; notes of both
+categories are preserved.
 
-A term of `terms.csv` takes the place of the sheet's term of its name and
-category: it is how a person corrects or settles a name of a sheet, and the
-editor writes a change of a sheet's term there. A name may mean several
-things in several categories, such as `Mist`, a district and a creature:
-each meaning is a term, and machine translation gets every meaning of a name
-found in a string, with its category and note, and uses the one the string
-means.
+`aeria-knowledge/glossary.json` stores the catalog (see
+[`glossary-catalog-v1.md`](../formats/glossary-catalog-v1.md)). A standalone
+term stores its translation there. A sheet-backed term stores source
+bindings instead: its translation is the most frequent translation of those
+PO source entries, with ties resolved by declaration, file and entry order.
+Editing it writes the corresponding source entries through the same
+translation checks as the editor, rather than creating a standalone copy.
+Reviewed source entries edited by a person keep the review of the new text,
+as in the ordinary string editor. The source entries record the new glossary
+version; other translations become outdated only when the effective term
+translation or own guidance changes.
+
+The legacy CSV glossary is migrated before editing, preserving its effective
+order, matching rules, notes, chosen translations and version identities.
+Project overrides transfer to source entries; original files are archived.
+A conflicting reviewed source or invalid translation refuses migration before
+any write. See the catalog format for the transaction and recovery contract.
 
 The terms say how a name is translated, not how a sentence writes it: the
 translation is the name as it stands alone, and a sentence puts it in the
@@ -40,8 +54,8 @@ source it was written with, so a term changed in the glossary reaches
 exactly the strings written with its old version: the glossary counts them
 and a correction run brings them to the term (see
 [`translate.md`](./translate.md#following-changed-terms)), whatever the
-string is, a row of the term's own sheet included. The glossary never
-writes a string itself.
+string is, a row of the term's own sheet included. The glossary writes only the source strings of an explicitly edited sheet
+term; it never rewrites other uses of the name automatically.
 `aeria_po::project_knowledge` reads the terms of the declared sheets, and a
 project's session reads them again when a file of a declared sheet changes.
 
@@ -65,11 +79,11 @@ The knowledge is the `aeria-knowledge` directory at the project root:
   usual decisions written down (see
   [`knowledge-v1.md`](../formats/knowledge-v1.md#files)), for the
   translators to change rather than to write from nothing;
-- `term-sheets.csv`: the sheets of the game that are part of the glossary,
-  each with the category and note of its names;
-- `terms.csv`: the terms, with their translation, category, note, other
-  wordings in the source (`the Scions` beside `Scions of the Seventh
-  Dawn`);
+- `glossary.json`: the category catalog, declared sheets with defaults,
+  term identities and properties, standalone translations, and source
+  bindings for sheet-backed terms;
+- `legacy-v1/`: original CSV definitions and source PO files changed by
+  migration, kept for recovery and review;
 - `skills/`: what a person asks machine translation to do to the
   translations of a run, and where, one Markdown file each, such as how to
   fix the agreement with the player character's gender in the dialogue.

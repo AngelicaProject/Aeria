@@ -70,7 +70,7 @@ pub struct ProjectKnowledge {
 /// Whether `path`, relative to `po/`, is a file of `sheet`: the sheet's file,
 /// or a file of its folder when it is split by row. A `~` a path adds to a
 /// name (see [`crate::identity::SheetPaths`]) is not part of the name.
-fn is_file_of(path: &str, sheet: &str) -> bool {
+pub(crate) fn is_file_of(path: &str, sheet: &str) -> bool {
     let Some(stem) = path.strip_suffix(".po") else {
         return false;
     };
@@ -202,6 +202,7 @@ fn term_of(strings: &[&Named], sheets: &[TermSheet]) -> Option<(GlossaryEntry, S
     }
     let sheet = &sheets[first.sheet];
     let entry = GlossaryEntry {
+        version_category: None,
         term: first.source.clone(),
         translation: translation.to_owned(),
         forms: forms.clone(),
@@ -276,6 +277,15 @@ fn category_note(sheets: &[TermSheet], category: &str) -> Option<String> {
 /// of its category (see [`category_note`]), said before its own.
 #[must_use]
 pub fn project_knowledge(root: &Path) -> ProjectKnowledge {
+    if root.join(aeria_knowledge::catalog::CATALOG_PATH).exists()
+        || root.join(".aeria/glossary-transaction.json").exists()
+    {
+        return crate::glossary_project::knowledge(root);
+    }
+    legacy_project_knowledge(root)
+}
+
+pub(crate) fn legacy_project_knowledge(root: &Path) -> ProjectKnowledge {
     let mut knowledge = Knowledge::load(root);
     let mut loaded = ProjectKnowledge::default();
     if knowledge.sheets.is_empty() {
