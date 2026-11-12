@@ -6,6 +6,7 @@
 
 pub mod check;
 pub mod generate;
+pub mod glossary_project;
 pub mod identity;
 pub mod length;
 pub mod merge;

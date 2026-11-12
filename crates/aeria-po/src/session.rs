@@ -483,6 +483,61 @@ impl Session {
         self.loaded_knowledge()
     }
 
+    /// Read one coherent glossary snapshot alongside ordinary string edits.
+    ///
+    /// # Errors
+    /// Returns an invalid catalog, source read error, or recovery conflict.
+    pub fn glossary(&self) -> Result<crate::glossary_project::Resolved, String> {
+        let _writing = lock(&self.writing);
+        crate::glossary_project::load(&self.root)
+    }
+
+    /// Migrate the legacy glossary without racing a string save.
+    ///
+    /// # Errors
+    /// Returns invalid legacy data, an unsafe transfer or filesystem error.
+    pub fn migrate_glossary(&self) -> Result<crate::glossary_project::Resolved, String> {
+        let _writing = lock(&self.writing);
+        let existed = self
+            .root
+            .join(aeria_knowledge::catalog::CATALOG_PATH)
+            .exists();
+        let loaded =
+            crate::glossary_project::migrate(&self.root, &self.settings().target_language)?;
+        *lock(&self.settings) = crate::read_settings(&self.root).map_err(|e| e.to_string())?;
+        if !existed {
+            self.touch();
+        }
+        Ok(loaded)
+    }
+
+    /// Publish glossary changes under the same writer lock as PO edits.
+    ///
+    /// # Errors
+    /// Returns invalid definitions, unsafe translations, concurrent changes,
+    /// or a filesystem/recovery error.
+    pub fn save_glossary(
+        &self,
+        expected: &str,
+        edits: Vec<crate::glossary_project::EditedTerm>,
+        categories: Option<Vec<aeria_knowledge::catalog::Category>>,
+        sheets: Option<Vec<aeria_knowledge::TermSheet>>,
+        merges: &[crate::glossary_project::TermMerge],
+    ) -> Result<crate::glossary_project::Resolved, String> {
+        let _writing = lock(&self.writing);
+        let loaded = crate::glossary_project::save(
+            &self.root,
+            &self.settings().target_language,
+            expected,
+            edits,
+            categories,
+            sheets,
+            merges,
+        )?;
+        self.touch();
+        Ok(loaded)
+    }
+
     fn loaded_knowledge(&self) -> Arc<Knowledge> {
         let stamps = |read: &[PathBuf]| -> Vec<Stamp> {
             KnowledgeFile::ALL

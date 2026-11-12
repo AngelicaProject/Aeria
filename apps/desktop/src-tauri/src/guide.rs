@@ -24,9 +24,12 @@ type CommandResult<T> = Result<T, CommandError>;
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProjectKnowledgeDto {
+    pub migrated: bool,
+    pub catalog: Option<GlossaryCatalogDto>,
+    pub term_ids: Vec<String>,
     /// `style.md`; `None` when the file does not exist.
     pub style: Option<String>,
-    /// `terms.csv` exactly as read, sent back when saving.
+    /// Legacy CSV text or the immutable catalog/source revision used on save.
     pub terms_text: Option<String>,
     pub entries: Vec<GlossaryEntry>,
     /// Rows excluded from the terms, with the reason.
@@ -45,6 +48,13 @@ pub struct ProjectKnowledgeDto {
     pub redundant: Vec<String>,
     /// The terms of the sheets the entries take the place of.
     pub replaced: Vec<ReplacedTermDto>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GlossaryCatalogDto {
+    pub format_version: u32,
+    pub categories: Vec<aeria_knowledge::catalog::Category>,
 }
 
 /// A term of the sheets an entry of `terms.csv` takes the place of.
@@ -122,6 +132,8 @@ pub struct TermSheetInput {
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct TermInput {
+    #[serde(default)]
+    pub id: Option<String>,
     pub term: String,
     pub translation: String,
     #[serde(default)]
@@ -144,7 +156,13 @@ fn repository_root(app: &tauri::AppHandle) -> CommandResult<PathBuf> {
 }
 
 fn load(root: &Path) -> ProjectKnowledgeDto {
+    if root.join(aeria_knowledge::catalog::CATALOG_PATH).exists() {
+        return catalog_dto(aeria_po::glossary_project::load(root));
+    }
     let mut dto = ProjectKnowledgeDto {
+        migrated: false,
+        catalog: None,
+        term_ids: Vec::new(),
         style: None,
         terms_text: None,
         entries: Vec::new(),
@@ -200,12 +218,78 @@ fn check_size(file: KnowledgeFile, text: &str) -> CommandResult<()> {
     Ok(())
 }
 
+fn catalog_dto(
+    result: Result<aeria_po::glossary_project::Resolved, String>,
+) -> ProjectKnowledgeDto {
+    let mut dto = ProjectKnowledgeDto {
+        migrated: false,
+        catalog: None,
+        term_ids: Vec::new(),
+        style: None,
+        terms_text: None,
+        entries: Vec::new(),
+        diagnostics: Vec::new(),
+        style_error: None,
+        terms_error: None,
+        sheets_text: None,
+        sheets: Vec::new(),
+        sheet_terms: Vec::new(),
+        redundant: Vec::new(),
+        replaced: Vec::new(),
+    };
+    match result {
+        Ok(loaded) => {
+            let token = aeria_po::glossary_project::token(&loaded);
+            dto.terms_text = Some(token.clone());
+            dto.sheets_text = Some(token);
+            dto.term_ids = loaded.term_ids;
+            dto.catalog = Some(GlossaryCatalogDto {
+                format_version: loaded.catalog.format_version,
+                categories: loaded.catalog.categories,
+            });
+            dto.style_error = loaded.knowledge.problems.first().cloned();
+            dto.style = loaded.knowledge.style;
+            dto.entries = loaded.knowledge.terms.entries;
+            dto.sheets = loaded.knowledge.sheets;
+            dto.replaced = loaded
+                .origins
+                .into_iter()
+                .enumerate()
+                .flat_map(|(entry, origins)| {
+                    origins.into_iter().map(move |term| ReplacedTermDto {
+                        entry,
+                        term: term.into(),
+                    })
+                })
+                .collect();
+        }
+        Err(error) => dto.terms_error = Some(error),
+    }
+    dto
+}
+
+fn change_glossary(
+    app: &tauri::AppHandle,
+    code: &'static str,
+    operation: impl FnOnce() -> Result<aeria_po::glossary_project::Resolved, String>,
+) -> CommandResult<ProjectKnowledgeDto> {
+    let state = app.state::<DesktopState>();
+    let translation = app.state::<crate::translate::Translation>();
+    state.while_idle(|| {
+        translation.while_idle(|| {
+            let loaded = operation().map_err(|e| CommandError::new(code, e))?;
+            Ok(catalog_dto(Ok(loaded)))
+        })
+    })?
+}
+
 /// The canonical terms file for edited entries. Every entry must be valid:
 /// the written file is parsed again and must exclude nothing.
 fn terms_file(entries: Vec<TermInput>) -> CommandResult<String> {
     let entries: Vec<GlossaryEntry> = entries
         .into_iter()
         .map(|entry| GlossaryEntry {
+            version_category: None,
             term: entry.term.trim().to_owned(),
             translation: entry.translation.trim().to_owned(),
             note: entry
@@ -280,8 +364,29 @@ fn save(
 /// # Errors
 ///
 /// Returns `noProjectOpen`.
-pub async fn project_knowledge(app: tauri::AppHandle) -> CommandResult<ProjectKnowledgeDto> {
-    run_blocking(move || Ok(load(&repository_root(&app)?))).await
+pub async fn project_knowledge(
+    app: tauri::AppHandle,
+    migrate: Option<bool>,
+) -> CommandResult<ProjectKnowledgeDto> {
+    run_blocking(move || {
+        let session = app.state::<DesktopState>().session()?;
+        if !migrate.unwrap_or(false) {
+            return Ok(load(session.root()));
+        }
+        if session
+            .root()
+            .join(aeria_knowledge::catalog::CATALOG_PATH)
+            .exists()
+        {
+            return Ok(catalog_dto(session.glossary()));
+        }
+        let mut dto = change_glossary(&app, "projectKnowledgeMigration", || {
+            session.migrate_glossary()
+        })?;
+        dto.migrated = true;
+        Ok(dto)
+    })
+    .await
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -324,8 +429,49 @@ pub async fn save_knowledge_terms(
     app: tauri::AppHandle,
     expected: Option<String>,
     entries: Vec<TermInput>,
+    categories: Option<Vec<aeria_knowledge::catalog::Category>>,
+    merges: Option<Vec<aeria_po::glossary_project::TermMerge>>,
+    sheets: Option<Vec<TermSheetInput>>,
 ) -> CommandResult<ProjectKnowledgeDto> {
     run_blocking(move || {
+        let session = app.state::<DesktopState>().session()?;
+        if session
+            .root()
+            .join(aeria_knowledge::catalog::CATALOG_PATH)
+            .exists()
+        {
+            let edits = entries
+                .into_iter()
+                .map(|e| aeria_po::glossary_project::EditedTerm {
+                    id: e.id,
+                    term: e.term,
+                    translation: e.translation,
+                    forms: e.forms,
+                    note: e.note,
+                    match_case: e.match_case,
+                    category: e.category,
+                })
+                .collect();
+            return change_glossary(&app, "projectKnowledgeWrite", || {
+                session.save_glossary(
+                    expected.as_deref().unwrap_or(""),
+                    edits,
+                    categories,
+                    sheets.map(|sheets| {
+                        sheets
+                            .into_iter()
+                            .map(|s| TermSheet {
+                                sheet: s.sheet,
+                                column: s.column,
+                                category: s.category,
+                                note: s.note,
+                            })
+                            .collect()
+                    }),
+                    &merges.unwrap_or_default(),
+                )
+            });
+        }
         let text = terms_file(entries)?;
         save(
             &repository_root(&app)?,
@@ -352,6 +498,48 @@ pub async fn save_knowledge_sheets(
     sheets: Vec<TermSheetInput>,
 ) -> CommandResult<ProjectKnowledgeDto> {
     run_blocking(move || {
+        let session = app.state::<DesktopState>().session()?;
+        if session
+            .root()
+            .join(aeria_knowledge::catalog::CATALOG_PATH)
+            .exists()
+        {
+            let loaded = aeria_po::glossary_project::load(session.root())
+                .map_err(|e| CommandError::new("projectKnowledgeRead", e))?;
+            let edits = loaded
+                .term_ids
+                .iter()
+                .zip(&loaded.knowledge.terms.entries)
+                .map(|(id, e)| aeria_po::glossary_project::EditedTerm {
+                    id: Some(id.clone()),
+                    term: e.term.clone(),
+                    translation: e.translation.clone(),
+                    forms: e.forms.clone(),
+                    note: e.note.clone(),
+                    match_case: e.match_case,
+                    category: e.category.clone(),
+                })
+                .collect();
+            return change_glossary(&app, "projectKnowledgeWrite", || {
+                session.save_glossary(
+                    expected.as_deref().unwrap_or(""),
+                    edits,
+                    None,
+                    Some(
+                        sheets
+                            .into_iter()
+                            .map(|s| TermSheet {
+                                sheet: s.sheet,
+                                column: s.column,
+                                category: s.category,
+                                note: s.note,
+                            })
+                            .collect(),
+                    ),
+                    &[],
+                )
+            });
+        }
         let text = sheets_file(sheets)?;
         save(
             &repository_root(&app)?,
@@ -658,6 +846,29 @@ mod tests {
     use super::*;
 
     #[test]
+    fn catalog_preserves_style_read_errors_for_the_editor() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        aeria_po::write_settings(
+            root,
+            &aeria_po::Settings {
+                format: aeria_po::FORMAT.to_owned(),
+                source_language: "en".to_owned(),
+                target_language: "ru".to_owned(),
+                game_version: String::new(),
+            },
+        )
+        .unwrap();
+        aeria_po::glossary_project::migrate(root, "ru").unwrap();
+        std::fs::write(root.join("aeria-knowledge/style.md"), [0xff]).unwrap();
+        let dto = catalog_dto(aeria_po::glossary_project::load(root));
+        assert!(dto.catalog.is_some());
+        assert!(dto.style.is_none());
+        assert!(dto.style_error.is_some());
+        assert!(dto.terms_error.is_none());
+    }
+
+    #[test]
     fn declared_sheets_are_written_once_each() {
         let sheet = |sheet: &str, column| TermSheetInput {
             sheet: sheet.to_owned(),
@@ -685,6 +896,7 @@ mod tests {
 
     fn entry(term: &str, translation: &str) -> TermInput {
         TermInput {
+            id: None,
             term: term.to_owned(),
             translation: translation.to_owned(),
             note: Some("  ".to_owned()),

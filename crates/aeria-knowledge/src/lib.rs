@@ -9,6 +9,7 @@
 //! The crate reads and checks the files and holds the rules every
 //! translation follows ([`rules`]).
 
+pub mod catalog;
 pub mod glossary;
 pub mod knowledge;
 pub mod rules;

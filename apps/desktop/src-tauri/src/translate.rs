@@ -33,6 +33,18 @@ pub struct Translation {
 }
 
 impl Translation {
+    /// Keep glossary migration/publication outside runs using old knowledge.
+    pub(crate) fn while_idle<T>(
+        &self,
+        operation: impl FnOnce() -> CommandResult<T>,
+    ) -> CommandResult<T> {
+        let run = self.run.lock().unwrap_or_else(PoisonError::into_inner);
+        if run.as_ref().is_some_and(|run| run.status().running) {
+            return Err(running());
+        }
+        operation()
+    }
+
     pub(crate) fn codex(&self) -> CommandResult<Arc<Codex>> {
         if let Some(codex) = self.codex.get() {
             return Ok(Arc::clone(codex));

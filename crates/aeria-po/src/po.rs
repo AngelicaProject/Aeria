@@ -147,7 +147,13 @@ pub fn name_fingerprint(
     }
     let joined: Vec<String> = senses
         .into_iter()
-        .map(|sense| format!("{} {}", term_fingerprint(sense), sense.category))
+        .map(|sense| {
+            format!(
+                "{} {}",
+                term_fingerprint(sense),
+                sense.version_category.as_deref().unwrap_or(&sense.category)
+            )
+        })
         .collect();
     fingerprint(&joined.join("\0"))
 }

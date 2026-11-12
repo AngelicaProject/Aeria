@@ -6,7 +6,7 @@ import type { GlossaryEntry, ReplacedTermDto, SheetTermDto, TermInput, TermSheet
  * with its case as written. `key` identifies the row while the glossary is
  * open; it is not its place in the file.
  */
-export type GlossaryRow = { key: number; term: string; translation: string; forms: string[]; note: string; matchCase: boolean; category: string };
+export type GlossaryRow = { id?: string; key: number; term: string; translation: string; forms: string[]; note: string; matchCase: boolean; category: string };
 
 export type RowProblem = "emptyTerm" | "emptyTranslation" | "emptyCategory" | "duplicateTerm";
 
@@ -50,15 +50,17 @@ export function splitForms(text: string): string[] {
  * file stays the one chosen; other entries take keys after every key of
  * `previous`.
  */
-export function rowsFromEntries(entries: readonly GlossaryEntry[], previous: readonly GlossaryRow[] = []): GlossaryRow[] {
+export function rowsFromEntries(entries: readonly GlossaryEntry[], previous: readonly GlossaryRow[] = [], ids: readonly string[] = []): GlossaryRow[] {
   const known = new Map<string, number[]>();
   for (const row of previous) {
     const name = usageKey(row.term, row.category);
     known.set(name, [...(known.get(name) ?? []), row.key]);
   }
   let next = previous.reduce((high, row) => Math.max(high, row.key + 1), 0);
-  return entries.map((entry) => ({
-    key: known.get(usageKey(entry.term, entry.category))?.shift() ?? next++,
+  const byId = new Map(previous.filter((row) => row.id).map((row) => [row.id, row.key]));
+  return entries.map((entry, index) => ({
+    ...(ids[index] ? { id: ids[index] } : {}),
+    key: (ids[index] ? byId.get(ids[index]) : undefined) ?? known.get(usageKey(entry.term, entry.category))?.shift() ?? next++,
     term: entry.term,
     translation: entry.translation,
     forms: [...(entry.forms ?? [])],
@@ -70,6 +72,7 @@ export function rowsFromEntries(entries: readonly GlossaryEntry[], previous: rea
 
 export function inputsFromRows(rows: readonly GlossaryRow[]): TermInput[] {
   return rows.map((row) => ({
+    ...(row.id ? { id: row.id } : {}),
     term: row.term.trim(),
     translation: row.translation.trim(),
     forms: row.forms.map((form) => form.trim()).filter(Boolean),
@@ -80,8 +83,30 @@ export function inputsFromRows(rows: readonly GlossaryRow[]): TermInput[] {
 }
 
 /** Whether edited rows differ from the saved entries. */
-export function rowsChanged(rows: readonly GlossaryRow[], entries: readonly GlossaryEntry[]): boolean {
-  return JSON.stringify(inputsFromRows(rows)) !== JSON.stringify(inputsFromRows(rowsFromEntries(entries)));
+export function rowsChanged(rows: readonly GlossaryRow[], entries: readonly GlossaryEntry[], ids: readonly string[] = []): boolean {
+  return JSON.stringify(inputsFromRows(rows)) !== JSON.stringify(inputsFromRows(rowsFromEntries(entries, [], ids)));
+}
+
+/** One name (including aliases) per category, across every source. */
+export function duplicateOf(rows: readonly GlossaryRow[], candidate: GlossaryRow): GlossaryRow | undefined {
+  const name = candidate.term.trim().toLowerCase();
+  if (!name) return undefined;
+  return rows.find((row) => row.key !== candidate.key && categoryKey(row.category) === categoryKey(candidate.category)
+    && [row.term, ...row.forms].some((form) => form.trim().toLowerCase() === name));
+}
+
+/** Keep source ownership visible while a category merge is still a draft. */
+export function originsForRows(rows: readonly GlossaryRow[], termIds: readonly string[], origins: readonly ReplacedTermDto[], merges: readonly { from: string; into: string }[]): ReplacedTermDto[] {
+  const byId = new Map<string, SheetTermDto[]>();
+  for (const origin of origins) {
+    const id = termIds[origin.entry];
+    if (id) byId.set(id, [...(byId.get(id) ?? []), origin.term]);
+  }
+  for (const merge of merges) {
+    byId.set(merge.into, [...(byId.get(merge.into) ?? []), ...(byId.get(merge.from) ?? [])]);
+    byId.delete(merge.from);
+  }
+  return rows.flatMap((row, entry) => row.id ? (byId.get(row.id) ?? []).map((term) => ({ entry, term })) : []);
 }
 
 /**
@@ -99,11 +124,11 @@ export function rowProblems(rows: readonly GlossaryRow[]): Map<number, RowProble
     const name = term.toLowerCase();
     const category = row.category.trim().toLowerCase();
     const forms = [term, ...row.forms.map((form) => form.trim())].filter(Boolean).map((form) => form.toLowerCase());
-    const taken = (form: string) => (seen.get(form) ?? []).some((other) => other.name !== name || other.category === category);
+    const taken = (form: string) => (seen.get(form) ?? []).some((other) => other.category === category);
     if (!term) problems.set(row.key, "emptyTerm");
     else if (!row.translation.trim()) problems.set(row.key, "emptyTranslation");
     else if (!category) problems.set(row.key, "emptyCategory");
-    else if (forms.some((form, index) => taken(form) || forms.indexOf(form) !== index)) problems.set(row.key, "duplicateTerm");
+    else if (forms.some(taken) || new Set([term, ...row.forms.map((form) => form.trim())].filter(Boolean)).size !== forms.length) problems.set(row.key, "duplicateTerm");
     for (const form of new Set(forms)) seen.set(form, [...(seen.get(form) ?? []), { name, category }]);
   }
   return problems;
@@ -115,7 +140,7 @@ export function rowProblems(rows: readonly GlossaryRow[]): Map<number, RowProble
  * `search` is the lowercase text a query is looked for in.
  */
 export type GlossaryItem =
-  | { kind: "entry"; id: string; row: GlossaryRow; replaced: readonly SheetTermDto[]; problem: RowProblem | null; redundant: boolean; search: string }
+  | { kind: "entry"; id: string; row: GlossaryRow; replaced: readonly SheetTermDto[]; problem: RowProblem | null; search: string }
   | { kind: "sheet"; id: string; term: SheetTermDto; search: string };
 
 export function entryId(key: number): string {
@@ -161,7 +186,7 @@ export function entryItems(
   rows: readonly GlossaryRow[],
   problems: ReadonlyMap<number, RowProblem>,
   replaced: readonly ReplacedTermDto[],
-  redundant: readonly string[],
+  _legacyRedundant: readonly string[],
   savedKeys: readonly number[] | null = null,
 ): GlossaryItem[] {
   const replacedBy = new Map<number, SheetTermDto[]>();
@@ -169,7 +194,6 @@ export function entryItems(
     const key = savedKeys === null ? entry : savedKeys[entry];
     if (key !== undefined) replacedBy.set(key, [...(replacedBy.get(key) ?? []), term]);
   }
-  const same = new Set(redundant);
   return rows.map((row): GlossaryItem => {
     const replacedTerms = replacedBy.get(row.key) ?? [];
     return {
@@ -178,7 +202,6 @@ export function entryItems(
       row,
       replaced: replacedTerms,
       problem: problems.get(row.key) ?? null,
-      redundant: same.has(row.term),
       search: [row.term, row.translation, row.note, row.category, ...row.forms, ...replacedTerms.map((term) => term.translation)].join("\n").toLocaleLowerCase(),
     };
   });
@@ -195,18 +218,17 @@ export function sheetItems(sheetTerms: readonly SheetTermDto[]): GlossaryItem[] 
 }
 
 /** What the list shows besides a category and a sheet. */
-export type GlossaryView = "all" | "entries" | "sheets" | "problems" | "outdated" | "redundant";
+export type GlossaryView = "all" | "entries" | "sheets" | "problems" | "outdated";
 
-export const GLOSSARY_VIEWS: readonly GlossaryView[] = ["all", "entries", "sheets", "problems", "outdated", "redundant"];
+export const GLOSSARY_VIEWS: readonly GlossaryView[] = ["all", "entries", "sheets", "problems", "outdated"];
 
 export function inView(item: GlossaryItem, view: GlossaryView, outdated: Outdated | null): boolean {
   switch (view) {
     case "all": return true;
-    case "entries": return item.kind === "entry";
-    case "sheets": return item.kind === "sheet";
+    case "entries": return item.kind === "entry" && item.replaced.length === 0;
+    case "sheets": return item.kind === "sheet" || item.replaced.length > 0;
     case "problems": return item.kind === "entry" && item.problem !== null;
     case "outdated": return outdatedOf(item, outdated) > 0;
-    case "redundant": return item.kind === "entry" && item.redundant;
   }
 }
 
@@ -244,7 +266,8 @@ export function facetCounts(items: readonly GlossaryItem[], outdated: Outdated |
       if (known) known.count += 1;
       else categories.set(key, { key, label, count: 1 });
     }
-    if (item.kind === "sheet") sheets.set(item.term.sheet, (sheets.get(item.term.sheet) ?? 0) + 1);
+    const sources = item.kind === "sheet" ? [item.term.sheet] : item.replaced.map((term) => term.sheet);
+    for (const source of new Set(sources)) sheets.set(source, (sheets.get(source) ?? 0) + 1);
   }
   return { views, categories: [...categories.values()].sort((a, b) => b.count - a.count || a.label.localeCompare(b.label)), sheets };
 }

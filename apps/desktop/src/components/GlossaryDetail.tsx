@@ -1,7 +1,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { normalizeCommandError, termStrings } from "../ipc";
 import type { GlossaryItem, GlossaryRow } from "../glossaryModel";
-import type { SheetTermDto, TermSheetDto, TermStringsDto } from "../types";
+import type { GlossaryCategory, SheetTermDto, TermSheetDto, TermStringsDto } from "../types";
 import { useI18n } from "../ui/i18n";
 import { UiIcon } from "../ui/primitives/UiIcon";
 import { CategoryField } from "./CategoryField";
@@ -23,6 +23,7 @@ type EntryDetailProps = {
   /** The note of the term's category, said before its own; empty when none. */
   categoryNote: string;
   onChange: (patch: Partial<GlossaryRow>) => void;
+  onTermCommit: () => void;
   onRemove: () => void;
   onOpen: (context: string) => void;
   onChoose: (id: string) => void;
@@ -30,16 +31,17 @@ type EntryDetailProps = {
 };
 
 /** The fields of a term of the project, with what the sheets give for its name. */
-export function EntryDetail({ item, sheetsGive, fix, categories, senses, disabled, categoryNote, onChange, onRemove, onOpen, onChoose, onOpenCategory }: EntryDetailProps) {
+export function EntryDetail({ item, sheetsGive, fix, categories, senses, disabled, categoryNote, onChange, onTermCommit, onRemove, onOpen, onChoose, onOpenCategory }: EntryDetailProps) {
   const { t } = useI18n();
   const row = item.row;
   const id = `glossary-entry-${row.key}`;
   const translation = row.translation.trim();
+  const sourceBacked = item.replaced.length > 0;
   return (
     <section className="glossary-detail" aria-label={row.term || t("glossary.untitled")}>
       <div className="glossary-field">
         <label htmlFor={`${id}-term`}>{t("glossary.field.term")}</label>
-        <input id={`${id}-term`} data-glossary-headword className="input glossary-detail-headword" value={row.term} readOnly={disabled} autoFocus={!row.term} onChange={(event) => onChange({ term: event.target.value })} />
+        <input id={`${id}-term`} data-glossary-headword className="input glossary-detail-headword" value={row.term} readOnly={disabled || sourceBacked} autoFocus={!row.term} onChange={(event) => onChange({ term: event.target.value })} onBlur={onTermCommit} />
       </div>
       <div className="glossary-field">
         <label htmlFor={`${id}-translation`}>{t("glossary.field.translation")}</label>
@@ -81,10 +83,9 @@ export function EntryDetail({ item, sheetsGive, fix, categories, senses, disable
       <SenseList senses={senses} onChoose={onChoose} />
       <TermStrings term={row.term.trim()} category={row.category.trim()} onOpen={onOpen} />
       <div className="glossary-detail-actions">
-        {item.redundant ? <span className="glossary-badge">{t("glossary.badge.same")}</span> : null}
-        <button className="button button-ghost glossary-remove" type="button" disabled={disabled} onClick={onRemove}>
-          <UiIcon icon="trash" size="sm" />{item.redundant ? t("glossary.detail.takeOut") : t("glossary.remove")}
-        </button>
+        {!sourceBacked ? <button className="button button-ghost glossary-remove" type="button" disabled={disabled} onClick={onRemove}>
+          <UiIcon icon="trash" size="sm" />{t("glossary.remove")}
+        </button> : null}
       </div>
     </section>
   );
@@ -299,19 +300,13 @@ export function SheetSettings({ sheets, count, categories, disabled, onChange, o
 function SheetColumn({ sheet, titled, categories, disabled, onChange }: { sheet: TermSheetDto; titled: boolean; categories: readonly string[]; disabled: boolean; onChange: (sheet: TermSheetDto) => void }) {
   const { t } = useI18n();
   const id = `glossary-sheet-settings-${sheet.sheet}-${sheet.column}`;
-  const savedNote = sheet.note ?? "";
-  const [note, setNote] = useState(savedNote);
-  useEffect(() => { setNote(savedNote); }, [savedNote, sheet.sheet]);
   return (
     <>
       {titled ? <span className="glossary-field-label">{t("glossary.sheets.column")} {String(sheet.column)}</span> : null}
       <div className="glossary-field">
-        <label htmlFor={`${id}-category`}>{t("glossary.sheets.category")}</label>
+        <label htmlFor={`${id}-category`}>{t("glossary.sheets.defaultCategory")}</label>
         <CategoryField id={`${id}-category`} value={sheet.category} categories={categories} disabled={disabled} onCommit={(category) => onChange({ ...sheet, category })} />
-      </div>
-      <div className="glossary-field glossary-field-grow">
-        <label htmlFor={`${id}-note`}>{t("glossary.sheets.note")}</label>
-        <textarea id={`${id}-note`} className="input glossary-note" value={note} spellCheck title={t("glossary.sheets.noteTitle")} readOnly={disabled} onChange={(event) => setNote(event.target.value)} onBlur={() => { if (note.trim() !== savedNote) onChange({ ...sheet, note: note.trim() || null }); }} />
+        <p className="muted">{t("glossary.sheets.defaultCategoryHelp")}</p>
       </div>
     </>
   );
@@ -352,61 +347,44 @@ export function BulkDetail({ count, entries, categories, disabled, fix, onCatego
 }
 
 type CategorySettingsProps = {
-  /** The category as its terms write it. */
-  category: string;
+  category: GlossaryCategory;
   count: number;
-  /** The declared sheets of the category, which keep its note. */
-  sheets: readonly TermSheetDto[];
+  categories: readonly GlossaryCategory[];
+  usedAsDefault: boolean;
   disabled: boolean;
-  onNote: (note: string | null) => void;
-  onOpenSheet: (sheet: string) => void;
+  onRename: (id: string, name: string) => void;
+  onNote: (note: string) => void;
+  onDelete: () => void;
+  onMerge: (targetId: string) => void;
 };
 
-/** A category: the note its sheets keep, saved to all of them at once, and the sheets themselves. */
-export function CategorySettings({ category, count, sheets, disabled, onNote, onOpenSheet }: CategorySettingsProps) {
+/** Categories are independent of sheet declarations and survive renames. */
+export function CategorySettings({ category, count, categories, usedAsDefault, disabled, onRename, onNote, onDelete, onMerge }: CategorySettingsProps) {
   const { t } = useI18n();
-  const notes = [...new Set(sheets.map((sheet) => (sheet.note ?? "").trim()))];
-  const differ = notes.length > 1;
-  const savedNote = notes.filter((note) => note !== "").join(" ");
-  const [note, setNote] = useState(savedNote);
-  useEffect(() => { setNote(savedNote); }, [savedNote, category]);
-  const names = [...new Set(sheets.map((sheet) => sheet.sheet))];
+  const [name, setName] = useState(category.name);
+  const [target, setTarget] = useState("");
+  const collision = categories.some((other) => other.id !== category.id && other.name.trim().toLowerCase() === name.trim().toLowerCase());
   return (
-    <section className="glossary-detail" aria-label={category}>
-      <div className="glossary-detail-title">
-        <UiIcon icon="listFilter" size="sm" />
-        <span>{category}</span>
-        <span className="muted">{t("glossary.count", { count })}</span>
+    <section className="glossary-detail" aria-label={category.name}>
+      <div className="glossary-detail-title"><UiIcon icon="listFilter" size="sm" /><span>{category.name}</span><span className="muted">{t("glossary.count", { count })}</span></div>
+      <div className="glossary-field">
+        <label htmlFor="glossary-category-name">{t("glossary.category.name")}</label>
+        <input id="glossary-category-name" className="input" value={name} disabled={disabled} onChange={(event) => setName(event.target.value)} onBlur={() => { if (name.trim() && !collision && name.trim() !== category.name) onRename(category.id, name.trim()); }} />
+        {collision ? <p className="glossary-problem">{t("glossary.category.exists")}</p> : null}
       </div>
-      {sheets.length > 0 ? (
-        <div className="glossary-field glossary-field-grow">
-          <label htmlFor="glossary-category-note">{t("glossary.category.note")}</label>
-          <textarea
-            id="glossary-category-note"
-            className="input glossary-note"
-            value={note}
-            spellCheck
-            title={t("glossary.category.noteTitle")}
-            readOnly={disabled}
-            onChange={(event) => setNote(event.target.value)}
-            onBlur={() => { if (note.trim() !== savedNote) onNote(note.trim() || null); }}
-          />
-          {differ ? <p className="glossary-problem"><UiIcon icon="circleAlert" size="xs" />{t("glossary.category.notesDiffer")}</p> : null}
-        </div>
-      ) : <p className="muted">{t("glossary.category.noSheets")}</p>}
-      {names.length > 0 ? (
-        <div className="glossary-field">
-          <span className="glossary-field-label">{t("glossary.category.sheets")}</span>
-          <ul className="glossary-senses">
-            {names.map((name) => (
-              <li key={name}>
-                <UiIcon icon="table2" size="xs" />
-                <button type="button" className="link-button" onClick={() => onOpenSheet(name)}>{name}</button>
-              </li>
-            ))}
-          </ul>
-        </div>
-      ) : null}
+      <div className="glossary-field glossary-field-grow">
+        <label htmlFor="glossary-category-note">{t("glossary.category.note")}</label>
+        <textarea id="glossary-category-note" className="input glossary-note" value={category.note} disabled={disabled} onChange={(event) => onNote(event.target.value)} />
+      </div>
+      <div className="glossary-field">
+        <label htmlFor="glossary-category-merge">{t("glossary.category.mergeInto")}</label>
+        <CategoryField id="glossary-category-merge" value={target} categories={categories.filter((c) => c.id !== category.id).map((c) => c.name)} disabled={disabled} onCommit={setTarget} />
+        <button type="button" className="button button-secondary" disabled={disabled || !categories.some((c) => c.id !== category.id && c.name === target)} onClick={() => { const other = categories.find((c) => c.id !== category.id && c.name === target); if (other) onMerge(other.id); }}>{t("glossary.category.merge")}</button>
+      </div>
+      <div className="glossary-detail-actions">
+        <button type="button" className="button button-ghost glossary-remove" disabled={disabled || count > 0 || usedAsDefault} onClick={onDelete}><UiIcon icon="trash" size="sm" />{t("glossary.category.delete")}</button>
+      </div>
+      {usedAsDefault ? <p className="muted">{t("glossary.category.usedAsDefault")}</p> : null}
     </section>
   );
 }

@@ -21,7 +21,6 @@ const SOURCES: readonly { view: GlossaryView; label: MessageKey; icon: UiIconNam
 const ATTENTION: readonly { view: GlossaryView; label: MessageKey; icon: UiIconName }[] = [
   { view: "problems", label: "glossary.view.problems", icon: "circleAlert" },
   { view: "outdated", label: "glossary.view.outdated", icon: "sparkles" },
-  { view: "redundant", label: "glossary.view.redundant", icon: "copy" },
 ];
 
 type GlossaryFacetsProps = {
@@ -39,13 +38,14 @@ type GlossaryFacetsProps = {
   categoryNames: readonly string[];
   disabled: boolean;
   onSheetsChange: (sheets: TermSheetDto[]) => void;
+  onAddCategory: () => void;
 };
 
 /**
  * What the glossary list shows: every term, the project's own, or the
  * sheets'; the terms that need attention; one category; one sheet.
  */
-export function GlossaryFacets({ filter, onFilter, views, pending, categories, sheets, sheetCounts, sheetNames, categoryNames, disabled, onSheetsChange }: GlossaryFacetsProps) {
+export function GlossaryFacets({ filter, onFilter, views, pending, categories, sheets, sheetCounts, sheetNames, categoryNames, disabled, onSheetsChange, onAddCategory }: GlossaryFacetsProps) {
   const { t } = useI18n();
   const [allCategories, setAllCategories] = useState(false);
   const shownCategories = allCategories ? categories : categories.slice(0, CATEGORIES_SHOWN);
@@ -72,7 +72,7 @@ export function GlossaryFacets({ filter, onFilter, views, pending, categories, s
       <div className="glossary-facet-group">
         {ATTENTION.map((item) => facet(item.view, t(item.label), item.icon, views[item.view], filter.view === item.view, () => onFilter({ ...filter, view: filter.view === item.view ? "all" : item.view }), item.view === "problems" ? "danger" : "warning", pending.has(item.view)))}
       </div>
-      <div className="glossary-facet-head">{t("glossary.categories")}</div>
+      <div className="glossary-facet-head"><span>{t("glossary.categories")}</span><IconButton icon="plus" size="xs" label={t("glossary.category.add")} onClick={onAddCategory} disabled={disabled} /></div>
       <div className="glossary-facet-group">
         {listed.map((category) => facet(`category:${category.key}`, category.label, "listFilter", category.count, filter.category === category.key, () => onFilter({ ...filter, category: filter.category === category.key ? null : category.key })))}
         {categories.length > CATEGORIES_SHOWN ? (

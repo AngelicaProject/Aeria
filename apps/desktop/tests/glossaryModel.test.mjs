@@ -3,6 +3,8 @@ import test from "node:test";
 
 import {
   categoryNote,
+  duplicateOf,
+  originsForRows,
   categorySheets,
   emptyGlossaryFilter,
   entryItems,
@@ -91,7 +93,7 @@ test("problems follow the glossary format rules", () => {
     row(8, "Gil", "гил", [], " "),
     row(9, "aether", "эфир", [], "существо"),
   ];
-  assert.deepEqual([...rowProblems(rows)], [[2, "duplicateTerm"], [3, "emptyTerm"], [4, "emptyTranslation"], [5, "duplicateTerm"], [6, "duplicateTerm"], [7, "duplicateTerm"], [8, "emptyCategory"]]);
+  assert.deepEqual([...rowProblems(rows)], [[2, "duplicateTerm"], [3, "emptyTerm"], [4, "emptyTranslation"], [5, "duplicateTerm"], [7, "duplicateTerm"], [8, "emptyCategory"]]);
 });
 
 test("the list holds the project's terms, then the sheets', with what each entry replaces", () => {
@@ -115,15 +117,16 @@ test("the list holds the project's terms, then the sheets', with what each entry
   assert.equal(outdatedOf(items[0], outdated), 0);
   const counts = facetCounts(items, outdated);
   assert.equal(counts.views.all, 5);
-  assert.equal(counts.views.entries, 3);
-  assert.equal(counts.views.sheets, 2);
+  assert.equal(counts.views.entries, 1);
+  assert.equal(counts.views.sheets, 4);
   assert.equal(counts.views.outdated, 2);
-  assert.equal(counts.views.redundant, 1);
+  assert.equal("redundant" in counts.views, false);
   assert.deepEqual(counts.categories.map((category) => [category.key, category.count]), [["место", 3], ["валюта", 1], ["существо", 1]]);
-  assert.equal(counts.sheets.get("PlaceName"), 1);
+  assert.equal(counts.sheets.get("PlaceName"), 3);
 
   const shown = (filter) => filterItems(items, { ...emptyGlossaryFilter, ...filter }).map((item) => item.id);
-  assert.deepEqual(shown({ category: "место", view: "entries" }), ["entry:0", "entry:2"]);
+  assert.deepEqual(shown({ category: "место", view: "entries" }), []);
+  assert.deepEqual(shown({ category: "место", view: "sheets" }), ["entry:0", "entry:2", "sheet:PlaceName:1:0:0"]);
   // A sheet shows its terms and the entries that replace its terms.
   assert.deepEqual(shown({ sheet: "PlaceName" }), ["entry:0", "entry:2", "sheet:PlaceName:1:0:0"]);
   // A query finds forms, translations, and the translations of the sheets' strings.
@@ -158,4 +161,33 @@ test("a category's note is the notes of its sheets, each once", () => {
   assert.equal(categoryNote(sheets, "персонаж"), "");
   assert.equal(categoryNote(sheets, "задание"), "");
   assert.deepEqual(categorySheets(sheets, "место").map((sheet) => `${sheet.sheet}:${sheet.column}`), ["PlaceName:0", "PlaceName:2", "TerritoryType:1"]);
+});
+
+
+test("stable catalog IDs preserve selection across category and headword edits", () => {
+  const before = rowsFromEntries(entries, [], ["a", "b"]);
+  const renamed = rowsFromEntries([{ ...entries[0], category: "новое" }, { ...entries[1], term: "Ice" }], before, ["a", "b"]);
+  assert.deepEqual(renamed.map((row) => row.key), before.map((row) => row.key));
+  assert.deepEqual(inputsFromRows(renamed).map((row) => row.id), ["a", "b"]);
+  assert.equal(rowsChanged(before, entries, ["a", "b"]), false);
+});
+
+test("a duplicate opens the existing term regardless of whether its source is a sheet", () => {
+  const existing = rowsFromEntries([{ term: "Thancred", translation: "Танкред", forms: ["the bard"], category: "персонаж" }], [], ["sheet-term"]);
+  const candidate = { ...existing[0], key: 9, id: undefined, term: " THE BARD " };
+  assert.equal(duplicateOf(existing, candidate)?.id, "sheet-term");
+  assert.equal(duplicateOf(existing, { ...candidate, category: "существо" }), undefined);
+  assert.equal(rowProblems([{ ...existing[0], forms: ["thancred"] }]).size, 0, "case spellings belong to the same term");
+});
+
+
+test("merging a source term into a standalone term keeps its source before Save", () => {
+  const source = sheetTerm("PlaceName:1:0:0", "Mist", "Туман", "место", "PlaceName");
+  const rows = [{ ...rowsFromEntries([{term: "Mist", translation: "Туман", category: "существо"}])[0], id: "target", key: 7 }];
+  const origins = originsForRows(rows, ["source", "target"], [{entry:0,term:source}], [{from:"source",into:"target"}]);
+  const items = entryItems(rows, new Map(), origins, [], [7]);
+  assert.equal(items[0].replaced[0].sheet, "PlaceName");
+  const counts = facetCounts(items);
+  assert.equal(counts.views.sheets,1);
+  assert.equal(counts.views.entries,0);
 });
