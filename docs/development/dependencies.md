@@ -66,8 +66,8 @@ FTS5 with the `unicode61` and `trigram` tokenizers, and `aho-corasick`
 (Unlicense OR MIT), already in the graph through `regex`, to find every
 terminology candidate in the game's text in one pass.
 
-The bundled SQLite is built without `SQLITE_ENABLE_MEMORY_MANAGEMENT`, which
-`libsqlite3-sys` enables by default: with it, every connection shares one page
+The bundled SQLite is explicitly built without `SQLITE_ENABLE_MEMORY_MANAGEMENT`:
+with it, every connection shares one page
 cache behind a global mutex, and parallel translation-memory searches spin on
 that mutex (a search took about 2.7 s of CPU on each of 12 threads instead of
 0.3 s). `.cargo/config.toml` passes
