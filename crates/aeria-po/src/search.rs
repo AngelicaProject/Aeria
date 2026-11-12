@@ -229,9 +229,10 @@ impl Matcher {
         if pattern.text.is_empty() {
             return Err(SearchError::EmptyPattern);
         }
+        let normalized = aeria_se::hyphen::HyphenText::new(&pattern.text);
         let source = match pattern.kind {
-            MatchKind::Text => regex::escape(&pattern.text),
-            MatchKind::Word => format!(r"\b{}\b", regex::escape(&pattern.text)),
+            MatchKind::Text => regex::escape(normalized.as_str()),
+            MatchKind::Word => format!(r"\b{}\b", regex::escape(normalized.as_str())),
             MatchKind::Regex => pattern.text.clone(),
         };
         let regex = RegexBuilder::new(&source)
@@ -266,6 +267,18 @@ impl Matcher {
 
     /// The matches in the text of macro text: in its text ranges only.
     fn find_in_text(&self, text: Text<'_>) -> Vec<Range<usize>> {
+        let normalized = aeria_se::hyphen::HyphenText::new(text.text);
+        if normalized.as_str() != text.text {
+            return text_ranges(normalized.as_str())
+                .into_iter()
+                .flat_map(|range| {
+                    self.find(&normalized.as_str()[range.clone()])
+                        .into_iter()
+                        .map(move |found| found.start + range.start..found.end + range.start)
+                })
+                .map(|range| normalized.original_range(range))
+                .collect();
+        }
         if !self.may_be_in_text(text.text) {
             return Vec::new();
         }
@@ -281,6 +294,10 @@ impl Matcher {
     /// Whether the text of macro text has a match, as
     /// [`Matcher::find_in_text`] finds them.
     fn is_in_text(&self, text: Text<'_>) -> bool {
+        let normalized = aeria_se::hyphen::HyphenText::new(text.text);
+        if normalized.as_str() != text.text {
+            return !self.find_in_text(text).is_empty();
+        }
         self.may_be_in_text(text.text) && text.ranges().any(|range| self.has(&text.text[range]))
     }
 
@@ -1295,28 +1312,27 @@ pub fn replace_in_text(
     macro_text: &str,
     replacement: &Replacement,
 ) -> Option<String> {
+    let normalized = aeria_se::hyphen::HyphenText::new(macro_text);
     let mut out = String::with_capacity(macro_text.len());
     let mut copied = 0;
     let mut changed = false;
-    for range in text_ranges(macro_text) {
-        let text = &macro_text[range.clone()];
-        out.push_str(&macro_text[copied..range.start]);
-        let mut last = 0;
+    for range in text_ranges(normalized.as_str()) {
+        let text = &normalized.as_str()[range.clone()];
         for captures in matcher.regex.captures_iter(text) {
             let Some(whole) = captures.get(0).filter(|whole| !whole.is_empty()) else {
                 continue;
             };
-            out.push_str(&text[last..whole.start()]);
+            let original =
+                normalized.original_range(range.start + whole.start()..range.start + whole.end());
+            out.push_str(&macro_text[copied..original.start]);
             let mut new = expand(kind, &captures, &replacement.text);
             if replacement.preserve_case {
                 new = match_case(whole.as_str(), &new);
             }
             escape_into(&mut out, &new);
-            last = whole.end();
+            copied = original.end;
             changed = true;
         }
-        out.push_str(&text[last..]);
-        copied = range.end;
     }
     out.push_str(&macro_text[copied..]);
     changed.then_some(out)
@@ -1463,6 +1479,46 @@ impl Corpus {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn search_joins_hyphens_and_returns_original_source_ranges() {
+        let source = "Вход: the Tam<hyphen>Tara Deepcroft. <sheet Item 1 0>";
+        for query in ["Tam-Tara", "Tam<hyphen>Tara"] {
+            for kind in [MatchKind::Text, MatchKind::Word] {
+                let matcher = matcher(query, kind, false);
+                let text = Text {
+                    text: source,
+                    ranges: Some(&[]),
+                };
+                assert!(matcher.is_in_text(text));
+                let ranges = matcher.find_in_text(text);
+                assert_eq!(ranges.len(), 1);
+                assert_eq!(&source[ranges[0].clone()], "Tam<hyphen>Tara");
+            }
+        }
+        let matcher = matcher("Item", MatchKind::Text, false);
+        assert!(!matcher.is_in_text(Text {
+            text: source,
+            ranges: Some(&[])
+        }));
+    }
+
+    #[test]
+    fn replacement_maps_hyphens_and_regex_captures_without_touching_other_macros() {
+        let source = "<i>Там<hyphen>Тара</i> и Там-Тара <sheet Item 1 0>!";
+        assert_eq!(
+            replace("(Там)-(Тара)", MatchKind::Regex, source, "$2/$1", false).as_deref(),
+            Some("<i>Тара/Там</i> и Тара/Там <sheet Item 1 0>!")
+        );
+        assert_eq!(
+            replace("Тара", MatchKind::Text, source, "катакомбы", false).as_deref(),
+            Some("<i>Там<hyphen>катакомбы</i> и Там-катакомбы <sheet Item 1 0>!")
+        );
+        assert_eq!(
+            replace("Там<hyphen>Тара", MatchKind::Text, source, "<new>", false).as_deref(),
+            Some(r"<i>\<new></i> и \<new> <sheet Item 1 0>!")
+        );
+    }
 
     fn matcher(text: &str, kind: MatchKind, case_sensitive: bool) -> Matcher {
         Matcher::new(&Pattern {

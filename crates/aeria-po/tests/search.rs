@@ -71,6 +71,26 @@ fn find(session: &aeria_po::Session, query: &Query) -> aeria_po::Found {
 }
 
 #[test]
+fn a_project_search_finds_both_hyphen_spellings_and_preserves_source_spans() {
+    let (_directory, session) = project();
+    let file = session.root().join("po/Addon.po");
+    let before = std::fs::read_to_string(&file).expect("file");
+    let after = before
+        .replace("The cook arrives", "the Tam<hyphen>Tara Deepcroft")
+        .replace("Ask the cook", "the Tam-Tara Deepcroft");
+    std::fs::write(&file, &after).expect("write");
+    for spelling in ["Tam-Tara", "Tam<hyphen>Tara"] {
+        let found = find(&session, &query(spelling, MatchKind::Text));
+        assert_eq!(found.total, 2);
+        let source = &found.hits[0].source;
+        let matched = &found.hits[0].matches[0];
+        assert_eq!(matched.field, Field::Source);
+        assert_eq!(&source[matched.ranges[0].clone()], "Tam<hyphen>Tara");
+    }
+    assert_eq!(std::fs::read_to_string(file).expect("file"), after);
+}
+
+#[test]
 fn search_matches_text_in_translations_and_sources_but_never_macros() {
     let (_directory, session) = project();
 

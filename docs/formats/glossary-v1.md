@@ -87,8 +87,10 @@ Scions of the Seventh Dawn,Потомки Седьмой Зари,the Scions; Sc
 
 ## Matching
 
-Terms are matched in the text of a string, never in its macros: each tag
-with its arguments counts as a space, so the sheet name in
+Terms are matched in the text of a string. The argument-free `<hyphen>`
+is read as `-`: `the Tam-Tara Deepcroft` matches both that spelling and
+`the Tam<hyphen>Tara Deepcroft`. Other macro names and arguments never
+match: each tag with its arguments counts as a space, so the sheet name in
 `<sheet Aetheryte $n1 8>` is not the word *Aetheryte*, while text between
 tags, such as the branches of a condition, is text. Each form of a term,
 its headword included, matches that text case-insensitively, or with its

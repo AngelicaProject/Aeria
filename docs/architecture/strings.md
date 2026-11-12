@@ -156,6 +156,16 @@ source's constructs describes it by its meaning. The editor reads the table from
 command. Naming another idiom is one entry whose text is canonical macro
 text.
 
+### Textual hyphens
+
+The argument-free macro `<hyphen>` (code `0x1F`) is a non-breaking
+hyphen. For search and terminology, `aeria_se::hyphen::HyphenText` presents
+it as `-` and maps the view's byte ranges back to the original tags.
+It normalizes actual macros in translatable text only, including condition
+branches; escaped text, non-translatable arguments, other macros, and
+malformed strings keep their syntax. The plain-text view uses the same
+hyphen classification. Persisted macro text and game bytes are unchanged.
+
 ### Insertions
 
 `catalog::INSERTIONS` lists the macros a person may insert while

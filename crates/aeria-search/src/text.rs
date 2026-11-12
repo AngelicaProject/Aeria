@@ -14,7 +14,10 @@ pub fn plain_text(macro_text: &str) -> String {
 /// empty query matches nothing.
 #[must_use]
 pub fn text_contains(macro_text: &str, query: &str) -> bool {
-    let query = query.trim().to_lowercase();
+    let query = aeria_se::hyphen::HyphenText::new(query)
+        .as_str()
+        .trim()
+        .to_lowercase();
     !query.is_empty() && plain_text(macro_text).to_lowercase().contains(&query)
 }
 
@@ -65,6 +68,10 @@ mod tests {
 
     #[test]
     fn plain_text_drops_macros_and_keeps_words_apart() {
+        assert_eq!(
+            plain_text("the Tam<hyphen>Tara Deepcroft"),
+            "the Tam-Tara Deepcroft"
+        );
         assert_eq!(plain_text("Hello, <player-name $n1>!"), "Hello, !");
         assert_eq!(plain_text("Line one<br>Line two"), "Line one Line two");
         assert_eq!(plain_text("  Plain  "), "Plain");
@@ -72,6 +79,8 @@ mod tests {
 
     #[test]
     fn contains_ignores_case_and_macros() {
+        assert!(text_contains("Tam<hyphen>Tara", "Tam-Tara"));
+        assert!(text_contains("Tam-Tara", "Tam<hyphen>Tara"));
         assert!(text_contains("Hello, <player-name $n1>!", "HELLO"));
         assert!(!text_contains("Hello, <player-name $n1>!", "player-name"));
         assert!(!text_contains("Hello", "  "));

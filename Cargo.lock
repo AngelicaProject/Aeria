@@ -103,6 +103,7 @@ dependencies = [
 name = "aeria-knowledge"
 version = "0.1.0"
 dependencies = [
+ "aeria-se",
  "aho-corasick",
  "csv",
  "regex",

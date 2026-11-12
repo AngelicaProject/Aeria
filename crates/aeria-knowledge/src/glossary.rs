@@ -435,13 +435,18 @@ pub fn write_glossary(entries: &[GlossaryEntry]) -> String {
 }
 
 /// The text of macro text, where terms are looked for: each tag, with its
-/// arguments, becomes a space, so a sheet name such as `Aetheryte` in
+/// arguments, becomes a space, except that `<hyphen>` becomes `-`. A sheet
+/// name such as `Aetheryte` in
 /// `<sheet Aetheryte $n1 8>` is not a word of the string, while text between
 /// tags, such as the branches of a condition, is. A `>` inside quotes or
 /// parentheses (`<if ($n1 > 0)>`) does not end a tag; `\<` is a literal `<`.
 #[must_use]
 pub fn text_of(macro_text: &str) -> std::borrow::Cow<'_, str> {
-    text_with(macro_text, ' ')
+    let normalized = aeria_se::hyphen::HyphenText::new(macro_text).into_text();
+    match normalized {
+        std::borrow::Cow::Borrowed(text) => text_with(text, ' '),
+        std::borrow::Cow::Owned(text) => text_with(&text, ' ').into_owned().into(),
+    }
 }
 
 /// The text of macro text as [`text_of`] reads it, with `fill` in place of
@@ -769,6 +774,30 @@ impl Glossary {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_hyphenated_term_matches_plain_and_macro_hyphens() {
+        let glossary = Glossary::new(vec![GlossaryEntry {
+            term: "the Tam-Tara Deepcroft".to_owned(),
+            translation: "Катакомбы Там-Тара".to_owned(),
+            match_case: true,
+            ..GlossaryEntry::default()
+        }]);
+        for source in [
+            "Enter the Tam-Tara Deepcroft.",
+            "Enter the Tam<hyphen>Tara Deepcroft.",
+            "<if $gn4>The Tam<hyphen>Tara Deepcroft<else>the Tam-Tara Deepcroft</if>",
+        ] {
+            assert_eq!(glossary.matches(source).len(), 1, "{source}");
+            assert!(glossary.uses(source, 0), "{source}");
+        }
+        assert!(glossary.matches("the Tam Tara Deepcroft").is_empty());
+        assert!(
+            glossary
+                .matches(r#"<sheet "the Tam<hyphen>Tara Deepcroft" 1 0>"#)
+                .is_empty()
+        );
+    }
 
     #[test]
     fn a_term_is_found_by_name_after_entries_are_added() {

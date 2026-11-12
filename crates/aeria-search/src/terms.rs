@@ -44,7 +44,10 @@ fn name_punctuation(character: char) -> bool {
 
 /// Whether a cell's text is a name: see the module documentation.
 fn is_name(sheet: &str, source: &str, plain: &str, tokenizer: Tokenizer) -> bool {
-    if sheet.contains('/') || source != plain || plain.trim() != plain {
+    if sheet.contains('/')
+        || aeria_se::hyphen::HyphenText::new(source).as_str() != plain
+        || plain.trim() != plain
+    {
         return false;
     }
     let characters = plain.chars().count();
@@ -236,6 +239,7 @@ mod tests {
     #[test]
     fn names_are_short_data_texts_without_sentences() {
         let words = Tokenizer::Words;
+        assert!(is_name("PlaceName", "Tam<hyphen>Tara", "Tam-Tara", words));
         assert!(is_name(
             "PlaceName",
             "Limsa Lominsa",

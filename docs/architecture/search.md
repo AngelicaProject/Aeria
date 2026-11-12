@@ -17,7 +17,8 @@ text, and plain text, and an FTS5 index over the plain text.
 
 The plain text of a macro string is its text ranges from `aeria-se` semantic
 analysis, in order, with a space where a macro separates two ranges; escapes
-contribute their character. Searches therefore match what players read, not
+contribute their character. An argument-free `<hyphen>` contributes `-`
+instead of separating words. Searches therefore match what players read, not
 macro names or arguments.
 
 The tokenizer follows the source language: three-character
@@ -27,7 +28,7 @@ without spaces, and case- and diacritic-insensitive words (`unicode61` with
 
 The index is built by reading every sheet of the game once, written to a
 `.partial` file, and published by rename only when complete. A file is used
-only when its recorded format (`2`) and source key match; any other file is
+only when its recorded format (`3`) and source key match; any other file is
 rebuilt. A cancelled or failed build leaves no index.
 
 ## Queries
@@ -62,8 +63,8 @@ for filling a project glossary. It reads the index twice and takes about two
 seconds for the English client.
 
 1. A *name* is an indexed cell of a data sheet (a sheet name without `/`, so
-   not quest, cutscene, or other script text) whose text has no macros, is 2
-   to 48 characters and at most 5 words, contains a letter, and has only
+   not quest, cutscene, or other script text) whose text has no macros other
+   than `<hyphen>` (read as `-`), is 2 to 48 characters and at most 5 words, contains a letter, and has only
    letters, digits, spaces, and `'`, `’`, `-`, `&`, `・`, or `ー`. With the
    word tokenizer it must start with an uppercase letter. Cells with the same
    text are one name.
@@ -88,7 +89,11 @@ project, and lists the entries found in file order (files sorted by path):
 - **Pattern**: text, whole words (`\b` around the text), or a regular
   expression of the `regex` crate, case-insensitive unless asked otherwise.
   Text and whole words are first looked for in a field's whole text: a
-  field without a match is not searched by its text ranges.
+  field without a match is not searched by its text ranges. An argument-free
+  `<hyphen>` is read as `-`, so `Tam-Tara` finds `Tam<hyphen>Tara`
+  as well as `Tam-Tara`; text and whole-word queries accept either spelling.
+  Matches are reported in the original string's byte ranges. Regex patterns
+  run over this same view without rewriting the regex syntax.
 - **Fields**: the translation, the source, the translator's notes, and the
   `msgctxt`. In translations and sources only the text a translator writes
   matches: text nodes and translatable macro arguments, such as the branches
@@ -148,8 +153,10 @@ seconds to check every translation.
 ### Replacing
 
 A replacement changes translations only, and only the text ranges a search
-matches in: game data cannot change. The replacement is text, or with a
-regular expression a template with `$1` and `${name}`; with *preserve case*,
+matches in: game data cannot change. A matched `<hyphen>` is part of
+that text; replacements map the normalized match back to the complete tag.
+Macros outside a replaced match keep their original spelling. The replacement
+is text, or with a regular expression a template with `$1` and `${name}`; with *preserve case*,
 a match in capitals or with a capital first letter keeps that case.
 Inserted text is escaped as macro text (`\<`, `\{`, `\\`), so it never
 becomes a macro.

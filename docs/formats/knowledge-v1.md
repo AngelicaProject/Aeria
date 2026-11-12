@@ -109,9 +109,11 @@ declared, and LF line endings.
 ### The terms of the sheets
 
 A name of a declared sheet is the source of a string of its column that is
-translated, not fuzzy, plain text without macros, and has a letter (`1` or
-`???` names nothing); sources that differ only in case are one name. The strings of one name in the sheets of one
-category give one term:
+translated, not fuzzy, plain text without macros other than `<hyphen>`,
+and has a letter (`1` or `???` names nothing); sources that differ only
+in case are one name. The strings of one name in the sheets of one category
+give one term. The argument-free `<hyphen>` is read as `-` in
+names, so both spellings form one term that matches both in the text:
 
 - its translation is the one most of those strings have, compared as
   written; between translations as frequent, the one of the first string
