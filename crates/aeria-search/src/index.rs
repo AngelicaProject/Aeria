@@ -17,7 +17,7 @@ use crate::terms::{MAX_TERM_CHARS, TermCandidate, TermFinder};
 use crate::text::{plain_text, similarity};
 
 /// The index file layout version.
-pub const INDEX_FORMAT: &str = "2";
+pub const INDEX_FORMAT: &str = "3";
 /// Most hits one search returns.
 pub const MAX_SEARCH_LIMIT: u32 = 200;
 /// Candidates read from the full-text index before similarity ranking.
@@ -331,7 +331,8 @@ impl SourceIndex {
     ///
     /// Returns a storage error.
     pub fn search(&self, query: &SourceQuery<'_>) -> Result<SourcePage, SearchError> {
-        let text = query.text.trim();
+        let normalized = aeria_se::hyphen::HyphenText::new(query.text);
+        let text = normalized.as_str().trim();
         if text.is_empty() {
             return Ok(SourcePage::default());
         }

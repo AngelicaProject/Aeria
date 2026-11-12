@@ -196,6 +196,11 @@ fn collect_text(nodes: &[SyntaxNode], pieces: &mut Vec<(String, bool)>, separate
                 *separated = false;
             }
             SyntaxKind::Macro(syntax) => {
+                if crate::hyphen::is_hyphen(syntax) {
+                    pieces.push(("-".to_owned(), *separated));
+                    *separated = false;
+                    continue;
+                }
                 *separated = true;
                 if let Some(spec) = syntax.spec {
                     for (index, arg) in syntax.args.iter().enumerate() {

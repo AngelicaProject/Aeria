@@ -15,6 +15,7 @@ mod assisted;
 pub mod bytes;
 pub mod catalog;
 pub mod codec;
+pub mod hyphen;
 mod semantic;
 pub mod speaker;
 mod syntax;

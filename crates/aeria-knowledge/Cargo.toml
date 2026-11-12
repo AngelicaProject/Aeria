@@ -9,6 +9,7 @@ repository.workspace = true
 description = "Project knowledge: style, terms, characters, story, and lessons, and the rules of a good translation."
 
 [dependencies]
+aeria-se = { path = "../aeria-se" }
 aho-corasick = "1.1.5"
 csv = "1.4.0"
 regex = "1.13.1"

@@ -121,7 +121,8 @@ fn named_strings(
             let named = Identity::parse(&entry.context).is_ok_and(|identity| {
                 identity.sheet == sheet.sheet && identity.column == sheet.column
             });
-            let source = entry.source.trim();
+            let normalized = aeria_se::hyphen::HyphenText::new(entry.source.trim());
+            let source = normalized.as_str();
             let translation = entry.translation.trim();
             // A name has a letter: `1` or `???` names nothing.
             if !named
@@ -363,6 +364,60 @@ pub fn project_knowledge(root: &Path) -> ProjectKnowledge {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sheet_names_with_hyphens_form_one_term_matching_both_spellings() {
+        let directory = tempfile::tempdir().expect("directory");
+        let root = directory.path();
+        write(
+            root,
+            "aeria-knowledge/term-sheets.csv",
+            "sheet,column,category\nContentFinderCondition,43,контент\n",
+        );
+        write(
+            root,
+            "po/ContentFinderCondition/0.po",
+            &[
+                entry(
+                    "ContentFinderCondition:2:0:43",
+                    "the Tam<hyphen>Tara Deepcroft",
+                    "Катакомбы Там-Тара",
+                ),
+                entry(
+                    "ContentFinderCondition:3:0:43",
+                    "the Tam-Tara Deepcroft",
+                    "Катакомбы Там-Тара",
+                ),
+                entry(
+                    "ContentFinderCondition:4:0:43",
+                    "<sheet PlaceName 1 0>",
+                    "Другое место",
+                ),
+            ]
+            .concat(),
+        );
+        let loaded = project_knowledge(root);
+        assert!(loaded.knowledge.problems.is_empty());
+        assert_eq!(loaded.sheet_terms.len(), 1);
+        let term = &loaded.sheet_terms[0];
+        assert_eq!(term.term, "the Tam-Tara Deepcroft");
+        assert_eq!(term.strings, 2);
+        assert_eq!(term.context, "ContentFinderCondition:2:0:43");
+        for source in [
+            "Enter the Tam-Tara Deepcroft.",
+            "Enter the Tam<hyphen>Tara Deepcroft.",
+        ] {
+            let found = loaded.knowledge.terms.matches(source);
+            assert_eq!(found.len(), 1);
+            assert_eq!(found[0].translation, "Катакомбы Там-Тара");
+        }
+        // Loading terms is read-only; the source's original macro stays.
+        assert!(
+            std::fs::read_to_string(root.join("po/ContentFinderCondition/0.po"))
+                .expect("file")
+                .contains("the Tam<hyphen>Tara Deepcroft")
+        );
+    }
 
     #[test]
     fn a_sheet_is_found_by_its_files() {
