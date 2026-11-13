@@ -544,6 +544,7 @@ export const en = {
   "glossary.loadError": "The terms could not be read",
   "glossary.saveError": "The terms could not be saved",
   "glossary.save": "Save",
+  "glossary.saved": "Saved",
   "glossary.revert": "Revert",
   "glossary.cancel": "Cancel",
   "glossary.discard": "Close the terms without saving your changes?",

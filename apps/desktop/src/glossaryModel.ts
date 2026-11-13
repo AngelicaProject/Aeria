@@ -58,16 +58,24 @@ export function rowsFromEntries(entries: readonly GlossaryEntry[], previous: rea
   }
   let next = previous.reduce((high, row) => Math.max(high, row.key + 1), 0);
   const byId = new Map(previous.filter((row) => row.id).map((row) => [row.id, row.key]));
-  return entries.map((entry, index) => ({
+  const byKey = new Map(previous.map((row) => [row.key, row]));
+  return entries.map((entry, index) => {
+    const key = (ids[index] ? byId.get(ids[index]) : undefined) ?? known.get(usageKey(entry.term, entry.category))?.shift() ?? next++;
+    const old = byKey.get(key);
+    if (old && old.id === ids[index] && old.term === entry.term && old.translation === entry.translation
+      && old.category === entry.category && old.note === (entry.note ?? "") && old.matchCase === (entry.matchCase ?? false)
+      && old.forms.length === (entry.forms?.length ?? 0) && old.forms.every((form, at) => form === entry.forms?.[at])) return old;
+    return {
     ...(ids[index] ? { id: ids[index] } : {}),
-    key: (ids[index] ? byId.get(ids[index]) : undefined) ?? known.get(usageKey(entry.term, entry.category))?.shift() ?? next++,
+    key,
     term: entry.term,
     translation: entry.translation,
     forms: [...(entry.forms ?? [])],
     note: entry.note ?? "",
     matchCase: entry.matchCase ?? false,
     category: entry.category,
-  }));
+    };
+  });
 }
 
 export function inputsFromRows(rows: readonly GlossaryRow[]): TermInput[] {

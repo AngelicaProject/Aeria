@@ -163,6 +163,12 @@ fn editing_a_sheet_term_writes_every_source_and_only_other_strings_become_outdat
         .unwrap()
         .translation = "Училище".to_owned();
     let after = catalog::save(root, "ru", &expected, changes, None, None, &[]).unwrap();
+    let reread = catalog::load(root).unwrap();
+    assert_eq!(catalog::token(&after), catalog::token(&reread));
+    assert_eq!(
+        after.knowledge.terms.entries,
+        reread.knowledge.terms.entries
+    );
     let names = PoFile::parse(&fs::read_to_string(root.join("po/PlaceName/0.po")).unwrap()).0;
     assert!(
         names
@@ -184,6 +190,35 @@ fn editing_a_sheet_term_writes_every_source_and_only_other_strings_become_outdat
             .all(|t| t.translation.is_none())
     );
     assert!(!root.join("aeria-knowledge/terms.csv").exists());
+}
+
+#[test]
+fn a_style_change_invalidates_a_glossary_save_without_overwriting_it() {
+    let dir = fixture();
+    let root = dir.path();
+    let loaded = catalog::migrate(root, "ru").unwrap();
+    let before = fs::read(root.join("aeria-knowledge/glossary.json")).unwrap();
+    write(
+        root,
+        "aeria-knowledge/style.md",
+        "New translation instructions",
+    );
+    assert!(
+        catalog::save(
+            root,
+            "ru",
+            &catalog::token(&loaded),
+            edits(&loaded),
+            None,
+            None,
+            &[]
+        )
+        .is_err()
+    );
+    assert_eq!(
+        before,
+        fs::read(root.join("aeria-knowledge/glossary.json")).unwrap()
+    );
 }
 
 #[test]
@@ -358,6 +393,10 @@ fn equivalent_category_merge_rebases_only_known_current_records() {
     assert_eq!(after.catalog.terms.len(), 1);
     assert_eq!(after.catalog.terms[0].sources.len(), 2);
     assert_eq!(before, outdated(root));
+    assert_eq!(
+        catalog::token(&after),
+        catalog::token(&catalog::load(root).unwrap())
+    );
 }
 
 #[test]

@@ -715,7 +715,7 @@ export type GlossaryCatalog = { formatVersion: number; categories: GlossaryCateg
 
 /** A sheet of the game declared part of the glossary: the strings of its column are terms. */
 /** How many strings of the game use one term. */
-export type TermUsageDto = { term: string; category: string; strings: number };
+export type TermUsageDto = { term: string; category: string; strings: number; outdated: number };
 
 export type TermSheetDto = { sheet: string; column: number; category: string; note?: string | null };
 

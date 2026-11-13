@@ -200,8 +200,12 @@ pub const REVIEWED_FLAG: &str = "aeria-reviewed";
 /// hexadecimal digits of the SHA-256 of its text.
 #[must_use]
 pub fn fingerprint(translation: &str) -> String {
+    fingerprint_bytes(translation.as_bytes())
+}
+
+pub(crate) fn fingerprint_bytes(bytes: &[u8]) -> String {
     use sha2::{Digest, Sha256};
-    let digest = Sha256::digest(translation.as_bytes());
+    let digest = Sha256::digest(bytes);
     digest[..6]
         .iter()
         .fold(String::with_capacity(12), |mut text, byte| {

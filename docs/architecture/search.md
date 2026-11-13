@@ -6,6 +6,12 @@ and translation memory. Its data is
 machine-local, rebuildable cache: deleting it never loses translation work,
 and it is never written to a repository.
 
+The open corpus retains the latest term-usage and outdated counts together.
+Reuse requires the same ordered parsed PO snapshots, names, forms, case rules
+and recorded definition fingerprints. Changed files or definitions invalidate
+the counts; cancelled partial computations are never cached. Both counters
+are computed in one pass and returned together to the glossary.
+
 ## Source index
 
 `SourceIndex` is one SQLite file per source language and game version,

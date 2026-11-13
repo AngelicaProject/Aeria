@@ -4,16 +4,18 @@ import { useI18n } from "../ui/i18n";
 import { UiIcon } from "../ui/primitives/UiIcon";
 
 /** Other forms of a term as chips, added by typing and removed one by one. */
-export function FormsInput({ id, forms, onChange }: { id: string; forms: readonly string[]; onChange: (forms: string[]) => void }) {
+export function FormsInput({ id, forms, onChange, disabled = false }: { id: string; forms: readonly string[]; onChange: (forms: string[]) => void; disabled?: boolean }) {
   const { t } = useI18n();
   const [text, setText] = useState("");
   const commit = () => {
+    if (disabled) return;
     const added = splitForms(text);
     if (added.length > 0) onChange([...forms, ...added]);
     setText("");
   };
   // A chip goes back into the field to be edited.
   const edit = (index: number) => {
+    if (disabled) return;
     setText(forms[index] ?? "");
     onChange([...forms.filter((_, other) => other !== index), ...splitForms(text)]);
   };
@@ -22,18 +24,22 @@ export function FormsInput({ id, forms, onChange }: { id: string; forms: readonl
       {forms.map((form, index) => (
         <span key={index} className="glossary-form" title={t("glossary.form.edit")} onDoubleClick={() => edit(index)}>
           {form}
-          <button type="button" className="glossary-form-remove" aria-label={t("glossary.form.remove", { form })} onClick={() => onChange(forms.filter((_, other) => other !== index))}><UiIcon icon="x" size="xs" /></button>
+          <button type="button" className="glossary-form-remove" disabled={disabled} aria-label={t("glossary.form.remove", { form })} onClick={() => onChange(forms.filter((_, other) => other !== index))}><UiIcon icon="x" size="xs" /></button>
         </span>
       ))}
       <input
         id={id}
         className="glossary-form-input"
         value={text}
+        readOnly={disabled}
         placeholder={forms.length === 0 ? t("glossary.form.add") : undefined}
         onChange={(event) => setText(event.target.value)}
         onBlur={commit}
         onKeyDown={(event) => {
-          if (event.key === "Enter" || event.key === ";") {
+          if (disabled) return;
+          if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s") {
+            commit();
+          } else if (event.key === "Enter" || event.key === ";") {
             event.preventDefault();
             commit();
           } else if (event.key === "Backspace" && text === "" && forms.length > 0) {

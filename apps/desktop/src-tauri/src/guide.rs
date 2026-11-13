@@ -597,6 +597,7 @@ pub struct TermUsageDto {
     pub term: String,
     pub category: String,
     pub strings: usize,
+    pub outdated: usize,
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -628,6 +629,7 @@ pub async fn term_usage(app: tauri::AppHandle) -> CommandResult<Vec<TermUsageDto
                 term: entry.term.clone(),
                 category: entry.category.clone(),
                 strings: usage.strings,
+                outdated: usage.outdated,
             })
             .collect())
     })

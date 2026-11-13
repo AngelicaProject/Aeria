@@ -53,7 +53,7 @@ export function EntryDetail({ item, sheetsGive, fix, categories, senses, disable
       </div>
       <div className="glossary-field">
         <label htmlFor={`${id}-forms`}>{t("glossary.field.forms")}</label>
-        <FormsInput id={`${id}-forms`} forms={row.forms} onChange={(forms) => onChange({ forms })} />
+        <FormsInput id={`${id}-forms`} forms={row.forms} disabled={disabled} onChange={(forms) => onChange({ forms })} />
       </div>
       <div className="glossary-field glossary-field-grow">
         <label htmlFor={`${id}-note`}>{t("glossary.field.note")}</label>
@@ -369,7 +369,7 @@ export function CategorySettings({ category, count, categories, usedAsDefault, d
       <div className="glossary-detail-title"><UiIcon icon="listFilter" size="sm" /><span>{category.name}</span><span className="muted">{t("glossary.count", { count })}</span></div>
       <div className="glossary-field">
         <label htmlFor="glossary-category-name">{t("glossary.category.name")}</label>
-        <input id="glossary-category-name" className="input" value={name} disabled={disabled} onChange={(event) => setName(event.target.value)} onBlur={() => { if (name.trim() && !collision && name.trim() !== category.name) onRename(category.id, name.trim()); }} />
+        <input id="glossary-category-name" className="input" value={name} disabled={disabled} onChange={(event) => setName(event.target.value)} onBlur={() => { if (name.trim() && !collision && name.trim() !== category.name) onRename(category.id, name.trim()); }} onKeyDown={(event) => { if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s" && name.trim() && !collision && name.trim() !== category.name) onRename(category.id, name.trim()); }} />
         {collision ? <p className="glossary-problem">{t("glossary.category.exists")}</p> : null}
       </div>
       <div className="glossary-field glossary-field-grow">
