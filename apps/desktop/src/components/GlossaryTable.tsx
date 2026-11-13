@@ -1,4 +1,4 @@
-import { forwardRef, useEffect, useImperativeHandle, useRef, type KeyboardEvent, type MouseEvent } from "react";
+import { forwardRef, memo, useEffect, useImperativeHandle, useRef, type KeyboardEvent, type MouseEvent } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { type GlossaryItem, type GlossarySort, type SortKey, type Outdated, itemCategory, itemTerm, itemTranslation, outdatedOf, usageKey } from "../glossaryModel";
 import type { MessageKey } from "../i18n/translate";
@@ -156,7 +156,7 @@ export const GlossaryTable = forwardRef<GlossaryTableHandle, GlossaryTableProps>
 });
 
 /** The cells of one term. */
-function Cells({ item, usage, outdated }: { item: GlossaryItem; usage: ReadonlyMap<string, number> | null; outdated: Outdated | null }) {
+const Cells = memo(function Cells({ item, usage, outdated }: { item: GlossaryItem; usage: ReadonlyMap<string, number> | null; outdated: Outdated | null }) {
   const { t } = useI18n();
   const term = itemTerm(item);
   const translation = itemTranslation(item);
@@ -183,4 +183,4 @@ function Cells({ item, usage, outdated }: { item: GlossaryItem; usage: ReadonlyM
       <span role="gridcell" className="glossary-cell glossary-cell-uses">{uses ?? ""}</span>
     </>
   );
-}
+});

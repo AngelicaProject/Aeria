@@ -799,6 +799,50 @@ pub struct Corpus {
     reading: Mutex<()>,
     /// The files of `po/` as the last search listed them.
     listed: Mutex<Vec<String>>,
+    usage: Mutex<Option<UsageSnapshot>>,
+}
+
+struct UsageMeaning {
+    term: String,
+    forms: Vec<String>,
+    match_case: bool,
+    version: String,
+}
+
+struct UsageSnapshot {
+    root: std::path::PathBuf,
+    files: Vec<(String, Arc<FileText>)>,
+    meanings: Vec<UsageMeaning>,
+    counts: Vec<TermUsage>,
+}
+
+impl UsageSnapshot {
+    fn matches(
+        &self,
+        root: &Path,
+        files: &[(String, Arc<FileText>)],
+        glossary: &aeria_knowledge::Glossary,
+        versions: &[String],
+    ) -> bool {
+        self.root == root
+            && self.files.len() == files.len()
+            && self
+                .files
+                .iter()
+                .zip(files)
+                .all(|((old_path, old), (path, file))| old_path == path && Arc::ptr_eq(old, file))
+            && self.meanings.len() == glossary.entries.len()
+            && self
+                .meanings
+                .iter()
+                .zip(glossary.entries.iter().zip(versions))
+                .all(|(old, (entry, version))| {
+                    old.term == entry.term
+                        && old.forms == entry.forms
+                        && old.match_case == entry.match_case
+                        && &old.version == version
+                })
+    }
 }
 
 impl Corpus {
@@ -1093,6 +1137,12 @@ impl Corpus {
             .iter()
             .map(|entry| crate::po::name_fingerprint(glossary, entry))
             .collect();
+        let mut cached = lock(&self.usage);
+        if let Some(cached) = cached.as_ref()
+            && cached.matches(root, &files, glossary, &prints)
+        {
+            return Ok(cached.counts.clone());
+        }
         // One count per worker, each over every `workers`-th file.
         let workers = std::thread::available_parallelism()
             .map_or(4, std::num::NonZero::get)
@@ -1126,6 +1176,24 @@ impl Corpus {
                 sum.strings += count.strings;
                 sum.outdated += count.outdated;
             }
+        }
+        if !cancel.load(Ordering::Relaxed) {
+            *cached = Some(UsageSnapshot {
+                root: root.to_owned(),
+                files,
+                meanings: glossary
+                    .entries
+                    .iter()
+                    .zip(prints)
+                    .map(|(entry, version)| UsageMeaning {
+                        term: entry.term.clone(),
+                        forms: entry.forms.clone(),
+                        match_case: entry.match_case,
+                        version,
+                    })
+                    .collect(),
+                counts: total.clone(),
+            });
         }
         Ok(total)
     }

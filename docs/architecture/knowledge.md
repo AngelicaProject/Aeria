@@ -59,6 +59,13 @@ term; it never rewrites other uses of the name automatically.
 `aeria_po::project_knowledge` reads the terms of the declared sheets, and a
 project's session reads them again when a file of a declared sheet changes.
 
+The session keeps one resolved glossary snapshot for subsequent edits. Save
+reuses its parsed sources, overlays explicit source changes, and resolves the
+result in memory. Catalog, settings, style and source content hashes are
+checked before publication; cached file timestamps never authorize a save.
+The published snapshot seeds the session's knowledge cache, so background
+statistics do not immediately parse the same glossary again.
+
 The other strings of the game that are names (items, actions, characters)
 are strings like any other: they follow the terms as a line of dialogue
 does. A name that is neither a term

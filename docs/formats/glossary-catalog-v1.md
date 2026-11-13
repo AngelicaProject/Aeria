@@ -104,14 +104,18 @@ existing catalog. New-project seed CSV files are not recreated after migration.
 
 Catalog and PO mutations are prepared and checked before publication. Expected
 versions cover project settings, the catalog and declared source files, including new files and
-source variants that do not change the majority. Ordinary PO saves and glossary publication share the session writer lock.
+source variants that do not change the majority, and the style used by the
+translation checks. Ordinary PO saves and glossary publication share the session writer lock.
 Migration and glossary writes wait for synchronization/export and refuse an
 active AI run, so a run cannot publish records using a retired catalog.
 Each modified file also has
 an exact expected original text. Concurrent changes are errors.
 
 An application lock in `.aeria/glossary.lock` serializes glossary publication
-and recovery. Before the first mutation, `.aeria/glossary-transaction.json`
+and recovery. The empty lock file remains on disk; the operating-system lock
+is held only for the operation and released when its file handle closes,
+including on process exit. File existence does not indicate an active lock.
+Before the first mutation, `.aeria/glossary-transaction.json`
 records each relative target path, its expected original text or absence,
 and its desired text or absence. Only PO paths, project settings, catalog paths and migration
 archive paths are valid; absolute paths and traversal components are refused.
@@ -123,3 +127,10 @@ A third version is a visible conflict and is never overwritten. The journal
 is removed only after completion. Catalog readers recover an outstanding
 transaction before resolving source entries. `.aeria` is local runtime state;
 the catalog, PO changes and migration archive are project-shared data.
+
+Saving can prepare a result from an earlier immutable snapshot, then verify
+every expected content version before writing. The normal writer applies its
+already prepared changes directly after publishing the journal; recovery
+parses that same journal only after an interruption. A successful save returns
+the exact published snapshot, including canonical source entries and their
+new recorded versions, without rereading the entire glossary.

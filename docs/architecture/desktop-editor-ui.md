@@ -787,6 +787,18 @@ sheet (or project), and number of source strings using the term. Search,
 column sorting, keyboard selection, category and sheet filters, and the
 outdated-strings correction workflow remain available.
 
+Draft rows are immutable. The renderer indexes name/category collisions and
+reuses unchanged source bindings, list items and counts, so typing in one
+term does not normalize or serialize the entire catalog. Edits and validation
+remain immediate; Save and keyboard Save always use the current draft.
+
+Save shows an in-progress state and disables draft mutations until the
+transaction finishes; a successful response shows Saved. Keyboard Save also
+commits pending category and form input. Unchanged rows and source cards
+survive the response instead of rebuilding the whole list. Usage and outdated
+counts come from one background request per saved snapshot; hidden tabs reuse
+pending requests, and superseded responses never replace newer counts.
+
 **Project terms** shows only standalone terms; **From sheets** shows terms
 with source bindings. There is no **Same as the sheet** view or separate
 project override. Editing a sheet term's translation writes all its eligible

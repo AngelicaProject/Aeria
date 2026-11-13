@@ -40,6 +40,16 @@ struct LoadedKnowledge {
     knowledge: Arc<Knowledge>,
 }
 
+fn knowledge_stamps(root: &Path, read: &[PathBuf]) -> Vec<Stamp> {
+    KnowledgeFile::ALL
+        .iter()
+        .map(|file| file.path(root))
+        .chain(std::iter::once(root.join(crate::SETTINGS_FILE)))
+        .chain(read.iter().cloned())
+        .map(|path| stamp(&path))
+        .collect()
+}
+
 /// The translation of one string, as its entry holds it.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct Translation {
@@ -327,6 +337,7 @@ pub struct Session {
     /// they had: [`Session::changed_sheets`] watches them.
     viewed: Mutex<HashMap<String, Stamp>>,
     knowledge: Mutex<Option<LoadedKnowledge>>,
+    glossary_snapshot: Mutex<Option<crate::glossary_project::Resolved>>,
     /// The text of the files that searches read.
     corpus: crate::search::Corpus,
     /// Writes one at a time, so two edits of one file never race.
@@ -396,6 +407,7 @@ impl Session {
             files: Mutex::new(HashMap::new()),
             viewed: Mutex::new(HashMap::new()),
             knowledge: Mutex::new(None),
+            glossary_snapshot: Mutex::new(None),
             corpus: crate::search::Corpus::default(),
             writing: Mutex::new(()),
             revision: std::sync::atomic::AtomicU64::new(0),
@@ -489,7 +501,25 @@ impl Session {
     /// Returns an invalid catalog, source read error, or recovery conflict.
     pub fn glossary(&self) -> Result<crate::glossary_project::Resolved, String> {
         let _writing = lock(&self.writing);
-        crate::glossary_project::load(&self.root)
+        let cached = lock(&self.glossary_snapshot).take();
+        let loaded = if let Some(loaded) = cached
+            && crate::glossary_project::is_current(&self.root, &loaded)?
+        {
+            loaded
+        } else {
+            crate::glossary_project::load(&self.root)?
+        };
+        self.remember_glossary(&loaded);
+        Ok(loaded)
+    }
+
+    fn remember_glossary(&self, loaded: &crate::glossary_project::Resolved) {
+        *lock(&self.knowledge) = Some(LoadedKnowledge {
+            stamps: knowledge_stamps(&self.root, &loaded.read),
+            read: loaded.read.clone(),
+            knowledge: Arc::new(loaded.knowledge.clone()),
+        });
+        *lock(&self.glossary_snapshot) = Some(loaded.clone());
     }
 
     /// Migrate the legacy glossary without racing a string save.
@@ -505,6 +535,7 @@ impl Session {
         let loaded =
             crate::glossary_project::migrate(&self.root, &self.settings().target_language)?;
         *lock(&self.settings) = crate::read_settings(&self.root).map_err(|e| e.to_string())?;
+        self.remember_glossary(&loaded);
         if !existed {
             self.touch();
         }
@@ -525,28 +556,29 @@ impl Session {
         merges: &[crate::glossary_project::TermMerge],
     ) -> Result<crate::glossary_project::Resolved, String> {
         let _writing = lock(&self.writing);
-        let loaded = crate::glossary_project::save(
+        let before = lock(&self.glossary_snapshot)
+            .take()
+            .filter(|loaded| crate::glossary_project::token(loaded) == expected);
+        let before = before.map_or_else(|| crate::glossary_project::load(&self.root), Ok)?;
+        let loaded = crate::glossary_project::save_resolved(
             &self.root,
-            &self.settings().target_language,
-            expected,
-            edits,
-            categories,
-            sheets,
-            merges,
+            before,
+            crate::glossary_project::SaveRequest {
+                target: &self.settings().target_language,
+                expected,
+                edits,
+                categories,
+                sheets,
+                merges,
+            },
         )?;
+        self.remember_glossary(&loaded);
         self.touch();
         Ok(loaded)
     }
 
     fn loaded_knowledge(&self) -> Arc<Knowledge> {
-        let stamps = |read: &[PathBuf]| -> Vec<Stamp> {
-            KnowledgeFile::ALL
-                .iter()
-                .map(|file| file.path(&self.root))
-                .chain(read.iter().cloned())
-                .map(|path| stamp(&path))
-                .collect()
-        };
+        let stamps = |read: &[PathBuf]| knowledge_stamps(&self.root, read);
         let mut cached = lock(&self.knowledge);
         if let Some(loaded) = cached.as_ref()
             && loaded.stamps == stamps(&loaded.read)

@@ -549,6 +549,7 @@ export const ru: Catalog = {
   "glossary.loadError": "Не удалось прочитать термины",
   "glossary.saveError": "Не удалось сохранить термины",
   "glossary.save": "Сохранить",
+  "glossary.saved": "Сохранено",
   "glossary.revert": "Отменить изменения",
   "glossary.cancel": "Отмена",
   "glossary.discard": "Закрыть термины без сохранения изменений?",

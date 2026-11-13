@@ -7,24 +7,20 @@ import {
   type SortKey,
   categoryKey,
   duplicateOf,
-  originsForRows,
   emptyGlossaryFilter,
   entryId,
-  entryItems,
-  facetCounts,
   filterItems,
   inputsFromRows,
   itemCategory,
   itemTerm,
-  rowProblems,
-  rowsChanged,
   rowsFromEntries,
   sheetItems,
   sortItems,
   outdatedOf,
   usageKey,
 } from "../glossaryModel";
-import { normalizeCommandError, projectKnowledge, saveKnowledgeSheets, saveKnowledgeTerms, stringBinding, termOutdated, termOutdatedStrings, termUsage, translationFix, translationStatus } from "../ipc";
+import { createGlossaryDraft } from "../glossaryDraft";
+import { normalizeCommandError, projectKnowledge, saveKnowledgeSheets, saveKnowledgeTerms, stringBinding, termOutdatedStrings, termUsage, translationFix, translationStatus } from "../ipc";
 import type { CommandError, GlossaryCategory, ProjectKnowledgeDto, SourceBinding, TermKey, TermSheetDto, TranslationStatus } from "../types";
 import { useI18n } from "../ui/i18n";
 import { usePreferences } from "../ui/preferences";
@@ -80,6 +76,8 @@ export const GlossaryView = forwardRef<GlossaryViewHandle, GlossaryViewProps>(fu
   const { t } = useI18n();
   const { preferences } = usePreferences();
   const [saved, setSaved] = useState<ProjectKnowledgeDto | null>(null);
+  const [draft] = useState(createGlossaryDraft);
+  const savedRows = useRef<readonly GlossaryRow[]>([]);
   const [rows, setRows] = useState<GlossaryRow[]>([]);
   const [categories, setCategories] = useState<GlossaryCategory[]>([]);
   const [sheets, setSheets] = useState<TermSheetDto[]>([]);
@@ -87,10 +85,18 @@ export const GlossaryView = forwardRef<GlossaryViewHandle, GlossaryViewProps>(fu
   const [addingCategory, setAddingCategory] = useState(false);
   const [categoryMerge, setCategoryMerge] = useState<CategoryMergeDraft | null>(null);
   const rowsRef = useRef(rows);
-  rowsRef.current = rows;
+  const updateRows = useCallback((update: GlossaryRow[] | ((current: GlossaryRow[]) => GlossaryRow[])) => {
+    const next = typeof update === "function" ? update(rowsRef.current) : update;
+    rowsRef.current = next;
+    setRows(next);
+  }, []);
+  const documentRef = useRef({ categories, sheets, merges });
+  documentRef.current = { categories, sheets, merges };
   // The key of the row read from each entry of the saved file.
   const nextKey = useRef(0);
   const [busy, setBusy] = useState(false);
+  const saving = useRef(false);
+  const [savedFeedback, setSavedFeedback] = useState(false);
   const [error, setError] = useState<{ title: string; error: CommandError } | null>(null);
   const [confirm, setConfirm] = useState<{ message: string; label?: string; run: () => void } | null>(null);
   const [filter, setFilter] = useState<GlossaryFilter>(emptyGlossaryFilter);
@@ -100,12 +106,12 @@ export const GlossaryView = forwardRef<GlossaryViewHandle, GlossaryViewProps>(fu
   const [counting, setCounting] = useState(false);
   // How many translations were written with another version of each term, by name; null until counted.
   const [outdated, setOutdated] = useState<ReadonlyMap<string, number> | null>(null);
-  const [checking, setChecking] = useState(false);
   // Counts read before the terms changed stay shown until counted again, so
   // a save neither empties a view of them nor reorders the list twice.
-  const [usageStale, setUsageStale] = useState(false);
-  const [outdatedStale, setOutdatedStale] = useState(false);
-  const recount = useCallback(() => { setUsageStale(true); setOutdatedStale(true); }, []);
+  const [countRevision, setCountRevision] = useState(0);
+  const countedSnapshot = useRef<{ text: string | null; revision: number } | null>(null);
+  const countRequest = useRef<{ text: string | null; revision: number; result: ReturnType<typeof termUsage> } | null>(null);
+  const recount = useCallback(() => setCountRevision((value) => value + 1), []);
   // A correction run the glossary started, with the terms it follows, and
   // whether another run goes.
   const [run, setRun] = useState<{ terms: string[]; status: TranslationStatus | null } | null>(null);
@@ -123,19 +129,20 @@ export const GlossaryView = forwardRef<GlossaryViewHandle, GlossaryViewProps>(fu
     setSaved(knowledge);
     recount();
     const next = rowsFromEntries(knowledge.entries, rowsRef.current, knowledge.termIds);
+    savedRows.current = next;
     setCategories(knowledge.catalog?.categories ?? []);
     setSheets(knowledge.sheets);
     setMerges([]);
     nextKey.current = Math.max(nextKey.current, ...next.map((row) => row.key + 1));
-    setRows(next);
-  }, [recount]);
+    updateRows(next);
+  }, [recount, updateRows]);
 
   const receive = useCallback((knowledge: ProjectKnowledgeDto) => {
     show(knowledge);
     if (knowledge.migrated) { loadedRevision.current = revision + 1; onSaved(); }
   }, [show, revision, onSaved]);
 
-  const dirty = saved !== null && rowsChanged(rows, saved.entries, saved.termIds) || saved !== null && (JSON.stringify(categories) !== JSON.stringify(saved.catalog?.categories ?? []) || JSON.stringify(sheets) !== JSON.stringify(saved.sheets) || merges.length > 0);
+  const dirty = saved !== null && (draft.changed(rows, savedRows.current) || JSON.stringify(categories) !== JSON.stringify(saved.catalog?.categories ?? []) || JSON.stringify(sheets) !== JSON.stringify(saved.sheets) || merges.length > 0);
   useEffect(() => onDirtyChange(dirty), [dirty, onDirtyChange]);
   useEffect(() => () => onDirtyChange(false), [onDirtyChange]);
 
@@ -147,13 +154,13 @@ export const GlossaryView = forwardRef<GlossaryViewHandle, GlossaryViewProps>(fu
     void projectKnowledge(true).then(receive).catch((reason: unknown) => setError({ title: t("glossary.loadError"), error: normalizeCommandError(reason) }));
   }, [active, dirty, revision, receive, t]);
 
-  const problems = useMemo(() => rowProblems(rows), [rows]);
+  const problems = useMemo(() => draft.problems(rows), [draft, rows]);
   const fromSheets = useMemo(() => sheetItems(saved?.sheetTerms ?? []), [saved]);
-  const origins = useMemo(() => originsForRows(rows, saved?.termIds ?? [], saved?.replaced ?? [], merges), [rows, saved, merges]);
-  const entries = useMemo(() => entryItems(rows, problems, origins, [], rows.map((row) => row.key)), [problems, rows, origins]);
+  const origins = useMemo(() => draft.origins(rows, saved?.termIds ?? [], saved?.replaced ?? [], merges), [draft, rows, saved, merges]);
+  const entries = useMemo(() => draft.items(rows, problems, origins), [draft, problems, rows, origins]);
   const items = useMemo(() => [...entries, ...fromSheets], [entries, fromSheets]);
   const byId = useMemo(() => new Map(items.map((item) => [item.id, item])), [items]);
-  const counted = useMemo(() => facetCounts(items, outdated), [items, outdated]);
+  const counted = useMemo(() => draft.counts(items, outdated), [draft, items, outdated]);
   const counts = useMemo(() => {
     return { ...counted, categories: categories.map((category) => ({ key: categoryKey(category.name), label: category.name, count: counted.categories.find((c) => c.key === categoryKey(category.name))?.count ?? 0 })).sort((a, b) => b.count - a.count || a.label.localeCompare(b.label)) };
   }, [counted, categories]);
@@ -168,35 +175,30 @@ export const GlossaryView = forwardRef<GlossaryViewHandle, GlossaryViewProps>(fu
   const categoryNames = useMemo(() => categories.map((category) => category.name), [categories]);
   const noteFor = (name: string) => categories.find((category) => categoryKey(category.name) === categoryKey(name))?.note ?? "";
 
-  const countUsage = useCallback(() => {
-    if (counting) return;
+  // One request computes both counters. Results from a superseded snapshot
+  // never replace the counts of a newly saved or reloaded glossary.
+  useEffect(() => {
+    if (!active || !saved) { setCounting(false); return; }
+    const text = saved.termsText;
+    if (countedSnapshot.current?.text === text && countedSnapshot.current.revision === countRevision) return;
+    let current = true;
     setCounting(true);
-    setUsageStale(false);
-    void termUsage()
-      .then((found) => setUsage(new Map(found.map((term) => [usageKey(term.term, term.category), term.strings]))))
-      // A failed count is not asked again until the terms are read again.
-      .catch((reason: unknown) => { setUsage(new Map()); setError({ title: t("glossary.loadError"), error: normalizeCommandError(reason) }); })
-      .finally(() => setCounting(false));
-  }, [counting, t]);
-
-  // The uses are counted once the terms are read, and again after each read.
-  useEffect(() => {
-    if (active && saved && (usage === null || usageStale) && !counting) countUsage();
-  }, [active, countUsage, counting, saved, usage, usageStale]);
-
-  // The translations written with another version of a term are counted
-  // once the terms are read, and again after a run.
-  const checkOutdated = useCallback(() => {
-    setChecking(true);
-    setOutdatedStale(false);
-    void termOutdated()
-      .then((found) => setOutdated(new Map(found.map((term) => [usageKey(term.term, term.category), term.strings]))))
-      .catch((reason: unknown) => { setOutdated(new Map()); setError({ title: t("glossary.loadError"), error: normalizeCommandError(reason) }); })
-      .finally(() => setChecking(false));
-  }, [t]);
-  useEffect(() => {
-    if (active && saved && (outdated === null || outdatedStale) && !checking) checkOutdated();
-  }, [active, checkOutdated, checking, saved, outdated, outdatedStale]);
+    if (countRequest.current?.text !== text || countRequest.current.revision !== countRevision) {
+      countRequest.current = { text, revision: countRevision, result: termUsage() };
+    }
+    const request = countRequest.current;
+    void request.result.then((found) => {
+      if (!current) return;
+      setUsage(new Map(found.map((term) => [usageKey(term.term, term.category), term.strings])));
+      setOutdated(new Map(found.filter((term) => term.outdated > 0).map((term) => [usageKey(term.term, term.category), term.outdated])));
+      countedSnapshot.current = { text, revision: countRevision };
+    }).catch((reason: unknown) => {
+      if (countRequest.current === request) countRequest.current = null;
+      if (!current) return;
+      setError({ title: t("glossary.loadError"), error: normalizeCommandError(reason) });
+    }).finally(() => { if (current) setCounting(false); });
+    return () => { current = false; };
+  }, [active, saved?.termsText, countRevision, t]);
 
   // A run of the glossary is read every second until it ends; then what it
   // wrote reaches the editor and the counts.
@@ -241,7 +243,7 @@ export const GlossaryView = forwardRef<GlossaryViewHandle, GlossaryViewProps>(fu
     void (async () => {
       try {
         const strings = await termOutdatedStrings(terms);
-        if (strings.length === 0) { checkOutdated(); return; }
+        if (strings.length === 0) { recount(); return; }
         const paths = [...new Set(strings.map((string) => string.path))];
         const names = [...new Set(terms.map((term) => term.term))];
         await translationFix(paths, strings.map((string) => string.context), { issues: false, groups: [], adapt: false, request, terms: names }, preferences.translationModel, preferences.translationEffort || null);
@@ -263,7 +265,7 @@ export const GlossaryView = forwardRef<GlossaryViewHandle, GlossaryViewProps>(fu
       if (current.descending === first) return { key, descending: !first };
       return { key: "order", descending: false };
     });
-    if (key === "uses" && usage === null) countUsage();
+    if (key === "uses" && usage === null) recount();
   };
 
   // Choosing --------------------------------------------------------------
@@ -320,17 +322,18 @@ export const GlossaryView = forwardRef<GlossaryViewHandle, GlossaryViewProps>(fu
     if (trimmed && !categories.some((c) => categoryKey(c.name) === categoryKey(trimmed))) setCategories((current) => [...current, { id: `c-${crypto.randomUUID()}`, name: trimmed, note: "" }]);
   };
   const change = (key: number, patch: Partial<GlossaryRow>) => {
+    if (busy) return;
     if (patch.category) ensureCategory(patch.category);
     const row = rows.find((candidate) => candidate.key === key);
     const existing = row && !row.id && patch.category !== undefined ? duplicateOf(rows, { ...row, ...patch }) : undefined;
-    if (existing) { setRows((current) => current.filter((candidate) => candidate.key !== key)); chooseOnly(entryId(existing.key)); return; }
-    setRows((current) => current.map((row) => row.key === key ? { ...row, ...patch } : row));
+    if (existing) { updateRows((current) => current.filter((candidate) => candidate.key !== key)); chooseOnly(entryId(existing.key)); return; }
+    updateRows((current) => current.map((row) => row.key === key ? { ...row, ...patch } : row));
   };
 
   const openExistingTerm = (key: number) => {
     const candidate = rows.find((row) => row.key === key);
     const existing = candidate && !candidate.id ? duplicateOf(rows, candidate) : undefined;
-    if (existing) { setRows((current) => current.filter((row) => row.key !== key)); chooseOnly(entryId(existing.key)); }
+    if (existing) { updateRows((current) => current.filter((row) => row.key !== key)); chooseOnly(entryId(existing.key)); }
   };
 
   // The new term stays in the list as the chosen one, under the filter as it
@@ -339,7 +342,7 @@ export const GlossaryView = forwardRef<GlossaryViewHandle, GlossaryViewProps>(fu
     const key = nextKey.current++;
     const category = row.category ?? counts.categories.find((candidate) => candidate.key === filter.category)?.label ?? "";
     const term = shown.length === 0 ? filter.query.trim() : "";
-    setRows((current) => [...current, { key, term, translation: "", forms: [], note: "", matchCase: false, ...row, category }]);
+    updateRows((current) => [...current, { key, term, translation: "", forms: [], note: "", matchCase: false, ...row, category }]);
     chooseOnly(entryId(key));
   };
 
@@ -358,31 +361,48 @@ export const GlossaryView = forwardRef<GlossaryViewHandle, GlossaryViewProps>(fu
   });
 
   const remove = (keys: readonly number[]) => {
-    if (keys.length === 0) return;
+    if (busy || keys.length === 0) return;
     const gone = new Set(keys.map(entryId));
     const at = shown.findIndex((item) => gone.has(item.id));
     const next = shown.slice(at + 1).find((item) => !gone.has(item.id)) ?? shown.slice(0, Math.max(0, at)).reverse().find((item) => !gone.has(item.id)) ?? null;
     const removing = new Set(keys.filter((key) => { const item = byId.get(entryId(key)); return item?.kind === "entry" && item.replaced.length === 0; }));
-    setRows((current) => current.filter((row) => !removing.has(row.key)));
+    updateRows((current) => current.filter((row) => !removing.has(row.key)));
     setSelection(next ? { ids: new Set([next.id]), active: next.id } : noSelection);
   };
 
   const setCategory = (keys: readonly number[], category: string) => {
     ensureCategory(category);
     const changing = new Set(keys);
-    setRows((current) => current.map((row) => changing.has(row.key) ? { ...row, category } : row));
+    updateRows((current) => current.map((row) => changing.has(row.key) ? { ...row, category } : row));
   };
 
   const saveTerms = () => {
-    if (!saved || !dirty || problems.size > 0 || busy || runGoing || otherRun) return;
-    const write = () => {
+    if (!saved || busy || saving.current || runGoing || otherRun) return;
+    const write = async () => {
+      if (saving.current) return;
+      saving.current = true;
       setBusy(true);
+      setSavedFeedback(false);
       setError(null);
-      void saveKnowledgeTerms(saved.termsText, inputsFromRows(rows), categories, merges, sheets)
-        // The save bumps the project's revision by one: what it wrote is shown already.
-        .then((knowledge) => { show(knowledge); loadedRevision.current = revision + 1; onSaved(); })
-        .catch((reason: unknown) => setError({ title: t("glossary.saveError"), error: normalizeCommandError(reason) }))
-        .finally(() => setBusy(false));
+      try {
+        // Let the busy state reach the renderer before serializing a large draft.
+        await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
+        const currentRows = rowsRef.current;
+        const { categories, sheets, merges } = documentRef.current;
+        const changed = draft.changed(currentRows, savedRows.current) || JSON.stringify(categories) !== JSON.stringify(saved.catalog?.categories ?? [])
+          || JSON.stringify(sheets) !== JSON.stringify(saved.sheets) || merges.length > 0;
+        if (!changed || draft.problems(currentRows).size > 0) return;
+        const knowledge = await saveKnowledgeTerms(saved.termsText, inputsFromRows(currentRows), categories, merges, sheets);
+        show(knowledge);
+        loadedRevision.current = revision + 1;
+        setSavedFeedback(true);
+        onSaved();
+      } catch (reason) {
+        setError({ title: t("glossary.saveError"), error: normalizeCommandError(reason) });
+      } finally {
+        saving.current = false;
+        setBusy(false);
+      }
     };
     if (saved.termsError && saved.termsText !== null) setConfirm({ message: t("glossary.replaceBroken"), run: write });
     else if (saved.diagnostics.length > 0) setConfirm({ message: t("glossary.dropExcluded", { count: saved.diagnostics.length }), run: write });
@@ -406,7 +426,7 @@ export const GlossaryView = forwardRef<GlossaryViewHandle, GlossaryViewProps>(fu
     if (existing || !name.trim()) return;
     const old = categories.find((c) => c.id === id)!;
     setCategories((current) => current.map((c) => c.id === id ? { ...c, name: name.trim() } : c));
-    setRows((current) => current.map((row) => categoryKey(row.category) === categoryKey(old.name) ? { ...row, category: name.trim() } : row));
+    updateRows((current) => current.map((row) => categoryKey(row.category) === categoryKey(old.name) ? { ...row, category: name.trim() } : row));
     setSheets((current) => current.map((sheet) => categoryKey(sheet.category) === categoryKey(old.name) ? { ...sheet, category: name.trim() } : sheet));
     setFilter((current) => ({ ...current, category: categoryKey(name) }));
   };
@@ -436,7 +456,7 @@ export const GlossaryView = forwardRef<GlossaryViewHandle, GlossaryViewProps>(fu
       replacement.set(base.key, { ...chosen, key: base.key, ...(base.id ? { id: base.id } : {}), category: target.name });
       if (other.id && base.id) operations.push({ from: other.id, into: base.id });
     }
-    setRows((current) => current.filter((row) => !removed.has(row.key)).map((row) => replacement.get(row.key) ?? (categoryKey(row.category) === categoryKey(source.name) ? { ...row, category: target.name } : row)));
+    updateRows((current) => current.filter((row) => !removed.has(row.key)).map((row) => replacement.get(row.key) ?? (categoryKey(row.category) === categoryKey(source.name) ? { ...row, category: target.name } : row)));
     setMerges((current) => [...current, ...operations]);
     setCategories((current) => current.filter((c) => c.id !== source.id).map((c) => c.id === target.id ? { ...c, note: [...new Set([target.note, source.note].filter(Boolean))].join("\n\n") } : c));
     setSheets((current) => current.map((sheet) => categoryKey(sheet.category) === categoryKey(source.name) ? { ...sheet, category: target.name } : sheet));
@@ -656,9 +676,10 @@ export const GlossaryView = forwardRef<GlossaryViewHandle, GlossaryViewProps>(fu
                 <UiIcon icon="circleAlert" size="xs" />{t("glossary.problems", { count: problems.size })}
               </button>
             ) : null}
-            <span className="glossary-footer-actions">
+            <span className="glossary-footer-actions" aria-busy={busy}>
+              <span className="muted" role="status">{busy ? t("common.saving") : savedFeedback && !dirty ? t("glossary.saved") : ""}</span>
               <button className="button button-ghost" type="button" disabled={busy || !dirty} onClick={revert}>{t("glossary.revert")}</button>
-              <button className="button button-primary" type="button" disabled={busy || !dirty || problems.size > 0 || runGoing || otherRun} title={runGoing || otherRun ? t("glossary.fix.busy") : "Ctrl+S"} onClick={saveTerms}>{t("glossary.save")}</button>
+              <button className="button button-primary" type="button" disabled={busy || !dirty || problems.size > 0 || runGoing || otherRun} title={runGoing || otherRun ? t("glossary.fix.busy") : "Ctrl+S"} onClick={saveTerms}>{busy ? t("common.saving") : t("glossary.save")}</button>
             </span>
           </footer>
         </section>

@@ -15,21 +15,22 @@ use std::{
 
 const JOURNAL: &str = ".aeria/glossary-transaction.json";
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct SourceString {
     path: String,
     entry: Entry,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct Group {
     source: TermSource,
     strings: Vec<SourceString>,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct Resolved {
     revision: String,
+    sources: Vec<Group>,
     pub catalog: Catalog,
     pub term_ids: Vec<String>,
     pub knowledge: Knowledge,
@@ -154,7 +155,8 @@ fn tally<'a>(strings: impl Iterator<Item = &'a SourceString>) -> Vec<(String, us
     result
 }
 
-fn discover_terms(catalog: &mut Catalog, groups: &[Group]) -> Result<(), String> {
+fn discover_terms(catalog: &mut Catalog, groups: &[Group]) -> Result<bool, String> {
+    let mut changed = false;
     let mut assigned: HashSet<_> = catalog
         .terms
         .iter()
@@ -227,16 +229,35 @@ fn discover_terms(catalog: &mut Catalog, groups: &[Group]) -> Result<(), String>
             });
         }
         assigned.insert(group_key(&group.source));
+        changed = true;
     }
-    Ok(())
+    Ok(changed)
 }
 
-fn resolved(root: &Path, mut catalog: Catalog) -> Result<Resolved, String> {
-    catalog.validate()?;
+fn resolved(root: &Path, catalog: Catalog, catalog_text: &str) -> Result<Resolved, String> {
     let revision = current_token(root, &catalog)?;
-    let (groups, mut read) = groups(root, &catalog.sheets)?;
-    discover_terms(&mut catalog, &groups)?;
-    catalog.validate()?;
+    let versions: BTreeMap<String, String> = serde_json::from_str(&revision).map_err(io)?;
+    if versions.get(CATALOG_PATH) != Some(&fingerprint(catalog_text)) {
+        return Err("glossary catalog changed while loading".to_owned());
+    }
+    let (groups, read) = groups(root, &catalog.sheets)?;
+    let loaded = resolve_sources(root, catalog, groups, read, revision)?;
+    if current_token(root, &loaded.catalog)? != loaded.revision {
+        return Err("glossary sources changed while loading".to_owned());
+    }
+    Ok(loaded)
+}
+
+fn resolve_sources(
+    root: &Path,
+    mut catalog: Catalog,
+    groups: Vec<Group>,
+    mut read: Vec<std::path::PathBuf>,
+    revision: String,
+) -> Result<Resolved, String> {
+    if discover_terms(&mut catalog, &groups)? {
+        catalog.validate()?;
+    }
     let by_source: HashMap<_, _> = groups.iter().map(|g| (group_key(&g.source), g)).collect();
     let mut entries = Vec::new();
     let mut origins = Vec::new();
@@ -292,7 +313,9 @@ fn resolved(root: &Path, mut catalog: Catalog) -> Result<Resolved, String> {
                 .collect(),
         );
     }
-    read.push(root.join(CATALOG_PATH));
+    if !read.contains(&root.join(CATALOG_PATH)) {
+        read.push(root.join(CATALOG_PATH));
+    }
     let (style, problems) =
         match aeria_knowledge::read_file(root, aeria_knowledge::KnowledgeFile::Style) {
             Ok(style) => (style, Vec::new()),
@@ -314,11 +337,9 @@ fn resolved(root: &Path, mut catalog: Catalog) -> Result<Resolved, String> {
             note: None,
         })
         .collect();
-    if current_token(root, &catalog)? != revision {
-        return Err("glossary sources changed while loading".to_owned());
-    }
     Ok(Resolved {
         revision,
+        sources: groups,
         catalog,
         term_ids,
         knowledge: Knowledge {
@@ -352,7 +373,7 @@ pub fn load(root: &Path) -> Result<Resolved, String> {
         }
         let text = aeria_knowledge::read_file(root, aeria_knowledge::KnowledgeFile::Catalog)?
             .ok_or("glossary catalog is missing")?;
-        resolved(root, Catalog::parse(&text)?)
+        resolved(root, Catalog::parse(&text)?, &text)
     })
 }
 
@@ -469,7 +490,8 @@ fn commit_locked(root: &Path, changes: &[Change]) -> Result<(), String> {
         &serde_json::to_string(&changes).map_err(io)?,
     )
     .map_err(io)?;
-    recover_locked(root)
+    apply(root, changes)?;
+    fs::remove_file(root.join(JOURNAL)).map_err(io)
 }
 
 fn legacy_categories(old: &Knowledge) -> Vec<Category> {
@@ -830,8 +852,21 @@ pub fn token(loaded: &Resolved) -> String {
     loaded.revision.clone()
 }
 
+pub(crate) fn is_current(root: &Path, loaded: &Resolved) -> Result<bool, String> {
+    Ok(!root.join(JOURNAL).exists()
+        && !root.join("aeria-knowledge/terms.csv").exists()
+        && !root.join("aeria-knowledge/term-sheets.csv").exists()
+        && current_token(root, &loaded.catalog)? == loaded.revision)
+}
+
 fn current_token(root: &Path, catalog: &Catalog) -> Result<String, String> {
     let mut files = BTreeMap::new();
+    let style = match fs::read(root.join("aeria-knowledge/style.md")) {
+        Ok(bytes) => format!("present:{}", crate::po::fingerprint_bytes(&bytes)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => "missing".to_owned(),
+        Err(error) => return Err(io(error)),
+    };
+    files.insert("aeria-knowledge/style.md".to_owned(), style);
     files.insert(
         crate::SETTINGS_FILE.to_owned(),
         fingerprint(&read_text(root, crate::SETTINGS_FILE)?.ok_or("project settings are missing")?),
@@ -1143,8 +1178,8 @@ fn edit_source_files(
     before: &Resolved,
     catalog: &Catalog,
     translations: &HashMap<String, String>,
+    source_groups: &[Group],
 ) -> Result<(ChangedFiles, HashSet<String>), String> {
-    let (source_groups, _) = groups(root, &catalog.sheets)?;
     let mut files: ChangedFiles = BTreeMap::new();
     let mut edited_contexts = HashSet::new();
     let by_source: HashMap<_, _> = source_groups
@@ -1195,6 +1230,58 @@ fn edit_source_files(
     Ok((files, edited_contexts))
 }
 
+fn overlay_sources(groups: &mut [Group], files: &ChangedFiles) {
+    let entries: HashMap<_, _> = files
+        .iter()
+        .flat_map(|(path, (_, file))| {
+            file.entries
+                .iter()
+                .map(move |e| ((path.as_str(), e.context.as_str()), e))
+        })
+        .collect();
+    for string in groups.iter_mut().flat_map(|g| &mut g.strings) {
+        if let Some(entry) = entries.get(&(string.path.as_str(), string.entry.context.as_str())) {
+            string.entry.clone_from(entry);
+        }
+    }
+}
+
+fn saved_revision(expected: &str, changes: &[Change]) -> Result<String, String> {
+    let mut versions: BTreeMap<String, String> = serde_json::from_str(expected).map_err(io)?;
+    for change in changes {
+        // Rebased usage records can live outside the declared source sheets.
+        // They are transaction writes, but not part of the glossary snapshot.
+        if !versions.contains_key(&change.path) {
+            continue;
+        }
+        if let Some(text) = &change.after {
+            versions.insert(change.path.clone(), fingerprint(text));
+        } else {
+            versions.remove(&change.path);
+        }
+    }
+    serde_json::to_string(&versions).map_err(io)
+}
+
+fn canonical_sources(groups: &mut [Group], changes: &[Change]) {
+    let paths: HashSet<_> = groups
+        .iter()
+        .flat_map(|g| g.strings.iter().map(|s| s.path.as_str()))
+        .collect();
+    let files: ChangedFiles = changes
+        .iter()
+        .filter_map(|change| {
+            let path = change.path.strip_prefix("po/")?;
+            if !paths.contains(path) {
+                return None;
+            }
+            let text = change.after.as_deref()?;
+            Some((path.to_owned(), (String::new(), PoFile::parse(text).0)))
+        })
+        .collect();
+    overlay_sources(groups, &files);
+}
+
 fn rebase_records(
     root: &Path,
     before: &Resolved,
@@ -1205,6 +1292,10 @@ fn rebase_records(
     // not what a translation followed. Rebase only records with an exactly
     // known OLD fingerprint and the same set of translations and own notes.
     // Genuine term edits and already-outdated records are never acknowledged.
+    let names = changed_names(before, after);
+    if names.is_empty() {
+        return Ok(());
+    }
     let mut relocations = HashMap::new();
     let after_by_name: HashMap<_, _> = after
         .knowledge
@@ -1214,6 +1305,9 @@ fn rebase_records(
         .map(|e| (e.term.to_lowercase(), e))
         .collect();
     for old in &before.knowledge.terms.entries {
+        if !names.contains(&old.term.to_lowercase()) {
+            continue;
+        }
         let Some(new) = after_by_name.get(&old.term.to_lowercase()).copied() else {
             continue;
         };
@@ -1262,6 +1356,36 @@ fn rebase_records(
     Ok(())
 }
 
+fn changed_names(before: &Resolved, after: &Resolved) -> HashSet<String> {
+    let old: HashMap<_, _> = before
+        .term_ids
+        .iter()
+        .zip(&before.knowledge.terms.entries)
+        .collect();
+    let mut names = HashSet::new();
+    let mut seen = HashSet::new();
+    for (id, entry) in after.term_ids.iter().zip(&after.knowledge.terms.entries) {
+        seen.insert(id);
+        if let Some(previous) = old.get(id) {
+            if previous.term == entry.term
+                && previous.translation == entry.translation
+                && previous.note == entry.note
+                && previous.version_category == entry.version_category
+            {
+                continue;
+            }
+            names.insert(previous.term.to_lowercase());
+        }
+        names.insert(entry.term.to_lowercase());
+    }
+    for (id, entry) in old {
+        if !seen.contains(id) {
+            names.insert(entry.term.to_lowercase());
+        }
+    }
+    names
+}
+
 /// Save the whole glossary document, including category management and
 /// source translations. Category IDs and term IDs survive renames/moves.
 ///
@@ -1278,25 +1402,69 @@ pub fn save(
     merges: &[TermMerge],
 ) -> Result<Resolved, String> {
     let before = load(root)?;
+    save_resolved(
+        root,
+        before,
+        SaveRequest {
+            target,
+            expected,
+            edits,
+            categories,
+            sheets,
+            merges,
+        },
+    )
+}
+
+pub(crate) struct SaveRequest<'a> {
+    pub target: &'a str,
+    pub expected: &'a str,
+    pub edits: Vec<EditedTerm>,
+    pub categories: Option<Vec<Category>>,
+    pub sheets: Option<Vec<TermSheet>>,
+    pub merges: &'a [TermMerge],
+}
+
+pub(crate) fn save_resolved(
+    root: &Path,
+    mut before: Resolved,
+    request: SaveRequest<'_>,
+) -> Result<Resolved, String> {
+    let SaveRequest {
+        target,
+        expected,
+        edits,
+        categories,
+        sheets,
+        merges,
+    } = request;
     if before.revision != expected {
         return Err("glossary or its source strings changed after loading".to_owned());
     }
     let old_catalog_text = read_text(root, CATALOG_PATH)?;
     let (catalog, translations) = update_catalog(&before, edits, categories, sheets, merges)?;
+    let same_sources = catalog.sheets.len() == before.catalog.sheets.len()
+        && catalog
+            .sheets
+            .iter()
+            .zip(&before.catalog.sheets)
+            .all(|(a, b)| a.sheet == b.sheet && a.column == b.column);
+    let source_revision = if same_sources {
+        expected.to_owned()
+    } else {
+        current_token(root, &catalog)?
+    };
+    let (mut sources, read) = if same_sources {
+        (std::mem::take(&mut before.sources), before.read.clone())
+    } else {
+        groups(root, &catalog.sheets)?
+    };
     let (mut files, edited_contexts) =
-        edit_source_files(root, target, &before, &catalog, &translations)?;
+        edit_source_files(root, target, &before, &catalog, &translations, &sources)?;
     // Build the resulting glossary with explicit edits overlaid, before any
     // write, so each directly edited source records the NEW term version.
-    let mut after = resolved(root, catalog.clone())?;
-    for (id, entry) in after
-        .term_ids
-        .iter()
-        .zip(&mut after.knowledge.terms.entries)
-    {
-        if let Some(translation) = translations.get(id) {
-            entry.translation.clone_from(translation);
-        }
-    }
+    overlay_sources(&mut sources, &files);
+    let mut after = resolve_sources(root, catalog, sources, read, source_revision.clone())?;
     for (_, file) in files.values_mut() {
         for entry in &mut file.entries {
             if edited_contexts.contains(&entry.context) {
@@ -1307,8 +1475,11 @@ pub fn save(
     rebase_records(root, &before, &after, &mut files)?;
     // Recheck every source version after preparation; concurrent edits are
     // refused rather than overwritten by the multi-file transaction.
-    if current_token(root, &before.catalog)? != expected {
+    if !is_current(root, &before)? {
         return Err("glossary changed during save".to_owned());
+    }
+    if !same_sources && current_token(root, &after.catalog)? != source_revision {
+        return Err("new glossary sources changed during save".to_owned());
     }
     let mut changes: Vec<_> = files
         .into_iter()
@@ -1323,6 +1494,8 @@ pub fn save(
         before: old_catalog_text,
         after: Some(after.catalog.text()?),
     });
+    canonical_sources(&mut after.sources, &changes);
+    after.revision = saved_revision(&source_revision, &changes)?;
     commit(root, &changes)?;
-    load(root)
+    Ok(after)
 }

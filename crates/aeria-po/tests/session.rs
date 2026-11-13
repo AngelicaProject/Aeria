@@ -31,6 +31,106 @@ fn game(root: &std::path::Path, version: &str, hello: &str) -> Arc<GameSource> {
 }
 
 #[test]
+fn cached_glossary_saves_preserve_live_versions_and_refuse_hidden_external_changes() {
+    use aeria_po::glossary_project::{self as glossary, EditedTerm};
+    let directory = tempfile::tempdir().unwrap();
+    let source = game(
+        &directory.path().join("game"),
+        "2026.01.01.0000.0000",
+        "Hello.",
+    );
+    let root = directory.path().join("project");
+    let session = aeria_po::session::create(&root, source, "ru", 2).unwrap();
+    session.set_translation("Addon", 1, 0, 0, "ОК").unwrap();
+    std::fs::create_dir_all(root.join("aeria-knowledge")).unwrap();
+    std::fs::write(
+        root.join("aeria-knowledge/terms.csv"),
+        "term,translation,category\nCustom,Особый,понятие\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("aeria-knowledge/term-sheets.csv"),
+        "sheet,column,category\nAddon,0,понятие\n",
+    )
+    .unwrap();
+    let mut loaded = session.migrate_glossary().unwrap();
+    let edits = |loaded: &glossary::Resolved| -> Vec<EditedTerm> {
+        loaded
+            .term_ids
+            .iter()
+            .zip(&loaded.knowledge.terms.entries)
+            .map(|(id, e)| EditedTerm {
+                id: Some(id.clone()),
+                term: e.term.clone(),
+                translation: e.translation.clone(),
+                category: e.category.clone(),
+                forms: e.forms.clone(),
+                note: e.note.clone(),
+                match_case: e.match_case,
+            })
+            .collect()
+    };
+    for translation in ["ДА", "ОК"] {
+        let mut changes = edits(&loaded);
+        changes
+            .iter_mut()
+            .find(|e| e.term == "OK")
+            .unwrap()
+            .translation = translation.to_owned();
+        loaded = session
+            .save_glossary(&glossary::token(&loaded), changes, None, None, &[])
+            .unwrap();
+        let reread = glossary::load(&root).unwrap();
+        assert_eq!(glossary::token(&loaded), glossary::token(&reread));
+        assert_eq!(
+            loaded.knowledge.terms.entries,
+            session.knowledge().terms.entries
+        );
+    }
+    let path = root.join("po/Addon/0.po");
+    let before = std::fs::metadata(&path).unwrap();
+    let text = std::fs::read_to_string(&path).unwrap();
+    std::fs::write(&path, text.replace("msgstr \"ОК\"", "msgstr \"ДА\"")).unwrap();
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(&path)
+        .unwrap()
+        .set_times(std::fs::FileTimes::new().set_modified(before.modified().unwrap()))
+        .unwrap();
+    assert_eq!(std::fs::metadata(&path).unwrap().len(), before.len());
+    let catalog = root.join("aeria-knowledge/glossary.json");
+    let original = std::fs::read(&catalog).unwrap();
+    let mut changes = edits(&loaded);
+    changes
+        .iter_mut()
+        .find(|e| e.term == "Custom")
+        .unwrap()
+        .note = Some("New note".to_owned());
+    assert!(
+        session
+            .save_glossary(&glossary::token(&loaded), changes, None, None, &[])
+            .is_err()
+    );
+    assert_eq!(std::fs::read(catalog).unwrap(), original);
+    assert!(
+        std::fs::read_to_string(path)
+            .unwrap()
+            .contains("msgstr \"ДА\"")
+    );
+    assert_eq!(
+        session
+            .glossary()
+            .unwrap()
+            .knowledge
+            .terms
+            .find("OK")
+            .unwrap()
+            .translation,
+        "ДА"
+    );
+}
+
+#[test]
 #[allow(clippy::too_many_lines)] // one scenario
 fn a_session_reads_writes_and_checks_strings() {
     let directory = tempfile::tempdir().expect("directory");

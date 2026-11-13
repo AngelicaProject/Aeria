@@ -70,7 +70,10 @@ export function CategoryField({ id, value, categories, disabled = false, onCommi
             onChange={(event) => { setText(event.target.value); setActive(0); setOpen(true); }}
             onBlur={() => commit(typed)}
             onKeyDown={(event) => {
-              if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+              if (disabled) return;
+              if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s") {
+                commit(typed);
+              } else if (event.key === "ArrowDown" || event.key === "ArrowUp") {
                 event.preventDefault();
                 if (!open) { show(); return; }
                 if (choices.length === 0) return;

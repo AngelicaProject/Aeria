@@ -385,6 +385,51 @@ fn a_term_exception_lifts_the_term_and_undo_takes_it_back() {
 }
 
 #[test]
+fn repeated_term_counts_follow_definition_alias_case_and_file_changes() {
+    let (_directory, session) = project();
+    let glossary = |term: &str, forms: &str, case: &str, translation: &str| {
+        aeria_knowledge::parse_glossary(format!("term,translation,forms,case,category\n{term},{translation},{forms},{case},профессия\n").as_bytes()).unwrap()
+    };
+    let count = |terms: &aeria_knowledge::Glossary| {
+        session
+            .corpus()
+            .term_usage(session.root(), terms, &AtomicBool::new(false))
+            .unwrap()
+    };
+    let cook = glossary("cook", "", "", "повар");
+    let baseline = count(&cook);
+    assert_eq!(baseline[0].strings, 3);
+    assert_eq!(count(&cook), baseline);
+    let aliases = glossary("cook", "Cooking", "", "повар");
+    assert_eq!(count(&aliases)[0].strings, 4);
+    assert_eq!(count(&cook), baseline);
+    assert_eq!(count(&glossary("COOK", "", "yes", "повар"))[0].strings, 0);
+    assert_eq!(count(&cook), baseline);
+    let cancelled = AtomicBool::new(true);
+    let _ = session
+        .corpus()
+        .term_usage(session.root(), &aliases, &cancelled)
+        .unwrap();
+    assert_eq!(count(&aliases)[0].strings, 4);
+    std::fs::create_dir_all(session.root().join("aeria-knowledge")).unwrap();
+    std::fs::write(
+        session.root().join("aeria-knowledge/terms.csv"),
+        "term,translation,category\ncook,повар,профессия\n",
+    )
+    .unwrap();
+    session
+        .set_translation("Addon", 1, 0, 0, "Повар пришёл")
+        .unwrap();
+    assert_eq!(count(&cook)[0].outdated, baseline[0].outdated - 1);
+    assert_eq!(
+        count(&glossary("cook", "", "", "кулинар"))[0].outdated,
+        baseline[0].outdated
+    );
+    session.set_reviewed("Addon", 2, 0, 0, true).unwrap();
+    assert_eq!(count(&cook)[0].outdated, baseline[0].outdated - 2);
+}
+
+#[test]
 fn a_translation_is_written_with_the_terms_of_its_save() {
     let (_directory, session) = project();
     let knowledge = session.root().join("aeria-knowledge");
